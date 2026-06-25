@@ -49,6 +49,7 @@ from modulo.core.hitl_manager import (
     GateAlreadyDecidedError,
     GateNotFoundError,
     HITLManager,
+    NotTeamMemberError,
 )
 from modulo.core.library_service import (
     CommunityPrimitiveReadOnlyError,
@@ -346,6 +347,7 @@ async def list_pending_hitl(page: int = 1, page_size: int = 20) -> dict[str, Any
                     "pipeline_id": str(g.pipeline_id),
                     "claimed_by": str(g.claimed_by) if g.claimed_by else None,
                     "expires_at": g.expires_at.isoformat() if g.expires_at else None,
+                    "required_team_id": str(g.required_team_id) if g.required_team_id else None,
                 }
                 for g in gates
             ]
@@ -453,6 +455,8 @@ async def review_hitl(
                 return {"status": "rejected", "gate_id": gate_id}
         except GateNotFoundError:
             return {"error": "gate_not_found", "run_id": run_id, "gate_id": gate_id}
+        except NotTeamMemberError:
+            return {"error": "not_team_member", "detail": "You are not a member of the team required by this gate"}
         except AlreadyClaimedError:
             return {"error": "already_claimed", "detail": "Gate is already held by another client"}
         except ClaimTokenInvalidError:

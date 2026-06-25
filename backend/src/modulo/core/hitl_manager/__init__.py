@@ -31,6 +31,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from modulo.auth.jwt import create_claim_token as _create_claim_jwt
 from modulo.auth.jwt import decode_claim_token as _decode_claim_jwt
 from modulo.db.models.hitl_claim import HitlClaim
+from modulo.db.models.team_membership import TeamMembership
 
 # ---------------------------------------------------------------------------
 # Public API
@@ -43,6 +44,7 @@ __all__: list[str] = [
     "GateAlreadyDecidedError",
     "GateNotFoundError",
     "HITLManager",
+    "NotTeamMemberError",
 ]
 
 # ---------------------------------------------------------------------------
@@ -79,6 +81,17 @@ class GateAlreadyDecidedError(RuntimeError):
         super().__init__(f"Gate {gate_id!r} on run {run_id} already has a decision")
 
 
+class NotTeamMemberError(PermissionError):
+    def __init__(self, run_id: uuid.UUID, gate_id: str, team_id: uuid.UUID, user_id: uuid.UUID) -> None:
+        super().__init__(
+            f"User {user_id} is not a member of team {team_id} required by gate {gate_id!r} on run {run_id}"
+        )
+        self.run_id = run_id
+        self.gate_id = gate_id
+        self.team_id = team_id
+        self.user_id = user_id
+
+
 # ---------------------------------------------------------------------------
 # Service
 # ---------------------------------------------------------------------------
@@ -111,6 +124,7 @@ class HITLManager:
         gate_id: str,
         pipeline_id: uuid.UUID,
         org_id: uuid.UUID,
+        required_team_id: uuid.UUID | None = None,
     ) -> HitlClaim:
         """Insert a new unclaimed gate row. Idempotent if called again for same key."""
         # Check for existing row first (unique constraint: run_id + gate_id)
@@ -122,6 +136,7 @@ class HITLManager:
             run_id=run_id,
             gate_id=gate_id,
             pipeline_id=pipeline_id,
+            required_team_id=required_team_id,
         )
         session.add(gate)
         await session.flush()
@@ -146,8 +161,37 @@ class HITLManager:
         If ``secret_key`` was provided at construction, the claim token is
         a signed JWT scoped to (run_id, gate_id, claimant_id).  Otherwise
         an opaque random string is used (alpha backwards compat).
+
+        If the gate has a ``required_team_id``, the claimant must be a
+        member of that team, otherwise ``NotTeamMemberError`` is raised.
         """
         now = datetime.now(UTC)
+
+        # Pre-check: gate must exist, not already decided, and claimant must
+        # be a team member if the gate is team-scoped.
+        gate_check = await self._get(session, run_id=run_id, gate_id=gate_id, org_id=org_id)
+        if gate_check is None:
+            raise GateNotFoundError(run_id, gate_id)
+        if gate_check.decision is not None:
+            raise GateAlreadyDecidedError(run_id, gate_id)
+        if gate_check.claimed_by is not None:
+            raise AlreadyClaimedError(run_id, gate_id)
+        if gate_check.required_team_id is not None:
+            tm_result = await session.execute(
+                select(TeamMembership).where(
+                    TeamMembership.team_id == gate_check.required_team_id,
+                    TeamMembership.user_id == claimant_id,
+                    TeamMembership.organisation_id == org_id,
+                )
+            )
+            if tm_result.scalar_one_or_none() is None:
+                raise NotTeamMemberError(
+                    run_id=run_id,
+                    gate_id=gate_id,
+                    team_id=gate_check.required_team_id,
+                    user_id=claimant_id,
+                )
+
         # Generate token — JWT if we have a secret_key, else opaque
         if self._secret_key:
             token = _create_claim_jwt(
@@ -181,9 +225,7 @@ class HITLManager:
         result = await session.execute(stmt)
         claimed_id = result.scalar_one_or_none()
         if claimed_id is None:
-            gate = await self._get(session, run_id=run_id, gate_id=gate_id, org_id=org_id)
-            if gate is None:
-                raise GateNotFoundError(run_id, gate_id)
+            # Race condition — someone else claimed between our check and update
             raise AlreadyClaimedError(run_id, gate_id)
 
         gate = await self._get(session, run_id=run_id, gate_id=gate_id, org_id=org_id)

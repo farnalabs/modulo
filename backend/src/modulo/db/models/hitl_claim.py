@@ -15,6 +15,9 @@ class HitlClaim(OrgScoped):
     run_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("runs.id", ondelete="CASCADE"), nullable=False, index=True
     )
+    required_team_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("teams.id", ondelete="RESTRICT")
+    )
     gate_id: Mapped[str] = mapped_column(String(255), nullable=False)
     pipeline_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True),

@@ -14,8 +14,10 @@ from modulo.core.hitl_manager import (
     GateAlreadyDecidedError,
     GateNotFoundError,
     HITLManager,
+    NotTeamMemberError,
 )
 from modulo.db.models.hitl_claim import HitlClaim
+from modulo.db.models.team_membership import TeamMembership
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -35,6 +37,7 @@ def _gate(
     expires_at: datetime | None = None,
     decision: str | None = None,
     claimed_at: datetime | None = None,
+    required_team_id: uuid.UUID | None = None,
 ) -> HitlClaim:
     g = MagicMock(spec=HitlClaim)
     g.id = uuid.uuid4()
@@ -48,6 +51,7 @@ def _gate(
     g.expires_at = expires_at
     g.decision = decision
     g.decision_at = None
+    g.required_team_id = required_team_id
     return g
 
 
@@ -65,8 +69,19 @@ def _session_get(return_value: Any = None) -> AsyncMock:
     return session
 
 
-def _session_update(*, rows_returned: int = 1, gate: HitlClaim | None = None) -> AsyncMock:
-    """Session that simulates an UPDATE RETURNING result."""
+def _session_update(
+    *,
+    rows_returned: int = 1,
+    gate: HitlClaim | None = None,
+    pre_check_gate: HitlClaim | None = None,
+) -> AsyncMock:
+    """Session that simulates a claim() flow with pre-check + UPDATE + refetch.
+
+    Call sequence:
+      1. Pre-check SELECT (returns ``pre_check_gate`` or falls back to ``gate``)
+      2. UPDATE … RETURNING  (returns claimed id if rows_returned > 0)
+      3. Re-fetch SELECT     (returns ``gate``)
+    """
     session = AsyncMock()
     session.add = MagicMock()
     session.flush = AsyncMock()
@@ -80,13 +95,18 @@ def _session_update(*, rows_returned: int = 1, gate: HitlClaim | None = None) ->
     get_result = MagicMock()
     get_result.scalar_one_or_none.return_value = gate
 
+    pre_check_result = MagicMock()
+    pre_check_result.scalar_one_or_none.return_value = pre_check_gate
+
     call_count = 0
 
     async def _execute(stmt: Any) -> Any:
         nonlocal call_count
         call_count += 1
-        # First execute is the UPDATE; second is the re-fetch
+        # First execute is the pre-check SELECT; second is the UPDATE; third is the re-fetch
         if call_count == 1:
+            return pre_check_result if pre_check_gate is not None else get_result
+        if call_count == 2:
             return update_result
         return get_result
 
@@ -130,12 +150,13 @@ async def test_create_gate_idempotent_if_exists():
 
 
 async def test_claim_success_sets_token_and_expiry():
+    pre_check = _gate(claimed_by=None)
     claimed_gate = _gate(
         claimed_by=_USER,
         claim_token="tok",
         expires_at=datetime.now(UTC) + timedelta(minutes=15),
     )
-    session = _session_update(rows_returned=1, gate=claimed_gate)
+    session = _session_update(rows_returned=1, gate=claimed_gate, pre_check_gate=pre_check)
     mgr = HITLManager()
     result = await mgr.claim(session, run_id=_RUN, gate_id=_GATE, org_id=_ORG, claimant_id=_USER)
     assert result is claimed_gate
@@ -143,14 +164,14 @@ async def test_claim_success_sets_token_and_expiry():
 
 async def test_claim_already_claimed_raises():
     existing = _gate(claimed_by=uuid.uuid4(), claim_token="tok")
-    session = _session_update(rows_returned=0, gate=existing)
+    session = _session_update(rows_returned=0, gate=existing, pre_check_gate=existing)
     mgr = HITLManager()
     with pytest.raises(AlreadyClaimedError):
         await mgr.claim(session, run_id=_RUN, gate_id=_GATE, org_id=_ORG, claimant_id=_USER)
 
 
 async def test_claim_gate_not_found_raises():
-    session = _session_update(rows_returned=0, gate=None)
+    session = _session_update(rows_returned=0, gate=None, pre_check_gate=None)
     mgr = HITLManager()
     with pytest.raises(GateNotFoundError):
         await mgr.claim(session, run_id=_RUN, gate_id=_GATE, org_id=_ORG, claimant_id=_USER)
@@ -158,17 +179,158 @@ async def test_claim_gate_not_found_raises():
 
 async def test_claim_custom_expiry_minutes_is_applied():
     """claim() with custom expiry_minutes passes the right interval to the UPDATE."""
+    pre_check = _gate(claimed_by=None)
     claimed_gate = _gate(
         claimed_by=_USER,
         claim_token="tok",
         expires_at=datetime.now(UTC) + timedelta(minutes=60),
     )
-    session = _session_update(rows_returned=1, gate=claimed_gate)
+    session = _session_update(rows_returned=1, gate=claimed_gate, pre_check_gate=pre_check)
     mgr = HITLManager()
     result = await mgr.claim(
         session, run_id=_RUN, gate_id=_GATE, org_id=_ORG, claimant_id=_USER, expiry_minutes=60
     )
     assert result is claimed_gate
+
+
+# ---------------------------------------------------------------------------
+# Team-scoped gates
+# ---------------------------------------------------------------------------
+
+_TEAM = uuid.uuid4()
+
+
+async def test_create_gate_with_required_team_id():
+    session = _session_get(return_value=None)
+    mgr = HITLManager()
+    result = await mgr.create_gate(
+        session, run_id=_RUN, gate_id=_GATE, pipeline_id=_PIPELINE, org_id=_ORG, required_team_id=_TEAM
+    )
+    session.add.assert_called_once()
+    assert result.required_team_id == _TEAM
+
+
+async def test_claim_team_member_can_claim():
+    """Team member can claim a team-scoped gate."""
+    unclaimed = _gate(claimed_by=None, required_team_id=_TEAM)
+    claimed = _gate(
+        claimed_by=_USER,
+        claim_token="tok",
+        expires_at=datetime.now(UTC) + timedelta(minutes=15),
+        required_team_id=_TEAM,
+    )
+    membership = MagicMock(spec=TeamMembership)
+    membership.team_id = _TEAM
+    membership.user_id = _USER
+
+    session = AsyncMock()
+    session.add = MagicMock()
+    session.flush = AsyncMock()
+
+    call_no = 0
+    team_check_hit = False
+
+    async def _execute(stmt: Any) -> Any:
+        nonlocal call_no, team_check_hit
+        call_no += 1
+        if call_no == 1:
+            # Pre-check SELECT
+            r = MagicMock()
+            r.scalar_one_or_none.return_value = unclaimed
+            return r
+        if call_no == 2:
+            # Team membership check
+            team_check_hit = True
+            r = MagicMock()
+            r.scalar_one_or_none.return_value = membership
+            return r
+        if call_no == 3:
+            # UPDATE
+            r = MagicMock()
+            r.scalar_one_or_none.return_value = uuid.uuid4()
+            return r
+        # Re-fetch
+        r = MagicMock()
+        r.scalar_one_or_none.return_value = claimed
+        return r
+
+    session.execute = _execute
+    mgr = HITLManager()
+    result = await mgr.claim(session, run_id=_RUN, gate_id=_GATE, org_id=_ORG, claimant_id=_USER)
+    assert result is claimed
+    assert team_check_hit, "Team membership check was not performed"
+
+
+async def test_claim_non_team_member_raises():
+    """Non-team member gets NotTeamMemberError on a team-scoped gate."""
+    gate = _gate(claimed_by=None, required_team_id=_TEAM)
+
+    session = AsyncMock()
+    session.add = MagicMock()
+    session.flush = AsyncMock()
+
+    call_no = 0
+    team_check_hit = False
+
+    async def _execute(stmt: Any) -> Any:
+        nonlocal call_no, team_check_hit
+        call_no += 1
+        if call_no == 1:
+            # Pre-check SELECT
+            r = MagicMock()
+            r.scalar_one_or_none.return_value = gate
+            return r
+        if call_no == 2:
+            # Team membership check — no membership found
+            team_check_hit = True
+            r = MagicMock()
+            r.scalar_one_or_none.return_value = None
+            return r
+        raise AssertionError("Should not reach UPDATE or refetch")
+
+    session.execute = _execute
+    mgr = HITLManager()
+    with pytest.raises(NotTeamMemberError):
+        await mgr.claim(session, run_id=_RUN, gate_id=_GATE, org_id=_ORG, claimant_id=_USER)
+    assert team_check_hit, "Team membership check was not performed"
+
+
+async def test_claim_no_required_team_still_works():
+    """Gate without required_team_id still allows existing claim behavior."""
+    unclaimed = _gate(claimed_by=None)
+    claimed = _gate(
+        claimed_by=_USER,
+        claim_token="tok",
+        expires_at=datetime.now(UTC) + timedelta(minutes=15),
+    )
+    session = AsyncMock()
+    session.add = MagicMock()
+    session.flush = AsyncMock()
+
+    call_no = 0
+
+    async def _execute(stmt: Any) -> Any:
+        nonlocal call_no
+        call_no += 1
+        if call_no == 1:
+            # Pre-check SELECT — gate exists, no required_team_id
+            r = MagicMock()
+            r.scalar_one_or_none.return_value = unclaimed
+            return r
+        if call_no == 2:
+            # UPDATE
+            r = MagicMock()
+            r.scalar_one_or_none.return_value = uuid.uuid4()
+            return r
+        # Re-fetch
+        r = MagicMock()
+        r.scalar_one_or_none.return_value = claimed
+        return r
+
+    session.execute = _execute
+    mgr = HITLManager()
+    result = await mgr.claim(session, run_id=_RUN, gate_id=_GATE, org_id=_ORG, claimant_id=_USER)
+    assert result is claimed
 
 
 # ---------------------------------------------------------------------------
