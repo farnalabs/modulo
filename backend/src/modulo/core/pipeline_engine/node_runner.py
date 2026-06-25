@@ -2,21 +2,24 @@
 
 Node types:
   - standard (agent):  agent/connector node; runs the node body, then checks for
-                       outgoing HITL gate edges (handled externally via
-                       intermediate gate nodes).
+                        outgoing HITL gate edges (handled externally via
+                        intermediate gate nodes).
   - hitl_gate:         intermediate node inserted by build_graph_from_json for
-                       every edge that carries a hitl_gate_config.  Calls
-                       interrupt(gate_payload) and blocks until a human reviews
-                       it, unless the effective autonomy level (from run_context
-                       or pipeline default) bypasses the gate.
+                        every edge that carries a hitl_gate_config.  Calls
+                        interrupt(gate_payload) and blocks until a human reviews
+                        it, unless the effective autonomy level (from run_context
+                        or pipeline default) bypasses the gate.  Also supports
+                        conditional gating via a JMESPath ``condition`` on the
+                        gate config, and eval-before-interrupt for node-scoped
+                        eval definitions.
   - manual:            placeholder node for SDLC modeling.  No AI agent, no
-                       connector binding, no model backend required.  The human
-                       provides output directly via the HITL review UI.  Output
-                       is validated against output_schema_id before the run
-                       continues.  A log entry is recorded on completion.
-                       Fields required: id, output_schema_id (optional).
-                       Fields NOT required: agent_id, connector_binding,
-                       model_backend_id.
+                        connector binding, no model backend required.  The human
+                        provides output directly via the HITL review UI.  Output
+                        is validated against output_schema_id before the run
+                        continues.  A log entry is recorded on completion.
+                        Fields required: id, output_schema_id (optional).
+                        Fields NOT required: agent_id, connector_binding,
+                        model_backend_id.
 
 Autonomy integration:
   - ``manual_approval`` (default):  gate interrupts for human review.
@@ -24,13 +27,27 @@ Autonomy integration:
                                     no interrupt is raised.
   - ``fully_autonomous``:           gate is silently skipped.
   - ``human_only`` on gate config:  overrides autonomy — always interrupts.
+
+Conditional gating (§8.17):
+  - ``condition`` on ``hitl_gate_config``:  JMESPath expression evaluated
+    against the current state (upstream node output).  If falsy the gate is
+    skipped.  If truthy or absent the gate proceeds to autonomy checks.
+
+Eval-before-interrupt (§8.17):
+  - ``eval_definitions``:  list of ``EvalDefinition`` DTOs scoped to the
+    upstream node.  Evaluated *after* the condition check but *before* the
+    interrupt.  If any eval with ``failure_behaviour='block'`` fails, an
+    ``EvalBlockedError`` is raised instead of a ``NodeInterrupt``.
 """
 
 import logging
+from collections.abc import Sequence
 from typing import Any
 
+import jmespath
 from langgraph.errors import NodeInterrupt
 
+from modulo.core.eval_engine import EvalDefinition, EvalEngine
 from modulo.core.pipeline_engine.decorator import cancellable_node
 from modulo.core.run_context.autonomy import (
     effective_autonomy_level,
@@ -39,6 +56,21 @@ from modulo.core.run_context.autonomy import (
 )
 
 _log = logging.getLogger(__name__)
+
+
+def _is_truthy(value: Any) -> bool:
+    """Match the truthiness semantics used elsewhere (graph_cache, polling)."""
+    if value is None:
+        return False
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return value != 0
+    if isinstance(value, (list, dict)):
+        return len(value) > 0
+    if isinstance(value, str):
+        return len(value) > 0
+    return True
 
 
 def make_node_fn(
@@ -69,6 +101,7 @@ def make_hitl_gate_fn(
     hitl_gate_config: dict[str, Any],
     *,
     timeout: float | None = None,
+    eval_definitions: Sequence[EvalDefinition] | None = None,
 ) -> Any:
     """Return a node function that raises a HITL interrupt.
 
@@ -76,14 +109,66 @@ def make_hitl_gate_fn(
     runtime.  If the gate should be bypassed (autonomous mode) or
     auto-approved (notify mode), no interrupt is raised.
 
+    Conditional gating:
+      If ``hitl_gate_config`` contains a ``condition`` JMESPath expression,
+      it is evaluated against the current state.  If the result is falsy
+      the gate is skipped entirely (no autonomy or decision checks).
+
+    Eval-before-interrupt:
+      If ``eval_definitions`` is provided, each definition is evaluated
+      against the current state *after* the condition check but *before*
+      the interrupt.  Any eval with ``failure_behaviour='block'`` that
+      fails raises ``EvalBlockedError``, preventing the interrupt.
+
     On resume (via ``aupdate_state`` + ``astream_events(None, config)``),
     the node is re-invoked with ``state["_hitl_decision"]`` populated.
     It then returns artifacts reflecting the human's decision.
     """
     gate_id: str = hitl_gate_config.get("gate_id", "gate")
     human_only: bool = hitl_gate_config.get("human_only", False)
+    condition_expr: str | None = hitl_gate_config.get("condition")
 
     async def _hitl_gate(state: dict[str, Any]) -> dict[str, Any]:
+        # --- Resume check — always first so condition/evals aren't re-evaluated. ---
+        decision = state.get("_hitl_decision")
+        if decision is not None:
+            is_rejected = isinstance(decision, dict) and decision.get("action") == "rejected"
+            result_status = "rejected" if is_rejected else "approved"
+            out_artifacts: list[dict[str, Any]] = list(state.get("artifacts") or [])
+            out_artifacts.append(
+                {
+                    "node_id": gate_id,
+                    "status": "interrupted",
+                    "result": result_status,
+                    "human_data": decision,
+                }
+            )
+            return {"artifacts": out_artifacts}
+
+        # --- Conditional gate (§8.17) — evaluate condition against state. ---
+        if condition_expr is not None:
+            compiled = jmespath.compile(condition_expr)
+            result = compiled.search(state)
+            if not _is_truthy(result):
+                # Condition falsy — skip the gate entirely.
+                artifacts: list[dict[str, Any]] = list(state.get("artifacts") or [])
+                artifacts.append(
+                    {
+                        "node_id": gate_id,
+                        "status": "condition_skipped",
+                        "condition": condition_expr,
+                        "condition_result": result,
+                    }
+                )
+                return {"artifacts": artifacts}
+
+        # --- Eval-before-interrupt (§8.17) — run node-scoped evals. ---
+        if eval_definitions:
+            engine = EvalEngine()
+            for eval_def in eval_definitions:
+                engine.evaluate(state, eval_def)
+            # If any block eval failed, EvalBlockedError was raised above.
+
         # Determine effective autonomy level from run_context.
         run_context: dict[str, Any] = state.get("run_context") or {}
         pipeline_default: str | None = run_context.get("_pipeline_default_autonomy")
@@ -95,7 +180,7 @@ def make_hitl_gate_fn(
             pass
         elif should_skip_hitl_gate(autonomy):
             # fully_autonomous: silently skip the gate.
-            artifacts: list[dict[str, Any]] = list(state.get("artifacts") or [])
+            artifacts = list(state.get("artifacts") or [])
             artifacts.append(
                 {
                     "node_id": gate_id,
@@ -115,22 +200,6 @@ def make_hitl_gate_fn(
                 }
             )
             return {"artifacts": artifacts}
-
-        # Check if this is a resume after human review.
-        decision = state.get("_hitl_decision")
-        if decision is not None:
-            is_rejected = isinstance(decision, dict) and decision.get("action") == "rejected"
-            result = "rejected" if is_rejected else "approved"
-            out_artifacts: list[dict[str, Any]] = list(state.get("artifacts") or [])
-            out_artifacts.append(
-                {
-                    "node_id": gate_id,
-                    "status": "interrupted",
-                    "result": result,
-                    "human_data": decision,
-                }
-            )
-            return {"artifacts": out_artifacts}
 
         # First invocation — store config and interrupt.
         hitl_gates: list[dict[str, Any]] = list(state.get("_hitl_gates") or [])

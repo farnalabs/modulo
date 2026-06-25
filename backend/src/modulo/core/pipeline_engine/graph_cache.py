@@ -18,6 +18,7 @@ from typing import Any
 import jmespath
 from langgraph.graph import StateGraph
 
+from modulo.core.eval_engine import EvalDefinition
 from modulo.core.pipeline_engine.node_runner import (
     make_hitl_gate_fn,
     make_manual_node_fn,
@@ -132,7 +133,11 @@ def _make_conditional_router(
 # ---------------------------------------------------------------------------
 
 
-def build_graph_from_json(graph_json: dict[str, Any]) -> Any:
+def build_graph_from_json(
+    graph_json: dict[str, Any],
+    *,
+    eval_definitions_by_node: dict[str, list[EvalDefinition]] | None = None,
+) -> Any:
     """Compile a StateGraph from the serialised graph_json stored in a snapshot.
 
     graph_json schema:
@@ -145,7 +150,12 @@ def build_graph_from_json(graph_json: dict[str, Any]) -> Any:
     For edges that carry a ``hitl_gate_config``, an intermediate gate node is
     inserted between the source and target.  At runtime the gate node checks
     the effective autonomy level (from pipeline default or run_context) and
-    either interrupts for human review or auto-approves.
+    either interrupts for human review or auto-approves.  The gate node also
+    supports:
+      - Conditional gating via ``condition`` JMESPath expression on the gate
+        config (evaluated against state before autonomy checks).
+      - Eval-before-interrupt via ``eval_definitions_by_node`` keyed by the
+        source node id.
 
     Conditional edges (``type: "conditional"``) are compiled via
     ``add_conditional_edges`` with a JMESPath-based router.  If a source has
@@ -218,7 +228,15 @@ def build_graph_from_json(graph_json: dict[str, Any]) -> Any:
                 if hitl_config:
                     gate_id = _make_gate_id(source, target)
                     hitl_config["gate_id"] = gate_id
-                    graph.add_node(gate_id, make_hitl_gate_fn(hitl_config))
+                    node_evals = (
+                        eval_definitions_by_node.get(source)
+                        if eval_definitions_by_node is not None
+                        else None
+                    )
+                    graph.add_node(
+                        gate_id,
+                        make_hitl_gate_fn(hitl_config, eval_definitions=node_evals),
+                    )
                     graph.add_edge(source, gate_id)
                     graph.add_edge(gate_id, target)
                     gate_node_ids.add(gate_id)

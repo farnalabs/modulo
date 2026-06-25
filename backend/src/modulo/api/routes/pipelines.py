@@ -143,6 +143,12 @@ class HitlGateConfig(BaseModel):
     claim_expiry_minutes: int = Field(gt=0, le=1440)
     human_only: bool
     required_team_id: uuid.UUID | None = None
+    condition: str | None = Field(
+        default=None,
+        max_length=500,
+        description="JMESPath expression evaluated against the upstream node output. "
+        "If it returns true, gate activates. If false/empty/null, gate is skipped.",
+    )
 
 
 class PipelineGraphEdge(BaseModel):

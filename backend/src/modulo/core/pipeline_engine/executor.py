@@ -28,8 +28,17 @@ from langgraph.errors import NodeInterrupt
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker
 
-from modulo.core.eval_engine import EvalResult as EngineEvalResult
-from modulo.core.eval_engine import SuiteEvalResult, evaluate_suite
+from modulo.core.eval_engine import (
+    EvalBlockedError,
+    SuiteEvalResult,
+    evaluate_suite,
+)
+from modulo.core.eval_engine import (
+    EvalDefinition as EvalDefDTO,
+)
+from modulo.core.eval_engine import (
+    EvalResult as EngineEvalResult,
+)
 from modulo.core.graph_validator import GraphValidator
 from modulo.core.pipeline_engine.decorator import (
     RunCancelledError,
@@ -242,10 +251,41 @@ class PipelineExecutor:
         snapshot_id = run.snapshot_id
         thread_id = run.langgraph_thread_id
 
+        # Load eval definitions for eval-before-interrupt (resume path).
+        eval_stmt = (
+            select(EvalDefinition)
+            .where(
+                EvalDefinition.pipeline_id == pipeline_id,
+                EvalDefinition.node_id.isnot(None),
+            )
+        )
+        eval_rows = (await session.execute(eval_stmt)).scalars().all()
+        resume_eval_defs_by_node: dict[str, list[EvalDefDTO]] = {}
+        for e in eval_rows:
+            node_key = str(e.node_id) if e.node_id else ""
+            if node_key:
+                resume_eval_defs_by_node.setdefault(node_key, []).append(
+                    EvalDefDTO(
+                        id=e.id,
+                        org_id=org_id,
+                        pipeline_id=e.pipeline_id,
+                        node_id=node_key,
+                        name=e.name,
+                        eval_type=e.eval_type,  # type: ignore[arg-type]
+                        config=e.config_json,
+                        failure_behaviour=e.failure_behaviour,  # type: ignore[arg-type]
+                        pass_threshold=e.pass_threshold,
+                        suite_id=e.suite_id,
+                    )
+                )
+
         compiled = get_or_compile(
             pipeline_id,
             snapshot_id,
-            lambda: build_graph_from_json(graph_json),
+            lambda: build_graph_from_json(
+                graph_json,
+                eval_definitions_by_node=resume_eval_defs_by_node,
+            ),
         )
 
         config = {"configurable": {"thread_id": thread_id}}
@@ -328,6 +368,34 @@ class PipelineExecutor:
         snapshot_id = run.snapshot_id
         thread_id = run.langgraph_thread_id
 
+        # Load eval definitions for conditional HITL gating (eval-before-interrupt).
+        eval_stmt = (
+            select(EvalDefinition)
+            .where(
+                EvalDefinition.pipeline_id == pipeline_id,
+                EvalDefinition.node_id.isnot(None),
+            )
+        )
+        eval_rows = (await session.execute(eval_stmt)).scalars().all()
+        eval_defs_by_node: dict[str, list[EvalDefDTO]] = {}
+        for e in eval_rows:
+            node_key = str(e.node_id) if e.node_id else ""
+            if node_key:
+                eval_defs_by_node.setdefault(node_key, []).append(
+                    EvalDefDTO(
+                        id=e.id,
+                        org_id=org_id,
+                        pipeline_id=e.pipeline_id,
+                        node_id=node_key,
+                        name=e.name,
+                        eval_type=e.eval_type,  # type: ignore[arg-type]
+                        config=e.config_json,
+                        failure_behaviour=e.failure_behaviour,  # type: ignore[arg-type]
+                        pass_threshold=e.pass_threshold,
+                        suite_id=e.suite_id,
+                    )
+                )
+
         # Wait for capacity slot (or return cancelled/timed out).
         capacity_run = await self._wait_for_capacity_or_fail(
             run_id=run_id,
@@ -355,7 +423,10 @@ class PipelineExecutor:
             compiled = get_or_compile(
                 pipeline_id,
                 snapshot_id,
-                lambda: build_graph_from_json(graph_json),
+                lambda: build_graph_from_json(
+                    graph_json,
+                    eval_definitions_by_node=eval_defs_by_node,
+                ),
             )
 
             initial_state = _seed_state(snapshot, input_payload)
@@ -519,6 +590,9 @@ class PipelineExecutor:
             gate_payload = interrupts[0].value if interrupts else {}
             broker.publish("hitl_awaiting", {"gate_payload": gate_payload})
             return "awaiting_human", None
+        except EvalBlockedError as exc:
+            broker.publish("run_failed", {"error": "eval_blocked", "detail": str(exc)})
+            return "failed", "eval_blocked"
         except RunCancelledError:
             broker.publish("run_cancelled", {})
             return "cancelled", None
