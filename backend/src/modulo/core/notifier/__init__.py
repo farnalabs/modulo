@@ -75,12 +75,19 @@ class Notifier:
         *,
         run_id: uuid.UUID | None = None,
         retain_payload: bool = False,
+        team_id: uuid.UUID | None = None,
     ) -> list[DispatchResult]:
-        """Dispatch a notification event to all subscribed endpoints for the org.
+        """Dispatch a notification event to subscribed endpoints.
+
+        When ``team_id`` is provided, dispatches to team-specific endpoints
+        first, falling back to org-wide (team_id IS NULL) endpoints if no
+        team-specific endpoints are configured for the event type.
+
+        When ``team_id`` is None, dispatches only to org-wide endpoints.
 
         Returns a list of DispatchResult, one per endpoint.
         """
-        endpoints = await self._get_subscribed_endpoints(org_id, event_type)
+        endpoints = await self._get_subscribed_endpoints(org_id, event_type, team_id=team_id)
         if not endpoints:
             _log.debug("notifier.no_subscribers", extra={"event_type": event_type, "org_id": str(org_id)})
             return []
@@ -96,16 +103,43 @@ class Notifier:
         self,
         org_id: uuid.UUID,
         event_type: str,
+        *,
+        team_id: uuid.UUID | None = None,
     ) -> list[NotificationEndpoint]:
-        """Return all active endpoints in the org subscribed to ``event_type``."""
+        """Return active endpoints subscribed to ``event_type``.
+
+        When ``team_id`` is provided, first queries endpoints matching the
+        team. If none match, falls back to org-wide (team_id IS NULL)
+        endpoints.
+
+        When ``team_id`` is None, returns only org-wide endpoints.
+        """
         async with self._session_factory() as session:
-            result = await session.execute(
-                select(NotificationEndpoint).where(
+            if team_id is not None:
+                stmt = select(NotificationEndpoint).where(
                     NotificationEndpoint.organisation_id == org_id,
+                    NotificationEndpoint.team_id == team_id,
                     NotificationEndpoint.auto_disabled.is_(False),
                 )
-            )
-            all_endpoints = list(result.scalars())
+                result = await session.execute(stmt)
+                all_endpoints = list(result.scalars())
+                if not all_endpoints:
+                    stmt = select(NotificationEndpoint).where(
+                        NotificationEndpoint.organisation_id == org_id,
+                        NotificationEndpoint.team_id.is_(None),
+                        NotificationEndpoint.auto_disabled.is_(False),
+                    )
+                    result = await session.execute(stmt)
+                    all_endpoints = list(result.scalars())
+            else:
+                result = await session.execute(
+                    select(NotificationEndpoint).where(
+                        NotificationEndpoint.organisation_id == org_id,
+                        NotificationEndpoint.team_id.is_(None),
+                        NotificationEndpoint.auto_disabled.is_(False),
+                    )
+                )
+                all_endpoints = list(result.scalars())
         subscribed = []
         for ep in all_endpoints:
             try:

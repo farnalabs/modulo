@@ -18,7 +18,7 @@ from modulo.api.dependencies import get_db_session
 from modulo.auth.dependencies import get_current_user
 from modulo.auth.jwt import AuthenticatedPrincipal
 from modulo.db.models.notification_endpoint import NotificationEndpoint
-from modulo.db.rls import set_rls_org
+from modulo.db.rls import set_rls_org, set_rls_user_context
 from modulo.settings import Settings, get_settings
 
 router = APIRouter(prefix="/api/v1/notifications", tags=["notifications"])
@@ -29,6 +29,7 @@ class NotificationEndpointCreate(BaseModel):
     secret: str | None = Field(None)
     events: list[str] = Field(default_factory=list)
     description: str | None = Field(None, max_length=500)
+    team_id: str | None = None
 
     @field_validator("url")
     @classmethod
@@ -37,12 +38,23 @@ class NotificationEndpointCreate(BaseModel):
             raise ValueError("url must start with http:// or https://")
         return v
 
+    @field_validator("team_id")
+    @classmethod
+    def _team_id_must_be_uuid(cls, v: str | None) -> str | None:
+        if v is not None:
+            try:
+                uuid.UUID(v)
+            except ValueError:
+                raise ValueError("team_id must be a valid UUID")
+        return v
+
 
 class NotificationEndpointUpdate(BaseModel):
     url: str | None = Field(None, max_length=2048)
     secret: str | None = None
     events: list[str] | None = None
     description: str | None = Field(None, max_length=500)
+    team_id: str | None = None
 
 
 class NotificationEndpointResponse(BaseModel):
@@ -52,6 +64,7 @@ class NotificationEndpointResponse(BaseModel):
     description: str | None
     auto_disabled: bool
     consecutive_dead_letter_count: int
+    team_id: str | None = None
 
 
 @router.get("", response_model=list[NotificationEndpointResponse])
@@ -61,6 +74,7 @@ async def list_endpoints(
 ) -> list[NotificationEndpointResponse]:
     async with session.begin():
         await set_rls_org(session, principal.organisation_id)
+        await set_rls_user_context(session, principal.user_id, principal.org_role)
         result = await session.execute(
             select(NotificationEndpoint).where(NotificationEndpoint.organisation_id == principal.organisation_id)
         )
@@ -77,13 +91,24 @@ async def create_endpoint(
 ) -> NotificationEndpointResponse:
     from cryptography.fernet import Fernet
 
+    if body.team_id is not None and principal.org_role != "admin":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only admins can create team-scoped notification endpoints",
+        )
+
     fernet = Fernet(settings.fernet_key.encode())
     secret_ciphertext: bytes | None = None
     if body.secret:
         secret_ciphertext = fernet.encrypt(body.secret.encode())
 
+    team_id: uuid.UUID | None = None
+    if body.team_id is not None:
+        team_id = uuid.UUID(body.team_id)
+
     async with session.begin():
         await set_rls_org(session, principal.organisation_id)
+        await set_rls_user_context(session, principal.user_id, principal.org_role)
         ep = NotificationEndpoint(
             id=uuid.uuid4(),
             organisation_id=principal.organisation_id,
@@ -92,6 +117,7 @@ async def create_endpoint(
             events=json.dumps(body.events),
             description=body.description,
             created_by=principal.user_id,
+            team_id=team_id,
         )
         session.add(ep)
         await session.flush()
@@ -107,6 +133,7 @@ async def get_endpoint(
 ) -> NotificationEndpointResponse:
     async with session.begin():
         await set_rls_org(session, principal.organisation_id)
+        await set_rls_user_context(session, principal.user_id, principal.org_role)
         ep = await session.get(NotificationEndpoint, endpoint_id)
         if ep is None or ep.organisation_id != principal.organisation_id:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Endpoint not found")
@@ -123,8 +150,15 @@ async def update_endpoint(
 ) -> NotificationEndpointResponse:
     from cryptography.fernet import Fernet
 
+    if body.team_id is not None and principal.org_role != "admin":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only admins can assign team-scoped notification endpoints",
+        )
+
     async with session.begin():
         await set_rls_org(session, principal.organisation_id)
+        await set_rls_user_context(session, principal.user_id, principal.org_role)
         ep = await session.get(NotificationEndpoint, endpoint_id)
         if ep is None or ep.organisation_id != principal.organisation_id:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Endpoint not found")
@@ -138,6 +172,8 @@ async def update_endpoint(
             ep.events = json.dumps(body.events)
         if body.description is not None:
             ep.description = body.description
+        if body.team_id is not None:
+            ep.team_id = uuid.UUID(body.team_id)
 
         await session.flush()
 
@@ -152,6 +188,7 @@ async def delete_endpoint(
 ) -> None:
     async with session.begin():
         await set_rls_org(session, principal.organisation_id)
+        await set_rls_user_context(session, principal.user_id, principal.org_role)
         ep = await session.get(NotificationEndpoint, endpoint_id)
         if ep is None or ep.organisation_id != principal.organisation_id:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Endpoint not found")
@@ -171,4 +208,5 @@ def _ep_to_response(ep: NotificationEndpoint) -> NotificationEndpointResponse:
         description=ep.description,
         auto_disabled=bool(ep.auto_disabled) if ep.auto_disabled is not None else False,
         consecutive_dead_letter_count=ep.consecutive_dead_letter_count or 0,
+        team_id=str(ep.team_id) if ep.team_id else None,
     )
