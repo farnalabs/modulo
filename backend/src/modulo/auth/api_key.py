@@ -7,6 +7,13 @@ Storage:     lookup_prefix = first 8 chars after "mk_"
 Alpha scopes:
   operator — read + trigger + HITL
   runner   — trigger only
+
+Team-scoped enforcement:
+  When an API key has a non-null ``team_id``, all operations performed
+  with that key are scoped to that specific team. The key's ``role`` field
+  already limits the effective permission level (operator/runner). The
+  ``team_id`` on the key acts as an additional filter — RLS policies on
+  team-scoped tables enforce that only the owning team's data is accessible.
 """
 
 import hashlib
@@ -52,6 +59,16 @@ def generate_api_key() -> tuple[str, str, str]:
 
 def _hash_key(full_key: str) -> str:
     return hashlib.sha256(full_key.encode()).hexdigest()
+
+
+def _validate_team_key_role(key: OrgApiKey) -> None:
+    """Reject admin roles on team-scoped keys.
+
+    Team-scoped keys must use operator or runner roles — admin
+    is reserved for org-wide keys without team_id.
+    """
+    if key.team_id is not None and key.role == "admin":
+        raise ValueError("team-scoped API keys cannot have admin role")
 
 
 async def create_api_key(
@@ -145,6 +162,7 @@ def _serialize_key(k: OrgApiKey) -> dict[str, Any]:
         "id": str(k.id),
         "name": k.name,
         "role": k.role,
+        "team_id": str(k.team_id) if k.team_id else None,
         "lookup_prefix": f"mk_{k.lookup_prefix}****",
         "last_used_at": k.last_used_at.isoformat() if k.last_used_at else None,
         "created_at": k.created_at.isoformat(),
@@ -174,6 +192,7 @@ async def update_api_key(
     *,
     name: str | None = None,
     role: str | None = None,
+    team_id: uuid.UUID | None = None,
     expires_at: datetime | None = None,
 ) -> OrgApiKey | None:
     stmt = select(OrgApiKey).where(
@@ -189,6 +208,8 @@ async def update_api_key(
         key.name = name
     if role is not None:
         key.role = role
+    if team_id is not None:
+        key.team_id = team_id
     if expires_at is not None:
         key.expires_at = expires_at
     await session.flush()

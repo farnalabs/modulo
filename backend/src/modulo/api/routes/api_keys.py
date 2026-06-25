@@ -12,7 +12,8 @@ from modulo.api.dependencies import get_db_session
 from modulo.auth.api_key import create_api_key, list_api_keys, revoke_api_key, update_api_key
 from modulo.auth.dependencies import get_current_user
 from modulo.auth.jwt import AuthenticatedPrincipal
-from modulo.db.rls import set_rls_org
+from modulo.auth.team_rbac import ORG_ROLE_HIERARCHY
+from modulo.db.rls import set_rls_org, set_rls_user_context
 from modulo.settings import Settings, get_settings
 
 router = APIRouter(prefix="/api/v1/api-keys", tags=["api-keys"])
@@ -22,11 +23,13 @@ class ApiKeyCreate(BaseModel):
     name: str = Field(min_length=1)
     role: str = "operator"
     expires_at: str | None = None
+    team_id: str | None = None
 
 
 class ApiKeyUpdate(BaseModel):
     name: str | None = Field(None, min_length=1)
     role: str | None = Field(None, min_length=1)
+    team_id: str | None = None
 
 
 class ApiKeyCreatedResponse(BaseModel):
@@ -36,6 +39,7 @@ class ApiKeyCreatedResponse(BaseModel):
     full_key: str
     lookup_prefix: str
     created_at: datetime
+    team_id: str | None = None
 
     model_config = {"from_attributes": False}
 
@@ -50,6 +54,14 @@ class McpConfigResponse(BaseModel):
     config_snippet: dict[str, Any]
 
 
+def _require_admin(principal: AuthenticatedPrincipal) -> None:
+    if ORG_ROLE_HIERARCHY.get(principal.org_role, -1) < ORG_ROLE_HIERARCHY["admin"]:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only admin users can perform this action",
+        )
+
+
 @router.post("", response_model=ApiKeyCreatedResponse, status_code=status.HTTP_201_CREATED)
 async def create_api_key_endpoint(
     body: ApiKeyCreate,
@@ -61,17 +73,23 @@ async def create_api_key_endpoint(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail="role must be 'operator' or 'runner'. admin keys are prohibited.",
         )
+    team_id: uuid.UUID | None = None
+    if body.team_id is not None:
+        _require_admin(principal)
+        team_id = uuid.UUID(body.team_id)
     expires_at: datetime | None = None
     if body.expires_at:
         expires_at = datetime.fromisoformat(body.expires_at)
     async with session.begin():
         await set_rls_org(session, principal.organisation_id)
+        await set_rls_user_context(session, principal.user_id, principal.org_role)
         key, full_key = await create_api_key(
             session,
             org_id=principal.organisation_id,
             name=body.name,
             role=body.role,
             created_by=principal.user_id,
+            team_id=team_id,
             expires_at=expires_at,
         )
     return ApiKeyCreatedResponse(
@@ -81,6 +99,7 @@ async def create_api_key_endpoint(
         full_key=full_key,
         lookup_prefix=f"mk_{key.lookup_prefix}****",
         created_at=key.created_at,
+        team_id=str(key.team_id) if key.team_id else None,
     )
 
 
@@ -91,6 +110,7 @@ async def list_api_keys_endpoint(
 ) -> list[dict[str, Any]]:
     async with session.begin():
         await set_rls_org(session, principal.organisation_id)
+        await set_rls_user_context(session, principal.user_id, principal.org_role)
         return await list_api_keys(session, principal.organisation_id)
 
 
@@ -106,14 +126,20 @@ async def update_api_key_endpoint(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail="role must be 'operator' or 'runner'.",
         )
+    team_id: uuid.UUID | None = None
+    if body.team_id is not None:
+        _require_admin(principal)
+        team_id = uuid.UUID(body.team_id)
     async with session.begin():
         await set_rls_org(session, principal.organisation_id)
+        await set_rls_user_context(session, principal.user_id, principal.org_role)
         key = await update_api_key(
             session,
             key_id,
             principal.organisation_id,
             name=body.name,
             role=body.role,
+            team_id=team_id,
         )
     if key is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="API key not found")
@@ -121,6 +147,7 @@ async def update_api_key_endpoint(
         "id": str(key.id),
         "name": key.name,
         "role": key.role,
+        "team_id": str(key.team_id) if key.team_id else None,
         "expires_at": key.expires_at.isoformat() if key.expires_at else None,
     }
 
@@ -133,6 +160,7 @@ async def revoke_api_key_endpoint(
 ) -> ApiKeyRevokeResponse:
     async with session.begin():
         await set_rls_org(session, principal.organisation_id)
+        await set_rls_user_context(session, principal.user_id, principal.org_role)
         revoked = await revoke_api_key(session, key_id, principal.organisation_id)
     if not revoked:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="API key not found")
