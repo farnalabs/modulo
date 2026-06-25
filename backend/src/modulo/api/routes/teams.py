@@ -9,6 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from modulo.api.dependencies import get_db_session
 from modulo.auth.dependencies import get_current_user
 from modulo.auth.jwt import AuthenticatedPrincipal
+from modulo.auth.team_rbac import ORG_ROLE_HIERARCHY, TEAM_ROLE_HIERARCHY
 from modulo.db.crud.team import (
     create_team,
     delete_team,
@@ -23,6 +24,7 @@ from modulo.db.crud.team_membership import (
     list_team_members,
     remove_team_member,
 )
+from modulo.db.crud.user import get_user_by_id_org
 from modulo.db.rls import set_rls_org, set_rls_user_context
 
 router = APIRouter(prefix="/api/v1/teams", tags=["teams"])
@@ -55,7 +57,7 @@ class TeamListResponse(BaseModel):
 
 class AddMemberRequest(BaseModel):
     user_id: str = Field(min_length=36, max_length=36)
-    role: str = Field(default="member", pattern=r"^(member|admin)$")
+    role: str = Field(default="viewer", pattern=r"^(viewer|runner|operator|admin)$")
 
 
 class MembershipResponse(BaseModel):
@@ -74,7 +76,7 @@ class MembershipListResponse(BaseModel):
 
 
 def _require_admin(principal: AuthenticatedPrincipal) -> None:
-    if principal.org_role != "admin":
+    if ORG_ROLE_HIERARCHY.get(principal.org_role, -1) < ORG_ROLE_HIERARCHY["admin"]:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Only admin users can perform this action",
@@ -260,6 +262,17 @@ async def add_member_endpoint(
     async with session.begin():
         await set_rls_org(session, current_user.organisation_id)
         await set_rls_user_context(session, current_user.user_id, current_user.org_role)
+
+        target_user = await get_user_by_id_org(session, user_id, current_user.organisation_id)
+        if target_user is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found in organisation")
+
+        if TEAM_ROLE_HIERARCHY.get(body.role, -1) > ORG_ROLE_HIERARCHY.get(target_user.org_role, -1):
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=f"Team role '{body.role}' exceeds user's org role '{target_user.org_role}'",
+            )
+
         team = await get_team(session, team_id)
         if team is None:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Team not found")
