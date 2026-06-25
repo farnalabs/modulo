@@ -68,6 +68,12 @@
           </div>
         </div>
 
+        <div class="bg-white border border-gray-200 rounded-lg p-6 mb-6">
+          <h3 class="text-base font-medium text-gray-900 mb-4">Ownership</h3>
+          <p class="text-sm text-gray-600 mb-4">Choose who this pipeline belongs to. Org-wide pipelines are visible to everyone in the organisation; team pipelines are visible only to team members.</p>
+          <OwnershipPicker v-model="ownership" label="Owner" />
+        </div>
+
         <div v-if="templateAgents.length > 0" class="bg-white border border-gray-200 rounded-lg p-6 mb-6">
           <h3 class="text-base font-medium text-gray-900 mb-4">Template Agents ({{ templateAgents.length }})</h3>
           <div class="space-y-3">
@@ -138,6 +144,8 @@
 import { ref, onMounted } from 'vue'
 import { useRoute } from 'vue-router'
 import { useApi } from '../composables/useApi'
+import OwnershipPicker from '../components/OwnershipPicker.vue'
+import type { OwnershipValue } from '../components/OwnershipPicker.vue'
 
 interface LibraryPrimitive {
   id: string
@@ -181,6 +189,7 @@ const loading = ref(true)
 const error = ref<string | null>(null)
 const pipelineName = ref('')
 const pipelineDescription = ref('')
+const ownership = ref<OwnershipValue>({ owner_team_id: null, visibility: 'org' })
 const creating = ref(false)
 const createError = ref<string | null>(null)
 const result = ref<CreatePipelineResponse | null>(null)
@@ -210,6 +219,8 @@ async function createPipeline() {
       {
         name: pipelineName.value || undefined,
         description: pipelineDescription.value || undefined,
+        owner_team_id: ownership.value.owner_team_id,
+        visibility: ownership.value.visibility,
       },
     )
     result.value = data
