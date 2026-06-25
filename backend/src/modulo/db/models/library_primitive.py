@@ -23,8 +23,7 @@ class LibraryPrimitive(OrgScoped):
     __table_args__ = (
         CheckConstraint("source IN ('local', 'registry')", name="ck_library_primitives_source"),
         CheckConstraint(
-            "primitive_type IN ('schema', 'workflow', 'agent', 'integration', "
-            "'test_fixture', 'pipeline_template')",
+            "primitive_type IN ('schema', 'workflow', 'agent', 'integration', 'test_fixture', 'pipeline_template')",
             name="ck_library_primitives_type",
         ),
         CheckConstraint(
@@ -54,9 +53,7 @@ class LibraryPrimitive(OrgScoped):
             "average_rating IS NULL OR average_rating BETWEEN 1 AND 5",
             name="ck_library_primitives_rating",
         ),
-        UniqueConstraint(
-            "organisation_id", "source", "slug", "version", name="uq_library_primitive_version"
-        ),
+        UniqueConstraint("organisation_id", "source", "slug", "version", name="uq_library_primitive_version"),
     )
 
     source: Mapped[str] = mapped_column(String(20), nullable=False)

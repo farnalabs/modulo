@@ -270,9 +270,7 @@ async def get_schema_version_endpoint(
         await set_rls_org(session, principal.organisation_id)
         sv = await get_schema_version(session, schema_id, version)
     if sv is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail="Schema version not found"
-        )
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Schema version not found")
     return SchemaVersionResponse.model_validate(sv)
 
 
@@ -361,8 +359,7 @@ async def infer_schema_endpoint(
 
     suggestion_name = f"Inferred from {ci.name}"
     suggestion_description = (
-        f"Auto-inferred schema from {ci.name} "
-        f"({body.sample_query.resource}, {len(records)} samples)"
+        f"Auto-inferred schema from {ci.name} ({body.sample_query.resource}, {len(records)} samples)"
     )
 
     return SchemaInferResponse(
@@ -453,9 +450,7 @@ class SchemaValidateResponse(BaseModel):
     errors: list[SchemaValidationError]
 
 
-def _find_json_location(
-    raw: str, instance: dict[str, Any], error_path: str
-) -> tuple[int | None, int | None]:
+def _find_json_location(raw: str, instance: dict[str, Any], error_path: str) -> tuple[int | None, int | None]:
     """Best-effort line/column lookup for a validation error path in raw JSON text."""
     try:
         parsed = json.loads(raw)

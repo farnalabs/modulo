@@ -28,29 +28,36 @@ class LoginRequest(BaseModel):
     email: str = Field(min_length=1)
     password: str = Field(min_length=1)
 
+
 class LoginResponse(BaseModel):
     access_token: str
     refresh_token: str
     token_type: str = "bearer"
 
+
 class RefreshRequest(BaseModel):
     refresh_token: str = Field(min_length=1)
+
 
 class RefreshResponse(BaseModel):
     access_token: str
     refresh_token: str
     token_type: str = "bearer"
 
+
 class LogoutResponse(BaseModel):
     detail: str = "Logged out"
 
+
 class WsTokenRequest(BaseModel):
     pass
+
 
 class WsTokenResponse(BaseModel):
     ws_token: str
     token_type: str = "bearer"
     expires_in_minutes: int = 15
+
 
 class MeResponse(BaseModel):
     id: str
@@ -78,13 +85,15 @@ async def login(
     family = await create_family(session, user.id, user.organisation_id)
 
     access_token = create_access_token(
-        user.email, settings.secret_key,
+        user.email,
+        settings.secret_key,
         organisation_id=str(user.organisation_id),
         user_id=str(user.id),
         org_role=user.org_role,
     )
     refresh_token = create_refresh_token(
-        user.email, settings.secret_key,
+        user.email,
+        settings.secret_key,
         organisation_id=str(user.organisation_id),
         user_id=str(user.id),
         org_role=user.org_role,
@@ -144,13 +153,15 @@ async def refresh(
         )
 
     new_access = create_access_token(
-        str(sub_val), settings.secret_key,
+        str(sub_val),
+        settings.secret_key,
         organisation_id=str(org_id_val),
         user_id=str(user_id_val),
         org_role=str(org_role_val),
     )
     new_refresh = create_refresh_token(
-        str(sub_val), settings.secret_key,
+        str(sub_val),
+        settings.secret_key,
         organisation_id=str(org_id_val),
         user_id=str(user_id_val),
         org_role=str(org_role_val),
@@ -191,7 +202,8 @@ async def ws_token(
     settings: Settings = Depends(get_settings),
 ) -> WsTokenResponse:
     token = create_ws_token(
-        current_user.username, settings.secret_key,
+        current_user.username,
+        settings.secret_key,
         organisation_id=str(current_user.organisation_id),
         user_id=str(current_user.user_id),
         org_role=current_user.org_role,

@@ -44,8 +44,7 @@ class VaultSecretsBackend(SecretsBackend):
     def __init__(self) -> None:
         if not _MODULE_AVAILABLE:
             raise RuntimeError(
-                "The 'hvac' package is required for VaultSecretsBackend. "
-                "Install it with: pip install hvac"
+                "The 'hvac' package is required for VaultSecretsBackend. Install it with: pip install hvac"
             )
 
         self._addr: str = os.environ.get("VAULT_ADDR", "")
@@ -64,8 +63,7 @@ class VaultSecretsBackend(SecretsBackend):
         """Return a configured hvac client, creating one if needed."""
         if not _MODULE_AVAILABLE:
             raise RuntimeError(
-                "The 'hvac' package is required for VaultSecretsBackend. "
-                "Install it with: pip install hvac"
+                "The 'hvac' package is required for VaultSecretsBackend. Install it with: pip install hvac"
             )
         if self._client is not None:
             return self._client
@@ -80,10 +78,7 @@ class VaultSecretsBackend(SecretsBackend):
                 secret_id=self._secret_id,
             )
         else:
-            raise RuntimeError(
-                "VaultSecretsBackend: neither VAULT_TOKEN nor "
-                "VAULT_ROLE_ID+VAULT_SECRET_ID are set"
-            )
+            raise RuntimeError("VaultSecretsBackend: neither VAULT_TOKEN nor VAULT_ROLE_ID+VAULT_SECRET_ID are set")
 
         self._client = client
         return client
@@ -104,9 +99,7 @@ class VaultSecretsBackend(SecretsBackend):
         except _hvac.exceptions.InvalidPath:
             raise KeyError(key) from None
         except _hvac.exceptions.Forbidden as exc:
-            raise PermissionError(
-                "VaultSecretsBackend: permission denied reading secret"
-            ) from exc
+            raise PermissionError("VaultSecretsBackend: permission denied reading secret") from exc
 
         data: dict[str, Any] = response.get("data", {})
         secret_data: dict[str, Any] = data.get("data", {})

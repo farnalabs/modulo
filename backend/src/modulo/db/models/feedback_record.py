@@ -18,8 +18,7 @@ class FeedbackRecord(OrgScoped):
             name="ck_feedback_records_status",
         ),
         CheckConstraint(
-            "feedback_handler_type IN ('human', 'ai_correction', "
-            "'ai_correction_with_human_review')",
+            "feedback_handler_type IN ('human', 'ai_correction', 'ai_correction_with_human_review')",
             name="ck_feedback_records_handler_type",
         ),
     )
@@ -40,12 +39,8 @@ class FeedbackRecord(OrgScoped):
     producing_agent_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("agents.id", ondelete="SET NULL"), nullable=True
     )
-    feedback_status: Mapped[str] = mapped_column(
-        String(20), nullable=False, server_default="pending"
-    )
-    feedback_handler_type: Mapped[str] = mapped_column(
-        String(40), nullable=False, server_default="human"
-    )
+    feedback_status: Mapped[str] = mapped_column(String(20), nullable=False, server_default="pending")
+    feedback_handler_type: Mapped[str] = mapped_column(String(40), nullable=False, server_default="human")
     correction_run_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("runs.id", ondelete="SET NULL"), nullable=True
     )

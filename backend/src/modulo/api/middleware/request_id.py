@@ -4,8 +4,8 @@ Delegates to CorrelationIdMiddleware. Kept for backward compat imports.
 New code should import CorrelationIdMiddleware from correlation_id directly.
 """
 
-from modulo.api.middleware.correlation_id import CorrelationIdMiddleware, REQUEST_ID_HEADER
+from modulo.api.middleware.correlation_id import REQUEST_ID_HEADER, CorrelationIdMiddleware
 
 RequestIdMiddleware = CorrelationIdMiddleware
 
-__all__ = ["RequestIdMiddleware", "REQUEST_ID_HEADER"]
+__all__ = ["REQUEST_ID_HEADER", "RequestIdMiddleware"]

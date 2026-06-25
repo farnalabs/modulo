@@ -108,10 +108,7 @@ class ClaimExpiryJob:
                         .returning(HitlClaim.run_id, HitlClaim.gate_id)
                     )
                     rows = (await session.execute(stmt)).all()
-                    expired = [
-                        {"run_id": r[0], "gate_id": r[1], "organisation_id": org_id}
-                        for r in rows
-                    ]
+                    expired = [{"run_id": r[0], "gate_id": r[1], "organisation_id": org_id} for r in rows]
                     all_expired.extend(expired)
 
                     # Batch-reset affected runs back to awaiting_human

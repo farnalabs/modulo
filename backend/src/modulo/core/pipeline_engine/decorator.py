@@ -91,9 +91,7 @@ def cancellable_node(
             # 1b. DB-backed cancellation check (authoritative source)
             db_check = _get_cancellation_check()
             if db_check is not None and await db_check():
-                raise RunCancelledError(
-                    f"Run cancelled (DB check) before node {fn.__name__!r} could execute."
-                )
+                raise RunCancelledError(f"Run cancelled (DB check) before node {fn.__name__!r} could execute.")
 
             # 2. Timeout-wrapped execution
             coro = fn(state, **kwargs)
@@ -101,9 +99,7 @@ def cancellable_node(
                 try:
                     result: dict[str, Any] = await asyncio.wait_for(coro, timeout=timeout)
                 except TimeoutError:
-                    raise TimeoutError(
-                        f"Node {fn.__name__!r} exceeded {timeout}s timeout."
-                    ) from None
+                    raise TimeoutError(f"Node {fn.__name__!r} exceeded {timeout}s timeout.") from None
             else:
                 result = await coro
 
@@ -111,16 +107,16 @@ def cancellable_node(
             if result and "run_context" in result:
                 if role == "context_setter":
                     # Record write in the ordered write-log with last-write-wins semantics.
-                    write_log: list[dict[str, Any]] = list(
-                        state.get(_RUN_CONTEXT_WRITE_LOG_KEY) or []
-                    )
+                    write_log: list[dict[str, Any]] = list(state.get(_RUN_CONTEXT_WRITE_LOG_KEY) or [])
                     written_fields = list(result["run_context"].keys())
-                    write_log.append({
-                        "node_name": fn.__name__,
-                        "role": role,
-                        "timestamp": datetime.now(UTC).isoformat(),
-                        "written_fields": written_fields,
-                    })
+                    write_log.append(
+                        {
+                            "node_name": fn.__name__,
+                            "role": role,
+                            "timestamp": datetime.now(UTC).isoformat(),
+                            "written_fields": written_fields,
+                        }
+                    )
                     result[_RUN_CONTEXT_WRITE_LOG_KEY] = write_log
 
                     _log.info(

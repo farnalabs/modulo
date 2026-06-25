@@ -89,9 +89,7 @@ def refresh_access_token(refresh_token: str, secret_key: str) -> str:
     )
 
 
-def decode_principal(
-    token: str, secret_key: str, allowed_purposes: list[str] | None = None
-) -> AuthenticatedPrincipal:
+def decode_principal(token: str, secret_key: str, allowed_purposes: list[str] | None = None) -> AuthenticatedPrincipal:
     """Decode and validate all identity claims needed for tenant-scoped API access."""
     payload: dict[str, object] = jwt.decode(token, secret_key, algorithms=[_ALGORITHM])
     sub = payload.get("sub")

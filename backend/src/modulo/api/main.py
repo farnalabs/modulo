@@ -82,7 +82,10 @@ async def _verify_db_connectivity(settings: Settings) -> None:
             logger.info("startup.db_connected")
             return
         except Exception as exc:
-            logger.warning("startup.db_connectivity_attempt_failed", extra={"attempt": attempt, "error": str(exc)})
+            logger.warning(
+                "startup.db_connectivity_attempt_failed",
+                extra={"attempt": attempt, "error": str(exc)},
+            )
             if attempt < 3:
                 await asyncio.sleep(attempt * 2)
     logger.error("startup.db_unreachable")
@@ -109,9 +112,7 @@ async def _run_migrations(settings: Settings) -> None:
 
         engine = get_or_create_engine(settings)
         async with engine.connect() as conn:
-            result = await conn.execute(
-                text("SELECT version_num FROM alembic_version")
-            )
+            result = await conn.execute(text("SELECT version_num FROM alembic_version"))
             applied = {row[0] for row in result.fetchall()}
 
         if applied == heads:
@@ -183,9 +184,7 @@ async def _seed_modulo_users(settings: Settings) -> None:
 
     async with factory() as session:
         async with session.begin():
-            org_result = await session.execute(
-                select(Organisation).order_by(Organisation.created_at).limit(1)
-            )
+            org_result = await session.execute(select(Organisation).order_by(Organisation.created_at).limit(1))
             org = org_result.scalar_one_or_none()
             if org is None:
                 logger.warning("startup.no_org_for_user_seed")
@@ -201,9 +200,7 @@ async def _seed_modulo_users(settings: Settings) -> None:
                 email = entry[:colon]
                 pw_part = entry[colon + 1 :]
 
-                result = await session.execute(
-                    select(User).where(User.email == email, User.organisation_id == org.id)
-                )
+                result = await session.execute(select(User).where(User.email == email, User.organisation_id == org.id))
                 existing = result.scalar_one_or_none()
                 pw_hash = pw_part if pw_part.startswith("$2") else hash_password(pw_part)
 
@@ -248,18 +245,14 @@ async def _seed_demo_data(settings: Settings) -> None:
 
     async with factory() as session:
         async with session.begin():
-            org_result = await session.execute(
-                select(Organisation).order_by(Organisation.created_at).limit(1)
-            )
+            org_result = await session.execute(select(Organisation).order_by(Organisation.created_at).limit(1))
             org = org_result.scalar_one_or_none()
             if org is None:
                 logger.warning("startup.demo_no_org")
                 return
 
             demo_email = "demo"
-            result = await session.execute(
-                select(User).where(User.email == demo_email, User.organisation_id == org.id)
-            )
+            result = await session.execute(select(User).where(User.email == demo_email, User.organisation_id == org.id))
             if result.scalar_one_or_none() is None:
                 demo_user = User(
                     organisation_id=org.id,
@@ -386,7 +379,10 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
         registry = get_plugin_registry()
         discovered = registry.discover_plugins()
         if discovered:
-            logger.info("startup.plugins_discovered", extra={"count": len(discovered), "plugins": [p.PLUGIN_ID for p in discovered]})
+            logger.info(
+                "startup.plugins_discovered",
+                extra={"count": len(discovered), "plugins": [p.PLUGIN_ID for p in discovered]},
+            )
         else:
             logger.info("startup.no_plugins_discovered")
     else:

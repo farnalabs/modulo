@@ -33,12 +33,8 @@ async def get_team(session: AsyncSession, team_id: uuid.UUID) -> Team | None:
     return result.scalar_one_or_none()
 
 
-async def get_team_by_name(
-    session: AsyncSession, org_id: uuid.UUID, name: str
-) -> Team | None:
-    result = await session.execute(
-        select(Team).where(Team.organisation_id == org_id, Team.name == name)
-    )
+async def get_team_by_name(session: AsyncSession, org_id: uuid.UUID, name: str) -> Team | None:
+    result = await session.execute(select(Team).where(Team.organisation_id == org_id, Team.name == name))
     return result.scalar_one_or_none()
 
 

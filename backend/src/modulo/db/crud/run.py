@@ -109,11 +109,7 @@ async def list_runs(
 
     offset = (page - 1) * page_size
     total = (await session.execute(count_q)).scalar_one()
-    items = list(
-        (
-            await session.execute(q.order_by(Run.created_at.desc()).offset(offset).limit(page_size))
-        ).scalars()
-    )
+    items = list((await session.execute(q.order_by(Run.created_at.desc()).offset(offset).limit(page_size))).scalars())
     return PageResult(items=items, total=total, page=page, page_size=page_size)
 
 
@@ -163,7 +159,9 @@ async def count_active_runs_for_pipeline(
     """Count runs in non-terminal states for a given pipeline."""
     active_statuses = {"pending", "running", "awaiting_human", "claimed", "waiting_for_lock"}
     result = await session.execute(
-        select(func.count()).select_from(Run).where(
+        select(func.count())
+        .select_from(Run)
+        .where(
             Run.pipeline_id == pipeline_id,
             Run.status.in_(active_statuses),
         )
@@ -189,9 +187,7 @@ async def get_run_stats(
     days = {"7d": 7, "30d": 30, "90d": 90}.get(period, 30)
     cutoff = datetime.now(UTC) - timedelta(days=days)
 
-    result = await session.execute(
-        select(Run).where(Run.created_at >= cutoff).order_by(Run.created_at)
-    )
+    result = await session.execute(select(Run).where(Run.created_at >= cutoff).order_by(Run.created_at))
     runs: list[Run] = list(result.scalars().all())
 
     total = len(runs)
@@ -209,10 +205,7 @@ async def get_run_stats(
         }
 
     completed_runs = [r for r in runs if r.completed_at and r.started_at]
-    durations_ms = sorted(
-        int((r.completed_at - r.started_at).total_seconds() * 1000)
-        for r in completed_runs
-    )
+    durations_ms = sorted(int((r.completed_at - r.started_at).total_seconds() * 1000) for r in completed_runs)
 
     success_count = sum(1 for r in runs if r.status == "complete")
     success_rate = round(success_count / total, 4)
@@ -246,17 +239,11 @@ async def get_run_stats(
         "p50_duration_ms": int(_percentile(durations_ms, 50)),
         "p95_duration_ms": int(_percentile(durations_ms, 95)),
         "p99_duration_ms": int(_percentile(durations_ms, 99)),
-        "runs_by_day": [
-            {"date": d, **v} for d, v in sorted(by_day.items())
-        ],
+        "runs_by_day": [{"date": d, **v} for d, v in sorted(by_day.items())],
         "failure_by_reason": [
-            {"reason": r, "count": c}
-            for r, c in sorted(failure_reasons.items(), key=lambda x: -x[1])
+            {"reason": r, "count": c} for r, c in sorted(failure_reasons.items(), key=lambda x: -x[1])
         ],
-        "avg_duration_by_day": [
-            {"date": d, "avg_ms": int(sum(v) / len(v))}
-            for d, v in sorted(dur_by_day.items())
-        ],
+        "avg_duration_by_day": [{"date": d, "avg_ms": int(sum(v) / len(v))} for d, v in sorted(dur_by_day.items())],
     }
 
 
@@ -269,10 +256,12 @@ async def get_run_heatmap(
     cutoff_end = datetime(year + 1, 1, 1, tzinfo=UTC)
 
     result = await session.execute(
-        select(Run).where(
+        select(Run)
+        .where(
             Run.created_at >= cutoff_start,
             Run.created_at < cutoff_end,
-        ).order_by(Run.created_at)
+        )
+        .order_by(Run.created_at)
     )
     runs: list[Run] = list(result.scalars().all())
 
@@ -302,10 +291,12 @@ async def batch_delete_old_terminal_runs(
         ids = list(
             (
                 await session.execute(
-                    select(Run.id).where(
+                    select(Run.id)
+                    .where(
                         Run.status.in_(["complete", "failed", "cancelled"]),
                         Run.completed_at < cutoff,
-                    ).limit(batch_size)
+                    )
+                    .limit(batch_size)
                 )
             )
             .scalars()

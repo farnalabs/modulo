@@ -223,9 +223,7 @@ async def list_pipelines_tool(page: int = 1, page_size: int = 20) -> dict[str, A
         async with _session(org_id) as s:
             result = await list_pipelines(s, page=page, page_size=page_size)
         return {
-            "pipelines": [
-                {"id": str(p.id), "name": p.name, "visibility": p.visibility} for p in result.items
-            ],
+            "pipelines": [{"id": str(p.id), "name": p.name, "visibility": p.visibility} for p in result.items],
             "total": result.total,
             "page": result.page,
             "page_size": result.page_size,
@@ -235,10 +233,7 @@ async def list_pipelines_tool(page: int = 1, page_size: int = 20) -> dict[str, A
         return _tool_error("Failed to list pipelines")
 
 
-@mcp.tool(
-    description="Fire a pipeline run and return immediately with run_id. "
-    "Poll get_run_status to track progress."
-)
+@mcp.tool(description="Fire a pipeline run and return immediately with run_id. Poll get_run_status to track progress.")
 async def trigger_pipeline(
     pipeline_id: str,
     input_payload: dict[str, Any] | None = None,
@@ -256,9 +251,7 @@ async def trigger_pipeline(
             pipeline = await get_pipeline(s, pid)
             if pipeline is None:
                 return {"error": "pipeline_not_found", "pipeline_id": pipeline_id}
-            snapshot = await create_snapshot_from_live_graph(
-                s, pipeline_id=pid, created_by=None
-            )
+            snapshot = await create_snapshot_from_live_graph(s, pipeline_id=pid, created_by=None)
             if snapshot is None:
                 return {"error": "snapshot_failed", "pipeline_id": pipeline_id}
             run = await create_run(
@@ -422,8 +415,7 @@ async def review_hitl(
                         return {
                             "error": "human_only_gate",
                             "detail": (
-                                "This gate has human_only=true. "
-                                "Only a browser-authenticated human can approve it."
+                                "This gate has human_only=true. Only a browser-authenticated human can approve it."
                             ),
                         }
 
@@ -590,9 +582,7 @@ async def resource_schemas() -> str:
 
     org_id = _ctx_org_id.get(_PLACEHOLDER_ORG_ID)
     async with _session(org_id) as s:
-        result = await s.execute(
-            select(Schema).where(Schema.organisation_id == org_id).order_by(Schema.name)
-        )
+        result = await s.execute(select(Schema).where(Schema.organisation_id == org_id).order_by(Schema.name))
         schemas = list(result.scalars())
     lines = [f"- {sc.name} (id={sc.id})" for sc in schemas]
     return f"Schemas ({len(schemas)}):\n" + "\n".join(lines)
@@ -625,9 +615,7 @@ async def resource_model_backends() -> str:
     org_id = _ctx_org_id.get(_PLACEHOLDER_ORG_ID)
     async with _session(org_id) as s:
         result = await s.execute(
-            select(ModelBackend)
-            .where(ModelBackend.organisation_id == org_id)
-            .order_by(ModelBackend.name)
+            select(ModelBackend).where(ModelBackend.organisation_id == org_id).order_by(ModelBackend.name)
         )
         backends = list(result.scalars())
     lines = [f"- {b.name} ({b.provider}/{b.model_id})" for b in backends]
@@ -803,12 +791,14 @@ async def _oauth_token(request: Request) -> JSONResponse:
                 token_sequence=sequence,
             )
 
-    return JSONResponse({
-        "access_token": access_token,
-        "token_type": "Bearer",
-        "expires_in": 3600,
-        "scope": " ".join(scopes_list),
-    })
+    return JSONResponse(
+        {
+            "access_token": access_token,
+            "token_type": "Bearer",
+            "expires_in": 3600,
+            "scope": " ".join(scopes_list),
+        }
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -825,9 +815,7 @@ def build_mcp_asgi_app() -> Starlette:
 
     # OAuth protocol endpoints — placed before auth middleware so they
     # don't require a Bearer token (they use client_id + client_secret).
-    oauth_authorize_route = Route(
-        "/oauth/authorize", _oauth_authorize, methods=["POST"]
-    )
+    oauth_authorize_route = Route("/oauth/authorize", _oauth_authorize, methods=["POST"])
     oauth_token_route = Route("/oauth/token", _oauth_token, methods=["POST"])
 
     all_routes = [

@@ -132,9 +132,7 @@ async def remove_oauth_client(
 
     async with session.begin():
         await set_rls_org(session, principal.organisation_id)
-        deleted = await delete_oauth_client(
-            session, client_id=client_id, org_id=principal.organisation_id
-        )
+        deleted = await delete_oauth_client(session, client_id=client_id, org_id=principal.organisation_id)
 
     if not deleted:
         raise HTTPException(

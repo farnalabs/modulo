@@ -101,7 +101,10 @@ class GraphValidator:
         await self._check_connector_bindings(connector_bindings or [], session, result)
         await self._check_model_backends(model_backend_pins or [], session, result)
         await self._check_environment_capabilities(
-            environment_profile_id, graph_json, session, result,
+            environment_profile_id,
+            graph_json,
+            session,
+            result,
         )
 
         return result
@@ -150,7 +153,10 @@ class GraphValidator:
 
         # Environment capability check.
         await self._check_environment_capabilities(
-            snapshot.environment_profile_id, snapshot.graph_json, session, result,
+            snapshot.environment_profile_id,
+            snapshot.graph_json,
+            session,
+            result,
         )
 
         return self._strip_warnings(result)
@@ -169,10 +175,7 @@ class GraphValidator:
 
     @staticmethod
     def _find_entry_candidates(nodes: list[dict[str, Any]], edges: list[dict[str, Any]]) -> list[str]:
-        return [
-            str(n["id"]) for n in nodes
-            if str(n["id"]) not in {str(e["target"]) for e in edges}
-        ]
+        return [str(n["id"]) for n in nodes if str(n["id"]) not in {str(e["target"]) for e in edges}]
 
     def _check_topology(self, graph_json: dict[str, Any], result: ValidationResult) -> None:
         nodes: list[dict[str, Any]] = graph_json.get("nodes", [])
@@ -388,8 +391,7 @@ class GraphValidator:
                 if out_type and in_type and out_type != in_type:
                     result.error(
                         "SCHEMA_FIELD_TYPE_MISMATCH",
-                        f"Edge {src}→{tgt}: field '{field_name}' type '{out_type}'"
-                        f" != input type '{in_type}'",
+                        f"Edge {src}→{tgt}: field '{field_name}' type '{out_type}' != input type '{in_type}'",
                         node_id=src,
                     )
 
@@ -446,11 +448,7 @@ class GraphValidator:
             return
         entry_id = entry_candidates[0]
 
-        entry_pins = [
-            p
-            for p in schema_pins
-            if str(p.get("node_id")) == entry_id and p.get("direction") == "input"
-        ]
+        entry_pins = [p for p in schema_pins if str(p.get("node_id")) == entry_id and p.get("direction") == "input"]
         if not entry_pins:
             return
 
@@ -468,17 +466,14 @@ class GraphValidator:
             if field_name in required_fields and field_name not in input_payload:
                 result.error(
                     "INPUT_MISSING_FIELD",
-                    f"Input payload missing required field '{field_name}'"
-                    f" for entry node '{entry_id}'",
+                    f"Input payload missing required field '{field_name}' for entry node '{entry_id}'",
                     node_id=entry_id,
                 )
                 continue
             if field_name not in input_payload:
                 continue
             expected_type = field_def.get("type")
-            if expected_type and not isinstance(
-                input_payload[field_name], _JSON_TYPE_MAP.get(expected_type, object)
-            ):
+            if expected_type and not isinstance(input_payload[field_name], _JSON_TYPE_MAP.get(expected_type, object)):
                 actual_type = type(input_payload[field_name]).__name__
                 result.error(
                     "INPUT_FIELD_TYPE_MISMATCH",
@@ -501,11 +496,7 @@ class GraphValidator:
 
         instance_ids = {uuid.UUID(str(b["connector_instance_id"])) for b in bindings}
         rows = (
-            (
-                await session.execute(
-                    select(ConnectorInstance).where(ConnectorInstance.id.in_(instance_ids))
-                )
-            )
+            (await session.execute(select(ConnectorInstance).where(ConnectorInstance.id.in_(instance_ids))))
             .scalars()
             .all()
         )
@@ -551,11 +542,7 @@ class GraphValidator:
             return
 
         backend_ids = {uuid.UUID(str(p["model_backend_id"])) for p in pins}
-        rows = (
-            (await session.execute(select(ModelBackend).where(ModelBackend.id.in_(backend_ids))))
-            .scalars()
-            .all()
-        )
+        rows = (await session.execute(select(ModelBackend).where(ModelBackend.id.in_(backend_ids)))).scalars().all()
         found: dict[uuid.UUID, ModelBackend] = {r.id: r for r in rows}
 
         for pin in pins:
@@ -613,11 +600,7 @@ class GraphValidator:
         if not agent_ids:
             return
 
-        rows = (
-            (await session.execute(select(Agent).where(Agent.id.in_(agent_ids))))
-            .scalars()
-            .all()
-        )
+        rows = (await session.execute(select(Agent).where(Agent.id.in_(agent_ids)))).scalars().all()
 
         profile_caps: set[str] = set(profile.capabilities or [])
 

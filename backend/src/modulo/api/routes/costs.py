@@ -99,22 +99,16 @@ async def get_spend_limits(
 
         from modulo.db.crud.team import list_teams
 
-        teams_result = await list_teams(
-            session, org_id=current_user.organisation_id, page=1, page_size=1000
-        )
+        teams_result = await list_teams(session, org_id=current_user.organisation_id, page=1, page_size=1000)
 
     return SpendLimitResponse(
         organisation_id=str(current_user.organisation_id),
-        org_daily_spend_limit=(
-            float(org.daily_spend_limit) if org and org.daily_spend_limit is not None else None
-        ),
+        org_daily_spend_limit=(float(org.daily_spend_limit) if org and org.daily_spend_limit is not None else None),
         team_limits=[
             {
                 "team_id": str(t.id),
                 "team_name": t.name,
-                "daily_spend_limit": (
-                    float(t.daily_spend_limit) if t.daily_spend_limit is not None else None
-                ),
+                "daily_spend_limit": (float(t.daily_spend_limit) if t.daily_spend_limit is not None else None),
             }
             for t in teams_result.items
         ],
@@ -133,12 +127,8 @@ async def set_org_spend_limit(
         await set_rls_org(session, current_user.organisation_id)
         org = await get_organisation(session, current_user.organisation_id)
         if org is None:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND, detail="Organisation not found"
-            )
-        org.daily_spend_limit = (
-            Decimal(str(body.daily_spend_limit)) if body.daily_spend_limit is not None else None
-        )
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Organisation not found")
+        org.daily_spend_limit = Decimal(str(body.daily_spend_limit)) if body.daily_spend_limit is not None else None
         await session.flush()
 
     return {
@@ -160,12 +150,8 @@ async def set_team_spend_limit(
         await set_rls_org(session, current_user.organisation_id)
         team = await get_team(session, team_id)
         if team is None:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND, detail="Team not found"
-            )
-        team.daily_spend_limit = (
-            Decimal(str(body.daily_spend_limit)) if body.daily_spend_limit is not None else None
-        )
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Team not found")
+        team.daily_spend_limit = Decimal(str(body.daily_spend_limit)) if body.daily_spend_limit is not None else None
         await session.flush()
 
     return {
@@ -281,7 +267,8 @@ async def list_reports(
     async with session.begin():
         await set_rls_org(session, current_user.organisation_id)
         reports = await list_scheduled_reports(
-            session, organisation_id=current_user.organisation_id,
+            session,
+            organisation_id=current_user.organisation_id,
         )
 
     return [
@@ -309,7 +296,9 @@ async def delete_report(
     async with session.begin():
         await set_rls_org(session, current_user.organisation_id)
         deleted = await delete_scheduled_report(
-            session, report_id=report_id, organisation_id=current_user.organisation_id,
+            session,
+            report_id=report_id,
+            organisation_id=current_user.organisation_id,
         )
 
     if not deleted:
@@ -343,25 +332,28 @@ async def get_anomalies(
         today = datetime.now(UTC).date()
         lookback = today - timedelta(days=30)
 
-        counts_q = select(
-            OrgDailyRunCount.run_date,
-            func.sum(OrgDailyRunCount.total_spend_usd).label("daily_spend"),
-        ).where(
-            OrgDailyRunCount.organisation_id == current_user.organisation_id,
-            OrgDailyRunCount.run_date >= lookback,
-            OrgDailyRunCount.team_id.is_(None),
-        ).group_by(OrgDailyRunCount.run_date).order_by(OrgDailyRunCount.run_date)
+        counts_q = (
+            select(
+                OrgDailyRunCount.run_date,
+                func.sum(OrgDailyRunCount.total_spend_usd).label("daily_spend"),
+            )
+            .where(
+                OrgDailyRunCount.organisation_id == current_user.organisation_id,
+                OrgDailyRunCount.run_date >= lookback,
+                OrgDailyRunCount.team_id.is_(None),
+            )
+            .group_by(OrgDailyRunCount.run_date)
+            .order_by(OrgDailyRunCount.run_date)
+        )
 
         counts_result = await session.execute(counts_q)
-        daily_spends: list[tuple[object, object]] = [
-            (r.run_date, r.daily_spend) for r in counts_result.all()
-        ]
+        daily_spends: list[tuple[object, object]] = [(r.run_date, r.daily_spend) for r in counts_result.all()]
 
         anomalies: list[dict[str, Any]] = []
         for i, (run_date, spend) in enumerate(daily_spends):
             if i < 7:
                 continue
-            window = [s for _, s in daily_spends[max(0, i - 7):i] if s is not None]
+            window = [s for _, s in daily_spends[max(0, i - 7) : i] if s is not None]
             if not window:
                 continue
             avg = sum(float(w) for w in window) / len(window)
@@ -370,15 +362,17 @@ async def get_anomalies(
             spend_val = float(spend) if spend else 0.0
             ratio = spend_val / avg
             if ratio > 2.0:
-                anomalies.append({
-                    "id": "",
-                    "anomaly_date": str(run_date),
-                    "pipeline_id": None,
-                    "amount": spend_val,
-                    "baseline": avg,
-                    "percent_above": round((ratio - 1.0) * 100, 2),
-                    "dismissed": False,
-                })
+                anomalies.append(
+                    {
+                        "id": "",
+                        "anomaly_date": str(run_date),
+                        "pipeline_id": None,
+                        "amount": spend_val,
+                        "baseline": avg,
+                        "percent_above": round((ratio - 1.0) * 100, 2),
+                        "dismissed": False,
+                    }
+                )
 
         # Also return any previously stored anomalies
         stored = await list_anomalies(session, organisation_id=current_user.organisation_id, dismissed=False)
@@ -422,7 +416,9 @@ async def dismiss_anomaly_endpoint(
     async with session.begin():
         await set_rls_org(session, current_user.organisation_id)
         dismissed = await dismiss_anomaly(
-            session, anomaly_id=anomaly_id, organisation_id=current_user.organisation_id,
+            session,
+            anomaly_id=anomaly_id,
+            organisation_id=current_user.organisation_id,
         )
 
     if not dismissed:

@@ -71,9 +71,7 @@ class DuplicateWebhookError(RuntimeError):
 
 class ConcurrentRunLimitError(RuntimeError):
     def __init__(self, trigger_id: uuid.UUID, limit: int) -> None:
-        super().__init__(
-            f"Trigger {trigger_id} already has {limit} concurrent run(s); limit reached"
-        )
+        super().__init__(f"Trigger {trigger_id} already has {limit} concurrent run(s); limit reached")
         self.trigger_id = trigger_id
         self.limit = limit
 
@@ -120,9 +118,7 @@ def _verify_timestamp(modulo_timestamp: str | None) -> int:
     return ts
 
 
-def _verify_hmac(
-    raw_body: bytes, secret: str, signature_header: str | None, timestamp: int | None = None
-) -> bool:
+def _verify_hmac(raw_body: bytes, secret: str, signature_header: str | None, timestamp: int | None = None) -> bool:
     """Return True if the HMAC-SHA256 signature matches ``timestamp.body``.
 
     When *timestamp* is provided, the HMAC is computed over
@@ -157,10 +153,7 @@ def _apply_payload_mapping(raw_payload: dict[str, Any], mapping: dict[str, str])
     """
     if not mapping:
         return dict(raw_payload)
-    return {
-        target_key: _extract_field(raw_payload, src_path)
-        for target_key, src_path in mapping.items()
-    }
+    return {target_key: _extract_field(raw_payload, src_path) for target_key, src_path in mapping.items()}
 
 
 # ---------------------------------------------------------------------------
@@ -437,9 +430,7 @@ class TriggerEngine:
             }
 
         try:
-            secrets_backend = create_secrets_backend(
-                fernet_key=settings.fernet_key, session=session
-            )
+            secrets_backend = create_secrets_backend(fernet_key=settings.fernet_key, session=session)
             raw_creds = await secrets_backend.get_secret(str(instance.id))
             creds: dict[str, Any] = json.loads(raw_creds)
             connector = _build_polling_connector(
@@ -483,26 +474,19 @@ class TriggerEngine:
             return 0
 
         now = datetime.now(UTC)
-        result = await session.execute(
-            select(WebhookDedupHash.id).where(WebhookDedupHash.expires_at <= now)
-        )
+        result = await session.execute(select(WebhookDedupHash.id).where(WebhookDedupHash.expires_at <= now))
         expired_ids = result.scalars().all()
         if not expired_ids:
             return 0
 
-        await session.execute(
-            delete(WebhookDedupHash)
-            .where(WebhookDedupHash.id.in_(expired_ids))
-        )
+        await session.execute(delete(WebhookDedupHash).where(WebhookDedupHash.id.in_(expired_ids)))
         return len(expired_ids)
 
     @staticmethod
     async def cleanup_expired_payloads(session: AsyncSession) -> int:
         """Delete expired webhook_payloads rows. Returns the number of deleted rows."""
         now = datetime.now(UTC)
-        result = await session.execute(
-            select(WebhookPayload.id).where(WebhookPayload.expires_at <= now)
-        )
+        result = await session.execute(select(WebhookPayload.id).where(WebhookPayload.expires_at <= now))
         expired_ids = result.scalars().all()
         if not expired_ids:
             return 0

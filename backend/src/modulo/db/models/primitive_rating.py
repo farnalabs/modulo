@@ -9,9 +9,7 @@ from modulo.db.models.base import OrgScoped
 
 class PrimitiveRating(OrgScoped):
     __tablename__ = "primitive_ratings"
-    __table_args__ = (
-        CheckConstraint("thumbs_up IS NOT NULL", name="ck_primitive_ratings_thumbs"),
-    )
+    __table_args__ = (CheckConstraint("thumbs_up IS NOT NULL", name="ck_primitive_ratings_thumbs"),)
 
     primitive_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True),

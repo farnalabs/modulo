@@ -18,12 +18,28 @@ from pythonjsonlogger import jsonlogger
 
 correlation_id_var: ContextVar[str | None] = ContextVar("correlation_id", default=None)
 
-_SENSITIVE_KEYS: frozenset[str] = frozenset({
-    "api_key", "api_secret", "access_key", "secret_key", "token",
-    "password", "passwd", "secret", "private_key", "credential",
-    "fernet_key", "auth_token", "bearer_token", "refresh_token",
-    "client_secret", "client_id", "session_key", "encryption_key",
-})
+_SENSITIVE_KEYS: frozenset[str] = frozenset(
+    {
+        "api_key",
+        "api_secret",
+        "access_key",
+        "secret_key",
+        "token",
+        "password",
+        "passwd",
+        "secret",
+        "private_key",
+        "credential",
+        "fernet_key",
+        "auth_token",
+        "bearer_token",
+        "refresh_token",
+        "client_secret",
+        "client_id",
+        "session_key",
+        "encryption_key",
+    }
+)
 
 
 def redact_sensitive(extra: dict[str, Any]) -> dict[str, Any]:
@@ -109,7 +125,7 @@ def _apply_per_module_levels() -> None:
     for env_name, value in os.environ.items():
         if not env_name.startswith("MODULO_LOG_LEVEL_"):
             continue
-        module_path = env_name[len("MODULO_LOG_LEVEL_"):].lower().replace("_", ".")
+        module_path = env_name[len("MODULO_LOG_LEVEL_") :].lower().replace("_", ".")
         if module_path in seen:
             continue
         seen.add(module_path)

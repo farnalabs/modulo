@@ -29,12 +29,8 @@ def upgrade() -> None:
         sa.Column("last_event_hash", sa.Text(), nullable=False),
         sa.Column("last_event_id", sa.Uuid(), nullable=True),
         sa.Column("event_count", sa.Integer(), nullable=False, server_default="0"),
-        sa.ForeignKeyConstraint(
-            ["organisation_id"], ["organisations.id"], ondelete="CASCADE"
-        ),
-        sa.ForeignKeyConstraint(
-            ["last_event_id"], ["audit_events.id"], ondelete="SET NULL"
-        ),
+        sa.ForeignKeyConstraint(["organisation_id"], ["organisations.id"], ondelete="CASCADE"),
+        sa.ForeignKeyConstraint(["last_event_id"], ["audit_events.id"], ondelete="SET NULL"),
         sa.PrimaryKeyConstraint("id"),
         sa.UniqueConstraint("organisation_id"),
     )

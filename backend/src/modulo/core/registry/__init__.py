@@ -229,7 +229,12 @@ _BUILTIN_REGISTRY: dict[str, RegistryEntry] = {
             content_json={
                 "fields": [
                     {"name": "functional", "type": "array", "items": "string", "required": True},
-                    {"name": "non_functional", "type": "array", "items": "string", "required": False},
+                    {
+                        "name": "non_functional",
+                        "type": "array",
+                        "items": "string",
+                        "required": False,
+                    },
                 ]
             },
             private_key=_registry_private,
@@ -281,7 +286,12 @@ _BUILTIN_REGISTRY: dict[str, RegistryEntry] = {
                     {"name": "agent_task", "type": "string", "required": True},
                     {"name": "feature_area", "type": "string", "required": True},
                     {"name": "spec_summary", "type": "string", "required": True},
-                    {"name": "files_to_change", "type": "array", "items": "string", "required": False},
+                    {
+                        "name": "files_to_change",
+                        "type": "array",
+                        "items": "string",
+                        "required": False,
+                    },
                     {"name": "implementation_notes", "type": "string", "required": False},
                 ]
             },
@@ -400,11 +410,7 @@ def list_registry_primitives(
         results = [e for e in results if e.primitive_type == primitive_type]
     if search:
         term = search.lower()
-        results = [
-            e
-            for e in results
-            if term in e.name.lower() or term in e.description.lower()
-        ]
+        results = [e for e in results if term in e.name.lower() or term in e.description.lower()]
     return results
 
 
@@ -623,12 +629,14 @@ def list_registry_primitives_ranked(
             review_count=0,
             published_at=e.published_at,
         )
-        enriched.append({
-            "entry": e,
-            "publisher_status": status,
-            "publisher_name": publisher.name if publisher else e.author,
-            "popularity_score": round(score, 4),
-        })
+        enriched.append(
+            {
+                "entry": e,
+                "publisher_status": status,
+                "publisher_name": publisher.name if publisher else e.author,
+                "popularity_score": round(score, 4),
+            }
+        )
 
     if sort_by == "popularity":
         enriched.sort(key=lambda x: x["popularity_score"], reverse=True)

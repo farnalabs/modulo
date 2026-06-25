@@ -63,9 +63,7 @@ async def copy_to_adapt(
     return result.scalar_one_or_none()
 
 
-async def get_library_primitive(
-    session: AsyncSession, primitive_id: uuid.UUID
-) -> LibraryPrimitive | None:
+async def get_library_primitive(session: AsyncSession, primitive_id: uuid.UUID) -> LibraryPrimitive | None:
     stmt = select(LibraryPrimitive).where(LibraryPrimitive.id == primitive_id)
     result = await session.execute(stmt)
     return result.scalar_one_or_none()

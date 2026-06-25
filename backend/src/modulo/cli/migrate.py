@@ -239,9 +239,7 @@ async def _import_org_data(
             try:
                 existing = None
                 if row_id:
-                    stmt = select(model_cls).where(
-                        getattr(model_cls, pk_col) == uuid.UUID(row_id)
-                    )
+                    stmt = select(model_cls).where(getattr(model_cls, pk_col) == uuid.UUID(row_id))
                     existing = (await session.execute(stmt)).scalar_one_or_none()
 
                 if existing is not None and strategy == "skip":
@@ -257,7 +255,13 @@ async def _import_org_data(
                             continue
                         if strategy == "merge":
                             current = getattr(existing, col)
-                            if current is not None and current != "" and current != 0 and current != [] and current != {}:
+                            if (
+                                current is not None
+                                and current != ""
+                                and current != 0
+                                and current != []
+                                and current != {}
+                            ):
                                 continue
                         setattr(existing, col, val)
                     counts["overwritten"] += 1
@@ -283,7 +287,6 @@ async def _import_org_data(
 async def _verify_export(meta: dict[str, Any], records: list[dict[str, Any]]) -> bool:
     expected_hash = meta.get("export_hash", "")
     groups = _group_records(records)
-    all_ok = True
 
     for table in _EXPORT_TABLES:
         table_records = groups.get(table, [])
@@ -313,7 +316,12 @@ async def _verify_export(meta: dict[str, Any], records: list[dict[str, Any]]) ->
 
 
 @click.group()
-@click.option("--token", envvar="MODULO_ADMIN_TOKEN", default=None, help="Admin JWT (or set MODULO_ADMIN_TOKEN)")
+@click.option(
+    "--token",
+    envvar="MODULO_ADMIN_TOKEN",
+    default=None,
+    help="Admin JWT (or set MODULO_ADMIN_TOKEN)",
+)
 @click.pass_context
 def cli(ctx: click.Context, token: str | None) -> None:
     """Modulo migration tool — export, import, and verify org data."""
@@ -329,7 +337,13 @@ def cli(ctx: click.Context, token: str | None) -> None:
 
 @cli.command()
 @click.argument("org_id", type=str)
-@click.option("--output", "-o", type=click.Path(path_type=Path), default="export.jsonl", help="Output JSONL path")
+@click.option(
+    "--output",
+    "-o",
+    type=click.Path(path_type=Path),
+    default="export.jsonl",
+    help="Output JSONL path",
+)
 @click.option("--pipelines-only", is_flag=True, default=False, help="Export only pipelines")
 @click.option("--users-only", is_flag=True, default=False, help="Export only users")
 @click.pass_context
@@ -347,9 +361,7 @@ async def _async_export_org(
 ) -> None:
     async with AsyncSessionLocal() as session:
         await _verify_admin_access(session, org_id, ctx.obj["admin_user_id"])
-        bundle = await _collect_org_data(
-            session, org_id, pipelines_only=pipelines_only, users_only=users_only
-        )
+        bundle = await _collect_org_data(session, org_id, pipelines_only=pipelines_only, users_only=users_only)
         hashes = _write_jsonl(bundle, output)
         record_count = sum(len(v) for k, v in bundle.items() if isinstance(v, list))
         click.echo(f"Exported {record_count} records to {output}")
@@ -359,7 +371,9 @@ async def _async_export_org(
 @cli.command()
 @click.argument("org_id", type=str)
 @click.option(
-    "--input", "-i", "input_path",
+    "--input",
+    "-i",
+    "input_path",
     type=click.Path(path_type=Path, exists=True),
     required=True,
     help="Input JSONL path",
@@ -382,9 +396,7 @@ def import_org(
     users_only: bool,
 ) -> None:
     """Import organisation data from a JSONL bundle with conflict resolution."""
-    asyncio.run(
-        _async_import_org(ctx, uuid.UUID(org_id), input_path, on_conflict, pipelines_only, users_only)
-    )
+    asyncio.run(_async_import_org(ctx, uuid.UUID(org_id), input_path, on_conflict, pipelines_only, users_only))
 
 
 async def _async_import_org(
@@ -395,13 +407,16 @@ async def _async_import_org(
     pipelines_only: bool,
     users_only: bool,
 ) -> None:
-    meta, records = await _read_jsonl(input_path)
+    _meta, records = await _read_jsonl(input_path)
     click.echo(f"Loaded {len(records)} records from {input_path}")
 
     async with AsyncSessionLocal() as session:
         await _verify_admin_access(session, org_id, ctx.obj["admin_user_id"])
         counts = await _import_org_data(
-            session, org_id, records, strategy,
+            session,
+            org_id,
+            records,
+            strategy,
             pipelines_only=pipelines_only,
             users_only=users_only,
         )
@@ -417,7 +432,9 @@ async def _async_import_org(
 @cli.command()
 @click.argument("org_id", type=str)
 @click.option(
-    "--input", "-i", "input_path",
+    "--input",
+    "-i",
+    "input_path",
     type=click.Path(path_type=Path, exists=True),
     required=True,
     help="Input JSONL path",

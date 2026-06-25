@@ -13,9 +13,7 @@ from modulo.db.models.base import Base
 class TokenFamily(Base):
     __tablename__ = "token_families"
 
-    family_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
-    )
+    family_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     user_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True),
         ForeignKey("users.id", ondelete="CASCADE"),
@@ -30,7 +28,5 @@ class TokenFamily(Base):
     )
     max_sequence: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     is_blacklisted: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now(), nullable=False
-    )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
     blacklisted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)

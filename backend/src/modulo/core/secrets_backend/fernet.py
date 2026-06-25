@@ -62,9 +62,7 @@ class FernetSecretsBackend(SecretsBackend):
         if self._session is None:
             raise RuntimeError("FernetSecretsBackend: no DB session set")
 
-        result = await self._session.execute(
-            select(Secret).where(Secret.key == key).limit(1)
-        )
+        result = await self._session.execute(select(Secret).where(Secret.key == key).limit(1))
         row = result.scalar_one_or_none()
         if row is None:
             raise KeyError(key)
@@ -88,9 +86,7 @@ class FernetSecretsBackend(SecretsBackend):
             return self._org_id
         if self._session is None:
             raise RuntimeError("FernetSecretsBackend: no DB session set")
-        result = await self._session.execute(
-            text("SELECT current_setting('app.organisation_id', true)")
-        )
+        result = await self._session.execute(text("SELECT current_setting('app.organisation_id', true)"))
         org_id_str: str | None = result.scalar()
         if not org_id_str:
             raise RuntimeError(

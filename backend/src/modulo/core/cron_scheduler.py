@@ -63,9 +63,7 @@ def validate_cron_expression(expression: str, timezone: str = "UTC") -> str | No
     return None
 
 
-def compute_next_fire(
-    cron_expression: str, after: datetime.datetime | None = None
-) -> datetime.datetime:
+def compute_next_fire(cron_expression: str, after: datetime.datetime | None = None) -> datetime.datetime:
     """Compute the next fire time for a cron expression.
 
     If *after* is None, uses the current UTC time.
@@ -148,9 +146,7 @@ async def _fire_cron_trigger(
 
             # Re-read trigger with FOR UPDATE to serialise concurrent fires
             result = await session.execute(
-                select(Trigger)
-                .where(Trigger.id == trigger_id, Trigger.organisation_id == org_id)
-                .with_for_update()
+                select(Trigger).where(Trigger.id == trigger_id, Trigger.organisation_id == org_id).with_for_update()
             )
             trigger = result.scalar_one_or_none()
             if trigger is None or not trigger.active:
@@ -164,9 +160,7 @@ async def _fire_cron_trigger(
                     trigger=trigger,
                     org_id=org_id,
                     result="concurrency_limit_reached",
-                    error_detail=(
-                        f"Active runs: {active_count}, limit: {trigger.max_concurrent_runs}"
-                    ),
+                    error_detail=(f"Active runs: {active_count}, limit: {trigger.max_concurrent_runs}"),
                 )
                 return {
                     "status": "skipped",
@@ -198,9 +192,7 @@ async def _fire_cron_trigger(
             now = datetime.datetime.now(datetime.UTC)
             next_fire = compute_next_fire(cron_expression, after=now)
             await session.execute(
-                update(Trigger)
-                .where(Trigger.id == trigger_id)
-                .values(last_fired_at=now, next_fire_at=next_fire)
+                update(Trigger).where(Trigger.id == trigger_id).values(last_fired_at=now, next_fire_at=next_fire)
             )
 
             _log.info(
@@ -280,10 +272,7 @@ class DatabaseCronEntry(ScheduleEntry):
         return (False, datetime.timedelta(seconds=max(delay, 0)))
 
     def __repr__(self) -> str:
-        return (
-            f"<DatabaseCronEntry trigger={self._trigger_id} "
-            f"next={self._next_fire_at.isoformat()}>"
-        )
+        return f"<DatabaseCronEntry trigger={self._trigger_id} next={self._next_fire_at.isoformat()}>"
 
 
 class DatabaseCronScheduler(Scheduler):
@@ -373,9 +362,7 @@ class DatabaseCronScheduler(Scheduler):
                     config = row.config_json or {}
                     snapshot_id_str = config.get("snapshot_id")
                     try:
-                        snapshot_id = (
-                            uuid.UUID(snapshot_id_str) if snapshot_id_str else uuid.uuid4()
-                        )
+                        snapshot_id = uuid.UUID(snapshot_id_str) if snapshot_id_str else uuid.uuid4()
                     except (ValueError, TypeError):
                         snapshot_id = uuid.uuid4()
 

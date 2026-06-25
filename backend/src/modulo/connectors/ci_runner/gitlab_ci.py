@@ -88,9 +88,7 @@ class GitLabCIRunner(CIRunnerBase):
     async def get_run_status(self, run_id: str) -> CIRun:
         project_id, _, pipeline_id = run_id.partition("/")
         if not pipeline_id:
-            raise ValueError(
-                f"Invalid run_id format: {run_id!r}. Expected 'project_id/pipeline_id'."
-            )
+            raise ValueError(f"Invalid run_id format: {run_id!r}. Expected 'project_id/pipeline_id'.")
         async with self._client() as client:
             r = await client.get(f"/projects/{project_id}/pipelines/{pipeline_id}")
             r.raise_for_status()
@@ -99,9 +97,7 @@ class GitLabCIRunner(CIRunnerBase):
     async def get_run_logs(self, run_id: str, cursor: str | None = None) -> CIRunLog:
         project_id, _, pipeline_id = run_id.partition("/")
         if not pipeline_id:
-            raise ValueError(
-                f"Invalid run_id format: {run_id!r}. Expected 'project_id/pipeline_id'."
-            )
+            raise ValueError(f"Invalid run_id format: {run_id!r}. Expected 'project_id/pipeline_id'.")
         async with self._client() as client:
             jobs_r = await client.get(
                 f"/projects/{project_id}/pipelines/{pipeline_id}/jobs",

@@ -320,6 +320,5 @@ async def list_publishers_endpoint() -> list[dict[str, str]]:
     """List all verified publishers."""
     publishers = list_verified_publishers()
     return [
-        {"author": p.author, "name": p.name, "fingerprint": p.fingerprint, "website": p.website}
-        for p in publishers
+        {"author": p.author, "name": p.name, "fingerprint": p.fingerprint, "website": p.website} for p in publishers
     ]

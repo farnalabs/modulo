@@ -20,8 +20,7 @@ class PathTraversalError(ValueError):
 
     def __init__(self, path: str, base_path: Path) -> None:
         super().__init__(
-            f"Path {path!r} resolves outside base_path {str(base_path)!r}. "
-            "Path traversal is not permitted."
+            f"Path {path!r} resolves outside base_path {str(base_path)!r}. Path traversal is not permitted."
         )
 
 

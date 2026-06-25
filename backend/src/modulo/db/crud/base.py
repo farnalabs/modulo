@@ -3,14 +3,15 @@
 from dataclasses import dataclass
 from typing import Any
 
-
-_IMMUTABLE_FIELDS = frozenset({
-    "id",
-    "organisation_id",
-    "created_at",
-    "updated_at",
-    "deleted_at",
-})
+_IMMUTABLE_FIELDS = frozenset(
+    {
+        "id",
+        "organisation_id",
+        "created_at",
+        "updated_at",
+        "deleted_at",
+    }
+)
 
 
 def apply_updates(entity: Any, updates: dict[str, Any]) -> None:

@@ -170,11 +170,14 @@ class AnalyseBundleRequest(BaseModel):
 
 class CreatePipelineFromTemplateRequest(BaseModel):
     name: str | None = Field(
-        None, min_length=1, max_length=255,
+        None,
+        min_length=1,
+        max_length=255,
         description="Overrides the template's default pipeline name",
     )
     description: str | None = Field(
-        None, max_length=2000,
+        None,
+        max_length=2000,
         description="Overrides the template's default description",
     )
 
@@ -336,9 +339,7 @@ async def copy_to_adapt_endpoint(
             detail="Community primitives may only be adapted via the browser UI, not via MCP.",
         ) from None
     except LookupError:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail="Primitive not found"
-        ) from None
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Primitive not found") from None
     return LibraryPrimitiveResponse.model_validate(result)
 
 
@@ -392,16 +393,16 @@ async def _analyse_bundle(
         pipeline_info = bundle.get("pipeline", {})
         pipeline_name = pipeline_info.get("name", "Unnamed Pipeline")
 
-        existing_pipeline_names = await get_existing_pipeline_names(
-            session, principal.organisation_id
-        )
+        existing_pipeline_names = await get_existing_pipeline_names(session, principal.organisation_id)
         if pipeline_name in existing_pipeline_names:
             suggested = suggest_import_name(existing_pipeline_names, pipeline_name)
-            name_conflicts.append({
-                "type": "pipeline",
-                "original": pipeline_name,
-                "suggested": suggested,
-            })
+            name_conflicts.append(
+                {
+                    "type": "pipeline",
+                    "original": pipeline_name,
+                    "suggested": suggested,
+                }
+            )
             warnings.append(f"Pipeline '{pipeline_name}' already exists. Suggested: '{suggested}'.")
 
         for schema in bundle.get("schemas", []):
@@ -420,9 +421,7 @@ async def _analyse_bundle(
                 ctid = ref.get("connector_type_id", ref.get("type", ""))
                 if ctid and ctid not in seen_connector_types:
                     seen_connector_types.add(ctid)
-                    result = await resolve_connector_type(
-                        session, principal.organisation_id, ctid
-                    )
+                    result = await resolve_connector_type(session, principal.organisation_id, ctid)
                     resolved_connectors.append(result)
                     if result.get("instance_id"):
                         connector_instance_map[ctid] = result["instance_id"]
@@ -437,18 +436,18 @@ async def _analyse_bundle(
             if result.get("warning"):
                 warnings.append(result["warning"])
 
-        existing_agent_names = await get_existing_agent_names(
-            session, principal.organisation_id
-        )
+        existing_agent_names = await get_existing_agent_names(session, principal.organisation_id)
         for agent in bundle.get("agents", []):
             aname = agent.get("name", "")
             if aname in existing_agent_names:
                 suggested = suggest_import_name(existing_agent_names, aname)
-                name_conflicts.append({
-                    "type": "agent",
-                    "original": aname,
-                    "suggested": suggested,
-                })
+                name_conflicts.append(
+                    {
+                        "type": "agent",
+                        "original": aname,
+                        "suggested": suggested,
+                    }
+                )
                 warnings.append(f"Agent '{aname}' already exists. Suggested: '{suggested}'.")
 
         # Inject resolved connector instances into graph node connector_bindings
@@ -470,14 +469,10 @@ async def _analyse_bundle(
             if mb_name and mb_name in mb_id_by_name:
                 agent["model_backend_id"] = mb_id_by_name[mb_name]
 
-        teams_result = await session.execute(
-            select(Team).where(Team.organisation_id == principal.organisation_id)
-        )
+        teams_result = await session.execute(select(Team).where(Team.organisation_id == principal.organisation_id))
         teams = list(teams_result.scalars())
 
-    available_teams = [
-        {"id": str(t.id), "name": t.name} for t in teams
-    ]
+    available_teams = [{"id": str(t.id), "name": t.name} for t in teams]
 
     return ImportBundleResponse(
         warnings=warnings,
@@ -503,7 +498,6 @@ async def upload_zip_and_analyse_endpoint(
     """
     name = file.filename or ""
     if not name.endswith(".zip"):
-
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Only .zip or .modulo.zip files are accepted",
@@ -601,9 +595,7 @@ async def list_ratings_endpoint(
 ) -> RatingListResponse:
     async with session.begin():
         await set_rls_org(session, principal.organisation_id)
-        result = await list_ratings_for_primitive(
-            session, primitive_id, page=page, page_size=page_size
-        )
+        result = await list_ratings_for_primitive(session, primitive_id, page=page, page_size=page_size)
     return RatingListResponse(
         items=[RatingResponse.model_validate(r) for r in result.items],
         total=result.total,
@@ -736,7 +728,9 @@ async def create_pipeline_from_template_endpoint(
         )
 
     name, description, graph_nodes, edges, agent_count, edge_count = _build_pipeline_from_template(
-        primitive, body.name, body.description,
+        primitive,
+        body.name,
+        body.description,
     )
 
     async with session.begin():

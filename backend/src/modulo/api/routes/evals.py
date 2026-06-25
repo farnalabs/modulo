@@ -15,7 +15,6 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm import joinedload
 
 from modulo.api.dependencies import get_db_session
 from modulo.auth.dependencies import get_current_user
@@ -138,9 +137,7 @@ async def list_run_evals(
         )
         run = run_result.scalar_one_or_none()
         if run is None:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND, detail="Run not found"
-            )
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Run not found")
 
         from sqlalchemy import func as sa_func
 
@@ -242,26 +239,20 @@ async def compare_evals(
             raise HTTPException(status_code=404, detail="Run B not found")
 
         results_a = (
-            await session.execute(
-                select(EvalResult).where(EvalResult.run_id == body.run_id_a)
-            )
-        ).scalars().all()
+            (await session.execute(select(EvalResult).where(EvalResult.run_id == body.run_id_a))).scalars().all()
+        )
 
         results_b = (
-            await session.execute(
-                select(EvalResult).where(EvalResult.run_id == body.run_id_b)
-            )
-        ).scalars().all()
+            (await session.execute(select(EvalResult).where(EvalResult.run_id == body.run_id_b))).scalars().all()
+        )
 
     eval_ids = {r.eval_id for r in results_a} | {r.eval_id for r in results_b}
     eval_defs = {}
     if eval_ids:
         async with session.begin():
             defs_rows = (
-                await session.execute(
-                    select(EvalDefinition).where(EvalDefinition.id.in_(eval_ids))
-                )
-            ).scalars().all()
+                (await session.execute(select(EvalDefinition).where(EvalDefinition.id.in_(eval_ids)))).scalars().all()
+            )
             for d in defs_rows:
                 eval_defs[d.id] = d
 
@@ -279,27 +270,37 @@ async def compare_evals(
         ra = results_by_eval_a.get(eid)
         rb = results_by_eval_b.get(eid)
         edef = eval_defs.get(eid)
-        result_a = {
-            "passed": ra.passed if ra else False,
-            "score": ra.score if ra else None,
-            "detail": ra.detail if ra else None,
-        } if ra else None
-        result_b = {
-            "passed": rb.passed if rb else False,
-            "score": rb.score if rb else None,
-            "detail": rb.detail if rb else None,
-        } if rb else None
+        result_a = (
+            {
+                "passed": ra.passed if ra else False,
+                "score": ra.score if ra else None,
+                "detail": ra.detail if ra else None,
+            }
+            if ra
+            else None
+        )
+        result_b = (
+            {
+                "passed": rb.passed if rb else False,
+                "score": rb.score if rb else None,
+                "detail": rb.detail if rb else None,
+            }
+            if rb
+            else None
+        )
         score_a = result_a["score"] if result_a and result_a["score"] is not None else 0.0
         score_b = result_b["score"] if result_b and result_b["score"] is not None else 0.0
         delta = round(score_a - score_b, 4)
-        compared.append({
-            "eval_id": str(eid),
-            "eval_name": edef.name if edef else "unknown",
-            "node_id": str(ra.node_id) if ra and ra.node_id else str(rb.node_id) if rb and rb.node_id else None,
-            "result_a": result_a,
-            "result_b": result_b,
-            "delta": delta,
-        })
+        compared.append(
+            {
+                "eval_id": str(eid),
+                "eval_name": edef.name if edef else "unknown",
+                "node_id": str(ra.node_id) if ra and ra.node_id else str(rb.node_id) if rb and rb.node_id else None,
+                "result_a": result_a,
+                "result_b": result_b,
+                "delta": delta,
+            }
+        )
 
     return {
         "run_a": {
@@ -346,13 +347,17 @@ async def eval_coverage(
         node_ids = [str(n.get("id")) for n in nodes_raw if n.get("id")]
 
         eval_defs_rows = (
-            await session.execute(
-                select(EvalDefinition).where(
-                    EvalDefinition.pipeline_id == pipeline_id,
-                    EvalDefinition.node_id.in_([uuid.UUID(nid) for nid in node_ids if nid]),
+            (
+                await session.execute(
+                    select(EvalDefinition).where(
+                        EvalDefinition.pipeline_id == pipeline_id,
+                        EvalDefinition.node_id.in_([uuid.UUID(nid) for nid in node_ids if nid]),
+                    )
                 )
             )
-        ).scalars().all()
+            .scalars()
+            .all()
+        )
 
     eval_count_by_node: dict[str, int] = {}
     for ed in eval_defs_rows:
@@ -368,12 +373,14 @@ async def eval_coverage(
         has_evals = count > 0
         if has_evals:
             covered_count += 1
-        nodes_result.append({
-            "node_id": nid,
-            "name": name,
-            "has_evals": has_evals,
-            "eval_count": count,
-        })
+        nodes_result.append(
+            {
+                "node_id": nid,
+                "name": name,
+                "has_evals": has_evals,
+                "eval_count": count,
+            }
+        )
 
     total = len(nodes_result)
     pct = round(covered_count / total * 100, 1) if total else 0.0
@@ -429,22 +436,22 @@ async def create_eval_from_run(
     config_json: dict[str, Any] = {}
     if body.eval_type == "regex":
         config_json = {
-            "field": list(sample_output.keys())[0] if sample_output else "",
+            "field": next(iter(sample_output.keys())) if sample_output else "",
             "pattern": "",
         }
     elif body.eval_type == "json_schema":
         config_json = {
-            "field": list(sample_output.keys())[0] if sample_output else "",
+            "field": next(iter(sample_output.keys())) if sample_output else "",
             "schema": {},
         }
     elif body.eval_type == "llm_judge":
         config_json = {
-            "field": list(sample_output.keys())[0] if sample_output else "",
+            "field": next(iter(sample_output.keys())) if sample_output else "",
             "instructions": "",
         }
     elif body.eval_type == "custom_function":
         config_json = {
-            "field": list(sample_output.keys())[0] if sample_output else "",
+            "field": next(iter(sample_output.keys())) if sample_output else "",
             "function": "",
         }
 

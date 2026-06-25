@@ -48,7 +48,11 @@ class RuntimeProvider(ABC):
 
     @abstractmethod
     async def exec_command(
-        self, provider_ref: str, command: list[str], *, timeout: int | None = None  # noqa: ASYNC109
+        self,
+        provider_ref: str,
+        command: list[str],
+        *,
+        timeout: int | None = None,  # noqa: ASYNC109
     ) -> ExecResult:
         """Run a command inside an existing workspace."""
         ...
@@ -67,5 +71,4 @@ class RuntimeProvider(ABC):
 class RuntimeProviderFactory(Protocol):
     """Callable that produces a RuntimeProvider given a profile."""
 
-    def __call__(self, profile: Any) -> RuntimeProvider:
-        ...
+    def __call__(self, profile: Any) -> RuntimeProvider: ...

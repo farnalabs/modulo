@@ -48,8 +48,7 @@ class JiraConnector(ConnectorBase):
             self._auth = httpx.BasicAuth(username=creds["email"], password=creds["api_token"])
         else:
             raise ValueError(
-                "Jira credentials must contain either 'token' (PAT/OAuth) "
-                "or 'email' + 'api_token' (Basic auth)"
+                "Jira credentials must contain either 'token' (PAT/OAuth) or 'email' + 'api_token' (Basic auth)"
             )
 
     @property

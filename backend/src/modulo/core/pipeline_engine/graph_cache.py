@@ -227,9 +227,7 @@ def build_graph_from_json(graph_json: dict[str, Any]) -> Any:
                     target_ids.add(target)
                     graph.add_edge(source, target)
 
-    entry_candidates = [
-        str(n["id"]) for n in nodes if str(n["id"]) not in target_ids
-    ]
+    entry_candidates = [str(n["id"]) for n in nodes if str(n["id"]) not in target_ids]
     if not entry_candidates:
         raise ValueError("graph_json has a cycle or no entry node")
     graph.set_entry_point(entry_candidates[0])

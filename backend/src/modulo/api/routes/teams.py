@@ -90,9 +90,7 @@ async def list_teams_endpoint(
 ) -> TeamListResponse:
     async with session.begin():
         await set_rls_org(session, current_user.organisation_id)
-        result = await list_teams(
-            session, org_id=current_user.organisation_id, page=page, page_size=page_size
-        )
+        result = await list_teams(session, org_id=current_user.organisation_id, page=page, page_size=page_size)
 
     return TeamListResponse(
         items=[
@@ -121,9 +119,7 @@ async def create_team_endpoint(
 
     async with session.begin():
         await set_rls_org(session, current_user.organisation_id)
-        existing = await get_team_by_name(
-            session, current_user.organisation_id, body.name
-        )
+        existing = await get_team_by_name(session, current_user.organisation_id, body.name)
         if existing is not None:
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
@@ -221,9 +217,7 @@ async def list_members_endpoint(
 ) -> MembershipListResponse:
     async with session.begin():
         await set_rls_org(session, current_user.organisation_id)
-        result = await list_team_members(
-            session, team_id=team_id, page=page, page_size=page_size
-        )
+        result = await list_team_members(session, team_id=team_id, page=page, page_size=page_size)
 
     return MembershipListResponse(
         items=[
@@ -261,9 +255,7 @@ async def add_member_endpoint(
         await set_rls_org(session, current_user.organisation_id)
         team = await get_team(session, team_id)
         if team is None:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND, detail="Team not found"
-            )
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Team not found")
         membership = await add_team_member(
             session,
             org_id=current_user.organisation_id,
@@ -297,7 +289,5 @@ async def remove_member_endpoint(
         await set_rls_org(session, current_user.organisation_id)
         membership = await get_membership(session, membership_id)
         if membership is None or membership.team_id != team_id:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND, detail="Membership not found"
-            )
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Membership not found")
         await remove_team_member(session, membership_id)

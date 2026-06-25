@@ -56,9 +56,7 @@ async def get_scim_principal(
             ) from None
         return ScimPrincipal(organisation_id=org_id)
 
-    result = await session.execute(
-        select(Organisation).order_by(Organisation.created_at).limit(1)
-    )
+    result = await session.execute(select(Organisation).order_by(Organisation.created_at).limit(1))
     org = result.scalar_one_or_none()
     if org is None:
         raise HTTPException(

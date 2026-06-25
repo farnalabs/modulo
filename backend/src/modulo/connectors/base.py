@@ -40,9 +40,7 @@ class ConnectorType(StrEnum):
             case ConnectorType.FILESYSTEM:
                 return frozenset({Capability.READ, Capability.WRITE})
             case ConnectorType.GITHUB:
-                return frozenset(
-                    {Capability.READ, Capability.WRITE, Capability.GIT_PUSH, Capability.CREATE_PR}
-                )
+                return frozenset({Capability.READ, Capability.WRITE, Capability.GIT_PUSH, Capability.CREATE_PR})
             case ConnectorType.CI_RUNNER:
                 return frozenset(
                     {
@@ -53,17 +51,11 @@ class ConnectorType(StrEnum):
                     }
                 )
             case ConnectorType.GITLAB:
-                return frozenset(
-                    {Capability.READ, Capability.WRITE, Capability.GIT_PUSH, Capability.CREATE_PR}
-                )
+                return frozenset({Capability.READ, Capability.WRITE, Capability.GIT_PUSH, Capability.CREATE_PR})
             case ConnectorType.JIRA:
-                return frozenset(
-                    {Capability.ISSUE_READ, Capability.ISSUE_WRITE, Capability.ISSUE_SEARCH}
-                )
+                return frozenset({Capability.ISSUE_READ, Capability.ISSUE_WRITE, Capability.ISSUE_SEARCH})
             case ConnectorType.LINEAR:
-                return frozenset(
-                    {Capability.ISSUE_READ, Capability.ISSUE_WRITE, Capability.ISSUE_SEARCH}
-                )
+                return frozenset({Capability.ISSUE_READ, Capability.ISSUE_WRITE, Capability.ISSUE_SEARCH})
             case ConnectorType.SLACK:
                 return frozenset({Capability.READ, Capability.WRITE})
             case ConnectorType.SHELL:
@@ -99,13 +91,11 @@ class ConnectorACL:
         if self.allowed_operations is not None:
             if not self.allowed_operations:
                 raise ConnectorPermissionError(
-                    "No operations allowed — the allowlist is empty. "
-                    "Operator must grant at least one operation."
+                    "No operations allowed — the allowlist is empty. Operator must grant at least one operation."
                 )
             if operation not in self.allowed_operations:
                 raise ConnectorPermissionError(
-                    f"Operation {operation!r} is not in allowed_operations: "
-                    f"{sorted(self.allowed_operations)}"
+                    f"Operation {operation!r} is not in allowed_operations: {sorted(self.allowed_operations)}"
                 )
         if request_visibility == "team" and self.visibility == "org":
             raise ConnectorPermissionError("Attempted team-scoped access on an org-only connector")

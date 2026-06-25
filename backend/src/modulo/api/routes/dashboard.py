@@ -15,9 +15,7 @@ from modulo.db.rls import set_rls_org
 
 router = APIRouter(prefix="/api/v1/dashboard", tags=["dashboard"])
 
-_ACTIVE_RUN_STATUSES = frozenset(
-    {"pending", "running", "awaiting_human", "claimed", "waiting_for_lock"}
-)
+_ACTIVE_RUN_STATUSES = frozenset({"pending", "running", "awaiting_human", "claimed", "waiting_for_lock"})
 _TRACKED_STATUSES = ("running", "awaiting_human", "failed", "idle")
 
 
@@ -30,27 +28,19 @@ async def dashboard_summary(
     async with session.begin():
         await set_rls_org(session, principal.organisation_id)
 
-        total_runs_result = await session.execute(
-            select(func.count()).select_from(Run)
-        )
+        total_runs_result = await session.execute(select(func.count()).select_from(Run))
         total_runs = int(total_runs_result.scalar_one())
 
-        active_pipelines_result = await session.execute(
-            select(func.count()).select_from(Pipeline)
-        )
+        active_pipelines_result = await session.execute(select(func.count()).select_from(Pipeline))
         active_pipelines = int(active_pipelines_result.scalar_one())
 
         status_counts: dict[str, int] = {}
         for status in _TRACKED_STATUSES:
-            count_result = await session.execute(
-                select(func.count()).select_from(Run).where(Run.status == status)
-            )
+            count_result = await session.execute(select(func.count()).select_from(Run).where(Run.status == status))
             status_counts[status] = int(count_result.scalar_one())
 
         idle_result = await session.execute(
-            select(func.count()).select_from(Run).where(
-                Run.status.not_in(_ACTIVE_RUN_STATUSES)
-            )
+            select(func.count()).select_from(Run).where(Run.status.not_in(_ACTIVE_RUN_STATUSES))
         )
         status_counts["idle"] = int(idle_result.scalar_one())
 

@@ -44,9 +44,13 @@ async def list_scheduled_reports(
     *,
     organisation_id: uuid.UUID,
 ) -> Sequence[ScheduledReport]:
-    q = select(ScheduledReport).where(
-        ScheduledReport.organisation_id == organisation_id,
-    ).order_by(ScheduledReport.created_at.desc())
+    q = (
+        select(ScheduledReport)
+        .where(
+            ScheduledReport.organisation_id == organisation_id,
+        )
+        .order_by(ScheduledReport.created_at.desc())
+    )
     result = await session.execute(q)
     return list(result.scalars().all())
 

@@ -88,9 +88,7 @@ class Notifier:
         http_client = await self._get_client()
         results: list[DispatchResult] = []
         for ep in endpoints:
-            result = await self._dispatch_to_endpoint(
-                http_client, ep, event_type, payload, run_id, retain_payload
-            )
+            result = await self._dispatch_to_endpoint(http_client, ep, event_type, payload, run_id, retain_payload)
             results.append(result)
         return results
 
@@ -261,9 +259,7 @@ class Notifier:
                     update(NotificationEndpoint)
                     .where(NotificationEndpoint.id == endpoint.id)
                     .values(
-                        consecutive_dead_letter_count=(
-                            NotificationEndpoint.consecutive_dead_letter_count + 1
-                        ),
+                        consecutive_dead_letter_count=(NotificationEndpoint.consecutive_dead_letter_count + 1),
                     )
                     .returning(NotificationEndpoint.consecutive_dead_letter_count)
                 )

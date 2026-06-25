@@ -18,36 +18,20 @@ class OAuthAuthorizationCode(Base):
     __tablename__ = "oauth_authorization_codes"
     __table_args__ = {"comment": "One-time authorization codes for OAuth 2.0 flow"}  # type: ignore[misc]  # noqa: RUF012
 
-    code: Mapped[str] = mapped_column(
-        String(128), primary_key=True
-    )
-    client_id: Mapped[str] = mapped_column(
-        String(64), nullable=False, index=True
-    )
+    code: Mapped[str] = mapped_column(String(128), primary_key=True)
+    client_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
     organisation_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True),
         ForeignKey("organisations.id", ondelete="CASCADE"),
         nullable=False,
         index=True,
     )
-    scopes: Mapped[str] = mapped_column(
-        Text, nullable=False, comment="Space-separated requested scopes"
-    )
-    redirect_uri: Mapped[str] = mapped_column(
-        String(1024), nullable=False
-    )
-    code_challenge: Mapped[str | None] = mapped_column(
-        String(128), nullable=True, comment="PKCE S256 challenge"
-    )
-    expires_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), nullable=False
-    )
-    used: Mapped[bool] = mapped_column(
-        Boolean, nullable=False, default=False
-    )
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now(), nullable=False
-    )
+    scopes: Mapped[str] = mapped_column(Text, nullable=False, comment="Space-separated requested scopes")
+    redirect_uri: Mapped[str] = mapped_column(String(1024), nullable=False)
+    code_challenge: Mapped[str | None] = mapped_column(String(128), nullable=True, comment="PKCE S256 challenge")
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    used: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
 
 
 class OAuthTokenFamily(Base):
@@ -60,27 +44,15 @@ class OAuthTokenFamily(Base):
     __tablename__ = "oauth_token_families"
     __table_args__ = {"comment": "Token families for MCP OAuth access token rotation"}  # type: ignore[misc]  # noqa: RUF012
 
-    family_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
-    )
-    client_id: Mapped[str] = mapped_column(
-        String(64), nullable=False, index=True
-    )
+    family_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    client_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
     organisation_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True),
         ForeignKey("organisations.id", ondelete="CASCADE"),
         nullable=False,
         index=True,
     )
-    max_sequence: Mapped[int] = mapped_column(
-        Integer, nullable=False, default=0
-    )
-    is_blacklisted: Mapped[bool] = mapped_column(
-        Boolean, nullable=False, default=False
-    )
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now(), nullable=False
-    )
-    blacklisted_at: Mapped[datetime | None] = mapped_column(
-        DateTime(timezone=True), nullable=True
-    )
+    max_sequence: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    is_blacklisted: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    blacklisted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)

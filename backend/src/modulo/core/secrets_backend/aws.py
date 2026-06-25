@@ -43,8 +43,7 @@ class AWSSecretsManagerBackend(SecretsBackend):
     def __init__(self) -> None:
         if not _MODULE_AVAILABLE:
             raise RuntimeError(
-                "The 'boto3' package is required for AWSSecretsManagerBackend. "
-                "Install it with: pip install boto3"
+                "The 'boto3' package is required for AWSSecretsManagerBackend. Install it with: pip install boto3"
             )
 
         self._region: str = os.environ.get("AWS_REGION", "us-east-1")
@@ -57,8 +56,7 @@ class AWSSecretsManagerBackend(SecretsBackend):
     def _ensure_client(self) -> Any:
         if not _MODULE_AVAILABLE:
             raise RuntimeError(
-                "The 'boto3' package is required for AWSSecretsManagerBackend. "
-                "Install it with: pip install boto3"
+                "The 'boto3' package is required for AWSSecretsManagerBackend. Install it with: pip install boto3"
             )
         if self._client is not None:
             return self._client
@@ -83,9 +81,7 @@ class AWSSecretsManagerBackend(SecretsBackend):
         except client.exceptions.ResourceNotFoundException:
             raise KeyError(key) from None
         except client.exceptions.AccessDeniedException as exc:
-            raise PermissionError(
-                "AWSSecretsManagerBackend: access denied reading secret"
-            ) from exc
+            raise PermissionError("AWSSecretsManagerBackend: access denied reading secret") from exc
 
         secret_string = response.get("SecretString")
         if isinstance(secret_string, str):

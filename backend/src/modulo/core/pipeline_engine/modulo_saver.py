@@ -233,10 +233,7 @@ class ModuloPostgresSaver(AsyncPostgresSaver):
         checkpoint_ns = config["configurable"].get("checkpoint_ns", "")
 
         if checkpoint_id:
-            where = (
-                "WHERE organisation_id = %s AND thread_id = %s"
-                " AND checkpoint_ns = %s AND checkpoint_id = %s"
-            )
+            where = "WHERE organisation_id = %s AND thread_id = %s AND checkpoint_ns = %s AND checkpoint_id = %s"
             args: tuple[Any, ...] = (self._org_id, thread_id, checkpoint_ns, checkpoint_id)
         else:
             where = (
@@ -275,21 +272,9 @@ class ModuloPostgresSaver(AsyncPostgresSaver):
                         if value.get("parent_checkpoint_id")
                         else None
                     ),
-                    (
-                        self._load_blobs(value["channel_values"])
-                        if value.get("channel_values")
-                        else None
-                    ),
-                    (
-                        self._load_writes(value["pending_writes"])
-                        if value.get("pending_writes")
-                        else None
-                    ),
-                    (
-                        self._load_writes(value["pending_sends"])
-                        if value.get("pending_sends")
-                        else None
-                    ),
+                    (self._load_blobs(value["channel_values"]) if value.get("channel_values") else None),
+                    (self._load_writes(value["pending_writes"]) if value.get("pending_writes") else None),
+                    (self._load_writes(value["pending_sends"]) if value.get("pending_sends") else None),
                     value["metadata"] if not isinstance(value["metadata"], dict) else None,
                 )
         return None
@@ -348,21 +333,9 @@ class ModuloPostgresSaver(AsyncPostgresSaver):
                         if value.get("parent_checkpoint_id")
                         else None
                     ),
-                    (
-                        self._load_blobs(value["channel_values"])
-                        if value.get("channel_values")
-                        else None
-                    ),
-                    (
-                        self._load_writes(value["pending_writes"])
-                        if value.get("pending_writes")
-                        else None
-                    ),
-                    (
-                        self._load_writes(value["pending_sends"])
-                        if value.get("pending_sends")
-                        else None
-                    ),
+                    (self._load_blobs(value["channel_values"]) if value.get("channel_values") else None),
+                    (self._load_writes(value["pending_writes"]) if value.get("pending_writes") else None),
+                    (self._load_writes(value["pending_sends"]) if value.get("pending_sends") else None),
                     value["metadata"] if not isinstance(value["metadata"], dict) else None,
                 )
 
@@ -494,6 +467,7 @@ class ModuloPostgresSaver(AsyncPostgresSaver):
     @staticmethod
     def _run_sync(coro: Any) -> Any:
         import asyncio
+
         try:
             asyncio.get_running_loop()
         except RuntimeError:

@@ -8,9 +8,7 @@ _log = logging.getLogger(__name__)
 
 _MIN_KEY_LEN = 32
 # Known placeholder values that operators paste from docs without changing.
-_BLOCKED_SECRET_KEYS = frozenset(
-    {"changeme", "secret", "your-secret-key", "development", "test", "insecure"}
-)
+_BLOCKED_SECRET_KEYS = frozenset({"changeme", "secret", "your-secret-key", "development", "test", "insecure"})
 
 
 class Settings(BaseSettings):
@@ -104,18 +102,14 @@ class Settings(BaseSettings):
         if v.lower() in _BLOCKED_SECRET_KEYS:
             raise ValueError("SECRET_KEY is a known placeholder value — generate a random key")
         if len(v.encode()) < _MIN_KEY_LEN:
-            raise ValueError(
-                f"SECRET_KEY must be at least {_MIN_KEY_LEN} bytes; got {len(v.encode())}"
-            )
+            raise ValueError(f"SECRET_KEY must be at least {_MIN_KEY_LEN} bytes; got {len(v.encode())}")
         return v
 
     @field_validator("fernet_key")
     @classmethod
     def _fernet_key_is_strong(cls, v: str) -> str:
         if len(v.encode()) < _MIN_KEY_LEN:
-            raise ValueError(
-                f"FERNET_KEY must be at least {_MIN_KEY_LEN} bytes; got {len(v.encode())}"
-            )
+            raise ValueError(f"FERNET_KEY must be at least {_MIN_KEY_LEN} bytes; got {len(v.encode())}")
         return v
 
     @field_validator("cors_origins")
@@ -124,9 +118,7 @@ class Settings(BaseSettings):
         origins = [o.strip() for o in v.split(",") if o.strip()]
         for origin in origins:
             if origin.endswith("/"):
-                raise ValueError(
-                    f"CORS origin must not have trailing slash: {origin}"
-                )
+                raise ValueError(f"CORS origin must not have trailing slash: {origin}")
         return v
 
     @field_validator("modulo_db")

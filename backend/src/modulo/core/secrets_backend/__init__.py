@@ -72,9 +72,7 @@ def create_secrets_backend(
             from modulo.core.secrets_backend.fernet import FernetSecretsBackend
 
             if fernet_key is None:
-                raise ValueError(
-                    "fernet_key is required when backend_name is 'fernet'"
-                )
+                raise ValueError("fernet_key is required when backend_name is 'fernet'")
             return FernetSecretsBackend(fernet_key=fernet_key, session=session)
         case "vault":
             from modulo.core.secrets_backend.vault import VaultSecretsBackend
@@ -85,8 +83,5 @@ def create_secrets_backend(
 
             return AWSSecretsManagerBackend()
         case _:
-            msg = (
-                f"Unknown MODULO_SECRETS_BACKEND: {name!r}. "
-                f"Must be one of: 'fernet', 'vault', 'aws'."
-            )
+            msg = f"Unknown MODULO_SECRETS_BACKEND: {name!r}. Must be one of: 'fernet', 'vault', 'aws'."
             raise ValueError(msg)

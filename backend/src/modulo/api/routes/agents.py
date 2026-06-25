@@ -250,9 +250,7 @@ async def optimize_prompt(
     if agent is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Agent not found")
 
-    eval_results, eval_defs = await get_eval_results_with_defs(
-        session, body.eval_result_ids, principal.organisation_id
-    )
+    eval_results, eval_defs = await get_eval_results_with_defs(session, body.eval_result_ids, principal.organisation_id)
 
     if not eval_results:
         raise HTTPException(
@@ -349,13 +347,16 @@ async def list_prompt_versions(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Agent not found")
 
     history = list(agent.prompt_version_history or [])
-    entries = [PromptVersionListEntry(
-        version=e["version"],
-        created_at=e["created_at"],
-        notes=e.get("notes", ""),
-        optimized_from=e.get("optimized_from"),
-        eval_result_ids=e.get("eval_result_ids", []),
-    ) for e in reversed(history)]
+    entries = [
+        PromptVersionListEntry(
+            version=e["version"],
+            created_at=e["created_at"],
+            notes=e.get("notes", ""),
+            optimized_from=e.get("optimized_from"),
+            eval_result_ids=e.get("eval_result_ids", []),
+        )
+        for e in reversed(history)
+    ]
     return entries
 
 
@@ -453,8 +454,10 @@ async def diff_prompt_versions(
             for _ in range(i2 - i1):
                 diff_lines.append(
                     DiffLine(
-                        type="unchanged", content=lines_a[i1].rstrip("\n"),
-                        line_number_a=line_a, line_number_b=line_b,
+                        type="unchanged",
+                        content=lines_a[i1].rstrip("\n"),
+                        line_number_a=line_a,
+                        line_number_b=line_b,
                     )
                 )
                 line_a += 1
@@ -464,8 +467,10 @@ async def diff_prompt_versions(
             for _ in range(i2 - i1):
                 diff_lines.append(
                     DiffLine(
-                        type="removed", content=lines_a[i1].rstrip("\n"),
-                        line_number_a=line_a, line_number_b=None,
+                        type="removed",
+                        content=lines_a[i1].rstrip("\n"),
+                        line_number_a=line_a,
+                        line_number_b=None,
                     )
                 )
                 line_a += 1
@@ -473,8 +478,10 @@ async def diff_prompt_versions(
             for _ in range(j2 - j1):
                 diff_lines.append(
                     DiffLine(
-                        type="added", content=lines_b[j1].rstrip("\n"),
-                        line_number_a=None, line_number_b=line_b,
+                        type="added",
+                        content=lines_b[j1].rstrip("\n"),
+                        line_number_a=None,
+                        line_number_b=line_b,
                     )
                 )
                 line_b += 1
@@ -483,8 +490,10 @@ async def diff_prompt_versions(
             for _ in range(i2 - i1):
                 diff_lines.append(
                     DiffLine(
-                        type="removed", content=lines_a[i1].rstrip("\n"),
-                        line_number_a=line_a, line_number_b=None,
+                        type="removed",
+                        content=lines_a[i1].rstrip("\n"),
+                        line_number_a=line_a,
+                        line_number_b=None,
                     )
                 )
                 line_a += 1
@@ -493,8 +502,10 @@ async def diff_prompt_versions(
             for _ in range(j2 - j1):
                 diff_lines.append(
                     DiffLine(
-                        type="added", content=lines_b[j1].rstrip("\n"),
-                        line_number_a=None, line_number_b=line_b,
+                        type="added",
+                        content=lines_b[j1].rstrip("\n"),
+                        line_number_a=None,
+                        line_number_b=line_b,
                     )
                 )
                 line_b += 1

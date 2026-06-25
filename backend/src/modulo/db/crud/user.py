@@ -25,12 +25,8 @@ async def get_user_by_id(session: AsyncSession, user_id: uuid.UUID) -> User | No
     return result.scalar_one_or_none()
 
 
-async def get_user_by_id_org(
-    session: AsyncSession, user_id: uuid.UUID, org_id: uuid.UUID
-) -> User | None:
-    result = await session.execute(
-        select(User).where(User.id == user_id, User.organisation_id == org_id)
-    )
+async def get_user_by_id_org(session: AsyncSession, user_id: uuid.UUID, org_id: uuid.UUID) -> User | None:
+    result = await session.execute(select(User).where(User.id == user_id, User.organisation_id == org_id))
     return result.scalar_one_or_none()
 
 
@@ -60,24 +56,16 @@ async def create_user(
 async def update_user_preferences(
     session: AsyncSession, user_id: uuid.UUID, preferences: dict[str, object]
 ) -> dict[str, object]:
-    await session.execute(
-        update(User).where(User.id == user_id).values(preferences=preferences)
-    )
+    await session.execute(update(User).where(User.id == user_id).values(preferences=preferences))
     return preferences
 
 
 async def update_last_login(session: AsyncSession, user_id: uuid.UUID) -> None:
-    await session.execute(
-        update(User).where(User.id == user_id).values(last_login=datetime.now(UTC))
-    )
+    await session.execute(update(User).where(User.id == user_id).values(last_login=datetime.now(UTC)))
 
 
-async def list_users_for_org(
-    session: AsyncSession, org_id: uuid.UUID
-) -> list[User]:
-    result = await session.execute(
-        select(User).where(User.organisation_id == org_id).order_by(User.created_at)
-    )
+async def list_users_for_org(session: AsyncSession, org_id: uuid.UUID) -> list[User]:
+    result = await session.execute(select(User).where(User.organisation_id == org_id).order_by(User.created_at))
     return list(result.scalars().all())
 
 
@@ -99,13 +87,7 @@ async def list_users_paginated(
     count_q = select(func.count()).select_from(User).where(*conditions)
     total = (await session.execute(count_q)).scalar() or 0
 
-    query = (
-        select(User)
-        .where(*conditions)
-        .order_by(User.created_at)
-        .offset((page - 1) * page_size)
-        .limit(page_size)
-    )
+    query = select(User).where(*conditions).order_by(User.created_at).offset((page - 1) * page_size).limit(page_size)
     result = await session.execute(query)
     items = list(result.scalars().all())
 

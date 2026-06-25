@@ -52,6 +52,7 @@ def _get_engine():
     global _engine
     if _engine is None:
         from modulo.settings import get_settings
+
         _engine = create_async_engine(get_settings().database_url)
     return _engine
 
@@ -61,9 +62,7 @@ def _get_engine():
 # ---------------------------------------------------------------------------
 
 
-def _build_polling_connector(
-    type_id: str, config: dict[str, Any], creds: dict[str, Any]
-) -> ConnectorBase:
+def _build_polling_connector(type_id: str, config: dict[str, Any], creds: dict[str, Any]) -> ConnectorBase:
     """Build a one-shot connector for polling queries.
 
     Mirrors ``modulo.core.connector_hub._build_connector()`` but does not
@@ -210,9 +209,7 @@ async def _fire_polling_trigger(
 
             # Re-read trigger with FOR UPDATE
             result = await session.execute(
-                select(Trigger)
-                .where(Trigger.id == trigger_id, Trigger.organisation_id == org_id)
-                .with_for_update()
+                select(Trigger).where(Trigger.id == trigger_id, Trigger.organisation_id == org_id).with_for_update()
             )
             trigger = result.scalar_one_or_none()
             if trigger is None or not trigger.active:
@@ -228,9 +225,7 @@ async def _fire_polling_trigger(
                     trigger=trigger,
                     org_id=org_id,
                     result="concurrency_limit_reached",
-                    error_detail=(
-                        f"Active runs: {active_count}, limit: {trigger.max_concurrent_runs}"
-                    ),
+                    error_detail=(f"Active runs: {active_count}, limit: {trigger.max_concurrent_runs}"),
                 )
                 return {
                     "status": "skipped",
@@ -258,9 +253,7 @@ async def _fire_polling_trigger(
 
             # Decrypt credentials and build connector
             try:
-                secrets_backend = create_secrets_backend(
-                    fernet_key=settings.fernet_key, session=session
-                )
+                secrets_backend = create_secrets_backend(fernet_key=settings.fernet_key, session=session)
                 raw_creds = await secrets_backend.get_secret(str(connector_instance.id))
                 creds: dict[str, Any] = json.loads(raw_creds)
                 connector = _build_polling_connector(
@@ -375,9 +368,7 @@ async def _update_next_fire(session: AsyncSession, trigger: Trigger) -> None:
     now = datetime.datetime.now(datetime.UTC)
     next_fire = now + datetime.timedelta(seconds=int(interval))
     await session.execute(
-        update(Trigger)
-        .where(Trigger.id == trigger.id)
-        .values(last_fired_at=now, next_fire_at=next_fire)
+        update(Trigger).where(Trigger.id == trigger.id).values(last_fired_at=now, next_fire_at=next_fire)
     )
 
 
@@ -446,10 +437,7 @@ class DatabasePollingEntry(ScheduleEntry):  # type: ignore[misc]
         return (False, datetime.timedelta(seconds=max(delay, 0)))
 
     def __repr__(self) -> str:
-        return (
-            f"<DatabasePollingEntry trigger={self._trigger_id} "
-            f"next={self._next_fire_at.isoformat()}>"
-        )
+        return f"<DatabasePollingEntry trigger={self._trigger_id} next={self._next_fire_at.isoformat()}>"
 
 
 class DatabasePollingScheduler(Scheduler):  # type: ignore[misc]

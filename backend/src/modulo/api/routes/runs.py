@@ -1,6 +1,5 @@
 """POST /api/v1/runs — manual pipeline trigger and run lifecycle endpoints."""
 
-import hashlib
 import logging
 import uuid
 from decimal import Decimal
@@ -116,9 +115,7 @@ async def _validate_run_input_basics(
     if agent_id_str is None:
         return
 
-    agent_result = await session.execute(
-        select(Agent).where(Agent.id == uuid.UUID(str(agent_id_str)))
-    )
+    agent_result = await session.execute(select(Agent).where(Agent.id == uuid.UUID(str(agent_id_str))))
     agent = agent_result.scalar_one_or_none()
     if agent is None:
         raise HTTPException(
@@ -173,9 +170,7 @@ async def trigger_run(
             )
 
         # Pre-run input health checks against entry agent.
-        await _validate_run_input_basics(
-            session, snapshot.graph_json, snapshot, body.input_payload
-        )
+        await _validate_run_input_basics(session, snapshot.graph_json, snapshot, body.input_payload)
 
         run = await create_run(
             session,
@@ -186,7 +181,6 @@ async def trigger_run(
             input_payload=body.input_payload,
         )
         run_id = run.id
-        thread_id = run.langgraph_thread_id
 
     executor = PipelineExecutor(
         engine,
@@ -289,9 +283,7 @@ async def _run_in_background(
             async with factory() as session:
                 async with session.begin():
                     await set_rls_org(session, org_id)
-                    await update_run_status(
-                        session, run_id, "failed", error_code="internal_error"
-                    )
+                    await update_run_status(session, run_id, "failed", error_code="internal_error")
         except Exception:
             _log.exception("run.mark_failed_error", extra={"run_id": str(run_id)})
 
@@ -319,9 +311,7 @@ class RunIOResponse(BaseModel):
         inp = self.input_payload or {}
         out = self.outputs_json or {}
 
-        if isinstance(out, dict) and any(
-            isinstance(v, dict) and "input" in v and "output" in v for v in out.values()
-        ):
+        if isinstance(out, dict) and any(isinstance(v, dict) and "input" in v and "output" in v for v in out.values()):
             for _node_id, node_io in out.items():
                 if isinstance(node_io, dict):
                     node_input = node_io.get("input", str(inp))
@@ -369,9 +359,8 @@ async def get_run_workspace_lease(
     async with session.begin():
         await set_rls_org(session, principal.organisation_id)
         from modulo.db.models.workspace_lease import WorkspaceLease
-        result = await session.execute(
-            select(WorkspaceLease).where(WorkspaceLease.run_id == run_id)
-        )
+
+        result = await session.execute(select(WorkspaceLease).where(WorkspaceLease.run_id == run_id))
         lease = result.scalar_one_or_none()
     if lease is None:
         return None
@@ -398,11 +387,14 @@ async def get_run_workspace_events(
     async with session.begin():
         await set_rls_org(session, principal.organisation_id)
         from modulo.db.models.audit_event import AuditEvent
+
         result = await session.execute(
-            select(AuditEvent).where(
+            select(AuditEvent)
+            .where(
                 AuditEvent.resource_type == "workspace",
                 AuditEvent.resource_id == run_id,
-            ).order_by(AuditEvent.created_at)
+            )
+            .order_by(AuditEvent.created_at)
         )
         events = result.scalars().all()
     return [

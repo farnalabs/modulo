@@ -72,9 +72,7 @@ async def list_agents(
     total = (await session.execute(select(func.count()).select_from(Agent))).scalar_one()
     items = list(
         (
-            await session.execute(
-                select(Agent).order_by(Agent.created_at.desc()).offset(offset).limit(page_size)
-            )
+            await session.execute(select(Agent).order_by(Agent.created_at.desc()).offset(offset).limit(page_size))
         ).scalars()
     )
     return PageResult(items=items, total=total, page=page, page_size=page_size)
@@ -194,11 +192,7 @@ async def rollback_prompt_version(
     if not target_template:
         return None
 
-    prev_version = (
-        agent.prompt_version_history[-1]["version"]
-        if agent.prompt_version_history
-        else "current"
-    )
+    prev_version = agent.prompt_version_history[-1]["version"] if agent.prompt_version_history else "current"
     notes = f"Rolled back from {prev_version} to {target_version}"
 
     history.append(
@@ -237,9 +231,7 @@ async def get_eval_results_with_defs(
     eval_results: list[EvalResult] = list(er_result.scalars().all())
 
     eval_def_ids = list({er.eval_id for er in eval_results})
-    ed_result = await session.execute(
-        select(EvalDefinition).where(EvalDefinition.id.in_(eval_def_ids))
-    )
+    ed_result = await session.execute(select(EvalDefinition).where(EvalDefinition.id.in_(eval_def_ids)))
     definitions: dict[str, Any] = {}
     for ed in ed_result.scalars().all():
         definitions[str(ed.id)] = {

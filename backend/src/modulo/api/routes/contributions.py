@@ -72,15 +72,9 @@ async def create_contribution(
             description=body.description,
             tags=body.tags,
             fixture_map=body.fixture_map,
-            source_run_id=(
-                uuid.UUID(body.source_run_id) if body.source_run_id else None
-            ),
-            source_pipeline_id=(
-                uuid.UUID(body.source_pipeline_id) if body.source_pipeline_id else None
-            ),
-            owner_team_id=(
-                uuid.UUID(body.owner_team_id) if body.owner_team_id else None
-            ),
+            source_run_id=(uuid.UUID(body.source_run_id) if body.source_run_id else None),
+            source_pipeline_id=(uuid.UUID(body.source_pipeline_id) if body.source_pipeline_id else None),
+            owner_team_id=(uuid.UUID(body.owner_team_id) if body.owner_team_id else None),
         )
     return ContributeFixtureResponse(
         id=prim.id,
@@ -105,13 +99,9 @@ async def submit_for_review(
             created_by=principal.user_id,
         )
     except ContributionNotFoundError:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail="Contribution not found"
-        ) from None
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Contribution not found") from None
     except ContributionInvalidTransitionError as e:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT, detail=str(e)
-        ) from None
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(e)) from None
     return ContributionStatusResponse(
         id=prim.id,
         contribution_status=prim.contribution_status,
@@ -146,13 +136,9 @@ async def publish_contribution_endpoint(
             approved_by=principal.user_id,
         )
     except ContributionNotFoundError:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail="Contribution not found"
-        ) from None
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Contribution not found") from None
     except ContributionInvalidTransitionError as e:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT, detail=str(e)
-        ) from None
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(e)) from None
     return ContributionStatusResponse(
         id=prim.id,
         contribution_status=prim.contribution_status,
@@ -181,9 +167,7 @@ async def list_contributions_endpoint(
             page_size=page_size,
         )
     return {
-        "items": [
-            LibraryPrimitiveResponse.model_validate(p) for p in result.items
-        ],
+        "items": [LibraryPrimitiveResponse.model_validate(p) for p in result.items],
         "total": result.total,
         "page": result.page,
         "page_size": result.page_size,

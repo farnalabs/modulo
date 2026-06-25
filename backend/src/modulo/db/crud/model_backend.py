@@ -44,9 +44,7 @@ async def create_model_backend(
     return mb
 
 
-async def get_model_backend(
-    session: AsyncSession, model_backend_id: uuid.UUID
-) -> ModelBackend | None:
+async def get_model_backend(session: AsyncSession, model_backend_id: uuid.UUID) -> ModelBackend | None:
     result = await session.execute(select(ModelBackend).where(ModelBackend.id == model_backend_id))
     return result.scalar_one_or_none()
 
@@ -62,10 +60,7 @@ async def list_model_backends(
     items = list(
         (
             await session.execute(
-                select(ModelBackend)
-                .order_by(ModelBackend.created_at.desc())
-                .offset(offset)
-                .limit(page_size)
+                select(ModelBackend).order_by(ModelBackend.created_at.desc()).offset(offset).limit(page_size)
             )
         ).scalars()
     )

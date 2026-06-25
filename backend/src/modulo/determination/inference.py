@@ -33,13 +33,25 @@ class Finding:
 
 
 _INTERESTING_LANGUAGES = {
-    "python", "typescript", "javascript", "go", "rust", "java",
-    "ruby", "kotlin", "swift", "csharp",
+    "python",
+    "typescript",
+    "javascript",
+    "go",
+    "rust",
+    "java",
+    "ruby",
+    "kotlin",
+    "swift",
+    "csharp",
 }
 
 _CI_FILES = {
-    ".github/workflows", ".gitlab-ci.yml", "Jenkinsfile",
-    "circleci", ".circleci", "azure-pipelines",
+    ".github/workflows",
+    ".gitlab-ci.yml",
+    "Jenkinsfile",
+    "circleci",
+    ".circleci",
+    "azure-pipelines",
 }
 
 
@@ -136,8 +148,7 @@ def infer(samples: list[ScanSample]) -> list[Finding]:
             Finding(
                 category="stage",
                 finding="Development stage detected: source repositories found",
-                evidence=f"{len(repo_names)} "
-                f"{'repository' if len(repo_names) == 1 else 'repositories'} accessible",
+                evidence=f"{len(repo_names)} {'repository' if len(repo_names) == 1 else 'repositories'} accessible",
                 confidence="high",
             )
         )
@@ -157,11 +168,9 @@ def infer(samples: list[ScanSample]) -> list[Finding]:
             Finding(
                 category="automation",
                 finding="CI/CD configuration detected in repository metadata",
-                evidence="Repository metadata references CI tooling "
-                "(GitHub Actions, GitLab CI, Jenkins, CircleCI)",
+                evidence="Repository metadata references CI tooling (GitHub Actions, GitLab CI, Jenkins, CircleCI)",
                 confidence="medium",
-                uncertainty="Cannot verify CI is actively running; "
-                "only config references were checked",
+                uncertainty="Cannot verify CI is actively running; only config references were checked",
             )
         )
     else:
@@ -171,24 +180,19 @@ def infer(samples: list[ScanSample]) -> list[Finding]:
                 finding="No CI/CD configuration detected in sampled repo metadata",
                 evidence="Sampled repo metadata does not reference known CI tooling",
                 confidence="low",
-                uncertainty="CI config may exist in files not sampled; "
-                "only repo metadata was scanned",
+                uncertainty="CI config may exist in files not sampled; only repo metadata was scanned",
             )
         )
 
     # --- Bottleneck: Stale PRs ---
     if pr_ages:
         avg_age = sum(pr_ages) / len(pr_ages)
-        evidence_detail = (
-            f"Average PR/MR age: {avg_age:.1f} days, "
-            f"{stale_pr_count}/{len(pr_ages)} open for >5 days"
-        )
+        evidence_detail = f"Average PR/MR age: {avg_age:.1f} days, {stale_pr_count}/{len(pr_ages)} open for >5 days"
         if stale_pr_count > 0:
             findings.append(
                 Finding(
                     category="bottleneck",
-                    finding=f"Potential review bottleneck: "
-                    f"{stale_pr_count} PRs/MRs open for >5 days without merge",
+                    finding=f"Potential review bottleneck: {stale_pr_count} PRs/MRs open for >5 days without merge",
                     evidence=evidence_detail,
                     confidence="medium",
                     uncertainty="Cannot determine if PRs are waiting for review "
@@ -258,8 +262,7 @@ def infer(samples: list[ScanSample]) -> list[Finding]:
                 finding="No SDLC stages could be detected from connected tools",
                 evidence="No connector produced stage-identifying records",
                 confidence="low",
-                uncertainty="Connectors may not be configured, or "
-                "sampled data may not contain stage metadata",
+                uncertainty="Connectors may not be configured, or sampled data may not contain stage metadata",
             )
         )
 

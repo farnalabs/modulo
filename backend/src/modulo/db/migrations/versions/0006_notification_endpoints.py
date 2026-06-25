@@ -29,9 +29,7 @@ def upgrade() -> None:
             server_default="0",
             nullable=False,
         ),
-        sa.Column(
-            "auto_disabled", sa.Boolean(), server_default="false", nullable=False
-        ),
+        sa.Column("auto_disabled", sa.Boolean(), server_default="false", nullable=False),
         sa.Column("disabled_at", sa.DateTime(timezone=True), nullable=True),
         sa.Column("created_by", sa.UUID(), nullable=True),
         sa.Column("id", sa.UUID(), nullable=False),
@@ -48,9 +46,7 @@ def upgrade() -> None:
             server_default=sa.text("now()"),
             nullable=False,
         ),
-        sa.ForeignKeyConstraint(
-            ["organisation_id"], ["organisations.id"], ondelete="CASCADE"
-        ),
+        sa.ForeignKeyConstraint(["organisation_id"], ["organisations.id"], ondelete="CASCADE"),
         sa.ForeignKeyConstraint(["created_by"], ["users.id"], ondelete="SET NULL"),
         sa.PrimaryKeyConstraint("id"),
     )

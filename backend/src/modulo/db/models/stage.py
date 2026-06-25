@@ -11,9 +11,7 @@ class Stage(OrgScoped):
     __tablename__ = "stages"
     __table_args__ = (
         CheckConstraint("visibility IN ('org', 'team')", name="ck_stages_visibility"),
-        CheckConstraint(
-            "visibility = 'org' OR owner_team_id IS NOT NULL", name="ck_stages_team_owner"
-        ),
+        CheckConstraint("visibility = 'org' OR owner_team_id IS NOT NULL", name="ck_stages_team_owner"),
     )
 
     name: Mapped[str] = mapped_column(String(255), nullable=False)

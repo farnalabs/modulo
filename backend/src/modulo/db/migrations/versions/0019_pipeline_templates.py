@@ -26,9 +26,7 @@ def upgrade() -> None:
         "ck_library_primitives_type",
         "library_primitives",
         sa.text(
-            "primitive_type IN "
-            "('schema', 'workflow', 'agent', 'integration', "
-            "'test_fixture', 'pipeline_template')"
+            "primitive_type IN ('schema', 'workflow', 'agent', 'integration', 'test_fixture', 'pipeline_template')"
         ),
     )
 
@@ -38,9 +36,6 @@ def downgrade() -> None:
     op.create_check_constraint(
         "ck_library_primitives_type",
         "library_primitives",
-        sa.text(
-            "primitive_type IN "
-            "('schema', 'workflow', 'agent', 'integration', 'test_fixture')"
-        ),
+        sa.text("primitive_type IN ('schema', 'workflow', 'agent', 'integration', 'test_fixture')"),
     )
     op.drop_column("library_primitives", "category")

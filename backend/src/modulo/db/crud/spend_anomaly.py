@@ -6,7 +6,7 @@ All functions require RLS org context to be set by the caller.
 import uuid
 from collections.abc import Sequence
 
-from sqlalchemy import delete, select, update
+from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.db.models.spend_anomaly import SpendAnomaly
@@ -34,10 +34,14 @@ async def dismiss_anomaly(
     anomaly_id: uuid.UUID,
     organisation_id: uuid.UUID,
 ) -> bool:
-    q = update(SpendAnomaly).where(
-        SpendAnomaly.id == anomaly_id,
-        SpendAnomaly.organisation_id == organisation_id,
-    ).values(dismissed=True)
+    q = (
+        update(SpendAnomaly)
+        .where(
+            SpendAnomaly.id == anomaly_id,
+            SpendAnomaly.organisation_id == organisation_id,
+        )
+        .values(dismissed=True)
+    )
     result = await session.execute(q)
     await session.flush()
     return result.rowcount > 0

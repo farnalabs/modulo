@@ -80,9 +80,7 @@ class SchemaGenerationService:
             )
         except TimeoutError:
             _log.error("Schema generation timed out after %ss", self._timeout)
-            raise SchemaGenerationError(
-                f"LLM call timed out after {self._timeout}s"
-            ) from None
+            raise SchemaGenerationError(f"LLM call timed out after {self._timeout}s") from None
         except Exception as exc:
             _log.exception("LLM call failed during schema generation")
             raise SchemaGenerationError("LLM call failed") from exc
@@ -92,14 +90,10 @@ class SchemaGenerationService:
 
         content = response.content
         if not isinstance(content, str):
-            raise SchemaGenerationError(
-                f"Expected string response, got {type(content).__name__}"
-            )
+            raise SchemaGenerationError(f"Expected string response, got {type(content).__name__}")
 
         try:
             return _parse_schema_from_response(content)
         except (json.JSONDecodeError, ValueError) as exc:
             _log.exception("Failed to parse generated schema from LLM response")
-            raise SchemaGenerationError(
-                "Failed to parse generated schema from LLM response"
-            ) from exc
+            raise SchemaGenerationError("Failed to parse generated schema from LLM response") from exc

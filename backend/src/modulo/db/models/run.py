@@ -64,9 +64,7 @@ class Run(OrgScoped):
     input_hash: Mapped[str] = mapped_column(String(64), nullable=False)
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
-    cancellation_requested: Mapped[bool] = mapped_column(
-        Boolean, nullable=False, server_default="false"
-    )
+    cancellation_requested: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="false")
     total_tokens: Mapped[int | None] = mapped_column(Integer)
     total_cost_usd: Mapped[Decimal | None] = mapped_column(Numeric(14, 6))
     error_detail: Mapped[str | None] = mapped_column(String)

@@ -33,9 +33,7 @@ class EvalDefinition(OrgScoped):
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     eval_type: Mapped[str] = mapped_column(String(30), nullable=False)
     config_json: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False, default=dict)
-    failure_behaviour: Mapped[str] = mapped_column(
-        String(10), nullable=False, server_default="warn"
-    )
+    failure_behaviour: Mapped[str] = mapped_column(String(10), nullable=False, server_default="warn")
     pass_threshold: Mapped[float | None] = mapped_column(Float, nullable=True)
     suite_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
     created_by: Mapped[uuid.UUID] = mapped_column(

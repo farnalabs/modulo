@@ -84,21 +84,17 @@ def generate_draft(samples: list[ScanSample], findings: list[Finding]) -> Pipeli
         nodes.append(n)
         stage_nodes.append("planning")
 
-        automation_suggestions.append({
-            "stage": "planning",
-            "suggestion": "Auto-assign issues to team members based on workload and expertise",
-            "connector_type": (
-                "jira" if any(s.connector_type.value == "jira" for s in samples)
-                else "linear"
-            ),
-        })
+        automation_suggestions.append(
+            {
+                "stage": "planning",
+                "suggestion": "Auto-assign issues to team members based on workload and expertise",
+                "connector_type": ("jira" if any(s.connector_type.value == "jira" for s in samples) else "linear"),
+            }
+        )
 
     if has_development:
         # Determine which connector types are available
-        git_providers = {
-            s.connector_type.value for s in samples
-            if s.resource in ("repos", "projects")
-        }
+        git_providers = {s.connector_type.value for s in samples if s.resource in ("repos", "projects")}
         connector_type = next(iter(git_providers), "github")
 
         n = DraftNode(
@@ -136,11 +132,13 @@ def generate_draft(samples: list[ScanSample], findings: list[Finding]) -> Pipeli
             review_source = "start"
         edges.append(DraftEdge(source=review_source, target="review", hitl_gate=True))
 
-        automation_suggestions.append({
-            "stage": "review",
-            "suggestion": "Auto-request reviews from matching code owners based on changed files",
-            "connector_type": connector_type,
-        })
+        automation_suggestions.append(
+            {
+                "stage": "review",
+                "suggestion": "Auto-request reviews from matching code owners based on changed files",
+                "connector_type": connector_type,
+            }
+        )
 
     if has_ci:
         n = DraftNode(

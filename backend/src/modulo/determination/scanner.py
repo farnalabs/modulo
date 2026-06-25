@@ -41,14 +41,19 @@ def _repo_name(rec: dict) -> str:
     return rec.get("full_name") or rec.get("path_with_namespace") or rec.get("name", "")
 
 
-def _add(samples: list[ScanSample], connector_id: uuid.UUID, ct: ConnectorType, resource: str,
-         records: list[dict], sample_count: int, error: str | None = None) -> None:
+def _add(
+    samples: list[ScanSample],
+    connector_id: uuid.UUID,
+    ct: ConnectorType,
+    resource: str,
+    records: list[dict],
+    sample_count: int,
+    error: str | None = None,
+) -> None:
     samples.append(ScanSample(connector_id, ct, resource, records, sample_count, error))
 
 
-async def _sample_connector(
-    connector_id: uuid.UUID, connector: ConnectorBase
-) -> list[ScanSample]:
+async def _sample_connector(connector_id: uuid.UUID, connector: ConnectorBase) -> list[ScanSample]:
     """Sample data from a single connector based on its type."""
     samples: list[ScanSample] = []
 
@@ -91,9 +96,7 @@ async def _sample_connector(
                 first = _repo_name(projects[0])
                 try:
                     r = await connector.query(
-                        ConnectorQuery(
-                            resource="mrs", filters={"project": first, "state": "opened"}
-                        )
+                        ConnectorQuery(resource="mrs", filters={"project": first, "state": "opened"})
                     )
                     _add(samples, connector_id, ct, "mrs", r.records, len(r.records))
                 except Exception as exc:
@@ -107,21 +110,14 @@ async def _sample_connector(
                         filters={"jql": "ORDER BY created DESC", "max_results": _SAMPLE_LIMIT},
                     )
                 )
-                _add(
-                    samples, connector_id, ct, "issues", r.records, r.total or len(r.records)
-                )
+                _add(samples, connector_id, ct, "issues", r.records, r.total or len(r.records))
             except Exception as exc:
                 _add(samples, connector_id, ct, "issues", [], 0, str(exc)[:200])
 
         case ConnectorType.LINEAR:
             try:
-                r = await connector.query(
-                    ConnectorQuery(resource="search", filters={"query": ""})
-                )
-                _add(
-                    samples,
-                    connector_id, ct, "issues", r.records[: _SAMPLE_LIMIT], len(r.records)
-                )
+                r = await connector.query(ConnectorQuery(resource="search", filters={"query": ""}))
+                _add(samples, connector_id, ct, "issues", r.records[:_SAMPLE_LIMIT], len(r.records))
             except Exception as exc:
                 _add(samples, connector_id, ct, "issues", [], 0, str(exc)[:200])
 

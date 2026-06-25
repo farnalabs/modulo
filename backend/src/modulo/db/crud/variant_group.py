@@ -41,12 +41,8 @@ async def create_variant_group(
     return group
 
 
-async def get_variant_group(
-    session: AsyncSession, group_id: uuid.UUID
-) -> VariantGroup | None:
-    result = await session.execute(
-        select(VariantGroup).where(VariantGroup.id == group_id)
-    )
+async def get_variant_group(session: AsyncSession, group_id: uuid.UUID) -> VariantGroup | None:
+    result = await session.execute(select(VariantGroup).where(VariantGroup.id == group_id))
     return result.scalar_one_or_none()
 
 
@@ -66,13 +62,7 @@ async def list_variant_groups(
     offset = (page - 1) * page_size
     total = (await session.execute(count_q)).scalar_one()
     items = list(
-        (
-            await session.execute(
-                q.order_by(VariantGroup.created_at.desc())
-                .offset(offset)
-                .limit(page_size)
-            )
-        ).scalars()
+        (await session.execute(q.order_by(VariantGroup.created_at.desc()).offset(offset).limit(page_size))).scalars()
     )
     return items, total
 
@@ -107,9 +97,7 @@ async def update_variant_group(
     return group
 
 
-async def delete_variant_group(
-    session: AsyncSession, group_id: uuid.UUID
-) -> bool:
+async def delete_variant_group(session: AsyncSession, group_id: uuid.UUID) -> bool:
     group = await get_variant_group(session, group_id)
     if group is None:
         return False
@@ -118,9 +106,7 @@ async def delete_variant_group(
     return True
 
 
-async def increment_run_count(
-    session: AsyncSession, group_id: uuid.UUID
-) -> VariantGroup | None:
+async def increment_run_count(session: AsyncSession, group_id: uuid.UUID) -> VariantGroup | None:
     group = await get_variant_group(session, group_id)
     if group is None:
         return None
@@ -129,9 +115,7 @@ async def increment_run_count(
     return group
 
 
-async def check_pipeline_run_quota(
-    session: AsyncSession, group: VariantGroup
-) -> bool:
+async def check_pipeline_run_quota(session: AsyncSession, group: VariantGroup) -> bool:
     """Check if the pipeline is within its concurrent run quota.
 
     Returns True if a new run is allowed, False if quota is exceeded.
@@ -229,26 +213,21 @@ async def get_coverage_gaps(
     if eval_def_ids is None:
         from modulo.db.models.eval_definition import EvalDefinition
 
-        result = await session.execute(
-            select(EvalDefinition).where(
-                EvalDefinition.pipeline_id == group.pipeline_id
-            )
-        )
+        result = await session.execute(select(EvalDefinition).where(EvalDefinition.pipeline_id == group.pipeline_id))
         eval_defs = list(result.scalars())
         eval_def_ids = [e.id for e in eval_defs]
 
     gaps: list[dict[str, Any]] = []
     for variant in group.variants:
-        variant_eval_ids = set(
-            uuid.UUID(str(eid))
-            for eid in variant.get("eval_definition_ids", [])
-        )
+        variant_eval_ids = set(uuid.UUID(str(eid)) for eid in variant.get("eval_definition_ids", []))
         missing = [str(eid) for eid in eval_def_ids if eid not in variant_eval_ids]
         if missing:
-            gaps.append({
-                "variant": variant,
-                "missing_evals": missing,
-            })
+            gaps.append(
+                {
+                    "variant": variant,
+                    "missing_evals": missing,
+                }
+            )
     return gaps
 
 
@@ -267,9 +246,7 @@ async def get_prompt_diffs(
     for variant in group.variants:
         sid = variant.get("snapshot_id")
         if sid is not None:
-            snapshot_ids.add(
-                uuid.UUID(str(sid)) if isinstance(sid, str) else sid
-            )
+            snapshot_ids.add(uuid.UUID(str(sid)) if isinstance(sid, str) else sid)
 
     if base_snapshot_ids:
         snapshot_ids.update(base_snapshot_ids)
@@ -279,18 +256,12 @@ async def get_prompt_diffs(
 
     from modulo.db.models.pipeline_snapshot import PipelineSnapshot
 
-    result = await session.execute(
-        select(PipelineSnapshot).where(PipelineSnapshot.id.in_(snapshot_ids))
-    )
+    result = await session.execute(select(PipelineSnapshot).where(PipelineSnapshot.id.in_(snapshot_ids)))
     snapshots = {s.id: s for s in result.scalars()}
 
-    base_variants = [
-        v for v in group.variants
-        if uuid.UUID(str(v.get("snapshot_id", ""))) in (base_snapshot_ids or [])
-    ]
+    base_variants = [v for v in group.variants if uuid.UUID(str(v.get("snapshot_id", ""))) in (base_snapshot_ids or [])]
     comparison_variants = [
-        v for v in group.variants
-        if uuid.UUID(str(v.get("snapshot_id", ""))) not in (base_snapshot_ids or [])
+        v for v in group.variants if uuid.UUID(str(v.get("snapshot_id", ""))) not in (base_snapshot_ids or [])
     ]
 
     diffs: list[dict[str, Any]] = []
@@ -303,26 +274,28 @@ async def get_prompt_diffs(
             if cv_snapshot is None or bv_snapshot is None:
                 continue
 
-            bv_pins = {p["agent_id"]: p["prompt_version_hash"]
-                       for p in bv_snapshot.prompt_pins_json}
-            cv_pins = {p["agent_id"]: p["prompt_version_hash"]
-                       for p in cv_snapshot.prompt_pins_json}
+            bv_pins = {p["agent_id"]: p["prompt_version_hash"] for p in bv_snapshot.prompt_pins_json}
+            cv_pins = {p["agent_id"]: p["prompt_version_hash"] for p in cv_snapshot.prompt_pins_json}
 
             agent_diffs = []
             for agent_id, cv_hash in cv_pins.items():
                 bv_hash = bv_pins.get(agent_id)
                 if bv_hash and bv_hash != cv_hash:
-                    agent_diffs.append({
-                        "agent_id": agent_id,
-                        "base_hash": bv_hash,
-                        "variant_hash": cv_hash,
-                    })
+                    agent_diffs.append(
+                        {
+                            "agent_id": agent_id,
+                            "base_hash": bv_hash,
+                            "variant_hash": cv_hash,
+                        }
+                    )
 
             if agent_diffs:
-                diffs.append({
-                    "base_variant": bv,
-                    "variant": cv,
-                    "agent_diffs": agent_diffs,
-                })
+                diffs.append(
+                    {
+                        "base_variant": bv,
+                        "variant": cv,
+                        "agent_diffs": agent_diffs,
+                    }
+                )
 
     return diffs

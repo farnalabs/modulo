@@ -85,10 +85,7 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
                 _log.warning("ratelimit.exceeded", extra={"client_key": client_key})
                 return Response(
                     status_code=HTTP_429_TOO_MANY_REQUESTS,
-                    content=(
-                        '{"detail":"Rate limit exceeded. Try again later.",'
-                        '"error_code":"rate_limit_exceeded"}'
-                    ),
+                    content=('{"detail":"Rate limit exceeded. Try again later.","error_code":"rate_limit_exceeded"}'),
                     media_type="application/json",
                     headers={"Retry-After": str(rule[2])},
                 )
@@ -114,9 +111,5 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
     @staticmethod
     def _client_key(request: Request) -> str:
         forwarded = request.headers.get("X-Forwarded-For", "")
-        ip = (
-            forwarded.split(",")[0].strip()
-            if forwarded
-            else request.client.host if request.client else "unknown"
-        )
+        ip = forwarded.split(",")[0].strip() if forwarded else request.client.host if request.client else "unknown"
         return f"{ip}:{request.url.path}"

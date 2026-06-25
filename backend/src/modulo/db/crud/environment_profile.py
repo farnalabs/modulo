@@ -42,12 +42,8 @@ async def create_environment_profile(
     return profile
 
 
-async def get_environment_profile(
-    session: AsyncSession, profile_id: uuid.UUID
-) -> EnvironmentProfile | None:
-    result = await session.execute(
-        select(EnvironmentProfile).where(EnvironmentProfile.id == profile_id)
-    )
+async def get_environment_profile(session: AsyncSession, profile_id: uuid.UUID) -> EnvironmentProfile | None:
+    result = await session.execute(select(EnvironmentProfile).where(EnvironmentProfile.id == profile_id))
     return result.scalar_one_or_none()
 
 
@@ -61,12 +57,7 @@ async def list_environment_profiles(
     count_q = select(func.count()).select_from(EnvironmentProfile)
     total = (await session.execute(count_q)).scalar_one()
 
-    q = (
-        select(EnvironmentProfile)
-        .order_by(EnvironmentProfile.created_at.desc())
-        .offset(offset)
-        .limit(page_size)
-    )
+    q = select(EnvironmentProfile).order_by(EnvironmentProfile.created_at.desc()).offset(offset).limit(page_size)
     rows = (await session.execute(q)).scalars().all()
     return PageResult(items=list(rows), total=total, page=page, page_size=page_size)
 
@@ -84,9 +75,7 @@ async def update_environment_profile(
     return profile
 
 
-async def delete_environment_profile(
-    session: AsyncSession, profile_id: uuid.UUID
-) -> bool:
+async def delete_environment_profile(session: AsyncSession, profile_id: uuid.UUID) -> bool:
     profile = await get_environment_profile(session, profile_id)
     if profile is None:
         return False

@@ -19,17 +19,15 @@ class OrgDailyRunCount(OrgScoped):
     __tablename__ = "org_daily_run_counts"
     __table_args__ = (
         UniqueConstraint(
-            "organisation_id", "team_id", "run_date",
+            "organisation_id",
+            "team_id",
+            "run_date",
             name="uq_org_daily_run_counts_org_team_date",
         ),
     )
 
     run_date: Mapped[date] = mapped_column(Date, nullable=False)
-    team_id: Mapped[uuid.UUID | None] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("teams.id", ondelete="CASCADE")
-    )
+    team_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("teams.id", ondelete="CASCADE"))
     run_count: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
-    total_spend_usd: Mapped[Decimal] = mapped_column(
-        Numeric(14, 6), nullable=False, server_default="0"
-    )
+    total_spend_usd: Mapped[Decimal] = mapped_column(Numeric(14, 6), nullable=False, server_default="0")
     team: Mapped[Team | None] = relationship()

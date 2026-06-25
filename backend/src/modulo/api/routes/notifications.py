@@ -62,9 +62,7 @@ async def list_endpoints(
     async with session.begin():
         await set_rls_org(session, principal.organisation_id)
         result = await session.execute(
-            select(NotificationEndpoint).where(
-                NotificationEndpoint.organisation_id == principal.organisation_id
-            )
+            select(NotificationEndpoint).where(NotificationEndpoint.organisation_id == principal.organisation_id)
         )
         endpoints = list(result.scalars())
     return [_ep_to_response(ep) for ep in endpoints]

@@ -46,9 +46,5 @@ class Trigger(OrgScoped):
     # Cron-specific fields (nullable for non-cron trigger types)
     cron_expression: Mapped[str | None] = mapped_column(String(100), nullable=True)
     cron_timezone: Mapped[str | None] = mapped_column(String(50), nullable=True)
-    last_fired_at: Mapped[datetime | None] = mapped_column(
-        DateTime(timezone=True), nullable=True
-    )
-    next_fire_at: Mapped[datetime | None] = mapped_column(
-        DateTime(timezone=True), nullable=True, index=True
-    )
+    last_fired_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    next_fire_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True, index=True)

@@ -46,9 +46,7 @@ async def scim_create_user(
     return user
 
 
-async def scim_get_user(
-    session: AsyncSession, org_id: uuid.UUID, user_id: uuid.UUID
-) -> User | None:
+async def scim_get_user(session: AsyncSession, org_id: uuid.UUID, user_id: uuid.UUID) -> User | None:
     return await get_user_by_id_org(session, user_id, org_id)
 
 
@@ -73,9 +71,7 @@ async def scim_update_user(
     return user
 
 
-async def scim_delete_user_by_id(
-    session: AsyncSession, org_id: uuid.UUID, user_id: uuid.UUID
-) -> bool:
+async def scim_delete_user_by_id(session: AsyncSession, org_id: uuid.UUID, user_id: uuid.UUID) -> bool:
     user = await get_user_by_id_org(session, user_id, org_id)
     if user is None:
         return False
@@ -100,13 +96,7 @@ async def scim_list_users(
     count_q = select(func.count()).select_from(User).where(*conditions)
     total = (await session.execute(count_q)).scalar() or 0
 
-    query = (
-        select(User)
-        .where(*conditions)
-        .order_by(User.created_at)
-        .offset(start_index - 1)
-        .limit(count)
-    )
+    query = select(User).where(*conditions).order_by(User.created_at).offset(start_index - 1).limit(count)
     result = await session.execute(query)
     items = list(result.scalars().all())
     return items, total
@@ -132,9 +122,7 @@ async def scim_create_group(
     )
 
 
-async def scim_get_group(
-    session: AsyncSession, team_id: uuid.UUID
-) -> Team | None:
+async def scim_get_group(session: AsyncSession, team_id: uuid.UUID) -> Team | None:
     return await get_team(session, team_id)
 
 
@@ -152,9 +140,7 @@ async def scim_update_group(
     return await update_team(session, team.id, updates)
 
 
-async def scim_delete_group_by_id(
-    session: AsyncSession, team_id: uuid.UUID
-) -> bool:
+async def scim_delete_group_by_id(session: AsyncSession, team_id: uuid.UUID) -> bool:
     return await delete_team(session, team_id)
 
 
@@ -174,13 +160,7 @@ async def scim_list_groups(
     count_q = select(func.count()).select_from(Team).where(*conditions)
     total = (await session.execute(count_q)).scalar() or 0
 
-    query = (
-        select(Team)
-        .where(*conditions)
-        .order_by(Team.created_at)
-        .offset(start_index - 1)
-        .limit(count)
-    )
+    query = select(Team).where(*conditions).order_by(Team.created_at).offset(start_index - 1).limit(count)
     result = await session.execute(query)
     items = list(result.scalars().all())
     return items, total
@@ -200,14 +180,10 @@ async def scim_add_group_member(
     existing = await get_membership_by_team_and_user(session, team_id, user_id)
     if existing is not None:
         return existing
-    return await add_team_member(
-        session, org_id=org_id, team_id=team_id, user_id=user_id, role=role
-    )
+    return await add_team_member(session, org_id=org_id, team_id=team_id, user_id=user_id, role=role)
 
 
-async def scim_remove_group_member(
-    session: AsyncSession, team_id: uuid.UUID, user_id: uuid.UUID
-) -> bool:
+async def scim_remove_group_member(session: AsyncSession, team_id: uuid.UUID, user_id: uuid.UUID) -> bool:
     membership = await get_membership_by_team_and_user(session, team_id, user_id)
     if membership is None:
         return False
@@ -215,10 +191,6 @@ async def scim_remove_group_member(
     return True
 
 
-async def scim_list_group_members(
-    session: AsyncSession, team_id: uuid.UUID
-) -> list[TeamMembership]:
-    result = await session.execute(
-        select(TeamMembership).where(TeamMembership.team_id == team_id)
-    )
+async def scim_list_group_members(session: AsyncSession, team_id: uuid.UUID) -> list[TeamMembership]:
+    result = await session.execute(select(TeamMembership).where(TeamMembership.team_id == team_id))
     return list(result.scalars().all())

@@ -21,10 +21,7 @@ async def set_rls_org(session: AsyncSession, org_id: uuid.UUID) -> None:
     cannot accidentally call this outside a BEGIN block and get silent no-ops.
     """
     if not session.in_transaction():
-        raise RuntimeError(
-            "set_rls_org requires an active transaction; "
-            "wrap the call in `async with session.begin():`"
-        )
+        raise RuntimeError("set_rls_org requires an active transaction; wrap the call in `async with session.begin():`")
     # set_config(name, value, is_local=true) is equivalent to SET LOCAL and
     # supports parameterised queries; bare SET LOCAL does not accept $1 placeholders.
     await session.execute(

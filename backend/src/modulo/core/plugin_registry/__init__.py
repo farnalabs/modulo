@@ -91,9 +91,7 @@ class PluginRegistry:
             logger.info("Discovered %d plugin(s): %s", len(discovered), ids)
         return discovered
 
-    def _load_entry_point(
-        self, ep: importlib.metadata.EntryPoint, group: str
-    ) -> PluginManifest | None:
+    def _load_entry_point(self, ep: importlib.metadata.EntryPoint, group: str) -> PluginManifest | None:
         """Load an entry point and register its builder.
 
         Returns a ``PluginManifest`` or ``None`` if the module could not be imported.
@@ -138,9 +136,7 @@ class PluginRegistry:
     # Builders
     # ------------------------------------------------------------------
 
-    def build_connector(
-        self, type_id: str, config: dict[str, Any], creds: dict[str, Any]
-    ) -> ConnectorBase:
+    def build_connector(self, type_id: str, config: dict[str, Any], creds: dict[str, Any]) -> ConnectorBase:
         """Build a connector from a plugin-registered builder.
 
         Raises ``KeyError`` if no plugin provides this connector type.
@@ -170,9 +166,7 @@ class PluginRegistry:
         manifest.capabilities.add("connector_type")
         self._plugins[manifest.PLUGIN_ID] = manifest
         self._health[manifest.PLUGIN_ID] = PluginHealth(ok=True, detail="Registered in-tree")
-        logger.info(
-            "Manually registered connector type '%s' from plugin %s", type_id, manifest.PLUGIN_ID
-        )
+        logger.info("Manually registered connector type '%s' from plugin %s", type_id, manifest.PLUGIN_ID)
 
     def register_model_backend(
         self, provider: str, builder: Callable[..., ModelBackendBase], manifest: PluginManifest
@@ -182,9 +176,7 @@ class PluginRegistry:
         manifest.capabilities.add("model_backend")
         self._plugins[manifest.PLUGIN_ID] = manifest
         self._health[manifest.PLUGIN_ID] = PluginHealth(ok=True, detail="Registered in-tree")
-        logger.info(
-            "Manually registered model backend '%s' from plugin %s", provider, manifest.PLUGIN_ID
-        )
+        logger.info("Manually registered model backend '%s' from plugin %s", provider, manifest.PLUGIN_ID)
 
     # ------------------------------------------------------------------
     # Queries

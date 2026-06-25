@@ -40,18 +40,12 @@ class Agent(OrgScoped):
     output_schema_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
     output_schema_version: Mapped[str] = mapped_column(String(50), nullable=False)
     prompt_template: Mapped[str] = mapped_column(Text, nullable=False)
-    prompt_version_history: Mapped[list[dict[str, Any]]] = mapped_column(
-        JSON, nullable=False, default=list
-    )
+    prompt_version_history: Mapped[list[dict[str, Any]]] = mapped_column(JSON, nullable=False, default=list)
     model_backend_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("model_backends.id", ondelete="RESTRICT"), nullable=False
     )
-    connector_type_refs: Mapped[list[dict[str, Any]]] = mapped_column(
-        JSON, nullable=False, default=list
-    )
-    required_environment_capabilities: Mapped[list[str]] = mapped_column(
-        JSON, nullable=False, default=list
-    )
+    connector_type_refs: Mapped[list[dict[str, Any]]] = mapped_column(JSON, nullable=False, default=list)
+    required_environment_capabilities: Mapped[list[str]] = mapped_column(JSON, nullable=False, default=list)
     evals: Mapped[list[dict[str, Any]] | None] = mapped_column(JSON, nullable=True, default=None)
     retry_policy: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False, default=dict)
     token_budget: Mapped[int | None] = mapped_column(Integer)

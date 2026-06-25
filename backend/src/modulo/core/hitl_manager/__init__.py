@@ -331,9 +331,7 @@ class HITLManager:
         threshold_minutes: int = 30,
     ) -> int:
         """Return the number of gates that exceed the overdue threshold."""
-        gates = await self.list_overdue(
-            session, org_id, threshold_minutes=threshold_minutes
-        )
+        gates = await self.list_overdue(session, org_id, threshold_minutes=threshold_minutes)
         return len(gates)
 
     # ------------------------------------------------------------------

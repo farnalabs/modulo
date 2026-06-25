@@ -64,12 +64,7 @@ async def list_pipelines(
     total = (await session.execute(select(func.count()).select_from(Pipeline))).scalar_one()
     items = list(
         (
-            await session.execute(
-                select(Pipeline)
-                .order_by(Pipeline.created_at.desc())
-                .offset(offset)
-                .limit(page_size)
-            )
+            await session.execute(select(Pipeline).order_by(Pipeline.created_at.desc()).offset(offset).limit(page_size))
         ).scalars()
     )
     return PageResult(items=items, total=total, page=page, page_size=page_size)
@@ -184,9 +179,7 @@ async def replace_pipeline_graph(
     edges: list[dict[str, Any]],
 ) -> tuple[list[dict[str, Any]], list[PipelineEdge]] | None:
     """Atomically replace an editable graph while preserving first-class edges."""
-    result = await session.execute(
-        select(Pipeline).where(Pipeline.id == pipeline_id).with_for_update()
-    )
+    result = await session.execute(select(Pipeline).where(Pipeline.id == pipeline_id).with_for_update())
     pipeline = result.scalar_one_or_none()
     if pipeline is None:
         return None

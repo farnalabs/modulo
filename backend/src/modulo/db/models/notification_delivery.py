@@ -20,9 +20,7 @@ class NotificationDeliveryLog(OrgScoped):
     run_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("runs.id", ondelete="SET NULL"), index=True
     )
-    status: Mapped[str] = mapped_column(
-        String(20), nullable=False, server_default="delivered"
-    )
+    status: Mapped[str] = mapped_column(String(20), nullable=False, server_default="delivered")
     attempt_count: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
     response_code: Mapped[int | None] = mapped_column(Integer)
     last_error: Mapped[str | None] = mapped_column(String(2000))

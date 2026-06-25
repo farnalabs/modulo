@@ -76,6 +76,7 @@ CONTRIBUTION_DRAFT = "draft"
 CONTRIBUTION_REVIEW_QUEUE = "review_queue"
 CONTRIBUTION_PUBLISHED = "published"
 
+
 class ContributionNotFoundError(LookupError):
     """Raised when a contribution primitive is not found."""
 
@@ -184,10 +185,8 @@ _COMMUNITY_PRIMITIVES: list[LibraryPrimitive] = [
         description="Example StubModelBackend fixture map for a PRD-to-requirements pipeline run.",
         content_json={
             "fixture_map": {
-                "Extract requirements from: Build a login system with SSO":
-                    "Functional: SSO authentication\nNon-functional: 99.9% uptime",
-                "Refine requirements: SSO authentication, 99.9% uptime":
-                    "1. Integrate SAML 2.0 SSO\n2. Support OIDC providers\n3. 99.9% uptime SLA",
+                "Extract requirements from: Build a login system with SSO": "Functional: SSO authentication\nNon-functional: 99.9% uptime",
+                "Refine requirements: SSO authentication, 99.9% uptime": "1. Integrate SAML 2.0 SSO\n2. Support OIDC providers\n3. 99.9% uptime SLA",
             },
             "pipeline_id": None,
             "run_id": None,
@@ -300,9 +299,7 @@ _COMMUNITY_PRIMITIVES: list[LibraryPrimitive] = [
                 "and extract a structured specification for implementation.\n\n"
                 "Issue:\n{{ input }}"
             ),
-            "connector_type_refs": [
-                {"connector_type": "github", "capabilities": ["issue_read"]}
-            ],
+            "connector_type_refs": [{"connector_type": "github", "capabilities": ["issue_read"]}],
             "required_environment_capabilities": ["egress:github.com"],
             "model_backend_id": None,
             "retry_policy": {},
@@ -346,9 +343,7 @@ _COMMUNITY_PRIMITIVES: list[LibraryPrimitive] = [
                 "by writing each file to disk.\n\n"
                 "Changes:\n{{ input }}"
             ),
-            "connector_type_refs": [
-                {"connector_type": "shell", "capabilities": ["write"]}
-            ],
+            "connector_type_refs": [{"connector_type": "shell", "capabilities": ["write"]}],
             "required_environment_capabilities": ["filesystem:write"],
             "model_backend_id": None,
             "retry_policy": {},
@@ -370,9 +365,7 @@ _COMMUNITY_PRIMITIVES: list[LibraryPrimitive] = [
                 "using the command 'uv run pytest tests/unit -x -q' and report the results.\n\n"
                 "Code changes applied:\n{{ input }}"
             ),
-            "connector_type_refs": [
-                {"connector_type": "shell", "capabilities": ["read", "write"]}
-            ],
+            "connector_type_refs": [{"connector_type": "shell", "capabilities": ["read", "write"]}],
             "required_environment_capabilities": ["shell:exec", "python3.12", "uv"],
             "model_backend_id": None,
             "retry_policy": {},
@@ -394,9 +387,7 @@ _COMMUNITY_PRIMITIVES: list[LibraryPrimitive] = [
                 "that were made and include the test results in the PR body.\n\n"
                 "Test results:\n{{ input }}"
             ),
-            "connector_type_refs": [
-                {"connector_type": "github", "capabilities": ["create_pr"]}
-            ],
+            "connector_type_refs": [{"connector_type": "github", "capabilities": ["create_pr"]}],
             "required_environment_capabilities": ["egress:github.com"],
             "model_backend_id": None,
             "retry_policy": {},
@@ -456,9 +447,7 @@ def _filter_community(
         results = [p for p in results if p.primitive_type == primitive_type]
     if search:
         term = search.strip().lower()
-        results = [
-            p for p in results if term in p.name.lower() or term in (p.description or "").lower()
-        ]
+        results = [p for p in results if term in p.name.lower() or term in (p.description or "").lower()]
     return results
 
 
@@ -480,12 +469,12 @@ async def list_primitives(
     """Return org-scoped and community primitives merged into a single page."""
     await set_rls_org(session, org_id)
     org_page = await list_library_primitives(
-            session,
-            page=page,
-            page_size=page_size,
-            primitive_type=primitive_type,
-            search=search,
-        )
+        session,
+        page=page,
+        page_size=page_size,
+        primitive_type=primitive_type,
+        search=search,
+    )
 
     community: list[LibraryPrimitive] = (
         _filter_community(primitive_type=primitive_type, search=search) if include_community else []
@@ -691,114 +680,256 @@ _INCIDENT_TEMPLATE_AGENTS = [
 ]
 
 _PR_TEMPLATE_NODES = [
-    {"id": "issue-reader", "node_type": "agent", "agent_index": 0, "label": "Issue Reader", "position": {"x": 50, "y": 100}},
-    {"id": "code-diff-analyzer", "node_type": "agent", "agent_index": 1, "label": "Code Diff Analyzer", "position": {"x": 350, "y": 100}},
-    {"id": "comment-generator", "node_type": "agent", "agent_index": 2, "label": "Comment Generator", "position": {"x": 650, "y": 100}},
-    {"id": "hitl-gate", "node_type": "manual", "label": "Review Gate", "position": {"x": 950, "y": 100}},
-    {"id": "pr-poster", "node_type": "agent", "agent_index": 3, "label": "PR Poster", "position": {"x": 1250, "y": 100}},
+    {
+        "id": "issue-reader",
+        "node_type": "agent",
+        "agent_index": 0,
+        "label": "Issue Reader",
+        "position": {"x": 50, "y": 100},
+    },
+    {
+        "id": "code-diff-analyzer",
+        "node_type": "agent",
+        "agent_index": 1,
+        "label": "Code Diff Analyzer",
+        "position": {"x": 350, "y": 100},
+    },
+    {
+        "id": "comment-generator",
+        "node_type": "agent",
+        "agent_index": 2,
+        "label": "Comment Generator",
+        "position": {"x": 650, "y": 100},
+    },
+    {
+        "id": "hitl-gate",
+        "node_type": "manual",
+        "label": "Review Gate",
+        "position": {"x": 950, "y": 100},
+    },
+    {
+        "id": "pr-poster",
+        "node_type": "agent",
+        "agent_index": 3,
+        "label": "PR Poster",
+        "position": {"x": 1250, "y": 100},
+    },
 ]
 _PR_TEMPLATE_EDGES = [
-    {"source_node_id": "issue-reader", "target_node_id": "code-diff-analyzer", "edge_type": "normal"},
-    {"source_node_id": "code-diff-analyzer", "target_node_id": "comment-generator", "edge_type": "normal"},
+    {
+        "source_node_id": "issue-reader",
+        "target_node_id": "code-diff-analyzer",
+        "edge_type": "normal",
+    },
+    {
+        "source_node_id": "code-diff-analyzer",
+        "target_node_id": "comment-generator",
+        "edge_type": "normal",
+    },
     {"source_node_id": "comment-generator", "target_node_id": "hitl-gate", "edge_type": "normal"},
-    {"source_node_id": "hitl-gate", "target_node_id": "pr-poster", "edge_type": "normal", "hitl_gate_config": {
-        "label": "Approve Review",
-        "description": "Review the generated comments before posting to the PR.",
-        "claim_expiry_minutes": 60,
-        "human_only": False,
-    }},
+    {
+        "source_node_id": "hitl-gate",
+        "target_node_id": "pr-poster",
+        "edge_type": "normal",
+        "hitl_gate_config": {
+            "label": "Approve Review",
+            "description": "Review the generated comments before posting to the PR.",
+            "claim_expiry_minutes": 60,
+            "human_only": False,
+        },
+    },
 ]
 
 _RELEASE_TEMPLATE_NODES = [
-    {"id": "version-bumper", "node_type": "agent", "agent_index": 0, "label": "Version Bumper", "position": {"x": 50, "y": 100}},
-    {"id": "changelog-generator", "node_type": "agent", "agent_index": 1, "label": "Changelog Generator", "position": {"x": 350, "y": 100}},
-    {"id": "release-notes-writer", "node_type": "agent", "agent_index": 2, "label": "Release Notes Writer", "position": {"x": 650, "y": 100}},
-    {"id": "hitl-gate", "node_type": "manual", "label": "Release Gate", "position": {"x": 950, "y": 100}},
-    {"id": "tag-creator", "node_type": "agent", "agent_index": 3, "label": "Tag Creator", "position": {"x": 1250, "y": 100}},
+    {
+        "id": "version-bumper",
+        "node_type": "agent",
+        "agent_index": 0,
+        "label": "Version Bumper",
+        "position": {"x": 50, "y": 100},
+    },
+    {
+        "id": "changelog-generator",
+        "node_type": "agent",
+        "agent_index": 1,
+        "label": "Changelog Generator",
+        "position": {"x": 350, "y": 100},
+    },
+    {
+        "id": "release-notes-writer",
+        "node_type": "agent",
+        "agent_index": 2,
+        "label": "Release Notes Writer",
+        "position": {"x": 650, "y": 100},
+    },
+    {
+        "id": "hitl-gate",
+        "node_type": "manual",
+        "label": "Release Gate",
+        "position": {"x": 950, "y": 100},
+    },
+    {
+        "id": "tag-creator",
+        "node_type": "agent",
+        "agent_index": 3,
+        "label": "Tag Creator",
+        "position": {"x": 1250, "y": 100},
+    },
 ]
 _RELEASE_TEMPLATE_EDGES = [
-    {"source_node_id": "version-bumper", "target_node_id": "changelog-generator", "edge_type": "normal"},
-    {"source_node_id": "changelog-generator", "target_node_id": "release-notes-writer", "edge_type": "normal"},
-    {"source_node_id": "release-notes-writer", "target_node_id": "hitl-gate", "edge_type": "normal"},
-    {"source_node_id": "hitl-gate", "target_node_id": "tag-creator", "edge_type": "normal", "hitl_gate_config": {
-        "label": "Approve Release",
-        "description": "Review the release notes before tagging the release.",
-        "claim_expiry_minutes": 60,
-        "human_only": False,
-    }},
+    {
+        "source_node_id": "version-bumper",
+        "target_node_id": "changelog-generator",
+        "edge_type": "normal",
+    },
+    {
+        "source_node_id": "changelog-generator",
+        "target_node_id": "release-notes-writer",
+        "edge_type": "normal",
+    },
+    {
+        "source_node_id": "release-notes-writer",
+        "target_node_id": "hitl-gate",
+        "edge_type": "normal",
+    },
+    {
+        "source_node_id": "hitl-gate",
+        "target_node_id": "tag-creator",
+        "edge_type": "normal",
+        "hitl_gate_config": {
+            "label": "Approve Release",
+            "description": "Review the release notes before tagging the release.",
+            "claim_expiry_minutes": 60,
+            "human_only": False,
+        },
+    },
 ]
 
 _INCIDENT_TEMPLATE_NODES = [
-    {"id": "alert-ingestor", "node_type": "agent", "agent_index": 0, "label": "Alert Ingestor", "position": {"x": 50, "y": 100}},
-    {"id": "severity-classifier", "node_type": "agent", "agent_index": 1, "label": "Severity Classifier", "position": {"x": 350, "y": 100}},
-    {"id": "runbook-matcher", "node_type": "agent", "agent_index": 2, "label": "Runbook Matcher", "position": {"x": 650, "y": 100}},
-    {"id": "remediation-agent", "node_type": "agent", "agent_index": 3, "label": "Remediation Agent", "position": {"x": 950, "y": 100}},
-    {"id": "hitl-gate", "node_type": "manual", "label": "Verification Gate", "position": {"x": 1250, "y": 100}},
-    {"id": "postmortem-generator", "node_type": "agent", "agent_index": 4, "label": "Postmortem Generator", "position": {"x": 1550, "y": 100}},
+    {
+        "id": "alert-ingestor",
+        "node_type": "agent",
+        "agent_index": 0,
+        "label": "Alert Ingestor",
+        "position": {"x": 50, "y": 100},
+    },
+    {
+        "id": "severity-classifier",
+        "node_type": "agent",
+        "agent_index": 1,
+        "label": "Severity Classifier",
+        "position": {"x": 350, "y": 100},
+    },
+    {
+        "id": "runbook-matcher",
+        "node_type": "agent",
+        "agent_index": 2,
+        "label": "Runbook Matcher",
+        "position": {"x": 650, "y": 100},
+    },
+    {
+        "id": "remediation-agent",
+        "node_type": "agent",
+        "agent_index": 3,
+        "label": "Remediation Agent",
+        "position": {"x": 950, "y": 100},
+    },
+    {
+        "id": "hitl-gate",
+        "node_type": "manual",
+        "label": "Verification Gate",
+        "position": {"x": 1250, "y": 100},
+    },
+    {
+        "id": "postmortem-generator",
+        "node_type": "agent",
+        "agent_index": 4,
+        "label": "Postmortem Generator",
+        "position": {"x": 1550, "y": 100},
+    },
 ]
 _INCIDENT_TEMPLATE_EDGES = [
-    {"source_node_id": "alert-ingestor", "target_node_id": "severity-classifier", "edge_type": "normal"},
-    {"source_node_id": "severity-classifier", "target_node_id": "runbook-matcher", "edge_type": "normal"},
-    {"source_node_id": "runbook-matcher", "target_node_id": "remediation-agent", "edge_type": "normal"},
+    {
+        "source_node_id": "alert-ingestor",
+        "target_node_id": "severity-classifier",
+        "edge_type": "normal",
+    },
+    {
+        "source_node_id": "severity-classifier",
+        "target_node_id": "runbook-matcher",
+        "edge_type": "normal",
+    },
+    {
+        "source_node_id": "runbook-matcher",
+        "target_node_id": "remediation-agent",
+        "edge_type": "normal",
+    },
     {"source_node_id": "remediation-agent", "target_node_id": "hitl-gate", "edge_type": "normal"},
-    {"source_node_id": "hitl-gate", "target_node_id": "postmortem-generator", "edge_type": "normal", "hitl_gate_config": {
-        "label": "Verify Resolution",
-        "description": "Confirm the incident is resolved before generating the postmortem.",
-        "claim_expiry_minutes": 60,
-        "human_only": False,
-    }},
+    {
+        "source_node_id": "hitl-gate",
+        "target_node_id": "postmortem-generator",
+        "edge_type": "normal",
+        "hitl_gate_config": {
+            "label": "Verify Resolution",
+            "description": "Confirm the incident is resolved before generating the postmortem.",
+            "claim_expiry_minutes": 60,
+            "human_only": False,
+        },
+    },
 ]
 
-_COMMUNITY_PRIMITIVES.extend([
-    _make_community(
-        pid="00000000-0000-0000-0000-000000000080",
-        primitive_type="pipeline_template",
-        name="PR Review Pipeline",
-        slug="pr-review-pipeline",
-        description="Automated PR review pipeline: reads a GitHub issue, analyses the code diff, generates review comments with a HITL gate, and posts to the PR.",
-        content_json={
-            "agents": _PR_TEMPLATE_AGENTS,
-            "graph_nodes": _PR_TEMPLATE_NODES,
-            "edges": _PR_TEMPLATE_EDGES,
-            "connector_type_refs": ["github"],
-            "schema_refs": [],
-            "category": "code-review",
-        },
-        tags=["pipeline_template", "code-review", "pr", "github"],
-    ),
-    _make_community(
-        pid="00000000-0000-0000-0000-000000000081",
-        primitive_type="pipeline_template",
-        name="Release Checklist Pipeline",
-        slug="release-checklist-pipeline",
-        description="Automated release pipeline: bumps the version, generates a changelog, formats release notes with a HITL gate, and creates a Git tag.",
-        content_json={
-            "agents": _RELEASE_TEMPLATE_AGENTS,
-            "graph_nodes": _RELEASE_TEMPLATE_NODES,
-            "edges": _RELEASE_TEMPLATE_EDGES,
-            "connector_type_refs": ["github"],
-            "schema_refs": [],
-            "category": "release",
-        },
-        tags=["pipeline_template", "release", "changelog", "github"],
-    ),
-    _make_community(
-        pid="00000000-0000-0000-0000-000000000082",
-        primitive_type="pipeline_template",
-        name="Incident Response Pipeline",
-        slug="incident-response-pipeline",
-        description="Automated incident response pipeline: ingests alerts, classifies severity, matches runbooks, applies remediation with a HITL gate, and generates a postmortem.",
-        content_json={
-            "agents": _INCIDENT_TEMPLATE_AGENTS,
-            "graph_nodes": _INCIDENT_TEMPLATE_NODES,
-            "edges": _INCIDENT_TEMPLATE_EDGES,
-            "connector_type_refs": [],
-            "schema_refs": [],
-            "category": "incident-response",
-        },
-        tags=["pipeline_template", "incident-response", "alerting", "runbook"],
-    ),
-])
+_COMMUNITY_PRIMITIVES.extend(
+    [
+        _make_community(
+            pid="00000000-0000-0000-0000-000000000080",
+            primitive_type="pipeline_template",
+            name="PR Review Pipeline",
+            slug="pr-review-pipeline",
+            description="Automated PR review pipeline: reads a GitHub issue, analyses the code diff, generates review comments with a HITL gate, and posts to the PR.",
+            content_json={
+                "agents": _PR_TEMPLATE_AGENTS,
+                "graph_nodes": _PR_TEMPLATE_NODES,
+                "edges": _PR_TEMPLATE_EDGES,
+                "connector_type_refs": ["github"],
+                "schema_refs": [],
+                "category": "code-review",
+            },
+            tags=["pipeline_template", "code-review", "pr", "github"],
+        ),
+        _make_community(
+            pid="00000000-0000-0000-0000-000000000081",
+            primitive_type="pipeline_template",
+            name="Release Checklist Pipeline",
+            slug="release-checklist-pipeline",
+            description="Automated release pipeline: bumps the version, generates a changelog, formats release notes with a HITL gate, and creates a Git tag.",
+            content_json={
+                "agents": _RELEASE_TEMPLATE_AGENTS,
+                "graph_nodes": _RELEASE_TEMPLATE_NODES,
+                "edges": _RELEASE_TEMPLATE_EDGES,
+                "connector_type_refs": ["github"],
+                "schema_refs": [],
+                "category": "release",
+            },
+            tags=["pipeline_template", "release", "changelog", "github"],
+        ),
+        _make_community(
+            pid="00000000-0000-0000-0000-000000000082",
+            primitive_type="pipeline_template",
+            name="Incident Response Pipeline",
+            slug="incident-response-pipeline",
+            description="Automated incident response pipeline: ingests alerts, classifies severity, matches runbooks, applies remediation with a HITL gate, and generates a postmortem.",
+            content_json={
+                "agents": _INCIDENT_TEMPLATE_AGENTS,
+                "graph_nodes": _INCIDENT_TEMPLATE_NODES,
+                "edges": _INCIDENT_TEMPLATE_EDGES,
+                "connector_type_refs": [],
+                "schema_refs": [],
+                "category": "incident-response",
+            },
+            tags=["pipeline_template", "incident-response", "alerting", "runbook"],
+        ),
+    ]
+)
 
 # Index for O(1) lookup by id
 _COMMUNITY_BY_ID: dict[uuid.UUID, LibraryPrimitive] = {p.id: p for p in _COMMUNITY_PRIMITIVES}
@@ -866,9 +997,7 @@ async def contribute_fixture(
             {"contribution_status": CONTRIBUTION_DRAFT},
         )
     if update is None:
-        raise ContributionNotFoundError(
-            f"Contribution {prim.id} not found after creation"
-        )
+        raise ContributionNotFoundError(f"Contribution {prim.id} not found after creation")
     return update
 
 

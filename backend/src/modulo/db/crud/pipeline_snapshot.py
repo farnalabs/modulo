@@ -34,9 +34,7 @@ async def create_snapshot_from_live_graph(
     context set. Locking the pipeline makes snapshot version allocation and the
     graph copy atomic with respect to graph replacement.
     """
-    pipeline_result = await session.execute(
-        select(Pipeline).where(Pipeline.id == pipeline_id).with_for_update()
-    )
+    pipeline_result = await session.execute(select(Pipeline).where(Pipeline.id == pipeline_id).with_for_update())
     pipeline = pipeline_result.scalar_one_or_none()
     if pipeline is None:
         return None
@@ -52,46 +50,28 @@ async def create_snapshot_from_live_graph(
     agent_ids = _ids(node.get("agent_id") for node in nodes)
     agents: list[Agent] = []
     if agent_ids:
-        agents = list(
-            (await session.execute(select(Agent).where(Agent.id.in_(agent_ids)))).scalars()
-        )
+        agents = list((await session.execute(select(Agent).where(Agent.id.in_(agent_ids)))).scalars())
 
     connector_ids = _ids(
-        binding.get("instance_id")
-        for node in nodes
-        if (binding := node.get("connector_binding")) is not None
+        binding.get("instance_id") for node in nodes if (binding := node.get("connector_binding")) is not None
     )
     connectors: list[ConnectorInstance] = []
     if connector_ids:
         connectors = list(
-            (
-                await session.execute(
-                    select(ConnectorInstance).where(ConnectorInstance.id.in_(connector_ids))
-                )
-            ).scalars()
+            (await session.execute(select(ConnectorInstance).where(ConnectorInstance.id.in_(connector_ids)))).scalars()
         )
     connectors_by_id = {connector.id: connector for connector in connectors}
 
-    schema_ids = {
-        schema_id
-        for agent in agents
-        for schema_id in (agent.input_schema_id, agent.output_schema_id)
-    }
+    schema_ids = {schema_id for agent in agents for schema_id in (agent.input_schema_id, agent.output_schema_id)}
     schemas: list[Schema] = []
     if schema_ids:
-        schemas = list(
-            (await session.execute(select(Schema).where(Schema.id.in_(schema_ids)))).scalars()
-        )
+        schemas = list((await session.execute(select(Schema).where(Schema.id.in_(schema_ids)))).scalars())
     schemas_by_id = {schema.id: schema for schema in schemas}
 
     backend_ids = {agent.model_backend_id for agent in agents}
     backends: list[ModelBackend] = []
     if backend_ids:
-        backends = list(
-            (
-                await session.execute(select(ModelBackend).where(ModelBackend.id.in_(backend_ids)))
-            ).scalars()
-        )
+        backends = list((await session.execute(select(ModelBackend).where(ModelBackend.id.in_(backend_ids)))).scalars())
     backends_by_id = {backend.id: backend for backend in backends}
 
     version_result = await session.execute(
@@ -112,9 +92,7 @@ async def create_snapshot_from_live_graph(
             {
                 "node_id": str(node["id"]),
                 "connector_instance_id": str(connector_id),
-                "connector_type": (
-                    connector.connector_type_id if connector is not None else binding.get("type")
-                ),
+                "connector_type": (connector.connector_type_id if connector is not None else binding.get("type")),
                 "instance_name": connector.name if connector is not None else None,
             }
         )

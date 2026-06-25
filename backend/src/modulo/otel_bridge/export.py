@@ -39,8 +39,7 @@ def setup_otel(
     """
     if not telemetry_enabled:
         _log.info(
-            "OTel telemetry is DISABLED (MODULO_TELEMETRY_ENABLED not set to true). "
-            "No telemetry data will be exported."
+            "OTel telemetry is DISABLED (MODULO_TELEMETRY_ENABLED not set to true). No telemetry data will be exported."
         )
         # Create a no-op provider that drops all spans
         provider = TracerProvider(resource=Resource.create({"service.name": service_name}))

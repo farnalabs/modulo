@@ -126,11 +126,13 @@ async def create_pipeline_from_template_endpoint(
         for idx, agent_cfg in enumerate(agent_configs):
             agent_id = uuid.uuid4()
             agent_ids[idx] = agent_id
-            created_agents.append({
-                "id": str(agent_id),
-                "name": agent_cfg.get("name", f"Agent {idx + 1}"),
-                "description": agent_cfg.get("description", ""),
-            })
+            created_agents.append(
+                {
+                    "id": str(agent_id),
+                    "name": agent_cfg.get("name", f"Agent {idx + 1}"),
+                    "description": agent_cfg.get("description", ""),
+                }
+            )
 
         pipeline = await create_pipeline(
             session,
@@ -146,20 +148,24 @@ async def create_pipeline_from_template_endpoint(
             resolved_id_str = str(uuid.uuid4())
 
             if agent_idx >= 0 and agent_idx in agent_ids:
-                resolved_nodes.append({
-                    "id": resolved_id_str,
-                    "node_type": node.get("node_type", "agent"),
-                    "agent_id": str(agent_ids[agent_idx]),
-                    "label": node.get("label", agent_configs[agent_idx].get("name", "")),
-                    "position": node.get("position", {"x": 100, "y": 100}),
-                })
+                resolved_nodes.append(
+                    {
+                        "id": resolved_id_str,
+                        "node_type": node.get("node_type", "agent"),
+                        "agent_id": str(agent_ids[agent_idx]),
+                        "label": node.get("label", agent_configs[agent_idx].get("name", "")),
+                        "position": node.get("position", {"x": 100, "y": 100}),
+                    }
+                )
             else:
-                resolved_nodes.append({
-                    "id": resolved_id_str,
-                    "node_type": node.get("node_type", "manual"),
-                    "label": node.get("label", "Manual Step"),
-                    "position": node.get("position", {"x": 100, "y": 100}),
-                })
+                resolved_nodes.append(
+                    {
+                        "id": resolved_id_str,
+                        "node_type": node.get("node_type", "manual"),
+                        "label": node.get("label", "Manual Step"),
+                        "position": node.get("position", {"x": 100, "y": 100}),
+                    }
+                )
 
         pipeline.graph_nodes_json = resolved_nodes
 

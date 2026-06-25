@@ -9,11 +9,7 @@ from modulo.db.models.base import OrgScoped
 
 class TeamMembership(OrgScoped):
     __tablename__ = "team_memberships"
-    __table_args__ = (
-        UniqueConstraint(
-            "team_id", "user_id", name="uq_team_memberships_team_user"
-        ),
-    )
+    __table_args__ = (UniqueConstraint("team_id", "user_id", name="uq_team_memberships_team_user"),)
 
     team_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("teams.id", ondelete="CASCADE"), nullable=False, index=True

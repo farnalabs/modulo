@@ -12,9 +12,10 @@ Blocked evals raise EvalBlockedError.
 
 import logging
 import re
+from collections.abc import Sequence
 from datetime import UTC, datetime
 from enum import StrEnum
-from typing import Any, Literal, Protocol, Sequence
+from typing import Any, Literal, Protocol
 from uuid import UUID, uuid4
 
 import jsonschema
@@ -75,10 +76,7 @@ class EvalSuiteBlockedError(RuntimeError):
     """Raised when an eval suite's aggregate score is below pass_threshold."""
 
     def __init__(self, suite_id: str, score: float, threshold: float) -> None:
-        super().__init__(
-            f"Eval suite {suite_id!r} blocked pipeline: "
-            f"score {score:.2f} < threshold {threshold:.2f}"
-        )
+        super().__init__(f"Eval suite {suite_id!r} blocked pipeline: score {score:.2f} < threshold {threshold:.2f}")
         self.suite_id = suite_id
         self.score = score
         self.threshold = threshold
@@ -98,8 +96,7 @@ class SuiteEvalResult(BaseModel):
 class LLMJudgeCallable(Protocol):
     """Protocol for LLM judge callables."""
 
-    def __call__(self, output: dict[str, Any], eval_def: EvalDefinition) -> dict[str, Any]:
-        ...
+    def __call__(self, output: dict[str, Any], eval_def: EvalDefinition) -> dict[str, Any]: ...
 
 
 def _result_from_dict(
@@ -347,9 +344,7 @@ def evaluate_suite(
     total = len(eval_results)
     passed_evals = sum(1 for r in eval_results if r.passed)
     aggregate_score = passed_evals / total if total > 0 else 1.0
-    blocking_failures = [
-        f"{r.eval_id}: {r.detail}" for r in eval_results if not r.passed
-    ]
+    blocking_failures = [f"{r.eval_id}: {r.detail}" for r in eval_results if not r.passed]
 
     suite_passed = True
     if pass_threshold is not None and total > 0:

@@ -73,9 +73,7 @@ async def jit_provision_user(
     if default_org_id is not None:
         org_id = default_org_id
     else:
-        result = await session.execute(
-            select(Organisation).order_by(Organisation.created_at).limit(1)
-        )
+        result = await session.execute(select(Organisation).order_by(Organisation.created_at).limit(1))
         org = result.scalar_one_or_none()
         if org is None:
             raise RuntimeError("No organisation exists — cannot JIT provision user")
@@ -92,7 +90,10 @@ async def jit_provision_user(
     )
     session.add(user)
     await session.flush()
-    _log.info("sso.jit_provisioned", extra={"email": email, "auth_provider": auth_provider, "sso_subject": sso_subject})
+    _log.info(
+        "sso.jit_provisioned",
+        extra={"email": email, "auth_provider": auth_provider, "sso_subject": sso_subject},
+    )
     return user
 
 
@@ -101,21 +102,21 @@ async def jit_provision_user(
 # ---------------------------------------------------------------------------
 
 
-async def issue_sso_tokens(
-    user: User, session: AsyncSession, settings: Settings
-) -> dict[str, str]:
+async def issue_sso_tokens(user: User, session: AsyncSession, settings: Settings) -> dict[str, str]:
     """Issue access + refresh tokens for an SSO-authenticated user."""
     await update_last_login(session, user.id)
     family = await create_family(session, user.id, user.organisation_id)
 
     access_token = create_access_token(
-        user.email, settings.secret_key,
+        user.email,
+        settings.secret_key,
         organisation_id=str(user.organisation_id),
         user_id=str(user.id),
         org_role=user.org_role,
     )
     refresh_token = create_refresh_token(
-        user.email, settings.secret_key,
+        user.email,
+        settings.secret_key,
         organisation_id=str(user.organisation_id),
         user_id=str(user.id),
         org_role=user.org_role,
@@ -149,13 +150,15 @@ async def oidc_get_authorize_url(
     raw_state = str(uuid.uuid4())
     signed = sign_state(f"{provider_id}:{raw_state}", settings.secret_key)
 
-    params = urllib.parse.urlencode({
-        "client_id": provider["client_id"],
-        "response_type": "code",
-        "scope": "openid email profile",
-        "redirect_uri": redirect_uri,
-        "state": signed,
-    })
+    params = urllib.parse.urlencode(
+        {
+            "client_id": provider["client_id"],
+            "response_type": "code",
+            "scope": "openid email profile",
+            "redirect_uri": redirect_uri,
+            "state": signed,
+        }
+    )
     return f"{auth_endpoint}?{params}", raw_state
 
 
@@ -194,11 +197,7 @@ async def oidc_process_callback(
     claims = _decode_id_token_claims(id_token)
 
     email = claims.get("email", "") or claims.get("sub", "")
-    name = (
-        claims.get("name", "")
-        or claims.get("preferred_username", "")
-        or email.split("@")[0]
-    )
+    name = claims.get("name", "") or claims.get("preferred_username", "") or email.split("@")[0]
     sso_subject = f"{provider_id}:{claims.get('sub', email)}"
 
     user = await jit_provision_user(session, settings, email, name, "oidc", sso_subject)
@@ -300,7 +299,7 @@ async def saml_get_auth_url(
 
     authn_request_xml = (
         '<?xml version="1.0" encoding="UTF-8"?>'
-        '<samlp:AuthnRequest'
+        "<samlp:AuthnRequest"
         ' xmlns:samlp="urn:oasis:names:tc:SAML:2.0:protocol"'
         ' xmlns:saml="urn:oasis:names:tc:SAML:2.0:assertion"'
         f' ID="{request_id}"'
@@ -309,11 +308,11 @@ async def saml_get_auth_url(
         f' Destination="{idp_sso_url}"'
         f' AssertionConsumerServiceURL="{acs_url}"'
         ' ProtocolBinding="urn:oasis:names:tc:SAML:2.0:bindings:HTTP-POST">'
-        f' <saml:Issuer>{settings.modulo_saml_entity_id}</saml:Issuer>'
-        ' <samlp:NameIDPolicy'
+        f" <saml:Issuer>{settings.modulo_saml_entity_id}</saml:Issuer>"
+        " <samlp:NameIDPolicy"
         '  Format="urn:oasis:names:tc:SAML:1.1:nameid-format:emailAddress"'
         '  AllowCreate="true"/>'
-        '</samlp:AuthnRequest>'
+        "</samlp:AuthnRequest>"
     )
 
     deflated = zlib.compress(authn_request_xml.encode())[2:-4]
@@ -371,7 +370,10 @@ async def saml_process_response(
             try:
                 issue_instant = datetime.fromisoformat(issue_instant_str.replace("Z", "+00:00"))
                 if now_utc < issue_instant - timedelta(minutes=5):
-                    _log.warning("sso.saml_clock_skew", extra={"issue_instant": issue_instant_str, "now": now_utc.isoformat()})
+                    _log.warning(
+                        "sso.saml_clock_skew",
+                        extra={"issue_instant": issue_instant_str, "now": now_utc.isoformat()},
+                    )
             except ValueError:
                 _log.warning("sso.saml_unparseable_issue_instant", extra={"issue_instant": issue_instant_str})
 
@@ -381,11 +383,7 @@ async def saml_process_response(
     attrs: dict[str, str] = {}
     for attr in assertion.findall(".//saml:Attribute", ns):
         attr_name = attr.get("Name", "")
-        values = [
-            v.text.strip()
-            for v in attr.findall("saml:AttributeValue", ns)
-            if v.text and v.text.strip()
-        ]
+        values = [v.text.strip() for v in attr.findall("saml:AttributeValue", ns) if v.text and v.text.strip()]
         if values:
             attrs[attr_name] = values[0]
 

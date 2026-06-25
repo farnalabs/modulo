@@ -17,9 +17,7 @@ if TYPE_CHECKING:
 
 class PipelineSnapshot(OrgScoped):
     __tablename__ = "pipeline_snapshots"
-    __table_args__ = (
-        UniqueConstraint("pipeline_id", "snapshot_version", name="uq_pipeline_snapshot_version"),
-    )
+    __table_args__ = (UniqueConstraint("pipeline_id", "snapshot_version", name="uq_pipeline_snapshot_version"),)
 
     pipeline_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True),

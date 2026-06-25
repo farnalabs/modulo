@@ -8,9 +8,7 @@ from modulo.db.models.organisation import Organisation
 
 
 async def get_otel_config(session: AsyncSession, org_id: uuid.UUID) -> dict[str, Any]:
-    result = await session.execute(
-        select(Organisation.otel_config_json).where(Organisation.id == org_id)
-    )
+    result = await session.execute(select(Organisation.otel_config_json).where(Organisation.id == org_id))
     row = result.scalar_one_or_none()
     return row if row is not None else {}
 

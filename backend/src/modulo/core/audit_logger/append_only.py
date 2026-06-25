@@ -33,9 +33,7 @@ def register_append_only_guard() -> None:
         connection: object,
         target: AuditEvent,
     ) -> None:
-        raise RuntimeError(
-            f"AuditEvent {target.id} cannot be updated: audit_events are append-only"
-        )
+        raise RuntimeError(f"AuditEvent {target.id} cannot be updated: audit_events are append-only")
 
     @event.listens_for(AuditEvent, "before_delete")
     def _block_audit_event_delete(
@@ -43,8 +41,6 @@ def register_append_only_guard() -> None:
         connection: object,
         target: AuditEvent,
     ) -> None:
-        raise RuntimeError(
-            f"AuditEvent {target.id} cannot be deleted: audit_events are append-only"
-        )
+        raise RuntimeError(f"AuditEvent {target.id} cannot be deleted: audit_events are append-only")
 
     _log.info("Registered append-only guard on AuditEvent (UPDATE/DELETE blocked)")

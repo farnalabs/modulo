@@ -28,13 +28,23 @@ def upgrade() -> None:
         sa.Column("organisation_id", sa.UUID(), nullable=False),
         sa.Column("max_sequence", sa.Integer(), nullable=False, server_default=sa.text("0")),
         sa.Column("is_blacklisted", sa.Boolean(), nullable=False, server_default=sa.text("false")),
-        sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.text("now()"), nullable=False),
+        sa.Column(
+            "created_at",
+            sa.DateTime(timezone=True),
+            server_default=sa.text("now()"),
+            nullable=False,
+        ),
         sa.Column("blacklisted_at", sa.DateTime(timezone=True), nullable=True),
         sa.ForeignKeyConstraint(["user_id"], ["users.id"], ondelete="CASCADE"),
         sa.PrimaryKeyConstraint("family_id"),
     )
     op.create_index(op.f("ix_token_families_user_id"), "token_families", ["user_id"], unique=False)
-    op.create_index(op.f("ix_token_families_organisation_id"), "token_families", ["organisation_id"], unique=False)
+    op.create_index(
+        op.f("ix_token_families_organisation_id"),
+        "token_families",
+        ["organisation_id"],
+        unique=False,
+    )
 
 
 def downgrade() -> None:

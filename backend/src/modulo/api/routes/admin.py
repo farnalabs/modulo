@@ -46,9 +46,7 @@ class SearchResponse(BaseModel):
 @router.get("/search", response_model=SearchResponse)
 async def global_search(
     q: str = Query(min_length=1),
-    type_filter: str = Query(
-        default="all", alias="type", pattern=r"^(all|pipeline|run|audit|library)$"
-    ),
+    type_filter: str = Query(default="all", alias="type", pattern=r"^(all|pipeline|run|audit|library)$"),
     limit: int = Query(default=20, ge=1, le=100),
     offset: int = Query(default=0, ge=0),
     current_user: AuthenticatedPrincipal = Depends(get_current_user),
@@ -67,11 +65,7 @@ async def global_search(
         like = f"%{q}%"
         prefix = f"{q}%"
 
-        search_types: list[str] = (
-            ["pipeline", "run", "audit", "library"]
-            if type_filter == "all"
-            else [type_filter]
-        )
+        search_types: list[str] = ["pipeline", "run", "audit", "library"] if type_filter == "all" else [type_filter]
 
         all_items: list[tuple[int, SearchResultItem]] = []
         total_by_type: dict[str, int] = {"pipeline": 0, "run": 0, "audit": 0, "library": 0}
@@ -110,16 +104,18 @@ async def global_search(
                 ).scalar() or 0
 
                 for row in rows:
-                    all_items.append((
-                        row.relevance,
-                        SearchResultItem(
-                            type="pipeline",
-                            id=str(row.id),
-                            title=row.name,
-                            subtitle=row.description,
-                            url=f"/pipelines/{row.id}",
-                        ),
-                    ))
+                    all_items.append(
+                        (
+                            row.relevance,
+                            SearchResultItem(
+                                type="pipeline",
+                                id=str(row.id),
+                                title=row.name,
+                                subtitle=row.description,
+                                url=f"/pipelines/{row.id}",
+                            ),
+                        )
+                    )
                 total_by_type["pipeline"] = count
 
             elif st == "run":
@@ -158,16 +154,18 @@ async def global_search(
                 ).scalar() or 0
 
                 for row in rows:
-                    all_items.append((
-                        row.relevance,
-                        SearchResultItem(
-                            type="run",
-                            id=str(row.id),
-                            title=row.display_id,
-                            subtitle=row.pipeline_name,
-                            url=f"/runs/{row.id}",
-                        ),
-                    ))
+                    all_items.append(
+                        (
+                            row.relevance,
+                            SearchResultItem(
+                                type="run",
+                                id=str(row.id),
+                                title=row.display_id,
+                                subtitle=row.pipeline_name,
+                                url=f"/runs/{row.id}",
+                            ),
+                        )
+                    )
                 total_by_type["run"] = count
 
             elif st == "audit":
@@ -211,16 +209,18 @@ async def global_search(
                     title = row.event_type
                     if row.resource_type:
                         title = f"{row.event_type} — {row.resource_type}"
-                    all_items.append((
-                        row.relevance,
-                        SearchResultItem(
-                            type="audit",
-                            id=str(row.id),
-                            title=title,
-                            subtitle=None,
-                            url=f"/admin/audit?event_id={row.id}",
-                        ),
-                    ))
+                    all_items.append(
+                        (
+                            row.relevance,
+                            SearchResultItem(
+                                type="audit",
+                                id=str(row.id),
+                                title=title,
+                                subtitle=None,
+                                url=f"/admin/audit?event_id={row.id}",
+                            ),
+                        )
+                    )
                 total_by_type["audit"] = count
 
             elif st == "library":
@@ -256,16 +256,18 @@ async def global_search(
                 ).scalar() or 0
 
                 for row in rows:
-                    all_items.append((
-                        row.relevance,
-                        SearchResultItem(
-                            type="library",
-                            id=str(row.id),
-                            title=row.name,
-                            subtitle=row.description,
-                            url="/libraries",
-                        ),
-                    ))
+                    all_items.append(
+                        (
+                            row.relevance,
+                            SearchResultItem(
+                                type="library",
+                                id=str(row.id),
+                                title=row.name,
+                                subtitle=row.description,
+                                url="/libraries",
+                            ),
+                        )
+                    )
                 total_by_type["library"] = count
 
         all_items.sort(key=lambda x: (-x[0], x[1].title))
@@ -279,6 +281,7 @@ class CreateUserRequest(BaseModel):
     display_name: str = Field(min_length=1)
     password: str = Field(min_length=8)
     org_role: str = Field(default="runner")
+
 
 class CreateUserResponse(BaseModel):
     id: str
@@ -302,10 +305,7 @@ async def admin_create_user(
     if body.org_role not in ("admin", "operator", "runner", "viewer"):
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail=(
-                f"Invalid role: {body.org_role}. "
-                "Must be one of: admin, operator, runner, viewer"
-            ),
+            detail=(f"Invalid role: {body.org_role}. Must be one of: admin, operator, runner, viewer"),
         )
 
     existing = await get_user_by_email(session, body.email)
@@ -437,9 +437,7 @@ async def admin_update_org(
             updates["settings_json"] = existing_settings
 
         if updates:
-            updated = await update_organisation(
-                session, current_user.organisation_id, updates
-            )
+            updated = await update_organisation(session, current_user.organisation_id, updates)
             if updated is not None:
                 org = updated
 
@@ -784,17 +782,12 @@ async def admin_delete_team(
 
         # Check for pipelines referencing this team
         pipeline_count = (
-            await session.execute(
-                select(func.count()).select_from(Pipeline).where(Pipeline.owner_team_id == team_id)
-            )
+            await session.execute(select(func.count()).select_from(Pipeline).where(Pipeline.owner_team_id == team_id))
         ).scalar() or 0
         if pipeline_count > 0:
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
-                detail=(
-                    f"Cannot delete team: {pipeline_count} pipeline(s) "
-                    "still reference this team"
-                ),
+                detail=(f"Cannot delete team: {pipeline_count} pipeline(s) still reference this team"),
             )
 
         deleted = await delete_team(session, team_id)
@@ -839,21 +832,15 @@ async def admin_billing_overview(
 
         org_id = current_user.organisation_id
         user_count = (
-            await session.execute(
-                select(func.count()).select_from(User).where(User.organisation_id == org_id)
-            )
+            await session.execute(select(func.count()).select_from(User).where(User.organisation_id == org_id))
         ).scalar() or 0
 
         team_count = (
-            await session.execute(
-                select(func.count()).select_from(Team).where(Team.organisation_id == org_id)
-            )
+            await session.execute(select(func.count()).select_from(Team).where(Team.organisation_id == org_id))
         ).scalar() or 0
 
         pipeline_count = (
-            await session.execute(
-                select(func.count()).select_from(Pipeline).where(Pipeline.organisation_id == org_id)
-            )
+            await session.execute(select(func.count()).select_from(Pipeline).where(Pipeline.organisation_id == org_id))
         ).scalar() or 0
 
         now = datetime.now(UTC)
@@ -1154,12 +1141,8 @@ async def eval_dashboard(
         # ── Summary ─────────────────────────────────────────────────
         summary_q = select(
             func.count(EvalResult.id).label("total_results"),
-            func.sum(
-                case((EvalResult.passed, 1), else_=0)
-            ).label("passed"),
-            func.sum(
-                case((EvalResult.passed.is_(False), 1), else_=0)
-            ).label("failed"),
+            func.sum(case((EvalResult.passed, 1), else_=0)).label("passed"),
+            func.sum(case((EvalResult.passed.is_(False), 1), else_=0)).label("failed"),
         )
         summary_row = (await session.execute(summary_q)).one()
 
@@ -1191,9 +1174,7 @@ async def eval_dashboard(
             GROUP BY bucket
             ORDER BY bucket
         """)
-        trend_rows = (
-            await session.execute(trend_q, {"org_id": current_user.organisation_id})
-        ).all()
+        trend_rows = (await session.execute(trend_q, {"org_id": current_user.organisation_id})).all()
 
         trend = [
             TrendBucket(
@@ -1218,9 +1199,7 @@ async def eval_dashboard(
             GROUP BY ed.eval_type
             ORDER BY ed.eval_type
         """)
-        by_type_rows = (
-            await session.execute(by_type_q, {"org_id": current_user.organisation_id})
-        ).all()
+        by_type_rows = (await session.execute(by_type_q, {"org_id": current_user.organisation_id})).all()
 
         by_type = [
             TypeBreakdown(
@@ -1255,7 +1234,7 @@ async def eval_dashboard(
 
         coverage_gaps: list[CoverageGap] = []
         for pl in pipelines:
-            for node in (pl.graph_nodes_json or []):
+            for node in pl.graph_nodes_json or []:
                 node_id = node.get("id")
                 if node_id and (pl.id, str(node_id)) not in covered_pairs:
                     coverage_gaps.append(
@@ -1283,9 +1262,7 @@ async def eval_dashboard(
             ORDER BY er.evaluated_at DESC
             LIMIT 50
         """)
-        recent_rows = (
-            await session.execute(recent_q, {"org_id": current_user.organisation_id})
-        ).all()
+        recent_rows = (await session.execute(recent_q, {"org_id": current_user.organisation_id})).all()
 
         recent_results = [
             RecentEvalResult(

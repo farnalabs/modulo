@@ -91,9 +91,7 @@ class RateLimiterRegistry:
         self._sliding: RedisSlidingWindowRateLimiter | None = (
             RedisSlidingWindowRateLimiter(redis_client) if redis_client is not None else None
         )
-        self._buckets: dict[str, TokenBucket] = defaultdict(
-            lambda: TokenBucket(rate=10.0, burst=20)
-        )
+        self._buckets: dict[str, TokenBucket] = defaultdict(lambda: TokenBucket(rate=10.0, burst=20))
 
     @property
     def has_redis(self) -> bool:

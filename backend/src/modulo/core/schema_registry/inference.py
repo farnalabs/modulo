@@ -40,9 +40,7 @@ def _build_infer_prompt(
     display = samples[:_MAX_SAMPLE_RECORDS]
     sample_text = json.dumps(display, indent=2, default=str)
     message_text = (
-        f"Sample data ({len(display)} records):\n"
-        f"```\n{sample_text}\n```\n"
-        "Return ONLY the JSON Schema object."
+        f"Sample data ({len(display)} records):\n```\n{sample_text}\n```\nReturn ONLY the JSON Schema object."
     )
     return [
         SystemMessage(content=system_prompt or _INFERENCE_SYSTEM_PROMPT),
@@ -93,9 +91,7 @@ class SchemaInferenceService:
             )
         except TimeoutError:
             _log.error("Schema inference timed out after %ss", self._timeout)
-            raise SchemaInferenceError(
-                f"LLM call timed out after {self._timeout}s"
-            ) from None
+            raise SchemaInferenceError(f"LLM call timed out after {self._timeout}s") from None
         except Exception as exc:
             _log.exception("LLM call failed during schema inference")
             raise SchemaInferenceError("LLM call failed") from exc
@@ -105,14 +101,10 @@ class SchemaInferenceService:
 
         content = response.content
         if not isinstance(content, str):
-            raise SchemaInferenceError(
-                f"Expected string response, got {type(content).__name__}"
-            )
+            raise SchemaInferenceError(f"Expected string response, got {type(content).__name__}")
 
         try:
             return _parse_schema_from_response(content)
         except (json.JSONDecodeError, ValueError) as exc:
             _log.exception("Failed to parse inferred schema from LLM response")
-            raise SchemaInferenceError(
-                "Failed to parse inferred schema from LLM response"
-            ) from exc
+            raise SchemaInferenceError("Failed to parse inferred schema from LLM response") from exc

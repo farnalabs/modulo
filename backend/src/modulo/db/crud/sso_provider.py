@@ -8,16 +8,12 @@ from modulo.db.models.sso_provider import SsoProvider
 
 
 async def list_providers(session: AsyncSession) -> list[SsoProvider]:
-    result = await session.execute(
-        select(SsoProvider).order_by(SsoProvider.created_at)
-    )
+    result = await session.execute(select(SsoProvider).order_by(SsoProvider.created_at))
     return list(result.scalars().all())
 
 
 async def get_provider(session: AsyncSession, provider_id: uuid.UUID) -> SsoProvider | None:
-    result = await session.execute(
-        select(SsoProvider).where(SsoProvider.id == provider_id)
-    )
+    result = await session.execute(select(SsoProvider).where(SsoProvider.id == provider_id))
     return result.scalar_one_or_none()
 
 

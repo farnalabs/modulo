@@ -17,7 +17,8 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 
 from jose import JWTError, jwt
-from sqlalchemy import delete as sa_delete, select
+from sqlalchemy import delete as sa_delete
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.db.models.oauth_client import OAuthClient
@@ -120,18 +121,12 @@ async def create_oauth_client(
     return client, client_secret
 
 
-async def get_oauth_client_by_client_id(
-    session: AsyncSession, client_id: str
-) -> OAuthClient | None:
-    result = await session.execute(
-        select(OAuthClient).where(OAuthClient.client_id == client_id)
-    )
+async def get_oauth_client_by_client_id(session: AsyncSession, client_id: str) -> OAuthClient | None:
+    result = await session.execute(select(OAuthClient).where(OAuthClient.client_id == client_id))
     return result.scalar_one_or_none()
 
 
-async def validate_client_secret(
-    session: AsyncSession, client_id: str, client_secret: str
-) -> OAuthClient:
+async def validate_client_secret(session: AsyncSession, client_id: str, client_secret: str) -> OAuthClient:
     """Validate client_id + client_secret. Returns the client on success."""
     client = await get_oauth_client_by_client_id(session, client_id)
     if client is None:
@@ -143,13 +138,9 @@ async def validate_client_secret(
     return client
 
 
-async def list_oauth_clients(
-    session: AsyncSession, org_id: uuid.UUID
-) -> list[dict]:
+async def list_oauth_clients(session: AsyncSession, org_id: uuid.UUID) -> list[dict]:
     result = await session.execute(
-        select(OAuthClient)
-        .where(OAuthClient.organisation_id == org_id)
-        .order_by(OAuthClient.created_at.desc())
+        select(OAuthClient).where(OAuthClient.organisation_id == org_id).order_by(OAuthClient.created_at.desc())
     )
     clients = list(result.scalars())
     return [
@@ -165,9 +156,7 @@ async def list_oauth_clients(
     ]
 
 
-async def delete_oauth_client(
-    session: AsyncSession, client_id: str, org_id: uuid.UUID
-) -> bool:
+async def delete_oauth_client(session: AsyncSession, client_id: str, org_id: uuid.UUID) -> bool:
     result = await session.execute(
         select(OAuthClient).where(
             OAuthClient.client_id == client_id,
@@ -246,9 +235,7 @@ async def consume_authorization_code(
     """
     await validate_client_secret(session, client_id, client_secret)
 
-    result = await session.execute(
-        select(OAuthAuthorizationCode).where(OAuthAuthorizationCode.code == code)
-    )
+    result = await session.execute(select(OAuthAuthorizationCode).where(OAuthAuthorizationCode.code == code))
     auth_code = result.scalar_one_or_none()
     if auth_code is None:
         raise InvalidGrantError("Authorization code not found")
@@ -312,16 +299,12 @@ def create_oauth_access_token(
     return str(jwt.encode(claims, secret_key, algorithm=_ALGORITHM))
 
 
-def decode_oauth_access_token(
-    token: str, secret_key: str
-) -> OAuthAccessTokenClaims:
+def decode_oauth_access_token(token: str, secret_key: str) -> OAuthAccessTokenClaims:
     """Decode and validate an OAuth access token JWT.
 
     Returns parsed claims on success. Raises JWTError on any failure.
     """
-    payload: dict[str, object] = jwt.decode(
-        token, secret_key, algorithms=[_ALGORITHM]
-    )
+    payload: dict[str, object] = jwt.decode(token, secret_key, algorithms=[_ALGORITHM])
     purpose = payload.get("purpose")
     if purpose != "oauth_access":
         raise JWTError(f"Token purpose '{purpose}' is not 'oauth_access'")
@@ -425,8 +408,7 @@ async def rotate_oauth_token_family(
             },
         )
         raise InvalidGrantError(
-            "Token family rotated out of order — possible token theft. "
-            "This family has been blacklisted."
+            "Token family rotated out of order — possible token theft. This family has been blacklisted."
         )
 
     new_sequence = family.max_sequence + 1
@@ -498,9 +480,7 @@ def normalize_scopes(requested: str) -> list[str]:
     return sorted(parts)
 
 
-def validate_client_scopes(
-    client: OAuthClient, requested_scopes: list[str]
-) -> list[str]:
+def validate_client_scopes(client: OAuthClient, requested_scopes: list[str]) -> list[str]:
     """Intersect requested scopes with the client's allowed scopes.
 
     Raises UnauthorizedClientError if no scopes remain after intersection.
@@ -509,7 +489,5 @@ def validate_client_scopes(
     requested = set(requested_scopes)
     valid = sorted(allowed & requested)
     if not valid:
-        raise UnauthorizedClientError(
-            "None of the requested scopes are allowed for this client"
-        )
+        raise UnauthorizedClientError("None of the requested scopes are allowed for this client")
     return valid

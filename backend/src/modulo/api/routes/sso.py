@@ -32,16 +32,13 @@ def _frontend_url(settings: Settings) -> str:
 def _redirect_to_frontend(tokens: dict[str, str], settings: Settings) -> RedirectResponse:
     """Redirect the browser to the frontend callback URL with tokens."""
     base = _frontend_url(settings)
-    url = (
-        f"{base}/auth/callback?"
-        f"access_token={tokens['access_token']}&"
-        f"refresh_token={tokens['refresh_token']}"
-    )
+    url = f"{base}/auth/callback?access_token={tokens['access_token']}&refresh_token={tokens['refresh_token']}"
     return RedirectResponse(url=url)
 
 
 class OidcProviderInfo(BaseModel):
     provider_id: str
+
 
 class SsoProvidersResponse(BaseModel):
     oidc: list[OidcProviderInfo]
@@ -53,17 +50,11 @@ async def sso_providers(
     settings: Settings = Depends(get_settings),
 ) -> SsoProvidersResponse:
     """List configured SSO providers (OIDC) and whether SAML is enabled."""
-    oidc_providers = [
-        {"provider_id": p["provider_id"]}
-        for p in parse_oidc_providers(settings)
-    ]
+    oidc_providers = [{"provider_id": p["provider_id"]} for p in parse_oidc_providers(settings)]
     saml_enabled = (
         settings.modulo_saml_enabled
         and bool(settings.modulo_license_key)
-        and (
-            bool(settings.modulo_saml_idp_metadata_url)
-            or bool(settings.modulo_saml_idp_metadata_xml)
-        )
+        and (bool(settings.modulo_saml_idp_metadata_url) or bool(settings.modulo_saml_idp_metadata_xml))
     )
     return SsoProvidersResponse(
         oidc=[OidcProviderInfo(**p) for p in oidc_providers],
@@ -214,16 +205,16 @@ async def saml_metadata(
 
     metadata_xml = (
         '<?xml version="1.0"?>'
-        '<md:EntityDescriptor'
+        "<md:EntityDescriptor"
         ' xmlns:md="urn:oasis:names:tc:SAML:2.0:metadata"'
         f' entityID="{entity_id}">'
-        '  <md:SPSSODescriptor'
+        "  <md:SPSSODescriptor"
         '   protocolSupportEnumeration="urn:oasis:names:tc:SAML:2.0:protocol">'
-        f'    <md:AssertionConsumerService'
+        f"    <md:AssertionConsumerService"
         f'     Binding="urn:oasis:names:tc:SAML:2.0:bindings:HTTP-POST"'
         f'     Location="{acs_url}"'
         f'     index="1"/>'
-        '  </md:SPSSODescriptor>'
-        '</md:EntityDescriptor>'
+        "  </md:SPSSODescriptor>"
+        "</md:EntityDescriptor>"
     )
     return metadata_xml

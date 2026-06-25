@@ -31,6 +31,7 @@ class HealthResult:
     ok: bool
     detail: str = ""
 
+
 @dataclass
 class RotatedResult:
     backend: ModelBackendBase
@@ -185,8 +186,7 @@ def _build_backend(
                 api_key = creds.get("api_key")
                 if not api_key:
                     raise ValueError(
-                        f"Missing 'api_key' in credentials for provider {provider!r}. "
-                        f"Got keys: {sorted(creds)}"
+                        f"Missing 'api_key' in credentials for provider {provider!r}. Got keys: {sorted(creds)}"
                     )
                 return registry.build_model_backend(provider, model_id, api_key, **default_params)
             raise ValueError(f"Unknown model backend provider: {provider!r}")

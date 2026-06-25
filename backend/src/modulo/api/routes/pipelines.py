@@ -35,7 +35,6 @@ from modulo.db.crud.pipeline import (
 from modulo.db.crud.pipeline_snapshot_versioning import (
     delete_snapshot,
     diff_snapshots,
-    get_snapshot,
     get_snapshot_detail,
     list_snapshots,
     rollback_to_snapshot,
@@ -232,9 +231,7 @@ async def _resolve_graph_references(
         )
 
     manual_schema_ids = {
-        node.output_schema_id
-        for node in nodes
-        if node.node_type == "manual" and node.output_schema_id is not None
+        node.output_schema_id for node in nodes if node.node_type == "manual" and node.output_schema_id is not None
     }
     existing_schema_ids = (
         set(
@@ -379,9 +376,7 @@ async def replace_pipeline_graph_endpoint(
             "target_node_id": edge.target_node_id,
             "edge_type": edge.edge_type,
             "hitl_gate_config": (
-                edge.hitl_gate_config.model_dump(mode="json")
-                if edge.hitl_gate_config is not None
-                else None
+                edge.hitl_gate_config.model_dump(mode="json") if edge.hitl_gate_config is not None else None
             ),
         }
         for edge in body.edges
@@ -394,9 +389,7 @@ async def replace_pipeline_graph_endpoint(
                 "target": str(edge.target_node_id),
                 "type": edge.edge_type,
                 "hitl_gate_config": (
-                    edge.hitl_gate_config.model_dump(mode="json")
-                    if edge.hitl_gate_config is not None
-                    else None
+                    edge.hitl_gate_config.model_dump(mode="json") if edge.hitl_gate_config is not None else None
                 ),
             }
             for edge in body.edges
@@ -503,7 +496,9 @@ async def delete_pipeline_endpoint(
 
 class PipelineCloneRequest(BaseModel):
     name: str | None = Field(
-        None, min_length=1, max_length=255,
+        None,
+        min_length=1,
+        max_length=255,
         description="Overrides the default 'Copy of {original_name}' name",
     )
 
@@ -623,9 +618,7 @@ async def list_snapshot_endpoint(
 ) -> SnapshotListResponse:
     async with session.begin():
         await set_rls_org(session, principal.organisation_id)
-        snapshots, total = await list_snapshots(
-            session, pipeline_id, page=page, page_size=page_size
-        )
+        snapshots, total = await list_snapshots(session, pipeline_id, page=page, page_size=page_size)
     return SnapshotListResponse(
         items=[_snapshot_to_response(s) for s in snapshots],
         total=total,
@@ -657,9 +650,7 @@ async def tag_snapshot_endpoint(
 ) -> SnapshotResponse:
     async with session.begin():
         await set_rls_org(session, principal.organisation_id)
-        snapshot = await tag_snapshot(
-            session, snapshot_id, tag=body.tag, notes=body.notes
-        )
+        snapshot = await tag_snapshot(session, snapshot_id, tag=body.tag, notes=body.notes)
     if snapshot is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Snapshot not found")
     return _snapshot_to_response(snapshot)
@@ -674,9 +665,7 @@ async def rollback_snapshot_endpoint(
 ) -> SnapshotResponse:
     async with session.begin():
         await set_rls_org(session, principal.organisation_id)
-        new_snapshot = await rollback_to_snapshot(
-            session, pipeline_id, snapshot_id, created_by=principal.user_id
-        )
+        new_snapshot = await rollback_to_snapshot(session, pipeline_id, snapshot_id, created_by=principal.user_id)
     if new_snapshot is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,

@@ -22,12 +22,14 @@ router = APIRouter(prefix="/api/v1/determination", tags=["determination"])
 
 _PLACEHOLDER_ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
 
-_DETERMINATION_SCOPES = frozenset({
-    ConnectorType.GITHUB,
-    ConnectorType.GITLAB,
-    ConnectorType.JIRA,
-    ConnectorType.LINEAR,
-})
+_DETERMINATION_SCOPES = frozenset(
+    {
+        ConnectorType.GITHUB,
+        ConnectorType.GITLAB,
+        ConnectorType.JIRA,
+        ConnectorType.LINEAR,
+    }
+)
 
 
 class SampleResponse(BaseModel):
@@ -113,8 +115,7 @@ async def _load_and_scan(settings: Settings) -> tuple[list[ScanSample], list[Fin
             instances = await list_connector_instances(session, page_size=100)
 
     relevant: list[ConnectorInstance] = [
-        ci for ci in instances.items
-        if ci.connector_type_id in {t.value for t in _DETERMINATION_SCOPES}
+        ci for ci in instances.items if ci.connector_type_id in {t.value for t in _DETERMINATION_SCOPES}
     ]
 
     async with ConnectorHub(fernet_key=settings.fernet_key) as hub:
@@ -144,8 +145,7 @@ async def run_determination(
         instances = await list_connector_instances(session, page_size=100)
 
     relevant: list[ConnectorInstance] = [
-        ci for ci in instances.items
-        if ci.connector_type_id in {t.value for t in _DETERMINATION_SCOPES}
+        ci for ci in instances.items if ci.connector_type_id in {t.value for t in _DETERMINATION_SCOPES}
     ]
 
     async with ConnectorHub(fernet_key=settings.fernet_key) as hub:
@@ -188,8 +188,7 @@ async def create_determination_draft(
         instances = await list_connector_instances(session, page_size=100)
 
     relevant: list[ConnectorInstance] = [
-        ci for ci in instances.items
-        if ci.connector_type_id in {t.value for t in _DETERMINATION_SCOPES}
+        ci for ci in instances.items if ci.connector_type_id in {t.value for t in _DETERMINATION_SCOPES}
     ]
 
     async with ConnectorHub(fernet_key=settings.fernet_key) as hub:

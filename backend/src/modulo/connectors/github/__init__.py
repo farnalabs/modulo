@@ -84,9 +84,7 @@ class GitHubConnector(ConnectorBase):
                     owner_repo = q.filters["repo"]
                     path = q.filters["path"]
                     ref = q.filters.get("ref", "main")
-                    r = await client.get(
-                        f"/repos/{owner_repo}/contents/{path}", params={"ref": ref}
-                    )
+                    r = await client.get(f"/repos/{owner_repo}/contents/{path}", params={"ref": ref})
                     r.raise_for_status()
                     return ConnectorResult(records=[r.json()])
                 case "pulls":

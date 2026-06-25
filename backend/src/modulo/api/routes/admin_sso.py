@@ -303,9 +303,7 @@ async def _test_saml_connection(provider) -> SsoProviderTestResult:
             message="No IDPSSODescriptor found in metadata XML",
         )
 
-    sso_service = sso_descriptor.find(
-        f"{{{md_ns}}}SingleSignOnService"
-    )
+    sso_service = sso_descriptor.find(f"{{{md_ns}}}SingleSignOnService")
     sso_url = ""
     cert_info = []
     if sso_service is not None:
@@ -319,10 +317,12 @@ async def _test_saml_connection(provider) -> SsoProviderTestResult:
                 cert = x509.find(f"{{{md_ns}}}X509Certificate")
                 if cert is not None and cert.text:
                     raw = cert.text.replace(" ", "")
-                    cert_info.append({
-                        "use": key_desc.get("use", "signing"),
-                        "certificate": f"{raw[:40]}...{raw[-20:]}",
-                    })
+                    cert_info.append(
+                        {
+                            "use": key_desc.get("use", "signing"),
+                            "certificate": f"{raw[:40]}...{raw[-20:]}",
+                        }
+                    )
 
     provider_info = {
         "entity_id": entity_id,

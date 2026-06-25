@@ -119,9 +119,7 @@ async def update_observability_settings(
             updates["langsmith_api_key_ciphertext"] = None
         else:
             fernet = Fernet(settings.fernet_key.encode())
-            updates["langsmith_api_key_ciphertext"] = fernet.encrypt(
-                body.langsmith_api_key.encode()
-            ).decode()
+            updates["langsmith_api_key_ciphertext"] = fernet.encrypt(body.langsmith_api_key.encode()).decode()
 
     async with session.begin():
         await set_rls_org(session, principal.organisation_id)

@@ -155,9 +155,7 @@ async def update_connector_endpoint(
 ) -> ConnectorResponse:
     updates: dict[str, Any] = {k: v for k, v in body.model_dump().items() if v is not None}
     if "credentials" in updates:
-        updates["credentials_ciphertext"] = _encrypt(
-            updates.pop("credentials"), settings.fernet_key
-        )
+        updates["credentials_ciphertext"] = _encrypt(updates.pop("credentials"), settings.fernet_key)
     async with session.begin():
         await set_rls_org(session, principal.organisation_id)
         ci = await update_connector_instance(session, connector_id, updates)

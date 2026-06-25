@@ -67,9 +67,7 @@ async def list_schemas(
     total = (await session.execute(select(func.count()).select_from(Schema))).scalar_one()
     items = list(
         (
-            await session.execute(
-                select(Schema).order_by(Schema.created_at.desc()).offset(offset).limit(page_size)
-            )
+            await session.execute(select(Schema).order_by(Schema.created_at.desc()).offset(offset).limit(page_size))
         ).scalars()
     )
     return PageResult(items=items, total=total, page=page, page_size=page_size)
@@ -167,9 +165,7 @@ async def list_schema_versions(
     offset = (page - 1) * page_size
     total = (
         await session.execute(
-            select(func.count())
-            .select_from(SchemaVersion)
-            .where(SchemaVersion.schema_id == schema_id)
+            select(func.count()).select_from(SchemaVersion).where(SchemaVersion.schema_id == schema_id)
         )
     ).scalar_one()
     items = list(

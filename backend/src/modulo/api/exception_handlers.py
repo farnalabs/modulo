@@ -48,14 +48,9 @@ async def http_exception_handler(request: Request, exc: StarletteHTTPException) 
     )
 
 
-async def validation_exception_handler(
-    request: Request, exc: RequestValidationError
-) -> JSONResponse:
+async def validation_exception_handler(request: Request, exc: RequestValidationError) -> JSONResponse:
     errors = exc.errors()
-    detail_str = "; ".join(
-        f"{'.'.join(str(p) for p in e.get('loc', []))}: {e.get('msg', '')}"
-        for e in errors
-    )
+    detail_str = "; ".join(f"{'.'.join(str(p) for p in e.get('loc', []))}: {e.get('msg', '')}" for e in errors)
     body = ErrorResponse(
         error=ErrorDetail(
             code="VALIDATION_ERROR",

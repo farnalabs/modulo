@@ -254,9 +254,9 @@ async def list_webhooks(
     async with session.begin():
         await set_rls_org(session, principal.organisation_id)
         result = await session.execute(
-            select(NotificationEndpoint).where(
-                NotificationEndpoint.organisation_id == principal.organisation_id
-            ).order_by(NotificationEndpoint.created_at.desc())
+            select(NotificationEndpoint)
+            .where(NotificationEndpoint.organisation_id == principal.organisation_id)
+            .order_by(NotificationEndpoint.created_at.desc())
         )
         endpoints = list(result.scalars())
     return [_ep_to_response(ep) for ep in endpoints]
@@ -371,11 +371,13 @@ async def test_webhook(
 
     import httpx
 
-    payload = json.dumps({
-        "event": "test",
-        "timestamp": datetime.now(UTC).isoformat(),
-        "payload": {"type": "ping", "message": "Modulo notification test"},
-    }).encode()
+    payload = json.dumps(
+        {
+            "event": "test",
+            "timestamp": datetime.now(UTC).isoformat(),
+            "payload": {"type": "ping", "message": "Modulo notification test"},
+        }
+    ).encode()
 
     headers = {"Content-Type": "application/json", "User-Agent": "Modulo-Notifier/1.0"}
     if ep.secret_ciphertext:
@@ -384,10 +386,12 @@ async def test_webhook(
             raw_secret = fernet.decrypt(ep.secret_ciphertext)
             import hashlib
             import hmac
+
             sig = hmac.new(raw_secret, payload, hashlib.sha256).hexdigest()
             headers["X-Modulo-Signature"] = f"sha256={sig}"
         except Exception:
             import logging
+
             logging.getLogger(__name__).exception("Failed to sign test payload")
 
     try:
@@ -539,11 +543,13 @@ async def retry_delivery(
             )
 
     event_type = delivery.event_type
-    body = json.dumps({
-        "event": delivery.event_type,
-        "timestamp": datetime.now(UTC).isoformat(),
-        "payload": {"event_type": event_type, "retry": True},
-    }).encode()
+    body = json.dumps(
+        {
+            "event": delivery.event_type,
+            "timestamp": datetime.now(UTC).isoformat(),
+            "payload": {"event_type": event_type, "retry": True},
+        }
+    ).encode()
 
     headers = {"Content-Type": "application/json", "User-Agent": "Modulo-Notifier/1.0"}
     if ep.secret_ciphertext:
@@ -552,10 +558,12 @@ async def retry_delivery(
             raw_secret = fernet.decrypt(ep.secret_ciphertext)
             import hashlib
             import hmac
+
             sig = hmac.new(raw_secret, body, hashlib.sha256).hexdigest()
             headers["X-Modulo-Signature"] = f"sha256={sig}"
         except Exception:
             import logging
+
             logging.getLogger(__name__).exception("Failed to sign retry payload")
 
     try:
@@ -572,10 +580,7 @@ async def retry_delivery(
                 attempt_count=delivery.attempt_count + 1,
                 response_code=resp.status_code,
                 response_body=resp.text[:500] if resp.is_success else None,
-                last_error=(
-                    None if resp.is_success
-                    else f"HTTP {resp.status_code}: {resp.text[:200]}"
-                ),
+                last_error=(None if resp.is_success else f"HTTP {resp.status_code}: {resp.text[:200]}"),
             )
             session.add(new_log)
 

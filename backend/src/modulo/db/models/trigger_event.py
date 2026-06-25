@@ -28,11 +28,7 @@ class TriggerEvent(OrgScoped):
     )
     trigger_type: Mapped[str] = mapped_column(String(20), nullable=False)
     raw_payload_hash: Mapped[str] = mapped_column(String(64), nullable=False)
-    received_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), nullable=False, server_default=func.now()
-    )
+    received_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
     validation_result: Mapped[str] = mapped_column(String(50), nullable=False)
-    run_id: Mapped[uuid.UUID | None] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("runs.id", ondelete="SET NULL")
-    )
+    run_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("runs.id", ondelete="SET NULL"))
     error_detail: Mapped[str | None] = mapped_column(String(2000))

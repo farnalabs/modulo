@@ -114,9 +114,7 @@ async def validate_api_key(
         raise ApiKeyInvalidError()
 
     # Update last_used_at
-    await session.execute(
-        update(OrgApiKey).where(OrgApiKey.id == key.id).values(last_used_at=datetime.now(UTC))
-    )
+    await session.execute(update(OrgApiKey).where(OrgApiKey.id == key.id).values(last_used_at=datetime.now(UTC)))
     return key
 
 

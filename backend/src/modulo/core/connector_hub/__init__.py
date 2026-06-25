@@ -130,9 +130,7 @@ class _TracedConnector(ConnectorBase):
     include credentials, API keys, or user content (queries, payloads).
     """
 
-    def __init__(
-        self, inner: ConnectorBase, tracer: trace.Tracer, org_id: str | None = None
-    ) -> None:
+    def __init__(self, inner: ConnectorBase, tracer: trace.Tracer, org_id: str | None = None) -> None:
         self._inner = inner
         self._tracer = tracer
         self._base_attrs: dict[str, str] = {}
@@ -190,9 +188,7 @@ class _TracedConnector(ConnectorBase):
             q,
             extra_attrs={"connector.limit": q.limit},
             post_span=lambda span, result: (
-                span.set_attribute("connector.result_total", result.total)
-                if result.total is not None
-                else None
+                span.set_attribute("connector.result_total", result.total) if result.total is not None else None
             ),
         )
 

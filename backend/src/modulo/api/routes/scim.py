@@ -90,9 +90,7 @@ def _user_to_scim(user: User, base_url: str) -> dict[str, object]:
     }
 
 
-def _group_to_scim(
-    group: Team, members: list[dict[str, str]], base_url: str
-) -> dict[str, object]:
+def _group_to_scim(group: Team, members: list[dict[str, str]], base_url: str) -> dict[str, object]:
     return {
         "schemas": [_SCIM_GROUP_SCHEMA],
         "id": str(group.id),
@@ -304,15 +302,9 @@ async def replace_user(
         await set_rls_org(session, principal.organisation_id)
         user = await scim_get_user(session, principal.organisation_id, user_id)
         if user is None:
-            raise _scim_error(
-                status.HTTP_404_NOT_FOUND, f"User {user_id} not found"
-            )
+            raise _scim_error(status.HTTP_404_NOT_FOUND, f"User {user_id} not found")
 
-        display_name = (
-            body.name.formatted
-            if body.name and body.name.formatted
-            else body.userName
-        )
+        display_name = body.name.formatted if body.name and body.name.formatted else body.userName
         user = await scim_update_user(
             session,
             user,
@@ -336,9 +328,7 @@ async def patch_user(
         await set_rls_org(session, principal.organisation_id)
         user = await scim_get_user(session, principal.organisation_id, user_id)
         if user is None:
-            raise _scim_error(
-                status.HTTP_404_NOT_FOUND, f"User {user_id} not found"
-            )
+            raise _scim_error(status.HTTP_404_NOT_FOUND, f"User {user_id} not found")
 
         for op in body.Operations:
             if op.op == "replace":
@@ -349,9 +339,9 @@ async def patch_user(
                         user.active = bool(op.value["active"])
                     if isinstance(op.value.get("name"), dict):
                         name_data = op.value["name"]
-                        formatted = name_data.get("formatted") or name_data.get(
-                            "givenName", ""
-                        ) + " " + name_data.get("familyName", "")
+                        formatted = name_data.get("formatted") or name_data.get("givenName", "") + " " + name_data.get(
+                            "familyName", ""
+                        )
                         user.display_name = str(formatted).strip()
                 if op.path == "active":
                     user.active = bool(op.value)
@@ -379,9 +369,7 @@ async def delete_user(
 ) -> None:
     async with session.begin():
         await set_rls_org(session, principal.organisation_id)
-        deleted = await scim_delete_user_by_id(
-            session, principal.organisation_id, user_id
-        )
+        deleted = await scim_delete_user_by_id(session, principal.organisation_id, user_id)
 
     if not deleted:
         raise _scim_error(status.HTTP_404_NOT_FOUND, f"User {user_id} not found")
@@ -446,9 +434,7 @@ async def create_group(
 
         from modulo.db.crud.team import get_team_by_name
 
-        existing = await get_team_by_name(
-            session, principal.organisation_id, body.displayName
-        )
+        existing = await get_team_by_name(session, principal.organisation_id, body.displayName)
         if existing is not None:
             raise _scim_error(
                 status.HTTP_409_CONFLICT,
@@ -461,11 +447,7 @@ async def create_group(
         from modulo.db.crud.user import list_users_for_org
 
         org_users = await list_users_for_org(session, principal.organisation_id)
-        creator_id = (
-            org_users[0].id
-            if org_users
-            else None
-        )
+        creator_id = org_users[0].id if org_users else None
 
         team = await scim_create_group(
             session,
@@ -512,9 +494,7 @@ async def get_group(
         group = await scim_get_group(session, group_id)
 
     if group is None:
-        raise _scim_error(
-            status.HTTP_404_NOT_FOUND, f"Group {group_id} not found"
-        )
+        raise _scim_error(status.HTTP_404_NOT_FOUND, f"Group {group_id} not found")
 
     base_url = _get_base_url(settings)
     memberships = await scim_list_group_members(session, group_id)
@@ -541,9 +521,7 @@ async def replace_group(
         await set_rls_org(session, principal.organisation_id)
         group = await scim_get_group(session, group_id)
         if group is None:
-            raise _scim_error(
-                status.HTTP_404_NOT_FOUND, f"Group {group_id} not found"
-            )
+            raise _scim_error(status.HTTP_404_NOT_FOUND, f"Group {group_id} not found")
 
         await scim_update_group(session, group, name=body.displayName)
 
@@ -590,25 +568,17 @@ async def patch_group(
         await set_rls_org(session, principal.organisation_id)
         group = await scim_get_group(session, group_id)
         if group is None:
-            raise _scim_error(
-                status.HTTP_404_NOT_FOUND, f"Group {group_id} not found"
-            )
+            raise _scim_error(status.HTTP_404_NOT_FOUND, f"Group {group_id} not found")
 
         for op in body.Operations:
             if op.op == "replace":
                 if isinstance(op.value, dict):
                     if "displayName" in op.value:
-                        await scim_update_group(
-                            session, group, name=str(op.value["displayName"])
-                        )
+                        await scim_update_group(session, group, name=str(op.value["displayName"]))
                     if "members" in op.value and isinstance(op.value["members"], list):
-                        existing = await scim_list_group_members(
-                            session, group.id
-                        )
+                        existing = await scim_list_group_members(session, group.id)
                         for em in existing:
-                            await scim_remove_group_member(
-                                session, group.id, em.user_id
-                            )
+                            await scim_remove_group_member(session, group.id, em.user_id)
                         for m in op.value["members"]:
                             if isinstance(m, dict) and "value" in m:
                                 try:
@@ -651,18 +621,14 @@ async def patch_group(
                             uid = uuid.UUID(uid_str)
                         except ValueError:
                             continue
-                        await scim_remove_group_member(
-                            session, group.id, uid
-                        )
+                        await scim_remove_group_member(session, group.id, uid)
                 elif op.value:
                     if isinstance(op.value, dict) and "value" in op.value:
                         try:
                             uid = uuid.UUID(str(op.value["value"]))
                         except ValueError:
                             continue
-                        await scim_remove_group_member(
-                            session, group.id, uid
-                        )
+                        await scim_remove_group_member(session, group.id, uid)
                     elif isinstance(op.value, list):
                         for item in op.value:
                             if isinstance(item, dict) and "value" in item:
@@ -670,9 +636,7 @@ async def patch_group(
                                     uid = uuid.UUID(str(item["value"]))
                                 except ValueError:
                                     continue
-                                await scim_remove_group_member(
-                                    session, group.id, uid
-                                )
+                                await scim_remove_group_member(session, group.id, uid)
 
     base_url = _get_base_url(settings)
     memberships = await scim_list_group_members(session, group.id)
@@ -699,6 +663,4 @@ async def delete_group(
         deleted = await scim_delete_group_by_id(session, group_id)
 
     if not deleted:
-        raise _scim_error(
-            status.HTTP_404_NOT_FOUND, f"Group {group_id} not found"
-        )
+        raise _scim_error(status.HTTP_404_NOT_FOUND, f"Group {group_id} not found")

@@ -66,9 +66,7 @@ async def list_snapshots(
 
     # Get total count
     count_result = await session.execute(
-        select(func.count())
-        .select_from(PipelineSnapshot)
-        .where(PipelineSnapshot.pipeline_id == pipeline_id)
+        select(func.count()).select_from(PipelineSnapshot).where(PipelineSnapshot.pipeline_id == pipeline_id)
     )
     total = count_result.scalar() or 0
 
@@ -80,9 +78,7 @@ async def get_snapshot(
     snapshot_id: uuid.UUID,
 ) -> PipelineSnapshot | None:
     """Get a single snapshot by ID."""
-    result = await session.execute(
-        select(PipelineSnapshot).where(PipelineSnapshot.id == snapshot_id)
-    )
+    result = await session.execute(select(PipelineSnapshot).where(PipelineSnapshot.id == snapshot_id))
     return result.scalar_one_or_none()
 
 
@@ -119,9 +115,7 @@ async def rollback_to_snapshot(
     if target is None or target.pipeline_id != pipeline_id:
         return None
 
-    pipeline_result = await session.execute(
-        select(Pipeline).where(Pipeline.id == pipeline_id).with_for_update()
-    )
+    pipeline_result = await session.execute(select(Pipeline).where(Pipeline.id == pipeline_id).with_for_update())
     pipeline = pipeline_result.scalar_one_or_none()
     if pipeline is None:
         return None
@@ -129,9 +123,7 @@ async def rollback_to_snapshot(
     pipeline.graph_nodes_json = copy.deepcopy(target.graph_json.get("nodes", []))
     await session.flush()
 
-    new_snapshot = await create_snapshot_from_live_graph(
-        session, pipeline_id=pipeline_id, created_by=created_by
-    )
+    new_snapshot = await create_snapshot_from_live_graph(session, pipeline_id=pipeline_id, created_by=created_by)
     if new_snapshot is not None:
         new_snapshot.tag = f"rollback-v{target.snapshot_version}"
         new_snapshot.notes = f"Rollback to snapshot version {target.snapshot_version}"
@@ -189,11 +181,17 @@ async def diff_snapshots(
 
     edges_a = {}
     for e in a.graph_json.get("edges", []):
-        key = (e.get("source") or e.get("source_node_id"), e.get("target") or e.get("target_node_id"))
+        key = (
+            e.get("source") or e.get("source_node_id"),
+            e.get("target") or e.get("target_node_id"),
+        )
         edges_a[key] = e
     edges_b = {}
     for e in b.graph_json.get("edges", []):
-        key = (e.get("source") or e.get("source_node_id"), e.get("target") or e.get("target_node_id"))
+        key = (
+            e.get("source") or e.get("source_node_id"),
+            e.get("target") or e.get("target_node_id"),
+        )
         edges_b[key] = e
 
     keys_a = set(edges_a)
@@ -216,10 +214,12 @@ async def diff_snapshots(
         if edge_changes:
             source = k[0]
             target = k[1]
-            modified_edges.append({
-                "edge": {"source": source, "target": target},
-                "changes": edge_changes,
-            })
+            modified_edges.append(
+                {
+                    "edge": {"source": source, "target": target},
+                    "changes": edge_changes,
+                }
+            )
 
     def _rebuild_graph(snapshot: PipelineSnapshot) -> dict:
         graph = snapshot.graph_json

@@ -18,16 +18,10 @@ class EnvironmentProfile(OrgScoped):
     description: Mapped[str | None] = mapped_column(Text)
     image_ref: Mapped[str] = mapped_column(String(500), nullable=False)
     capabilities: Mapped[list[str]] = mapped_column(JSON, nullable=False, default=list)
-    egress_policy: Mapped[str | None] = mapped_column(
-        String(20), nullable=True, default=None
-    )
-    persistence_policy: Mapped[dict[str, Any]] = mapped_column(
-        JSON, nullable=False, default=dict
-    )
+    egress_policy: Mapped[str | None] = mapped_column(String(20), nullable=True, default=None)
+    persistence_policy: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False, default=dict)
     timeout_seconds: Mapped[int] = mapped_column(Integer, nullable=False, default=3600)
-    resource_limits_json: Mapped[dict[str, Any]] = mapped_column(
-        JSON, nullable=False, default=dict
-    )
+    resource_limits_json: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False, default=dict)
     created_by: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL")
     )

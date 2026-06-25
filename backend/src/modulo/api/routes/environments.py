@@ -107,9 +107,7 @@ def _to_response(p: EnvironmentProfile) -> ProfileResponse:
     )
 
 
-async def _get_profile_or_404(
-    session: AsyncSession, profile_id: uuid.UUID
-) -> EnvironmentProfile:
+async def _get_profile_or_404(session: AsyncSession, profile_id: uuid.UUID) -> EnvironmentProfile:
     profile = await get_environment_profile(session, profile_id)
     if profile is None:
         raise HTTPException(
@@ -236,6 +234,7 @@ async def _sandbox_test_stream(profile: EnvironmentProfile) -> AsyncIterator[str
         await asyncio.sleep(0.5)
 
         from modulo.core.runtime_provider.e2b import E2BRuntimeProvider
+
         provider = E2BRuntimeProvider()
         spec = _build_workspace_spec(profile)
         provider_ref = await provider.create_workspace(spec)
@@ -244,17 +243,17 @@ async def _sandbox_test_stream(profile: EnvironmentProfile) -> AsyncIterator[str
 
         # Run echo command
         yield _sse_event("command_start", 'Executing: echo "Hello from Modulo sandbox"')
-        result = await provider.exec_command(
-            provider_ref, ["echo", "Hello from Modulo sandbox"], timeout=30
-        )
+        result = await provider.exec_command(provider_ref, ["echo", "Hello from Modulo sandbox"], timeout=30)
         yield _sse_event(
             "command_complete",
-            json.dumps({
-                "stdout": result.stdout,
-                "stderr": result.stderr,
-                "exit_code": result.exit_code,
-                "duration_ms": result.duration_ms,
-            }),
+            json.dumps(
+                {
+                    "stdout": result.stdout,
+                    "stderr": result.stderr,
+                    "exit_code": result.exit_code,
+                    "duration_ms": result.duration_ms,
+                }
+            ),
         )
         await asyncio.sleep(0.3)
 
@@ -262,28 +261,32 @@ async def _sandbox_test_stream(profile: EnvironmentProfile) -> AsyncIterator[str
         yield _sse_event("destroying", "Destroying sandbox...")
         await provider.destroy_workspace(provider_ref)
         yield _sse_event("destroyed", "Sandbox destroyed successfully")
-    except Exception as exc:
+    except Exception:
         _log.exception("Sandbox test failed for profile %s", profile.id)
         yield _sse_event("failed", "Test failed — check server logs for details")
         if provider_ref:
             try:
                 from modulo.core.runtime_provider.e2b import E2BRuntimeProvider
+
                 await E2BRuntimeProvider().destroy_workspace(provider_ref)
             except Exception:
                 _log.warning("Failed to clean up sandbox %s after error", provider_ref)
 
 
 def _sse_event(event: str, detail: str) -> str:
-    data = json.dumps({
-        "event": event,
-        "detail": detail,
-        "timestamp": datetime.now(UTC).isoformat(),
-    })
+    data = json.dumps(
+        {
+            "event": event,
+            "detail": detail,
+            "timestamp": datetime.now(UTC).isoformat(),
+        }
+    )
     return f"data: {data}\n\n"
 
 
 def _build_workspace_spec(profile: EnvironmentProfile) -> Any:
     from modulo.core.runtime_provider import WorkspaceSpec
+
     return WorkspaceSpec(
         environment_profile_id=profile.id,
         organisation_id=profile.organisation_id,
@@ -317,5 +320,3 @@ async def test_profile(
             "X-Accel-Buffering": "no",
         },
     )
-
-

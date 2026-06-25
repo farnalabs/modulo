@@ -30,16 +30,10 @@ _OLD_CONSTRAINT = (
 
 
 def upgrade() -> None:
+    op.execute(sa.text("ALTER TABLE trigger_events DROP CONSTRAINT ck_trigger_events_validation_result"))
     op.execute(
         sa.text(
-            "ALTER TABLE trigger_events DROP CONSTRAINT "
-            "ck_trigger_events_validation_result"
-        )
-    )
-    op.execute(
-        sa.text(
-            f"ALTER TABLE trigger_events ADD CONSTRAINT "
-            f"ck_trigger_events_validation_result CHECK ({_NEW_CONSTRAINT})"
+            f"ALTER TABLE trigger_events ADD CONSTRAINT ck_trigger_events_validation_result CHECK ({_NEW_CONSTRAINT})"
         )
     )
 
@@ -52,15 +46,9 @@ def downgrade() -> None:
             "('accepted', 'flood_rejected', 'no_match', 'condition_met', 'poll_error')"
         )
     )
+    op.execute(sa.text("ALTER TABLE trigger_events DROP CONSTRAINT ck_trigger_events_validation_result"))
     op.execute(
         sa.text(
-            "ALTER TABLE trigger_events DROP CONSTRAINT "
-            "ck_trigger_events_validation_result"
-        )
-    )
-    op.execute(
-        sa.text(
-            f"ALTER TABLE trigger_events ADD CONSTRAINT "
-            f"ck_trigger_events_validation_result CHECK ({_OLD_CONSTRAINT})"
+            f"ALTER TABLE trigger_events ADD CONSTRAINT ck_trigger_events_validation_result CHECK ({_OLD_CONSTRAINT})"
         )
     )

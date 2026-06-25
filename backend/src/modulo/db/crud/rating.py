@@ -36,11 +36,7 @@ async def get_rating_aggregate(
     session: AsyncSession,
     primitive_id: uuid.UUID,
 ) -> tuple[Decimal | None, int]:
-    count_stmt = (
-        select(func.count())
-        .select_from(PrimitiveRating)
-        .where(PrimitiveRating.primitive_id == primitive_id)
-    )
+    count_stmt = select(func.count()).select_from(PrimitiveRating).where(PrimitiveRating.primitive_id == primitive_id)
     total_count = (await session.execute(count_stmt)).scalar_one()
 
     if total_count == 0:
@@ -65,10 +61,7 @@ async def update_primitive_ratings_aggregate(
     primitive_id: uuid.UUID,
 ) -> None:
     avg, count = await get_rating_aggregate(session, primitive_id)
-    stmt = (
-        select(LibraryPrimitive)
-        .where(LibraryPrimitive.id == primitive_id)
-    )
+    stmt = select(LibraryPrimitive).where(LibraryPrimitive.id == primitive_id)
     result = await session.execute(stmt)
     prim = result.scalar_one_or_none()
     if prim is not None:
@@ -85,11 +78,7 @@ async def list_ratings_for_primitive(
     page_size: int = 20,
 ) -> PageResult[PrimitiveRating]:
     offset = (page - 1) * page_size
-    count_stmt = (
-        select(func.count())
-        .select_from(PrimitiveRating)
-        .where(PrimitiveRating.primitive_id == primitive_id)
-    )
+    count_stmt = select(func.count()).select_from(PrimitiveRating).where(PrimitiveRating.primitive_id == primitive_id)
     total = (await session.execute(count_stmt)).scalar_one()
     stmt = (
         select(PrimitiveRating)

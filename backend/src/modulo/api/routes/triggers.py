@@ -107,9 +107,7 @@ async def update_cron_config(
         )
         trigger = result.scalar_one_or_none()
         if trigger is None:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND, detail="Trigger not found"
-            )
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Trigger not found")
 
         if trigger.trigger_type != "cron":
             raise HTTPException(
@@ -175,9 +173,7 @@ async def preview_cron_schedule(
         )
         trigger = result.scalar_one_or_none()
         if trigger is None:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND, detail="Trigger not found"
-            )
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Trigger not found")
 
         if not trigger.cron_expression:
             raise HTTPException(
@@ -239,9 +235,7 @@ async def update_polling_config(
         )
         trigger = result.scalar_one_or_none()
         if trigger is None:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND, detail="Trigger not found"
-            )
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Trigger not found")
 
         if trigger.trigger_type != "polling":
             raise HTTPException(
@@ -277,9 +271,7 @@ async def update_polling_config(
             ]
         ):
             trigger_engine = TriggerEngine()
-            await trigger_engine.schedule_polling_trigger(
-                session, trigger=trigger, org_id=principal.organisation_id
-            )
+            await trigger_engine.schedule_polling_trigger(session, trigger=trigger, org_id=principal.organisation_id)
 
         await session.flush()
 
@@ -321,9 +313,7 @@ async def test_polling_condition(
         )
         trigger = result.scalar_one_or_none()
         if trigger is None:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND, detail="Trigger not found"
-            )
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Trigger not found")
 
         if trigger.trigger_type != "polling":
             raise HTTPException(
@@ -431,9 +421,7 @@ async def update_trigger(
         )
         trigger = result.scalar_one_or_none()
         if trigger is None:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND, detail="Trigger not found"
-            )
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Trigger not found")
 
         if body.active is not None:
             trigger.active = body.active
@@ -497,9 +485,7 @@ async def delete_trigger(
         )
         trigger = result.scalar_one_or_none()
         if trigger is None:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND, detail="Trigger not found"
-            )
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Trigger not found")
         await session.delete(trigger)
 
 
@@ -520,9 +506,7 @@ async def toggle_trigger(
         )
         trigger = result.scalar_one_or_none()
         if trigger is None:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND, detail="Trigger not found"
-            )
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Trigger not found")
 
         trigger.active = not trigger.active
         await session.flush()
@@ -556,12 +540,11 @@ async def test_trigger(
         )
         trigger = result.scalar_one_or_none()
         if trigger is None:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND, detail="Trigger not found"
-            )
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Trigger not found")
 
         import hashlib
         import json
+
         raw_body = json.dumps(body.payload, sort_keys=True).encode()
         payload_hash = hashlib.sha256(raw_body).hexdigest()
 
@@ -634,9 +617,7 @@ async def list_trigger_events(
         )
         trigger = trigger_result.scalar_one_or_none()
         if trigger is None:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND, detail="Trigger not found"
-            )
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Trigger not found")
 
         q = select(TriggerEvent).where(
             TriggerEvent.trigger_id == trigger_id,
@@ -651,8 +632,8 @@ async def list_trigger_events(
                 cursor_dt = datetime.datetime.fromisoformat(cursor_created_at_str)
                 cursor_uuid = uuid.UUID(cursor_id)
                 q = q.where(
-                    (TriggerEvent.created_at < cursor_dt) |
-                    ((TriggerEvent.created_at == cursor_dt) & (TriggerEvent.id < cursor_uuid))
+                    (TriggerEvent.created_at < cursor_dt)
+                    | ((TriggerEvent.created_at == cursor_dt) & (TriggerEvent.id < cursor_uuid))
                 )
             except (ValueError, AttributeError):
                 pass

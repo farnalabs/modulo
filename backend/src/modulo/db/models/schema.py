@@ -10,9 +10,7 @@ from modulo.db.models.base import OrgScoped
 
 class Schema(OrgScoped):
     __tablename__ = "schemas"
-    __table_args__ = (
-        UniqueConstraint("organisation_id", "name", name="uq_schemas_organisation_name"),
-    )
+    __table_args__ = (UniqueConstraint("organisation_id", "name", name="uq_schemas_organisation_name"),)
 
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     description: Mapped[str | None] = mapped_column(String(2000))

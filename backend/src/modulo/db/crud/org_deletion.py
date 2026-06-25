@@ -47,57 +47,30 @@ async def _collect_org_export(session: AsyncSession, org: Organisation) -> dict[
     """Bundle all org-owned data into a JSON-serialisable dict."""
     org_id = org.id
 
-    users = (
-        (await session.execute(select(User).where(User.organisation_id == org_id)))
-        .scalars()
-        .all()
-    )
-    pipelines = (
-        (await session.execute(select(Pipeline).where(Pipeline.organisation_id == org_id)))
-        .scalars()
-        .all()
-    )
-    runs = (
-        (await session.execute(
-            select(Run).where(Run.organisation_id == org_id).limit(5000)
-        ))
-        .scalars()
-        .all()
-    )
+    users = (await session.execute(select(User).where(User.organisation_id == org_id))).scalars().all()
+    pipelines = (await session.execute(select(Pipeline).where(Pipeline.organisation_id == org_id))).scalars().all()
+    runs = (await session.execute(select(Run).where(Run.organisation_id == org_id).limit(5000))).scalars().all()
     audit = (
-        (await session.execute(
-            select(AuditEvent).where(AuditEvent.organisation_id == org_id).limit(10000)
-        ))
+        (await session.execute(select(AuditEvent).where(AuditEvent.organisation_id == org_id).limit(10000)))
         .scalars()
         .all()
     )
     library = (
-        (await session.execute(
-            select(LibraryPrimitive).where(LibraryPrimitive.organisation_id == org_id)
-        ))
+        (await session.execute(select(LibraryPrimitive).where(LibraryPrimitive.organisation_id == org_id)))
         .scalars()
         .all()
     )
     connectors = (
-        (await session.execute(
-            select(ConnectorInstance).where(ConnectorInstance.organisation_id == org_id)
-        ))
+        (await session.execute(select(ConnectorInstance).where(ConnectorInstance.organisation_id == org_id)))
         .scalars()
         .all()
     )
     backends = (
-        (await session.execute(
-            select(ModelBackend).where(ModelBackend.organisation_id == org_id)
-        ))
-        .scalars()
-        .all()
+        (await session.execute(select(ModelBackend).where(ModelBackend.organisation_id == org_id))).scalars().all()
     )
 
     def _serialise(records: Any) -> list[dict[str, Any]]:
-        return [
-            {c.name: getattr(r, c.name) for c in r.__table__.columns}
-            for r in records
-        ]
+        return [{c.name: getattr(r, c.name) for c in r.__table__.columns} for r in records]
 
     return {
         "organisation": _serialise([org]),
@@ -187,9 +160,7 @@ async def confirm_org_deletion(
     # Hard-delete terminal runs past retention window
     from modulo.db.crud.run import batch_delete_old_terminal_runs
 
-    deleted_runs = await batch_delete_old_terminal_runs(
-        session, max_age_days=RUN_RETENTION_DAYS, batch_size=500
-    )
+    deleted_runs = await batch_delete_old_terminal_runs(session, max_age_days=RUN_RETENTION_DAYS, batch_size=500)
 
     # Hard-delete the organisation — FK cascade removes all remaining scoped rows
     await session.delete(org)
@@ -241,9 +212,7 @@ async def batch_delete_langgraph_checkpoints(
                 ")"
             )
             stmt = text(_sql)
-            result = await session.execute(
-                stmt, {"cutoff": cutoff, "limit": batch_size}
-            )
+            result = await session.execute(stmt, {"cutoff": cutoff, "limit": batch_size})
             count = result.rowcount
             deleted_total += count
             if count < batch_size:

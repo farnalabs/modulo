@@ -78,15 +78,11 @@ async def receive_webhook(
 
             from modulo.db.crud.pipeline_snapshot import create_snapshot_from_live_graph
 
-            trigger_row = await session.execute(
-                select(Trigger).where(Trigger.id == trigger_id)
-            )
+            trigger_row = await session.execute(select(Trigger).where(Trigger.id == trigger_id))
             trigger = trigger_row.scalar_one_or_none()
             if trigger is None:
                 raise TriggerNotFoundError()
-            snapshot = await create_snapshot_from_live_graph(
-                session, pipeline_id=trigger.pipeline_id, created_by=None
-            )
+            snapshot = await create_snapshot_from_live_graph(session, pipeline_id=trigger.pipeline_id, created_by=None)
             if snapshot is None:
                 raise HTTPException(
                     status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -104,13 +100,9 @@ async def receive_webhook(
                 snapshot_id=snapshot.id,
             )
     except TriggerNotFoundError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail="Trigger not found"
-        ) from exc
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Trigger not found") from exc
     except TriggerInactiveError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail="Trigger not found"
-        ) from exc
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Trigger not found") from exc
     except TimestampExpiredError as exc:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -134,9 +126,7 @@ async def receive_webhook(
 
     run_id = run.id
     executor = PipelineExecutor(engine)
-    background_tasks.add_task(
-        _run_in_background, executor, run_id, principal.organisation_id, input_payload
-    )
+    background_tasks.add_task(_run_in_background, executor, run_id, principal.organisation_id, input_payload)
 
     return {"run_id": str(run_id), "status": "accepted"}
 
@@ -161,15 +151,11 @@ async def replay_webhook(
 
             from modulo.db.crud.pipeline_snapshot import create_snapshot_from_live_graph
 
-            trigger_row = await session.execute(
-                select(Trigger).where(Trigger.id == trigger_id)
-            )
+            trigger_row = await session.execute(select(Trigger).where(Trigger.id == trigger_id))
             trigger = trigger_row.scalar_one_or_none()
             if trigger is None:
                 raise TriggerNotFoundError()
-            snapshot = await create_snapshot_from_live_graph(
-                session, pipeline_id=trigger.pipeline_id, created_by=None
-            )
+            snapshot = await create_snapshot_from_live_graph(session, pipeline_id=trigger.pipeline_id, created_by=None)
             if snapshot is None:
                 raise HTTPException(
                     status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -183,17 +169,11 @@ async def replay_webhook(
                 snapshot_id=snapshot.id,
             )
     except ReplayNotFoundError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail="Trigger event not found"
-        ) from exc
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Trigger event not found") from exc
     except TriggerNotFoundError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail="Trigger not found"
-        ) from exc
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Trigger not found") from exc
     except TriggerInactiveError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail="Trigger not found"
-        ) from exc
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Trigger not found") from exc
     except DuplicateWebhookError as exc:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -207,9 +187,7 @@ async def replay_webhook(
 
     run_id = run.id
     executor = PipelineExecutor(engine)
-    background_tasks.add_task(
-        _run_in_background, executor, run_id, principal.organisation_id, input_payload
-    )
+    background_tasks.add_task(_run_in_background, executor, run_id, principal.organisation_id, input_payload)
 
     return {"run_id": str(run_id), "status": "accepted"}
 
@@ -228,9 +206,7 @@ async def cleanup_expired(
     try:
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
-            result["dedup_hashes_deleted"] = await _trigger_engine.cleanup_expired_dedup_hashes(
-                session
-            )
+            result["dedup_hashes_deleted"] = await _trigger_engine.cleanup_expired_dedup_hashes(session)
         # Separate transaction for payloads
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)

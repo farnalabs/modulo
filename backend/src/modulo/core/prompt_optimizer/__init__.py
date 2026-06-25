@@ -44,8 +44,7 @@ class OptimizationResult:
 
 
 class LLMCallable(Protocol):
-    async def __call__(self, messages: list[BaseMessage]) -> str:
-        ...
+    async def __call__(self, messages: list[BaseMessage]) -> str: ...
 
 
 def _build_failure_context(
@@ -81,10 +80,10 @@ def _parse_llm_response(raw: str) -> OptimizationResult:
     cleaned = raw.strip()
     start = cleaned.find("```")
     if start != -1:
-        after_fence = cleaned[start + 3:]
+        after_fence = cleaned[start + 3 :]
         lang_end = after_fence.find("\n")
         if lang_end != -1:
-            after_fence = after_fence[lang_end + 1:]
+            after_fence = after_fence[lang_end + 1 :]
         end = after_fence.find("```")
         if end != -1:
             after_fence = after_fence[:end]

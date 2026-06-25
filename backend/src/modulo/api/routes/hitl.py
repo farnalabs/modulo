@@ -311,9 +311,7 @@ async def list_run_pending_gates(
         )
         gates = list(result.scalars())
 
-    return PendingGatesResponse(
-        gates=[_gate_to_response(g) for g in gates]
-    )
+    return PendingGatesResponse(gates=[_gate_to_response(g) for g in gates])
 
 
 @router.get(
@@ -330,9 +328,7 @@ async def list_org_pending_gates(
         await set_rls_org(session, principal.organisation_id)
         gates = await mgr.list_pending(session, principal.organisation_id)
 
-    return PendingGatesResponse(
-        gates=[_gate_to_response(g) for g in gates]
-    )
+    return PendingGatesResponse(gates=[_gate_to_response(g) for g in gates])
 
 
 # ---------------------------------------------------------------------------

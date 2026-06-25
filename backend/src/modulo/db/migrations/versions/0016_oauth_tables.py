@@ -25,20 +25,31 @@ def upgrade() -> None:
         sa.Column("client_secret_hash", sa.String(128), nullable=False),
         sa.Column("name", sa.String(255), nullable=False),
         sa.Column("scopes", sa.Text(), nullable=False, comment="Space-separated scope values"),
-        sa.Column("redirect_uris", sa.Text(), nullable=False, comment="Space-separated allowed redirect URIs"),
+        sa.Column(
+            "redirect_uris",
+            sa.Text(),
+            nullable=False,
+            comment="Space-separated allowed redirect URIs",
+        ),
         sa.Column("created_by", sa.UUID(), nullable=True),
-        sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.text("now()"), nullable=False),
-        sa.Column("updated_at", sa.DateTime(timezone=True), server_default=sa.text("now()"), nullable=False),
+        sa.Column(
+            "created_at",
+            sa.DateTime(timezone=True),
+            server_default=sa.text("now()"),
+            nullable=False,
+        ),
+        sa.Column(
+            "updated_at",
+            sa.DateTime(timezone=True),
+            server_default=sa.text("now()"),
+            nullable=False,
+        ),
         sa.ForeignKeyConstraint(["organisation_id"], ["organisations.id"], ondelete="CASCADE"),
         sa.PrimaryKeyConstraint("id"),
         sa.UniqueConstraint("client_id", name="uq_oauth_clients_client_id"),
     )
-    op.create_index(
-        op.f("ix_oauth_clients_client_id"), "oauth_clients", ["client_id"], unique=True
-    )
-    op.create_index(
-        op.f("ix_oauth_clients_organisation_id"), "oauth_clients", ["organisation_id"], unique=False
-    )
+    op.create_index(op.f("ix_oauth_clients_client_id"), "oauth_clients", ["client_id"], unique=True)
+    op.create_index(op.f("ix_oauth_clients_organisation_id"), "oauth_clients", ["organisation_id"], unique=False)
 
     op.create_table(
         "oauth_authorization_codes",
@@ -50,7 +61,12 @@ def upgrade() -> None:
         sa.Column("code_challenge", sa.String(128), nullable=True, comment="PKCE S256 challenge"),
         sa.Column("expires_at", sa.DateTime(timezone=True), nullable=False),
         sa.Column("used", sa.Boolean(), nullable=False, server_default=sa.text("false")),
-        sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.text("now()"), nullable=False),
+        sa.Column(
+            "created_at",
+            sa.DateTime(timezone=True),
+            server_default=sa.text("now()"),
+            nullable=False,
+        ),
         sa.PrimaryKeyConstraint("code"),
     )
     op.create_index(
@@ -73,7 +89,12 @@ def upgrade() -> None:
         sa.Column("organisation_id", sa.UUID(), nullable=False),
         sa.Column("max_sequence", sa.Integer(), nullable=False, server_default=sa.text("0")),
         sa.Column("is_blacklisted", sa.Boolean(), nullable=False, server_default=sa.text("false")),
-        sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.text("now()"), nullable=False),
+        sa.Column(
+            "created_at",
+            sa.DateTime(timezone=True),
+            server_default=sa.text("now()"),
+            nullable=False,
+        ),
         sa.Column("blacklisted_at", sa.DateTime(timezone=True), nullable=True),
         sa.PrimaryKeyConstraint("family_id"),
     )

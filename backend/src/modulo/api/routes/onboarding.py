@@ -43,6 +43,7 @@ def _load_onboarding_state() -> _OnboardingState:
 def _load_onboarding_json() -> dict[str, Any] | None:
     import json
     import os
+
     path = os.path.join(os.path.dirname(__file__), "..", "..", "..", "..", ".onboarding-state.json")
     try:
         with open(path) as f:
@@ -54,6 +55,7 @@ def _load_onboarding_json() -> dict[str, Any] | None:
 def _save_onboarding_state(state: _OnboardingState) -> None:
     import json
     import os
+
     path = os.path.join(os.path.dirname(__file__), "..", "..", "..", "..", ".onboarding-state.json")
     os.makedirs(os.path.dirname(path), exist_ok=True)
     with open(path, "w") as f:
@@ -155,10 +157,7 @@ async def mark_step_completed(
     if body.step_id not in valid_ids:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
-            detail=(
-                f"Invalid step_id '{body.step_id}'. "
-                f"Must be one of: {', '.join(sorted(valid_ids))}"
-            ),
+            detail=(f"Invalid step_id '{body.step_id}'. Must be one of: {', '.join(sorted(valid_ids))}"),
         )
 
     state = _load_onboarding_state()
@@ -202,11 +201,14 @@ async def get_step_data(
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
             from modulo.db.models.library_primitive import LibraryPrimitive
+
             templates_result = await session.execute(
-                select(LibraryPrimitive).where(
+                select(LibraryPrimitive)
+                .where(
                     LibraryPrimitive.organisation_id == principal.organisation_id,
                     LibraryPrimitive.primitive_type == "pipeline_template",
-                ).limit(3)
+                )
+                .limit(3)
             )
             templates = templates_result.scalars().all()
             data["templates"] = [

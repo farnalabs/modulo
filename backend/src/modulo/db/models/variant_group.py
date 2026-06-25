@@ -32,15 +32,9 @@ class VariantGroup(OrgScoped):
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     description: Mapped[str | None] = mapped_column(String(2000), nullable=True)
     variants: Mapped[list[dict[str, Any]]] = mapped_column(JSON, nullable=False, default=list)
-    selection_strategy: Mapped[str] = mapped_column(
-        String(20), nullable=False, server_default="weighted"
-    )
+    selection_strategy: Mapped[str] = mapped_column(String(20), nullable=False, server_default="weighted")
     run_count: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
-    max_concurrent_runs: Mapped[int] = mapped_column(
-        Integer, nullable=False, server_default="5"
-    )
-    degraded_evals: Mapped[bool] = mapped_column(
-        server_default="false", nullable=False
-    )
+    max_concurrent_runs: Mapped[int] = mapped_column(Integer, nullable=False, server_default="5")
+    degraded_evals: Mapped[bool] = mapped_column(server_default="false", nullable=False)
     organisation: Mapped[Organisation] = relationship()
     pipeline: Mapped[Pipeline] = relationship()

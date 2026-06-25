@@ -60,9 +60,7 @@ async def export_pipeline_bundle(
 
     agents_list: list[dict[str, Any]] = []
     if agent_ids:
-        agent_result = await session.execute(
-            select(Agent).where(Agent.id.in_(agent_ids))
-        )
+        agent_result = await session.execute(select(Agent).where(Agent.id.in_(agent_ids)))
         agents = list(agent_result.scalars())
         agents_list = [
             {
@@ -96,9 +94,7 @@ async def export_pipeline_bundle(
 
     schemas_list: list[dict[str, Any]] = []
     if schema_ids:
-        schema_result = await session.execute(
-            select(Schema).where(Schema.id.in_(schema_ids))
-        )
+        schema_result = await session.execute(select(Schema).where(Schema.id.in_(schema_ids)))
         schemas = list(schema_result.scalars())
         for s in schemas:
             # Get latest published version
@@ -112,20 +108,20 @@ async def export_pipeline_bundle(
                 .limit(1)
             )
             latest_version = sv_result.scalar_one_or_none()
-            schemas_list.append({
-                "id": str(s.id),
-                "name": s.name,
-                "description": s.description,
-                "abstract_name": s.abstract_name,
-                "latest_version": latest_version.version if latest_version else None,
-                "definition_json": latest_version.definition_json if latest_version else None,
-            })
+            schemas_list.append(
+                {
+                    "id": str(s.id),
+                    "name": s.name,
+                    "description": s.description,
+                    "abstract_name": s.abstract_name,
+                    "latest_version": latest_version.version if latest_version else None,
+                    "definition_json": latest_version.definition_json if latest_version else None,
+                }
+            )
 
     model_backends_list: list[dict[str, Any]] = []
     if model_backend_ids:
-        mb_result = await session.execute(
-            select(ModelBackend).where(ModelBackend.id.in_(model_backend_ids))
-        )
+        mb_result = await session.execute(select(ModelBackend).where(ModelBackend.id.in_(model_backend_ids)))
         backends = list(mb_result.scalars())
         model_backends_list = [
             {
@@ -138,9 +134,7 @@ async def export_pipeline_bundle(
         ]
 
     # Edges
-    edge_result = await session.execute(
-        select(PipelineEdge).where(PipelineEdge.pipeline_id == pipeline_id)
-    )
+    edge_result = await session.execute(select(PipelineEdge).where(PipelineEdge.pipeline_id == pipeline_id))
     edges = list(edge_result.scalars())
     edges_list = [
         {
@@ -193,12 +187,9 @@ async def resolve_schema(
 
     # First try abstract_name match
     if abstract_name:
-        stmt = (
-            select(Schema)
-            .where(
-                Schema.organisation_id == org_id,
-                Schema.abstract_name == abstract_name,
-            )
+        stmt = select(Schema).where(
+            Schema.organisation_id == org_id,
+            Schema.abstract_name == abstract_name,
         )
         result = await session.execute(stmt)
         schema = result.scalar_one_or_none()
@@ -221,11 +212,7 @@ async def resolve_schema(
 
     # Try matching by same definition structure
     if definition:
-        all_schemas = (
-            await session.execute(
-                select(Schema).where(Schema.organisation_id == org_id)
-            )
-        ).scalars()
+        all_schemas = (await session.execute(select(Schema).where(Schema.organisation_id == org_id))).scalars()
         for s in all_schemas:
             sv_result = await session.execute(
                 select(SchemaVersion)
@@ -257,13 +244,10 @@ async def resolve_connector_type(
     connector_type_id: str,
 ) -> dict[str, Any]:
     """Find a local connector instance matching the given type."""
-    stmt = (
-        select(ConnectorInstance)
-        .where(
-            ConnectorInstance.organisation_id == org_id,
-            ConnectorInstance.connector_type_id == connector_type_id,
-            ConnectorInstance.status == "active",
-        )
+    stmt = select(ConnectorInstance).where(
+        ConnectorInstance.organisation_id == org_id,
+        ConnectorInstance.connector_type_id == connector_type_id,
+        ConnectorInstance.status == "active",
     )
     result = await session.execute(stmt)
     instances = list(result.scalars())
@@ -276,10 +260,7 @@ async def resolve_connector_type(
     return {
         "instance_id": None,
         "instance_name": None,
-        "warning": (
-    f"Connector type '{connector_type_id}' not found locally. "
-    "A matching instance must be created."
-),
+        "warning": (f"Connector type '{connector_type_id}' not found locally. A matching instance must be created."),
     }
 
 
@@ -294,13 +275,10 @@ async def resolve_model_backend(
     model_id = export_backend["model_id"]
 
     # Try by name first
-    stmt = (
-        select(ModelBackend)
-        .where(
-            ModelBackend.organisation_id == org_id,
-            ModelBackend.name == name,
-            ModelBackend.status == "active",
-        )
+    stmt = select(ModelBackend).where(
+        ModelBackend.organisation_id == org_id,
+        ModelBackend.name == name,
+        ModelBackend.status == "active",
     )
     result = await session.execute(stmt)
     backend = result.scalar_one_or_none()
@@ -311,14 +289,11 @@ async def resolve_model_backend(
         }
 
     # Try by provider+model_id
-    stmt2 = (
-        select(ModelBackend)
-        .where(
-            ModelBackend.organisation_id == org_id,
-            ModelBackend.provider == provider,
-            ModelBackend.model_id == model_id,
-            ModelBackend.status == "active",
-        )
+    stmt2 = select(ModelBackend).where(
+        ModelBackend.organisation_id == org_id,
+        ModelBackend.provider == provider,
+        ModelBackend.model_id == model_id,
+        ModelBackend.status == "active",
     )
     result2 = await session.execute(stmt2)
     backend2 = result2.scalar_one_or_none()
@@ -356,9 +331,7 @@ async def get_existing_pipeline_names(
     session: AsyncSession,
     org_id: uuid.UUID,
 ) -> set[str]:
-    result = await session.execute(
-        select(Pipeline.name).where(Pipeline.organisation_id == org_id)
-    )
+    result = await session.execute(select(Pipeline.name).where(Pipeline.organisation_id == org_id))
     return {row[0] for row in result}
 
 
@@ -366,9 +339,7 @@ async def get_existing_agent_names(
     session: AsyncSession,
     org_id: uuid.UUID,
 ) -> set[str]:
-    result = await session.execute(
-        select(Agent.name).where(Agent.organisation_id == org_id)
-    )
+    result = await session.execute(select(Agent.name).where(Agent.organisation_id == org_id))
     return {row[0] for row in result}
 
 
@@ -424,11 +395,7 @@ async def materialize_import(
     existing_agent_names = await get_existing_agent_names(session, org_id)
     existing_pipeline_names = await get_existing_pipeline_names(session, org_id)
 
-    pname = (
-        suggest_import_name(existing_pipeline_names, name)
-        if name in existing_pipeline_names
-        else name
-    )
+    pname = suggest_import_name(existing_pipeline_names, name) if name in existing_pipeline_names else name
 
     # --- Step 1: Create any schemas that don't exist locally ---
     schema_id_map: dict[str, str] = {}
@@ -456,12 +423,9 @@ async def materialize_import(
         sname: str = sd.get("name", "Imported Schema")
 
         # Check for existing schema with same name but different definition
-        existing_stmt = (
-            select(Schema)
-            .where(
-                Schema.organisation_id == org_id,
-                Schema.name == sname,
-            )
+        existing_stmt = select(Schema).where(
+            Schema.organisation_id == org_id,
+            Schema.name == sname,
         )
         existing_result = await session.execute(existing_stmt)
         existing_schema = existing_result.scalar_one_or_none()
@@ -478,17 +442,16 @@ async def materialize_import(
             existing_sv = sv_result.scalar_one_or_none()
             if existing_sv and existing_sv.definition_json != definition:
                 existing_schemas = list(
-                    (await session.execute(
-                        select(Schema).where(Schema.organisation_id == org_id)
-                    )).scalars()
+                    (await session.execute(select(Schema).where(Schema.organisation_id == org_id))).scalars()
                 )
                 existing_names = {s.name for s in existing_schemas}
                 sname = suggest_import_name(
-                    existing_names, sname, suffix="(imported)",
+                    existing_names,
+                    sname,
+                    suffix="(imported)",
                 )
                 warnings.append(
-                    f"Schema '{existing_schema.name}' exists with different structure. "
-                    f"Created as '{sname}' instead."
+                    f"Schema '{existing_schema.name}' exists with different structure. Created as '{sname}' instead."
                 )
 
         new_schema = await create_schema(
@@ -517,29 +480,19 @@ async def materialize_import(
     agent_id_map: dict[str, str] = {}
     for ad in agents_data:
         export_agent_id = ad.get("id", "")
-        aname = suggest_import_name(
-            existing_agent_names, ad.get("name", "Imported Agent")
-        )
+        aname = suggest_import_name(existing_agent_names, ad.get("name", "Imported Agent"))
         existing_agent_names.add(aname)
 
         input_schema_id_str = ad.get("input_schema_id", "")
         output_schema_id_str = ad.get("output_schema_id", "")
         resolved_input_id = schema_id_map.get(input_schema_id_str, input_schema_id_str)
         resolved_output_id = schema_id_map.get(output_schema_id_str, output_schema_id_str)
-        resolved_input_version = schema_version_map.get(
-            input_schema_id_str, ad.get("input_schema_version", "1.0")
-        )
-        resolved_output_version = schema_version_map.get(
-            output_schema_id_str, ad.get("output_schema_version", "1.0")
-        )
+        resolved_input_version = schema_version_map.get(input_schema_id_str, ad.get("input_schema_version", "1.0"))
+        resolved_output_version = schema_version_map.get(output_schema_id_str, ad.get("output_schema_version", "1.0"))
 
         export_mb_id = ad.get("model_backend_id", "")
         resolved_mb_id = ad.get("_resolved_model_backend_id")
-        resolved_mb_id_str = (
-            resolved_mb_id
-            if resolved_mb_id
-            else mb_overrides.get(export_mb_id, export_mb_id)
-        )
+        resolved_mb_id_str = resolved_mb_id if resolved_mb_id else mb_overrides.get(export_mb_id, export_mb_id)
 
         agent = await create_agent(
             session,

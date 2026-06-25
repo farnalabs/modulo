@@ -37,9 +37,7 @@ class E2BRuntimeProvider(RuntimeProvider):
     def __init__(self, api_key: str | None = None) -> None:
         self._api_key = api_key or os.environ.get("MODULO_E2B_API_KEY")
         if not self._api_key:
-            raise ValueError(
-                "E2B API key is required. Pass api_key= or set MODULO_E2B_API_KEY."
-            )
+            raise ValueError("E2B API key is required. Pass api_key= or set MODULO_E2B_API_KEY.")
         self._sandboxes: dict[str, Any] = {}
 
     # ------------------------------------------------------------------
@@ -146,14 +144,10 @@ class E2BRuntimeProvider(RuntimeProvider):
         repo_ref = labels.get("repo_ref", "main")
         cmds = [f"git clone {shlex.quote(repo_url)} /home/user/repo"]
         if repo_ref != "main":
-            cmds.append(
-                f"cd /home/user/repo && git checkout {shlex.quote(repo_ref)}"
-            )
+            cmds.append(f"cd /home/user/repo && git checkout {shlex.quote(repo_ref)}")
         combined = " && ".join(cmds)
         result = await asyncio.to_thread(sandbox.commands.run, combined)
         exit_code = getattr(result, "exit_code", None)
         if exit_code is not None and exit_code != 0:
             stderr = getattr(result, "stderr", "") or ""
-            _log.warning(
-                "Repo clone exited %d for %s: %s", exit_code, repo_url, stderr
-            )
+            _log.warning("Repo clone exited %d for %s: %s", exit_code, repo_url, stderr)

@@ -82,9 +82,7 @@ async def create_feedback(
         )
         run = run_result.scalar_one_or_none()
         if run is None:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND, detail="Run not found"
-            )
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Run not found")
 
         mgr = FeedbackManager(session, principal.organisation_id)
         record = await mgr.create_feedback_record(
@@ -172,10 +170,7 @@ async def list_feedback_inbox(
     pipeline_map = result.get("pipeline_map", {})
 
     return {
-        "items": [
-            _serialise_record(r, pipeline_name=pipeline_map.get(str(r.run_id)))
-            for r in result["items"]
-        ],
+        "items": [_serialise_record(r, pipeline_name=pipeline_map.get(str(r.run_id))) for r in result["items"]],
         "total": result["total"],
         "page": result["page"],
         "page_size": result["page_size"],
@@ -214,9 +209,7 @@ async def get_feedback(
         record = await mgr.get_feedback_record(record_id)
 
     if record is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail="Feedback record not found"
-        )
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Feedback record not found")
 
     return _serialise_record(record)
 
@@ -241,9 +234,7 @@ async def update_feedback_status(
         record = await mgr.update_status(record_id, body.status)
 
     if record is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail="Feedback record not found"
-        )
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Feedback record not found")
 
     return {
         "id": str(record.id),
@@ -263,9 +254,7 @@ async def detect_eval_gap(
         record = await mgr.get_feedback_record(record_id)
 
     if record is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail="Feedback record not found"
-        )
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Feedback record not found")
 
     async with session.begin():
         await set_rls_org(session, principal.organisation_id)
@@ -290,19 +279,14 @@ async def get_inbox_item(
         record = await mgr.get_feedback_record(record_id)
 
     if record is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail="Feedback record not found"
-        )
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Feedback record not found")
 
     pipeline_name: str | None = None
     if record.run_id:
-        run_row = (
-            await session.execute(
-                select(Run).where(Run.id == record.run_id)
-            )
-        ).scalar_one_or_none()
+        run_row = (await session.execute(select(Run).where(Run.id == record.run_id))).scalar_one_or_none()
         if run_row:
             from modulo.db.models.pipeline import Pipeline
+
             pipeline = await session.get(Pipeline, run_row.pipeline_id)
             if pipeline:
                 pipeline_name = pipeline.name
@@ -332,9 +316,7 @@ async def review_feedback(
         record = await mgr.get_feedback_record(record_id)
 
         if record is None:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND, detail="Feedback record not found"
-            )
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Feedback record not found")
 
         if body.action == "mark_reviewed":
             record = await mgr.update_status(record_id, "resolved")

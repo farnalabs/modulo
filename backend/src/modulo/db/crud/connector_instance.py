@@ -42,12 +42,8 @@ async def create_connector_instance(
     return ci
 
 
-async def get_connector_instance(
-    session: AsyncSession, connector_id: uuid.UUID
-) -> ConnectorInstance | None:
-    result = await session.execute(
-        select(ConnectorInstance).where(ConnectorInstance.id == connector_id)
-    )
+async def get_connector_instance(session: AsyncSession, connector_id: uuid.UUID) -> ConnectorInstance | None:
+    result = await session.execute(select(ConnectorInstance).where(ConnectorInstance.id == connector_id))
     return result.scalar_one_or_none()
 
 
@@ -58,16 +54,11 @@ async def list_connector_instances(
     page_size: int = 20,
 ) -> PageResult[ConnectorInstance]:
     offset = (page - 1) * page_size
-    total = (
-        await session.execute(select(func.count()).select_from(ConnectorInstance))
-    ).scalar_one()
+    total = (await session.execute(select(func.count()).select_from(ConnectorInstance))).scalar_one()
     items = list(
         (
             await session.execute(
-                select(ConnectorInstance)
-                .order_by(ConnectorInstance.created_at.desc())
-                .offset(offset)
-                .limit(page_size)
+                select(ConnectorInstance).order_by(ConnectorInstance.created_at.desc()).offset(offset).limit(page_size)
             )
         ).scalars()
     )

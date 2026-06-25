@@ -11,9 +11,7 @@ from modulo.db.models.base import OrgScoped
 
 class WebhookDedupHash(OrgScoped):
     __tablename__ = "webhook_dedup_hashes"
-    __table_args__ = (
-        UniqueConstraint("trigger_id", "payload_hash", name="uq_webhook_dedup_trigger_hash"),
-    )
+    __table_args__ = (UniqueConstraint("trigger_id", "payload_hash", name="uq_webhook_dedup_trigger_hash"),)
 
     trigger_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True),
@@ -22,9 +20,7 @@ class WebhookDedupHash(OrgScoped):
         index=True,
     )
     payload_hash: Mapped[str] = mapped_column(String(64), nullable=False)
-    expires_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), nullable=False, index=True
-    )
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, index=True)
 
 
 class WebhookPayload(OrgScoped):
@@ -35,6 +31,4 @@ class WebhookPayload(OrgScoped):
     )
     raw_body: Mapped[bytes] = mapped_column(LargeBinary, nullable=False)
     raw_payload: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
-    expires_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), nullable=False, index=True
-    )
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, index=True)

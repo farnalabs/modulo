@@ -16,7 +16,10 @@ class CatchAllMiddleware(BaseHTTPMiddleware):
             return response
         except Exception:
             rid = getattr(request.state, "request_id", None)
-            logger.exception("middleware.unhandled_exception", extra={"method": request.method, "path": str(request.url.path), "request_id": rid})
+            logger.exception(
+                "middleware.unhandled_exception",
+                extra={"method": request.method, "path": str(request.url.path), "request_id": rid},
+            )
             body = ErrorResponse(
                 error=ErrorDetail(
                     code="INTERNAL_ERROR",

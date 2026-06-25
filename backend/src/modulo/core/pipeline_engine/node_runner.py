@@ -96,20 +96,24 @@ def make_hitl_gate_fn(
         elif should_skip_hitl_gate(autonomy):
             # fully_autonomous: silently skip the gate.
             artifacts: list[dict[str, Any]] = list(state.get("artifacts") or [])
-            artifacts.append({
-                "node_id": gate_id,
-                "status": "skipped",
-                "autonomy": autonomy.value,
-            })
+            artifacts.append(
+                {
+                    "node_id": gate_id,
+                    "status": "skipped",
+                    "autonomy": autonomy.value,
+                }
+            )
             return {"artifacts": artifacts}
         elif should_notify_on_complete(autonomy):
             # notify_on_complete: auto-approve, record notification artifact.
             artifacts = list(state.get("artifacts") or [])
-            artifacts.append({
-                "node_id": gate_id,
-                "status": "auto_approved",
-                "autonomy": autonomy.value,
-            })
+            artifacts.append(
+                {
+                    "node_id": gate_id,
+                    "status": "auto_approved",
+                    "autonomy": autonomy.value,
+                }
+            )
             return {"artifacts": artifacts}
 
         # Check if this is a resume after human review.
@@ -118,12 +122,14 @@ def make_hitl_gate_fn(
             is_rejected = isinstance(decision, dict) and decision.get("action") == "rejected"
             result = "rejected" if is_rejected else "approved"
             out_artifacts: list[dict[str, Any]] = list(state.get("artifacts") or [])
-            out_artifacts.append({
-                "node_id": gate_id,
-                "status": "interrupted",
-                "result": result,
-                "human_data": decision,
-            })
+            out_artifacts.append(
+                {
+                    "node_id": gate_id,
+                    "status": "interrupted",
+                    "result": result,
+                    "human_data": decision,
+                }
+            )
             return {"artifacts": out_artifacts}
 
         # First invocation — store config and interrupt.
@@ -132,12 +138,14 @@ def make_hitl_gate_fn(
         state["_hitl_gates"] = hitl_gates
 
         # State mutations before the raise are persisted by the checkpointer.
-        raise NodeInterrupt({
-            "gate_id": gate_id,
-            "autonomy_level": autonomy.value,
-            "human_only": human_only_effective,
-            "overdue_threshold_minutes": hitl_gate_config.get("overdue_threshold_minutes"),
-        })
+        raise NodeInterrupt(
+            {
+                "gate_id": gate_id,
+                "autonomy_level": autonomy.value,
+                "human_only": human_only_effective,
+                "overdue_threshold_minutes": hitl_gate_config.get("overdue_threshold_minutes"),
+            }
+        )
 
     _hitl_gate.__name__ = f"hitl_gate_{gate_id}"
     return _hitl_gate
@@ -162,18 +170,18 @@ def make_manual_node_fn(
         decision = state.get("_hitl_decision")
         if decision is not None and isinstance(decision, dict):
             resume_data = decision.get("output", decision)
-            manual_output: dict[str, Any] | None = (
-                resume_data if isinstance(resume_data, dict) else None
-            )
+            manual_output: dict[str, Any] | None = resume_data if isinstance(resume_data, dict) else None
             if output_schema_json and manual_output is not None:
                 _validate_against_schema(manual_output, output_schema_json)
 
             out_artifacts: list[dict[str, Any]] = list(state.get("artifacts") or [])
-            out_artifacts.append({
-                "node_id": node_id,
-                "status": "completed",
-                "human_output": manual_output,
-            })
+            out_artifacts.append(
+                {
+                    "node_id": node_id,
+                    "status": "completed",
+                    "human_output": manual_output,
+                }
+            )
 
             _log.info(
                 "manual_node.completed",
@@ -201,12 +209,14 @@ def make_manual_node_fn(
             },
         )
 
-        raise NodeInterrupt({
-            "manual": True,
-            "node_id": node_id,
-            "prompt": manual_prompt,
-            "output_schema_id": node_def.get("output_schema_id"),
-        })
+        raise NodeInterrupt(
+            {
+                "manual": True,
+                "node_id": node_id,
+                "prompt": manual_prompt,
+                "output_schema_id": node_def.get("output_schema_id"),
+            }
+        )
 
     _manual_node.__name__ = f"manual_{node_id}"
     return _manual_node
@@ -221,7 +231,4 @@ def _validate_against_schema(data: dict[str, Any], schema: dict[str, Any]) -> No
     required: list[str] = schema.get("required", [])
     for field in required:
         if field not in data:
-            raise ValueError(
-                f"Manual output missing required field {field!r} "
-                f"(required: {required})"
-            )
+            raise ValueError(f"Manual output missing required field {field!r} (required: {required})")

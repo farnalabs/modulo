@@ -61,9 +61,7 @@ def _compute_event_hash(
 
 async def get_chain_head(session: AsyncSession, org_id: uuid.UUID) -> AuditChainHead | None:
     """Return the current chain head for an org."""
-    result = await session.execute(
-        select(AuditChainHead).where(AuditChainHead.organisation_id == org_id)
-    )
+    result = await session.execute(select(AuditChainHead).where(AuditChainHead.organisation_id == org_id))
     return result.scalar_one_or_none()
 
 
@@ -177,8 +175,7 @@ async def verify_chain(
                 "first_gap_index": idx,
                 "first_tampered_id": str(event.id),
                 "detail": (
-                    f"Chain break at event {idx}: expected previous_hash "
-                    f"{expected_prev!r}, got {event.previous_hash!r}"
+                    f"Chain break at event {idx}: expected previous_hash {expected_prev!r}, got {event.previous_hash!r}"
                 ),
             }
         expected_prev = canonical_hash
@@ -215,24 +212,24 @@ async def export_chain(
     )
     events = list(result.scalars())
 
-    total_result = await session.execute(
-        select(func.count(AuditEvent.id)).where(AuditEvent.organisation_id == org_id)
-    )
+    total_result = await session.execute(select(func.count(AuditEvent.id)).where(AuditEvent.organisation_id == org_id))
     total = total_result.scalar() or 0
 
     items = []
     for e in events:
-        items.append({
-            "id": str(e.id),
-            "event_type": e.event_type,
-            "actor_user_id": str(e.actor_user_id) if e.actor_user_id else None,
-            "resource_type": e.resource_type,
-            "resource_id": str(e.resource_id) if e.resource_id else None,
-            "payload_json": e.payload_json,
-            "request_id": e.request_id,
-            "previous_hash": e.previous_hash,
-            "created_at": e.created_at.isoformat() if e.created_at else None,
-        })
+        items.append(
+            {
+                "id": str(e.id),
+                "event_type": e.event_type,
+                "actor_user_id": str(e.actor_user_id) if e.actor_user_id else None,
+                "resource_type": e.resource_type,
+                "resource_id": str(e.resource_id) if e.resource_id else None,
+                "payload_json": e.payload_json,
+                "request_id": e.request_id,
+                "previous_hash": e.previous_hash,
+                "created_at": e.created_at.isoformat() if e.created_at else None,
+            }
+        )
 
     return {
         "items": items,
@@ -295,17 +292,19 @@ async def list_audit_events(
 
     items = []
     for e in events:
-        items.append({
-            "id": str(e.id),
-            "event_type": e.event_type,
-            "actor_user_id": str(e.actor_user_id) if e.actor_user_id else None,
-            "resource_type": e.resource_type,
-            "resource_id": str(e.resource_id) if e.resource_id else None,
-            "payload_json": e.payload_json,
-            "request_id": e.request_id,
-            "previous_hash": e.previous_hash,
-            "created_at": e.created_at.isoformat() if e.created_at else None,
-        })
+        items.append(
+            {
+                "id": str(e.id),
+                "event_type": e.event_type,
+                "actor_user_id": str(e.actor_user_id) if e.actor_user_id else None,
+                "resource_type": e.resource_type,
+                "resource_id": str(e.resource_id) if e.resource_id else None,
+                "payload_json": e.payload_json,
+                "request_id": e.request_id,
+                "previous_hash": e.previous_hash,
+                "created_at": e.created_at.isoformat() if e.created_at else None,
+            }
+        )
 
     next_cursor = str(events[-1].id) if events and has_more else None
     prev_cursor = str(events[0].id) if events else None
@@ -336,24 +335,24 @@ async def get_audit_events_batch(
         return []
 
     result = await session.execute(
-        select(AuditEvent)
-        .where(AuditEvent.organisation_id == org_id)
-        .where(AuditEvent.id.in_(ids))
+        select(AuditEvent).where(AuditEvent.organisation_id == org_id).where(AuditEvent.id.in_(ids))
     )
     events = list(result.scalars())
 
     items = []
     for e in events:
-        items.append({
-            "id": str(e.id),
-            "event_type": e.event_type,
-            "actor_user_id": str(e.actor_user_id) if e.actor_user_id else None,
-            "resource_type": e.resource_type,
-            "resource_id": str(e.resource_id) if e.resource_id else None,
-            "payload_json": e.payload_json,
-            "request_id": e.request_id,
-            "previous_hash": e.previous_hash,
-            "created_at": e.created_at.isoformat() if e.created_at else None,
-        })
+        items.append(
+            {
+                "id": str(e.id),
+                "event_type": e.event_type,
+                "actor_user_id": str(e.actor_user_id) if e.actor_user_id else None,
+                "resource_type": e.resource_type,
+                "resource_id": str(e.resource_id) if e.resource_id else None,
+                "payload_json": e.payload_json,
+                "request_id": e.request_id,
+                "previous_hash": e.previous_hash,
+                "created_at": e.created_at.isoformat() if e.created_at else None,
+            }
+        )
 
     return items

@@ -127,9 +127,7 @@ async def list_groups(
 ) -> list[dict[str, Any]]:
     async with session.begin():
         await set_rls_org(session, principal.organisation_id)
-        items, _total = await list_variant_groups(
-            session, pipeline_id=pipeline_id, page=page, page_size=page_size
-        )
+        items, _total = await list_variant_groups(session, pipeline_id=pipeline_id, page=page, page_size=page_size)
     return [_variant_to_response(g) for g in items]
 
 
@@ -197,7 +195,8 @@ async def run_variant(
         group = await get_variant_group(session, group_id)
         if group is None:
             raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND, detail="Variant group not found",
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Variant group not found",
             )
 
         if not await check_pipeline_run_quota(session, group):
@@ -238,7 +237,8 @@ async def coverage_gaps(
         group = await get_variant_group(session, group_id)
         if group is None:
             raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND, detail="Variant group not found",
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Variant group not found",
             )
         gaps = await get_coverage_gaps(session, group)
     return gaps
@@ -255,7 +255,8 @@ async def prompt_diffs(
         group = await get_variant_group(session, group_id)
         if group is None:
             raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND, detail="Variant group not found",
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Variant group not found",
             )
         diffs = await get_prompt_diffs(session, group)
     return diffs

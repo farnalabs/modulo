@@ -28,7 +28,8 @@ from langgraph.errors import NodeInterrupt
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker
 
-from modulo.core.eval_engine import EvalResult as EngineEvalResult, SuiteEvalResult, evaluate_suite
+from modulo.core.eval_engine import EvalResult as EngineEvalResult
+from modulo.core.eval_engine import SuiteEvalResult, evaluate_suite
 from modulo.core.graph_validator import GraphValidator
 from modulo.core.pipeline_engine.decorator import (
     RunCancelledError,
@@ -116,9 +117,7 @@ def _map_lg_event(
 
 def _strip_asyncpg(url: str) -> str:
     """Convert an asyncpg SQLAlchemy URL to a psycopg-compatible URL."""
-    return url.replace("postgresql+asyncpg://", "postgresql://").replace(
-        "postgresql+psycopg://", "postgresql://"
-    )
+    return url.replace("postgresql+asyncpg://", "postgresql://").replace("postgresql+psycopg://", "postgresql://")
 
 
 @asynccontextmanager
@@ -176,9 +175,7 @@ class PipelineExecutor:
                     await set_rls_org(session, org_id)
                     # Serialise on the pipeline row — only one executor at a time
                     # passes this check for a given pipeline.
-                    await session.execute(
-                        select(Pipeline).where(Pipeline.id == pipeline_id).with_for_update()
-                    )
+                    await session.execute(select(Pipeline).where(Pipeline.id == pipeline_id).with_for_update())
                     run = await get_run(session, run_id)
                     if run is None:
                         raise RunNotFoundError(run_id)
@@ -189,9 +186,7 @@ class PipelineExecutor:
                             raise RunNotFoundError(run_id)
                         return cancelled_run
 
-                    active_count = await count_active_runs_for_pipeline(
-                        session, pipeline_id
-                    )
+                    active_count = await count_active_runs_for_pipeline(session, pipeline_id)
                     if active_count < max_concurrent:
                         await update_run_status(session, run_id, "running")
                         running_run = await get_run(session, run_id)
@@ -239,9 +234,7 @@ class PipelineExecutor:
 
                 # Re-validate the snapshot before resuming — the pipeline
                 # config may have changed since the original run started.
-                validation = await GraphValidator().validate_for_run(
-                    snapshot, {}, session
-                )
+                validation = await GraphValidator().validate_for_run(snapshot, {}, session)
                 if not validation.is_valid:
                     raise GraphValidationError(validation.issues, run_id)
 
@@ -269,7 +262,12 @@ class PipelineExecutor:
                 compiled.checkpointer = saver
                 await compiled.aupdate_state(config, {"_hitl_decision": resume_data})
                 final_status, error_code = await self._stream_graph(
-                    compiled, None, config, node_ids, broker, run_id,
+                    compiled,
+                    None,
+                    config,
+                    node_ids,
+                    broker,
+                    run_id,
                 )
         except Exception as exc:
             _log.exception("pipeline.resume_error", extra={"run_id": str(run_id)})
@@ -283,7 +281,10 @@ class PipelineExecutor:
             async with session.begin():
                 await set_rls_org(session, org_id)
                 final_run = await update_run_status(
-                    session, run_id, final_status, error_code=error_code,
+                    session,
+                    run_id,
+                    final_status,
+                    error_code=error_code,
                 )
 
         if final_run is None:
@@ -306,9 +307,7 @@ class PipelineExecutor:
                 run = await get_run(session, run_id)
                 if run is None:
                     raise RunNotFoundError(run_id)
-                pipeline_result = await session.execute(
-                    select(Pipeline).where(Pipeline.id == run.pipeline_id)
-                )
+                pipeline_result = await session.execute(select(Pipeline).where(Pipeline.id == run.pipeline_id))
                 pipeline = pipeline_result.scalar_one()
                 snapshot_result = await session.execute(
                     select(PipelineSnapshot).where(PipelineSnapshot.id == run.snapshot_id)
@@ -317,9 +316,7 @@ class PipelineExecutor:
                 graph_json: dict[str, Any] = snapshot.graph_json
 
                 # Pre-run validation — blocks execution on errors.
-                validation = await GraphValidator().validate_for_run(
-                    snapshot, input_payload, session
-                )
+                validation = await GraphValidator().validate_for_run(snapshot, input_payload, session)
                 if not validation.is_valid:
                     raise GraphValidationError(validation.issues, run_id)
 
@@ -389,9 +386,7 @@ class PipelineExecutor:
             async with self._session_factory() as session:
                 async with session.begin():
                     await set_rls_org(session, org_id)
-                    suite_results = await self._check_eval_suites(
-                        session, run_id, pipeline_id
-                    )
+                    suite_results = await self._check_eval_suites(session, run_id, pipeline_id)
                     for sr in suite_results:
                         if not sr.passed:
                             final_status = "failed"
@@ -410,9 +405,7 @@ class PipelineExecutor:
         async with self._session_factory() as session:
             async with session.begin():
                 await set_rls_org(session, org_id)
-                final_run = await update_run_status(
-                    session, run_id, final_status, error_code=error_code
-                )
+                final_run = await update_run_status(session, run_id, final_status, error_code=error_code)
 
         if final_run is None:
             raise RunNotFoundError(run_id)

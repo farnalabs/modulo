@@ -37,14 +37,8 @@ class WorkspaceLease(OrgScoped):
     )
     provider_ref: Mapped[str] = mapped_column(String(500), nullable=False)
     status: Mapped[str] = mapped_column(String(20), nullable=False, default="pending")
-    started_at: Mapped[datetime | None] = mapped_column(
-        DateTime(timezone=True), nullable=True
-    )
-    expires_at: Mapped[datetime | None] = mapped_column(
-        DateTime(timezone=True), nullable=True
-    )
-    resource_usage_json: Mapped[dict | None] = mapped_column(
-        JSON, nullable=True, default=None
-    )
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    resource_usage_json: Mapped[dict | None] = mapped_column(JSON, nullable=True, default=None)
 
     environment_profile: Mapped[EnvironmentProfile] = relationship()

@@ -37,6 +37,7 @@ def _rls(method: Callable[..., Any]) -> Callable[..., Any]:
     async def wrapper(self: "FeedbackManager", *args: Any, **kwargs: Any) -> Any:
         await set_rls_org(self._session, self._org_id)
         return await method(self, *args, **kwargs)
+
     return wrapper
 
 
@@ -88,16 +89,12 @@ class FeedbackManager:
         if status:
             conditions.append(FeedbackRecord.feedback_status == status)
         if pipeline_id:
-            run_subq = select(Run.id).where(
-                Run.pipeline_id == pipeline_id, Run.organisation_id == self._org_id
-            )
+            run_subq = select(Run.id).where(Run.pipeline_id == pipeline_id, Run.organisation_id == self._org_id)
             conditions.append(FeedbackRecord.run_id.in_(run_subq))
 
         total = 0
         if include_total:
-            total_q = select(func.count()).select_from(
-                select(FeedbackRecord).where(*conditions).subquery()
-            )
+            total_q = select(func.count()).select_from(select(FeedbackRecord).where(*conditions).subquery())
             total = (await self._session.execute(total_q)).scalar() or 0
 
         offset = (page - 1) * page_size
@@ -151,9 +148,7 @@ class FeedbackManager:
         return result.scalar_one_or_none()
 
     @_rls
-    async def link_correction_run(
-        self, record_id: UUID, correction_run_id: UUID
-    ) -> FeedbackRecord | None:
+    async def link_correction_run(self, record_id: UUID, correction_run_id: UUID) -> FeedbackRecord | None:
         current = await self._session.get(FeedbackRecord, record_id)
         if current is None:
             return None
@@ -211,9 +206,7 @@ class FeedbackManager:
         if status:
             conditions.append(FeedbackRecord.feedback_status == status)
         if pipeline_id:
-            run_subq = select(Run.id).where(
-                Run.pipeline_id == pipeline_id, Run.organisation_id == self._org_id
-            )
+            run_subq = select(Run.id).where(Run.pipeline_id == pipeline_id, Run.organisation_id == self._org_id)
             conditions.append(FeedbackRecord.run_id.in_(run_subq))
         if date_from:
             conditions.append(FeedbackRecord.created_at >= date_from)
@@ -222,9 +215,7 @@ class FeedbackManager:
 
         total = 0
         if include_total:
-            total_q = select(func.count()).select_from(
-                select(FeedbackRecord).where(*conditions).subquery()
-            )
+            total_q = select(func.count()).select_from(select(FeedbackRecord).where(*conditions).subquery())
             total = (await self._session.execute(total_q)).scalar() or 0
 
         offset = (page - 1) * page_size
@@ -240,13 +231,10 @@ class FeedbackManager:
         run_ids = list({r.run_id for r in rows if r.run_id})
         pipeline_map: dict[UUID, str] = {}
         if run_ids:
-            run_rows = (
-                await self._session.execute(
-                    select(Run.id, Run.pipeline_id).where(Run.id.in_(run_ids))
-                )
-            ).all()
+            run_rows = (await self._session.execute(select(Run.id, Run.pipeline_id).where(Run.id.in_(run_ids)))).all()
             for run_id, pipeline_id_val in run_rows:
                 from modulo.db.models.pipeline import Pipeline
+
                 pipeline = await self._session.get(Pipeline, pipeline_id_val)
                 if pipeline:
                     pipeline_map[run_id] = pipeline.name
@@ -270,9 +258,7 @@ class FeedbackManager:
             FeedbackRecord.eval_gap.is_(True),
             FeedbackRecord.feedback_status.in_(["pending", "routing"]),
         ]
-        total_q = select(func.count()).select_from(
-            select(FeedbackRecord).where(*conditions).subquery()
-        )
+        total_q = select(func.count()).select_from(select(FeedbackRecord).where(*conditions).subquery())
         total = (await self._session.execute(total_q)).scalar() or 0
 
         offset = (page - 1) * page_size

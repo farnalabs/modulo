@@ -30,12 +30,8 @@ class BatchDetailRequest(BaseModel):
 async def list_audit_events_endpoint(
     cursor: str | None = Query(None, max_length=64, description="Cursor for pagination (event ID)"),
     limit: int = Query(50, ge=1, le=200, description="Number of events per page"),
-    event_type: str | None = Query(
-        None, max_length=64, description="Filter by event type (action_type)"
-    ),
-    actor_user_id: str | None = Query(
-        None, max_length=64, alias="user_id", description="Filter by actor user ID"
-    ),
+    event_type: str | None = Query(None, max_length=64, description="Filter by event type (action_type)"),
+    actor_user_id: str | None = Query(None, max_length=64, alias="user_id", description="Filter by actor user ID"),
     resource_type: str | None = Query(
         None,
         max_length=64,
@@ -45,9 +41,7 @@ async def list_audit_events_endpoint(
     from_date: str | None = Query(
         None, max_length=32, alias="from_date", description="Filter by start date (ISO 8601)"
     ),
-    to_date: str | None = Query(
-        None, max_length=32, alias="to_date", description="Filter by end date (ISO 8601)"
-    ),
+    to_date: str | None = Query(None, max_length=32, alias="to_date", description="Filter by end date (ISO 8601)"),
     session: AsyncSession = Depends(get_db_session),
     principal: AuthenticatedPrincipal = Depends(get_current_user),
 ) -> dict[str, object]:
@@ -112,7 +106,5 @@ async def export_chain_endpoint(
     """Export audit events as paginated JSON."""
     async with session.begin():
         await set_rls_org(session, principal.organisation_id)
-        result = await export_chain(
-            session, principal.organisation_id, page=page, page_size=page_size
-        )
+        result = await export_chain(session, principal.organisation_id, page=page, page_size=page_size)
     return result

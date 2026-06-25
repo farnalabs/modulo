@@ -151,9 +151,7 @@ def upgrade() -> None:
         sa.Column("created_by", sa.UUID(), nullable=True),
         sa.Column("settings_json", sa.JSON(), nullable=False),
         sa.Column("plan_id", sa.String(length=255), nullable=True),
-        sa.CheckConstraint(
-            "status IN ('active', 'suspended', 'deleted')", name="ck_organisations_status"
-        ),
+        sa.CheckConstraint("status IN ('active', 'suspended', 'deleted')", name="ck_organisations_status"),
         sa.PrimaryKeyConstraint("id"),
         sa.UniqueConstraint("slug"),
     )
@@ -161,9 +159,7 @@ def upgrade() -> None:
         "org_daily_run_counts",
         sa.Column("run_date", sa.Date(), nullable=False),
         sa.Column("run_count", sa.Integer(), server_default="0", nullable=False),
-        sa.Column(
-            "total_spend_usd", sa.Numeric(precision=14, scale=6), server_default="0", nullable=False
-        ),
+        sa.Column("total_spend_usd", sa.Numeric(precision=14, scale=6), server_default="0", nullable=False),
         sa.Column("id", sa.UUID(), nullable=False),
         sa.Column("organisation_id", sa.UUID(), nullable=False),
         sa.Column(
@@ -211,12 +207,8 @@ def upgrade() -> None:
             server_default=sa.text("now()"),
             nullable=False,
         ),
-        sa.CheckConstraint(
-            "auth_provider IN ('local', 'oidc', 'saml')", name="ck_users_auth_provider"
-        ),
-        sa.CheckConstraint(
-            "org_role IN ('admin', 'operator', 'runner', 'viewer')", name="ck_users_org_role"
-        ),
+        sa.CheckConstraint("auth_provider IN ('local', 'oidc', 'saml')", name="ck_users_auth_provider"),
+        sa.CheckConstraint("org_role IN ('admin', 'operator', 'runner', 'viewer')", name="ck_users_org_role"),
         sa.ForeignKeyConstraint(["organisation_id"], ["organisations.id"], ondelete="CASCADE"),
         sa.PrimaryKeyConstraint("id"),
         sa.UniqueConstraint("organisation_id", "email", name="uq_users_organisation_email"),
@@ -248,12 +240,8 @@ def upgrade() -> None:
         sa.ForeignKeyConstraint(["organisation_id"], ["organisations.id"], ondelete="CASCADE"),
         sa.PrimaryKeyConstraint("id"),
     )
-    op.create_index(
-        op.f("ix_audit_events_event_type"), "audit_events", ["event_type"], unique=False
-    )
-    op.create_index(
-        op.f("ix_audit_events_organisation_id"), "audit_events", ["organisation_id"], unique=False
-    )
+    op.create_index(op.f("ix_audit_events_event_type"), "audit_events", ["event_type"], unique=False)
+    op.create_index(op.f("ix_audit_events_organisation_id"), "audit_events", ["organisation_id"], unique=False)
     op.create_table(
         "schemas",
         sa.Column("name", sa.String(length=255), nullable=False),
@@ -279,9 +267,7 @@ def upgrade() -> None:
         sa.PrimaryKeyConstraint("id"),
         sa.UniqueConstraint("organisation_id", "name", name="uq_schemas_organisation_name"),
     )
-    op.create_index(
-        op.f("ix_schemas_organisation_id"), "schemas", ["organisation_id"], unique=False
-    )
+    op.create_index(op.f("ix_schemas_organisation_id"), "schemas", ["organisation_id"], unique=False)
     op.create_table(
         "teams",
         sa.Column("name", sa.String(length=255), nullable=False),
@@ -335,9 +321,7 @@ def upgrade() -> None:
             server_default=sa.text("now()"),
             nullable=False,
         ),
-        sa.CheckConstraint(
-            "visibility IN ('org', 'team')", name="ck_connector_instances_visibility"
-        ),
+        sa.CheckConstraint("visibility IN ('org', 'team')", name="ck_connector_instances_visibility"),
         sa.CheckConstraint(
             "visibility = 'org' OR owner_team_id IS NOT NULL",
             name="ck_connector_instances_team_owner",
@@ -411,9 +395,7 @@ def upgrade() -> None:
             name="ck_library_primitives_type",
         ),
         sa.CheckConstraint("source IN ('local', 'registry')", name="ck_library_primitives_source"),
-        sa.CheckConstraint(
-            "visibility IN ('org', 'team')", name="ck_library_primitives_visibility"
-        ),
+        sa.CheckConstraint("visibility IN ('org', 'team')", name="ck_library_primitives_visibility"),
         sa.CheckConstraint(
             "visibility = 'org' OR owner_team_id IS NOT NULL",
             name="ck_library_primitives_team_owner",
@@ -427,9 +409,7 @@ def upgrade() -> None:
         sa.ForeignKeyConstraint(["organisation_id"], ["organisations.id"], ondelete="CASCADE"),
         sa.ForeignKeyConstraint(["owner_team_id"], ["teams.id"], ondelete="RESTRICT"),
         sa.PrimaryKeyConstraint("id"),
-        sa.UniqueConstraint(
-            "organisation_id", "source", "slug", "version", name="uq_library_primitive_version"
-        ),
+        sa.UniqueConstraint("organisation_id", "source", "slug", "version", name="uq_library_primitive_version"),
     )
     op.create_index(
         op.f("ix_library_primitives_organisation_id"),
@@ -467,9 +447,7 @@ def upgrade() -> None:
             server_default=sa.text("now()"),
             nullable=False,
         ),
-        sa.CheckConstraint(
-            "cost_tracking IN ('enabled', 'disabled')", name="ck_model_backends_cost"
-        ),
+        sa.CheckConstraint("cost_tracking IN ('enabled', 'disabled')", name="ck_model_backends_cost"),
         sa.CheckConstraint(
             "provider IN ('anthropic', 'openai', 'azure_openai', 'bedrock', 'ollama', 'custom')",
             name="ck_model_backends_provider",
@@ -521,9 +499,7 @@ def upgrade() -> None:
         sa.PrimaryKeyConstraint("id"),
         sa.UniqueConstraint("lookup_prefix", name="uq_org_api_keys_lookup_prefix"),
     )
-    op.create_index(
-        op.f("ix_org_api_keys_organisation_id"), "org_api_keys", ["organisation_id"], unique=False
-    )
+    op.create_index(op.f("ix_org_api_keys_organisation_id"), "org_api_keys", ["organisation_id"], unique=False)
     op.create_table(
         "schema_versions",
         sa.Column("schema_id", sa.UUID(), nullable=False),
@@ -565,9 +541,7 @@ def upgrade() -> None:
         ["organisation_id"],
         unique=False,
     )
-    op.create_index(
-        op.f("ix_schema_versions_schema_id"), "schema_versions", ["schema_id"], unique=False
-    )
+    op.create_index(op.f("ix_schema_versions_schema_id"), "schema_versions", ["schema_id"], unique=False)
     op.create_table(
         "stages",
         sa.Column("name", sa.String(length=255), nullable=False),
@@ -691,9 +665,7 @@ def upgrade() -> None:
             "visibility = 'org' OR owner_team_id IS NOT NULL",
             name="ck_pipelines_team_owner",
         ),
-        sa.CheckConstraint(
-            "lock_wait_timeout_seconds BETWEEN 30 AND 3600", name="ck_pipelines_lock_wait_timeout"
-        ),
+        sa.CheckConstraint("lock_wait_timeout_seconds BETWEEN 30 AND 3600", name="ck_pipelines_lock_wait_timeout"),
         sa.CheckConstraint("max_concurrent_runs > 0", name="ck_pipelines_max_concurrent_runs"),
         sa.CheckConstraint("node_timeout_seconds > 0", name="ck_pipelines_node_timeout"),
         sa.ForeignKeyConstraint(["created_by"], ["users.id"], ondelete="RESTRICT"),
@@ -702,9 +674,7 @@ def upgrade() -> None:
         sa.ForeignKeyConstraint(["stage_id"], ["stages.id"], ondelete="SET NULL"),
         sa.PrimaryKeyConstraint("id"),
     )
-    op.create_index(
-        op.f("ix_pipelines_organisation_id"), "pipelines", ["organisation_id"], unique=False
-    )
+    op.create_index(op.f("ix_pipelines_organisation_id"), "pipelines", ["organisation_id"], unique=False)
     op.create_table(
         "pipeline_edges",
         sa.Column("pipeline_id", sa.UUID(), nullable=False),
@@ -744,9 +714,7 @@ def upgrade() -> None:
         ["organisation_id"],
         unique=False,
     )
-    op.create_index(
-        op.f("ix_pipeline_edges_pipeline_id"), "pipeline_edges", ["pipeline_id"], unique=False
-    )
+    op.create_index(op.f("ix_pipeline_edges_pipeline_id"), "pipeline_edges", ["pipeline_id"], unique=False)
     op.create_table(
         "pipeline_snapshots",
         sa.Column("pipeline_id", sa.UUID(), nullable=False),
@@ -823,9 +791,7 @@ def upgrade() -> None:
         sa.ForeignKeyConstraint(["pipeline_id"], ["pipelines.id"], ondelete="CASCADE"),
         sa.PrimaryKeyConstraint("id"),
     )
-    op.create_index(
-        op.f("ix_triggers_organisation_id"), "triggers", ["organisation_id"], unique=False
-    )
+    op.create_index(op.f("ix_triggers_organisation_id"), "triggers", ["organisation_id"], unique=False)
     op.create_index(op.f("ix_triggers_pipeline_id"), "triggers", ["pipeline_id"], unique=False)
     op.create_table(
         "runs",
@@ -948,12 +914,8 @@ def upgrade() -> None:
         sa.PrimaryKeyConstraint("id"),
         sa.UniqueConstraint("run_id", "gate_id", name="uq_hitl_claims_run_gate"),
     )
-    op.create_index(
-        op.f("ix_hitl_claims_organisation_id"), "hitl_claims", ["organisation_id"], unique=False
-    )
-    op.create_index(
-        op.f("ix_hitl_claims_pipeline_id"), "hitl_claims", ["pipeline_id"], unique=False
-    )
+    op.create_index(op.f("ix_hitl_claims_organisation_id"), "hitl_claims", ["organisation_id"], unique=False)
+    op.create_index(op.f("ix_hitl_claims_pipeline_id"), "hitl_claims", ["pipeline_id"], unique=False)
     op.create_index(op.f("ix_hitl_claims_run_id"), "hitl_claims", ["run_id"], unique=False)
     op.create_table(
         "notification_delivery_log",
@@ -1050,9 +1012,7 @@ def upgrade() -> None:
         ["organisation_id"],
         unique=False,
     )
-    op.create_index(
-        op.f("ix_trigger_events_trigger_id"), "trigger_events", ["trigger_id"], unique=False
-    )
+    op.create_index(op.f("ix_trigger_events_trigger_id"), "trigger_events", ["trigger_id"], unique=False)
     op.create_table(
         "webhook_payloads",
         sa.Column("trigger_event_id", sa.UUID(), nullable=False),
@@ -1076,9 +1036,7 @@ def upgrade() -> None:
         sa.ForeignKeyConstraint(["trigger_event_id"], ["trigger_events.id"], ondelete="CASCADE"),
         sa.PrimaryKeyConstraint("id"),
     )
-    op.create_index(
-        op.f("ix_webhook_payloads_expires_at"), "webhook_payloads", ["expires_at"], unique=False
-    )
+    op.create_index(op.f("ix_webhook_payloads_expires_at"), "webhook_payloads", ["expires_at"], unique=False)
     op.create_index(
         op.f("ix_webhook_payloads_organisation_id"),
         "webhook_payloads",
@@ -1101,27 +1059,17 @@ def downgrade() -> None:
     op.drop_index(op.f("ix_trigger_events_trigger_id"), table_name="trigger_events")
     op.drop_index(op.f("ix_trigger_events_organisation_id"), table_name="trigger_events")
     op.drop_table("trigger_events")
-    op.drop_index(
-        op.f("ix_notification_delivery_log_run_id"), table_name="notification_delivery_log"
-    )
-    op.drop_index(
-        op.f("ix_notification_delivery_log_organisation_id"), table_name="notification_delivery_log"
-    )
-    op.drop_index(
-        op.f("ix_notification_delivery_log_event_type"), table_name="notification_delivery_log"
-    )
-    op.drop_index(
-        op.f("ix_notification_delivery_log_endpoint_id"), table_name="notification_delivery_log"
-    )
+    op.drop_index(op.f("ix_notification_delivery_log_run_id"), table_name="notification_delivery_log")
+    op.drop_index(op.f("ix_notification_delivery_log_organisation_id"), table_name="notification_delivery_log")
+    op.drop_index(op.f("ix_notification_delivery_log_event_type"), table_name="notification_delivery_log")
+    op.drop_index(op.f("ix_notification_delivery_log_endpoint_id"), table_name="notification_delivery_log")
     op.drop_table("notification_delivery_log")
     op.drop_index(op.f("ix_hitl_claims_run_id"), table_name="hitl_claims")
     op.drop_index(op.f("ix_hitl_claims_pipeline_id"), table_name="hitl_claims")
     op.drop_index(op.f("ix_hitl_claims_organisation_id"), table_name="hitl_claims")
     op.drop_table("hitl_claims")
     op.drop_index(op.f("ix_webhook_dedup_hashes_trigger_id"), table_name="webhook_dedup_hashes")
-    op.drop_index(
-        op.f("ix_webhook_dedup_hashes_organisation_id"), table_name="webhook_dedup_hashes"
-    )
+    op.drop_index(op.f("ix_webhook_dedup_hashes_organisation_id"), table_name="webhook_dedup_hashes")
     op.drop_index(op.f("ix_webhook_dedup_hashes_expires_at"), table_name="webhook_dedup_hashes")
     op.drop_table("webhook_dedup_hashes")
     op.drop_index(op.f("ix_runs_pipeline_id"), table_name="runs")
@@ -1152,9 +1100,7 @@ def downgrade() -> None:
     op.drop_index(op.f("ix_library_primitives_organisation_id"), table_name="library_primitives")
     op.drop_table("library_primitives")
     op.drop_index(op.f("ix_connector_instances_organisation_id"), table_name="connector_instances")
-    op.drop_index(
-        op.f("ix_connector_instances_connector_type_id"), table_name="connector_instances"
-    )
+    op.drop_index(op.f("ix_connector_instances_connector_type_id"), table_name="connector_instances")
     op.drop_table("connector_instances")
     op.drop_index(op.f("ix_teams_organisation_id"), table_name="teams")
     op.drop_table("teams")
@@ -1165,9 +1111,7 @@ def downgrade() -> None:
     op.drop_table("audit_events")
     op.drop_index(op.f("ix_users_organisation_id"), table_name="users")
     op.drop_table("users")
-    op.drop_index(
-        op.f("ix_org_daily_run_counts_organisation_id"), table_name="org_daily_run_counts"
-    )
+    op.drop_index(op.f("ix_org_daily_run_counts_organisation_id"), table_name="org_daily_run_counts")
     op.drop_table("org_daily_run_counts")
     op.drop_table("organisations")
     # ### end Alembic commands ###
