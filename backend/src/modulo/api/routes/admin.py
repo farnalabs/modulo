@@ -15,6 +15,8 @@ from modulo.auth.passwords import hash_password, validate_password_strength
 from modulo.db.crud.organisation import get_organisation, update_organisation
 from modulo.db.crud.team import create_team, delete_team, list_teams
 from modulo.db.crud.team import update_team as crud_update_team
+from modulo.db.crud.team_membership import list_memberships_for_user, remove_team_member
+from modulo.db.crud.token_family import blacklist_family, list_families_for_user
 from modulo.db.crud.user import create_user, get_user_by_email, list_users_paginated
 from modulo.db.crud.user import update_user as crud_update_user
 from modulo.db.models.eval_definition import EvalDefinition
@@ -22,7 +24,7 @@ from modulo.db.models.eval_result import EvalResult
 from modulo.db.models.pipeline import Pipeline
 from modulo.db.models.team import Team
 from modulo.db.models.user import User
-from modulo.db.rls import set_rls_org
+from modulo.db.rls import set_rls_org, set_rls_user_context
 
 router = APIRouter(prefix="/api/v1/admin", tags=["admin"])
 
@@ -609,10 +611,21 @@ async def admin_deactivate_user(
 
     async with session.begin():
         await set_rls_org(session, current_user.organisation_id)
+        await set_rls_user_context(session, current_user.user_id, current_user.org_role)
         user = await crud_update_user(session, user_id, {"active": False})
+        if user is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="User not found",
+            )
 
-    if user is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
+        families = await list_families_for_user(session, user_id)
+        for family in families:
+            await blacklist_family(session, family.family_id)
+
+        memberships = await list_memberships_for_user(session, user_id)
+        for membership in memberships:
+            await remove_team_member(session, membership.id)
 
     return UserListItem(
         id=str(user.id),

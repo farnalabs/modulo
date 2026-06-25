@@ -273,9 +273,26 @@ class TestUserDeactivate:
         fake_user = _fake_user(user_id=_OTHER_USER_ID, active=False)
         target_id = str(_OTHER_USER_ID)
 
-        with patch(
-            "modulo.api.routes.admin.crud_update_user",
-            AsyncMock(return_value=fake_user),
+        fake_membership = MagicMock()
+        fake_membership.id = uuid.uuid4()
+
+        with (
+            patch(
+                "modulo.api.routes.admin.crud_update_user",
+                AsyncMock(return_value=fake_user),
+            ),
+            patch(
+                "modulo.api.routes.admin.list_families_for_user",
+                AsyncMock(return_value=[]),
+            ),
+            patch(
+                "modulo.api.routes.admin.list_memberships_for_user",
+                AsyncMock(return_value=[fake_membership]),
+            ),
+            patch(
+                "modulo.api.routes.admin.remove_team_member",
+                AsyncMock(return_value=True),
+            ),
         ):
             resp = client.post(f"{self.URL}/{target_id}/deactivate")
 
@@ -288,9 +305,19 @@ class TestUserDeactivate:
 
     def test_deactivate_not_found(self, client: TestClient) -> None:
         target_id = uuid.uuid4()
-        with patch(
-            "modulo.api.routes.admin.crud_update_user",
-            AsyncMock(return_value=None),
+        with (
+            patch(
+                "modulo.api.routes.admin.crud_update_user",
+                AsyncMock(return_value=None),
+            ),
+            patch(
+                "modulo.api.routes.admin.list_families_for_user",
+                AsyncMock(return_value=[]),
+            ),
+            patch(
+                "modulo.api.routes.admin.list_memberships_for_user",
+                AsyncMock(return_value=[]),
+            ),
         ):
             resp = client.post(f"{self.URL}/{target_id}/deactivate")
 

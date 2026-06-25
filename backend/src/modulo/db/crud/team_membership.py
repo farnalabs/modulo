@@ -82,6 +82,11 @@ async def update_member_role(
     return membership
 
 
+async def list_memberships_for_user(session: AsyncSession, user_id: uuid.UUID) -> list[TeamMembership]:
+    result = await session.execute(select(TeamMembership).where(TeamMembership.user_id == user_id))
+    return list(result.scalars().all())
+
+
 async def remove_team_member(session: AsyncSession, membership_id: uuid.UUID) -> bool:
     membership = await get_membership(session, membership_id)
     if membership is None:

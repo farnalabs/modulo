@@ -76,6 +76,11 @@ async def blacklist_family(session: AsyncSession, family_id: uuid.UUID) -> bool:
     return True
 
 
+async def list_families_for_user(session: AsyncSession, user_id: uuid.UUID) -> list[TokenFamily]:
+    result = await session.execute(select(TokenFamily).where(TokenFamily.user_id == user_id))
+    return list(result.scalars().all())
+
+
 async def is_family_blacklisted(session: AsyncSession, family_id: uuid.UUID) -> bool:
     result = await session.execute(select(TokenFamily).where(TokenFamily.family_id == family_id))
     family = result.scalar_one_or_none()
