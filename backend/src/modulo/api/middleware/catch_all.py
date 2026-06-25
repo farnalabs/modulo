@@ -1,0 +1,33 @@
+import logging
+
+from fastapi import Request
+from fastapi.responses import JSONResponse
+from starlette.middleware.base import BaseHTTPMiddleware
+
+from modulo.api.models.error import ErrorDetail, ErrorResponse
+
+logger = logging.getLogger(__name__)
+
+
+class CatchAllMiddleware(BaseHTTPMiddleware):
+    async def dispatch(self, request: Request, call_next):
+        try:
+            response = await call_next(request)
+            return response
+        except Exception:
+            rid = getattr(request.state, "request_id", None)
+            logger.exception("middleware.unhandled_exception", extra={"method": request.method, "path": str(request.url.path), "request_id": rid})
+            body = ErrorResponse(
+                error=ErrorDetail(
+                    code="INTERNAL_ERROR",
+                    message="An unexpected error occurred",
+                    detail=None,
+                    request_id=rid,
+                )
+            )
+            content = body.model_dump(mode="json")
+            return JSONResponse(
+                status_code=500,
+                content=content,
+                headers={"X-Request-ID": rid or ""},
+            )

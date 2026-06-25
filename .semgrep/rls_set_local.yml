@@ -1,0 +1,13 @@
+rules:
+  - id: rls-must-use-set-local
+    patterns:
+      - pattern: |
+          $CONN.execute($TEXT, ...)
+      - metavariable-regex:
+          metavariable: $TEXT
+          regex: '(?i)\bSET\s+app\.organisation_id\b(?!\s*=\s*:org_id.*LOCAL)'
+    message: "Use SET LOCAL app.organisation_id inside a transaction. Bare SET persists on pooled connections."
+    languages: [python]
+    severity: ERROR
+    paths:
+      include: ["backend/src/**"]

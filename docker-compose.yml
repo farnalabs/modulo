@@ -1,0 +1,55 @@
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: modulo
+      POSTGRES_PASSWORD: modulo
+      POSTGRES_DB: modulo
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U modulo"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+
+  backend:
+    build: ./backend
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql+asyncpg://modulo:modulo@db:5432/modulo
+      MODULO_DB: postgres
+      SECRET_KEY: modulo-docker-compose-secret-key-32bytes!
+      FERNET_KEY: modulo-docker-compose-fernet-key-min-32-bytes!!
+      REDIS_URL: redis://redis:6379/0
+      MODULO_PUBLIC_URL: http://localhost:8000
+      MODULO_USERS: admin:admin
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./backend/src:/app/src
+
+  frontend:
+    build: ./frontend
+    depends_on:
+      - backend
+    ports:
+      - "5173:5173"
+    volumes:
+      - ./frontend/src:/app/src
+    environment:
+      # Auto-login with the admin user seeded by MODULO_USERS below.
+      - VITE_AUTO_LOGIN_USERNAME=admin
+      - VITE_AUTO_LOGIN_PASSWORD=admin
+
+volumes:
+  pgdata:

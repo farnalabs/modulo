@@ -1,0 +1,244 @@
+"""ConnectorHub — run-scoped credential decryption and connector lifecycle.
+
+Usage:
+    hub = ConnectorHub(secrets_backend=secrets_backend)
+    async with hub:
+        await hub.initialise(connector_instances)
+        connector = hub.get(connector_id)
+        result = await connector.query(...)
+
+All connector operations (query, write, health_check) are automatically wrapped
+in OpenTelemetry spans with connector_type, operation_name, and org_id attributes.
+Sensitive data (credentials, API keys, user content) is never included in span attributes.
+"""
+
+import json
+import uuid
+from collections.abc import Sequence
+from typing import Any
+
+from opentelemetry import trace
+from opentelemetry.trace import Status, StatusCode
+
+from modulo.connectors.base import (
+    ConnectorACL,
+    ConnectorBase,
+    ConnectorPayload,
+    ConnectorQuery,
+    ConnectorResult,
+    ConnectorType,
+    HealthResult,
+)
+from modulo.connectors.ci_runner import GitHubActionsCIRunner, GitLabCIRunner
+from modulo.connectors.filesystem import FilesystemConnector
+from modulo.connectors.github import GitHubConnector
+from modulo.connectors.gitlab import GitLabConnector
+from modulo.connectors.jira import JiraConnector
+from modulo.connectors.linear import LinearConnector
+from modulo.connectors.slack import SlackConnector
+from modulo.core.plugin_registry import get_plugin_registry
+from modulo.core.secrets_backend import SecretsBackend
+from modulo.db.models.connector_instance import ConnectorInstance
+
+from .locking import ConnectorLockError
+
+
+class ConnectorNotFoundError(KeyError):
+    """Raised when hub.get() is called with an unregistered connector ID."""
+
+    def __init__(self, connector_id: uuid.UUID) -> None:
+        super().__init__(str(connector_id))
+        self.connector_id = connector_id
+
+
+class ConnectorDecryptError(ValueError):
+    """Raised when credentials cannot be decrypted (wrong key or corrupted data)."""
+
+    def __init__(self, connector_id: uuid.UUID) -> None:
+        super().__init__(f"Failed to decrypt credentials for connector {connector_id}")
+        self.connector_id = connector_id
+
+
+class ConnectorHub:
+    """Decrypts connector credentials once at run-start; discards them on exit.
+
+    Not thread-safe. Each run gets its own ConnectorHub instance.
+    """
+
+    def __init__(self, secrets_backend: SecretsBackend, org_id: str | None = None) -> None:
+        self._secrets_backend = secrets_backend
+        self._connectors: dict[uuid.UUID, ConnectorBase] = {}
+        self._acls: dict[uuid.UUID, ConnectorACL] = {}
+        self._tracer = trace.get_tracer("modulo.connector_hub")
+        self._org_id = org_id
+
+    async def __aenter__(self) -> "ConnectorHub":
+        return self
+
+    async def __aexit__(self, *_: object) -> None:
+        self._connectors.clear()
+        self._acls.clear()
+
+    async def initialise(self, instances: Sequence[ConnectorInstance]) -> None:
+        """Decrypt credentials and initialise connectors. Call once at run start.
+
+        ACLs are built from instance visibility and allowed_operations columns.
+        """
+        for ci in instances:
+            try:
+                raw_str = await self._secrets_backend.get_secret(str(ci.id))
+            except KeyError as exc:
+                raise ConnectorDecryptError(ci.id) from exc
+            try:
+                creds: dict[str, Any] = json.loads(raw_str)
+            except json.JSONDecodeError as exc:
+                raise ConnectorDecryptError(ci.id) from exc
+            connector = _build_connector(ci.connector_type_id, ci.config_json, creds)
+            traced = _TracedConnector(connector, tracer=self._tracer, org_id=self._org_id)
+            self._connectors[ci.id] = traced
+            self._acls[ci.id] = ConnectorACL(
+                visibility=ci.visibility,
+                allowed_operations=ci.allowed_operations or None,
+            )
+
+    def _lookup(self, connector_id: uuid.UUID) -> ConnectorBase:
+        try:
+            return self._connectors[connector_id]
+        except KeyError:
+            raise ConnectorNotFoundError(connector_id) from None
+
+    def get(self, connector_id: uuid.UUID) -> ConnectorBase:
+        """Return the initialised connector. Raises ConnectorNotFoundError if absent."""
+        return self._lookup(connector_id)
+
+    def acl(self, connector_id: uuid.UUID) -> ConnectorACL:
+        """Return the ACL for a connector. Raises ConnectorNotFoundError if absent."""
+        try:
+            return self._acls[connector_id]
+        except KeyError:
+            raise ConnectorNotFoundError(connector_id) from None
+
+    @property
+    def connector_ids(self) -> frozenset[uuid.UUID]:
+        return frozenset(self._connectors)
+
+
+class _TracedConnector(ConnectorBase):
+    """Proxy wrapper that adds OTel spans around every connector operation.
+
+    Spans carry connector_type, operation_name, and org_id attributes but NEVER
+    include credentials, API keys, or user content (queries, payloads).
+    """
+
+    def __init__(
+        self, inner: ConnectorBase, tracer: trace.Tracer, org_id: str | None = None
+    ) -> None:
+        self._inner = inner
+        self._tracer = tracer
+        self._base_attrs: dict[str, str] = {}
+        if org_id is not None:
+            self._base_attrs["connector.org_id"] = org_id
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._inner, name)
+
+    @property
+    def connector_type(self) -> ConnectorType:
+        return self._inner.connector_type
+
+    async def _run_with_tracing(
+        self,
+        span_name: str,
+        operation: str,
+        method: Any,
+        *args: Any,
+        extra_attrs: dict[str, Any] | None = None,
+        post_span: Any = None,
+        **kwargs: Any,
+    ) -> Any:
+        attrs = self._base_attrs | {
+            "connector.type": str(self._inner.connector_type),
+            "connector.operation": operation,
+        }
+        if extra_attrs:
+            attrs |= extra_attrs
+        with self._tracer.start_as_current_span(span_name, attributes=attrs) as span:
+            try:
+                result = await method(*args, **kwargs)
+                span.set_status(Status(StatusCode.OK))
+                if post_span:
+                    post_span(span, result)
+                return result
+            except Exception as exc:
+                span.set_status(Status(StatusCode.ERROR, f"{operation} failed"))
+                span.record_exception(exc)
+                raise
+
+    async def health_check(self) -> HealthResult:
+        return await self._run_with_tracing(
+            f"connector.{self._inner.connector_type}.health_check",
+            "health_check",
+            self._inner.health_check,
+            post_span=lambda span, result: span.set_attribute("connector.healthy", result.ok),
+        )
+
+    async def query(self, q: ConnectorQuery) -> ConnectorResult:
+        return await self._run_with_tracing(
+            f"connector.{self._inner.connector_type}.query",
+            "query",
+            self._inner.query,
+            q,
+            extra_attrs={"connector.limit": q.limit},
+            post_span=lambda span, result: (
+                span.set_attribute("connector.result_total", result.total)
+                if result.total is not None
+                else None
+            ),
+        )
+
+    async def write(self, payload: ConnectorPayload) -> dict[str, Any]:
+        return await self._run_with_tracing(
+            f"connector.{self._inner.connector_type}.write",
+            "write",
+            self._inner.write,
+            payload,
+        )
+
+
+def _get_cred(creds: dict[str, Any], key: str, type_id: str) -> Any:
+    try:
+        return creds[key]
+    except KeyError:
+        raise ValueError(f"Missing credential key {key!r} for connector type {type_id!r}") from None
+
+
+def _build_connector(type_id: str, config: dict[str, Any], creds: dict[str, Any]) -> ConnectorBase:
+    match type_id:
+        case "filesystem":
+            base_path = config.get("base_path")
+            if not base_path:
+                raise ValueError("FilesystemConnector requires 'base_path' in config_json")
+            return FilesystemConnector(base_path=base_path)
+        case "github":
+            return GitHubConnector(token=_get_cred(creds, "token", type_id))
+        case "github_actions_ci":
+            return GitHubActionsCIRunner(token=_get_cred(creds, "token", type_id))
+        case "gitlab_ci":
+            base_url = config.get("base_url", "https://gitlab.com/api/v4")
+            return GitLabCIRunner(token=_get_cred(creds, "token", type_id), base_url=base_url)
+        case "gitlab":
+            return GitLabConnector(token=_get_cred(creds, "token", type_id))
+        case "linear":
+            return LinearConnector(api_key=_get_cred(creds, "api_key", type_id))
+        case "jira":
+            instance = config.get("instance", config.get("base_url", ""))
+            if not instance:
+                raise ValueError("JiraConnector requires 'instance' in config_json")
+            return JiraConnector(instance=instance, creds=creds)
+        case "slack":
+            return SlackConnector(bot_token=_get_cred(creds, "bot_token", type_id))
+        case _:
+            registry = get_plugin_registry()
+            if registry.has_connector_type(type_id):
+                return registry.build_connector(type_id, config, creds)
+            raise ValueError(f"Unknown connector type: {type_id!r}")

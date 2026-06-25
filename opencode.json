@@ -1,0 +1,85 @@
+{
+    "$schema": "https://opencode.ai/config.json",
+    "instructions": [
+        ".opencode/instructions.md"
+    ],
+    "provider": {
+        "ollama": {
+            "npm": "@ai-sdk/openai-compatible",
+            "options": {
+                "baseURL": "http://localhost:11434/v1",
+                "extraBody": {
+                    "options": {
+                        "think": false
+                    }
+                }
+            },
+            "models": {
+                "qwen-3.6": {
+                    "name": "Qwen 3.6 27B",
+                    "limit": {
+                        "context": 43008,
+                        "output": 16384
+                    }
+                }
+            }
+        }
+    },
+    "model": "opencode/deepseek-v4-flash-free",
+    "lsp": false,
+    "permission": {
+        "read": "allow",
+        "glob": "allow",
+        "grep": "allow",
+        "list": "allow",
+        "edit": "allow",
+        "write": "allow",
+        "lsp": "allow",
+        "websearch": "deny",
+        "webfetch": "deny",
+        "todowrite": "allow",
+        "task": {
+            "*": "allow"
+        },
+        "external_directory": "allow",
+        "bash": {
+            "*": "allow"
+        }
+    },
+    "agent": {
+        "build": {
+            "temperature": 0.2,
+            "steps": 500
+        }
+    },
+    "watcher": {
+        "ignore": [
+            "node_modules/**",
+            ".venv/**",
+            "__pycache__/**",
+            "*.pyc",
+            ".git/**",
+            "dist/**",
+            ".agent-work/**",
+            "*.egg-info/**",
+            ".mypy_cache/**",
+            ".ruff_cache/**"
+        ]
+    },
+    "compaction": {
+        "auto": true
+    },
+    "mcp": {
+        "playwright": {
+            "command": "playwright-mcp",
+            "args": [
+                "--allowed-hosts",
+                "localhost,127.0.0.1"
+            ],
+            "enabled": true
+        }
+    },
+    "experimental": {
+        "lsp": false
+    }
+}

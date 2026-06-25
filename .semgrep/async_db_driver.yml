@@ -1,0 +1,10 @@
+rules:
+  - id: no-sync-db-in-async
+    patterns:
+      - pattern: import psycopg2
+      - pattern: import sqlite3
+    message: "Use asyncpg (Postgres) or aiosqlite (SQLite) in async code. Sync drivers block the event loop."
+    languages: [python]
+    severity: ERROR
+    paths:
+      include: ["backend/src/**"]

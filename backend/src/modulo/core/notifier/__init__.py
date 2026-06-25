@@ -1,0 +1,297 @@
+"""Notifier — dispatch webhook notifications with HMAC signing, retry, and dead-letter tracking.
+
+Event types dispatched:
+  - hitl_awaiting     (run_id, gate_id, pipeline_name, threshold)
+  - run_failed        (run_id, error_code, pipeline_name)
+  - claim_expired     (run_id, gate_id, claimed_by)
+  - hitl_overdue      (run_id, gate_id, minutes_overdue)
+
+For each event, the notifier:
+  1. Queries all active NotificationEndpoints subscribed to the event type.
+  2. Builds an HMAC-SHA256 signature over the JSON payload.
+  3. POSTs to the endpoint URL with ``X-Modulo-Signature`` header.
+  4. Records delivery outcome in ``notification_delivery_log``.
+  5. On HTTP failure: retries up to ``MAX_RETRIES`` with exponential backoff.
+  6. On final failure: marks dead_lettered, increments endpoint's dead-letter counter.
+  7. On success: resets endpoint's consecutive-dead-letter counter to 0.
+  8. Auto-disables endpoint after ``MAX_DEAD_LETTERS`` consecutive failures.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import hashlib
+import hmac
+import json
+import logging
+import uuid
+from dataclasses import dataclass
+from datetime import UTC, datetime
+from typing import Any
+
+import httpx
+from cryptography.fernet import Fernet, InvalidToken
+from sqlalchemy import select, update
+from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker
+
+from modulo.db.models.notification_delivery import NotificationDeliveryLog
+from modulo.db.models.notification_endpoint import NotificationEndpoint
+
+_log = logging.getLogger(__name__)
+
+MAX_RETRIES = 3
+MAX_DEAD_LETTERS = 10
+RETRY_DELAYS = [5.0, 30.0, 120.0]
+
+
+@dataclass
+class DispatchResult:
+    endpoint_id: uuid.UUID
+    status: str
+    attempt_count: int
+    response_code: int | None = None
+    last_error: str | None = None
+
+
+class Notifier:
+    """Dispatch notifications to configured endpoints with retry and dead-letter."""
+
+    def __init__(self, db_engine: AsyncEngine, fernet_key: str) -> None:
+        self._engine = db_engine
+        self._session_factory = async_sessionmaker(db_engine, expire_on_commit=False)
+        self._fernet = Fernet(fernet_key.encode())
+        self._http_client: httpx.AsyncClient | None = None
+
+    async def _get_client(self) -> httpx.AsyncClient:
+        if self._http_client is None or self._http_client.is_closed:
+            self._http_client = httpx.AsyncClient(timeout=30.0)
+        return self._http_client
+
+    async def dispatch_event(
+        self,
+        org_id: uuid.UUID,
+        event_type: str,
+        payload: dict[str, Any],
+        *,
+        run_id: uuid.UUID | None = None,
+        retain_payload: bool = False,
+    ) -> list[DispatchResult]:
+        """Dispatch a notification event to all subscribed endpoints for the org.
+
+        Returns a list of DispatchResult, one per endpoint.
+        """
+        endpoints = await self._get_subscribed_endpoints(org_id, event_type)
+        if not endpoints:
+            _log.debug("notifier.no_subscribers", extra={"event_type": event_type, "org_id": str(org_id)})
+            return []
+
+        http_client = await self._get_client()
+        results: list[DispatchResult] = []
+        for ep in endpoints:
+            result = await self._dispatch_to_endpoint(
+                http_client, ep, event_type, payload, run_id, retain_payload
+            )
+            results.append(result)
+        return results
+
+    async def _get_subscribed_endpoints(
+        self,
+        org_id: uuid.UUID,
+        event_type: str,
+    ) -> list[NotificationEndpoint]:
+        """Return all active endpoints in the org subscribed to ``event_type``."""
+        async with self._session_factory() as session:
+            result = await session.execute(
+                select(NotificationEndpoint).where(
+                    NotificationEndpoint.organisation_id == org_id,
+                    NotificationEndpoint.auto_disabled.is_(False),
+                )
+            )
+            all_endpoints = list(result.scalars())
+        subscribed = []
+        for ep in all_endpoints:
+            try:
+                events_list = json.loads(ep.events)
+            except (json.JSONDecodeError, TypeError):
+                continue
+            if event_type in events_list:
+                subscribed.append(ep)
+        return subscribed
+
+    async def _dispatch_to_endpoint(
+        self,
+        client: httpx.AsyncClient,
+        endpoint: NotificationEndpoint,
+        event_type: str,
+        payload: dict[str, Any],
+        run_id: uuid.UUID | None,
+        retain_payload: bool,
+    ) -> DispatchResult:
+        """Send a single notification to one endpoint with retry logic."""
+        body = json.dumps(
+            {
+                "event": event_type,
+                "timestamp": datetime.now(UTC).isoformat(),
+                "payload": payload,
+            },
+            separators=(",", ":"),
+        ).encode()
+
+        signature = await self._sign_payload(body, endpoint)
+
+        last_error: str | None = None
+        response_code: int | None = None
+        attempt_count = 0
+
+        for attempt in range(1, MAX_RETRIES + 1):
+            attempt_count = attempt
+            try:
+                resp = await client.post(
+                    endpoint.url,
+                    content=body,
+                    headers={
+                        "Content-Type": "application/json",
+                        "X-Modulo-Signature": signature,
+                        "User-Agent": "Modulo-Notifier/1.0",
+                    },
+                )
+                response_code = resp.status_code
+                if resp.is_success:
+                    break
+                last_error = f"HTTP {resp.status_code}: {resp.text[:200]}"
+            except httpx.RequestError as exc:
+                last_error = f"RequestError: {exc}"
+                response_code = None
+
+            if attempt < MAX_RETRIES:
+                _log.warning(
+                    "notifier.delivery_attempt_failed",
+                    extra={
+                        "attempt": attempt,
+                        "max_retries": MAX_RETRIES,
+                        "endpoint_id": str(endpoint.id),
+                        "last_error": last_error,
+                    },
+                )
+                delay_idx = min(attempt - 1, len(RETRY_DELAYS) - 1)
+                await asyncio.sleep(RETRY_DELAYS[delay_idx])
+
+        status: str
+        if response_code is not None and 200 <= response_code < 300:
+            status = "delivered"
+        elif attempt_count >= MAX_RETRIES:
+            status = "dead_lettered"
+        else:
+            status = "failed"
+
+        payload_ciphertext: bytes | None = None
+        if retain_payload:
+            try:
+                payload_ciphertext = self._fernet.encrypt(body)
+            except Exception:
+                _log.exception("notifier.encrypt_failed", extra={"endpoint_id": str(endpoint.id)})
+
+        await self._record_delivery(
+            endpoint,
+            event_type,
+            run_id,
+            status,
+            attempt_count,
+            response_code,
+            last_error,
+            payload_ciphertext,
+        )
+
+        if status == "dead_lettered":
+            await self._increment_dead_letter(endpoint)
+        elif status == "delivered":
+            await self._reset_dead_letter(endpoint)
+
+        return DispatchResult(
+            endpoint_id=endpoint.id,
+            status=status,
+            attempt_count=attempt_count,
+            response_code=response_code,
+            last_error=last_error,
+        )
+
+    async def _sign_payload(self, body: bytes, endpoint: NotificationEndpoint) -> str:
+        """Build HMAC-SHA256 signature over the JSON body."""
+        if endpoint.secret_ciphertext is None:
+            return ""
+        try:
+            raw_secret = self._fernet.decrypt(endpoint.secret_ciphertext)
+        except InvalidToken:
+            _log.error("notifier.decrypt_failed", extra={"endpoint_id": str(endpoint.id)})
+            return ""
+        sig = hmac.new(raw_secret, body, hashlib.sha256).hexdigest()
+        return f"sha256={sig}"
+
+    async def _record_delivery(
+        self,
+        endpoint: NotificationEndpoint,
+        event_type: str,
+        run_id: uuid.UUID | None,
+        status: str,
+        attempt_count: int,
+        response_code: int | None,
+        last_error: str | None,
+        payload_ciphertext: bytes | None,
+    ) -> None:
+        async with self._session_factory() as session:
+            async with session.begin():
+                log_entry = NotificationDeliveryLog(
+                    organisation_id=endpoint.organisation_id,
+                    event_type=event_type,
+                    endpoint_id=endpoint.id,
+                    run_id=run_id,
+                    status=status,
+                    attempt_count=attempt_count,
+                    response_code=response_code,
+                    last_error=last_error,
+                    payload_ciphertext=payload_ciphertext,
+                )
+                session.add(log_entry)
+
+    async def _increment_dead_letter(self, endpoint: NotificationEndpoint) -> None:
+        """Increment dead-letter counter and auto-disable if threshold exceeded."""
+        async with self._session_factory() as session:
+            async with session.begin():
+                result = await session.execute(
+                    update(NotificationEndpoint)
+                    .where(NotificationEndpoint.id == endpoint.id)
+                    .values(
+                        consecutive_dead_letter_count=(
+                            NotificationEndpoint.consecutive_dead_letter_count + 1
+                        ),
+                    )
+                    .returning(NotificationEndpoint.consecutive_dead_letter_count)
+                )
+                new_count = result.scalar_one()
+
+                if new_count >= MAX_DEAD_LETTERS:
+                    await session.execute(
+                        update(NotificationEndpoint)
+                        .where(NotificationEndpoint.id == endpoint.id)
+                        .values(
+                            auto_disabled=True,
+                            disabled_at=datetime.now(UTC),
+                        )
+                    )
+                    _log.warning(
+                        "notifier.auto_disabled",
+                        extra={"endpoint_id": str(endpoint.id), "dead_letter_count": new_count},
+                    )
+
+    async def _reset_dead_letter(self, endpoint: NotificationEndpoint) -> None:
+        """Reset consecutive dead-letter counter to 0 on successful delivery."""
+        async with self._session_factory() as session:
+            async with session.begin():
+                await session.execute(
+                    update(NotificationEndpoint)
+                    .where(
+                        NotificationEndpoint.id == endpoint.id,
+                        NotificationEndpoint.consecutive_dead_letter_count > 0,
+                    )
+                    .values(consecutive_dead_letter_count=0)
+                )

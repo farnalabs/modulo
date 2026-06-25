@@ -1,0 +1,69 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: frontend
+  labels:
+    app.kubernetes.io/component: frontend
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/component: frontend
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/component: frontend
+    spec:
+      containers:
+        - name: frontend
+          image: modulo-frontend:latest
+          imagePullPolicy: Always
+          ports:
+            - containerPort: 80
+              protocol: TCP
+              name: http
+          livenessProbe:
+            httpGet:
+              path: /
+              port: 80
+            initialDelaySeconds: 10
+            periodSeconds: 15
+            timeoutSeconds: 5
+          readinessProbe:
+            httpGet:
+              path: /
+              port: 80
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            timeoutSeconds: 3
+          resources:
+            requests:
+              cpu: "100m"
+              memory: "128Mi"
+            limits:
+              cpu: "500m"
+              memory: "256Mi"
+          volumeMounts:
+            - name: nginx-config
+              mountPath: /etc/nginx/conf.d
+              readOnly: true
+      volumes:
+        - name: nginx-config
+          configMap:
+            name: nginx-config
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: frontend
+  labels:
+    app.kubernetes.io/component: frontend
+spec:
+  type: ClusterIP
+  ports:
+    - port: 80
+      targetPort: 80
+      protocol: TCP
+      name: http
+  selector:
+    app.kubernetes.io/component: frontend

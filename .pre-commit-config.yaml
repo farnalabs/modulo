@@ -1,0 +1,90 @@
+repos:
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.4.7
+    hooks:
+      - id: ruff
+        args: [--fix]
+      - id: ruff-format
+
+  - repo: https://github.com/pre-commit/mirrors-mypy
+    rev: v1.10.0
+    hooks:
+      - id: mypy
+        args: [--strict, --ignore-missing-imports]
+        additional_dependencies:
+          - types-PyYAML
+          - types-passlib
+          - pydantic
+        files: ^backend/src/
+
+  - repo: https://github.com/PyCQA/bandit
+    rev: 1.7.8
+    hooks:
+      - id: bandit
+        args: [-r, backend/src/, -ll, -x, backend/src/modulo/model_backends/stub/]
+
+  - repo: https://github.com/returntocorp/semgrep
+    rev: v1.70.0
+    hooks:
+      - id: semgrep
+        args: [--config=.semgrep/, --error]
+        files: ^backend/src/
+
+  - repo: https://github.com/gitleaks/gitleaks
+    rev: v8.18.3
+    hooks:
+      - id: gitleaks
+        args: ['--verbose']
+
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v4.6.0
+    hooks:
+      - id: check-merge-conflict
+      - id: check-yaml
+      - id: check-toml
+      - id: check-json
+      - id: end-of-file-fixer
+      - id: trailing-whitespace
+      - id: no-commit-to-branch
+        args: [--branch, main]
+
+  - repo: https://github.com/pypa/pip-audit
+    rev: v2.10.1
+    hooks:
+      - id: pip-audit
+        name: pip-audit (backend)
+        args:
+          - --project=backend/
+        files: ^backend/(pyproject\.toml|uv\.lock)$
+        pass_filenames: false
+
+  - repo: https://github.com/npm/cli
+    rev: v11.3.0
+    hooks:
+      - id: npm-audit
+        name: npm audit (frontend)
+        files: ^frontend/(package\.json|package-lock\.json)$
+        args:
+          - --prefix=frontend
+        pass_filenames: false
+
+  - repo: local
+    hooks:
+      - id: import-linter
+        name: import-linter
+        entry: bash -c 'cd backend && uv run lint-imports'
+        language: system
+        files: ^backend/src/
+        pass_filenames: false
+      - id: eslint
+        name: ESLint
+        entry: bash -c 'cd frontend && npm run lint --if-present'
+        language: system
+        files: \.(vue|ts|js)$
+        pass_filenames: false
+      - id: vue-tsc
+        name: vue-tsc type check
+        entry: bash -c 'cd frontend && npm run type-check --if-present'
+        language: system
+        files: \.(vue|ts)$
+        pass_filenames: false

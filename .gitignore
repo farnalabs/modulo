@@ -1,0 +1,79 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+.venv/
+venv/
+env/
+.env
+.env.*
+*.egg-info/
+dist/
+build/
+.eggs/
+
+# uv — lockfile IS committed (reproducible installs)
+# uv.lock
+
+# mypy
+.mypy_cache/
+.dmypy.json
+dmypy.json
+
+# Generated log files (not to be committed)
+/backend/backend-err.log
+/backend/backend-out.log
+
+# pytest
+.pytest_cache/
+.coverage
+coverage.xml
+htmlcov/
+test-results/
+
+# ruff
+.ruff_cache/
+
+# Alembic
+# (migrations tracked in git — do not ignore)
+
+# Node / frontend
+node_modules/
+frontend/dist/
+frontend/.vite/
+*.local
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+
+# Docker
+docker-compose.override.yml
+
+# Secrets (never commit these)
+*.pem
+*.key
+secrets/
+
+# Local agent delivery state and helpers (intentionally machine-local)
+.agent-work/
+
+# OpenCode
+.opencode/cache/
+.opencode/*.session
+
+# Agent worktrees (created by improve-codebase / qa-iterate)
+.agents/worktrees/
+
+# Local — machine-local tooling, scripts, resources.
+local/
+.local/
+
+# UX review capture
+ux-review-capture.json
+ux-review-report.md

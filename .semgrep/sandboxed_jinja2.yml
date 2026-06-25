@@ -1,0 +1,8 @@
+rules:
+  - id: must-use-sandboxed-jinja2
+    pattern: jinja2.Environment(...)
+    message: "Use jinja2.sandbox.SandboxedEnvironment. Raw Environment is RCE when users define templates."
+    languages: [python]
+    severity: ERROR
+    paths:
+      include: ["backend/src/**"]

@@ -1,0 +1,192 @@
+"""ModelBackendHub — run-scoped registry with health check and rotation.
+
+Usage:
+    hub = ModelBackendHub()
+    async with hub:
+        await hub.initialise(model_backend_rows, secrets_backend=secrets_backend)
+        backend = hub.get(backend_id)
+        reply = await backend.invoke(messages)
+    # After __aexit__: all backend references discarded, API keys gone.
+"""
+
+import asyncio
+import json
+import uuid
+from collections.abc import Sequence
+from dataclasses import dataclass
+from typing import Any
+
+from langchain_core.messages import HumanMessage
+
+from modulo.core.plugin_registry import get_plugin_registry
+from modulo.core.secrets_backend import SecretsBackend
+from modulo.model_backends.anthropic import AnthropicBackend
+from modulo.model_backends.base import ModelBackendBase
+from modulo.model_backends.ollama import OllamaBackend
+from modulo.model_backends.openai import OpenAIBackend
+
+
+@dataclass
+class HealthResult:
+    ok: bool
+    detail: str = ""
+
+@dataclass
+class RotatedResult:
+    backend: ModelBackendBase
+    rotated: bool
+    original_id: uuid.UUID | None = None
+
+
+class BackendNotFoundError(KeyError):
+    """Raised when hub.get() is called with an unregistered backend ID."""
+
+    def __init__(self, backend_id: uuid.UUID) -> None:
+        super().__init__(str(backend_id))
+        self.backend_id = backend_id
+
+
+class BackendUnavailableError(RuntimeError):
+    """Raised when the requested backend (and all fallbacks) are unhealthy."""
+
+    def __init__(self, backend_id: uuid.UUID) -> None:
+        super().__init__(f"No healthy backend available; requested {backend_id}")
+        self.backend_id = backend_id
+
+
+class BackendDecryptError(ValueError):
+    """Raised when credentials cannot be decrypted."""
+
+    def __init__(self, backend_id: uuid.UUID) -> None:
+        super().__init__(f"Failed to decrypt credentials for model backend {backend_id}")
+        self.backend_id = backend_id
+
+
+class ModelBackendHub:
+    """Registry of model backends; manages decryption, health checks, and rotation.
+
+    Not thread-safe. Each run gets its own hub instance.
+    """
+
+    def __init__(self) -> None:
+        self._backends: dict[uuid.UUID, ModelBackendBase] = {}
+        self._healthy: dict[uuid.UUID, bool] = {}
+
+    async def __aenter__(self) -> "ModelBackendHub":
+        return self
+
+    async def __aexit__(self, *_: object) -> None:
+        self._backends.clear()
+        self._healthy.clear()
+
+    def register(self, backend_id: uuid.UUID, backend: ModelBackendBase) -> None:
+        """Register a pre-built backend (e.g. StubModelBackend adapter in tests)."""
+        self._backends[backend_id] = backend
+        self._healthy[backend_id] = True
+
+    async def initialise(self, instances: Sequence[Any], secrets_backend: SecretsBackend) -> None:
+        """Decrypt API keys and register backends. Call once at run start.
+
+        `instances` must be `ModelBackend` ORM rows (or duck-typed equivalents with
+        `.id`, `.provider`, `.model_id`, `.credentials_ciphertext`, `.default_params`).
+        """
+        for mb in instances:
+            try:
+                raw_str = await secrets_backend.get_secret(str(mb.id))
+            except KeyError as exc:
+                raise BackendDecryptError(mb.id) from exc
+            creds: dict[str, Any] = json.loads(raw_str)
+            backend = _build_backend(mb.provider, mb.model_id, creds, mb.default_params or {})
+            self.register(mb.id, backend)
+            del raw_str, creds
+
+    def get(self, backend_id: uuid.UUID) -> ModelBackendBase:
+        """Return the backend. Raises BackendUnavailableError if marked unhealthy."""
+        if backend_id not in self._backends:
+            raise BackendNotFoundError(backend_id)
+        if not self._healthy.get(backend_id, False):
+            raise BackendUnavailableError(backend_id)
+        return self._backends[backend_id]
+
+    def get_with_rotation(self, backend_id: uuid.UUID) -> RotatedResult:
+        """Return the requested backend if healthy; else rotate to first healthy one.
+
+        Returns a RotatedResult so the caller can detect when a fallback was used.
+        """
+        if self._healthy.get(backend_id, False) and backend_id in self._backends:
+            return RotatedResult(
+                backend=self._backends[backend_id],
+                rotated=False,
+                original_id=backend_id,
+            )
+        for oid, backend in self._backends.items():
+            if self._healthy.get(oid, False):
+                return RotatedResult(
+                    backend=backend,
+                    rotated=True,
+                    original_id=backend_id,
+                )
+        raise BackendUnavailableError(backend_id)
+
+    CONNECTOR_TIMEOUT: float = 60.0
+
+    async def health_check(self, backend_id: uuid.UUID) -> HealthResult:
+        """Check backend health with a minimal ping; update health state."""
+        if backend_id not in self._backends:
+            return HealthResult(ok=False, detail="Backend not registered")
+        backend = self._backends[backend_id]
+        try:
+            await asyncio.wait_for(
+                backend.invoke([HumanMessage(content="ping")], max_tokens=1),
+                timeout=self.CONNECTOR_TIMEOUT,
+            )
+            self._healthy[backend_id] = True
+            return HealthResult(ok=True)
+        except TimeoutError:
+            self._healthy[backend_id] = False
+            return HealthResult(ok=False, detail="Health check timed out")
+        except Exception as exc:
+            self._healthy[backend_id] = False
+            return HealthResult(ok=False, detail=str(exc)[:500])
+
+    def mark_unhealthy(self, backend_id: uuid.UUID) -> None:
+        """Explicitly mark a backend as unhealthy (e.g. after a node-level error)."""
+        self._healthy[backend_id] = False
+
+    @property
+    def backend_ids(self) -> frozenset[uuid.UUID]:
+        return frozenset(self._backends)
+
+
+def _build_backend(
+    provider: str,
+    model_id: str,
+    creds: dict[str, Any],
+    default_params: dict[str, Any],
+) -> ModelBackendBase:
+    if "api_key" not in creds:
+        raise ValueError(f"Missing 'api_key' in credentials for provider {provider!r}")
+    match provider:
+        case "anthropic":
+            return AnthropicBackend(api_key=creds["api_key"], model_id=model_id, **default_params)
+        case "openai":
+            return OpenAIBackend(api_key=creds["api_key"], model_id=model_id, **default_params)
+        case "ollama":
+            base_url = creds.get("base_url", "http://localhost:11434/v1")
+            return OllamaBackend(
+                api_key=creds.get("api_key", ""),
+                model_id=model_id,
+                base_url=base_url,
+                **default_params,
+            )
+        case _:
+            registry = get_plugin_registry()
+            if registry.has_model_backend(provider):
+                api_key = creds.get("api_key")
+                if not api_key:
+                    raise ValueError(
+                        f"Missing 'api_key' in credentials for provider {provider!r}. "
+                        f"Got keys: {sorted(creds)}"
+                    )
+                return registry.build_model_backend(provider, model_id, api_key, **default_params)
+            raise ValueError(f"Unknown model backend provider: {provider!r}")

@@ -1,0 +1,34 @@
+receivers:
+  otlp:
+    protocols:
+      grpc:
+        endpoint: 0.0.0.0:4317
+
+exporters:
+  debug:
+    verbosity: detailed
+  prometheus:
+    endpoint: 0.0.0.0:8889
+    namespace: modulo
+    send_timestamps: true
+    metric_expiration: 180m
+    resource_to_telemetry_conversion:
+      enabled: true
+  file:
+    path: /var/log/otel/metrics.jsonl
+    rotation:
+
+processors:
+  batch:
+    timeout: 1s
+    send_batch_size: 1024
+  memory_limiter:
+    check_interval: 1s
+    limit_mib: 512
+
+service:
+  pipelines:
+    metrics:
+      receivers: [otlp]
+      processors: [memory_limiter, batch]
+      exporters: [debug, prometheus, file]

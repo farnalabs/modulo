@@ -1,0 +1,273 @@
+"""CRUD for pipeline snapshot versioning — list, tag, rollback, diff."""
+
+import copy
+import uuid
+
+from sqlalchemy import func, select
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from modulo.db.crud.pipeline_snapshot import create_snapshot_from_live_graph
+from modulo.db.models.pipeline import Pipeline
+from modulo.db.models.pipeline_snapshot import PipelineSnapshot
+
+
+async def delete_snapshot(
+    session: AsyncSession,
+    snapshot_id: uuid.UUID,
+) -> bool:
+    """Delete a historical snapshot. Refuses to delete the latest snapshot."""
+    target = await get_snapshot(session, snapshot_id)
+    if target is None:
+        return False
+
+    result = await session.execute(
+        select(PipelineSnapshot)
+        .where(PipelineSnapshot.pipeline_id == target.pipeline_id)
+        .order_by(PipelineSnapshot.snapshot_version.desc())
+        .limit(1)
+    )
+    latest = result.scalar_one_or_none()
+    if latest is not None and latest.id == target.id:
+        return False
+
+    await session.delete(target)
+    await session.flush()
+    return True
+
+
+async def get_snapshot_detail(
+    session: AsyncSession,
+    snapshot_id: uuid.UUID,
+) -> PipelineSnapshot | None:
+    """Get a single snapshot with full graph detail."""
+    return await get_snapshot(session, snapshot_id)
+
+
+async def list_snapshots(
+    session: AsyncSession,
+    pipeline_id: uuid.UUID,
+    page: int = 1,
+    page_size: int = 20,
+) -> tuple[list[PipelineSnapshot], int]:
+    """List snapshots for a pipeline ordered by version descending.
+
+    Returns (snapshots, total_count) where total_count is the total
+    number of snapshots for the pipeline across all pages.
+    """
+    offset = (page - 1) * page_size
+    result = await session.execute(
+        select(PipelineSnapshot)
+        .where(PipelineSnapshot.pipeline_id == pipeline_id)
+        .order_by(PipelineSnapshot.snapshot_version.desc())
+        .offset(offset)
+        .limit(page_size)
+    )
+    snapshots = list(result.scalars())
+
+    # Get total count
+    count_result = await session.execute(
+        select(func.count())
+        .select_from(PipelineSnapshot)
+        .where(PipelineSnapshot.pipeline_id == pipeline_id)
+    )
+    total = count_result.scalar() or 0
+
+    return snapshots, total
+
+
+async def get_snapshot(
+    session: AsyncSession,
+    snapshot_id: uuid.UUID,
+) -> PipelineSnapshot | None:
+    """Get a single snapshot by ID."""
+    result = await session.execute(
+        select(PipelineSnapshot).where(PipelineSnapshot.id == snapshot_id)
+    )
+    return result.scalar_one_or_none()
+
+
+async def tag_snapshot(
+    session: AsyncSession,
+    snapshot_id: uuid.UUID,
+    tag: str | None = None,
+    notes: str | None = None,
+) -> PipelineSnapshot | None:
+    """Set or clear tag and notes on a snapshot."""
+    snapshot = await get_snapshot(session, snapshot_id)
+    if snapshot is None:
+        return None
+    if tag is not None:
+        snapshot.tag = tag
+    if notes is not None:
+        snapshot.notes = notes
+    await session.flush()
+    return snapshot
+
+
+async def rollback_to_snapshot(
+    session: AsyncSession,
+    pipeline_id: uuid.UUID,
+    target_snapshot_id: uuid.UUID,
+    created_by: uuid.UUID | None = None,
+) -> PipelineSnapshot | None:
+    """Create a new snapshot that restores the graph from a previous snapshot.
+
+    Does not affect in-flight runs (they continue on their original snapshot).
+    Returns the new snapshot, or None if the target snapshot doesn't exist.
+    """
+    target = await get_snapshot(session, target_snapshot_id)
+    if target is None or target.pipeline_id != pipeline_id:
+        return None
+
+    pipeline_result = await session.execute(
+        select(Pipeline).where(Pipeline.id == pipeline_id).with_for_update()
+    )
+    pipeline = pipeline_result.scalar_one_or_none()
+    if pipeline is None:
+        return None
+
+    pipeline.graph_nodes_json = copy.deepcopy(target.graph_json.get("nodes", []))
+    await session.flush()
+
+    new_snapshot = await create_snapshot_from_live_graph(
+        session, pipeline_id=pipeline_id, created_by=created_by
+    )
+    if new_snapshot is not None:
+        new_snapshot.tag = f"rollback-v{target.snapshot_version}"
+        new_snapshot.notes = f"Rollback to snapshot version {target.snapshot_version}"
+        await session.flush()
+
+    return new_snapshot
+
+
+def _compute_node_changes(na: dict, nb: dict) -> dict:
+    changes: dict = {}
+    for key in ("agent_id", "label", "node_type"):
+        if na.get(key) != nb.get(key):
+            changes[key] = {"old": na.get(key), "new": nb.get(key)}
+    for key in ("output_schema_id",):
+        if na.get(key) != nb.get(key):
+            changes["schema_id"] = {"old": na.get(key), "new": nb.get(key)}
+    if na.get("connector_binding") != nb.get("connector_binding"):
+        changes["connector_binding"] = {
+            "old": na.get("connector_binding"),
+            "new": nb.get("connector_binding"),
+        }
+    if na.get("environment_binding") != nb.get("environment_binding"):
+        changes["environment_binding"] = {
+            "old": na.get("environment_binding"),
+            "new": nb.get("environment_binding"),
+        }
+    return changes
+
+
+async def diff_snapshots(
+    session: AsyncSession,
+    snapshot_id_a: uuid.UUID,
+    snapshot_id_b: uuid.UUID,
+) -> dict | None:
+    """Compare two snapshots and return structural differences with per-field changes."""
+    a = await get_snapshot(session, snapshot_id_a)
+    b = await get_snapshot(session, snapshot_id_b)
+    if a is None or b is None:
+        return None
+
+    nodes_a = {n["id"]: n for n in a.graph_json.get("nodes", [])}
+    nodes_b = {n["id"]: n for n in b.graph_json.get("nodes", [])}
+    ids_a = set(nodes_a)
+    ids_b = set(nodes_b)
+
+    added_nodes = [nodes_b[nid] for nid in ids_b - ids_a]
+    removed_nodes = [nodes_a[nid] for nid in ids_a - ids_b]
+    modified_nodes = []
+    for nid in ids_a & ids_b:
+        na = nodes_a[nid]
+        nb = nodes_b[nid]
+        changes = _compute_node_changes(na, nb)
+        if changes:
+            modified_nodes.append({"node_id": nid, "changes": changes})
+
+    edges_a = {}
+    for e in a.graph_json.get("edges", []):
+        key = (e.get("source") or e.get("source_node_id"), e.get("target") or e.get("target_node_id"))
+        edges_a[key] = e
+    edges_b = {}
+    for e in b.graph_json.get("edges", []):
+        key = (e.get("source") or e.get("source_node_id"), e.get("target") or e.get("target_node_id"))
+        edges_b[key] = e
+
+    keys_a = set(edges_a)
+    keys_b = set(edges_b)
+    added_edges = [edges_b[k] for k in keys_b - keys_a]
+    removed_edges = [edges_a[k] for k in keys_a - keys_b]
+    modified_edges = []
+    for k in keys_a & keys_b:
+        ea = edges_a[k]
+        eb = edges_b[k]
+        edge_changes = {}
+        for ekey in ("edge_type", "type"):
+            if ea.get(ekey) != eb.get(ekey):
+                edge_changes["edge_type"] = {"old": ea.get(ekey), "new": eb.get(ekey)}
+        if ea.get("hitl_gate_config") != eb.get("hitl_gate_config"):
+            edge_changes["hitl_gate_config"] = {
+                "old": ea.get("hitl_gate_config"),
+                "new": eb.get("hitl_gate_config"),
+            }
+        if edge_changes:
+            source = k[0]
+            target = k[1]
+            modified_edges.append({
+                "edge": {"source": source, "target": target},
+                "changes": edge_changes,
+            })
+
+    def _rebuild_graph(snapshot: PipelineSnapshot) -> dict:
+        graph = snapshot.graph_json
+        return {
+            "nodes": [
+                {
+                    "id": n["id"],
+                    "agent_id": n.get("agent_id"),
+                    "label": n.get("label"),
+                    "node_type": n.get("node_type", "agent"),
+                    "position": n.get("position", {"x": 0, "y": 0}),
+                    "output_schema_id": n.get("output_schema_id"),
+                    "connector_binding": n.get("connector_binding"),
+                    "environment_binding": n.get("environment_binding"),
+                }
+                for n in graph.get("nodes", [])
+            ],
+            "edges": [
+                {
+                    "id": e.get("id"),
+                    "source_node_id": e.get("source") or e.get("source_node_id", ""),
+                    "target_node_id": e.get("target") or e.get("target_node_id", ""),
+                    "edge_type": e.get("edge_type", e.get("type", "normal")),
+                    "hitl_gate_config": e.get("hitl_gate_config"),
+                }
+                for e in graph.get("edges", [])
+            ],
+        }
+
+    return {
+        "snapshot_a": {
+            "id": str(a.id),
+            "version": a.snapshot_version,
+            "tag": a.tag,
+            "created_at": a.created_at.isoformat() if a.created_at else None,
+            "graph": _rebuild_graph(a),
+        },
+        "snapshot_b": {
+            "id": str(b.id),
+            "version": b.snapshot_version,
+            "tag": b.tag,
+            "created_at": b.created_at.isoformat() if b.created_at else None,
+            "graph": _rebuild_graph(b),
+        },
+        "nodes_added": added_nodes,
+        "nodes_removed": removed_nodes,
+        "nodes_modified": modified_nodes,
+        "edges_added": added_edges,
+        "edges_removed": removed_edges,
+        "edges_modified": modified_edges,
+    }

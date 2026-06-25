@@ -1,0 +1,16 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: config
+  labels:
+    app.kubernetes.io/component: config
+data:
+  MODULO_PUBLIC_URL: "https://modulo.example.com"
+  CORS_ORIGINS: "https://modulo.example.com"
+  MODULO_DB: "postgres"
+  MODULO_LOG_LEVEL: "INFO"
+  MODULO_SECRETS_BACKEND: "fernet"
+  MODULO_PLUGIN_DISCOVERY: "true"
+  MODULO_OTEL_SERVICE_NAME: "modulo"
+  MODULO_DEMO_MODE: "false"
+  MODULO_USERS: ""

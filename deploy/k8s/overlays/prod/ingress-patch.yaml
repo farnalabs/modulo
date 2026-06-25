@@ -1,0 +1,41 @@
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: modulo
+spec:
+  tls:
+    - hosts:
+        - modulo.example.com
+      secretName: modulo-prod-tls
+  rules:
+    - host: modulo.example.com
+      http:
+        paths:
+          - path: /api/
+            pathType: Prefix
+            backend:
+              service:
+                name: backend
+                port:
+                  number: 8000
+          - path: /ws
+            pathType: Prefix
+            backend:
+              service:
+                name: backend
+                port:
+                  number: 8000
+          - path: /mcp
+            pathType: Prefix
+            backend:
+              service:
+                name: backend
+                port:
+                  number: 8000
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: frontend
+                port:
+                  number: 80

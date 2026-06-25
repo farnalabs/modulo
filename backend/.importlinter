@@ -1,0 +1,43 @@
+[importlinter]
+root_package = modulo
+include_external_packages = True
+
+[importlinter:contract:api-does-not-import-langgraph-directly]
+name = API layer uses pipeline_engine, not LangGraph directly
+type = forbidden
+source_modules =
+    modulo.api
+forbidden_modules =
+    langgraph
+ignore_imports =
+    modulo.api.routes.runs -> modulo.core.pipeline_engine.executor
+    modulo.api.routes.webhooks -> modulo.core.pipeline_engine.executor
+
+[importlinter:contract:connectors-do-not-import-api]
+name = Connectors layer is independent of API
+type = forbidden
+source_modules =
+    modulo.connectors
+forbidden_modules =
+    modulo.api
+    modulo.auth
+
+[importlinter:contract:core-does-not-import-modulo-cloud]
+name = Core is zero-coupled to modulo-cloud
+type = forbidden
+source_modules =
+    modulo.core
+    modulo.api
+    modulo.connectors
+forbidden_modules =
+    modulo_cloud
+
+[importlinter:contract:otel-bridge-is-standalone]
+name = OTel bridge does not import core business logic
+type = forbidden
+source_modules =
+    modulo.otel_bridge
+forbidden_modules =
+    modulo.core.pipeline_engine
+    modulo.core.hitl_manager
+    modulo.core.eval_engine

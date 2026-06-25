@@ -1,0 +1,261 @@
+"""Variant group API — A/B test management endpoints."""
+
+import uuid
+from typing import Any
+
+from fastapi import APIRouter, Depends, HTTPException, Query, status
+from pydantic import BaseModel, Field
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from modulo.api.dependencies import get_db_session
+from modulo.auth.dependencies import get_current_user
+from modulo.auth.jwt import AuthenticatedPrincipal
+from modulo.db.crud.variant_group import (
+    check_pipeline_run_quota,
+    create_variant_group,
+    delete_variant_group,
+    get_coverage_gaps,
+    get_prompt_diffs,
+    get_variant_group,
+    list_variant_groups,
+    run_variant_weighted,
+    update_variant_group,
+)
+from modulo.db.rls import set_rls_org
+
+router = APIRouter(prefix="/api/v1/variant-groups", tags=["variant-groups"])
+
+
+class VariantDef(BaseModel):
+    snapshot_id: str | uuid.UUID
+    name: str
+    weight: float = Field(default=1.0, ge=0)
+    run_context_overrides: dict[str, Any] = Field(default_factory=dict)
+    eval_definition_ids: list[str | uuid.UUID] = Field(default_factory=list)
+
+
+class CreateVariantGroupRequest(BaseModel):
+    pipeline_id: uuid.UUID
+    name: str
+    description: str | None = None
+    variants: list[VariantDef] = Field(default_factory=list)
+    selection_strategy: str = "weighted"
+    max_concurrent_runs: int = 5
+    degraded_evals: bool = False
+
+
+class VariantGroupResponse(BaseModel):
+    id: uuid.UUID
+    pipeline_id: uuid.UUID
+    name: str
+    description: str | None
+    variants: list[dict[str, Any]]
+    selection_strategy: str
+    run_count: int
+    max_concurrent_runs: int
+    degraded_evals: bool
+    created_at: str
+    updated_at: str
+
+
+class RunVariantResponse(BaseModel):
+    run_id: uuid.UUID
+    variant_name: str
+    merged_payload: dict[str, Any]
+
+
+class CoverageGap(BaseModel):
+    variant: dict[str, Any]
+    missing_evals: list[str]
+
+
+class PromptDiffEntry(BaseModel):
+    base_variant: dict[str, Any]
+    variant: dict[str, Any]
+    agent_diffs: list[dict[str, Any]]
+
+
+class RunVariantRequest(BaseModel):
+    input_payload: dict[str, Any] = Field(default_factory=dict)
+
+
+def _variant_to_response(group: Any) -> dict[str, Any]:
+    return {
+        "id": group.id,
+        "pipeline_id": group.pipeline_id,
+        "name": group.name,
+        "description": group.description,
+        "variants": group.variants if isinstance(group.variants, list) else [],
+        "selection_strategy": group.selection_strategy,
+        "run_count": group.run_count or 0,
+        "max_concurrent_runs": group.max_concurrent_runs,
+        "degraded_evals": group.degraded_evals,
+        "created_at": group.created_at.isoformat() if group.created_at else "",
+        "updated_at": group.updated_at.isoformat() if group.updated_at else "",
+    }
+
+
+@router.post("", response_model=VariantGroupResponse, status_code=status.HTTP_201_CREATED)
+async def create_group(
+    body: CreateVariantGroupRequest,
+    session: AsyncSession = Depends(get_db_session),
+    principal: AuthenticatedPrincipal = Depends(get_current_user),
+) -> dict[str, Any]:
+    async with session.begin():
+        await set_rls_org(session, principal.organisation_id)
+        group = await create_variant_group(
+            session,
+            org_id=principal.organisation_id,
+            pipeline_id=body.pipeline_id,
+            name=body.name,
+            variants=[v.model_dump() for v in body.variants],
+            description=body.description,
+            selection_strategy=body.selection_strategy,
+            max_concurrent_runs=body.max_concurrent_runs,
+            degraded_evals=body.degraded_evals,
+        )
+    return _variant_to_response(group)
+
+
+@router.get("", response_model=list[VariantGroupResponse])
+async def list_groups(
+    pipeline_id: uuid.UUID | None = Query(None),
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=100),
+    session: AsyncSession = Depends(get_db_session),
+    principal: AuthenticatedPrincipal = Depends(get_current_user),
+) -> list[dict[str, Any]]:
+    async with session.begin():
+        await set_rls_org(session, principal.organisation_id)
+        items, _total = await list_variant_groups(
+            session, pipeline_id=pipeline_id, page=page, page_size=page_size
+        )
+    return [_variant_to_response(g) for g in items]
+
+
+@router.get("/{group_id}", response_model=VariantGroupResponse)
+async def get_group(
+    group_id: uuid.UUID,
+    session: AsyncSession = Depends(get_db_session),
+    principal: AuthenticatedPrincipal = Depends(get_current_user),
+) -> dict[str, Any]:
+    async with session.begin():
+        await set_rls_org(session, principal.organisation_id)
+        group = await get_variant_group(session, group_id)
+    if group is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Variant group not found")
+    return _variant_to_response(group)
+
+
+@router.put("/{group_id}", response_model=VariantGroupResponse)
+async def update_group(
+    group_id: uuid.UUID,
+    body: CreateVariantGroupRequest,
+    session: AsyncSession = Depends(get_db_session),
+    principal: AuthenticatedPrincipal = Depends(get_current_user),
+) -> dict[str, Any]:
+    async with session.begin():
+        await set_rls_org(session, principal.organisation_id)
+        group = await update_variant_group(
+            session,
+            group_id,
+            name=body.name,
+            description=body.description,
+            variants=[v.model_dump() for v in body.variants],
+            selection_strategy=body.selection_strategy,
+            max_concurrent_runs=body.max_concurrent_runs,
+            degraded_evals=body.degraded_evals,
+        )
+    if group is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Variant group not found")
+    return _variant_to_response(group)
+
+
+@router.delete("/{group_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_group(
+    group_id: uuid.UUID,
+    session: AsyncSession = Depends(get_db_session),
+    principal: AuthenticatedPrincipal = Depends(get_current_user),
+) -> None:
+    async with session.begin():
+        await set_rls_org(session, principal.organisation_id)
+        deleted = await delete_variant_group(session, group_id)
+    if not deleted:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Variant group not found")
+    return None
+
+
+@router.post("/{group_id}/run", response_model=RunVariantResponse)
+async def run_variant(
+    group_id: uuid.UUID,
+    body: RunVariantRequest,
+    session: AsyncSession = Depends(get_db_session),
+    principal: AuthenticatedPrincipal = Depends(get_current_user),
+) -> dict[str, Any]:
+    async with session.begin():
+        await set_rls_org(session, principal.organisation_id)
+        group = await get_variant_group(session, group_id)
+        if group is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND, detail="Variant group not found",
+            )
+
+        if not await check_pipeline_run_quota(session, group):
+            raise HTTPException(
+                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                detail="Pipeline concurrent run quota exceeded",
+            )
+
+        result = await run_variant_weighted(
+            session,
+            org_id=principal.organisation_id,
+            group=group,
+            input_payload=body.input_payload,
+            created_by=principal.user_id,
+        )
+
+    if result is None:
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail="No variant selected or quota exceeded",
+        )
+
+    return {
+        "run_id": result["run_id"],
+        "variant_name": result["variant"].get("name", "unknown"),
+        "merged_payload": result["merged_payload"],
+    }
+
+
+@router.get("/{group_id}/coverage-gaps", response_model=list[CoverageGap])
+async def coverage_gaps(
+    group_id: uuid.UUID,
+    session: AsyncSession = Depends(get_db_session),
+    principal: AuthenticatedPrincipal = Depends(get_current_user),
+) -> list[dict[str, Any]]:
+    async with session.begin():
+        await set_rls_org(session, principal.organisation_id)
+        group = await get_variant_group(session, group_id)
+        if group is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND, detail="Variant group not found",
+            )
+        gaps = await get_coverage_gaps(session, group)
+    return gaps
+
+
+@router.get("/{group_id}/prompt-diffs", response_model=list[PromptDiffEntry])
+async def prompt_diffs(
+    group_id: uuid.UUID,
+    session: AsyncSession = Depends(get_db_session),
+    principal: AuthenticatedPrincipal = Depends(get_current_user),
+) -> list[dict[str, Any]]:
+    async with session.begin():
+        await set_rls_org(session, principal.organisation_id)
+        group = await get_variant_group(session, group_id)
+        if group is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND, detail="Variant group not found",
+            )
+        diffs = await get_prompt_diffs(session, group)
+    return diffs

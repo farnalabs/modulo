@@ -1,0 +1,68 @@
+services:
+  db-local:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: modulo
+      POSTGRES_PASSWORD: modulo
+      POSTGRES_DB: modulo
+    ports:
+      - "5434:5432"
+    volumes:
+      - pgdata_local:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U modulo"]
+      interval: 3s
+      timeout: 5s
+      retries: 10
+
+  redis-local:
+    image: redis:7-alpine
+    ports:
+      - "6380:6379"
+
+  otel-collector:
+    profiles:
+      - observability
+    image: otel/opentelemetry-collector-contrib:latest
+    command: ["--config=/etc/otel-collector.yml"]
+    ports:
+      - "4317:4317"
+    volumes:
+      - ./configs/otel-collector.yml:/etc/otel-collector.yml
+      - otel_data:/var/log/otel
+
+  prometheus:
+    profiles:
+      - observability
+    image: prom/prometheus:latest
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--storage.tsdb.retention.time=7d"
+    ports:
+      - "9090:9090"
+    volumes:
+      - prometheus_data:/prometheus
+    depends_on:
+      - otel-collector
+
+  grafana:
+    profiles:
+      - observability
+    image: grafana/grafana:latest
+    ports:
+      - "3000:3000"
+    environment:
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: admin
+    volumes:
+      - ./configs/grafana/datasources:/etc/grafana/provisioning/datasources
+      - ./configs/grafana/dashboards:/etc/grafana/provisioning/dashboards
+      - grafana_data:/var/lib/grafana
+    depends_on:
+      - prometheus
+
+volumes:
+  pgdata_local:
+  otel_data:
+  prometheus_data:
+  grafana_data:

@@ -1,0 +1,48 @@
+name: BDD / E2E Tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  bdd:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          python-version: "3.12.4"
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - name: Install backend deps
+        working-directory: backend
+        run: uv pip install --system -e ".[dev]"
+      - name: Install Playwright browsers
+        working-directory: backend
+        run: playwright install --with-deps chromium
+      - name: Install frontend deps
+        working-directory: frontend
+        run: npm ci
+      - name: Build frontend
+        working-directory: frontend
+        run: npm run build
+      - name: Start backend
+        working-directory: backend
+        run: |
+          uvicorn modulo.api.main:app --host 0.0.0.0 --port 8000 &
+          sleep 3
+        env:
+          DATABASE_URL: "postgresql+asyncpg://modulo:modulo@localhost:5432/modulo"
+          SECRET_KEY: "ci-secret-key"
+          FERNET_KEY: "ci-fernet-key"
+      - name: Run BDD tests
+        working-directory: backend
+        run: |
+          pytest tests/bdd/ \
+            -m e2e \
+            --base-url http://localhost:5173 \
+            -q

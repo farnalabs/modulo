@@ -1,0 +1,8 @@
+rules:
+  - id: must-use-yaml-safe-load
+    pattern: yaml.load(...)
+    message: "Use yaml.safe_load(). yaml.load() executes arbitrary Python."
+    languages: [python]
+    severity: ERROR
+    paths:
+      include: ["backend/src/**"]

@@ -1,0 +1,23 @@
+title = "Modulo Secret Scanning Configuration"
+
+[allowlist]
+description = "Allowlisted files and patterns"
+paths = [
+    "tests/",  # test fixtures may contain fake secrets
+    "docs/grafana/",  # Grafana dashboard JSON
+    "configs/",  # config files
+]
+
+[[patterns]]
+id = "modulo-secret-key"
+description = "Modulo SECRET_KEY/FERNET_KEY exposure"
+regex = '''(?i)(SECRET_KEY|FERNET_KEY)\s*=\s*['\"][^'\"]+['\"]'''
+tags = ["modulo", "credentials"]
+
+[[patterns]]
+id = "modulo-db-url"
+description = "Modulo DATABASE_URL exposure"
+regex = '''(?i)(DATABASE_URL|MODULO_DB)\s*=\s*['\"][^'\"]+['\"]'''
+tags = ["modulo", "database"]
+
+# Include Gitleaks default rules via --no-git flag

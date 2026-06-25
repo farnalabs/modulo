@@ -1,0 +1,48 @@
+name: Integration Tests
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  integration:
+    runs-on: ubuntu-latest
+    services:
+      # Testcontainers spins its own Postgres — this service entry is a
+      # fallback for any tests that use the GH Actions service directly.
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: modulo_test
+          POSTGRES_PASSWORD: modulo_test
+          POSTGRES_DB: modulo_test
+        ports:
+          - 5433:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          python-version: "3.12.4"
+      - name: Install backend deps
+        working-directory: backend
+        run: uv pip install --system -e ".[dev]"
+      - name: Run integration tests
+        working-directory: backend
+        run: |
+          pytest tests/integration/ \
+            -m integration \
+            -n 2 \
+            --cov=src/modulo \
+            --cov-report=xml \
+            -q
+        env:
+          SECRET_KEY: "ci-secret-key"
+          FERNET_KEY: "ci-fernet-key"
+          # Testcontainers manages DATABASE_URL dynamically
+          DATABASE_URL: "postgresql+asyncpg://modulo_test:modulo_test@localhost:5433/modulo_test"
+          TESTCONTAINERS_RYUK_DISABLED: "true"

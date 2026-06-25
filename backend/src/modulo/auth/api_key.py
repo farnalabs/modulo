@@ -1,0 +1,197 @@
+"""API key generation and validation for MCP clients.
+
+Key format:  mk_<8-char-prefix>_<32-char-secret>
+Storage:     lookup_prefix = first 8 chars after "mk_"
+             hashed_secret = SHA-256 hex of full key (constant-time compare)
+
+Alpha scopes:
+  operator — read + trigger + HITL
+  runner   — trigger only
+"""
+
+import hashlib
+import hmac
+import secrets
+import uuid
+from datetime import UTC, datetime
+from typing import Any
+
+from sqlalchemy import select, update
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from modulo.db.models.api_key import OrgApiKey
+
+
+class ApiKeyInvalidError(PermissionError):
+    def __init__(self) -> None:
+        super().__init__("API key is invalid or revoked")
+
+
+class ApiKeyNotFoundError(KeyError):
+    pass
+
+
+_PREFIX_LEN = 8
+_SECRET_LEN = 32  # url-safe base64 chars
+_MK_PREFIX = "mk_"
+
+
+def generate_api_key() -> tuple[str, str, str]:
+    """Return (full_key, lookup_prefix, hashed_secret).
+
+    full_key   — returned once to the caller; never stored
+    lookup_prefix — stored in DB for fast lookup
+    hashed_secret — SHA-256 hex of full_key; stored for verification
+    """
+    rand = secrets.token_urlsafe(_SECRET_LEN)[:_SECRET_LEN]
+    prefix = rand[:_PREFIX_LEN]
+    full_key = f"{_MK_PREFIX}{rand}"
+    hashed = hashlib.sha256(full_key.encode()).hexdigest()
+    return full_key, prefix, hashed
+
+
+def _hash_key(full_key: str) -> str:
+    return hashlib.sha256(full_key.encode()).hexdigest()
+
+
+async def create_api_key(
+    session: AsyncSession,
+    *,
+    org_id: uuid.UUID,
+    name: str,
+    role: str,
+    created_by: uuid.UUID,
+    team_id: uuid.UUID | None = None,
+    expires_at: datetime | None = None,
+) -> tuple[OrgApiKey, str]:
+    """Create an API key. Returns (OrgApiKey, full_key). full_key is shown once."""
+    full_key, prefix, hashed = generate_api_key()
+    key = OrgApiKey(
+        organisation_id=org_id,
+        name=name,
+        lookup_prefix=prefix,
+        hashed_secret=hashed,
+        role=role,
+        created_by=created_by,
+        team_id=team_id,
+        expires_at=expires_at,
+    )
+    session.add(key)
+    await session.flush()
+    return key, full_key
+
+
+async def validate_api_key(
+    session: AsyncSession,
+    full_key: str,
+    org_id: uuid.UUID,
+) -> OrgApiKey:
+    """Validate a full API key.  Raises ApiKeyInvalidError on any failure."""
+    if not full_key.startswith(_MK_PREFIX):
+        raise ApiKeyInvalidError()
+
+    inner = full_key[len(_MK_PREFIX) :]
+    prefix = inner[:_PREFIX_LEN]
+
+    now = datetime.now(UTC)
+    result = await session.execute(
+        select(OrgApiKey).where(
+            OrgApiKey.lookup_prefix == prefix,
+            OrgApiKey.organisation_id == org_id,
+            OrgApiKey.revoked_at.is_(None),
+        )
+    )
+    key = result.scalar_one_or_none()
+    if key is None:
+        raise ApiKeyInvalidError()
+    if key.expires_at is not None and key.expires_at < now:
+        raise ApiKeyInvalidError()
+
+    # Constant-time compare to prevent timing attacks
+    expected = key.hashed_secret
+    actual = _hash_key(full_key)
+    if not hmac.compare_digest(expected, actual):
+        raise ApiKeyInvalidError()
+
+    # Update last_used_at
+    await session.execute(
+        update(OrgApiKey).where(OrgApiKey.id == key.id).values(last_used_at=datetime.now(UTC))
+    )
+    return key
+
+
+async def revoke_api_key(
+    session: AsyncSession,
+    key_id: uuid.UUID,
+    org_id: uuid.UUID,
+) -> bool:
+    result = await session.execute(
+        select(OrgApiKey).where(
+            OrgApiKey.id == key_id,
+            OrgApiKey.organisation_id == org_id,
+            OrgApiKey.revoked_at.is_(None),
+        )
+    )
+    key = result.scalar_one_or_none()
+    if key is None:
+        return False
+    key.revoked_at = datetime.now(UTC)
+    await session.flush()
+    return True
+
+
+def _serialize_key(k: OrgApiKey) -> dict[str, Any]:
+    now = datetime.now(UTC)
+    is_active = k.revoked_at is None and (k.expires_at is None or k.expires_at > now)
+    return {
+        "id": str(k.id),
+        "name": k.name,
+        "role": k.role,
+        "lookup_prefix": f"mk_{k.lookup_prefix}****",
+        "last_used_at": k.last_used_at.isoformat() if k.last_used_at else None,
+        "created_at": k.created_at.isoformat(),
+        "expires_at": k.expires_at.isoformat() if k.expires_at else None,
+        "is_active": is_active,
+    }
+
+
+async def list_api_keys(
+    session: AsyncSession,
+    org_id: uuid.UUID,
+    include_revoked: bool = False,
+) -> list[dict[str, Any]]:
+    stmt = select(OrgApiKey).where(OrgApiKey.organisation_id == org_id)
+    if not include_revoked:
+        stmt = stmt.where(OrgApiKey.revoked_at.is_(None))
+    stmt = stmt.order_by(OrgApiKey.created_at.desc())
+    result = await session.execute(stmt)
+    keys = list(result.scalars())
+    return [_serialize_key(k) for k in keys]
+
+
+async def update_api_key(
+    session: AsyncSession,
+    key_id: uuid.UUID,
+    org_id: uuid.UUID,
+    *,
+    name: str | None = None,
+    role: str | None = None,
+    expires_at: datetime | None = None,
+) -> OrgApiKey | None:
+    stmt = select(OrgApiKey).where(
+        OrgApiKey.id == key_id,
+        OrgApiKey.organisation_id == org_id,
+        OrgApiKey.revoked_at.is_(None),
+    )
+    result = await session.execute(stmt)
+    key = result.scalar_one_or_none()
+    if key is None:
+        return None
+    if name is not None:
+        key.name = name
+    if role is not None:
+        key.role = role
+    if expires_at is not None:
+        key.expires_at = expires_at
+    await session.flush()
+    return key

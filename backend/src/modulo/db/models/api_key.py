@@ -1,0 +1,30 @@
+import uuid
+from datetime import datetime
+
+from sqlalchemy import CheckConstraint, DateTime, ForeignKey, String, UniqueConstraint
+from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy.orm import Mapped, mapped_column
+
+from modulo.db.models.base import OrgScoped
+
+
+class OrgApiKey(OrgScoped):
+    __tablename__ = "org_api_keys"
+    __table_args__ = (
+        CheckConstraint("role IN ('operator', 'runner')", name="ck_org_api_keys_role"),
+        UniqueConstraint("lookup_prefix", name="uq_org_api_keys_lookup_prefix"),
+    )
+
+    name: Mapped[str] = mapped_column(String(255), nullable=False)
+    lookup_prefix: Mapped[str] = mapped_column(String(8), nullable=False)
+    hashed_secret: Mapped[str] = mapped_column(String(64), nullable=False)
+    role: Mapped[str] = mapped_column(String(20), nullable=False)
+    team_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("teams.id", ondelete="CASCADE")
+    )
+    created_by: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("users.id", ondelete="RESTRICT"), nullable=False
+    )
+    last_used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))

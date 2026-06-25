@@ -1,0 +1,20 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+resources:
+  - ../../base
+
+patches:
+  - path: backend-patch.yaml
+  - path: frontend-patch.yaml
+  - path: ingress-patch.yaml
+
+namespace: modulo-dev
+
+configMapGenerator:
+  - name: config
+    behavior: merge
+    literals:
+      - MODULO_PUBLIC_URL=https://dev.example.com
+      - CORS_ORIGINS=https://dev.example.com
+      - MODULO_DEMO_MODE=true

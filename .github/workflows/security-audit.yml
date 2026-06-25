@@ -1,0 +1,29 @@
+name: Security Audit
+on:
+  schedule:
+    - cron: '0 6 * * 1'
+  pull_request:
+    paths:
+      - 'backend/pyproject.toml'
+      - 'backend/uv.lock'
+      - 'frontend/package.json'
+      - 'frontend/package-lock.json'
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - name: Install pip-audit
+        run: pip install pip-audit
+      - name: pip-audit (backend)
+        run: pip-audit --project=backend/
+      - name: npm audit (frontend)
+        run: cd frontend && npm audit

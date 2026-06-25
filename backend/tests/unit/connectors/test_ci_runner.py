@@ -1,0 +1,502 @@
+"""Unit tests for CI-runner connectors using test doubles."""
+
+import httpx
+import pytest
+import respx
+
+from modulo.connectors.base import CIRunStatus, ConnectorType
+from modulo.connectors.ci_runner import GitHubActionsCIRunner, GitLabCIRunner
+from modulo.connectors.ci_runner.github_actions import _GitHubActionsTestDouble
+from modulo.connectors.ci_runner.gitlab_ci import _GitLabCITestDouble
+
+# ---------------------------------------------------------------------------
+# Fixtures
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture()
+def gh_runner():
+    return GitHubActionsCIRunner(token="ghp_test")
+
+
+@pytest.fixture()
+def gl_runner():
+    return GitLabCIRunner(token="glpat_test")
+
+
+@pytest.fixture()
+def gh_double():
+    return _GitHubActionsTestDouble()
+
+
+@pytest.fixture()
+def gl_double():
+    return _GitLabCITestDouble()
+
+
+# ---------------------------------------------------------------------------
+# Connector type identity
+# ---------------------------------------------------------------------------
+
+
+def test_github_actions_connector_type(gh_runner):
+    assert gh_runner.connector_type == ConnectorType.CI_RUNNER
+
+
+def test_gitlab_ci_connector_type(gl_runner):
+    assert gl_runner.connector_type == ConnectorType.CI_RUNNER
+
+
+# ---------------------------------------------------------------------------
+# GitHub Actions — health check (respx)
+# ---------------------------------------------------------------------------
+
+
+@respx.mock
+async def test_gh_health_check_ok(gh_runner):
+    respx.get("https://api.github.com/user").mock(
+        return_value=httpx.Response(200, json={"login": "octocat"})
+    )
+    result = await gh_runner.health_check()
+    assert result.ok is True
+
+
+@respx.mock
+async def test_gh_health_check_fail(gh_runner):
+    respx.get("https://api.github.com/user").mock(
+        return_value=httpx.Response(401, text="Unauthorized")
+    )
+    result = await gh_runner.health_check()
+    assert result.ok is False
+    assert "401" in result.detail
+
+
+# ---------------------------------------------------------------------------
+# GitHub Actions — trigger_run (respx)
+# ---------------------------------------------------------------------------
+
+
+@respx.mock
+async def test_gh_trigger_run_workflow_dispatch(gh_runner):
+    respx.post("https://api.github.com/repos/owner/repo/actions/workflows/ci.yml/dispatches").mock(
+        return_value=httpx.Response(204)
+    )
+    respx.get("https://api.github.com/repos/owner/repo/actions/runs").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "workflow_runs": [
+                    {
+                        "id": 12345,
+                        "workflow_id": "ci.yml",
+                        "status": "queued",
+                        "html_url": "https://github.com/owner/repo/actions/runs/12345",
+                        "head_branch": "main",
+                        "head_sha": "abc123",
+                        "created_at": "2026-01-01T00:00:00Z",
+                        "updated_at": "2026-01-01T00:00:00Z",
+                        "actor": {"login": "octocat"},
+                    }
+                ]
+            },
+        )
+    )
+    run = await gh_runner.trigger_run(
+        pipeline_id="owner/repo/ci.yml",
+        branch="main",
+        variables={"KEY": "value"},
+    )
+    assert run.pipeline_id == "ci.yml"
+    assert run.status == CIRunStatus.QUEUED
+
+
+# ---------------------------------------------------------------------------
+# GitHub Actions — get_run_status (respx)
+# ---------------------------------------------------------------------------
+
+
+@respx.mock
+async def test_gh_get_run_status_success(gh_runner):
+    respx.get("https://api.github.com/repos/owner/repo/actions/runs/12345").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "id": 12345,
+                "workflow_id": "ci.yml",
+                "status": "completed",
+                "conclusion": "success",
+                "html_url": "https://github.com/owner/repo/actions/runs/12345",
+                "head_branch": "main",
+                "head_sha": "abc123",
+                "created_at": "2026-01-01T00:00:00Z",
+                "updated_at": "2026-01-01T00:01:00Z",
+                "actor": {"login": "octocat"},
+            },
+        )
+    )
+    run = await gh_runner.get_run_status("owner/repo/12345")
+    assert run.status == CIRunStatus.SUCCESS
+    assert run.id == "12345"
+
+
+@respx.mock
+async def test_gh_get_run_status_failure(gh_runner):
+    respx.get("https://api.github.com/repos/owner/repo/actions/runs/12345").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "id": 12345,
+                "workflow_id": "ci.yml",
+                "status": "completed",
+                "conclusion": "failure",
+                "html_url": "https://github.com/owner/repo/actions/runs/12345",
+                "head_branch": "main",
+                "head_sha": "abc123",
+                "created_at": "2026-01-01T00:00:00Z",
+                "updated_at": "2026-01-01T00:01:00Z",
+                "actor": {"login": "octocat"},
+            },
+        )
+    )
+    run = await gh_runner.get_run_status("owner/repo/12345")
+    assert run.status == CIRunStatus.FAILURE
+
+
+@respx.mock
+async def test_gh_get_run_status_in_progress(gh_runner):
+    respx.get("https://api.github.com/repos/owner/repo/actions/runs/12345").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "id": 12345,
+                "workflow_id": "ci.yml",
+                "status": "in_progress",
+                "html_url": "https://github.com/owner/repo/actions/runs/12345",
+                "head_branch": "main",
+                "head_sha": "abc123",
+                "actor": {"login": "octocat"},
+            },
+        )
+    )
+    run = await gh_runner.get_run_status("owner/repo/12345")
+    assert run.status == CIRunStatus.IN_PROGRESS
+
+
+@respx.mock
+async def test_gh_get_run_status_invalid_id_raises(gh_runner):
+    with pytest.raises(ValueError, match="Invalid run_id format"):
+        await gh_runner.get_run_status("bogus")
+
+
+# ---------------------------------------------------------------------------
+# GitHub Actions — get_run_logs (respx)
+# ---------------------------------------------------------------------------
+
+
+@respx.mock
+async def test_gh_get_run_logs(gh_runner):
+    log_text = "line1\nline2\nline3\n"
+    respx.get("https://api.github.com/repos/owner/repo/actions/runs/12345/logs").mock(
+        return_value=httpx.Response(200, text=log_text)
+    )
+    logs = await gh_runner.get_run_logs("owner/repo/12345")
+    assert len(logs.lines) == 3
+    assert logs.lines[0] == "line1"
+
+
+# ---------------------------------------------------------------------------
+# GitHub Actions — list_runs (respx)
+# ---------------------------------------------------------------------------
+
+
+@respx.mock
+async def test_gh_list_runs(gh_runner):
+    respx.get("https://api.github.com/repos/owner/repo/actions/runs").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "workflow_runs": [
+                    {
+                        "id": 1,
+                        "workflow_id": "ci.yml",
+                        "status": "completed",
+                        "conclusion": "success",
+                        "html_url": "",
+                        "head_branch": "main",
+                        "head_sha": "abc",
+                        "actor": {"login": "octocat"},
+                    },
+                    {
+                        "id": 2,
+                        "workflow_id": "ci.yml",
+                        "status": "completed",
+                        "conclusion": "failure",
+                        "html_url": "",
+                        "head_branch": "main",
+                        "head_sha": "def",
+                        "actor": {"login": "octocat"},
+                    },
+                ]
+            },
+        )
+    )
+    runs = await gh_runner.list_runs(pipeline_id="owner/repo")
+    assert len(runs) == 2
+    assert runs[0].status == CIRunStatus.SUCCESS
+    assert runs[1].status == CIRunStatus.FAILURE
+
+
+# ---------------------------------------------------------------------------
+# GitLab CI — health check (respx)
+# ---------------------------------------------------------------------------
+
+
+@respx.mock
+async def test_gl_health_check_ok(gl_runner):
+    respx.get("https://gitlab.com/api/v4/projects?per_page=1").mock(
+        return_value=httpx.Response(200, json=[{"id": 1}])
+    )
+    result = await gl_runner.health_check()
+    assert result.ok is True
+
+
+@respx.mock
+async def test_gl_health_check_fail(gl_runner):
+    respx.get("https://gitlab.com/api/v4/projects?per_page=1").mock(
+        return_value=httpx.Response(401, text="Unauthorized")
+    )
+    result = await gl_runner.health_check()
+    assert result.ok is False
+    assert "Authentication failed" in result.detail
+
+
+# ---------------------------------------------------------------------------
+# GitLab CI — trigger_run (respx)
+# ---------------------------------------------------------------------------
+
+
+@respx.mock
+async def test_gl_trigger_run(gl_runner):
+    respx.post("https://gitlab.com/api/v4/projects/12345/pipeline").mock(
+        return_value=httpx.Response(
+            201,
+            json={
+                "id": 67890,
+                "project_id": "12345",
+                "status": "pending",
+                "web_url": "https://gitlab.com/owner/repo/-/pipelines/67890",
+                "ref": "main",
+                "sha": "abc123",
+                "created_at": "2026-01-01T00:00:00Z",
+                "updated_at": "2026-01-01T00:00:00Z",
+                "user": {"username": "developer"},
+            },
+        )
+    )
+    run = await gl_runner.trigger_run(
+        pipeline_id="12345",
+        branch="main",
+        variables={"KEY": "value"},
+    )
+    assert run.status == CIRunStatus.PENDING
+    assert run.pipeline_id == "12345"
+
+
+# ---------------------------------------------------------------------------
+# GitLab CI — get_run_status (respx)
+# ---------------------------------------------------------------------------
+
+
+@respx.mock
+async def test_gl_get_run_status(gl_runner):
+    respx.get("https://gitlab.com/api/v4/projects/12345/pipelines/67890").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "id": 67890,
+                "project_id": 12345,
+                "status": "running",
+                "web_url": "https://gitlab.com/owner/repo/-/pipelines/67890",
+                "ref": "main",
+                "sha": "abc123",
+                "created_at": "2026-01-01T00:00:00Z",
+                "updated_at": "2026-01-01T00:00:00Z",
+                "user": {"username": "developer"},
+            },
+        )
+    )
+    run = await gl_runner.get_run_status("12345/67890")
+    assert run.status == CIRunStatus.IN_PROGRESS
+
+
+@respx.mock
+async def test_gl_get_run_status_invalid_id_raises(gl_runner):
+    with pytest.raises(ValueError, match="Invalid run_id format"):
+        await gl_runner.get_run_status("bogus")
+
+
+# ---------------------------------------------------------------------------
+# GitLab CI — get_run_logs (respx)
+# ---------------------------------------------------------------------------
+
+
+@respx.mock
+async def test_gl_get_run_logs(gl_runner):
+    respx.get("https://gitlab.com/api/v4/projects/12345/pipelines/67890/jobs").mock(
+        return_value=httpx.Response(
+            200,
+            json=[
+                {"id": 111, "name": "build"},
+                {"id": 222, "name": "test"},
+            ],
+        )
+    )
+    respx.get("https://gitlab.com/api/v4/projects/12345/jobs/111/trace").mock(
+        return_value=httpx.Response(200, text="Build log line 1\nBuild log line 2\n")
+    )
+    respx.get("https://gitlab.com/api/v4/projects/12345/jobs/222/trace").mock(
+        return_value=httpx.Response(200, text="Test log line 1\nTest log line 2\n")
+    )
+    logs = await gl_runner.get_run_logs("12345/67890")
+    assert len(logs.lines) >= 6
+    assert any("build" in line.lower() for line in logs.lines)
+    assert any("Build log line 1" in line for line in logs.lines)
+
+
+# ---------------------------------------------------------------------------
+# GitLab CI — list_runs (respx)
+# ---------------------------------------------------------------------------
+
+
+@respx.mock
+async def test_gl_list_runs(gl_runner):
+    respx.get("https://gitlab.com/api/v4/projects/12345/pipelines").mock(
+        return_value=httpx.Response(
+            200,
+            json=[
+                {
+                    "id": 1,
+                    "project_id": 12345,
+                    "status": "success",
+                    "web_url": "",
+                    "ref": "main",
+                    "sha": "abc",
+                    "user": {"username": "dev"},
+                },
+                {
+                    "id": 2,
+                    "project_id": 12345,
+                    "status": "failed",
+                    "web_url": "",
+                    "ref": "main",
+                    "sha": "def",
+                    "user": {"username": "dev"},
+                },
+            ],
+        )
+    )
+    runs = await gl_runner.list_runs(pipeline_id="12345")
+    assert len(runs) == 2
+    assert runs[0].status == CIRunStatus.SUCCESS
+    assert runs[1].status == CIRunStatus.FAILURE
+
+
+# ---------------------------------------------------------------------------
+# GitHub Actions — test double
+# ---------------------------------------------------------------------------
+
+
+async def test_gh_double_trigger_run(gh_double):
+    run = await gh_double.trigger_run(
+        pipeline_id="owner/repo/ci.yml",
+        branch="main",
+        variables={"KEY": "value"},
+    )
+    assert run.status == CIRunStatus.QUEUED
+    assert len(gh_double._triggered) == 1
+
+
+async def test_gh_double_get_run_status(gh_double):
+    run = await gh_double.get_run_status("owner/repo/12345")
+    assert run.status == CIRunStatus.QUEUED
+
+
+async def test_gh_double_get_run_logs(gh_double):
+    gh_double._run_logs = ["line1", "line2"]
+    logs = await gh_double.get_run_logs("owner/repo/12345")
+    assert logs.lines == ["line1", "line2"]
+
+
+async def test_gh_double_list_runs(gh_double):
+    runs = await gh_double.list_runs(pipeline_id="owner/repo/ci.yml")
+    assert len(runs) == 1
+    assert runs[0].status == CIRunStatus.SUCCESS
+
+
+async def test_gh_double_health_check(gh_double):
+    result = await gh_double.health_check()
+    assert result.ok is True
+
+
+# ---------------------------------------------------------------------------
+# GitLab CI — test double
+# ---------------------------------------------------------------------------
+
+
+async def test_gl_double_trigger_run(gl_double):
+    run = await gl_double.trigger_run(
+        pipeline_id="12345",
+        branch="main",
+        variables={"KEY": "value"},
+    )
+    assert run.status == CIRunStatus.QUEUED
+    assert len(gl_double._triggered) == 1
+
+
+async def test_gl_double_get_run_status(gl_double):
+    run = await gl_double.get_run_status("12345/67890")
+    assert run.status == CIRunStatus.QUEUED
+
+
+async def test_gl_double_get_run_logs(gl_double):
+    gl_double._run_logs = ["line1", "line2"]
+    logs = await gl_double.get_run_logs("12345/67890")
+    assert logs.lines == ["line1", "line2"]
+
+
+async def test_gl_double_list_runs(gl_double):
+    runs = await gl_double.list_runs(pipeline_id="12345")
+    assert len(runs) == 1
+    assert runs[0].status == CIRunStatus.SUCCESS
+
+
+async def test_gl_double_health_check(gl_double):
+    result = await gl_double.health_check()
+    assert result.ok is True
+
+
+# ---------------------------------------------------------------------------
+# CIRunStatus StrEnum
+# ---------------------------------------------------------------------------
+
+
+def test_ci_run_status_values():
+    assert CIRunStatus.PENDING.value == "pending"
+    assert CIRunStatus.SUCCESS.value == "success"
+    assert CIRunStatus.FAILURE.value == "failure"
+    assert CIRunStatus.UNKNOWN.value == "unknown"
+
+
+# ---------------------------------------------------------------------------
+# Base class — query/write not implemented
+# ---------------------------------------------------------------------------
+
+
+async def test_ci_runner_query_not_implemented(gh_runner):
+    with pytest.raises(NotImplementedError):
+        await gh_runner.query(None)  # type: ignore[arg-type]
+
+
+async def test_ci_runner_write_not_implemented(gh_runner):
+    with pytest.raises(NotImplementedError):
+        await gh_runner.write(None)  # type: ignore[arg-type]
