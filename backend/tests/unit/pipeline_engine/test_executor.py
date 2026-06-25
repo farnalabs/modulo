@@ -558,6 +558,125 @@ async def test_execute_sets_cancelled_on_run_cancelled_error():
 
 
 # ---------------------------------------------------------------------------
+# PipelineExecutor.execute — EvalBlockedError → eval_failed
+# ---------------------------------------------------------------------------
+
+
+async def _bypass_capacity(mock_self, *, run_id, org_id, pipeline_id, max_concurrent, lock_wait_seconds):
+    """Return a run with status='running' to bypass the capacity check."""
+    run = MagicMock()
+    run.status = "running"
+    return run
+
+
+async def test_execute_sets_eval_failed_on_eval_blocked_error():
+    from modulo.core.eval_engine import EvalBlockedError
+
+    run = _make_run()
+    final_run = _make_run(run_id=run.id, status="eval_failed")
+    snapshot = _make_snapshot()
+    session = _make_session(snapshot)
+    factory = _make_session_factory(session)
+    compiled = _mock_compiled_raising(
+        EvalBlockedError("test-eval", "score 0.3 below threshold 0.8")
+    )
+    registry = _mock_registry()
+
+    with (
+        patch("modulo.core.pipeline_engine.executor.async_sessionmaker", return_value=factory),
+        patch("modulo.core.pipeline_engine.executor.get_run", return_value=run),
+        patch(
+            "modulo.core.pipeline_engine.executor.update_run_status",
+            return_value=final_run,
+        ) as mock_update,
+        patch("modulo.core.pipeline_engine.executor.set_rls_org"),
+        patch.object(PipelineExecutor, "_wait_for_capacity_or_fail", _bypass_capacity),
+        patch("modulo.core.pipeline_engine.executor.get_or_compile", return_value=compiled),
+        patch("modulo.core.pipeline_engine.executor.get_registry", return_value=registry),
+    ):
+        executor = PipelineExecutor(MagicMock())
+        result = await executor.execute(
+            run_id=run.id, org_id=uuid.uuid4(), input_payload={}
+        )
+
+    assert result is final_run
+    calls = mock_update.call_args_list
+    assert calls[0].args[2] == "eval_failed"
+    assert calls[0].kwargs.get("error_code") == "eval_blocked"
+
+
+async def test_execute_publishes_run_failed_on_eval_blocked():
+    from modulo.core.eval_engine import EvalBlockedError
+
+    run = _make_run()
+    final_run = _make_run(run_id=run.id, status="eval_failed")
+    snapshot = _make_snapshot()
+    session = _make_session(snapshot)
+    factory = _make_session_factory(session)
+    compiled = _mock_compiled_raising(
+        EvalBlockedError("test-eval", "regex mismatch")
+    )
+    registry = _mock_registry()
+
+    with (
+        patch("modulo.core.pipeline_engine.executor.async_sessionmaker", return_value=factory),
+        patch("modulo.core.pipeline_engine.executor.get_run", return_value=run),
+        patch(
+            "modulo.core.pipeline_engine.executor.update_run_status",
+            return_value=final_run,
+        ),
+        patch("modulo.core.pipeline_engine.executor.set_rls_org"),
+        patch.object(PipelineExecutor, "_wait_for_capacity_or_fail", _bypass_capacity),
+        patch("modulo.core.pipeline_engine.executor.get_or_compile", return_value=compiled),
+        patch("modulo.core.pipeline_engine.executor.get_registry", return_value=registry),
+    ):
+        executor = PipelineExecutor(MagicMock())
+        await executor.execute(run_id=run.id, org_id=uuid.uuid4(), input_payload={})
+
+    broker = registry.get_or_create.return_value
+    published_events = [
+        call.args for call in broker.publish.call_args_list if call.args[0] == "run_failed"
+    ]
+    assert len(published_events) == 1
+    payload = published_events[0][1]
+    assert payload["error"] == "eval_blocked"
+    assert "regex mismatch" in payload["detail"]
+
+
+async def test_execute_eval_failed_stores_error_detail():
+    from modulo.core.eval_engine import EvalBlockedError
+
+    run = _make_run()
+    final_run = _make_run(run_id=run.id, status="eval_failed")
+    snapshot = _make_snapshot()
+    session = _make_session(snapshot)
+    factory = _make_session_factory(session)
+    compiled = _mock_compiled_raising(
+        EvalBlockedError("quality-check", "failed llm judge")
+    )
+    registry = _mock_registry()
+
+    with (
+        patch("modulo.core.pipeline_engine.executor.async_sessionmaker", return_value=factory),
+        patch("modulo.core.pipeline_engine.executor.get_run", return_value=run),
+        patch(
+            "modulo.core.pipeline_engine.executor.update_run_status",
+            return_value=final_run,
+        ) as mock_update,
+        patch("modulo.core.pipeline_engine.executor.set_rls_org"),
+        patch.object(PipelineExecutor, "_wait_for_capacity_or_fail", _bypass_capacity),
+        patch("modulo.core.pipeline_engine.executor.get_or_compile", return_value=compiled),
+        patch("modulo.core.pipeline_engine.executor.get_registry", return_value=registry),
+    ):
+        executor = PipelineExecutor(MagicMock())
+        await executor.execute(run_id=run.id, org_id=uuid.uuid4(), input_payload={})
+
+    calls = mock_update.call_args_list
+    assert calls[0].kwargs.get("error_detail") is not None
+    assert "failed llm judge" in calls[0].kwargs["error_detail"]
+
+
+# ---------------------------------------------------------------------------
 # PipelineExecutor.execute — graph compilation failure
 # ---------------------------------------------------------------------------
 

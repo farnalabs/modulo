@@ -36,7 +36,7 @@ class Run(OrgScoped):
         ),
         CheckConstraint(
             "status IN ('pending', 'running', 'awaiting_human', 'claimed', "
-            "'waiting_for_lock', 'complete', 'failed', 'cancelled')",
+            "'waiting_for_lock', 'complete', 'failed', 'cancelled', 'eval_failed')",
             name="ck_runs_status",
         ),
     )

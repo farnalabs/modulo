@@ -38,7 +38,7 @@ from modulo.settings import get_settings
 _log = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/v1/runs", tags=["runs"])
 
-_TERMINAL_STATUSES = frozenset({"complete", "failed", "cancelled"})
+_TERMINAL_STATUSES = frozenset({"complete", "failed", "cancelled", "eval_failed"})
 _NAMESPACE_TRACE = uuid.UUID("6ba7b810-9dad-11d1-80b4-00c04fd430c8")
 
 

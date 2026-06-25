@@ -7,7 +7,7 @@ Responsibilities:
   - Consume astream_events() and publish to the per-run RunEventBroker
   - Set up AsyncPostgresSaver as LangGraph checkpointer
   - Stream graph execution, updating Run status on transitions
-  - Mark run complete/failed/cancelled/awaiting_human in DB
+  - Mark run complete/failed/cancelled/awaiting_human/eval_failed in DB
 
 Handles NodeInterrupt by transitioning the run to awaiting_human.
 Does NOT handle WebSocket fan-out, HITL claim/approve/reject, or webhook triggers (phases 3+).
@@ -436,11 +436,11 @@ class PipelineExecutor:
             if self._checkpointer_conn_string:
                 async with _checkpointer_scope(self._checkpointer_conn_string) as saver:
                     compiled.checkpointer = saver
-                    final_status, error_code = await self._stream_graph(
+                    final_status, error_code, error_detail = await self._stream_graph(
                         compiled, initial_state, config, node_ids, broker, run_id
                     )
             else:
-                final_status, error_code = await self._stream_graph(
+                final_status, error_code, error_detail = await self._stream_graph(
                     compiled, initial_state, config, node_ids, broker, run_id
                 )
         except Exception as exc:
@@ -476,7 +476,7 @@ class PipelineExecutor:
         async with self._session_factory() as session:
             async with session.begin():
                 await set_rls_org(session, org_id)
-                final_run = await update_run_status(session, run_id, final_status, error_code=error_code)
+                final_run = await update_run_status(session, run_id, final_status, error_code=error_code, error_detail=error_detail)
 
         if final_run is None:
             raise RunNotFoundError(run_id)
@@ -572,10 +572,10 @@ class PipelineExecutor:
         node_ids: set[str],
         broker: RunEventBroker,
         run_id: uuid.UUID,
-    ) -> tuple[str, str | None]:
+    ) -> tuple[str, str | None, str | None]:
         """Stream graph execution, mapping events to broker publishes.
 
-        Returns (final_status, error_code).
+        Returns (final_status, error_code, error_detail).
         """
         try:
             async for lg_event in compiled.astream_events(initial_state, config, version="v2"):
@@ -584,18 +584,18 @@ class PipelineExecutor:
                     event_type, payload = mapped
                     broker.publish(event_type, payload)
             broker.publish("run_completed", {})
-            return "complete", None
+            return "complete", None, None
         except NodeInterrupt as exc:
             interrupts = exc.args[0] if exc.args else []
             gate_payload = interrupts[0].value if interrupts else {}
             broker.publish("hitl_awaiting", {"gate_payload": gate_payload})
-            return "awaiting_human", None
+            return "awaiting_human", None, None
         except EvalBlockedError as exc:
             broker.publish("run_failed", {"error": "eval_blocked", "detail": str(exc)})
-            return "failed", "eval_blocked"
+            return "eval_failed", "eval_blocked", str(exc)
         except RunCancelledError:
             broker.publish("run_cancelled", {})
-            return "cancelled", None
+            return "cancelled", None, None
         except Exception as exc:
             broker.publish("run_failed", {"error": type(exc).__name__})
-            return "failed", type(exc).__name__
+            return "failed", type(exc).__name__, None

@@ -129,7 +129,7 @@ async def update_run_status(
     run.status = status
     if status == "running" and run.started_at is None:
         run.started_at = datetime.now(UTC)
-    if status in ("complete", "failed", "cancelled"):
+    if status in ("complete", "failed", "cancelled", "eval_failed"):
         run.completed_at = datetime.now(UTC)
     if error_code is not None:
         run.error_code = error_code
