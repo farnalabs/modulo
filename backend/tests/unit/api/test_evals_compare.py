@@ -121,11 +121,13 @@ class TestEvalCompare:
 
         mock_session.execute.side_effect = [
             _make_result(scalar_one_value=None),  # set_rls_org
+            _make_result(scalar_value=None),      # set_rls_user_context (user_id)
+            _make_result(scalar_value=None),      # set_rls_user_context (org_role)
             _make_result(scalar_one_value=run_a),
             _make_result(scalar_one_value=run_b),
             _make_result(all_value=[result_a]),
             _make_result(all_value=[result_b]),
-            _make_result(all_value=[eval_def]),  # eval defs query (no set_rls_org in 2nd begin)
+            _make_result(all_value=[eval_def]),
         ]
 
         async def override_session() -> AsyncGenerator[AsyncMock, None]:
@@ -151,7 +153,9 @@ class TestEvalCompare:
         mock_session = _make_mock_session()
 
         mock_session.execute.side_effect = [
-            _make_result(scalar_one_value=None),
+            _make_result(scalar_one_value=None),  # set_rls_org
+            _make_result(scalar_value=None),      # set_rls_user_context (user_id)
+            _make_result(scalar_value=None),      # set_rls_user_context (org_role)
             _make_result(scalar_one_value=None),
         ]
 
@@ -172,7 +176,9 @@ class TestEvalCompare:
         run_b = _make_row(id=_RUN_B, created_at=_DT)
 
         mock_session.execute.side_effect = [
-            _make_result(scalar_one_value=None),
+            _make_result(scalar_one_value=None),  # set_rls_org
+            _make_result(scalar_value=None),      # set_rls_user_context (user_id)
+            _make_result(scalar_value=None),      # set_rls_user_context (org_role)
             _make_result(scalar_one_value=run_a),
             _make_result(scalar_one_value=run_b),
             _make_result(all_value=[]),
@@ -212,7 +218,9 @@ class TestEvalCoverage:
         eval_def = _make_row(id=_EVAL_DEF_1, node_id=_NODE_1)
 
         mock_session.execute.side_effect = [
-            _make_result(scalar_one_value=None),
+            _make_result(scalar_one_value=None),  # set_rls_org
+            _make_result(scalar_value=None),      # set_rls_user_context (user_id)
+            _make_result(scalar_value=None),      # set_rls_user_context (org_role)
             _make_result(scalar_one_value=pipeline),
             _make_result(all_value=[eval_def]),
         ]
@@ -235,7 +243,9 @@ class TestEvalCoverage:
         mock_session = _make_mock_session()
 
         mock_session.execute.side_effect = [
-            _make_result(scalar_one_value=None),
+            _make_result(scalar_one_value=None),  # set_rls_org
+            _make_result(scalar_value=None),      # set_rls_user_context (user_id)
+            _make_result(scalar_value=None),      # set_rls_user_context (org_role)
             _make_result(scalar_one_value=None),
         ]
 
@@ -256,7 +266,9 @@ class TestEvalCoverage:
         )
 
         mock_session.execute.side_effect = [
-            _make_result(scalar_one_value=None),
+            _make_result(scalar_one_value=None),  # set_rls_org
+            _make_result(scalar_value=None),      # set_rls_user_context (user_id)
+            _make_result(scalar_value=None),      # set_rls_user_context (org_role)
             _make_result(scalar_one_value=pipeline),
             _make_result(all_value=[]),
         ]
@@ -289,9 +301,10 @@ class TestEvalFromRun:
         )
 
         mock_session.execute.side_effect = [
-            _make_result(scalar_one_value=None),
+            _make_result(scalar_one_value=None),  # set_rls_org
+            _make_result(scalar_value=None),      # set_rls_user_context (user_id)
+            _make_result(scalar_value=None),      # set_rls_user_context (org_role)
             _make_result(scalar_one_value=run),
-            _make_result(scalar_one_value=None),
         ]
         mock_session.add = MagicMock()
         mock_session.flush = AsyncMock()
@@ -331,7 +344,9 @@ class TestEvalFromRun:
         mock_session = _make_mock_session()
 
         mock_session.execute.side_effect = [
-            _make_result(scalar_one_value=None),
+            _make_result(scalar_one_value=None),  # set_rls_org
+            _make_result(scalar_value=None),      # set_rls_user_context (user_id)
+            _make_result(scalar_value=None),      # set_rls_user_context (org_role)
             _make_result(scalar_one_value=None),
         ]
 
@@ -358,9 +373,10 @@ class TestEvalFromRun:
             )
 
             mock_session.execute.side_effect = [
-                _make_result(scalar_one_value=None),
+                _make_result(scalar_one_value=None),  # set_rls_org
+                _make_result(scalar_value=None),      # set_rls_user_context (user_id)
+            _make_result(scalar_value=None),      # set_rls_user_context (org_role)
                 _make_result(scalar_one_value=run),
-                _make_result(scalar_one_value=None),
             ]
             mock_session.add = MagicMock()
             mock_session.flush = AsyncMock()

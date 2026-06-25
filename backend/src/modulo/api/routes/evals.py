@@ -23,7 +23,7 @@ from modulo.db.models.eval_definition import EvalDefinition
 from modulo.db.models.eval_result import EvalResult
 from modulo.db.models.pipeline import Pipeline
 from modulo.db.models.run import Run
-from modulo.db.rls import set_rls_org
+from modulo.db.rls import set_rls_org, set_rls_user_context
 
 router = APIRouter(prefix="/api/v1", tags=["evals"])
 
@@ -40,6 +40,8 @@ class CreateEvalRequest(BaseModel):
     eval_type: str = Field(pattern=r"^(llm_judge|regex|json_schema|custom_function)$")
     config_json: dict[str, Any] = {}
     failure_behaviour: str = "warn"
+    pass_threshold: float | None = None
+    suite_id: str | None = None
 
 
 class EvalDefinitionResponse(BaseModel):
@@ -50,6 +52,8 @@ class EvalDefinitionResponse(BaseModel):
     eval_type: str
     config_json: dict[str, Any]
     failure_behaviour: str
+    pass_threshold: float | None = None
+    suite_id: str | None = None
     created_by: uuid.UUID
 
 
@@ -62,6 +66,43 @@ class EvalResultResponse(BaseModel):
     score: float | None
     detail: str | None
     evaluated_at: str
+
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+
+def _eval_def_to_dict(eval_def: EvalDefinition) -> dict[str, Any]:
+    return {
+        "id": str(eval_def.id),
+        "pipeline_id": str(eval_def.pipeline_id),
+        "node_id": str(eval_def.node_id) if eval_def.node_id else None,
+        "name": eval_def.name,
+        "eval_type": eval_def.eval_type,
+        "config_json": eval_def.config_json,
+        "failure_behaviour": eval_def.failure_behaviour,
+        "pass_threshold": eval_def.pass_threshold,
+        "suite_id": eval_def.suite_id,
+        "created_by": str(eval_def.created_by),
+    }
+
+
+class UpdateEvalRequest(BaseModel):
+    node_id: uuid.UUID | None = None
+    name: str | None = Field(None, min_length=1, max_length=255)
+    eval_type: str | None = Field(None, pattern=r"^(llm_judge|regex|json_schema|custom_function)$")
+    config_json: dict[str, Any] | None = None
+    failure_behaviour: str | None = None
+    pass_threshold: float | None = None
+    suite_id: str | None = None
+
+
+class EvalDefinitionListResponse(BaseModel):
+    items: list[EvalDefinitionResponse]
+    total: int
+    page: int
+    page_size: int
 
 
 # ---------------------------------------------------------------------------
@@ -87,6 +128,7 @@ async def create_eval_definition(
 
     async with session.begin():
         await set_rls_org(session, principal.organisation_id)
+        await set_rls_user_context(session, principal.user_id, principal.org_role)
         eval_def = EvalDefinition(
             organisation_id=principal.organisation_id,
             pipeline_id=body.pipeline_id,
@@ -95,21 +137,137 @@ async def create_eval_definition(
             eval_type=body.eval_type,
             config_json=body.config_json,
             failure_behaviour=body.failure_behaviour,
+            pass_threshold=body.pass_threshold,
+            suite_id=body.suite_id,
             created_by=principal.user_id,
         )
         session.add(eval_def)
         await session.flush()
 
-    return {
-        "id": str(eval_def.id),
-        "pipeline_id": str(eval_def.pipeline_id),
-        "node_id": str(eval_def.node_id) if eval_def.node_id else None,
-        "name": eval_def.name,
-        "eval_type": eval_def.eval_type,
-        "config_json": eval_def.config_json,
-        "failure_behaviour": eval_def.failure_behaviour,
-        "created_by": str(eval_def.created_by),
-    }
+    return _eval_def_to_dict(eval_def)
+
+
+# ---------------------------------------------------------------------------
+# Eval Definition CRUD
+# ---------------------------------------------------------------------------
+
+
+@router.get("/evals", response_model=EvalDefinitionListResponse)
+async def list_eval_definitions(
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=100),
+    pipeline_id: uuid.UUID | None = None,
+    session: AsyncSession = Depends(get_db_session),
+    principal: AuthenticatedPrincipal = Depends(get_current_user),
+) -> EvalDefinitionListResponse:
+    """List eval definitions for the caller's organisation."""
+    from sqlalchemy import func as sa_func
+
+    conditions = [EvalDefinition.organisation_id == principal.organisation_id]
+    if pipeline_id:
+        conditions.append(EvalDefinition.pipeline_id == pipeline_id)
+
+    async with session.begin():
+        await set_rls_org(session, principal.organisation_id)
+        await set_rls_user_context(session, principal.user_id, principal.org_role)
+
+        total_q = select(sa_func.count(EvalDefinition.id)).where(*conditions)
+        total = (await session.execute(total_q)).scalar() or 0
+
+        q = (
+            select(EvalDefinition)
+            .where(*conditions)
+            .order_by(EvalDefinition.created_at.desc())
+            .offset((page - 1) * page_size)
+            .limit(page_size)
+        )
+        rows = (await session.execute(q)).scalars().all()
+
+    return EvalDefinitionListResponse(
+        items=[EvalDefinitionResponse(**_eval_def_to_dict(d)) for d in rows],
+        total=total,
+        page=page,
+        page_size=page_size,
+    )
+
+
+@router.get("/evals/{eval_id}", response_model=dict[str, Any])
+async def get_eval_definition(
+    eval_id: uuid.UUID,
+    session: AsyncSession = Depends(get_db_session),
+    principal: AuthenticatedPrincipal = Depends(get_current_user),
+) -> dict[str, Any]:
+    """Get a single eval definition by ID."""
+    async with session.begin():
+        await set_rls_org(session, principal.organisation_id)
+        await set_rls_user_context(session, principal.user_id, principal.org_role)
+        result = await session.execute(
+            select(EvalDefinition).where(
+                EvalDefinition.id == eval_id,
+                EvalDefinition.organisation_id == principal.organisation_id,
+            )
+        )
+        eval_def = result.scalar_one_or_none()
+    if eval_def is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Eval definition not found")
+    return _eval_def_to_dict(eval_def)
+
+
+@router.put("/evals/{eval_id}", response_model=dict[str, Any])
+async def update_eval_definition(
+    eval_id: uuid.UUID,
+    body: UpdateEvalRequest,
+    session: AsyncSession = Depends(get_db_session),
+    principal: AuthenticatedPrincipal = Depends(get_current_user),
+) -> dict[str, Any]:
+    """Update an eval definition. Admin only."""
+    if principal.org_role != "admin":
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Only admins can update eval definitions")
+
+    async with session.begin():
+        await set_rls_org(session, principal.organisation_id)
+        await set_rls_user_context(session, principal.user_id, principal.org_role)
+        result = await session.execute(
+            select(EvalDefinition).where(
+                EvalDefinition.id == eval_id,
+                EvalDefinition.organisation_id == principal.organisation_id,
+            )
+        )
+        eval_def = result.scalar_one_or_none()
+        if eval_def is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Eval definition not found")
+
+        updates = body.model_dump(exclude_unset=True)
+        for key, value in updates.items():
+            setattr(eval_def, key, value)
+        await session.flush()
+
+    return _eval_def_to_dict(eval_def)
+
+
+@router.delete("/evals/{eval_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_eval_definition(
+    eval_id: uuid.UUID,
+    session: AsyncSession = Depends(get_db_session),
+    principal: AuthenticatedPrincipal = Depends(get_current_user),
+) -> None:
+    """Delete an eval definition. Admin only."""
+    if principal.org_role != "admin":
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Only admins can delete eval definitions")
+
+    async with session.begin():
+        await set_rls_org(session, principal.organisation_id)
+        await set_rls_user_context(session, principal.user_id, principal.org_role)
+        result = await session.execute(
+            select(EvalDefinition).where(
+                EvalDefinition.id == eval_id,
+                EvalDefinition.organisation_id == principal.organisation_id,
+            )
+        )
+        eval_def = result.scalar_one_or_none()
+        if eval_def is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Eval definition not found")
+        await session.delete(eval_def)
 
 
 @router.get("/runs/{run_id}/evals", response_model=dict[str, Any], status_code=status.HTTP_200_OK)
@@ -128,6 +286,7 @@ async def list_run_evals(
     """
     async with session.begin():
         await set_rls_org(session, principal.organisation_id)
+        await set_rls_user_context(session, principal.user_id, principal.org_role)
 
         run_result = await session.execute(
             select(Run).where(
@@ -215,6 +374,7 @@ async def compare_evals(
     """Compare eval results between two runs side by side."""
     async with session.begin():
         await set_rls_org(session, principal.organisation_id)
+        await set_rls_user_context(session, principal.user_id, principal.org_role)
 
         run_a = (
             await session.execute(
@@ -331,6 +491,7 @@ async def eval_coverage(
     """Return eval coverage map for a pipeline."""
     async with session.begin():
         await set_rls_org(session, principal.organisation_id)
+        await set_rls_user_context(session, principal.user_id, principal.org_role)
 
         pipeline = (
             await session.execute(
@@ -416,6 +577,7 @@ async def create_eval_from_run(
 
     async with session.begin():
         await set_rls_org(session, principal.organisation_id)
+        await set_rls_user_context(session, principal.user_id, principal.org_role)
 
         run = (
             await session.execute(
@@ -469,14 +631,162 @@ async def create_eval_from_run(
         session.add(eval_def)
         await session.flush()
 
+    result = _eval_def_to_dict(eval_def)
+    result["sample_output"] = sample_output
+    return result
+
+
+# ---------------------------------------------------------------------------
+# GET /api/v1/evals — list eval definitions
+# ---------------------------------------------------------------------------
+
+
+@router.get("/evals", response_model=dict[str, Any], status_code=status.HTTP_200_OK)
+async def list_eval_definitions(
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=100),
+    pipeline_id: uuid.UUID | None = Query(None, description="Filter by pipeline ID"),
+    session: AsyncSession = Depends(get_db_session),
+    principal: AuthenticatedPrincipal = Depends(get_current_user),
+) -> dict[str, Any]:
+    """List eval definitions scoped to the caller's organisation."""
+    async with session.begin():
+        await set_rls_org(session, principal.organisation_id)
+        await set_rls_user_context(session, principal.user_id, principal.org_role)
+
+        from sqlalchemy import func as sa_func
+
+        filters = [EvalDefinition.organisation_id == principal.organisation_id]
+        if pipeline_id is not None:
+            filters.append(EvalDefinition.pipeline_id == pipeline_id)
+
+        total_q = select(sa_func.count(EvalDefinition.id)).where(*filters)
+        total = (await session.execute(total_q)).scalar() or 0
+
+        offset = (page - 1) * page_size
+        q = (
+            select(EvalDefinition)
+            .where(*filters)
+            .order_by(EvalDefinition.created_at.desc())
+            .offset(offset)
+            .limit(page_size)
+        )
+        rows = (await session.execute(q)).scalars().all()
+
     return {
-        "id": str(eval_def.id),
-        "pipeline_id": str(eval_def.pipeline_id),
-        "node_id": str(eval_def.node_id) if eval_def.node_id else None,
-        "name": eval_def.name,
-        "eval_type": eval_def.eval_type,
-        "config_json": eval_def.config_json,
-        "failure_behaviour": eval_def.failure_behaviour,
-        "created_by": str(eval_def.created_by),
-        "sample_output": sample_output,
+        "items": [_eval_def_to_dict(r) for r in rows],
+        "total": total,
+        "page": page,
+        "page_size": page_size,
     }
+
+
+# ---------------------------------------------------------------------------
+# GET /api/v1/evals/{eval_id} — single eval definition
+# ---------------------------------------------------------------------------
+
+
+@router.get("/evals/{eval_id}", response_model=dict[str, Any], status_code=status.HTTP_200_OK)
+async def get_eval_definition(
+    eval_id: uuid.UUID,
+    session: AsyncSession = Depends(get_db_session),
+    principal: AuthenticatedPrincipal = Depends(get_current_user),
+) -> dict[str, Any]:
+    """Get a single eval definition by ID."""
+    async with session.begin():
+        await set_rls_org(session, principal.organisation_id)
+        await set_rls_user_context(session, principal.user_id, principal.org_role)
+
+        result = await session.execute(
+            select(EvalDefinition).where(
+                EvalDefinition.id == eval_id,
+                EvalDefinition.organisation_id == principal.organisation_id,
+            )
+        )
+        eval_def = result.scalar_one_or_none()
+
+    if eval_def is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Eval definition not found")
+    return _eval_def_to_dict(eval_def)
+
+
+# ---------------------------------------------------------------------------
+# PUT /api/v1/evals/{eval_id} — update eval definition (admin only)
+# ---------------------------------------------------------------------------
+
+
+@router.put("/evals/{eval_id}", response_model=dict[str, Any], status_code=status.HTTP_200_OK)
+async def update_eval_definition(
+    eval_id: uuid.UUID,
+    body: UpdateEvalRequest,
+    session: AsyncSession = Depends(get_db_session),
+    principal: AuthenticatedPrincipal = Depends(get_current_user),
+) -> dict[str, Any]:
+    """Update an eval definition.
+
+    Admin only. Only provided fields are updated (partial update semantics).
+    """
+    if principal.org_role != "admin":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only admins can update eval definitions",
+        )
+
+    updates = {k: v for k, v in body.model_dump().items() if v is not None}
+
+    async with session.begin():
+        await set_rls_org(session, principal.organisation_id)
+        await set_rls_user_context(session, principal.user_id, principal.org_role)
+
+        result = await session.execute(
+            select(EvalDefinition).where(
+                EvalDefinition.id == eval_id,
+                EvalDefinition.organisation_id == principal.organisation_id,
+            )
+        )
+        eval_def = result.scalar_one_or_none()
+        if eval_def is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Eval definition not found")
+
+        for key, value in updates.items():
+            setattr(eval_def, key, value)
+
+    return _eval_def_to_dict(eval_def)
+
+
+# ---------------------------------------------------------------------------
+# DELETE /api/v1/evals/{eval_id} — delete eval definition (admin only)
+# ---------------------------------------------------------------------------
+
+
+@router.delete("/evals/{eval_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_eval_definition(
+    eval_id: uuid.UUID,
+    session: AsyncSession = Depends(get_db_session),
+    principal: AuthenticatedPrincipal = Depends(get_current_user),
+) -> None:
+    """Delete an eval definition.
+
+    Admin only. The eval definition is scoped to the caller's organisation.
+    """
+    if principal.org_role != "admin":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only admins can delete eval definitions",
+        )
+
+    async with session.begin():
+        await set_rls_org(session, principal.organisation_id)
+        await set_rls_user_context(session, principal.user_id, principal.org_role)
+
+        result = await session.execute(
+            select(EvalDefinition).where(
+                EvalDefinition.id == eval_id,
+                EvalDefinition.organisation_id == principal.organisation_id,
+            )
+        )
+        eval_def = result.scalar_one_or_none()
+        if eval_def is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Eval definition not found")
+
+        await session.delete(eval_def)
