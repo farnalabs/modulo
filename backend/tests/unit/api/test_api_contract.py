@@ -269,6 +269,7 @@ class TestPipelineEndpointSchemas:
         with (
             patch("modulo.api.routes.pipelines.list_pipelines", return_value=page_result),
             patch("modulo.api.routes.pipelines.set_rls_org"),
+            patch("modulo.api.routes.pipelines.set_rls_user_context"),
         ):
             resp = client.get("/api/v1/pipelines")
 
@@ -283,6 +284,7 @@ class TestPipelineEndpointSchemas:
         with (
             patch("modulo.api.routes.pipelines.create_pipeline", return_value=pipeline),
             patch("modulo.api.routes.pipelines.set_rls_org"),
+            patch("modulo.api.routes.pipelines.set_rls_user_context"),
         ):
             resp = client.post("/api/v1/pipelines", json={"name": "Test"})
 
@@ -297,6 +299,7 @@ class TestPipelineEndpointSchemas:
         with (
             patch("modulo.api.routes.pipelines.get_pipeline", return_value=pipeline),
             patch("modulo.api.routes.pipelines.set_rls_org"),
+            patch("modulo.api.routes.pipelines.set_rls_user_context"),
         ):
             resp = client.get(f"/api/v1/pipelines/{pipeline.id}")
 
@@ -309,6 +312,7 @@ class TestPipelineEndpointSchemas:
         with (
             patch("modulo.api.routes.pipelines.get_pipeline", return_value=None),
             patch("modulo.api.routes.pipelines.set_rls_org"),
+            patch("modulo.api.routes.pipelines.set_rls_user_context"),
         ):
             resp = client.get(f"/api/v1/pipelines/{uuid.uuid4()}")
 
@@ -322,6 +326,7 @@ class TestPipelineEndpointSchemas:
             patch("modulo.api.routes.pipelines.get_pipeline", return_value=pipeline),
             patch("modulo.api.routes.pipelines.update_pipeline", return_value=pipeline),
             patch("modulo.api.routes.pipelines.set_rls_org"),
+            patch("modulo.api.routes.pipelines.set_rls_user_context"),
         ):
             resp = client.patch(f"/api/v1/pipelines/{pipeline.id}", json={"name": "Updated"})
 
@@ -334,6 +339,7 @@ class TestPipelineEndpointSchemas:
         with (
             patch("modulo.api.routes.pipelines.get_pipeline_graph", return_value=None),
             patch("modulo.api.routes.pipelines.set_rls_org"),
+            patch("modulo.api.routes.pipelines.set_rls_user_context"),
         ):
             resp = client.get(f"/api/v1/pipelines/{uuid.uuid4()}/graph")
 
@@ -393,6 +399,7 @@ class TestPipelineSnapshotSchemas:
         with (
             patch("modulo.api.routes.pipelines.list_snapshots", return_value=[]),
             patch("modulo.api.routes.pipelines.set_rls_org"),
+            patch("modulo.api.routes.pipelines.set_rls_user_context"),
         ):
             resp = client.get(f"/api/v1/pipelines/{pipeline_id}/snapshots")
 
@@ -408,6 +415,7 @@ class TestPipelineSnapshotSchemas:
         with (
             patch("modulo.api.routes.pipelines.get_snapshot", return_value=None),
             patch("modulo.api.routes.pipelines.set_rls_org"),
+            patch("modulo.api.routes.pipelines.set_rls_user_context"),
         ):
             resp = client.get(f"/api/v1/pipelines/{pipeline_id}/snapshots/{snapshot_id}")
 
@@ -426,6 +434,7 @@ class TestConnectorEndpointSchemas:
         with (
             patch("modulo.api.routes.connectors.list_connector_instances", return_value=page),
             patch("modulo.api.routes.connectors.set_rls_org"),
+            patch("modulo.api.routes.connectors.set_rls_user_context"),
         ):
             resp = client.get("/api/v1/connectors")
 
@@ -453,6 +462,7 @@ class TestConnectorEndpointSchemas:
             patch("modulo.api.routes.connectors.create_connector_instance", return_value=connector),
             patch("modulo.api.routes.connectors._encrypt", return_value=b"encrypted"),
             patch("modulo.api.routes.connectors.set_rls_org"),
+            patch("modulo.api.routes.connectors.set_rls_user_context"),
         ):
             resp = client.post(
                 "/api/v1/connectors",
@@ -502,6 +512,7 @@ class TestModelBackendEndpointSchemas:
         with (
             patch("modulo.api.routes.model_backends.list_model_backends", return_value=page),
             patch("modulo.api.routes.model_backends.set_rls_org"),
+            patch("modulo.api.routes.model_backends.set_rls_user_context"),
         ):
             resp = client.get("/api/v1/model-backends")
 
@@ -521,6 +532,7 @@ class TestErrorResponseShapes:
         with (
             patch("modulo.api.routes.pipelines.get_pipeline", return_value=None),
             patch("modulo.api.routes.pipelines.set_rls_org"),
+            patch("modulo.api.routes.pipelines.set_rls_user_context"),
         ):
             resp = client.get(f"/api/v1/pipelines/{uuid.uuid4()}")
 

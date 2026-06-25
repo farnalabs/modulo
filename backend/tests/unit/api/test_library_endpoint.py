@@ -156,7 +156,8 @@ def test_create_pipeline_from_template_returns_201(client: TestClient) -> None:
         patch("modulo.api.routes.library.get_primitive", return_value=primitive),
         patch("modulo.api.routes.library.create_pipeline", return_value=pipeline) as create_mock,
         patch("modulo.api.routes.library.set_rls_org"),
-    ):
+            patch("modulo.api.routes.library.set_rls_user_context"),
+        ):
         resp = client.post(
             f"/api/v1/libraries/{primitive_id}/create-pipeline",
             json={"name": "PR Review Pipeline", "description": "My custom PR pipeline"},
@@ -191,7 +192,8 @@ def test_create_pipeline_from_template_default_name(client: TestClient) -> None:
         patch("modulo.api.routes.library.get_primitive", return_value=primitive),
         patch("modulo.api.routes.library.create_pipeline", return_value=pipeline),
         patch("modulo.api.routes.library.set_rls_org"),
-    ):
+            patch("modulo.api.routes.library.set_rls_user_context"),
+        ):
         resp = client.post(
             f"/api/v1/libraries/{primitive_id}/create-pipeline",
             json={},
@@ -205,7 +207,8 @@ def test_create_pipeline_from_primitive_not_found(client: TestClient) -> None:
     with (
         patch("modulo.api.routes.library.get_primitive", return_value=None),
         patch("modulo.api.routes.library.set_rls_org"),
-    ):
+            patch("modulo.api.routes.library.set_rls_user_context"),
+        ):
         resp = client.post(
             f"/api/v1/libraries/{uuid.uuid4()}/create-pipeline",
             json={},
@@ -221,7 +224,8 @@ def test_create_pipeline_from_invalid_type(client: TestClient) -> None:
     with (
         patch("modulo.api.routes.library.get_primitive", return_value=primitive),
         patch("modulo.api.routes.library.set_rls_org"),
-    ):
+            patch("modulo.api.routes.library.set_rls_user_context"),
+        ):
         resp = client.post(
             f"/api/v1/libraries/{primitive_id}/create-pipeline",
             json={},

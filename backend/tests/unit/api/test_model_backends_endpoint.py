@@ -99,7 +99,8 @@ def test_list_model_backends_returns_200(client: TestClient) -> None:
     with (
         patch("modulo.api.routes.model_backends.list_model_backends", return_value=page_result),
         patch("modulo.api.routes.model_backends.set_rls_org"),
-    ):
+            patch("modulo.api.routes.model_backends.set_rls_user_context"),
+        ):
         resp = client.get("/api/v1/model-backends")
     assert resp.status_code == 200
     assert resp.json()["total"] == 1
@@ -110,7 +111,8 @@ def test_create_model_backend_does_not_expose_credentials(client: TestClient) ->
     with (
         patch("modulo.api.routes.model_backends.create_model_backend", return_value=backend),
         patch("modulo.api.routes.model_backends.set_rls_org"),
-    ):
+            patch("modulo.api.routes.model_backends.set_rls_user_context"),
+        ):
         resp = client.post("/api/v1/model-backends", json=_CREATE_BODY)
 
     assert resp.status_code == 201
@@ -130,7 +132,8 @@ def test_create_model_backend_encrypts_api_key(client: TestClient) -> None:
     with (
         patch("modulo.api.routes.model_backends.create_model_backend", new=fake_create),
         patch("modulo.api.routes.model_backends.set_rls_org"),
-    ):
+            patch("modulo.api.routes.model_backends.set_rls_user_context"),
+        ):
         client.post("/api/v1/model-backends", json=_CREATE_BODY)
 
     assert captured, "create_model_backend was not called"
@@ -146,7 +149,8 @@ def test_get_model_backend_returns_200_without_credentials(client: TestClient) -
     with (
         patch("modulo.api.routes.model_backends.get_model_backend", return_value=_make_backend()),
         patch("modulo.api.routes.model_backends.set_rls_org"),
-    ):
+            patch("modulo.api.routes.model_backends.set_rls_user_context"),
+        ):
         resp = client.get(f"/api/v1/model-backends/{_BACKEND_ID}")
     assert resp.status_code == 200
     body = resp.json()
@@ -158,7 +162,8 @@ def test_get_model_backend_not_found_returns_404(client: TestClient) -> None:
     with (
         patch("modulo.api.routes.model_backends.get_model_backend", return_value=None),
         patch("modulo.api.routes.model_backends.set_rls_org"),
-    ):
+            patch("modulo.api.routes.model_backends.set_rls_user_context"),
+        ):
         resp = client.get(f"/api/v1/model-backends/{uuid.uuid4()}")
     assert resp.status_code == 404
 
@@ -169,7 +174,8 @@ def test_update_model_backend_returns_200(client: TestClient) -> None:
     with (
         patch("modulo.api.routes.model_backends.update_model_backend", return_value=backend),
         patch("modulo.api.routes.model_backends.set_rls_org"),
-    ):
+            patch("modulo.api.routes.model_backends.set_rls_user_context"),
+        ):
         resp = client.patch(f"/api/v1/model-backends/{_BACKEND_ID}", json={"name": "Updated"})
     assert resp.status_code == 200
     assert resp.json()["name"] == "Updated"
@@ -179,7 +185,8 @@ def test_update_model_backend_not_found_returns_404(client: TestClient) -> None:
     with (
         patch("modulo.api.routes.model_backends.update_model_backend", return_value=None),
         patch("modulo.api.routes.model_backends.set_rls_org"),
-    ):
+            patch("modulo.api.routes.model_backends.set_rls_user_context"),
+        ):
         resp = client.patch(f"/api/v1/model-backends/{uuid.uuid4()}", json={"name": "x"})
     assert resp.status_code == 404
 
@@ -188,7 +195,8 @@ def test_delete_model_backend_returns_204(client: TestClient) -> None:
     with (
         patch("modulo.api.routes.model_backends.delete_model_backend", return_value=True),
         patch("modulo.api.routes.model_backends.set_rls_org"),
-    ):
+            patch("modulo.api.routes.model_backends.set_rls_user_context"),
+        ):
         resp = client.delete(f"/api/v1/model-backends/{_BACKEND_ID}")
     assert resp.status_code == 204
 
@@ -197,7 +205,8 @@ def test_delete_model_backend_not_found_returns_404(client: TestClient) -> None:
     with (
         patch("modulo.api.routes.model_backends.delete_model_backend", return_value=False),
         patch("modulo.api.routes.model_backends.set_rls_org"),
-    ):
+            patch("modulo.api.routes.model_backends.set_rls_user_context"),
+        ):
         resp = client.delete(f"/api/v1/model-backends/{uuid.uuid4()}")
     assert resp.status_code == 404
 
@@ -207,7 +216,8 @@ def test_model_backend_no_credentials_shows_false(client: TestClient) -> None:
     with (
         patch("modulo.api.routes.model_backends.get_model_backend", return_value=backend),
         patch("modulo.api.routes.model_backends.set_rls_org"),
-    ):
+            patch("modulo.api.routes.model_backends.set_rls_user_context"),
+        ):
         resp = client.get(f"/api/v1/model-backends/{_BACKEND_ID}")
     assert resp.json()["has_credentials"] is False
 

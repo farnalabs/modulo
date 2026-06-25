@@ -30,6 +30,26 @@ async def set_rls_org(session: AsyncSession, org_id: uuid.UUID) -> None:
     )
 
 
+async def set_rls_user_context(session: AsyncSession, user_id: uuid.UUID, org_role: str) -> None:
+    """Set the current user identity and role for team-scoped RLS policies.
+
+    Must be called inside an active transaction alongside set_rls_org.
+    """
+    if not session.in_transaction():
+        raise RuntimeError(
+            "set_rls_user_context requires an active transaction; "
+            "wrap the call in `async with session.begin():`"
+        )
+    await session.execute(
+        text("SELECT set_config('app.user_id', :uid, true)"),
+        {"uid": str(user_id)},
+    )
+    await session.execute(
+        text("SELECT set_config('app.org_role', :role, true)"),
+        {"role": org_role},
+    )
+
+
 def register_rls_reset_hook(engine: AsyncEngine) -> None:
     """Register a pool-checkout listener that clears stale org context.
 
@@ -54,11 +74,13 @@ def register_rls_reset_hook(engine: AsyncEngine) -> None:
         with dbapi_connection.cursor() as cursor:  # type: ignore[attr-defined]
             try:
                 cursor.execute("SELECT set_config('app.organisation_id', '', false)")
+                cursor.execute("SELECT set_config('app.user_id', '', false)")
+                cursor.execute("SELECT set_config('app.org_role', '', false)")
             except Exception:
                 # Hook failure must not break connection checkout. Log and continue;
                 # set_config(is_local=true) in set_rls_org still provides correct
                 # transaction-scoped isolation even if this defensive reset is skipped.
                 _log.warning(
-                    "rls_reset_hook: failed to clear app.organisation_id on checkout",
+                    "rls_reset_hook: failed to clear RLS session context on checkout",
                     exc_info=True,
                 )

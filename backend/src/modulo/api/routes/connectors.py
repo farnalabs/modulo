@@ -23,7 +23,7 @@ from modulo.db.crud.connector_instance import (
     list_connector_instances,
     update_connector_instance,
 )
-from modulo.db.rls import set_rls_org
+from modulo.db.rls import set_rls_org, set_rls_user_context
 from modulo.settings import Settings, get_settings
 
 router = APIRouter(prefix="/api/v1/connectors", tags=["connectors"])
@@ -98,6 +98,7 @@ async def list_connectors_endpoint(
 ) -> ConnectorListResponse:
     async with session.begin():
         await set_rls_org(session, principal.organisation_id)
+        await set_rls_user_context(session, principal.user_id, principal.org_role)
         result = await list_connector_instances(session, page=page, page_size=page_size)
     return ConnectorListResponse(
         items=[_to_response(ci) for ci in result.items],
@@ -117,6 +118,7 @@ async def create_connector_endpoint(
     ciphertext = _encrypt(body.credentials, settings.fernet_key)
     async with session.begin():
         await set_rls_org(session, principal.organisation_id)
+        await set_rls_user_context(session, principal.user_id, principal.org_role)
         ci = await create_connector_instance(
             session,
             org_id=principal.organisation_id,
@@ -139,6 +141,7 @@ async def get_connector_endpoint(
 ) -> ConnectorResponse:
     async with session.begin():
         await set_rls_org(session, principal.organisation_id)
+        await set_rls_user_context(session, principal.user_id, principal.org_role)
         ci = await get_connector_instance(session, connector_id)
     if ci is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Connector not found")
@@ -158,6 +161,7 @@ async def update_connector_endpoint(
         updates["credentials_ciphertext"] = _encrypt(updates.pop("credentials"), settings.fernet_key)
     async with session.begin():
         await set_rls_org(session, principal.organisation_id)
+        await set_rls_user_context(session, principal.user_id, principal.org_role)
         ci = await update_connector_instance(session, connector_id, updates)
     if ci is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Connector not found")
@@ -172,6 +176,7 @@ async def delete_connector_endpoint(
 ) -> None:
     async with session.begin():
         await set_rls_org(session, principal.organisation_id)
+        await set_rls_user_context(session, principal.user_id, principal.org_role)
         deleted = await delete_connector_instance(session, connector_id)
     if not deleted:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Connector not found")

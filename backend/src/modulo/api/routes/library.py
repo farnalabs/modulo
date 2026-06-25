@@ -47,7 +47,7 @@ from modulo.db.crud.rating import (
 )
 from modulo.db.models.pipeline_edge import PipelineEdge
 from modulo.db.models.team import Team
-from modulo.db.rls import set_rls_org
+from modulo.db.rls import set_rls_org, set_rls_user_context
 
 router = APIRouter(prefix="/api/v1/libraries", tags=["libraries"])
 
@@ -213,6 +213,7 @@ async def list_library_primitives_endpoint(
 ) -> LibraryPrimitiveListResponse:
     async with session.begin():
         await set_rls_org(session, principal.organisation_id)
+        await set_rls_user_context(session, principal.user_id, principal.org_role)
         include_community = source != "local"
         result = await list_primitives(
             session,
@@ -237,7 +238,10 @@ async def get_library_primitive_endpoint(
     session: AsyncSession = Depends(get_db_session),
     principal: AuthenticatedPrincipal = Depends(get_current_user),
 ) -> LibraryPrimitiveResponse:
-    primitive = await get_primitive(session, principal.organisation_id, primitive_id)
+    async with session.begin():
+        await set_rls_org(session, principal.organisation_id)
+        await set_rls_user_context(session, principal.user_id, principal.org_role)
+        primitive = await get_primitive(session, principal.organisation_id, primitive_id)
     if primitive is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Primitive not found")
     return LibraryPrimitiveResponse.model_validate(primitive)
@@ -256,6 +260,7 @@ async def create_library_primitive_endpoint(
 ) -> LibraryPrimitiveResponse:
     async with session.begin():
         await set_rls_org(session, principal.organisation_id)
+        await set_rls_user_context(session, principal.user_id, principal.org_role)
         prim = await create_library_primitive(
             session,
             org_id=principal.organisation_id,
@@ -293,6 +298,7 @@ async def update_library_primitive_endpoint(
     updates = {k: v for k, v in body.model_dump().items() if v is not None}
     async with session.begin():
         await set_rls_org(session, principal.organisation_id)
+        await set_rls_user_context(session, principal.user_id, principal.org_role)
         prim = await update_library_primitive(session, primitive_id, updates)
     if prim is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Primitive not found")
@@ -307,6 +313,7 @@ async def delete_library_primitive_endpoint(
 ) -> None:
     async with session.begin():
         await set_rls_org(session, principal.organisation_id)
+        await set_rls_user_context(session, principal.user_id, principal.org_role)
         deleted = await delete_library_primitive(session, primitive_id)
     if not deleted:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Primitive not found")
@@ -356,6 +363,7 @@ async def export_pipeline_endpoint(
 ) -> Response:
     async with session.begin():
         await set_rls_org(session, principal.organisation_id)
+        await set_rls_user_context(session, principal.user_id, principal.org_role)
         pipeline = await get_pipeline(session, pipeline_id)
         if pipeline is None:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Pipeline not found")
@@ -389,6 +397,7 @@ async def _analyse_bundle(
 
     async with session.begin():
         await set_rls_org(session, principal.organisation_id)
+        await set_rls_user_context(session, principal.user_id, principal.org_role)
 
         pipeline_info = bundle.get("pipeline", {})
         pipeline_name = pipeline_info.get("name", "Unnamed Pipeline")
@@ -555,6 +564,7 @@ async def confirm_import_endpoint(
 
     async with session.begin():
         await set_rls_org(session, principal.organisation_id)
+        await set_rls_user_context(session, principal.user_id, principal.org_role)
         result = await materialize_import(
             session,
             org_id=principal.organisation_id,
@@ -595,6 +605,7 @@ async def list_ratings_endpoint(
 ) -> RatingListResponse:
     async with session.begin():
         await set_rls_org(session, principal.organisation_id)
+        await set_rls_user_context(session, principal.user_id, principal.org_role)
         result = await list_ratings_for_primitive(session, primitive_id, page=page, page_size=page_size)
     return RatingListResponse(
         items=[RatingResponse.model_validate(r) for r in result.items],
@@ -610,6 +621,7 @@ async def get_rating_aggregate_endpoint(
 ) -> RatingAggregateResponse:
     async with session.begin():
         await set_rls_org(session, principal.organisation_id)
+        await set_rls_user_context(session, principal.user_id, principal.org_role)
         avg, count = await get_rating_aggregate(session, primitive_id)
     return RatingAggregateResponse(
         average_rating=float(avg) if avg is not None else None,
@@ -630,6 +642,7 @@ async def submit_rating_endpoint(
 ) -> RatingResponse:
     async with session.begin():
         await set_rls_org(session, principal.organisation_id)
+        await set_rls_user_context(session, principal.user_id, principal.org_role)
         rating = await submit_rating(
             session,
             org_id=principal.organisation_id,
@@ -697,7 +710,7 @@ def _build_pipeline_from_template(
             "target_node_id": edge.get("target", edge.get("target_node_id", "")),
             "edge_type": edge.get("edge_type", "normal"),
         }
-        hitl_config = edge.get("hitl_gate_config") or edge.get("hitl_gate_config")
+        hitl_config = edge.get("hitl_gate_config")
         if hitl_config:
             pipeline_edge["hitl_gate_config"] = hitl_config
         pipeline_edges.append(pipeline_edge)
@@ -718,6 +731,7 @@ async def create_pipeline_from_template_endpoint(
 ) -> PipelineFromTemplateResponse:
     async with session.begin():
         await set_rls_org(session, principal.organisation_id)
+        await set_rls_user_context(session, principal.user_id, principal.org_role)
         primitive = await get_primitive(session, principal.organisation_id, primitive_id)
     if primitive is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Primitive not found")
@@ -735,6 +749,7 @@ async def create_pipeline_from_template_endpoint(
 
     async with session.begin():
         await set_rls_org(session, principal.organisation_id)
+        await set_rls_user_context(session, principal.user_id, principal.org_role)
         pipeline = await create_pipeline(
             session,
             org_id=principal.organisation_id,

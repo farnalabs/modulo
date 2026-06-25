@@ -42,7 +42,7 @@ from modulo.db.crud.pipeline_snapshot_versioning import (
 )
 from modulo.db.models.agent import Agent
 from modulo.db.models.schema import Schema
-from modulo.db.rls import set_rls_org
+from modulo.db.rls import set_rls_org, set_rls_user_context
 
 router = APIRouter(prefix="/api/v1/pipelines", tags=["pipelines"])
 
@@ -299,6 +299,7 @@ async def list_pipelines_endpoint(
 ) -> PipelineListResponse:
     async with session.begin():
         await set_rls_org(session, principal.organisation_id)
+        await set_rls_user_context(session, principal.user_id, principal.org_role)
         result = await list_pipelines(session, page=page, page_size=page_size)
     return PipelineListResponse(
         items=[PipelineResponse.model_validate(p) for p in result.items],
@@ -316,6 +317,7 @@ async def create_pipeline_endpoint(
 ) -> PipelineResponse:
     async with session.begin():
         await set_rls_org(session, principal.organisation_id)
+        await set_rls_user_context(session, principal.user_id, principal.org_role)
         pipeline = await create_pipeline(
             session,
             org_id=principal.organisation_id,
@@ -340,6 +342,7 @@ async def get_pipeline_endpoint(
 ) -> PipelineResponse:
     async with session.begin():
         await set_rls_org(session, principal.organisation_id)
+        await set_rls_user_context(session, principal.user_id, principal.org_role)
         pipeline = await get_pipeline(session, pipeline_id)
     if pipeline is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Pipeline not found")
@@ -354,6 +357,7 @@ async def get_pipeline_graph_endpoint(
 ) -> PipelineGraphResponse:
     async with session.begin():
         await set_rls_org(session, principal.organisation_id)
+        await set_rls_user_context(session, principal.user_id, principal.org_role)
         graph = await get_pipeline_graph(session, pipeline_id)
     if graph is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Pipeline not found")
@@ -406,6 +410,7 @@ async def replace_pipeline_graph_endpoint(
 
     async with session.begin():
         await set_rls_org(session, principal.organisation_id)
+        await set_rls_user_context(session, principal.user_id, principal.org_role)
         schema_pins, model_backend_pins = await _resolve_graph_references(
             session,
             body.nodes,
@@ -448,11 +453,10 @@ async def update_pipeline_endpoint(
     session: AsyncSession = Depends(get_db_session),
     principal: AuthenticatedPrincipal = Depends(get_current_user),
 ) -> PipelineResponse:
-    from modulo.db.crud.pipeline import get_pipeline
-
     updates = {k: v for k, v in body.model_dump().items() if v is not None}
     async with session.begin():
         await set_rls_org(session, principal.organisation_id)
+        await set_rls_user_context(session, principal.user_id, principal.org_role)
         if "default_autonomy_level" in updates:
             previous = await get_pipeline(session, pipeline_id)
             prev_level = previous.default_autonomy_level if previous else None
@@ -484,6 +488,7 @@ async def delete_pipeline_endpoint(
 ) -> None:
     async with session.begin():
         await set_rls_org(session, principal.organisation_id)
+        await set_rls_user_context(session, principal.user_id, principal.org_role)
         deleted = await delete_pipeline(session, pipeline_id)
     if not deleted:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Pipeline not found")
@@ -512,6 +517,7 @@ async def clone_pipeline_endpoint(
 ) -> PipelineResponse:
     async with session.begin():
         await set_rls_org(session, principal.organisation_id)
+        await set_rls_user_context(session, principal.user_id, principal.org_role)
         cloned = await clone_pipeline(
             session,
             org_id=principal.organisation_id,
@@ -618,6 +624,7 @@ async def list_snapshot_endpoint(
 ) -> SnapshotListResponse:
     async with session.begin():
         await set_rls_org(session, principal.organisation_id)
+        await set_rls_user_context(session, principal.user_id, principal.org_role)
         snapshots, total = await list_snapshots(session, pipeline_id, page=page, page_size=page_size)
     return SnapshotListResponse(
         items=[_snapshot_to_response(s) for s in snapshots],
@@ -634,6 +641,7 @@ async def get_snapshot_detail_endpoint(
 ) -> SnapshotDetailResponse:
     async with session.begin():
         await set_rls_org(session, principal.organisation_id)
+        await set_rls_user_context(session, principal.user_id, principal.org_role)
         snapshot = await get_snapshot_detail(session, snapshot_id)
     if snapshot is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Snapshot not found")
@@ -650,6 +658,7 @@ async def tag_snapshot_endpoint(
 ) -> SnapshotResponse:
     async with session.begin():
         await set_rls_org(session, principal.organisation_id)
+        await set_rls_user_context(session, principal.user_id, principal.org_role)
         snapshot = await tag_snapshot(session, snapshot_id, tag=body.tag, notes=body.notes)
     if snapshot is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Snapshot not found")
@@ -665,6 +674,7 @@ async def rollback_snapshot_endpoint(
 ) -> SnapshotResponse:
     async with session.begin():
         await set_rls_org(session, principal.organisation_id)
+        await set_rls_user_context(session, principal.user_id, principal.org_role)
         new_snapshot = await rollback_to_snapshot(session, pipeline_id, snapshot_id, created_by=principal.user_id)
     if new_snapshot is None:
         raise HTTPException(
@@ -688,6 +698,7 @@ async def delete_snapshot_endpoint(
         )
     async with session.begin():
         await set_rls_org(session, principal.organisation_id)
+        await set_rls_user_context(session, principal.user_id, principal.org_role)
         deleted = await delete_snapshot(session, snapshot_id)
     if not deleted:
         raise HTTPException(
@@ -705,6 +716,7 @@ async def diff_snapshot_endpoint(
 ) -> SnapshotDiffResponse:
     async with session.begin():
         await set_rls_org(session, principal.organisation_id)
+        await set_rls_user_context(session, principal.user_id, principal.org_role)
         result = await diff_snapshots(session, body.snapshot_a_id, body.snapshot_b_id)
     if result is None:
         raise HTTPException(

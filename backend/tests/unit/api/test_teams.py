@@ -122,6 +122,7 @@ class TestListTeams:
         with (
             patch("modulo.api.routes.teams.list_teams", return_value=page_result),
             patch("modulo.api.routes.teams.set_rls_org"),
+            patch("modulo.api.routes.teams.set_rls_user_context"),
         ):
             resp = client.get("/api/v1/teams")
         assert resp.status_code == 200
@@ -134,6 +135,7 @@ class TestListTeams:
         with (
             patch("modulo.api.routes.teams.list_teams", return_value=page_result),
             patch("modulo.api.routes.teams.set_rls_org"),
+            patch("modulo.api.routes.teams.set_rls_user_context"),
         ):
             resp = client.get("/api/v1/teams")
         assert resp.status_code == 200
@@ -156,6 +158,7 @@ class TestCreateTeam:
                 return_value=None,
             ),
             patch("modulo.api.routes.teams.set_rls_org"),
+            patch("modulo.api.routes.teams.set_rls_user_context"),
         ):
             resp = client.post("/api/v1/teams", json=_TEAM_BODY)
         assert resp.status_code == 201
@@ -182,6 +185,7 @@ class TestGetTeam:
                 return_value=_make_team(),
             ),
             patch("modulo.api.routes.teams.set_rls_org"),
+            patch("modulo.api.routes.teams.set_rls_user_context"),
         ):
             resp = client.get(f"/api/v1/teams/{_TEAM_ID}")
         assert resp.status_code == 200
@@ -191,6 +195,7 @@ class TestGetTeam:
         with (
             patch("modulo.api.routes.teams.get_team", return_value=None),
             patch("modulo.api.routes.teams.set_rls_org"),
+            patch("modulo.api.routes.teams.set_rls_user_context"),
         ):
             resp = client.get(f"/api/v1/teams/{uuid.uuid4()}")
         assert resp.status_code == 404
@@ -202,6 +207,7 @@ class TestUpdateTeam:
         with (
             patch("modulo.api.routes.teams.update_team", return_value=team),
             patch("modulo.api.routes.teams.set_rls_org"),
+            patch("modulo.api.routes.teams.set_rls_user_context"),
         ):
             resp = client.patch(
                 f"/api/v1/teams/{_TEAM_ID}", json={"name": "Updated"}
@@ -213,6 +219,7 @@ class TestUpdateTeam:
         with (
             patch("modulo.api.routes.teams.update_team", return_value=None),
             patch("modulo.api.routes.teams.set_rls_org"),
+            patch("modulo.api.routes.teams.set_rls_user_context"),
         ):
             resp = client.patch(
                 f"/api/v1/teams/{uuid.uuid4()}", json={"name": "x"}
@@ -229,6 +236,7 @@ class TestDeleteTeam:
         with (
             patch("modulo.api.routes.teams.delete_team", return_value=True),
             patch("modulo.api.routes.teams.set_rls_org"),
+            patch("modulo.api.routes.teams.set_rls_user_context"),
         ):
             resp = client.delete(f"/api/v1/teams/{_TEAM_ID}")
         assert resp.status_code == 204
@@ -237,6 +245,7 @@ class TestDeleteTeam:
         with (
             patch("modulo.api.routes.teams.delete_team", return_value=False),
             patch("modulo.api.routes.teams.set_rls_org"),
+            patch("modulo.api.routes.teams.set_rls_user_context"),
         ):
             resp = client.delete(f"/api/v1/teams/{uuid.uuid4()}")
         assert resp.status_code == 404
@@ -250,6 +259,7 @@ class TestAddMember:
                 return_value=_make_membership(),
             ),
             patch("modulo.api.routes.teams.set_rls_org"),
+            patch("modulo.api.routes.teams.set_rls_user_context"),
         ):
             resp = client.post(
                 f"/api/v1/teams/{_TEAM_ID}/members",
@@ -283,6 +293,7 @@ class TestListMembers:
                 return_value=page_result,
             ),
             patch("modulo.api.routes.teams.set_rls_org"),
+            patch("modulo.api.routes.teams.set_rls_user_context"),
         ):
             resp = client.get(f"/api/v1/teams/{_TEAM_ID}/members")
         assert resp.status_code == 200
@@ -298,6 +309,7 @@ class TestListMembers:
                 return_value=page_result,
             ),
             patch("modulo.api.routes.teams.set_rls_org"),
+            patch("modulo.api.routes.teams.set_rls_user_context"),
         ):
             resp = client.get(f"/api/v1/teams/{_TEAM_ID}/members")
         assert resp.status_code == 200
@@ -315,6 +327,7 @@ class TestRemoveMember:
                 "modulo.api.routes.teams.remove_team_member", return_value=True
             ),
             patch("modulo.api.routes.teams.set_rls_org"),
+            patch("modulo.api.routes.teams.set_rls_user_context"),
         ):
             resp = client.delete(
                 f"/api/v1/teams/{_TEAM_ID}/members/{_MEMBERSHIP_ID}"
@@ -331,6 +344,7 @@ class TestRemoveMember:
                 "modulo.api.routes.teams.remove_team_member", return_value=False
             ),
             patch("modulo.api.routes.teams.set_rls_org"),
+            patch("modulo.api.routes.teams.set_rls_user_context"),
         ):
             resp = client.delete(
                 f"/api/v1/teams/{_TEAM_ID}/members/{uuid.uuid4()}"

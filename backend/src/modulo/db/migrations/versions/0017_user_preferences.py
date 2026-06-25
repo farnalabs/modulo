@@ -1,7 +1,8 @@
 """Add preferences JSON column to users table.
 
 Revision ID: 0017_user_preferences
-Revises: 0016_oauth_tables, 0012_team_memberships, 0012_feedback_records, 0008_audit_chaining, 0007_pipeline_snapshot_tag_notes, 0006_primitive_ratings
+Revises: 0016_oauth_tables, 0012_team_memberships, 0012_feedback_records,
+         0008_audit_chaining, 0007_pipeline_snapshot_tag_notes, 0006_primitive_ratings
 Create Date: 2026-06-24
 """
 

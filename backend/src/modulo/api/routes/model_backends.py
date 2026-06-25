@@ -23,7 +23,7 @@ from modulo.db.crud.model_backend import (
     list_model_backends,
     update_model_backend,
 )
-from modulo.db.rls import set_rls_org
+from modulo.db.rls import set_rls_org, set_rls_user_context
 from modulo.settings import Settings, get_settings
 
 router = APIRouter(prefix="/api/v1/model-backends", tags=["model-backends"])
@@ -102,6 +102,7 @@ async def list_model_backends_endpoint(
 ) -> ModelBackendListResponse:
     async with session.begin():
         await set_rls_org(session, principal.organisation_id)
+        await set_rls_user_context(session, principal.user_id, principal.org_role)
         result = await list_model_backends(session, page=page, page_size=page_size)
     return ModelBackendListResponse(
         items=[_to_response(mb) for mb in result.items],
@@ -121,6 +122,7 @@ async def create_model_backend_endpoint(
     ciphertext = _encrypt(body.api_key, settings.fernet_key)
     async with session.begin():
         await set_rls_org(session, principal.organisation_id)
+        await set_rls_user_context(session, principal.user_id, principal.org_role)
         mb = await create_model_backend(
             session,
             org_id=principal.organisation_id,
@@ -144,6 +146,7 @@ async def get_model_backend_endpoint(
 ) -> ModelBackendResponse:
     async with session.begin():
         await set_rls_org(session, principal.organisation_id)
+        await set_rls_user_context(session, principal.user_id, principal.org_role)
         mb = await get_model_backend(session, backend_id)
     if mb is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Model backend not found")
@@ -163,6 +166,7 @@ async def update_model_backend_endpoint(
         updates["credentials_ciphertext"] = _encrypt(updates.pop("api_key"), settings.fernet_key)
     async with session.begin():
         await set_rls_org(session, principal.organisation_id)
+        await set_rls_user_context(session, principal.user_id, principal.org_role)
         mb = await update_model_backend(session, backend_id, updates)
     if mb is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Model backend not found")
@@ -177,6 +181,7 @@ async def delete_model_backend_endpoint(
 ) -> None:
     async with session.begin():
         await set_rls_org(session, principal.organisation_id)
+        await set_rls_user_context(session, principal.user_id, principal.org_role)
         deleted = await delete_model_backend(session, backend_id)
     if not deleted:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Model backend not found")

@@ -885,7 +885,11 @@ _INCIDENT_TEMPLATE_EDGES = [
         "target_node_id": "remediation-agent",
         "edge_type": "normal",
     },
-    {"source_node_id": "remediation-agent", "target_node_id": "hitl-gate", "edge_type": "normal"},
+    {
+        "source_node_id": "remediation-agent",
+        "target_node_id": "hitl-gate",
+        "edge_type": "normal",
+    },
     {
         "source_node_id": "hitl-gate",
         "target_node_id": "postmortem-generator",
@@ -906,7 +910,10 @@ _COMMUNITY_PRIMITIVES.extend(
             primitive_type="pipeline_template",
             name="PR Review Pipeline",
             slug="pr-review-pipeline",
-            description="Automated PR review pipeline: reads a GitHub issue, analyses the code diff, generates review comments with a HITL gate, and posts to the PR.",
+            description=(
+                "Automated PR review pipeline: reads a GitHub issue, analyses the code diff,"
+                " generates review comments with a HITL gate, and posts to the PR."
+            ),
             content_json={
                 "agents": _PR_TEMPLATE_AGENTS,
                 "graph_nodes": _PR_TEMPLATE_NODES,
@@ -922,7 +929,10 @@ _COMMUNITY_PRIMITIVES.extend(
             primitive_type="pipeline_template",
             name="Release Checklist Pipeline",
             slug="release-checklist-pipeline",
-            description="Automated release pipeline: bumps the version, generates a changelog, formats release notes with a HITL gate, and creates a Git tag.",
+            description=(
+                "Automated release pipeline: bumps the version, generates a changelog,"
+                " formats release notes with a HITL gate, and creates a Git tag."
+            ),
             content_json={
                 "agents": _RELEASE_TEMPLATE_AGENTS,
                 "graph_nodes": _RELEASE_TEMPLATE_NODES,
@@ -938,7 +948,10 @@ _COMMUNITY_PRIMITIVES.extend(
             primitive_type="pipeline_template",
             name="Incident Response Pipeline",
             slug="incident-response-pipeline",
-            description="Automated incident response pipeline: ingests alerts, classifies severity, matches runbooks, applies remediation with a HITL gate, and generates a postmortem.",
+            description=(
+                "Automated incident response pipeline: ingests alerts, classifies severity,"
+                " matches runbooks, applies remediation with a HITL gate, and generates a postmortem."
+            ),
             content_json={
                 "agents": _INCIDENT_TEMPLATE_AGENTS,
                 "graph_nodes": _INCIDENT_TEMPLATE_NODES,

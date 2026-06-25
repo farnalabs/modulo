@@ -23,7 +23,7 @@ from modulo.db.crud.team_membership import (
     list_team_members,
     remove_team_member,
 )
-from modulo.db.rls import set_rls_org
+from modulo.db.rls import set_rls_org, set_rls_user_context
 
 router = APIRouter(prefix="/api/v1/teams", tags=["teams"])
 
@@ -90,6 +90,7 @@ async def list_teams_endpoint(
 ) -> TeamListResponse:
     async with session.begin():
         await set_rls_org(session, current_user.organisation_id)
+        await set_rls_user_context(session, current_user.user_id, current_user.org_role)
         result = await list_teams(session, org_id=current_user.organisation_id, page=page, page_size=page_size)
 
     return TeamListResponse(
@@ -119,6 +120,7 @@ async def create_team_endpoint(
 
     async with session.begin():
         await set_rls_org(session, current_user.organisation_id)
+        await set_rls_user_context(session, current_user.user_id, current_user.org_role)
         existing = await get_team_by_name(session, current_user.organisation_id, body.name)
         if existing is not None:
             raise HTTPException(
@@ -150,6 +152,7 @@ async def get_team_endpoint(
 ) -> TeamResponse:
     async with session.begin():
         await set_rls_org(session, current_user.organisation_id)
+        await set_rls_user_context(session, current_user.user_id, current_user.org_role)
         team = await get_team(session, team_id)
 
     if team is None:
@@ -177,6 +180,7 @@ async def update_team_endpoint(
 
     async with session.begin():
         await set_rls_org(session, current_user.organisation_id)
+        await set_rls_user_context(session, current_user.user_id, current_user.org_role)
         team = await update_team(session, team_id, updates)
 
     if team is None:
@@ -201,6 +205,7 @@ async def delete_team_endpoint(
 
     async with session.begin():
         await set_rls_org(session, current_user.organisation_id)
+        await set_rls_user_context(session, current_user.user_id, current_user.org_role)
         deleted = await delete_team(session, team_id)
 
     if not deleted:
@@ -217,6 +222,7 @@ async def list_members_endpoint(
 ) -> MembershipListResponse:
     async with session.begin():
         await set_rls_org(session, current_user.organisation_id)
+        await set_rls_user_context(session, current_user.user_id, current_user.org_role)
         result = await list_team_members(session, team_id=team_id, page=page, page_size=page_size)
 
     return MembershipListResponse(
@@ -253,6 +259,7 @@ async def add_member_endpoint(
 
     async with session.begin():
         await set_rls_org(session, current_user.organisation_id)
+        await set_rls_user_context(session, current_user.user_id, current_user.org_role)
         team = await get_team(session, team_id)
         if team is None:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Team not found")
@@ -287,6 +294,7 @@ async def remove_member_endpoint(
 
     async with session.begin():
         await set_rls_org(session, current_user.organisation_id)
+        await set_rls_user_context(session, current_user.user_id, current_user.org_role)
         membership = await get_membership(session, membership_id)
         if membership is None or membership.team_id != team_id:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Membership not found")
