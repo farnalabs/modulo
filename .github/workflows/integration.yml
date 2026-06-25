@@ -8,8 +8,6 @@ jobs:
   integration:
     runs-on: ubuntu-latest
     services:
-      # Testcontainers spins its own Postgres — this service entry is a
-      # fallback for any tests that use the GH Actions service directly.
       postgres:
         image: postgres:16-alpine
         env:
@@ -41,8 +39,7 @@ jobs:
             --cov-report=xml \
             -q
         env:
-          SECRET_KEY: "ci-secret-key"
-          FERNET_KEY: "ci-fernet-key"
-          # Testcontainers manages DATABASE_URL dynamically
+          SECRET_KEY: "ci-secret-key-for-github-actions-testing-only"
+          FERNET_KEY: "vK-xU7GqHLflg_GqzJ1FqWI7pHWoHSIyukf4wx-tMHI="
           DATABASE_URL: "postgresql+asyncpg://modulo_test:modulo_test@localhost:5433/modulo_test"
           TESTCONTAINERS_RYUK_DISABLED: "true"

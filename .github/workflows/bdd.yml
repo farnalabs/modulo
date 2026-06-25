@@ -9,6 +9,20 @@ on:
 jobs:
   bdd:
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: modulo
+          POSTGRES_PASSWORD: modulo
+          POSTGRES_DB: modulo
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 5
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v5
@@ -24,6 +38,13 @@ jobs:
       - name: Install Playwright browsers
         working-directory: backend
         run: playwright install --with-deps chromium
+      - name: Run migrations
+        working-directory: backend
+        run: uv run alembic upgrade heads
+        env:
+          DATABASE_URL: "postgresql+asyncpg://modulo:modulo@localhost:5432/modulo"
+          SECRET_KEY: "ci-secret-key-for-github-actions-testing-only"
+          FERNET_KEY: "vK-xU7GqHLflg_GqzJ1FqWI7pHWoHSIyukf4wx-tMHI="
       - name: Install frontend deps
         working-directory: frontend
         run: npm ci
@@ -32,17 +53,28 @@ jobs:
         run: npm run build
       - name: Start backend
         working-directory: backend
-        run: |
-          uvicorn modulo.api.main:app --host 0.0.0.0 --port 8000 &
-          sleep 3
+        run: uvicorn modulo.api.main:app --host 0.0.0.0 --port 8000 &
         env:
           DATABASE_URL: "postgresql+asyncpg://modulo:modulo@localhost:5432/modulo"
-          SECRET_KEY: "ci-secret-key"
-          FERNET_KEY: "ci-fernet-key"
+          SECRET_KEY: "ci-secret-key-for-github-actions-testing-only"
+          FERNET_KEY: "vK-xU7GqHLflg_GqzJ1FqWI7pHWoHSIyukf4wx-tMHI="
+          MODULO_PUBLIC_URL: "http://localhost:8000"
+          MODULO_USERS: "admin:admin"
+          CORS_ORIGINS: "http://localhost:4173"
+      - name: Serve frontend
+        working-directory: frontend
+        run: npm run preview -- --port 4173 &
+      - name: Wait for services
+        run: |
+          npx wait-on http://localhost:8000/health http://localhost:4173 --timeout 30000
       - name: Run BDD tests
         working-directory: backend
         run: |
           pytest tests/bdd/ \
             -m e2e \
-            --base-url http://localhost:5173 \
+            --base-url http://localhost:4173 \
             -q
+        env:
+          DATABASE_URL: "postgresql+asyncpg://modulo:modulo@localhost:5432/modulo"
+          SECRET_KEY: "ci-secret-key-for-github-actions-testing-only"
+          FERNET_KEY: "vK-xU7GqHLflg_GqzJ1FqWI7pHWoHSIyukf4wx-tMHI="

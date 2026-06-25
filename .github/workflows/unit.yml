@@ -26,9 +26,5 @@ jobs:
             -q
         env:
           DATABASE_URL: "postgresql+asyncpg://unused:unused@localhost/unused"
-          SECRET_KEY: "ci-secret-key"
-          FERNET_KEY: "ci-fernet-key"
-      - name: Upload coverage
-        uses: codecov/codecov-action@v4
-        with:
-          files: backend/coverage.xml
+          SECRET_KEY: "ci-secret-key-for-github-actions-testing-only"
+          FERNET_KEY: "vK-xU7GqHLflg_GqzJ1FqWI7pHWoHSIyukf4wx-tMHI="
