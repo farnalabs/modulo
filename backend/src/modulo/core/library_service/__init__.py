@@ -583,21 +583,30 @@ _PR_TEMPLATE_AGENTS = [
     {
         "name": "Issue Reader",
         "description": "Reads a GitHub issue via GitHubConnector and extracts structured requirements.",
-        "prompt_template": "Read the following GitHub issue and extract structured requirements for code review.\n\nIssue:\n{{ input }}",
+        "prompt_template": (
+            "Read the following GitHub issue and extract structured requirements for code review."
+            "\n\nIssue:\n{{ input }}"
+        ),
         "connector_type_refs": [{"connector_type": "github", "capabilities": ["issue_read"]}],
         "required_environment_capabilities": ["egress:github.com"],
     },
     {
         "name": "Code Diff Analyzer",
         "description": "Analyses code changes and identifies potential issues, style violations, and security concerns.",
-        "prompt_template": "Review the following code diff and identify: 1) logic errors, 2) style violations, 3) security issues, 4) performance concerns.\n\nDiff:\n{{ input }}",
+        "prompt_template": (
+            "Review the following code diff and identify: 1) logic errors, 2) style violations,"
+            " 3) security issues, 4) performance concerns.\n\nDiff:\n{{ input }}"
+        ),
         "connector_type_refs": [],
         "required_environment_capabilities": [],
     },
     {
         "name": "Comment Generator",
         "description": "Generates actionable review comments from the diff analysis.",
-        "prompt_template": "Based on the analysis below, generate clear, actionable PR review comments. Be constructive and specific.\n\nAnalysis:\n{{ input }}",
+        "prompt_template": (
+            "Based on the analysis below, generate clear, actionable PR review comments."
+            " Be constructive and specific.\n\nAnalysis:\n{{ input }}"
+        ),
         "connector_type_refs": [],
         "required_environment_capabilities": [],
     },
@@ -614,7 +623,10 @@ _RELEASE_TEMPLATE_AGENTS = [
     {
         "name": "Version Bumper",
         "description": "Reads the current version from a file and proposes the next semantic version.",
-        "prompt_template": "Read the current version and determine the next semantic version based on the changes described.\n\nChanges:\n{{ input }}",
+        "prompt_template": (
+            "Read the current version and determine the next semantic version based on the changes described."
+            "\n\nChanges:\n{{ input }}"
+        ),
         "connector_type_refs": [{"connector_type": "github", "capabilities": ["issue_read"]}],
         "required_environment_capabilities": ["egress:github.com"],
     },
@@ -635,7 +647,10 @@ _RELEASE_TEMPLATE_AGENTS = [
     {
         "name": "Tag Creator",
         "description": "Creates a Git tag for the new version via GitHubConnector.",
-        "prompt_template": "Create a Git tag for version {{ version }} and push it to the remote repository.\n\nRelease notes:\n{{ input }}",
+        "prompt_template": (
+            "Create a Git tag for version {{ version }} and push it to the remote repository."
+            "\n\nRelease notes:\n{{ input }}"
+        ),
         "connector_type_refs": [{"connector_type": "github", "capabilities": ["create_pr"]}],
         "required_environment_capabilities": ["egress:github.com"],
     },
@@ -652,14 +667,20 @@ _INCIDENT_TEMPLATE_AGENTS = [
     {
         "name": "Severity Classifier",
         "description": "Classifies the incident severity based on the alert payload.",
-        "prompt_template": "Classify the following incident as CRITICAL, HIGH, MEDIUM, or LOW based on impact and urgency:\n\nIncident:\n{{ input }}",
+        "prompt_template": (
+            "Classify the following incident as CRITICAL, HIGH, MEDIUM, or LOW based on impact and urgency:"
+            "\n\nIncident:\n{{ input }}"
+        ),
         "connector_type_refs": [],
         "required_environment_capabilities": [],
     },
     {
         "name": "Runbook Matcher",
         "description": "Matches the incident to the most relevant runbook based on patterns.",
-        "prompt_template": "Match the following incident to the appropriate runbook based on the alert type and service:\n\nIncident:\n{{ input }}",
+        "prompt_template": (
+            "Match the following incident to the appropriate runbook based on the alert type and service:"
+            "\n\nIncident:\n{{ input }}"
+        ),
         "connector_type_refs": [],
         "required_environment_capabilities": [],
     },

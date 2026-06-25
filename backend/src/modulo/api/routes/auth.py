@@ -111,11 +111,11 @@ async def refresh(
 ) -> RefreshResponse:
     try:
         claims = decode_refresh_token_claims(body.refresh_token, settings.secret_key)
-    except JWTError:
+    except JWTError as exc:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid or expired refresh token",
-        )
+        ) from exc
 
     family_id_val = claims.get("token_family")
     sequence_val = claims.get("token_sequence")
@@ -129,11 +129,11 @@ async def refresh(
 
     try:
         family_uuid = uuid.UUID(family_id_str)
-    except ValueError:
+    except ValueError as exc:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid refresh token family",
-        )
+        ) from exc
 
     new_sequence, theft_detected = await advance_sequence(session, family_uuid, sequence)
     if theft_detected:
@@ -179,11 +179,11 @@ async def logout(
 ) -> LogoutResponse:
     try:
         claims = decode_refresh_token_claims(body.refresh_token, settings.secret_key)
-    except JWTError:
+    except JWTError as exc:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid or expired refresh token",
-        )
+        ) from exc
 
     family_id_val = claims.get("token_family")
     if isinstance(family_id_val, str):

@@ -40,7 +40,7 @@ from modulo.core.plugin_registry import get_plugin_registry
 from modulo.core.secrets_backend import SecretsBackend
 from modulo.db.models.connector_instance import ConnectorInstance
 
-from .locking import ConnectorLockError
+from .locking import ConnectorLockError as ConnectorLockError
 
 
 class ConnectorNotFoundError(KeyError):

@@ -357,15 +357,15 @@ async def saml_process_response(
                 not_before = datetime.fromisoformat(not_before_str.replace("Z", "+00:00"))
                 if now_utc < not_before:
                     raise ValueError("SAML assertion used before NotBefore time")
-            except ValueError:
-                raise ValueError("Invalid SAML Conditions NotBefore format")
+            except ValueError as exc:
+                raise ValueError("Invalid SAML Conditions NotBefore format") from exc
         if not_on_or_after_str:
             try:
                 not_on_or_after = datetime.fromisoformat(not_on_or_after_str.replace("Z", "+00:00"))
                 if now_utc >= not_on_or_after:
                     raise ValueError("SAML assertion has expired (NotOnOrAfter)")
-            except ValueError:
-                raise ValueError("Invalid SAML Conditions NotOnOrAfter format")
+            except ValueError as exc:
+                raise ValueError("Invalid SAML Conditions NotOnOrAfter format") from exc
         if issue_instant_str:
             try:
                 issue_instant = datetime.fromisoformat(issue_instant_str.replace("Z", "+00:00"))
