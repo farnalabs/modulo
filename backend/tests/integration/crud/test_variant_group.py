@@ -199,7 +199,7 @@ async def test_check_pipeline_run_quota_allows_within_limit(
 
 
 async def test_coverage_gaps_detects_missing_evals(
-    rls_session: AsyncSession, test_org: uuid.UUID, db_engine: AsyncEngine
+    rls_session: AsyncSession, test_org: uuid.UUID, test_user: uuid.UUID, db_engine: AsyncEngine
 ) -> None:
     pipeline_id = await _create_test_pipeline(db_engine, test_org)
     eval_id = uuid.uuid4()
@@ -216,7 +216,7 @@ async def test_coverage_gaps_detects_missing_evals(
                     "org_id": str(test_org),
                     "pipeline_id": str(pipeline_id),
                     "name": "test-eval",
-                    "created_by": str(uuid.uuid4()),
+                    "created_by": str(test_user),
                 },
             )
 
@@ -243,7 +243,7 @@ async def test_coverage_gaps_detects_missing_evals(
 
 
 async def test_no_coverage_gaps_when_all_evals_present(
-    rls_session: AsyncSession, test_org: uuid.UUID, db_engine: AsyncEngine
+    rls_session: AsyncSession, test_org: uuid.UUID, test_user: uuid.UUID, db_engine: AsyncEngine
 ) -> None:
     pipeline_id = await _create_test_pipeline(db_engine, test_org)
     eval_id = uuid.uuid4()
@@ -260,7 +260,7 @@ async def test_no_coverage_gaps_when_all_evals_present(
                     "org_id": str(test_org),
                     "pipeline_id": str(pipeline_id),
                     "name": "test-eval",
-                    "created_by": str(uuid.uuid4()),
+                    "created_by": str(test_user),
                 },
             )
 

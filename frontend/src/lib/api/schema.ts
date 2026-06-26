@@ -263,6 +263,17 @@ export interface paths {
       }
     }
   }
+  '/api/v1/changelog': {
+    get: {
+      responses: {
+        200: {
+          content: {
+            'application/json': components['schemas']['ChangelogEntry'][]
+          }
+        }
+      }
+    }
+  }
   '/api/v1/connectors': {
     get: {
       responses: {
@@ -753,6 +764,14 @@ export interface components {
       total: number
       page: number
       page_size: number
+    }
+    ChangelogEntry: {
+      version: string
+      date: string
+      summary: string
+      changes: string[]
+      deprecations: string[] | null
+      migration_url: string | null
     }
     ConnectorItem: {
       id: string
