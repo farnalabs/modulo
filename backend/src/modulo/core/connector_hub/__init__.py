@@ -244,6 +244,10 @@ def _build_connector(type_id: str, config: dict[str, Any], creds: dict[str, Any]
             return GitLabCIRunner(token=_get_cred(creds, "token", type_id), base_url=base_url)
         case "gitlab":
             return GitLabConnector(token=_get_cred(creds, "token", type_id))
+        case "shell":
+            allowed = config.get("allowed_commands")
+            from modulo.connectors.shell import ShellConnector
+            return ShellConnector(runtime_provider=None, allowed_commands=allowed)
         case "linear":
             return LinearConnector(api_key=_get_cred(creds, "api_key", type_id))
         case "jira":

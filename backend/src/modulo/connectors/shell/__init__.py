@@ -38,7 +38,7 @@ class ShellConnector(ConnectorBase):
 
     def __init__(
         self,
-        runtime_provider: RuntimeProvider,
+        runtime_provider: RuntimeProvider | None = None,
         allowed_commands: list[str] | None = None,
     ) -> None:
         self._runtime_provider = runtime_provider

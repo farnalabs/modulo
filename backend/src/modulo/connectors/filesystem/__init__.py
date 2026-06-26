@@ -73,7 +73,7 @@ class FilesystemConnector(ConnectorBase):
                     ]
 
                 entries = await asyncio.to_thread(_list_dir)
-                return ConnectorResult(records=entries)
+                return ConnectorResult(records=entries, total=len(entries))
             case _:
                 raise ValueError(f"Unsupported filesystem resource: {q.resource!r}")
 

@@ -73,13 +73,14 @@ async def test_register_and_get():
     bid = uuid.uuid4()
     backend = _FakeBackend()
     hub.register(bid, backend)
-    assert hub.get(bid) is backend
+    got = await hub.get(bid)
+    assert got is backend
 
 
 async def test_get_unknown_raises():
     hub = ModelBackendHub()
     with pytest.raises(BackendNotFoundError) as exc_info:
-        hub.get(uuid.uuid4())
+        await hub.get(uuid.uuid4())
     assert exc_info.value.backend_id is not None
 
 
@@ -88,10 +89,11 @@ async def test_aexit_clears_backends():
     bid = uuid.uuid4()
     async with hub:
         hub.register(bid, _FakeBackend())
-        hub.get(bid)  # should not raise
+        result = await hub.get(bid)  # should not raise
+        assert result is not None
 
     with pytest.raises(BackendNotFoundError):
-        hub.get(bid)
+        await hub.get(bid)
 
 
 async def test_backend_ids_property():
@@ -122,7 +124,7 @@ async def test_health_check_fail_marks_unhealthy():
     result = await hub.health_check(bid)
     assert result.ok is False
     with pytest.raises(BackendUnavailableError):
-        hub.get(bid)
+        await hub.get(bid)
 
 
 async def test_health_check_unknown_backend():
@@ -138,7 +140,7 @@ async def test_get_raises_if_unhealthy():
     hub.register(bid, _FakeBackend())
     hub.mark_unhealthy(bid)
     with pytest.raises(BackendUnavailableError):
-        hub.get(bid)
+        await hub.get(bid)
 
 
 async def test_mark_unhealthy_then_health_check_recovers():
@@ -147,7 +149,8 @@ async def test_mark_unhealthy_then_health_check_recovers():
     hub.register(bid, _FakeBackend())
     hub.mark_unhealthy(bid)
     await hub.health_check(bid)  # passes -> marks healthy
-    hub.get(bid)  # should not raise
+    result = await hub.get(bid)  # should not raise
+    assert result is not None
 
 
 # ---------------------------------------------------------------------------
