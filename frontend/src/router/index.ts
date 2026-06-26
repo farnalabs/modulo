@@ -7,6 +7,8 @@ import SettingsTeamsView from '../views/SettingsTeamsView.vue'
 import SchemaInferenceView from '../views/SchemaInferenceView.vue'
 import OnboardingWizard from '../views/OnboardingWizard.vue'
 import FeedbackInboxView from '../views/FeedbackInboxView.vue'
+import EvalEditorView from '../views/EvalEditorView.vue'
+import VariantCompareView from '../views/VariantCompareView.vue'
 
 const router = createRouter({
   history: createWebHistory(),
@@ -55,6 +57,16 @@ const router = createRouter({
       path: '/feedback/inbox',
       name: 'feedback-inbox',
       component: FeedbackInboxView,
+    },
+    {
+      path: '/evals/editor',
+      name: 'eval-editor',
+      component: EvalEditorView,
+    },
+    {
+      path: '/variants/compare',
+      name: 'variant-compare',
+      component: VariantCompareView,
     },
   ],
 })

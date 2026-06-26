@@ -322,6 +322,92 @@ export interface paths {
       }
     }
   }
+  '/api/v1/variant-groups': {
+    get: {
+      responses: {
+        200: {
+          content: {
+            'application/json': components['schemas']['VariantGroupResponse'][]
+          }
+        }
+      }
+    }
+  }
+  '/api/v1/variant-groups/{group_id}': {
+    get: {
+      parameters: {
+        path: { group_id: string }
+      }
+      responses: {
+        200: {
+          content: {
+            'application/json': components['schemas']['VariantGroupResponse']
+          }
+        }
+      }
+    }
+  }
+  '/api/v1/variant-groups/{group_id}/run': {
+    post: {
+      parameters: {
+        path: { group_id: string }
+      }
+      requestBody: {
+        content: {
+          'application/json': components['schemas']['RunVariantRequest']
+        }
+      }
+      responses: {
+        200: {
+          content: {
+            'application/json': components['schemas']['RunVariantResponse']
+          }
+        }
+      }
+    }
+  }
+  '/api/v1/runs/{run_id}': {
+    get: {
+      parameters: {
+        path: { run_id: string }
+      }
+      responses: {
+        200: {
+          content: {
+            'application/json': components['schemas']['RunResponse']
+          }
+        }
+      }
+    }
+  }
+  '/api/v1/runs/{run_id}/io': {
+    get: {
+      parameters: {
+        path: { run_id: string }
+      }
+      responses: {
+        200: {
+          content: {
+            'application/json': components['schemas']['RunIOResponse']
+          }
+        }
+      }
+    }
+  }
+  '/api/v1/runs/{run_id}/evals': {
+    get: {
+      parameters: {
+        path: { run_id: string }
+      }
+      responses: {
+        200: {
+          content: {
+            'application/json': components['schemas']['RunEvalListResponse']
+          }
+        }
+      }
+    }
+  }
 }
 
 export interface components {
@@ -538,6 +624,68 @@ export interface components {
     }
     PipelineListResponse: {
       items: components['schemas']['PipelineItem'][]
+      total: number
+      page: number
+      page_size: number
+    }
+    VariantGroupResponse: {
+      id: string
+      pipeline_id: string
+      name: string
+      description: string | null
+      variants: components['schemas']['VariantDef'][]
+      selection_strategy: string
+      run_count: number
+      max_concurrent_runs: number
+      degraded_evals: boolean
+      created_at: string
+      updated_at: string
+    }
+    VariantDef: {
+      snapshot_id: string
+      name: string
+      weight: number
+      run_context_overrides: Record<string, unknown>
+      eval_definition_ids: string[]
+    }
+    RunVariantRequest: {
+      input_payload?: Record<string, unknown>
+    }
+    RunVariantResponse: {
+      run_id: string
+      variant_name: string
+      merged_payload: Record<string, unknown>
+    }
+    RunResponse: {
+      run_id: string
+      status: string
+      pipeline_id: string
+      langgraph_thread_id: string
+      error_detail: string | null
+      error_code: string | null
+      total_cost_usd: number | null
+      token_consumption: Record<string, unknown> | null
+      trace_id: string | null
+    }
+    RunIOResponse: {
+      run_id: string
+      status: string
+      input_payload: Record<string, unknown> | null
+      outputs_json: Record<string, unknown> | null
+      fixture_map: Record<string, string> | null
+    }
+    RunEvalItem: {
+      id: string
+      run_id: string
+      node_id: string | null
+      eval_id: string
+      passed: boolean
+      score: number | null
+      detail: string | null
+      evaluated_at: string | null
+    }
+    RunEvalListResponse: {
+      items: components['schemas']['RunEvalItem'][]
       total: number
       page: number
       page_size: number

@@ -26,7 +26,9 @@ export function useApi() {
   return {
     get: <T>(path: string, options?: ApiOptions) => request<T>('GET', path, undefined, options),
     post: <T>(path: string, body?: unknown, options?: ApiOptions) => request<T>('POST', path, body, options),
+    put: <T>(path: string, body?: unknown, options?: ApiOptions) => request<T>('PUT', path, body, options),
     patch: <T>(path: string, body?: unknown, options?: ApiOptions) => request<T>('PATCH', path, body, options),
     delete: <T>(path: string, options?: ApiOptions) => request<T>('DELETE', path, undefined, options),
+    del: <T>(path: string, options?: ApiOptions) => request<T>('DELETE', path, undefined, options),
   }
 }
