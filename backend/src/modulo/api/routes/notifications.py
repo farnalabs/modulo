@@ -44,8 +44,8 @@ class NotificationEndpointCreate(BaseModel):
         if v is not None:
             try:
                 uuid.UUID(v)
-            except ValueError:
-                raise ValueError("team_id must be a valid UUID")
+            except ValueError as exc:
+                raise ValueError("team_id must be a valid UUID") from exc
         return v
 
 

@@ -185,8 +185,12 @@ _COMMUNITY_PRIMITIVES: list[LibraryPrimitive] = [
         description="Example StubModelBackend fixture map for a PRD-to-requirements pipeline run.",
         content_json={
             "fixture_map": {
-                "Extract requirements from: Build a login system with SSO": "Functional: SSO authentication\nNon-functional: 99.9% uptime",
-                "Refine requirements: SSO authentication, 99.9% uptime": "1. Integrate SAML 2.0 SSO\n2. Support OIDC providers\n3. 99.9% uptime SLA",
+                "Extract requirements from: Build a login system with SSO": (
+                    "Functional: SSO authentication\nNon-functional: 99.9% uptime"
+                ),
+                "Refine requirements: SSO authentication, 99.9% uptime": (
+                    "1. Integrate SAML 2.0 SSO\n2. Support OIDC providers\n3. 99.9% uptime SLA"
+                ),
             },
             "pipeline_id": None,
             "run_id": None,
@@ -592,7 +596,9 @@ _PR_TEMPLATE_AGENTS = [
     },
     {
         "name": "Code Diff Analyzer",
-        "description": "Analyses code changes and identifies potential issues, style violations, and security concerns.",
+        "description": (
+            "Analyses code changes and identifies potential issues, style violations, and security concerns."
+        ),
         "prompt_template": (
             "Review the following code diff and identify: 1) logic errors, 2) style violations,"
             " 3) security issues, 4) performance concerns.\n\nDiff:\n{{ input }}"

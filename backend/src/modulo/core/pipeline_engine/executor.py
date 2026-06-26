@@ -476,7 +476,9 @@ class PipelineExecutor:
         async with self._session_factory() as session:
             async with session.begin():
                 await set_rls_org(session, org_id)
-                final_run = await update_run_status(session, run_id, final_status, error_code=error_code, error_detail=error_detail)
+                final_run = await update_run_status(
+                    session, run_id, final_status, error_code=error_code, error_detail=error_detail
+                )
 
         if final_run is None:
             raise RunNotFoundError(run_id)
