@@ -1,0 +1,69 @@
+Business Source License 1.1
+
+Licensor:             Farna Labs
+
+Licensed Work:        The Licensed Work is (c) 2026 Farna Labs.
+
+                      The Licensed Work is Modulo, version 0.1.0.
+
+Additional Use Grant: You may use, copy, modify, and distribute the Licensed
+                      Work for any lawful purpose, including production use,
+                      without a separate license from the Licensor, provided
+                      that you do not sell, license, or distribute the Licensed
+                      Work, or any product or service whose primary value
+                      derives from the Licensed Work, to third parties for a
+                      fee.
+
+Change Date:          2029-06-26
+
+Change License:       Apache License, Version 2.0
+
+---------------------------------------------------------------------
+
+Terms
+
+The Licensor hereby grants you the right to copy, modify, create derivative
+works, redistribute, and make non-production use of the Licensed Work. The
+Licensor may make the Licensed Work available under a subsequent version of
+this license. You must not offer or impose any terms on the Licensed Work that
+alter or restrict the terms of this license or the recipients' exercise of
+the rights granted hereunder. You must keep intact all notices that refer to
+this license and to the disclaimer of warranties. You may not use the
+Licensed Work for any production use without the prior written consent of
+the Licensor, except as expressly permitted by any additional use grant
+contained in this license.
+
+You may use the Licensed Work for any lawful purpose, including production
+use, in accordance with the Additional Use Grant above.
+
+This license is not a license to sell the Licensed Work. You may not
+sub-license, lease, sell, or otherwise distribute the Licensed Work for a
+fee, or offer the Licensed Work as a service for a fee, except as expressly
+permitted by the Additional Use Grant or by a separate written agreement with
+the Licensor.
+
+The Licensor may provide the Licensed Work under a subsequent version of this
+license, and you may choose to use the Licensed Work under the terms of any
+subsequent version. This license terminates automatically if you fail to
+comply with any of its terms. Upon termination, you must destroy all copies
+of the Licensed Work in your possession or control.
+
+Disclaimer of Warranties
+
+THE LICENSED WORK IS PROVIDED "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES,
+INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND
+FITNESS FOR A PARTICULAR PURPOSE, ARE DISCLAIMED. IN NO EVENT SHALL THE
+LICENSOR BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY,
+OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
+SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
+INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
+CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
+ARISING IN ANY WAY OUT OF THE USE OF THE LICENSED WORK, EVEN IF ADVISED OF
+THE POSSIBILITY OF SUCH DAMAGES.
+
+---------------------------------------------------------------------
+
+**Release workflow**: When cutting a new semver release, update the version
+number in the "Licensed Work" line and the Change Date to 3 years from the
+release date. This ensures each version independently converts to Apache 2.0
+three years after its release.
