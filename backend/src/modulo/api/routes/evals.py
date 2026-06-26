@@ -1,4 +1,4 @@
-﻿"""Eval management endpoints.
+"""Eval management endpoints.
 
 URLs:
     POST   /api/v1/evals              â€” create an eval definition (admin only)

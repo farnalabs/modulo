@@ -6,6 +6,7 @@ import uuid
 from datetime import UTC, datetime
 from typing import Any
 
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.db.crud.base import PageResult
@@ -13,6 +14,7 @@ from modulo.db.crud.library_primitive import (
     create_library_primitive,
     get_library_primitive,
     list_library_primitives,
+    list_primitives_by_version_group,
     update_library_primitive,
 )
 from modulo.db.models.library_primitive import LibraryPrimitive
@@ -1117,6 +1119,7 @@ async def publish_contribution(
         )
     if updated is None:
         raise ContributionNotFoundError(f"Contribution {primitive_id} not found")
+    await notify_importers_of_update(session, org_id, primitive_id)
     return updated
 
 
@@ -1141,3 +1144,179 @@ async def list_contributions(
         result.items = [p for p in result.items if p.contribution_status == contribution_status]
         result.total = len(result.items)
     return result
+
+
+# ---------------------------------------------------------------------------
+# Contribution versioning
+# ---------------------------------------------------------------------------
+
+
+async def submit_contribution_version(
+    session: AsyncSession,
+    org_id: uuid.UUID,
+    primitive_id: uuid.UUID,
+    *,
+    created_by: uuid.UUID,
+    name: str,
+    slug: str,
+    description: str | None,
+    tags: list[str],
+    fixture_map: dict[str, str],
+    source_run_id: uuid.UUID | None = None,
+    source_pipeline_id: uuid.UUID | None = None,
+    owner_team_id: uuid.UUID | None = None,
+) -> LibraryPrimitive:
+    """Submit a new version of an existing published fixture contribution.
+
+    Auto-increments the minor version and creates a new draft row linked
+    via version_group_id.  The new version must go through
+    review_queue -> published independently.
+    """
+    from modulo.db.crud.library_primitive import create_library_primitive as _create
+
+    async with session.begin():
+        await set_rls_org(session, org_id)
+        existing = await get_library_primitive(session, primitive_id)
+
+    if existing is None:
+        raise ContributionNotFoundError(f"Contribution {primitive_id} not found")
+
+    if existing.contribution_status != CONTRIBUTION_PUBLISHED:
+        raise ContributionInvalidTransitionError(
+            f"Cannot version contribution {primitive_id}: "
+            f"expected status '{CONTRIBUTION_PUBLISHED}', got '{existing.contribution_status}'"
+        )
+
+    # Auto-increment the minor version
+    parts = existing.version.split(".")
+    try:
+        parts[-1] = str(int(parts[-1]) + 1)
+    except (ValueError, IndexError):
+        parts = ["1", "0"]
+    new_version = ".".join(parts)
+
+    # Establish a version group if this is the first versioned submission
+    group_id = existing.version_group_id or existing.id
+
+    content: dict[str, Any] = {
+        "fixture_map": fixture_map,
+        "source_run_id": str(source_run_id) if source_run_id else None,
+        "source_pipeline_id": str(source_pipeline_id) if source_pipeline_id else None,
+    }
+
+    async with session.begin():
+        await set_rls_org(session, org_id)
+        # Seed version_group_id on the original if it was created before
+        # this feature existed
+        if existing.version_group_id is None:
+            await update_library_primitive(
+                session,
+                primitive_id,
+                {"version_group_id": group_id},
+            )
+        prim = await _create(
+            session,
+            org_id=org_id,
+            source="local",
+            primitive_type="test_fixture",
+            name=name,
+            slug=slug,
+            description=description,
+            author=created_by.hex,
+            version=new_version,
+            tags=tags,
+            content_json=content,
+            source_url=None,
+            forked_from=primitive_id,
+            checksum=None,
+            ed25519_signature=None,
+            verified=None,
+            download_count=None,
+            average_rating=None,
+            review_count=None,
+            owner_team_id=owner_team_id,
+            visibility="org",
+            created_by=created_by,
+        )
+        update = await update_library_primitive(
+            session,
+            prim.id,
+            {
+                "contribution_status": CONTRIBUTION_DRAFT,
+                "version_group_id": group_id,
+            },
+        )
+    if update is None:
+        raise ContributionNotFoundError(f"Contribution version {prim.id} not found after creation")
+    return update
+
+
+async def list_contribution_versions(
+    session: AsyncSession,
+    org_id: uuid.UUID,
+    primitive_id: uuid.UUID,
+) -> list[LibraryPrimitive]:
+    """Return all versions for a contribution primitive, newest first."""
+    async with session.begin():
+        await set_rls_org(session, org_id)
+        prim = await get_library_primitive(session, primitive_id)
+
+    if prim is None:
+        raise ContributionNotFoundError(f"Contribution {primitive_id} not found")
+
+    group_id = prim.version_group_id or prim.id
+
+    async with session.begin():
+        await set_rls_org(session, org_id)
+        results = await list_primitives_by_version_group(session, group_id)
+
+    # If the target primitive has no version_group_id yet, return just itself
+    if prim.version_group_id is None:
+        return [prim]
+
+    # Include the seed primitive (the one whose version_group_id was set to
+    # its own id) — it won't appear in the version-group query because it
+    # may not yet have the version_group_id set if it predates the feature.
+    if not any(r.id == prim.id for r in results):
+        results.append(prim)
+
+    return sorted(results, key=lambda p: p.version, reverse=True)
+
+
+async def notify_importers_of_update(
+    session: AsyncSession,
+    org_id: uuid.UUID,
+    primitive_id: uuid.UUID,
+) -> None:
+    """Mark library entries that forked from this primitive as having an update.
+
+    Finds all primitives that were copied (``forked_from``) from any version
+    in the same version group and sets their ``update_available_version_id``
+    to the newly published version.
+    """
+    async with session.begin():
+        await set_rls_org(session, org_id)
+        prim = await get_library_primitive(session, primitive_id)
+
+    if prim is None:
+        return
+
+    group_id = prim.version_group_id
+    if group_id is None:
+        return
+
+    # Find all primitives forked from any version in this group
+    stmt = select(LibraryPrimitive).where(
+        LibraryPrimitive.forked_from.in_(
+            select(LibraryPrimitive.id).where(LibraryPrimitive.version_group_id == group_id)
+        )
+    )
+    result = await session.execute(stmt)
+    fork_copies = list(result.scalars())
+
+    for copy in fork_copies:
+        await update_library_primitive(
+            session,
+            copy.id,
+            {"update_available_version_id": prim.id},
+        )

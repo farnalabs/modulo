@@ -219,8 +219,8 @@ async def _create_seed_run(
     snapshot_id = uuid.uuid4()
     await session.execute(
         text(
-            "INSERT INTO pipelines (id, organisation_id, name, created_by) "
-            "VALUES (:id, :org_id, :name, :user_id)"
+            "INSERT INTO pipelines (id, organisation_id, name, created_by, run_context_defaults) "
+            "VALUES (:id, :org_id, :name, :user_id, '{}'::json)"
         ),
         {
             "id": str(pipeline_id),

@@ -22,6 +22,4 @@ class NotificationEndpoint(OrgScoped):
         UUID(as_uuid=True),
         ForeignKey("users.id", ondelete="SET NULL"),
     )
-    team_id: Mapped[uuid.UUID | None] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("teams.id", ondelete="CASCADE")
-    )
+    team_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("teams.id", ondelete="CASCADE"))

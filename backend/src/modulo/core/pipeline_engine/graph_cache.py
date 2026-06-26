@@ -228,11 +228,7 @@ def build_graph_from_json(
                 if hitl_config:
                     gate_id = _make_gate_id(source, target)
                     hitl_config["gate_id"] = gate_id
-                    node_evals = (
-                        eval_definitions_by_node.get(source)
-                        if eval_definitions_by_node is not None
-                        else None
-                    )
+                    node_evals = eval_definitions_by_node.get(source) if eval_definitions_by_node is not None else None
                     graph.add_node(
                         gate_id,
                         make_hitl_gate_fn(hitl_config, eval_definitions=node_evals),

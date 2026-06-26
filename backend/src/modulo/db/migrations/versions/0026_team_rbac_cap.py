@@ -22,17 +22,10 @@ depends_on: str | Sequence[str] | None = None
 
 def upgrade() -> None:
     # 1. Migrate existing 'member' rows to 'viewer'
-    op.execute(
-        sa.text("UPDATE team_memberships SET role = 'viewer' WHERE role = 'member'")
-    )
+    op.execute(sa.text("UPDATE team_memberships SET role = 'viewer' WHERE role = 'member'"))
 
     # 2. Change column default to 'viewer'
-    op.execute(
-        sa.text(
-            "ALTER TABLE team_memberships "
-            "ALTER COLUMN role SET DEFAULT 'viewer'"
-        )
-    )
+    op.execute(sa.text("ALTER TABLE team_memberships ALTER COLUMN role SET DEFAULT 'viewer'"))
 
     # 3. Add CHECK constraint restricting to valid team roles
     op.create_check_constraint(
@@ -98,9 +91,4 @@ def downgrade() -> None:
     op.execute(sa.text("DROP TRIGGER IF EXISTS trg_team_privilege_cap ON team_memberships"))
     op.execute(sa.text("DROP FUNCTION IF EXISTS check_team_privilege_cap()"))
     op.drop_constraint("ck_team_memberships_role", "team_memberships")
-    op.execute(
-        sa.text(
-            "ALTER TABLE team_memberships "
-            "ALTER COLUMN role SET DEFAULT 'member'"
-        )
-    )
+    op.execute(sa.text("ALTER TABLE team_memberships ALTER COLUMN role SET DEFAULT 'member'"))

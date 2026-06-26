@@ -93,6 +93,19 @@ def migrated_db_url(db_url: str) -> str:
                     text("ALTER TABLE webhook_payloads ALTER COLUMN payload_ciphertext DROP NOT NULL")
                 )
 
+            # Force RLS on all org-scoped tables so it applies to the testcontainers
+            # superuser too. Without FORCE, PostgreSQL superusers bypass ENABLE RLS,
+            # which breaks cross-tenant isolation tests that rely on SET LOCAL ROLE.
+            for _tbl in (
+                "org_daily_run_counts", "users", "audit_events", "schemas", "teams",
+                "connector_instances", "library_primitives", "model_backends",
+                "org_api_keys", "schema_versions", "stages", "agents", "pipelines",
+                "pipeline_edges", "pipeline_snapshots", "triggers", "runs",
+                "webhook_dedup_hashes", "hitl_claims", "notification_delivery_log",
+                "trigger_events", "webhook_payloads",
+            ):
+                await conn.execute(text(f"ALTER TABLE {_tbl} FORCE ROW LEVEL SECURITY"))
+
             await conn.commit()
         await eng.dispose()
 

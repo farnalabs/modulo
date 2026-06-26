@@ -127,7 +127,12 @@ _VALID_32 = "a" * 32
 def webhook_client() -> Generator[TestClient, None, None]:
     from modulo.api.dependencies import _get_engine, get_db_session
     from modulo.api.main import app
+    from modulo.auth.dependencies import get_current_user
+    from modulo.auth.jwt import AuthenticatedPrincipal
     from modulo.settings import Settings, get_settings
+
+    _fake_org_id = uuid.uuid4()
+    _fake_user_id = uuid.uuid4()
 
     def _settings() -> Settings:
         return Settings(
@@ -135,6 +140,14 @@ def webhook_client() -> Generator[TestClient, None, None]:
             secret_key=_VALID_32,
             fernet_key=_VALID_32,
             modulo_admin_password="pw",
+        )
+
+    def _principal() -> AuthenticatedPrincipal:
+        return AuthenticatedPrincipal(
+            username="ci@test.local",
+            organisation_id=_fake_org_id,
+            user_id=_fake_user_id,
+            org_role="admin",
         )
 
     session = AsyncMock()
@@ -149,6 +162,7 @@ def webhook_client() -> Generator[TestClient, None, None]:
     app.dependency_overrides[get_settings] = _settings
     app.dependency_overrides[get_db_session] = _session
     app.dependency_overrides[_get_engine] = lambda: MagicMock()
+    app.dependency_overrides[get_current_user] = _principal
 
     yield TestClient(app, raise_server_exceptions=False)
 

@@ -40,7 +40,7 @@ class LangGraphOtelBridge(BaseCallbackHandler):
         tracer: trace.Tracer | None = None,
         tracer_name: str = "modulo.langgraph",
     ) -> None:
-        super().__init__(raise_error=False)
+        super().__init__()
         # Accept an injected tracer so tests can provide a TracerProvider with
         # an InMemorySpanExporter without mutating the global OTel state.
         self._tracer: trace.Tracer = tracer or trace.get_tracer(tracer_name)

@@ -252,12 +252,9 @@ class PipelineExecutor:
         thread_id = run.langgraph_thread_id
 
         # Load eval definitions for eval-before-interrupt (resume path).
-        eval_stmt = (
-            select(EvalDefinition)
-            .where(
-                EvalDefinition.pipeline_id == pipeline_id,
-                EvalDefinition.node_id.isnot(None),
-            )
+        eval_stmt = select(EvalDefinition).where(
+            EvalDefinition.pipeline_id == pipeline_id,
+            EvalDefinition.node_id.isnot(None),
         )
         eval_rows = (await session.execute(eval_stmt)).scalars().all()
         resume_eval_defs_by_node: dict[str, list[EvalDefDTO]] = {}
@@ -369,12 +366,9 @@ class PipelineExecutor:
         thread_id = run.langgraph_thread_id
 
         # Load eval definitions for conditional HITL gating (eval-before-interrupt).
-        eval_stmt = (
-            select(EvalDefinition)
-            .where(
-                EvalDefinition.pipeline_id == pipeline_id,
-                EvalDefinition.node_id.isnot(None),
-            )
+        eval_stmt = select(EvalDefinition).where(
+            EvalDefinition.pipeline_id == pipeline_id,
+            EvalDefinition.node_id.isnot(None),
         )
         eval_rows = (await session.execute(eval_stmt)).scalars().all()
         eval_defs_by_node: dict[str, list[EvalDefDTO]] = {}

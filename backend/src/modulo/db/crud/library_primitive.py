@@ -171,6 +171,19 @@ async def update_library_primitive(
     return primitive
 
 
+async def list_primitives_by_version_group(
+    session: AsyncSession,
+    version_group_id: uuid.UUID,
+) -> list[LibraryPrimitive]:
+    stmt = (
+        select(LibraryPrimitive)
+        .where(LibraryPrimitive.version_group_id == version_group_id)
+        .order_by(LibraryPrimitive.created_at.desc())
+    )
+    result = await session.execute(stmt)
+    return list(result.scalars())
+
+
 async def delete_library_primitive(session: AsyncSession, primitive_id: uuid.UUID) -> bool:
     primitive = await get_library_primitive(session, primitive_id)
     if primitive is None:

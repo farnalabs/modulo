@@ -46,16 +46,9 @@ _TEAM_POLICY_USING = (
 
 def upgrade() -> None:
     for table in _TEAM_SCOPED_TABLES:
-        op.execute(
-            sa.text(
-                f'CREATE POLICY rls_team_isolation ON "{table}" '
-                f"USING ({_TEAM_POLICY_USING})"
-            )
-        )
+        op.execute(sa.text(f'CREATE POLICY rls_team_isolation ON "{table}" USING ({_TEAM_POLICY_USING})'))
 
 
 def downgrade() -> None:
     for table in reversed(_TEAM_SCOPED_TABLES):
-        op.execute(
-            sa.text(f'DROP POLICY IF EXISTS rls_team_isolation ON "{table}"')
-        )
+        op.execute(sa.text(f'DROP POLICY IF EXISTS rls_team_isolation ON "{table}"'))

@@ -95,8 +95,8 @@ async def seeded_db(db_session: AsyncSession) -> AsyncSession:
     # Insert connector instance
     await db_session.execute(
         text(
-            "INSERT INTO connector_instances (id, organisation_id, created_by, "
-            "connector_type_id, display_name, config_json, visibility, "
+            "INSERT INTO connector_instances (id, organisation_id, owner_id, "
+            "connector_type_id, name, config_json, visibility, "
             "allowed_operations, credentials_ciphertext) "
             "VALUES (:id, :oid, :uid, 'stub', 'Stub CI', "
             "'{}'::json, 'org', ARRAY['query']::text[], 'ciphertext') "

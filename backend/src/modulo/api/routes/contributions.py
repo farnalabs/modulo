@@ -14,9 +14,11 @@ from modulo.core.library_service import (
     ContributionInvalidTransitionError,
     ContributionNotFoundError,
     contribute_fixture,
+    list_contribution_versions,
     list_contributions,
     publish_contribution,
     submit_contribution_for_review,
+    submit_contribution_version,
 )
 from modulo.db.rls import set_rls_org
 
@@ -145,6 +147,93 @@ async def publish_contribution_endpoint(
         visibility=prim.visibility,
         name=prim.name,
         slug=prim.slug,
+    )
+
+
+class VersionResponse(BaseModel):
+    id: uuid.UUID
+    version: str
+    contribution_status: str | None
+    name: str
+    slug: str
+    created_by: str | None = None
+
+
+class VersionListResponse(BaseModel):
+    versions: list[VersionResponse]
+    total: int
+
+
+@router.post("/{primitive_id}/versions", response_model=ContributeFixtureResponse, status_code=status.HTTP_201_CREATED)
+async def submit_contribution_version_endpoint(
+    primitive_id: uuid.UUID,
+    body: ContributeFixtureRequest,
+    session: AsyncSession = Depends(get_db_session),
+    principal: AuthenticatedPrincipal = Depends(get_current_user),
+) -> ContributeFixtureResponse:
+    """Submit a new version of an existing published fixture contribution.
+
+    Accepts the same fields as creation.  The version string is auto-incremented
+    and the new version starts as a draft, going through the same
+    review -> publish lifecycle.
+    """
+    try:
+        async with session.begin():
+            await set_rls_org(session, principal.organisation_id)
+            prim = await submit_contribution_version(
+                session,
+                principal.organisation_id,
+                primitive_id,
+                created_by=principal.user_id,
+                name=body.name,
+                slug=body.slug,
+                description=body.description,
+                tags=body.tags,
+                fixture_map=body.fixture_map,
+                source_run_id=(uuid.UUID(body.source_run_id) if body.source_run_id else None),
+                source_pipeline_id=(uuid.UUID(body.source_pipeline_id) if body.source_pipeline_id else None),
+                owner_team_id=(uuid.UUID(body.owner_team_id) if body.owner_team_id else None),
+            )
+    except ContributionNotFoundError:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Contribution not found") from None
+    except ContributionInvalidTransitionError as e:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(e)) from None
+    return ContributeFixtureResponse(
+        id=prim.id,
+        contribution_status=prim.contribution_status,
+        name=prim.name,
+        slug=prim.slug,
+    )
+
+
+@router.get("/{primitive_id}/versions", response_model=VersionListResponse)
+async def list_contribution_versions_endpoint(
+    primitive_id: uuid.UUID,
+    session: AsyncSession = Depends(get_db_session),
+    principal: AuthenticatedPrincipal = Depends(get_current_user),
+) -> VersionListResponse:
+    """List all versions for a fixture contribution."""
+    try:
+        versions = await list_contribution_versions(
+            session,
+            principal.organisation_id,
+            primitive_id,
+        )
+    except ContributionNotFoundError:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Contribution not found") from None
+    return VersionListResponse(
+        versions=[
+            VersionResponse(
+                id=v.id,
+                version=v.version,
+                contribution_status=v.contribution_status,
+                name=v.name,
+                slug=v.slug,
+                created_by=v.created_by.hex if v.created_by else None,
+            )
+            for v in versions
+        ],
+        total=len(versions),
     )
 
 

@@ -45,15 +45,45 @@ def _make_snapshot(graph_json: dict[str, Any] | None = None) -> MagicMock:
     return snap
 
 
+def _make_pipeline() -> MagicMock:
+    pipeline = MagicMock()
+    pipeline.max_concurrent_runs = 5
+    pipeline.lock_wait_timeout_seconds = 30
+    return pipeline
+
+
 def _make_session(snapshot: MagicMock) -> AsyncMock:
+    pipeline = _make_pipeline()
+
+    pipeline_result = MagicMock()
+    pipeline_result.scalar_one.return_value = pipeline
+
+    snapshot_result = MagicMock()
+    snapshot_result.scalar_one.return_value = snapshot
+
+    eval_result = MagicMock()
+    scalars_mock = MagicMock()
+    scalars_mock.all.return_value = []
+    eval_result.scalars.return_value = scalars_mock
+
+    count_result = MagicMock()
+    count_result.scalar.return_value = 0
+
+    # Return pipeline first, snapshot second, then eval query, then count query
+    execute_results = iter([pipeline_result, snapshot_result, eval_result, count_result])
+
+    async def _execute(*_args: Any, **_kwargs: Any) -> Any:
+        try:
+            return next(execute_results)
+        except StopIteration:
+            return count_result
+
     session = AsyncMock()
     begin_cm = AsyncMock()
     begin_cm.__aenter__ = AsyncMock(return_value=None)
     begin_cm.__aexit__ = AsyncMock(return_value=False)
     session.begin = MagicMock(return_value=begin_cm)
-    scalar_result = MagicMock()
-    scalar_result.scalar_one.return_value = snapshot
-    session.execute = AsyncMock(return_value=scalar_result)
+    session.execute = _execute
     return session
 
 

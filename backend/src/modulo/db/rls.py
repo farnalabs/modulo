@@ -37,8 +37,7 @@ async def set_rls_user_context(session: AsyncSession, user_id: uuid.UUID, org_ro
     """
     if not session.in_transaction():
         raise RuntimeError(
-            "set_rls_user_context requires an active transaction; "
-            "wrap the call in `async with session.begin():`"
+            "set_rls_user_context requires an active transaction; wrap the call in `async with session.begin():`"
         )
     await session.execute(
         text("SELECT set_config('app.user_id', :uid, true)"),
