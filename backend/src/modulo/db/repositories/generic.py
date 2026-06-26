@@ -6,16 +6,8 @@ from collections.abc import AsyncGenerator, Callable
 from sqlalchemy import Select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from modulo.db.repositories.base import BaseRepository
-
-
-def _extract_entity(stmt: Select) -> type | None:
-    """Walk the statement's column descriptions to find the ORM entity."""
-    for desc in stmt.column_descriptions:
-        entity = desc.get("entity")
-        if entity is not None:
-            return entity
-    return None
+from modulo.db.repositories.base import BaseRepository, extract_orm_entity
+from modulo.db.rls import set_rls_org
 
 
 class GenericRepository(BaseRepository):
@@ -26,17 +18,11 @@ class GenericRepository(BaseRepository):
     clause into every query via ``apply_tenant_filter``.
     """
 
-    def __init__(
-        self,
-        session_factory: Callable[[], AsyncGenerator[AsyncSession, None]],
-    ) -> None:
-        super().__init__(session_factory)
-
     async def set_org_context(self, session: AsyncSession, org_id: uuid.UUID) -> None:
-        pass
+        await set_rls_org(session, org_id)
 
     def apply_tenant_filter(self, stmt: Select, org_id: uuid.UUID) -> Select:
-        entity = _extract_entity(stmt)
+        entity = extract_orm_entity(stmt)
         if entity is not None and hasattr(entity, "organisation_id"):
             return stmt.where(entity.organisation_id == org_id)
         return stmt

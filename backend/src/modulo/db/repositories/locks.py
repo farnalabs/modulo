@@ -89,12 +89,15 @@ class PostgresLock(BaseLockService):
 class GenericLock(BaseLockService):
     """In-memory lock for single-process backends (SQLite, MariaDB).
 
-    Uses an ``asyncio.Lock`` per key.  The *session* parameter is accepted
-    for interface compatibility but is not used.
+    Uses an ``asyncio.Lock`` per key, tracking ownership by task ID so
+    that timeout / error paths cannot release another task's lock.
+    The *session* parameter is accepted for interface compatibility but
+    is not used.
     """
 
     def __init__(self) -> None:
         self._locks: dict[str, asyncio.Lock] = {}
+        self._owners: dict[str, int] = {}
         self._dict_lock = asyncio.Lock()
 
     async def acquire_lock(
@@ -116,10 +119,22 @@ class GenericLock(BaseLockService):
         else:
             await lock.acquire()
 
+        owner = id(asyncio.current_task())
+        async with self._dict_lock:
+            self._owners[key] = owner
+
     async def release_lock(self, session: AsyncSession, key: str) -> None:
-        lock = self._locks.get(key)
-        if lock is not None and lock.locked():
-            lock.release()
+        owner = id(asyncio.current_task())
+        async with self._dict_lock:
+            actual = self._owners.get(key)
+            if actual is None or actual != owner:
+                return
+            del self._owners[key]
+            lock = self._locks.get(key)
+            if lock is not None:
+                lock.release()
+                if not lock.locked():
+                    del self._locks[key]
 
 
 def _str_to_lock_keys(key: str) -> tuple[int, int]:

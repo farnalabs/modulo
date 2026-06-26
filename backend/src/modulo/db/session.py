@@ -12,27 +12,35 @@ from modulo.settings import get_settings
 
 _log = logging.getLogger(__name__)
 
-_settings = get_settings()
-_db_type = _settings.modulo_db.lower()
 
-_kw: dict[str, Any] = {"url": _settings.database_url}
-if _db_type != "sqlite":
-    _kw["pool_pre_ping"] = True
-    _kw["pool_size"] = 10
-    _kw["max_overflow"] = 5
+def _build_engine() -> Any:
+    """Build and configure the async engine from settings.
 
-engine = create_async_engine(**_kw)
+    Extracted into a function so tests can replace it without patching
+    module-level state.  Called once at module load.
+    """
+    settings = get_settings()
+    db_type = settings.modulo_db.lower()
 
-if _db_type == "postgres":
-    register_rls_reset_hook(engine)
-    register_append_only_guard()
-else:
-    _log.info("Skipping pool-level RLS reset hook — %s backend", _db_type)
+    kw: dict[str, Any] = {"url": settings.database_url}
+    if db_type != "sqlite":
+        kw["pool_pre_ping"] = True
+        kw["pool_size"] = 10
+        kw["max_overflow"] = 5
 
-# Register ORM tenant filter for non-Postgres backends (MariaDB, SQLite, MySQL).
-# This auto-injects WHERE organisation_id = :oid on every query using the org_id
-# stored in session.info by set_rls_org().
-register_tenant_filter()
+    engine = create_async_engine(**kw)
+
+    if db_type == "postgres":
+        register_rls_reset_hook(engine)
+        register_append_only_guard()
+    else:
+        _log.info("Skipping pool-level RLS reset hook — %s backend", db_type)
+
+    register_tenant_filter()
+    return engine
+
+
+engine = _build_engine()
 
 AsyncSessionLocal = async_sessionmaker(
     engine,
@@ -49,6 +57,6 @@ async def get_session() -> AsyncGenerator[AsyncSession, None]:
         try:
             yield session
             await session.commit()
-        except SQLAlchemyError:
+        except Exception:
             await session.rollback()
             raise
