@@ -26,6 +26,7 @@ class _FakeSnapshot:
         self.schema_pins_json = schema_pins_json or []
         self.connector_bindings_json = connector_bindings_json or []
         self.model_backend_pins_json = model_backend_pins_json or []
+        self.environment_profile_id = None
 
 
 async def test_pre_run_blocks_on_empty_graph(

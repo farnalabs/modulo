@@ -168,48 +168,44 @@ async def org_a_data(
 class TestCrossTenantPipelines:
 
     async def test_list_pipelines_hides_org_a(
-        self, db_engine: AsyncEngine, org_b: uuid.UUID, rls_role: str,
+        self, db_engine: AsyncEngine, org_b: uuid.UUID,
     ) -> None:
         factory = async_sessionmaker(db_engine, expire_on_commit=False)
         async with factory() as session:
             async with session.begin():
-                await session.execute(text(f'SET LOCAL ROLE "{rls_role}"'))
                 await set_rls_org(session, org_b)
                 result = await list_pipelines(session)
                 assert result.total == 0
 
     async def test_get_pipeline_returns_none_for_org_a_id(
-        self, db_engine: AsyncEngine, org_b: uuid.UUID, rls_role: str,
+        self, db_engine: AsyncEngine, org_b: uuid.UUID,
         org_a_data: dict[str, uuid.UUID],
     ) -> None:
         factory = async_sessionmaker(db_engine, expire_on_commit=False)
         async with factory() as session:
             async with session.begin():
-                await session.execute(text(f'SET LOCAL ROLE "{rls_role}"'))
                 await set_rls_org(session, org_b)
                 result = await get_pipeline(session, org_a_data["pipeline"])
                 assert result is None
 
     async def test_update_pipeline_returns_none_for_org_a_id(
-        self, db_engine: AsyncEngine, org_b: uuid.UUID, rls_role: str,
+        self, db_engine: AsyncEngine, org_b: uuid.UUID,
         org_a_data: dict[str, uuid.UUID],
     ) -> None:
         factory = async_sessionmaker(db_engine, expire_on_commit=False)
         async with factory() as session:
             async with session.begin():
-                await session.execute(text(f'SET LOCAL ROLE "{rls_role}"'))
                 await set_rls_org(session, org_b)
                 result = await update_pipeline(session, org_a_data["pipeline"], {"name": "Hacked"})
                 assert result is None
 
     async def test_delete_pipeline_returns_false_for_org_a_id(
-        self, db_engine: AsyncEngine, org_b: uuid.UUID, rls_role: str,
+        self, db_engine: AsyncEngine, org_b: uuid.UUID,
         org_a_data: dict[str, uuid.UUID],
     ) -> None:
         factory = async_sessionmaker(db_engine, expire_on_commit=False)
         async with factory() as session:
             async with session.begin():
-                await session.execute(text(f'SET LOCAL ROLE "{rls_role}"'))
                 await set_rls_org(session, org_b)
                 result = await delete_pipeline(session, org_a_data["pipeline"])
                 assert result is False
@@ -218,24 +214,22 @@ class TestCrossTenantPipelines:
 class TestCrossTenantAgents:
 
     async def test_list_agents_hides_org_a(
-        self, db_engine: AsyncEngine, org_b: uuid.UUID, rls_role: str,
+        self, db_engine: AsyncEngine, org_b: uuid.UUID,
     ) -> None:
         factory = async_sessionmaker(db_engine, expire_on_commit=False)
         async with factory() as session:
             async with session.begin():
-                await session.execute(text(f'SET LOCAL ROLE "{rls_role}"'))
                 await set_rls_org(session, org_b)
                 result = await list_agents(session)
                 assert result.total == 0
 
     async def test_get_agent_returns_none_for_org_a_id(
-        self, db_engine: AsyncEngine, org_b: uuid.UUID, rls_role: str,
+        self, db_engine: AsyncEngine, org_b: uuid.UUID,
         org_a_data: dict[str, uuid.UUID],
     ) -> None:
         factory = async_sessionmaker(db_engine, expire_on_commit=False)
         async with factory() as session:
             async with session.begin():
-                await session.execute(text(f'SET LOCAL ROLE "{rls_role}"'))
                 await set_rls_org(session, org_b)
                 result = await get_agent(session, org_a_data["agent"])
                 assert result is None
@@ -244,24 +238,22 @@ class TestCrossTenantAgents:
 class TestCrossTenantSchemas:
 
     async def test_list_schemas_hides_org_a(
-        self, db_engine: AsyncEngine, org_b: uuid.UUID, rls_role: str,
+        self, db_engine: AsyncEngine, org_b: uuid.UUID,
     ) -> None:
         factory = async_sessionmaker(db_engine, expire_on_commit=False)
         async with factory() as session:
             async with session.begin():
-                await session.execute(text(f'SET LOCAL ROLE "{rls_role}"'))
                 await set_rls_org(session, org_b)
                 result = await list_schemas(session)
                 assert result.total == 0
 
     async def test_get_schema_returns_none_for_org_a_id(
-        self, db_engine: AsyncEngine, org_b: uuid.UUID, rls_role: str,
+        self, db_engine: AsyncEngine, org_b: uuid.UUID,
         org_a_data: dict[str, uuid.UUID],
     ) -> None:
         factory = async_sessionmaker(db_engine, expire_on_commit=False)
         async with factory() as session:
             async with session.begin():
-                await session.execute(text(f'SET LOCAL ROLE "{rls_role}"'))
                 await set_rls_org(session, org_b)
                 result = await get_schema(session, org_a_data["schema"])
                 assert result is None
@@ -270,24 +262,22 @@ class TestCrossTenantSchemas:
 class TestCrossTenantConnectorInstances:
 
     async def test_list_connector_instances_hides_org_a(
-        self, db_engine: AsyncEngine, org_b: uuid.UUID, rls_role: str,
+        self, db_engine: AsyncEngine, org_b: uuid.UUID,
     ) -> None:
         factory = async_sessionmaker(db_engine, expire_on_commit=False)
         async with factory() as session:
             async with session.begin():
-                await session.execute(text(f'SET LOCAL ROLE "{rls_role}"'))
                 await set_rls_org(session, org_b)
                 result = await list_connector_instances(session)
                 assert result.total == 0
 
     async def test_get_connector_instance_returns_none_for_org_a_id(
-        self, db_engine: AsyncEngine, org_b: uuid.UUID, rls_role: str,
+        self, db_engine: AsyncEngine, org_b: uuid.UUID,
         org_a_data: dict[str, uuid.UUID],
     ) -> None:
         factory = async_sessionmaker(db_engine, expire_on_commit=False)
         async with factory() as session:
             async with session.begin():
-                await session.execute(text(f'SET LOCAL ROLE "{rls_role}"'))
                 await set_rls_org(session, org_b)
                 result = await get_connector_instance(session, org_a_data["connector_instance"])
                 assert result is None
@@ -301,52 +291,48 @@ class TestCrossTenantConnectorInstances:
 class TestPositiveControl:
 
     async def test_orga_sees_own_pipeline(
-        self, db_engine: AsyncEngine, org_a: uuid.UUID, rls_role: str,
+        self, db_engine: AsyncEngine, org_a: uuid.UUID,
         org_a_data: dict[str, uuid.UUID],
     ) -> None:
         factory = async_sessionmaker(db_engine, expire_on_commit=False)
         async with factory() as session:
             async with session.begin():
-                await session.execute(text(f'SET LOCAL ROLE "{rls_role}"'))
                 await set_rls_org(session, org_a)
                 result = await get_pipeline(session, org_a_data["pipeline"])
                 assert result is not None
                 assert result.name == "OrgA-Pipeline"
 
     async def test_orga_sees_own_agent(
-        self, db_engine: AsyncEngine, org_a: uuid.UUID, rls_role: str,
+        self, db_engine: AsyncEngine, org_a: uuid.UUID,
         org_a_data: dict[str, uuid.UUID],
     ) -> None:
         factory = async_sessionmaker(db_engine, expire_on_commit=False)
         async with factory() as session:
             async with session.begin():
-                await session.execute(text(f'SET LOCAL ROLE "{rls_role}"'))
                 await set_rls_org(session, org_a)
                 result = await get_agent(session, org_a_data["agent"])
                 assert result is not None
                 assert result.name == "OrgA-Agent"
 
     async def test_orga_sees_own_schema(
-        self, db_engine: AsyncEngine, org_a: uuid.UUID, rls_role: str,
+        self, db_engine: AsyncEngine, org_a: uuid.UUID,
         org_a_data: dict[str, uuid.UUID],
     ) -> None:
         factory = async_sessionmaker(db_engine, expire_on_commit=False)
         async with factory() as session:
             async with session.begin():
-                await session.execute(text(f'SET LOCAL ROLE "{rls_role}"'))
                 await set_rls_org(session, org_a)
                 result = await get_schema(session, org_a_data["schema"])
                 assert result is not None
                 assert result.name == "OrgA-Schema"
 
     async def test_orga_sees_own_connector_instance(
-        self, db_engine: AsyncEngine, org_a: uuid.UUID, rls_role: str,
+        self, db_engine: AsyncEngine, org_a: uuid.UUID,
         org_a_data: dict[str, uuid.UUID],
     ) -> None:
         factory = async_sessionmaker(db_engine, expire_on_commit=False)
         async with factory() as session:
             async with session.begin():
-                await session.execute(text(f'SET LOCAL ROLE "{rls_role}"'))
                 await set_rls_org(session, org_a)
                 result = await get_connector_instance(session, org_a_data["connector_instance"])
                 assert result is not None

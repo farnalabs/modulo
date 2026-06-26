@@ -22,6 +22,7 @@ from modulo.api.mcp_server import build_mcp_asgi_app
 from modulo.api.middleware.catch_all import CatchAllMiddleware
 from modulo.api.middleware.correlation_id import CorrelationIdMiddleware
 from modulo.api.middleware.cors_logging import CorsLoggingMiddleware
+from modulo.api.middleware.deprecation_headers import DeprecationHeaderMiddleware
 from modulo.api.middleware.rate_limiter import RateLimitMiddleware
 from modulo.api.routes.admin import router as admin_router
 from modulo.api.routes.admin_feature_flags import router as admin_feature_flags_router
@@ -32,6 +33,7 @@ from modulo.api.routes.agents import router as agents_router
 from modulo.api.routes.api_keys import router as api_keys_router
 from modulo.api.routes.audit import router as audit_router
 from modulo.api.routes.auth import router as auth_router
+from modulo.api.routes.changelog import router as changelog_router
 from modulo.api.routes.connectors import router as connectors_router
 from modulo.api.routes.contributions import router as contributions_router
 from modulo.api.routes.costs import router as costs_router
@@ -451,6 +453,7 @@ app.add_middleware(
 )
 app.add_middleware(CorrelationIdMiddleware)
 app.add_middleware(RateLimitMiddleware)
+app.add_middleware(DeprecationHeaderMiddleware)
 app.add_middleware(CatchAllMiddleware)
 
 app.include_router(admin_router)
@@ -458,6 +461,7 @@ app.include_router(admin_feature_flags_router)
 app.include_router(admin_rate_limits_router)
 app.include_router(admin_sso_router)
 app.include_router(auth_router)
+app.include_router(changelog_router)
 app.include_router(sso_router)
 app.include_router(dashboard_router)
 app.include_router(costs_router)
