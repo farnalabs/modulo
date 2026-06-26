@@ -268,3 +268,101 @@ CORS_MAX_AGE=3600
 | `MODULO_E2B_API_KEY` | For E2B | — | E2B sandbox API key for runtime provider |
 | `MODULO_ADMIN_SECRET` | No | — | Shared secret for `modulo-migrate` CLI auth |
 | `OLLAMA_BASE_URL` | For Ollama | `http://localhost:11434` | Ollama server URL |
+
+---
+
+## Deployment Modes
+
+Modulo supports three deployment modes depending on your needs.
+
+### Standalone (single-user, local)
+
+```
+pip install modulo   # or uv tool install modulo
+modulo init          # generates keys, seeds admin user
+modulo start         # starts server, opens browser
+```
+
+| Component | How it runs |
+|---|---|
+| Database | SQLite file (`./modulo.db`), no server process needed |
+| Task scheduling | In-process asyncio loops — cron and polling triggers work |
+| Task queue | In-process, no durability across crashes |
+| Rate limiting | In-memory token bucket, single-user safe |
+| Concurrency | Single process, single worker |
+
+**What you lose vs. full deployment:**
+- **No horizontal scaling** — one process, one user at a time
+- **No task durability** — if the process crashes mid-run, the run is lost (re-run manually)
+- **No distributed rate limiting** — the in-memory bucket doesn't coordinate across processes
+
+**What you keep:**
+- Cron-triggered pipelines ✓
+- Polling triggers ✓
+- All pipeline features, evals, HITL, connectors ✓
+- The SQLite DB file is portable — copy it to another machine and `modulo start` picks it up
+
+### Docker Compose (single-server, multi-user)
+
+```
+curl https://modulo.run/install.sh | bash
+# or: docker compose -f docker-compose.prod.yml up
+```
+
+| Component | How it runs |
+|---|---|
+| Database | PostgreSQL 16 (separate container) |
+| Task scheduling | In-process asyncio loops (default) or Celery beat (with Redis) |
+| Task queue | In-process (default) or Celery workers (with Redis) |
+| Rate limiting | In-memory (default) or Redis token bucket (with Redis) |
+| Concurrency | Single backend replica, multiple simultaneous requests |
+
+If Redis is configured (`REDIS_URL` set), the app automatically upgrades scheduling, queuing, and rate limiting to use Celery + Redis. If Redis is absent, everything still works via in-process fallbacks with a startup notice.
+
+### Kubernetes (production, multi-replica)
+
+See `docs/deployment/k8s.md` and the Helm chart at `helm/modulo/`.
+
+| Component | How it runs |
+|---|---|
+| Database | PostgreSQL 16 (Bitnami sub-chart or external) |
+| Task scheduling | Celery beat (Redis required) |
+| Task queue | Celery workers (Redis required) |
+| Rate limiting | Redis token bucket (Redis required) |
+| Concurrency | Multiple backend replicas, horizontal scaling |
+
+**Redis is required for multi-replica deployments.** See the Scaling section below.
+
+---
+
+## Scaling
+
+### Horizontal scaling (multiple backend replicas)
+
+For more than one backend replica, **Redis is mandatory.** Here's why:
+
+| Feature | Without Redis | With Redis | What goes wrong at 2+ replicas |
+|---|---|---|---|
+| Cron triggers | In-process asyncio loop | Celery beat | Both replicas fire every trigger. Runs execute twice. |
+| Polling triggers | In-process asyncio loop | Celery worker | Same — duplicate execution. |
+| Task queue | In-process | Celery broker + result backend | Tasks are scheduled in the replica that received the request. If that replica crashes or is scaled down, the task disappears. |
+| Rate limiting | In-memory dict | Redis token bucket | Each replica has its own counter. A user hitting both replicas effectively doubles their rate limit. |
+| Lock coordination | PG advisory locks | PG advisory locks | These work across replicas via PostgreSQL — no Redis needed for locks. |
+
+**The pattern:** without Redis, each replica independently runs its own scheduler and rate limiter. They don't coordinate. This is fine for a single replica. For two or more, the system behaves incorrectly.
+
+**The one exception** is PG advisory locks — they coordinate across any number of replicas via PostgreSQL itself, so locking patterns work without Redis regardless of replica count.
+
+### Vertical scaling (bigger machine)
+
+Adding CPU/RAM to a single replica works without Redis. The asyncio event loop handles many concurrent requests within one process. Gunicorn worker processes (configurable via `GUNICORN_WORKERS` env var) use multiple CPU cores on a single machine.
+
+### Configuration
+
+```env
+# Single replica — no Redis needed
+REDIS_URL=
+
+# Multiple replicas — Redis required
+REDIS_URL=redis://redis:6379/0
+```
