@@ -274,7 +274,7 @@ async def test_initialise_creates_shell_connector():
     backend = create_secrets_backend(fernet_key=_KEY, backend_name="fernet")
     provider = _HubFakeRuntimeProvider()
     with patch.object(backend, 'get_secret', return_value="{}"):
-        hub = ConnectorHub(secrets_backend=backend, runtime_provider=provider)
+        hub = ConnectorHub(secrets_backend=backend)
         await hub.initialise([ci])
     connector = hub.get(ci.id)
     assert connector.connector_type == ConnectorType.SHELL
@@ -290,6 +290,6 @@ async def test_initialise_shell_no_runtime_provider_raises():
     )
     backend = create_secrets_backend(fernet_key=_KEY, backend_name="fernet")
     with patch.object(backend, 'get_secret', return_value="{}"):
-        hub = ConnectorHub(secrets_backend=backend, runtime_provider=None)
+        hub = ConnectorHub(secrets_backend=backend)
         with pytest.raises(ValueError, match="RuntimeProvider"):
             await hub.initialise([ci])

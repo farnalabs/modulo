@@ -8,6 +8,7 @@ import respx
 from cryptography.fernet import Fernet
 
 from modulo.core.connector_hub import ConnectorHub
+from modulo.core.secrets_backend import create_secrets_backend
 from modulo.determination.scanner import run_scan
 
 _KEY = Fernet.generate_key().decode()
@@ -43,7 +44,7 @@ _LINEAR_API = "https://api.linear.app/graphql"
 @respx.mock
 async def test_github_scan():
     ci = _fake_ci("github", creds={"token": "ghp_test"})
-    hub = ConnectorHub(fernet_key=_KEY)
+    hub = ConnectorHub(secrets_backend=create_secrets_backend(fernet_key=_KEY))
     hub.initialise([ci])
 
     respx.get(f"{_GITHUB_API}/user").mock(httpx.Response(200, json={"login": "octocat"}))
@@ -65,7 +66,7 @@ async def test_github_scan():
 @respx.mock
 async def test_gitlab_scan():
     ci = _fake_ci("gitlab", creds={"token": "glpat_test"})
-    hub = ConnectorHub(fernet_key=_KEY)
+    hub = ConnectorHub(secrets_backend=create_secrets_backend(fernet_key=_KEY))
     hub.initialise([ci])
 
     respx.get(f"{_GITLAB_API}/user").mock(httpx.Response(200, json={"username": "testuser"}))
@@ -89,7 +90,7 @@ async def test_jira_scan():
         creds={"email": "user@test.com", "api_token": "token"},
         config={"instance": "test-domain.atlassian.net"},
     )
-    hub = ConnectorHub(fernet_key=_KEY)
+    hub = ConnectorHub(secrets_backend=create_secrets_backend(fernet_key=_KEY))
     hub.initialise([ci])
 
     respx.get(f"{_JIRA_BASE}/myself").mock(
@@ -110,7 +111,7 @@ async def test_jira_scan():
 @respx.mock
 async def test_linear_scan():
     ci = _fake_ci("linear", creds={"api_key": "lin_key"})
-    hub = ConnectorHub(fernet_key=_KEY)
+    hub = ConnectorHub(secrets_backend=create_secrets_backend(fernet_key=_KEY))
     hub.initialise([ci])
 
     respx.post(f"{_LINEAR_API}/graphql").mock(
@@ -160,7 +161,7 @@ async def test_filesystem_connector_skipped():
     import tempfile
     with tempfile.TemporaryDirectory() as tmpdir:
         ci = _fake_ci("filesystem", config={"base_path": tmpdir})
-        hub = ConnectorHub(fernet_key=_KEY)
+        hub = ConnectorHub(secrets_backend=create_secrets_backend(fernet_key=_KEY))
         hub.initialise([ci])
         samples = await run_scan(hub)
     assert len(samples) == 0  # filesystem is not sampled
@@ -169,7 +170,7 @@ async def test_filesystem_connector_skipped():
 @respx.mock
 async def test_health_check_failure_returns_no_samples():
     ci = _fake_ci("github", creds={"token": "bad_token"})
-    hub = ConnectorHub(fernet_key=_KEY)
+    hub = ConnectorHub(secrets_backend=create_secrets_backend(fernet_key=_KEY))
     hub.initialise([ci])
 
     # Health check fails
@@ -185,7 +186,7 @@ async def test_health_check_failure_returns_no_samples():
 
 @respx.mock
 async def test_empty_hub_returns_no_samples():
-    hub = ConnectorHub(fernet_key=_KEY)
+    hub = ConnectorHub(secrets_backend=create_secrets_backend(fernet_key=_KEY))
     samples = await run_scan(hub)
     assert len(samples) == 0
 
@@ -193,7 +194,7 @@ async def test_empty_hub_returns_no_samples():
 @respx.mock
 async def test_connector_query_error_returns_error_in_sample():
     ci = _fake_ci("github", creds={"token": "ghp_test"})
-    hub = ConnectorHub(fernet_key=_KEY)
+    hub = ConnectorHub(secrets_backend=create_secrets_backend(fernet_key=_KEY))
     hub.initialise([ci])
 
     respx.get(f"{_GITHUB_API}/user").mock(httpx.Response(200, json={"login": "octocat"}))
