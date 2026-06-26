@@ -35,7 +35,8 @@ async def set_rls_org(session: AsyncSession, org_id: uuid.UUID) -> None:
     if not session.in_transaction():
         raise RuntimeError("set_rls_org requires an active transaction; wrap the call in `async with session.begin():`")
 
-    dialect = session.get_bind().dialect.name
+    bind = await session.get_bind()
+    dialect = bind.dialect.name
 
     if dialect == "postgresql":
         # set_config(name, value, is_local=true) is equivalent to SET LOCAL and
@@ -61,7 +62,8 @@ async def set_rls_user_context(session: AsyncSession, user_id: uuid.UUID, org_ro
             "set_rls_user_context requires an active transaction; wrap the call in `async with session.begin():`"
         )
 
-    dialect = session.get_bind().dialect.name
+    bind = await session.get_bind()
+    dialect = bind.dialect.name
 
     if dialect == "postgresql":
         await session.execute(

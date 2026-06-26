@@ -212,6 +212,7 @@ def test_get_pipeline_graph_returns_authoritative_graph(client: TestClient) -> N
     edge.source_node_id = node_id
     edge.target_node_id = uuid.uuid4()
     edge.edge_type = "normal"
+    edge.condition_expression = None
     edge.hitl_gate_config = None
     nodes = [
         {
@@ -552,7 +553,7 @@ def test_update_pipeline_autonomy_level(client: TestClient) -> None:
 
     with (
         patch("modulo.api.routes.pipelines.update_pipeline", return_value=updated),
-        patch("modulo.db.crud.pipeline.get_pipeline", return_value=pipeline),
+        patch("modulo.api.routes.pipelines.get_pipeline", new=AsyncMock(return_value=pipeline)),
         patch("modulo.api.routes.pipelines.set_rls_org"),
         patch("modulo.api.routes.pipelines.append_audit_event") as mock_audit,
     ):
@@ -572,7 +573,7 @@ def test_update_pipeline_autonomy_level_unchanged_no_audit(client: TestClient) -
 
     with (
         patch("modulo.api.routes.pipelines.update_pipeline", return_value=pipeline),
-        patch("modulo.db.crud.pipeline.get_pipeline", return_value=pipeline),
+        patch("modulo.api.routes.pipelines.get_pipeline", new=AsyncMock(return_value=pipeline)),
         patch("modulo.api.routes.pipelines.set_rls_org"),
         patch("modulo.api.routes.pipelines.append_audit_event") as mock_audit,
     ):

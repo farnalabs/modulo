@@ -89,7 +89,7 @@ modulo/
 
 ## Stack (quick reference)
 
-- **Backend**: Python 3.12, uv, FastAPI, LangGraph, SQLAlchemy 2 async + asyncpg, Alembic
+- **Backend**: Python 3.12, uv, FastAPI, LangGraph, SQLAlchemy 2 async + asyncpg/aiosqlite/asyncmy, Alembic
 - **Frontend**: Vue 3 (Composition API), Pinia, shadcn-vue + Radix Vue, Vue Flow, Tailwind, Playwright
 - **API types**: FastAPI OpenAPI → `openapi-typescript` → typed `openapi-fetch` client at `src/lib/api/schema.d.ts`
 - **Lint**: ruff, mypy --strict, bandit, semgrep, import-linter, gitleaks
@@ -101,8 +101,37 @@ modulo/
 
 ### Database
 - `SET LOCAL app.organisation_id = :org_id` **inside a transaction** — never bare `SET`. Semgrep-enforced.
-- All async DB uses `asyncpg` (Postgres) or `aiosqlite` (SQLite dev only). No `psycopg2`/`sqlite3` in async path. Semgrep-enforced.
+- All async DB uses `asyncpg` (Postgres), `aiosqlite` (SQLite), or `asyncmy` (MariaDB/MySQL). No `psycopg2`/`sqlite3` in async path. Semgrep-enforced.
 - Alembic `upgrade head` runs before `AsyncPostgresSaver.setup()` on startup. Postgres advisory lock for multi-worker startup.
+
+### Multi-backend DB support
+
+Modulo supports three database backends, configurable via `MODULO_DB` env var:
+
+| Backend | `MODULO_DB` | Driver | Default `DATABASE_URL` |
+|---|---|---|---|
+| PostgreSQL | `postgres` (default) | `asyncpg` | `postgresql+asyncpg://modulo:modulo@localhost:5432/modulo` |
+| MariaDB/MySQL | `mariadb` / `mysql` | `asyncmy` | `mysql+asyncmy://modulo:modulo@localhost:5435/modulo` |
+| SQLite | `sqlite` | `aiosqlite` | `sqlite+aiosqlite:///./modulo.db` |
+
+On non-Postgres backends, tenant isolation works via an auto-injected `WHERE organisation_id = :oid` clause instead of Postgres RLS (`set_config`). The `do_orm_execute` listener in `db/rls.py` handles this transparently — **zero changes** needed to CRUD functions or route handlers.
+
+**Key differences between backends:**
+
+| Feature | Postgres | MariaDB | SQLite |
+|---|---|---|---|
+| RLS (`SET LOCAL`) | ✅ Native | ❌ (app-level filter) | ❌ (app-level filter) |
+| Advisory locks | ✅ `pg_advisory_lock` | ❌ (in-memory lock) | ❌ (in-memory lock) |
+| Alembic batch mode | ❌ | ❌ | ✅ |
+| Migration DDL | Native PG | Conditional DDL needed | `render_as_batch` |
+
+To run with MariaDB locally:
+```powershell
+docker compose -f docker-compose.yml -f docker-compose.mariadb.yml up -d
+# Sets MODULO_DB=mariadb, DATABASE_URL=mysql+asyncmy://modulo:modulo@db:3306/modulo
+```
+
+Architecture decision record: `docs/adr/002-database-abstraction-strategy.md`.
 
 ### LangGraph
 - State type is `dict[str, Any]` — no dynamic TypedDicts.

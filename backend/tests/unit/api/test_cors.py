@@ -106,7 +106,11 @@ class TestCorsPreflight:
             },
         )
         assert resp.status_code in (200, 400)
-        assert resp.headers.get("access-control-allow-credentials") is None
+        # Starlette CORSMiddleware includes access-control-allow-credentials on all
+        # responses when allow_credentials=True, but should NOT include the disallowed
+        # origin in the access-control-allow-origin header.
+        aco = resp.headers.get("access-control-allow-origin", "")
+        assert _DISALLOWED_ORIGIN not in aco
 
     def test_preflight_max_age_matches_config(self, client: TestClient) -> None:
         resp = client.options(

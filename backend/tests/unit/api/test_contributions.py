@@ -62,6 +62,7 @@ def _make_mock_primitive(**overrides) -> MagicMock:
     p.checksum = None
     p.ed25519_signature = None
     p.verified = None
+    p.trust_tier = "unverified"
     p.download_count = None
     p.average_rating = None
     p.review_count = None

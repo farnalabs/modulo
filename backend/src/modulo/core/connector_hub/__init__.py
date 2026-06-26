@@ -118,6 +118,26 @@ class ConnectorHub:
         except KeyError:
             raise ConnectorNotFoundError(connector_id) from None
 
+    async def sample(
+        self,
+        connector_id: uuid.UUID,
+        resource: str,
+        filters: dict[str, Any] | None = None,
+        limit: int = 100,
+    ) -> list[dict[str, Any]]:
+        """Sample data from a connector by querying the given resource.
+
+        Convenience method that wraps get() + query() into a single call.
+        """
+        connector = self._lookup(connector_id)
+        query = ConnectorQuery(
+            resource=resource,
+            filters=filters or {},
+            limit=limit,
+        )
+        result = await connector.query(query)
+        return result.records
+
     @property
     def connector_ids(self) -> frozenset[uuid.UUID]:
         return frozenset(self._connectors)
