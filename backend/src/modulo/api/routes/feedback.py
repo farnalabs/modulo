@@ -63,6 +63,7 @@ def _serialise_record(r: Any, pipeline_name: str | None = None) -> dict[str, Any
         "feedback_handler_type": r.feedback_handler_type,
         "correction_run_id": str(r.correction_run_id) if r.correction_run_id else None,
         "eval_gap": r.eval_gap,
+        "needs_human_review": getattr(r, "needs_human_review", False),
         "pipeline_name": pipeline_name,
         "created_at": r.created_at.isoformat() if r.created_at else None,
     }
@@ -105,6 +106,7 @@ async def create_feedback(
         "feedback_status": record.feedback_status,
         "feedback_handler_type": record.feedback_handler_type,
         "eval_gap": record.eval_gap,
+        "correction_run_id": str(record.correction_run_id) if record.correction_run_id else None,
     }
 
 

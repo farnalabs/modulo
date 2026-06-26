@@ -45,3 +45,4 @@ class FeedbackRecord(OrgScoped):
         UUID(as_uuid=True), ForeignKey("runs.id", ondelete="SET NULL"), nullable=True
     )
     eval_gap: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    needs_human_review: Mapped[bool | None] = mapped_column(Boolean, nullable=True, default=False)

@@ -12,6 +12,8 @@ from modulo.auth.dependencies import get_current_user
 from modulo.auth.jwt import AuthenticatedPrincipal
 from modulo.db.models.daily_run_count import OrgDailyRunCount
 from modulo.db.models.eval_result import EvalResult
+from modulo.db.models.feedback_record import FeedbackRecord
+from modulo.db.models.hitl_claim import HitlClaim
 from modulo.db.models.pipeline import Pipeline
 from modulo.db.models.run import Run
 from modulo.db.models.team import Team
@@ -283,9 +285,124 @@ async def dashboard_trends(
             for row in spend_result.all()
         ]
 
+        # ------------------------------------------------------------------
+        # HITL volume / trend tracking (§8.20)
+        # ------------------------------------------------------------------
+
+        hitl_decision_query = (
+            select(
+                func.date(HitlClaim.decision_at).label("decision_date"),
+                func.count().label("total_decisions"),
+                func.sum(case((HitlClaim.decision == "approved", 1), else_=0)).label("approved_count"),
+                func.sum(case((HitlClaim.decision == "rejected", 1), else_=0)).label("rejected_count"),
+                func.avg(
+                    func.extract("epoch", HitlClaim.decision_at - HitlClaim.created_at) * 1000
+                ).label("avg_time_to_approve_ms"),
+            )
+            .where(
+                HitlClaim.organisation_id == org_id,
+                HitlClaim.decision.is_not(None),
+                HitlClaim.decision_at.is_not(None),
+                HitlClaim.created_at >= start_date,
+            )
+            .group_by(func.date(HitlClaim.decision_at))
+            .order_by(func.date(HitlClaim.decision_at))
+        )
+        hitl_rows = (await session.execute(hitl_decision_query)).all()
+
+        hitl_by_date: dict[str, dict[str, Any]] = {}
+        for row in hitl_rows:
+            d = str(row.decision_date)
+            total = int(row.total_decisions)
+            approved = int(row.approved_count)
+            rejected = int(row.rejected_count)
+            hitl_by_date[d] = {
+                "total_decisions": total,
+                "approved_count": approved,
+                "rejected_count": rejected,
+                "rejection_rate": round(rejected / total * 100, 1) if total > 0 else 0.0,
+                "avg_time_to_approve_ms": round(float(row.avg_time_to_approve_ms), 1) if row.avg_time_to_approve_ms else None,
+            }
+
+        # Build daily hitl series aligned with the trend date range
+        hitl_volume: list[dict[str, Any]] = []
+        for i in range(days):
+            d = (start_date + timedelta(days=i)).isoformat()
+            entry = hitl_by_date.get(d, {
+                "total_decisions": 0,
+                "approved_count": 0,
+                "rejected_count": 0,
+                "rejection_rate": 0.0,
+                "avg_time_to_approve_ms": None,
+            })
+            entry["date"] = d
+            hitl_volume.append(entry)
+
+        # Rejection-rate trend (rolling 3-day average for smoothing)
+        raw_rates = [h["rejection_rate"] for h in hitl_volume]
+        rejection_trend: list[dict[str, Any]] = []
+        for i, h in enumerate(hitl_volume):
+            window = raw_rates[max(0, i - 2):i + 1]
+            smoothed = round(sum(window) / len(window), 1) if window else 0.0
+            rejection_trend.append({
+                "date": h["date"],
+                "rolling_rejection_rate": smoothed,
+                "raw_rejection_rate": h["rejection_rate"],
+            })
+
+        # Correlation: eval pass rate vs rejection rate per day
+        eval_rate_map: dict[str, float | None] = {r["date"]: r.get("pass_rate") for r in eval_rates}
+        correlation: list[dict[str, Any]] = []
+        for h in hitl_volume:
+            eval_rate = eval_rate_map.get(h["date"])
+            correlation.append({
+                "date": h["date"],
+                "rejection_rate": h["rejection_rate"],
+                "eval_pass_rate": eval_rate,
+            })
+
+        # Feedback-record volume (by date created)
+        feedback_volume_query = (
+            select(
+                func.date(FeedbackRecord.created_at).label("feedback_date"),
+                func.count().label("feedback_count"),
+                func.sum(case((FeedbackRecord.feedback_status == "resolved", 1), else_=0)).label("resolved_count"),
+                func.sum(case((FeedbackRecord.feedback_status == "correcting", 1), else_=0)).label("correcting_count"),
+            )
+            .where(
+                FeedbackRecord.organisation_id == org_id,
+                func.date(FeedbackRecord.created_at) >= start_date,
+            )
+            .group_by(func.date(FeedbackRecord.created_at))
+            .order_by(func.date(FeedbackRecord.created_at))
+        )
+        feedback_rows = (await session.execute(feedback_volume_query)).all()
+        feedback_by_date: dict[str, dict[str, int]] = {}
+        for row in feedback_rows:
+            feedback_by_date[str(row.feedback_date)] = {
+                "feedback_count": int(row.feedback_count),
+                "resolved_count": int(row.resolved_count),
+                "correcting_count": int(row.correcting_count),
+            }
+
+        feedback_volume: list[dict[str, Any]] = []
+        for i in range(days):
+            d = (start_date + timedelta(days=i)).isoformat()
+            entry = feedback_by_date.get(d, {
+                "feedback_count": 0,
+                "resolved_count": 0,
+                "correcting_count": 0,
+            })
+            entry["date"] = d
+            feedback_volume.append(entry)
+
     return {
         "days": days,
         "run_counts": run_counts,
         "eval_pass_rates": eval_rates,
         "token_spend": token_spend,
+        "hitl_volume": hitl_volume,
+        "rejection_trend": rejection_trend,
+        "correlation": correlation,
+        "feedback_volume": feedback_volume,
     }

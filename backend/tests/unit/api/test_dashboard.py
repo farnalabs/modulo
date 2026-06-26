@@ -230,3 +230,63 @@ class TestDashboardTrends:
         for entry in body["token_spend"]:
             assert "date" in entry
             assert "total_spend_usd" in entry
+
+    def test_hitl_volume_present(self, client: TestClient) -> None:
+        """HITL metrics are present in trends response (§8.20)."""
+        response = client.get("/api/v1/dashboard/trends?days=7")
+        assert response.status_code == 200
+        body = response.json()
+        assert "hitl_volume" in body
+        assert "rejection_trend" in body
+        assert "correlation" in body
+        assert "feedback_volume" in body
+
+    def test_hitl_volume_structure(self, client: TestClient) -> None:
+        response = client.get("/api/v1/dashboard/trends?days=7")
+        assert response.status_code == 200
+        body = response.json()
+        for entry in body["hitl_volume"]:
+            assert "date" in entry
+            assert "total_decisions" in entry
+            assert "approved_count" in entry
+            assert "rejected_count" in entry
+            assert "rejection_rate" in entry
+            assert "avg_time_to_approve_ms" in entry or entry["avg_time_to_approve_ms"] is None
+
+    def test_rejection_trend_structure(self, client: TestClient) -> None:
+        response = client.get("/api/v1/dashboard/trends?days=7")
+        assert response.status_code == 200
+        body = response.json()
+        for entry in body["rejection_trend"]:
+            assert "date" in entry
+            assert "rolling_rejection_rate" in entry
+            assert "raw_rejection_rate" in entry
+
+    def test_correlation_structure(self, client: TestClient) -> None:
+        response = client.get("/api/v1/dashboard/trends?days=7")
+        assert response.status_code == 200
+        body = response.json()
+        for entry in body["correlation"]:
+            assert "date" in entry
+            assert "rejection_rate" in entry
+            assert "eval_pass_rate" in entry
+
+    def test_feedback_volume_structure(self, client: TestClient) -> None:
+        response = client.get("/api/v1/dashboard/trends?days=7")
+        assert response.status_code == 200
+        body = response.json()
+        for entry in body["feedback_volume"]:
+            assert "date" in entry
+            assert "feedback_count" in entry
+            assert "resolved_count" in entry
+            assert "correcting_count" in entry
+
+    def test_all_trends_align_by_day_count(self, client: TestClient) -> None:
+        response = client.get("/api/v1/dashboard/trends?days=7")
+        assert response.status_code == 200
+        body = response.json()
+        expected_len = 7
+        assert len(body["hitl_volume"]) == expected_len
+        assert len(body["rejection_trend"]) == expected_len
+        assert len(body["correlation"]) == expected_len
+        assert len(body["feedback_volume"]) == expected_len

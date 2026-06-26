@@ -26,7 +26,7 @@ _log = logging.getLogger(__name__)
 _VALID_STATUS_TRANSITIONS: dict[str, set[str]] = {
     "pending": {"routing", "correcting", "dismissed"},
     "routing": {"escalated", "correcting", "resolved"},
-    "correcting": {"resolved", "escalated"},
+    "correcting": {"correcting", "resolved", "escalated"},
     "escalated": {"resolved", "dismissed"},
     "resolved": set(),
     "dismissed": set(),
@@ -75,6 +75,12 @@ class FeedbackManager:
         )
         self._session.add(record)
         await self._session.flush()
+
+        # Auto-trigger correction run for AI correction handlers (§8.20)
+        if feedback_handler_type in ("ai_correction", "ai_correction_with_human_review"):
+            await self.update_status(record.id, "correcting")
+            await self.spawn_correction_run(record.id)
+
         return record
 
     @_rls
@@ -251,6 +257,79 @@ class FeedbackManager:
         await self.link_correction_run(record_id, new_run.id)
 
         return new_run.id
+
+    @_rls
+    async def run_post_correction_eval(
+        self,
+        record_id: UUID,
+        eval_engine: EvalEngine | None = None,
+        eval_config: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """Evaluate the correction run's output and auto-resolve or flag for review.
+
+        Called after a correction run completes.  Checks the corrected output
+        via EvalEngine.standalone_evaluate() and:
+
+          * ai_correction:              auto-resolves on pass
+          * ai_correction_with_human_review: resolves but marks needs_human_review=True
+
+        Args:
+            record_id: The FeedbackRecord linked to the completed correction run.
+            eval_engine: Optional EvalEngine instance (created fresh if omitted).
+            eval_config: Optional config dict forwarded to standalone_evaluate().
+
+        Returns:
+            Dict with keys: passed, detail, score, needs_human_review.
+
+        Raises:
+            ValueError: If the record is missing, not in ``correcting`` state,
+                        or has no linked correction run.
+        """
+        record = await self.get_feedback_record(record_id)
+        if record is None:
+            raise ValueError(f"FeedbackRecord {record_id} not found")
+        if record.feedback_status != "correcting":
+            raise ValueError(
+                f"FeedbackRecord {record_id} has status '{record.feedback_status}', "
+                f"expected 'correcting'"
+            )
+        if record.correction_run_id is None:
+            raise ValueError(f"FeedbackRecord {record_id} has no correction run linked")
+
+        correction_run = await get_run(self._session, record.correction_run_id)
+        if correction_run is None:
+            raise ValueError(f"Correction run {record.correction_run_id} not found")
+
+        engine = eval_engine or EvalEngine()
+        output = correction_run.outputs_json or {}
+
+        result = engine.standalone_evaluate(
+            output,
+            name="post_correction_eval",
+            config=eval_config or {},
+        )
+
+        outcome: dict[str, Any] = {
+            "passed": result.passed,
+            "detail": result.detail,
+            "score": result.score,
+            "needs_human_review": False,
+        }
+
+        if result.passed:
+            if record.feedback_handler_type == "ai_correction":
+                await self.update_status(record_id, "resolved")
+            elif record.feedback_handler_type == "ai_correction_with_human_review":
+                await self.update_status(record_id, "resolved")
+                outcome["needs_human_review"] = True
+                await self._session.execute(
+                    update(FeedbackRecord)
+                    .where(FeedbackRecord.id == record_id)
+                    .values(needs_human_review=True)
+                )
+
+        await self._session.flush()
+        return outcome
 
     @_rls
     async def get_feedback_records_inbox(
