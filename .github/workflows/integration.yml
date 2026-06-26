@@ -38,7 +38,7 @@ jobs:
         run: |
           pytest tests/integration/ \
             -m integration \
-            --maxfail=5 \
+
             --cov=src/modulo \
             --cov-report=xml \
             --cov-fail-under=0 \
