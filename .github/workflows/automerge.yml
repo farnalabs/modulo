@@ -14,25 +14,18 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Check PR is not draft and has ready label
-        id: check_labels
+      - name: Enable auto-merge (squash)
         run: |
           PR_JSON=$(gh pr view ${{ github.event.pull_request.number }} --json isDraft,labels)
           IS_DRAFT=$(echo "$PR_JSON" | jq -r '.isDraft')
-          HAS_LABEL=$(echo "$PR_JSON" | jq -r '.labels[] | select(.name == "ready for review") | .name')
+          HAS_LABEL=$(echo "$PR_JSON" | jq -e -r '.labels[] | select(.name == "ready for review") | .name' 2>/dev/null || echo "")
           if [ "$IS_DRAFT" = "false" ] && [ -n "$HAS_LABEL" ]; then
-            echo "matched=true" >> $GITHUB_OUTPUT
+            gh pr merge ${{ github.event.pull_request.number }} \
+              --auto \
+              --squash \
+              --subject "${{ github.event.pull_request.title }}"
           else
-            echo "matched=false" >> $GITHUB_OUTPUT
+            echo "Skipping: PR is draft or missing 'ready for review' label"
           fi
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      - name: Enable auto-merge (squash)
-        if: steps.check_labels.outputs.matched == 'true'
-        run: |
-          gh pr merge ${{ github.event.pull_request.number }} \
-            --auto \
-            --squash \
-            --subject "${{ github.event.pull_request.title }}"
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
