@@ -35,6 +35,7 @@ from modulo.core.registry.crypto import (
     verify_signature as crypto_verify_signature,
 )
 from modulo.db.crud.library_primitive import create_library_primitive
+from modulo.db.crud.publisher import get_publisher_by_key as db_get_publisher_by_key
 from modulo.db.rls import set_rls_org
 
 router = APIRouter(prefix="/api/v1/registry", tags=["registry"])
@@ -338,6 +339,8 @@ class VerifyResponseV2(BaseModel):
     verified: bool
     signing_key_fingerprint: str
     publisher_status: str
+    trust_tier: str | None = None
+    publisher_name: str | None = None
 
 
 @router.post("/publish", response_model=PublishResponseV2, status_code=status.HTTP_201_CREATED)
@@ -426,12 +429,17 @@ async def pull_registry_primitive_v2(
 async def verify_registry_primitive_v2(
     slug: str,
     public_key_hex: str | None = None,
+    session: AsyncSession = Depends(get_db_session),
+    principal: AuthenticatedPrincipal = Depends(get_current_user),
 ) -> VerifyResponseV2:
     """Verify a published primitive's signature (v2 protocol).
 
     Optionally accepts a ``public_key_hex`` query parameter to verify
     against a specific public key.  Otherwise uses the built-in registry
     key or the publisher's registered key.
+
+    Returns the publisher's trust tier (green/amber/null) and name
+    when a matching publisher is found.
     """
     entry = get_registry_primitive(slug)
     if entry is None:
@@ -441,6 +449,9 @@ async def verify_registry_primitive_v2(
         )
 
     publisher_status = get_publisher_status(entry.signing_key_fingerprint)
+    trust_tier: str | None = None
+    publisher_name: str | None = None
+    verified = False
 
     if public_key_hex:
         payload = {
@@ -453,6 +464,15 @@ async def verify_registry_primitive_v2(
             "content_json": entry.content_json,
         }
         verified = crypto_verify_signature(payload, entry.ed25519_signature_hex, public_key_hex)
+
+        async with session.begin():
+            await set_rls_org(session, principal.organisation_id)
+            db_pub = await db_get_publisher_by_key(
+                session, principal.organisation_id, public_key_hex
+            )
+            if db_pub is not None:
+                trust_tier = db_pub.trust_tier
+                publisher_name = db_pub.name
     else:
         verified = verify_primitive_signature(entry)
 
@@ -461,6 +481,8 @@ async def verify_registry_primitive_v2(
         verified=verified,
         signing_key_fingerprint=entry.signing_key_fingerprint,
         publisher_status=publisher_status,
+        trust_tier=trust_tier,
+        publisher_name=publisher_name,
     )
 
 

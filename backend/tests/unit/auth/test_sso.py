@@ -14,6 +14,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from modulo.api.dependencies import _get_engine, get_db_session
 from modulo.api.routes.sso import router as sso_router
 from modulo.auth.sso import (
     parse_oidc_providers,
@@ -76,7 +77,14 @@ _app.include_router(sso_router)
 
 @pytest.fixture()
 def client() -> Generator[TestClient, None, None]:
+    mock_session = AsyncMock(spec=AsyncSession)
+
+    async def _override_session() -> AsyncMock:
+        yield mock_session
+
     _app.dependency_overrides[get_settings] = lambda: _override()
+    _app.dependency_overrides[get_db_session] = _override_session
+    _app.dependency_overrides[_get_engine] = lambda: MagicMock()
     try:
         yield TestClient(_app)
     finally:

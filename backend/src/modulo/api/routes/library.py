@@ -6,7 +6,7 @@ from datetime import datetime
 from typing import Any
 
 from fastapi import APIRouter, Depends, File, HTTPException, Query, Response, UploadFile, status
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -74,6 +74,7 @@ class LibraryPrimitiveResponse(BaseModel):
     checksum: str | None
     ed25519_signature: str | None
     verified: bool | None
+    trust_tier: str | None
     download_count: int | None
     average_rating: float | None
     review_count: int | None
@@ -84,6 +85,20 @@ class LibraryPrimitiveResponse(BaseModel):
     updated_at: datetime
 
     model_config = {"from_attributes": True}
+
+    @model_validator(mode="before")
+    @classmethod
+    def _compute_trust_tier(cls, data: Any) -> Any:
+        if isinstance(data, dict):
+            source = data.get("source")
+            verified = data.get("verified")
+            if source == "registry" and verified is True:
+                data["trust_tier"] = "green"
+            elif source == "registry":
+                data["trust_tier"] = "amber"
+            else:
+                data["trust_tier"] = None
+        return data
 
 
 class LibraryPrimitiveListResponse(BaseModel):

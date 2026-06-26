@@ -21,9 +21,11 @@ class TestTokenBucket:
         assert await bucket.consume() is False
 
     async def test_refills_over_time(self):
-        bucket = TokenBucket(rate=10.0, burst=2)
-        times = iter([0.0, 0.0, 0.0, 0.2, 0.2])
+        # Values: [init=0.0, consume1=0.0, consume2=0.0, consume3(False)=0.0, consume4(True)=0.2]
+        # __init__ consumes the first monotonic() call before the bucket is used.
+        times = iter([0.0, 0.0, 0.0, 0.0, 0.2])
         with patch.object(time, "monotonic", side_effect=times):
+            bucket = TokenBucket(rate=10.0, burst=2)
             await bucket.consume()
             await bucket.consume()
             assert await bucket.consume() is False

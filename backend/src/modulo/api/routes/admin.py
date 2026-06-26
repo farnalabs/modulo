@@ -13,6 +13,18 @@ from modulo.auth.dependencies import get_current_user
 from modulo.auth.jwt import AuthenticatedPrincipal
 from modulo.auth.passwords import hash_password, validate_password_strength
 from modulo.db.crud.organisation import get_organisation, update_organisation
+from modulo.db.crud.publisher import (
+    create_publisher,
+    get_publisher_by_key,
+    get_publisher_by_name,
+    list_publishers,
+)
+from modulo.db.crud.publisher import (
+    delete_publisher as crud_delete_publisher,
+)
+from modulo.db.crud.publisher import (
+    update_publisher as crud_update_publisher,
+)
 from modulo.db.crud.team import create_team, delete_team, list_teams
 from modulo.db.crud.team import update_team as crud_update_team
 from modulo.db.crud.team_membership import list_memberships_for_user, remove_team_member
@@ -1298,3 +1310,240 @@ async def eval_dashboard(
         coverage_gaps=coverage_gaps,
         recent_results=recent_results,
     )
+
+
+# ── Publisher Management ──────────────────────────────────────────────────
+
+
+class PublisherCreateRequest(BaseModel):
+    name: str = Field(min_length=1, max_length=255)
+    contact_email: str | None = Field(None, max_length=255)
+    public_key_hex: str = Field(min_length=64, max_length=128)
+    trust_tier: str = Field(default="amber", pattern=r"^(green|amber)$")
+    website_url: str | None = Field(None, max_length=2000)
+
+
+class PublisherUpdateRequest(BaseModel):
+    name: str | None = Field(None, min_length=1, max_length=255)
+    contact_email: str | None = Field(None, max_length=255)
+    public_key_hex: str | None = Field(None, min_length=64, max_length=128)
+    trust_tier: str | None = Field(None, pattern=r"^(green|amber)$")
+    website_url: str | None = Field(None, max_length=2000)
+
+
+class PublisherResponse(BaseModel):
+    id: str
+    name: str
+    contact_email: str | None
+    public_key_hex: str
+    trust_tier: str
+    verified_since: str | None
+    website_url: str | None
+    created_at: str
+    updated_at: str
+
+    model_config = {"from_attributes": True}
+
+
+class PublisherListResponse(BaseModel):
+    items: list[PublisherResponse]
+    total: int
+    page: int
+    page_size: int
+
+
+@router.get("/publishers", response_model=PublisherListResponse)
+async def admin_list_publishers(
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=100),
+    trust_tier: str | None = Query(None, pattern=r"^(green|amber)$"),
+    search: str | None = Query(None, min_length=1),
+    current_user: AuthenticatedPrincipal = Depends(get_current_user),
+    session: AsyncSession = Depends(get_db_session),
+) -> PublisherListResponse:
+    if current_user.org_role != "admin":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only admin users can list publishers",
+        )
+
+    async with session.begin():
+        await set_rls_org(session, current_user.organisation_id)
+        result = await list_publishers(
+            session,
+            org_id=current_user.organisation_id,
+            page=page,
+            page_size=page_size,
+            trust_tier=trust_tier,
+            search=search,
+        )
+
+    return PublisherListResponse(
+        items=[
+            PublisherResponse(
+                id=str(p.id),
+                name=p.name,
+                contact_email=p.contact_email,
+                public_key_hex=p.public_key_hex,
+                trust_tier=p.trust_tier,
+                verified_since=p.verified_since.isoformat() if p.verified_since else None,
+                website_url=p.website_url,
+                created_at=p.created_at.isoformat(),
+                updated_at=p.updated_at.isoformat(),
+            )
+            for p in result.items
+        ],
+        total=result.total,
+        page=result.page,
+        page_size=result.page_size,
+    )
+
+
+@router.post("/publishers", response_model=PublisherResponse, status_code=status.HTTP_201_CREATED)
+async def admin_create_publisher(
+    body: PublisherCreateRequest,
+    current_user: AuthenticatedPrincipal = Depends(get_current_user),
+    session: AsyncSession = Depends(get_db_session),
+) -> PublisherResponse:
+    if current_user.org_role != "admin":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only admin users can create publishers",
+        )
+
+    async with session.begin():
+        await set_rls_org(session, current_user.organisation_id)
+
+        existing = await get_publisher_by_name(session, current_user.organisation_id, body.name)
+        if existing is not None:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="A publisher with this name already exists",
+            )
+
+        existing_key = await get_publisher_by_key(
+            session, current_user.organisation_id, body.public_key_hex
+        )
+        if existing_key is not None:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="A publisher with this public key already exists",
+            )
+
+        try:
+            publisher = await create_publisher(
+                session,
+                org_id=current_user.organisation_id,
+                name=body.name,
+                contact_email=body.contact_email,
+                public_key_hex=body.public_key_hex,
+                trust_tier=body.trust_tier,
+                website_url=body.website_url,
+            )
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=str(exc),
+            ) from exc
+
+    return PublisherResponse(
+        id=str(publisher.id),
+        name=publisher.name,
+        contact_email=publisher.contact_email,
+        public_key_hex=publisher.public_key_hex,
+        trust_tier=publisher.trust_tier,
+        verified_since=publisher.verified_since.isoformat() if publisher.verified_since else None,
+        website_url=publisher.website_url,
+        created_at=publisher.created_at.isoformat(),
+        updated_at=publisher.updated_at.isoformat(),
+    )
+
+
+@router.put("/publishers/{publisher_id}", response_model=PublisherResponse)
+async def admin_update_publisher(
+    publisher_id: uuid.UUID,
+    body: PublisherUpdateRequest,
+    current_user: AuthenticatedPrincipal = Depends(get_current_user),
+    session: AsyncSession = Depends(get_db_session),
+) -> PublisherResponse:
+    if current_user.org_role != "admin":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only admin users can update publishers",
+        )
+
+    updates: dict[str, object] = {k: v for k, v in body.model_dump().items() if v is not None}
+
+    async with session.begin():
+        await set_rls_org(session, current_user.organisation_id)
+
+        if "name" in updates:
+            name_val = updates["name"]
+            assert isinstance(name_val, str)
+            existing = await get_publisher_by_name(session, current_user.organisation_id, name_val)
+            if existing is not None and existing.id != publisher_id:
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail="A publisher with this name already exists",
+                )
+
+        if "public_key_hex" in updates:
+            key_val = updates["public_key_hex"]
+            assert isinstance(key_val, str)
+            existing_key = await get_publisher_by_key(
+                session, current_user.organisation_id, key_val
+            )
+            if existing_key is not None and existing_key.id != publisher_id:
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail="A publisher with this public key already exists",
+                )
+
+        try:
+            publisher = await crud_update_publisher(session, publisher_id, updates)
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=str(exc),
+            ) from exc
+
+    if publisher is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Publisher not found",
+        )
+
+    return PublisherResponse(
+        id=str(publisher.id),
+        name=publisher.name,
+        contact_email=publisher.contact_email,
+        public_key_hex=publisher.public_key_hex,
+        trust_tier=publisher.trust_tier,
+        verified_since=publisher.verified_since.isoformat() if publisher.verified_since else None,
+        website_url=publisher.website_url,
+        created_at=publisher.created_at.isoformat(),
+        updated_at=publisher.updated_at.isoformat(),
+    )
+
+
+@router.delete("/publishers/{publisher_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def admin_delete_publisher(
+    publisher_id: uuid.UUID,
+    current_user: AuthenticatedPrincipal = Depends(get_current_user),
+    session: AsyncSession = Depends(get_db_session),
+) -> None:
+    if current_user.org_role != "admin":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only admin users can delete publishers",
+        )
+
+    async with session.begin():
+        await set_rls_org(session, current_user.organisation_id)
+        deleted = await crud_delete_publisher(session, publisher_id)
+
+    if not deleted:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Publisher not found",
+        )

@@ -44,6 +44,15 @@ def _make_mock_session() -> AsyncMock:
     begin_cm.__aenter__ = AsyncMock(return_value=None)
     begin_cm.__aexit__ = AsyncMock(return_value=False)
     session.begin = MagicMock(return_value=begin_cm)
+
+    # Explicitly configure execute so scalar_one_or_none() returns a MagicMock trigger
+    # (not a coroutine — Python 3.13 AsyncMock can return coroutines for child attribute calls)
+    trigger_mock = MagicMock()
+    trigger_mock.pipeline_id = uuid.uuid4()
+    execute_result = MagicMock()
+    execute_result.scalar_one_or_none.return_value = trigger_mock
+    session.execute = AsyncMock(return_value=execute_result)
+
     return session
 
 

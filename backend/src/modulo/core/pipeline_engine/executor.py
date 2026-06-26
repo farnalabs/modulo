@@ -410,6 +410,7 @@ class PipelineExecutor:
 
         final_status: str = "failed"
         error_code: str | None = None
+        error_detail: str | None = None
         broker = get_registry().get_or_create(run_id)
         set_cancellation_check(_check_db_cancellation)
         try:

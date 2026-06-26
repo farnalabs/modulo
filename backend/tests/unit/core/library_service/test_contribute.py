@@ -405,6 +405,10 @@ class TestPublish:
                 new_callable=AsyncMock,
                 return_value=updated,
             ) as mock_update,
+            patch(
+                "modulo.core.library_service.notify_importers_of_update",
+                new_callable=AsyncMock,
+            ),
         ):
             approved_by = uuid.uuid4()
             result = await publish_contribution(session, org_id, prim_id, approved_by=approved_by)
