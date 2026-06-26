@@ -311,6 +311,7 @@ async function loadCatalog() {
     schemas.value = s.items || []
     snapshots.value = (snaps.items || []).filter((sn: any) => sn.snapshot_version > 0)
   } catch {
+    // Initial load may fail silently; data stays empty
   }
 }
 

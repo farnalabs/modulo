@@ -1,0 +1,36 @@
+name: Auto-merge
+
+on:
+  pull_request:
+    types: [labeled, ready_for_review, synchronize]
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  automerge:
+    name: Enable auto-merge
+    if: >
+      !github.event.pull_request.draft &&
+      (
+        (github.event.action == 'labeled' && github.event.label.name == 'ready for review') ||
+        github.event.action == 'ready_for_review'
+      )
+    runs-on: ubuntu-latest
+    steps:
+      - name: Wait for CI checks to pass
+        uses: lewagon/wait-on-check-action@v1.3.4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+          wait-interval: 30
+          running-workflow-name: 'Auto-merge'
+      - name: Enable auto-merge (squash)
+        run: |
+          gh pr merge ${{ github.event.pull_request.number }} \
+            --auto \
+            --squash \
+            --subject "${{ github.event.pull_request.title }}"
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

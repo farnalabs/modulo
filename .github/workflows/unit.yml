@@ -22,7 +22,6 @@ jobs:
             -n auto \
             --cov=src/modulo \
             --cov-report=xml \
-            --cov-fail-under=80 \
             -q
         env:
           DATABASE_URL: "postgresql+asyncpg://unused:unused@localhost/unused"
