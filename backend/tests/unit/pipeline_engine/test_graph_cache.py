@@ -8,6 +8,7 @@ import pytest
 from modulo.core.pipeline_engine.graph_cache import (
     _CACHE,
     _MAX_SIZE,
+    _make_gate_kickback_router,
     build_graph_from_json,
     evict,
     get_or_compile,
@@ -351,3 +352,146 @@ async def test_conditional_accepts_persisted_naming():
     config = {"configurable": {"thread_id": str(uuid.uuid4())}}
     result = await compiled.ainvoke(initial_state, config)
     assert "target" in [a["node_id"] for a in result["artifacts"]]
+
+
+# ---------------------------------------------------------------------------
+# Kick-back edges (HITL rejection routing)
+# ---------------------------------------------------------------------------
+
+
+# ---------------------------------------------------------------------------
+# Kick-back edge router — pure function tests
+# ---------------------------------------------------------------------------
+
+
+def test_gate_kickback_router_routes_to_reject_on_rejection():
+    """Router returns reject_target when _hitl_decision action is rejected."""
+    router = _make_gate_kickback_router("normal_target", "reject_target")
+    assert router({"_hitl_decision": {"action": "rejected"}}) == "reject_target"
+
+
+def test_gate_kickback_router_routes_to_normal_on_approval():
+    """Router returns normal_target when _hitl_decision action is approved."""
+    router = _make_gate_kickback_router("normal_target", "reject_target")
+    assert router({"_hitl_decision": {"action": "approved"}}) == "normal_target"
+
+
+def test_gate_kickback_router_falls_back_to_normal_without_decision():
+    """Router returns normal_target when no _hitl_decision is in state."""
+    router = _make_gate_kickback_router("normal_target", "reject_target")
+    assert router({}) == "normal_target"
+    assert router({"some_key": "value"}) == "normal_target"
+
+
+# ---------------------------------------------------------------------------
+# Kick-back graph compilation — structural tests
+# ---------------------------------------------------------------------------
+
+
+def test_gate_with_reject_target_compiles():
+    """A graph with a gate that has reject_target compiles without error."""
+    graph: dict[str, Any] = {
+        "nodes": [
+            {"id": "source", "role": None},
+            {"id": "target", "role": None},
+            {"id": "kickback_target", "role": None},
+        ],
+        "edges": [
+            {
+                "source": "source",
+                "target": "target",
+                "type": "normal",
+                "hitl_gate_config": {
+                    "label": "Review",
+                    "description": "Gate",
+                    "reject_target": "kickback_target",
+                    "claim_expiry_minutes": 60,
+                    "human_only": False,
+                },
+            },
+        ],
+    }
+    compiled = build_graph_from_json(graph)
+    assert compiled is not None
+
+def test_gate_with_reject_target_compiles():
+    """A graph with a gate that has reject_target compiles without error."""
+    graph: dict[str, Any] = {
+        "nodes": [
+            {"id": "source", "role": None},
+            {"id": "target", "role": None},
+            {"id": "kickback_target", "role": None},
+        ],
+        "edges": [
+            {
+                "source": "source",
+                "target": "target",
+                "type": "normal",
+                "hitl_gate_config": {
+                    "label": "Review",
+                    "description": "Gate",
+                    "reject_target": "kickback_target",
+                    "claim_expiry_minutes": 60,
+                    "human_only": False,
+                },
+            },
+        ],
+    }
+    compiled = build_graph_from_json(graph)
+    assert compiled is not None
+
+
+def test_gate_without_reject_target_compiles():
+    """A gate without reject_target (no kickback) compiles normally."""
+    graph: dict[str, Any] = {
+        "nodes": [
+            {"id": "source", "role": None},
+            {"id": "target", "role": None},
+        ],
+        "edges": [
+            {
+                "source": "source",
+                "target": "target",
+                "type": "normal",
+                "hitl_gate_config": {
+                    "label": "Review",
+                    "description": "Gate",
+                    "claim_expiry_minutes": 60,
+                    "human_only": False,
+                },
+            },
+        ],
+    }
+    compiled = build_graph_from_json(graph)
+    assert compiled is not None
+
+
+def test_gate_with_reject_edge_type_compiles():
+    """A graph with a reject-type edge (as kickback source) compiles."""
+    graph: dict[str, Any] = {
+        "nodes": [
+            {"id": "source", "role": None},
+            {"id": "target", "role": None},
+            {"id": "fallback_node", "role": None},
+        ],
+        "edges": [
+            {
+                "source": "source",
+                "target": "target",
+                "type": "normal",
+                "hitl_gate_config": {
+                    "label": "Review",
+                    "description": "Gate",
+                    "claim_expiry_minutes": 60,
+                    "human_only": False,
+                },
+            },
+            {
+                "source_node_id": "source",
+                "target_node_id": "fallback_node",
+                "edge_type": "reject",
+            },
+        ],
+    }
+    compiled = build_graph_from_json(graph)
+    assert compiled is not None

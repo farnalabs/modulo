@@ -20,6 +20,8 @@ from modulo.core.schema_registry import (
     SchemaGenerationService,
     SchemaInferenceError,
     SchemaInferenceService,
+    apply_migration,
+    create_migration,
 )
 from modulo.core.secrets_backend import create_secrets_backend
 from modulo.db.crud.connector_instance import get_connector_instance
@@ -346,7 +348,7 @@ async def infer_schema_endpoint(
     async with ModelBackendHub() as mh:
         await mh.initialise(mbs.items, secrets_backend=secrets_backend)
         first_backend_id = next(iter(mh.backend_ids))
-        backend = mh.get(first_backend_id)
+        backend = await mh.get(first_backend_id)
 
         service = SchemaInferenceService(backend)
         try:
@@ -411,7 +413,7 @@ async def generate_schema_endpoint(
     async with ModelBackendHub() as mh:
         await mh.initialise(mbs.items, secrets_backend=secrets_backend)
         first_backend_id = next(iter(mh.backend_ids))
-        backend = mh.get(first_backend_id)
+        backend = await mh.get(first_backend_id)
 
         service = SchemaGenerationService(backend)
         try:
@@ -426,6 +428,95 @@ async def generate_schema_endpoint(
             ) from exc
 
     return SchemaGenerateResponse(definition_json=definition_json)
+
+
+# ---------------------------------------------------------------------------
+# Schema Migration
+# ---------------------------------------------------------------------------
+
+
+class SchemaMigrationRequest(BaseModel):
+    from_schema_id: uuid.UUID
+    to_schema_id: uuid.UUID
+    data: dict[str, Any]
+
+
+class SchemaMigrationResponse(BaseModel):
+    migrated_data: dict[str, Any]
+    plan: dict[str, Any]
+
+
+class SchemaMigrationPlanRequest(BaseModel):
+    from_definition: dict[str, Any]
+    to_definition: dict[str, Any]
+
+
+@router.post("/migrate", response_model=SchemaMigrationResponse)
+async def migrate_data_endpoint(
+    body: SchemaMigrationRequest,
+    session: AsyncSession = Depends(get_db_session),
+    principal: AuthenticatedPrincipal = Depends(get_current_user),
+) -> SchemaMigrationResponse:
+    """Migrate data from one schema version to another.
+
+    Accepts *from_schema_id* and *to_schema_id* (Schema UUIDs),
+    fetches the latest version of each, computes a migration plan,
+    and applies it to *data*.
+    """
+    async with session.begin():
+        await set_rls_org(session, principal.organisation_id)
+        from_schema = await get_schema(session, body.from_schema_id)
+        if from_schema is None:
+            raise HTTPException(status_code=404, detail="Source schema not found")
+        from_sv = await _get_latest_version(session, body.from_schema_id)
+        if from_sv is None:
+            raise HTTPException(status_code=404, detail="Source schema has no versions")
+
+        to_schema = await get_schema(session, body.to_schema_id)
+        if to_schema is None:
+            raise HTTPException(status_code=404, detail="Target schema not found")
+        to_sv = await _get_latest_version(session, body.to_schema_id)
+        if to_sv is None:
+            raise HTTPException(status_code=404, detail="Target schema has no versions")
+
+    plan = create_migration(from_sv.definition_json, to_sv.definition_json)
+    migrated = apply_migration(body.data, plan)
+
+    return SchemaMigrationResponse(
+        migrated_data=migrated,
+        plan={
+            "field_additions": plan.field_additions,
+            "field_removals": plan.field_removals,
+            "type_changes": {
+                k: {"old_type": v.old_type, "new_type": v.new_type}
+                for k, v in plan.type_changes.items()
+            },
+            "renames": plan.renames,
+        },
+    )
+
+
+@router.post("/migrate/plan", response_model=dict[str, Any])
+async def migration_plan_endpoint(
+    body: SchemaMigrationPlanRequest,
+) -> dict[str, Any]:
+    """Preview a migration plan between two schemas without applying it."""
+    plan = create_migration(body.from_definition, body.to_definition)
+    return {
+        "field_additions": plan.field_additions,
+        "field_removals": plan.field_removals,
+        "type_changes": {
+            k: {"old_type": v.old_type, "new_type": v.new_type}
+            for k, v in plan.type_changes.items()
+        },
+        "renames": plan.renames,
+    }
+
+
+async def _get_latest_version(session: AsyncSession, schema_id: uuid.UUID) -> Any:
+    """Fetch the latest SchemaVersion for a given schema_id."""
+    versions = await list_schema_versions(session, schema_id, page=1, page_size=1)
+    return versions.items[0] if versions.items else None
 
 
 # ---------------------------------------------------------------------------

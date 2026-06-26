@@ -2,6 +2,7 @@ import { createRouter, createWebHistory } from 'vue-router'
 import DashboardView from '../views/DashboardView.vue'
 import LibraryView from '../views/LibraryView.vue'
 import LibraryPipelineWizard from '../views/LibraryPipelineWizard.vue'
+import SettingsObservabilityView from '../views/SettingsObservabilityView.vue'
 import SettingsSsoView from '../views/SettingsSsoView.vue'
 import SettingsTeamsView from '../views/SettingsTeamsView.vue'
 import SchemaInferenceView from '../views/SchemaInferenceView.vue'
@@ -9,6 +10,11 @@ import OnboardingWizard from '../views/OnboardingWizard.vue'
 import FeedbackInboxView from '../views/FeedbackInboxView.vue'
 import EvalEditorView from '../views/EvalEditorView.vue'
 import VariantCompareView from '../views/VariantCompareView.vue'
+import ABTestModelsView from '../views/ABTestModelsView.vue'
+import RunDetailView from '../views/RunDetailView.vue'
+import AdminAuditView from '../views/AdminAuditView.vue'
+import TeamComparisonView from '../views/TeamComparisonView.vue'
+import PipelineEditorView from '../views/PipelineEditorView.vue'
 
 const router = createRouter({
   history: createWebHistory(),
@@ -32,6 +38,11 @@ const router = createRouter({
       name: 'library-pipeline-wizard',
       component: LibraryPipelineWizard,
       props: true,
+    },
+    {
+      path: '/settings/observability',
+      name: 'settings-observability',
+      component: SettingsObservabilityView,
     },
     {
       path: '/settings/teams',
@@ -67,6 +78,31 @@ const router = createRouter({
       path: '/variants/compare',
       name: 'variant-compare',
       component: VariantCompareView,
+    },
+    {
+      path: '/variants/ab-test',
+      name: 'ab-test-models',
+      component: ABTestModelsView,
+    },
+    {
+      path: '/runs/:id',
+      name: 'run-detail',
+      component: RunDetailView,
+    },
+    {
+      path: '/admin/audit',
+      name: 'admin-audit',
+      component: AdminAuditView,
+    },
+    {
+      path: '/admin/teams/comparison',
+      name: 'team-comparison',
+      component: TeamComparisonView,
+    },
+    {
+      path: '/pipelines/:id/editor',
+      name: 'pipeline-editor',
+      component: PipelineEditorView,
     },
   ],
 })

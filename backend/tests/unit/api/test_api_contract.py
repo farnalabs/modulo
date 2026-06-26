@@ -397,7 +397,7 @@ class TestPipelineSnapshotSchemas:
         pipeline_id = uuid.uuid4()
 
         with (
-            patch("modulo.api.routes.pipelines.list_snapshots", return_value=[]),
+            patch("modulo.api.routes.pipelines.list_snapshots", new=AsyncMock(return_value=([], 0))),
             patch("modulo.api.routes.pipelines.set_rls_org"),
             patch("modulo.api.routes.pipelines.set_rls_user_context"),
         ):
@@ -413,7 +413,7 @@ class TestPipelineSnapshotSchemas:
         snapshot_id = uuid.uuid4()
 
         with (
-            patch("modulo.api.routes.pipelines.get_snapshot", return_value=None),
+            patch("modulo.api.routes.pipelines.get_snapshot_detail", new=AsyncMock(return_value=None)),
             patch("modulo.api.routes.pipelines.set_rls_org"),
             patch("modulo.api.routes.pipelines.set_rls_user_context"),
         ):

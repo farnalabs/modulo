@@ -57,6 +57,7 @@ class RunResponse(BaseModel):
     total_cost_usd: Decimal | None = None
     token_consumption: dict[str, Any] | None = None
     trace_id: str | None = None
+    node_token_usage: dict[str, Any] | None = None
 
 
 def _build_run_response(run: Any) -> RunResponse:
@@ -79,6 +80,7 @@ def _build_run_response(run: Any) -> RunResponse:
         total_cost_usd=run.total_cost_usd,
         token_consumption=token_consumption,
         trace_id=trace_id,
+        node_token_usage=run.node_token_usage,
     )
 
 

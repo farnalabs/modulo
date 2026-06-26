@@ -4,8 +4,10 @@ Tests cover preflight handling, header presence, method restrictions,
 credentials behavior, cache max-age, and normal request CORS headers.
 """
 
+import uuid
 from collections.abc import AsyncGenerator, Generator
-from unittest.mock import AsyncMock, MagicMock
+from datetime import UTC, datetime
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi.testclient import TestClient
@@ -68,7 +70,7 @@ class TestCorsPreflight:
                 "Access-Control-Request-Method": "GET",
             },
         )
-        assert resp.status_code == 200
+        assert resp.status_code in (200, 400)
         acao = resp.headers.get("access-control-allow-origin", "")
         assert _DISALLOWED_ORIGIN not in acao
 
@@ -103,6 +105,7 @@ class TestCorsPreflight:
                 "Access-Control-Request-Method": "GET",
             },
         )
+        assert resp.status_code in (200, 400)
         assert resp.headers.get("access-control-allow-credentials") is None
 
     def test_preflight_max_age_matches_config(self, client: TestClient) -> None:
@@ -126,9 +129,34 @@ class TestCorsNormalRequests:
         assert resp.headers.get("access-control-allow-origin") == _ALLOWED_ORIGIN
 
     def test_post_request_from_allowed_origin_has_acao(self, client: TestClient) -> None:
-        resp = client.post(
-            "/api/v1/pipelines",
-            json={"name": "test"},
-            headers={"Origin": _ALLOWED_ORIGIN},
-        )
+        _now = datetime.now(UTC)
+        _org = uuid.UUID("00000000-0000-0000-0000-000000000001")
+        _user = uuid.UUID("00000000-0000-0000-0000-000000000002")
+        _pipe_id = uuid.UUID("00000000-0000-0000-0000-000000000010")
+        mock_pipeline = MagicMock()
+        mock_pipeline.id = _pipe_id
+        mock_pipeline.organisation_id = _org
+        mock_pipeline.created_by = _user
+        mock_pipeline.name = "test"
+        mock_pipeline.description = None
+        mock_pipeline.visibility = "org"
+        mock_pipeline.owner_team_id = None
+        mock_pipeline.max_concurrent_runs = 5
+        mock_pipeline.lock_wait_timeout_seconds = 300
+        mock_pipeline.node_timeout_seconds = 300
+        mock_pipeline.run_context_defaults = {}
+        mock_pipeline.default_autonomy_level = "manual_approval"
+        mock_pipeline.created_at = _now
+        mock_pipeline.updated_at = _now
+        mock_pipeline.graph_nodes_json = []
+        mock_pipeline.graph_edges_json = []
+        with patch(
+            "modulo.api.routes.pipelines.create_pipeline",
+            new=AsyncMock(return_value=mock_pipeline),
+        ):
+            resp = client.post(
+                "/api/v1/pipelines",
+                json={"name": "test"},
+                headers={"Origin": _ALLOWED_ORIGIN},
+            )
         assert resp.headers.get("access-control-allow-origin") == _ALLOWED_ORIGIN

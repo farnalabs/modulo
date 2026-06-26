@@ -102,11 +102,9 @@ def _configure_execute(
 
     summary_row = _make_row(total_results=total_results, passed=passed, failed=failed)
 
-    # First calls are from set_rls_org() and set_rls_user_context(), then the 7 dashboard queries
+    # First call is from set_rls_org(), then the 7 dashboard queries
     session.execute.side_effect = [
         _make_result(scalar_value=None),  # set_rls_org SELECT set_config
-        _make_result(scalar_value=None),  # set_rls_user_context (user_id)
-        _make_result(scalar_value=None),  # set_rls_user_context (org_role)
         _make_result(one_value=summary_row),
         _make_result(scalar_value=total_defs),
         _make_result(all_value=trend_rows),
@@ -296,8 +294,6 @@ class TestEvalDashboardEmptyState:
 
         mock_session.execute.side_effect = [
             _make_result(scalar_value=None),  # set_rls_org
-            _make_result(scalar_value=None),  # set_rls_user_context (user_id)
-        _make_result(scalar_value=None),  # set_rls_user_context (org_role)
             _make_result(one_value=summary_row),
             _make_result(scalar_value=0),
             _make_result(all_value=[]),
@@ -337,8 +333,6 @@ class TestEvalDashboardMultiType:
 
         mock_session.execute.side_effect = [
             _make_result(scalar_value=None),  # set_rls_org
-            _make_result(scalar_value=None),  # set_rls_user_context (user_id)
-        _make_result(scalar_value=None),  # set_rls_user_context (org_role)
             _make_result(one_value=summary_row),
             _make_result(scalar_value=3),
             _make_result(all_value=[]),

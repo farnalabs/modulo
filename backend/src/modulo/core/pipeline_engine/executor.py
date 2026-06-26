@@ -21,6 +21,7 @@ import uuid
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
+from decimal import Decimal
 from typing import Any
 
 from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
@@ -304,12 +305,13 @@ class PipelineExecutor:
 
         final_status: str = "failed"
         error_code: str | None = None
+        node_token_usage: dict[str, Any] | None = None
         broker = get_registry().get_or_create(run_id)
         try:
             async with _checkpointer_scope(self._checkpointer_conn_string) as saver:
                 compiled.checkpointer = saver
                 await compiled.aupdate_state(config, {"_hitl_decision": resume_data})
-                final_status, error_code = await self._stream_graph(
+                final_status, error_code, _, node_token_usage = await self._stream_graph(
                     compiled,
                     None,
                     config,
@@ -325,6 +327,18 @@ class PipelineExecutor:
             if final_status != "awaiting_human":
                 get_registry().close(run_id)
 
+        total_tokens: int | None = None
+        if node_token_usage:
+            total_tokens = sum(n["total_tokens"] for n in node_token_usage.values())
+            _INPUT_RATE = Decimal("0.00001")
+            _OUTPUT_RATE = Decimal("0.00003")
+            total_cost = Decimal("0")
+            for n_data in node_token_usage.values():
+                n_cost = Decimal(str(n_data.get("input_tokens", 0))) * _INPUT_RATE
+                n_cost += Decimal(str(n_data.get("output_tokens", 0))) * _OUTPUT_RATE
+                n_data["cost_usd"] = float(n_cost)
+                total_cost += n_cost
+
         async with self._session_factory() as session:
             async with session.begin():
                 await set_rls_org(session, org_id)
@@ -333,6 +347,9 @@ class PipelineExecutor:
                     run_id,
                     final_status,
                     error_code=error_code,
+                    total_tokens=total_tokens,
+                    total_cost_usd=total_cost if node_token_usage else None,
+                    node_token_usage=node_token_usage,
                 )
 
         if final_run is None:
@@ -422,6 +439,7 @@ class PipelineExecutor:
         final_status: str = "failed"
         error_code: str | None = None
         error_detail: str | None = None
+        node_token_usage: dict[str, Any] | None = None
         broker = get_registry().get_or_create(run_id)
         set_cancellation_check(_check_db_cancellation)
         try:
@@ -442,11 +460,11 @@ class PipelineExecutor:
             if self._checkpointer_conn_string:
                 async with _checkpointer_scope(self._checkpointer_conn_string) as saver:
                     compiled.checkpointer = saver
-                    final_status, error_code, error_detail = await self._stream_graph(
+                    final_status, error_code, error_detail, node_token_usage = await self._stream_graph(
                         compiled, initial_state, config, node_ids, broker, run_id
                     )
             else:
-                final_status, error_code, error_detail = await self._stream_graph(
+                final_status, error_code, error_detail, node_token_usage = await self._stream_graph(
                     compiled, initial_state, config, node_ids, broker, run_id
                 )
         except Exception as exc:
@@ -478,12 +496,36 @@ class PipelineExecutor:
                             )
                             break
 
+        # Compute aggregate token/cost data from per-node usage.
+        total_tokens: int | None = None
+        total_cost_usd_val: Decimal | None = None
+        if node_token_usage:
+            total_tokens = sum(n["total_tokens"] for n in node_token_usage.values())
+
+            # Estimate cost at $10/1M input tokens, $30/1M output tokens (Claude Haiku).
+            _INPUT_RATE = Decimal("0.00001")
+            _OUTPUT_RATE = Decimal("0.00003")
+            total_cost = Decimal("0")
+            for n_data in node_token_usage.values():
+                n_cost = Decimal(str(n_data.get("input_tokens", 0))) * _INPUT_RATE
+                n_cost += Decimal(str(n_data.get("output_tokens", 0))) * _OUTPUT_RATE
+                n_data["cost_usd"] = float(n_cost)
+                total_cost += n_cost
+            total_cost_usd_val = total_cost
+
         # Mark complete/failed/cancelled/awaiting_human.
         async with self._session_factory() as session:
             async with session.begin():
                 await set_rls_org(session, org_id)
                 final_run = await update_run_status(
-                    session, run_id, final_status, error_code=error_code, error_detail=error_detail
+                    session,
+                    run_id,
+                    final_status,
+                    error_code=error_code,
+                    error_detail=error_detail,
+                    total_tokens=total_tokens,
+                    total_cost_usd=total_cost_usd_val,
+                    node_token_usage=node_token_usage,
                 )
 
         if final_run is None:
@@ -580,30 +622,50 @@ class PipelineExecutor:
         node_ids: set[str],
         broker: RunEventBroker,
         run_id: uuid.UUID,
-    ) -> tuple[str, str | None, str | None]:
+    ) -> tuple[str, str | None, str | None, dict[str, Any] | None]:
         """Stream graph execution, mapping events to broker publishes.
 
-        Returns (final_status, error_code, error_detail).
+        Returns (final_status, error_code, error_detail, node_token_usage).
         """
+        node_token_usage: dict[str, dict[str, int]] = {}
         try:
             async for lg_event in compiled.astream_events(initial_state, config, version="v2"):
                 mapped = _map_lg_event(lg_event, run_id, node_ids)
                 if mapped is not None:
                     event_type, payload = mapped
                     broker.publish(event_type, payload)
+
+                event_kind = lg_event.get("event", "")
+                if event_kind in ("on_chat_model_end", "on_llm_end"):
+                    metadata = lg_event.get("metadata") or {}
+                    node_name = metadata.get("langgraph_node")
+                    if node_name:
+                        data = lg_event.get("data", {})
+                        output = data.get("output", {}) if isinstance(data, dict) else {}
+                        llm_output = output.get("llm_output", {}) if isinstance(output, dict) else {}
+                        token_usage = llm_output.get("token_usage", {}) if isinstance(llm_output, dict) else {}
+                        if isinstance(token_usage, dict):
+                            node_data = node_token_usage.setdefault(node_name, {"input_tokens": 0, "output_tokens": 0, "total_tokens": 0})
+                            pt = token_usage.get("prompt_tokens", 0) or 0
+                            ct = token_usage.get("completion_tokens", 0) or 0
+                            tt = token_usage.get("total_tokens", 0) or 0
+                            node_data["input_tokens"] += pt
+                            node_data["output_tokens"] += ct
+                            node_data["total_tokens"] += tt
+
             broker.publish("run_completed", {})
-            return "complete", None, None
+            return "complete", None, None, node_token_usage or None
         except NodeInterrupt as exc:
             interrupts = exc.args[0] if exc.args else []
             gate_payload = interrupts[0].value if interrupts else {}
             broker.publish("hitl_awaiting", {"gate_payload": gate_payload})
-            return "awaiting_human", None, None
+            return "awaiting_human", None, None, None
         except EvalBlockedError as exc:
             broker.publish("run_failed", {"error": "eval_blocked", "detail": str(exc)})
-            return "eval_failed", "eval_blocked", str(exc)
+            return "eval_failed", "eval_blocked", str(exc), None
         except RunCancelledError:
             broker.publish("run_cancelled", {})
-            return "cancelled", None, None
+            return "cancelled", None, None, None
         except Exception as exc:
             broker.publish("run_failed", {"error": type(exc).__name__})
-            return "failed", type(exc).__name__, None
+            return "failed", type(exc).__name__, None, None

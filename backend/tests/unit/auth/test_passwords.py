@@ -1,6 +1,7 @@
 """Password hashing, verification, and entropy tests for v1 user management."""
 
 import bcrypt as _bcrypt_lib
+import pytest
 
 from modulo.auth.passwords import (
     authenticate_db_user,
@@ -127,8 +128,9 @@ def test_validate_short_password() -> None:
 
 
 def test_validate_low_entropy_long_password() -> None:
+    # digits-only: 8 * log2(10) ≈ 26.6 bits < 30 minimum
     with pytest.raises(ValueError, match="too weak"):
-        validate_password_strength("aaaaaaaa")
+        validate_password_strength("12345678")
 
 
 def test_validate_all_lowercase_12_chars() -> None:

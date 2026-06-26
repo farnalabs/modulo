@@ -46,6 +46,7 @@ def _make_backend(credentials_ciphertext: bytes = b"encrypted") -> MagicMock:
     mb.credentials_ciphertext = credentials_ciphertext
     mb.default_params = {}
     mb.visibility = "org"
+    mb.fallback_backend_ids = None
     mb.created_by = uuid.uuid4()
     mb.created_at = _NOW
     mb.updated_at = _NOW
@@ -122,6 +123,30 @@ def test_create_model_backend_does_not_expose_credentials(client: TestClient) ->
     assert body["has_credentials"] is True
 
 
+def test_create_model_backend_with_fallback_ids(client: TestClient) -> None:
+    """Verify fallback_backend_ids are passed to create_model_backend."""
+    fallback_id = uuid.uuid4()
+    captured: list[list[str] | None] = []
+
+    async def fake_create(session: object, **kwargs: object) -> MagicMock:
+        captured.append(kwargs.get("fallback_backend_ids"))
+        backend = _make_backend()
+        backend.fallback_backend_ids = kwargs.get("fallback_backend_ids")
+        return backend  # type: ignore[return-value]
+
+    with (
+        patch("modulo.api.routes.model_backends.create_model_backend", new=fake_create),
+        patch("modulo.api.routes.model_backends.set_rls_org"),
+        patch("modulo.api.routes.model_backends.set_rls_user_context"),
+    ):
+        body = {**_CREATE_BODY, "fallback_backend_ids": [str(fallback_id)]}
+        resp = client.post("/api/v1/model-backends", json=body)
+
+    assert resp.status_code == 201
+    assert captured == [[str(fallback_id)]]
+    assert resp.json()["fallback_backend_ids"] == [str(fallback_id)]
+
+
 def test_create_model_backend_encrypts_api_key(client: TestClient) -> None:
     captured: list[bytes] = []
 
@@ -156,6 +181,22 @@ def test_get_model_backend_returns_200_without_credentials(client: TestClient) -
     body = resp.json()
     assert "credentials_ciphertext" not in body
     assert body["has_credentials"] is True
+    assert body["fallback_backend_ids"] is None
+
+
+def test_get_model_backend_with_fallback_ids_in_response(client: TestClient) -> None:
+    """Response includes fallback_backend_ids when set."""
+    fallback_id = uuid.uuid4()
+    backend = _make_backend()
+    backend.fallback_backend_ids = [str(fallback_id)]
+    with (
+        patch("modulo.api.routes.model_backends.get_model_backend", return_value=backend),
+        patch("modulo.api.routes.model_backends.set_rls_org"),
+            patch("modulo.api.routes.model_backends.set_rls_user_context"),
+        ):
+        resp = client.get(f"/api/v1/model-backends/{_BACKEND_ID}")
+    assert resp.status_code == 200
+    assert resp.json()["fallback_backend_ids"] == [str(fallback_id)]
 
 
 def test_get_model_backend_not_found_returns_404(client: TestClient) -> None:

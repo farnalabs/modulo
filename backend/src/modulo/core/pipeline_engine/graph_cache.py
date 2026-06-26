@@ -91,6 +91,19 @@ def _is_truthy(value: Any) -> bool:
     return True
 
 
+def _make_gate_kickback_router(
+    normal_target: str,
+    reject_target_str: str,
+) -> Callable[[dict[str, Any]], str]:
+    """Build a router that kicks back to reject_target on HITL rejection."""
+    def _router(state: dict[str, Any]) -> str:
+        decision = state.get("_hitl_decision")
+        if decision and isinstance(decision, dict) and decision.get("action") == "rejected":
+            return reject_target_str
+        return normal_target
+    return _router
+
+
 def _make_conditional_router(
     conditional_edges: list[dict[str, Any]],
     normal_targets: list[str],
@@ -189,6 +202,15 @@ def build_graph_from_json(
                 make_node_fn(node_def, role=role, timeout=timeout),
             )
 
+    # Build reject-edge lookup for kick-back routing.
+    reject_targets_by_source: dict[str, str] = {}
+    for edge_def in edges:
+        etype = edge_def.get("type", edge_def.get("edge_type", ""))
+        if etype == "reject":
+            src = _get_edge_val(edge_def, "source", "source_node_id")
+            tgt = _get_edge_val(edge_def, "target", "target_node_id")
+            reject_targets_by_source[src] = tgt
+
     # Group forwarding edges by source (skip reject).
     source_edges: dict[str, list[dict[str, Any]]] = defaultdict(list)
     for edge_def in edges:
@@ -234,7 +256,21 @@ def build_graph_from_json(
                         make_hitl_gate_fn(hitl_config, eval_definitions=node_evals),
                     )
                     graph.add_edge(source, gate_id)
-                    graph.add_edge(gate_id, target)
+
+                    # Determine kick-back target for HITL rejection routing.
+                    # Priority: gate config reject_target > reject edge target.
+                    reject_target: str | None = hitl_config.get("reject_target")
+                    if reject_target is None:
+                        reject_target = reject_targets_by_source.get(source)
+
+                    if reject_target:
+                        reject_target_str = str(reject_target)
+                        gate_router = _make_gate_kickback_router(target, reject_target_str)
+                        graph.add_conditional_edges(gate_id, gate_router)
+                        target_ids.add(reject_target_str)
+                    else:
+                        graph.add_edge(gate_id, target)
+
                     gate_node_ids.add(gate_id)
                     target_ids.add(gate_id)
                 else:

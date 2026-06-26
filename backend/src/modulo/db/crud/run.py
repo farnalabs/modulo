@@ -124,6 +124,7 @@ async def update_run_status(
     error_detail: str | None = None,
     total_tokens: int | None = None,
     total_cost_usd: Decimal | None = None,
+    node_token_usage: dict[str, Any] | None = None,
 ) -> Run | None:
     run = await get_run(session, run_id)
     if run is None:
@@ -141,6 +142,8 @@ async def update_run_status(
         run.total_tokens = total_tokens
     if total_cost_usd is not None:
         run.total_cost_usd = total_cost_usd
+    if node_token_usage is not None:
+        run.node_token_usage = node_token_usage
     await session.flush()
     return run
 

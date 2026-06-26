@@ -174,7 +174,7 @@ class TestListAuditEvents:
             resp = client.get(f"{self.URL}?user_id={_USER_ID}")
         assert resp.status_code == 200
         _, kwargs = mock_list.call_args
-        assert kwargs.get("user_id") == str(_USER_ID)
+        assert kwargs.get("actor_user_id") == _USER_ID
 
     def test_list_with_entity_type_filter(self, client: TestClient) -> None:
         with (
@@ -191,7 +191,7 @@ class TestListAuditEvents:
             resp = client.get(f"{self.URL}?entity_type=pipeline")
         assert resp.status_code == 200
         _, kwargs = mock_list.call_args
-        assert kwargs.get("entity_type") == "pipeline"
+        assert kwargs.get("resource_type") == "pipeline"
 
     def test_list_with_date_range(self, client: TestClient) -> None:
         with (

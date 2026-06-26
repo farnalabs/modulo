@@ -41,6 +41,8 @@ from modulo.db.crud.pipeline_snapshot_versioning import (
     tag_snapshot,
 )
 from modulo.db.models.agent import Agent
+from modulo.db.models.connector_instance import ConnectorInstance
+from modulo.db.models.model_backend import ModelBackend
 from modulo.db.models.schema import Schema
 from modulo.db.rls import set_rls_org, set_rls_user_context
 
@@ -155,8 +157,14 @@ class PipelineGraphEdge(BaseModel):
     id: uuid.UUID = Field(default_factory=uuid.uuid4)
     source_node_id: uuid.UUID
     target_node_id: uuid.UUID
-    edge_type: str = Field(pattern="^(normal|reject)$")
+    edge_type: str = Field(pattern="^(normal|reject|conditional)$")
     hitl_gate_config: HitlGateConfig | None = None
+    condition_expression: str | None = Field(
+        default=None,
+        max_length=500,
+        description="JMESPath expression for conditional edge routing. "
+        "Evaluated against pipeline state; if truthy, routes to target.",
+    )
 
     model_config = {"from_attributes": True}
 
@@ -385,6 +393,7 @@ async def replace_pipeline_graph_endpoint(
             "source_node_id": edge.source_node_id,
             "target_node_id": edge.target_node_id,
             "edge_type": edge.edge_type,
+            "condition_expression": edge.condition_expression,
             "hitl_gate_config": (
                 edge.hitl_gate_config.model_dump(mode="json") if edge.hitl_gate_config is not None else None
             ),
@@ -398,6 +407,7 @@ async def replace_pipeline_graph_endpoint(
                 "source": str(edge.source_node_id),
                 "target": str(edge.target_node_id),
                 "type": edge.edge_type,
+                "condition_expression": edge.condition_expression,
                 "hitl_gate_config": (
                     edge.hitl_gate_config.model_dump(mode="json") if edge.hitl_gate_config is not None else None
                 ),
@@ -730,3 +740,212 @@ async def diff_snapshot_endpoint(
             detail="One or both snapshots not found",
         )
     return SnapshotDiffResponse(**result)
+
+
+# ---------------------------------------------------------------------------
+# Node conversion: manual ↔ agent
+# ---------------------------------------------------------------------------
+
+
+class ConvertToAgentRequest(BaseModel):
+    agent_id: uuid.UUID
+    connector_binding: ConnectorBinding
+    model_backend_id: uuid.UUID
+
+
+@router.post(
+    "/{pipeline_id}/nodes/{node_id}/convert-to-agent",
+    response_model=PipelineGraphResponse,
+)
+async def convert_node_to_agent_endpoint(
+    pipeline_id: uuid.UUID,
+    node_id: uuid.UUID,
+    body: ConvertToAgentRequest,
+    session: AsyncSession = Depends(get_db_session),
+    principal: AuthenticatedPrincipal = Depends(get_current_user),
+) -> PipelineGraphResponse:
+    async with session.begin():
+        await set_rls_org(session, principal.organisation_id)
+        await set_rls_user_context(session, principal.user_id, principal.org_role)
+
+        graph = await get_pipeline_graph(session, pipeline_id)
+        if graph is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Pipeline not found")
+        nodes, edges = graph
+
+        target = _find_node_in_list(nodes, node_id)
+        if target is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Node not found")
+        if target.get("node_type") != "manual":
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="Only manual nodes can be converted to agent",
+            )
+
+        agent = (
+            await session.execute(
+                select(Agent).where(
+                    Agent.id == body.agent_id,
+                    Agent.organisation_id == principal.organisation_id,
+                )
+            )
+        ).scalar_one_or_none()
+        if agent is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Agent not found")
+
+        connector = (
+            await session.execute(
+                select(ConnectorInstance).where(
+                    ConnectorInstance.id == body.connector_binding.instance_id,
+                    ConnectorInstance.organisation_id == principal.organisation_id,
+                )
+            )
+        ).scalar_one_or_none()
+        if connector is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Connector not found")
+        if connector.connector_type_id != body.connector_binding.type:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="Connector type mismatch",
+            )
+
+        model_backend = (
+            await session.execute(
+                select(ModelBackend).where(
+                    ModelBackend.id == body.model_backend_id,
+                    ModelBackend.organisation_id == principal.organisation_id,
+                )
+            )
+        ).scalar_one_or_none()
+        if model_backend is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Model backend not found")
+
+        target["node_type"] = "agent"
+        target["agent_id"] = str(body.agent_id)
+        target["connector_binding"] = {
+            "type": body.connector_binding.type,
+            "instance_id": str(body.connector_binding.instance_id),
+        }
+        target.pop("output_schema_id", None)
+
+        saved = await _save_graph(session, pipeline_id, principal.organisation_id, nodes, edges)
+
+    if saved is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Pipeline not found")
+    saved_nodes, saved_edges = saved
+    return _graph_response(saved_nodes, saved_edges)
+
+
+@router.post(
+    "/{pipeline_id}/nodes/{node_id}/revert-to-manual",
+    response_model=PipelineGraphResponse,
+)
+async def revert_node_to_manual_endpoint(
+    pipeline_id: uuid.UUID,
+    node_id: uuid.UUID,
+    snapshot_id: uuid.UUID = Query(...),
+    session: AsyncSession = Depends(get_db_session),
+    principal: AuthenticatedPrincipal = Depends(get_current_user),
+) -> PipelineGraphResponse:
+    async with session.begin():
+        await set_rls_org(session, principal.organisation_id)
+        await set_rls_user_context(session, principal.user_id, principal.org_role)
+
+        graph = await get_pipeline_graph(session, pipeline_id)
+        if graph is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Pipeline not found")
+        nodes, edges = graph
+
+        target = _find_node_in_list(nodes, node_id)
+        if target is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Node not found")
+        if target.get("node_type") != "agent":
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="Only agent nodes can be reverted to manual",
+            )
+
+        snapshot = await get_snapshot_detail(session, snapshot_id)
+        if snapshot is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Snapshot not found")
+
+        snapshot_nodes = snapshot.graph_json.get("nodes", [])
+        snapshot_node = _find_node_in_list(snapshot_nodes, node_id)
+        if snapshot_node is None:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="Snapshot does not contain this node",
+            )
+        if snapshot_node.get("node_type") != "manual":
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="Snapshot node was not a manual node",
+            )
+
+        output_schema_id = snapshot_node.get("output_schema_id")
+        if output_schema_id is None:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="Snapshot node has no output schema",
+            )
+
+        target["node_type"] = "manual"
+        target["output_schema_id"] = str(output_schema_id) if not isinstance(output_schema_id, str) else output_schema_id
+        target.pop("agent_id", None)
+        target.pop("connector_binding", None)
+        if not target.get("label"):
+            target["label"] = snapshot_node.get("label") or f"Manual {node_id}"
+
+        saved = await _save_graph(session, pipeline_id, principal.organisation_id, nodes, edges)
+
+    if saved is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Pipeline not found")
+    saved_nodes, saved_edges = saved
+    return _graph_response(saved_nodes, saved_edges)
+
+
+def _find_node_in_list(nodes: list[dict], node_id: uuid.UUID) -> dict | None:
+    """Find a node dict by ID within a list of node dicts."""
+    node_id_str = str(node_id)
+    for n in nodes:
+        raw_id = n.get("id")
+        if raw_id is None:
+            continue
+        if isinstance(raw_id, uuid.UUID):
+            if raw_id == node_id:
+                return n
+        elif str(raw_id) == node_id_str:
+            return n
+    return None
+
+
+def _edge_to_dict(e: Any) -> dict:
+    return {
+        "id": str(e.id),
+        "source_node_id": str(e.source_node_id),
+        "target_node_id": str(e.target_node_id),
+        "edge_type": e.edge_type,
+        "condition_expression": getattr(e, "condition_expression", None),
+        "hitl_gate_config": dict(e.hitl_gate_config) if isinstance(e.hitl_gate_config, dict) else e.hitl_gate_config,
+    }
+
+
+async def _save_graph(
+    session: AsyncSession,
+    pipeline_id: uuid.UUID,
+    org_id: uuid.UUID,
+    nodes: list[dict],
+    edges: list[Any],
+) -> tuple[list[dict], list[Any]] | None:
+    """Persist updated nodes + edges via replace_pipeline_graph.
+
+    Accepts edges as either ORM model instances (PipelineEdge) or plain dicts.
+    """
+    edge_dicts = [_edge_to_dict(e) if hasattr(e, "source_node_id") else dict(e) for e in edges]
+    return await replace_pipeline_graph(
+        session,
+        pipeline_id=pipeline_id,
+        org_id=org_id,
+        nodes=nodes,
+        edges=edge_dicts,
+    )

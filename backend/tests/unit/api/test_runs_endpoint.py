@@ -4,6 +4,7 @@ import uuid
 from collections.abc import AsyncGenerator, Generator
 from contextlib import asynccontextmanager
 from decimal import Decimal
+from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -53,6 +54,7 @@ def _make_run(
     error_code: str | None = None,
     total_cost_usd: Decimal | None = None,
     total_tokens: int | None = None,
+    node_token_usage: dict[str, Any] | None = None,
 ) -> MagicMock:
     r = MagicMock()
     r.id = _RUN_ID
@@ -63,6 +65,7 @@ def _make_run(
     r.error_code = error_code
     r.total_cost_usd = total_cost_usd
     r.total_tokens = total_tokens
+    r.node_token_usage = node_token_usage
     return r
 
 
@@ -406,6 +409,43 @@ def test_run_response_token_consumption_none_when_no_tokens(client: TestClient) 
 
     body = resp.json()
     assert body["token_consumption"] is None
+
+
+def test_run_response_populates_node_token_usage(client: TestClient) -> None:
+    run = _make_run(
+        status="complete",
+        node_token_usage={
+            "planner": {"input_tokens": 150, "output_tokens": 450, "total_tokens": 600, "cost_usd": 0.015},
+            "coder": {"input_tokens": 1200, "output_tokens": 3200, "total_tokens": 4400, "cost_usd": 0.108},
+        },
+    )
+    with (
+        patch("modulo.api.routes.runs.get_run", return_value=run),
+        patch("modulo.api.routes.runs.set_rls_org"),
+    ):
+        resp = client.get(f"/api/v1/runs/{_RUN_ID}")
+
+    body = resp.json()
+    ntu = body["node_token_usage"]
+    assert isinstance(ntu, dict)
+    assert "planner" in ntu
+    assert "coder" in ntu
+    assert ntu["planner"]["input_tokens"] == 150
+    assert ntu["planner"]["output_tokens"] == 450
+    assert ntu["planner"]["total_tokens"] == 600
+    assert ntu["coder"]["total_tokens"] == 4400
+
+
+def test_run_response_node_token_usage_none_when_not_available(client: TestClient) -> None:
+    run = _make_run(status="pending", node_token_usage=None)
+    with (
+        patch("modulo.api.routes.runs.get_run", return_value=run),
+        patch("modulo.api.routes.runs.set_rls_org"),
+    ):
+        resp = client.get(f"/api/v1/runs/{_RUN_ID}")
+
+    body = resp.json()
+    assert body["node_token_usage"] is None
 
 
 def test_run_response_populates_trace_id(client: TestClient) -> None:

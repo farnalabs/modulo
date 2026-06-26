@@ -65,7 +65,10 @@ def _make_settings() -> Settings:
 
 def test_create_ws_token_is_short_lived():
     settings = _make_settings()
-    token = create_ws_token("testuser", settings.secret_key)
+    token = create_ws_token(
+        "testuser", settings.secret_key,
+        organisation_id=str(_ORG_ID), user_id=str(_USER_ID), org_role="admin",
+    )
     principal = decode_principal(token, settings.secret_key)
     assert principal.username == "testuser"
     assert principal.organisation_id == _ORG_ID
@@ -91,7 +94,10 @@ def test_create_ws_token_expires_quickly():
 
 def test_create_ws_token_has_purpose_claim():
     settings = _make_settings()
-    token = create_ws_token("u", settings.secret_key)
+    token = create_ws_token(
+        "u", settings.secret_key,
+        organisation_id=str(_ORG_ID), user_id=str(_USER_ID), org_role="admin",
+    )
     from jose import jwt
 
     payload = jwt.decode(token, settings.secret_key, algorithms=["HS256"])
@@ -118,14 +124,20 @@ def test_create_ws_token_carries_identity():
 def test_access_token_not_accepted_as_ws_token():
     """Regular access tokens lack purpose claim and must be rejected for WS use."""
     settings = _make_settings()
-    token = create_access_token("testuser", settings.secret_key)
+    token = create_access_token(
+        "testuser", settings.secret_key,
+        organisation_id=str(_ORG_ID), user_id=str(_USER_ID), org_role="admin",
+    )
     with pytest.raises(JWTError, match="purpose"):
         decode_principal(token, settings.secret_key, allowed_purposes=["ws"])
 
 
 def test_ws_token_rejected_with_wrong_key():
     settings = _make_settings()
-    token = create_ws_token("testuser", settings.secret_key)
+    token = create_ws_token(
+        "testuser", settings.secret_key,
+        organisation_id=str(_ORG_ID), user_id=str(_USER_ID), org_role="admin",
+    )
     with pytest.raises(JWTError):
         decode_principal(token, "b" * 32)
 

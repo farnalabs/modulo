@@ -244,3 +244,124 @@ def test_get_schema_version_not_found_returns_404(client: TestClient) -> None:
 def test_list_schemas_unauthenticated_returns_4xx(unauth_client: TestClient) -> None:
     resp = unauth_client.get("/api/v1/schemas")
     assert resp.status_code in (401, 403)
+
+
+# ---------------------------------------------------------------------------
+# Schema Migration
+# ---------------------------------------------------------------------------
+
+
+def test_migrate_data_returns_200(client: TestClient) -> None:
+    from_schema = _make_schema()
+    to_schema = _make_schema()
+    from_sv = _make_schema_version(from_schema.id)
+    from_sv.definition_json = {
+        "type": "object",
+        "properties": {"name": {"type": "string"}, "legacy": {"type": "boolean"}},
+    }
+    to_sv = _make_schema_version(to_schema.id)
+    to_sv.definition_json = {
+        "type": "object",
+        "properties": {"name": {"type": "string"}, "email": {"type": "string"}},
+    }
+    page_result = MagicMock(items=[from_sv], total=1, page=1, page_size=20)
+    to_page = MagicMock(items=[to_sv], total=1, page=1, page_size=20)
+    with (
+        patch("modulo.api.routes.schemas.get_schema", side_effect=[from_schema, to_schema]),
+        patch("modulo.api.routes.schemas.list_schema_versions", side_effect=[page_result, to_page]),
+        patch("modulo.api.routes.schemas.set_rls_org"),
+    ):
+        resp = client.post(
+            "/api/v1/schemas/migrate",
+            json={
+                "from_schema_id": str(from_schema.id),
+                "to_schema_id": str(to_schema.id),
+                "data": {"name": "Alice", "legacy": True},
+            },
+        )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["migrated_data"]["name"] == "Alice"
+    assert "legacy" not in body["migrated_data"]
+    assert body["migrated_data"]["email"] is None
+    assert "field_removals" in body["plan"]
+    assert "field_additions" in body["plan"]
+
+
+def test_migrate_data_source_schema_not_found_returns_404(client: TestClient) -> None:
+    with (
+        patch("modulo.api.routes.schemas.get_schema", return_value=None),
+        patch("modulo.api.routes.schemas.set_rls_org"),
+    ):
+        resp = client.post(
+            "/api/v1/schemas/migrate",
+            json={
+                "from_schema_id": str(uuid.uuid4()),
+                "to_schema_id": str(uuid.uuid4()),
+                "data": {"name": "Alice"},
+            },
+        )
+    assert resp.status_code == 404
+
+
+def test_migrate_data_source_no_versions_returns_404(client: TestClient) -> None:
+    from_schema = _make_schema()
+    to_schema = _make_schema()
+    with (
+        patch("modulo.api.routes.schemas.get_schema", side_effect=[from_schema, to_schema]),
+        patch("modulo.api.routes.schemas.list_schema_versions", return_value=MagicMock(items=[], total=0, page=1, page_size=20)),
+        patch("modulo.api.routes.schemas.set_rls_org"),
+    ):
+        resp = client.post(
+            "/api/v1/schemas/migrate",
+            json={
+                "from_schema_id": str(from_schema.id),
+                "to_schema_id": str(to_schema.id),
+                "data": {"name": "Alice"},
+            },
+        )
+    assert resp.status_code == 404
+
+
+def test_migration_plan_endpoint_returns_200(client: TestClient) -> None:
+    resp = client.post(
+        "/api/v1/schemas/migrate/plan",
+        json={
+            "from_definition": {
+                "type": "object",
+                "properties": {"full_name": {"type": "string"}, "age": {"type": "integer"}},
+            },
+            "to_definition": {
+                "type": "object",
+                "properties": {"display_name": {"type": "string"}, "email": {"type": "boolean"}},
+            },
+        },
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert "full_name" in body["renames"]
+    assert body["renames"]["full_name"] == "display_name"
+    assert "email" in body["field_additions"]
+    assert body["field_additions"]["email"] == "boolean"
+    assert "age" in body["field_removals"]
+
+
+def test_migration_plan_no_changes(client: TestClient) -> None:
+    resp = client.post(
+        "/api/v1/schemas/migrate/plan",
+        json={
+            "from_definition": {
+                "type": "object",
+                "properties": {"name": {"type": "string"}},
+            },
+            "to_definition": {
+                "type": "object",
+                "properties": {"name": {"type": "string"}},
+            },
+        },
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["field_additions"] == {}
+    assert body["field_removals"] == []
+    assert body["renames"] == {}

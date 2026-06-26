@@ -1,0 +1,776 @@
+<template>
+  <div class="mx-auto max-w-6xl space-y-8 p-6">
+    <div v-if="loading" class="flex items-center justify-center py-16">
+      <div class="h-8 w-8 animate-spin rounded-full border-4 border-primary border-t-transparent" />
+    </div>
+    <div v-else-if="error" class="rounded-lg border border-destructive/50 bg-destructive/10 p-4 text-destructive">
+      {{ error }}
+    </div>
+    <template v-else>
+      <header>
+        <h1 class="text-3xl font-bold tracking-tight">A/B Test Models</h1>
+        <p class="mt-1 text-muted-foreground">
+          Compare model backends side by side with weighted A/B testing — eval scores, costs, and token usage
+        </p>
+      </header>
+
+      <div class="flex flex-wrap items-center gap-4">
+        <label class="flex items-center gap-2 text-sm">
+          <span class="text-muted-foreground">Pipeline:</span>
+          <select
+            v-model="selectedPipelineId"
+            class="min-w-[280px] rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          >
+            <option value="" disabled>Select a pipeline…</option>
+            <option v-for="p in pipelines" :key="p.id" :value="p.id">
+              {{ p.name }}
+            </option>
+          </select>
+        </label>
+
+        <label class="flex items-center gap-2 text-sm">
+          <span class="text-muted-foreground">Existing group:</span>
+          <select
+            v-model="selectedGroupId"
+            class="min-w-[200px] rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          >
+            <option value="">New group</option>
+            <option v-for="g in filteredGroups" :key="g.id" :value="g.id">
+              {{ g.name }}
+            </option>
+          </select>
+        </label>
+      </div>
+
+      <template v-if="selectedPipelineId">
+        <section class="space-y-4 rounded-lg border bg-card p-6">
+          <h2 class="text-lg font-semibold tracking-tight">
+            {{ selectedGroupId ? 'Edit Variant Group' : 'New Variant Group' }}
+          </h2>
+          <div class="grid gap-4 sm:grid-cols-2">
+            <div>
+              <label class="mb-1 block text-sm font-medium text-muted-foreground">Group Name</label>
+              <input
+                v-model="groupName"
+                type="text"
+                placeholder="e.g. Claude vs GPT-4o"
+                class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              />
+            </div>
+            <div>
+              <label class="mb-1 block text-sm font-medium text-muted-foreground">Description</label>
+              <input
+                v-model="groupDescription"
+                type="text"
+                placeholder="Compare accuracy and cost across model providers"
+                class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              />
+            </div>
+          </div>
+
+          <div v-if="!selectedGroupId && availableSnapshotId" class="text-xs text-muted-foreground">
+            Using snapshot: <code class="rounded bg-muted px-1.5 py-0.5 font-mono">{{ availableSnapshotId.slice(0, 8) }}…</code>
+            <span v-if="availableSnapshotTag" class="ml-1">({{ availableSnapshotTag }})</span>
+          </div>
+
+          <div class="space-y-3">
+            <div class="flex items-center justify-between">
+              <h3 class="text-sm font-medium text-muted-foreground">Variants</h3>
+              <button
+                :disabled="modelBackends.length === 0"
+                class="inline-flex items-center gap-1 rounded-lg bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
+                @click="addVariant"
+              >
+                + Add Variant
+              </button>
+            </div>
+
+            <p v-if="variants.length === 0" class="py-4 text-center text-sm text-muted-foreground">
+              Add at least two variants to run an A/B test.
+            </p>
+
+            <div
+              v-for="(v, i) in variants"
+              :key="v.id"
+              class="rounded-lg border bg-muted/20 p-4"
+            >
+              <div class="mb-3 flex items-center justify-between">
+                <span class="text-xs font-medium text-muted-foreground">Variant {{ i + 1 }}</span>
+                <button
+                  class="text-xs text-destructive hover:underline"
+                  @click="removeVariant(i)"
+                >
+                  Remove
+                </button>
+              </div>
+              <div class="grid gap-3 sm:grid-cols-3">
+                <div>
+                  <label class="mb-1 block text-xs font-medium text-muted-foreground">Name</label>
+                  <input
+                    v-model="v.name"
+                    type="text"
+                    placeholder="Variant A"
+                    class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                  />
+                </div>
+                <div>
+                  <label class="mb-1 block text-xs font-medium text-muted-foreground">Model Backend</label>
+                  <select
+                    v-model="v.modelBackendId"
+                    class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                  >
+                    <option value="" disabled>Select model…</option>
+                    <option
+                      v-for="mb in modelBackends"
+                      :key="mb.id"
+                      :value="mb.id"
+                    >
+                      {{ mb.display_name }} ({{ mb.provider }})
+                    </option>
+                  </select>
+                </div>
+                <div>
+                  <label class="mb-1 block text-xs font-medium text-muted-foreground">
+                    Weight: <span class="font-mono tabular-nums">{{ v.weight }}%</span>
+                  </label>
+                  <input
+                    v-model.number="v.weight"
+                    type="range"
+                    min="0"
+                    max="100"
+                    step="1"
+                    class="w-full accent-primary"
+                  />
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div class="flex flex-wrap gap-3 pt-2">
+            <button
+              :disabled="!canRun"
+              class="inline-flex items-center gap-2 rounded-lg bg-primary px-5 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
+              @click="saveAndRun"
+            >
+              <span v-if="running" class="inline-block h-4 w-4 animate-spin rounded-full border-2 border-current border-t-transparent" />
+              {{ running ? 'Running…' : 'Run A/B Test' }}
+            </button>
+            <button
+              class="inline-flex items-center gap-2 rounded-lg border border-input bg-background px-5 py-2 text-sm font-medium hover:bg-muted/50"
+              @click="saveGroup"
+            >
+              Save Group
+            </button>
+          </div>
+        </section>
+
+        <section v-if="runEntries.size > 0" class="space-y-4">
+          <h2 class="text-xl font-semibold tracking-tight">Results</h2>
+
+          <div class="overflow-x-auto rounded-lg border bg-card">
+            <table class="w-full text-left text-sm">
+              <thead>
+                <tr class="border-b bg-muted/50">
+                  <th class="px-4 py-3 font-semibold text-muted-foreground">Metric</th>
+                  <th
+                    v-for="s in summaryByVariant"
+                    :key="s.name"
+                    class="min-w-[180px] px-4 py-3 font-semibold"
+                  >
+                    <div class="flex flex-col gap-0.5">
+                      <span>{{ s.name }}</span>
+                      <span v-if="s.modelBackendName" class="text-xs font-normal text-muted-foreground">
+                        {{ s.modelBackendName }}
+                      </span>
+                    </div>
+                  </th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr class="border-b hover:bg-muted/30">
+                  <td class="px-4 py-3 font-medium text-muted-foreground">Eval Pass Rate</td>
+                  <td
+                    v-for="s in summaryByVariant"
+                    :key="`pass-${s.name}`"
+                    class="px-4 py-3"
+                  >
+                    <span
+                      v-if="s.passRate !== null"
+                      class="inline-flex items-center gap-1 rounded-full border px-2.5 py-0.5 text-xs font-medium"
+                      :class="passRateClass(s.passRate)"
+                    >
+                      <span
+                        class="h-1.5 w-1.5 rounded-full"
+                        :class="{
+                          'bg-green-500': s.passRate >= 80,
+                          'bg-amber-500': s.passRate >= 40 && s.passRate < 80,
+                          'bg-red-500': s.passRate < 40,
+                        }"
+                      />
+                      {{ s.passRate.toFixed(0) }}%
+                      <span class="font-normal opacity-70">({{ s.passedCount }}/{{ s.totalEvals }})</span>
+                    </span>
+                    <span v-else class="text-xs text-muted-foreground">—</span>
+                  </td>
+                </tr>
+                <tr class="border-b hover:bg-muted/30">
+                  <td class="px-4 py-3 font-medium text-muted-foreground">Cost</td>
+                  <td
+                    v-for="s in summaryByVariant"
+                    :key="`cost-${s.name}`"
+                    class="px-4 py-3 font-mono tabular-nums text-xs"
+                  >
+                    <span v-if="s.totalCost !== null">${{ Number(s.totalCost).toFixed(6) }}</span>
+                    <span v-else class="text-muted-foreground">—</span>
+                  </td>
+                </tr>
+                <tr class="hover:bg-muted/30">
+                  <td class="px-4 py-3 font-medium text-muted-foreground">Tokens</td>
+                  <td
+                    v-for="s in summaryByVariant"
+                    :key="`tokens-${s.name}`"
+                    class="px-4 py-3 font-mono tabular-nums text-xs"
+                  >
+                    <span v-if="s.tokenTotal !== null">{{ s.tokenTotal.toLocaleString() }}</span>
+                    <span v-else class="text-muted-foreground">—</span>
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+
+          <div
+            v-if="hasTerminalRuns"
+            class="flex flex-wrap gap-3"
+          >
+            <button
+              v-for="s in summaryByVariant"
+              :key="`promote-${s.name}`"
+              :disabled="promotingName === s.name"
+              class="inline-flex items-center gap-2 rounded-lg border border-input bg-background px-4 py-2 text-sm font-medium hover:bg-muted/50 disabled:opacity-50"
+              @click="promoteWinner(s.name)"
+            >
+              <span v-if="promotingName === s.name" class="inline-block h-4 w-4 animate-spin rounded-full border-2 border-current border-t-transparent" />
+              Promote "{{ s.name }}" as default
+            </button>
+          </div>
+        </section>
+
+        <div
+          v-else-if="!selectedPipelineId"
+          class="rounded-lg border bg-card p-8 text-center text-muted-foreground"
+        >
+          Select a pipeline and configure variants to run an A/B test.
+        </div>
+      </template>
+
+      <div
+        v-else-if="!loading && pipelines.length === 0"
+        class="rounded-lg border bg-card p-8 text-center text-muted-foreground"
+      >
+        No pipelines found. Create a pipeline first to set up A/B testing.
+      </div>
+    </template>
+  </div>
+</template>
+
+<script setup lang="ts">
+import { ref, computed, onMounted, watch } from 'vue'
+import { api } from '../lib/api/client'
+import type { components } from '../lib/api/client'
+
+type PipelineItem = components['schemas']['PipelineItem']
+type VariantGroup = components['schemas']['VariantGroupResponse']
+type ModelBackend = components['schemas']['ModelBackendResponse']
+type RunResponse = components['schemas']['RunResponse']
+type RunIOResponse = components['schemas']['RunIOResponse']
+type RunEvalItem = components['schemas']['RunEvalItem']
+type RunEvalListResponse = components['schemas']['RunEvalListResponse']
+
+interface VariantForm {
+  id: string
+  name: string
+  modelBackendId: string | null
+  weight: number
+}
+
+interface RunEntry {
+  runId: string
+  variantName: string
+  modelBackendName: string
+  runStatus: string
+  totalCostUsd: number | null
+  tokenConsumption: Record<string, unknown> | null
+  nodeOutputs: Record<string, unknown> | null
+  evalResults: RunEvalItem[]
+}
+
+const pipelines = ref<PipelineItem[]>([])
+const variantGroups = ref<VariantGroup[]>([])
+const modelBackends = ref<ModelBackend[]>([])
+const selectedPipelineId = ref<string>('')
+const selectedGroupId = ref<string>('')
+const groupName = ref('')
+const groupDescription = ref('')
+const variants = ref<VariantForm[]>([])
+const loading = ref(true)
+const error = ref<string | null>(null)
+const running = ref(false)
+const savedGroupId = ref<string | null>(null)
+const promotingName = ref<string | null>(null)
+
+const runEntries = ref<Map<string, RunEntry>>(new Map())
+const terminalStatuses = new Set(['complete', 'failed', 'cancelled', 'eval_failed'])
+
+const filteredGroups = computed(() =>
+  variantGroups.value.filter(g => g.pipeline_id === selectedPipelineId.value)
+)
+
+const availableSnapshotId = computed(() => {
+  return snapshotId.value || undefined
+})
+
+const availableSnapshotTag = computed(() => {
+  return null
+})
+
+const snapshotId = ref<string | null>(null)
+
+const modelBackendMap = computed(() => {
+  const map = new Map<string, ModelBackend>()
+  for (const mb of modelBackends.value) {
+    map.set(mb.id, mb)
+  }
+  return map
+})
+
+const canRun = computed(() => {
+  if (!selectedPipelineId.value || !groupName.value.trim()) return false
+  if (variants.value.length < 2) return false
+  return variants.value.every(v => v.name.trim() && v.modelBackendId)
+})
+
+const hasTerminalRuns = computed(() => {
+  for (const entry of runEntries.value.values()) {
+    if (terminalStatuses.has(entry.runStatus)) return true
+  }
+  return false
+})
+
+const summaryByVariant = computed(() => {
+  const result: Array<{
+    name: string
+    modelBackendName: string
+    passRate: number | null
+    passedCount: number
+    totalEvals: number
+    totalCost: number | null
+    tokenTotal: number | null
+  }> = []
+
+  for (const entry of runEntries.value.values()) {
+    const passCount = entry.evalResults.filter(r => r.passed).length
+    const totalCount = entry.evalResults.length
+    const tc = entry.tokenConsumption as { total_tokens?: number } | null
+    result.push({
+      name: entry.variantName,
+      modelBackendName: entry.modelBackendName,
+      passRate: totalCount > 0 ? (passCount / totalCount) * 100 : null,
+      passedCount: passCount,
+      totalEvals: totalCount,
+      totalCost: entry.totalCostUsd,
+      tokenTotal: tc?.total_tokens ?? null,
+    })
+  }
+
+  return result
+})
+
+function passRateClass(rate: number): Record<string, boolean> {
+  return {
+    'border-green-200 bg-green-50 text-green-700': rate >= 80,
+    'border-amber-200 bg-amber-50 text-amber-700': rate >= 40 && rate < 80,
+    'border-red-200 bg-red-50 text-red-700': rate < 40,
+  }
+}
+
+function addVariant() {
+  const usedIds = new Set(modelBackends.value.filter(mb =>
+    variants.value.some(v => v.modelBackendId === mb.id)
+  ).map(mb => mb.id))
+
+  const available = modelBackends.value.find(mb => !usedIds.has(mb.id))
+  variants.value.push({
+    id: crypto.randomUUID(),
+    name: `Variant ${variants.value.length + 1}`,
+    modelBackendId: available?.id ?? null,
+    weight: Math.round(100 / (variants.value.length + 1)),
+  })
+  normalizeWeights()
+}
+
+function removeVariant(index: number) {
+  variants.value.splice(index, 1)
+  normalizeWeights()
+}
+
+function normalizeWeights() {
+  if (variants.value.length === 0) return
+  const total = variants.value.reduce((sum, v) => sum + v.weight, 0)
+  if (total === 0) {
+    const equal = Math.floor(100 / variants.value.length)
+    variants.value.forEach((v, i) => {
+      v.weight = i < variants.value.length - 1 ? equal : 100 - equal * (variants.value.length - 1)
+    })
+    return
+  }
+  const remaining = 100
+  let allocated = 0
+  variants.value.forEach((v, i) => {
+    if (i === variants.value.length - 1) {
+      v.weight = remaining - allocated
+    } else {
+      v.weight = Math.round((v.weight / total) * remaining)
+      allocated += v.weight
+    }
+  })
+}
+
+async function saveGroup() {
+  if (!selectedPipelineId.value || !groupName.value.trim()) return
+  error.value = null
+
+  const snapshot = snapshotId.value || ''
+  const variantDefs = variants.value.map(v => ({
+    snapshot_id: snapshot,
+    name: v.name.trim(),
+    weight: v.weight / 100,
+    run_context_overrides: {
+      model_backend_id: v.modelBackendId,
+    },
+    eval_definition_ids: [],
+  }))
+
+  try {
+    if (selectedGroupId.value) {
+      const { data, error: err } = await api.PUT('/api/v1/variant-groups/{group_id}', {
+        params: { path: { group_id: selectedGroupId.value } },
+        body: {
+          pipeline_id: selectedPipelineId.value,
+          name: groupName.value.trim(),
+          description: groupDescription.value || null,
+          variants: variantDefs as unknown as components['schemas']['VariantDef'][],
+        },
+      })
+      if (err) {
+        error.value = `Failed to update group: ${JSON.stringify(err)}`
+        return
+      }
+      if (data) {
+        savedGroupId.value = (data as unknown as VariantGroup).id
+      }
+    } else {
+      const { data, error: err } = await api.POST('/api/v1/variant-groups', {
+        body: {
+          pipeline_id: selectedPipelineId.value,
+          name: groupName.value.trim(),
+          description: groupDescription.value || null,
+          variants: variantDefs as unknown as components['schemas']['VariantDef'][],
+        },
+      })
+      if (err) {
+        error.value = `Failed to create group: ${JSON.stringify(err)}`
+        return
+      }
+      if (data) {
+        const group = data as unknown as VariantGroup
+        savedGroupId.value = group.id
+        selectedGroupId.value = group.id
+        await fetchVariantGroups()
+      }
+    }
+  } catch (e: unknown) {
+    error.value = `Failed to save group: ${e instanceof Error ? e.message : String(e)}`
+  }
+}
+
+async function saveAndRun() {
+  await saveGroup()
+  if (!savedGroupId.value) return
+  await runTest(savedGroupId.value)
+}
+
+async function runTest(groupId: string) {
+  running.value = true
+  error.value = null
+  runEntries.value.clear()
+
+  try {
+    const { data, error: err } = await api.POST('/api/v1/variant-groups/{group_id}/run', {
+      params: { path: { group_id: groupId } },
+      body: {},
+    })
+
+    if (err) {
+      error.value = `Run failed: ${JSON.stringify(err)}`
+      return
+    }
+
+    if (!data) return
+
+    const { run_id, variant_name } = data as unknown as {
+      run_id: string
+      variant_name: string
+    }
+
+    const mbId = variants.value.find(v => v.name === variant_name)?.modelBackendId
+    const mb = mbId ? modelBackendMap.value.get(mbId) : undefined
+
+    const entry: RunEntry = {
+      runId: run_id,
+      variantName: variant_name,
+      modelBackendName: mb?.display_name || variant_name,
+      runStatus: 'pending',
+      totalCostUsd: null,
+      tokenConsumption: null,
+      nodeOutputs: null,
+      evalResults: [],
+    }
+    runEntries.value.set(variant_name, entry)
+
+    await pollRunStatus(run_id, variant_name)
+  } catch (e: unknown) {
+    error.value = `Failed to run A/B test: ${e instanceof Error ? e.message : String(e)}`
+  } finally {
+    running.value = false
+  }
+}
+
+async function pollRunStatus(runId: string, variantName: string) {
+  let status = 'pending'
+
+  while (!terminalStatuses.has(status)) {
+    await delay(2000)
+
+    try {
+      const { data } = await api.GET('/api/v1/runs/{run_id}', {
+        params: { path: { run_id: runId } },
+      })
+
+      if (data) {
+        const runResp = data as unknown as RunResponse
+        status = runResp.status
+
+        const existing = runEntries.value.get(variantName)
+        if (existing) {
+          runEntries.value.set(variantName, {
+            ...existing,
+            runStatus: status,
+            totalCostUsd: runResp.total_cost_usd,
+            tokenConsumption: runResp.token_consumption,
+          })
+        }
+
+        if (terminalStatuses.has(status)) {
+          if (status === 'complete') {
+            await Promise.all([
+              fetchRunIO(runId, variantName),
+              fetchRunEvals(runId, variantName),
+            ])
+          } else {
+            error.value = `Run failed with status: ${status}`
+          }
+          break
+        }
+      }
+    } catch {
+      // Retry on next poll interval
+    }
+  }
+}
+
+async function fetchRunIO(runId: string, variantName: string) {
+  try {
+    const { data } = await api.GET('/api/v1/runs/{run_id}/io', {
+      params: { path: { run_id: runId } },
+    })
+    if (data) {
+      const ioResp = data as unknown as RunIOResponse
+      const existing = runEntries.value.get(variantName)
+      if (existing) {
+        runEntries.value.set(variantName, {
+          ...existing,
+          nodeOutputs: ioResp.outputs_json,
+        })
+      }
+    }
+  } catch {
+    // Non-critical
+  }
+}
+
+async function fetchRunEvals(runId: string, variantName: string) {
+  try {
+    const { data } = await api.GET('/api/v1/runs/{run_id}/evals', {
+      params: { path: { run_id: runId } },
+    })
+    if (data) {
+      const evalResp = data as unknown as RunEvalListResponse
+      const existing = runEntries.value.get(variantName)
+      if (existing) {
+        runEntries.value.set(variantName, {
+          ...existing,
+          evalResults: evalResp.items ?? [],
+        })
+      }
+    }
+  } catch {
+    // Non-critical
+  }
+}
+
+async function promoteWinner(variantName: string) {
+  if (!savedGroupId.value) return
+  promotingName.value = variantName
+  error.value = null
+
+  const variant = variants.value.find(v => v.name === variantName)
+  if (!variant) {
+    promotingName.value = null
+    return
+  }
+
+  try {
+    const snapshot = snapshotId.value || ''
+    const variantDef = {
+      snapshot_id: snapshot,
+      name: variant.name.trim(),
+      weight: 1.0,
+      run_context_overrides: {
+        model_backend_id: variant.modelBackendId,
+      },
+      eval_definition_ids: [] as string[],
+    }
+
+    const { error: err } = await api.PUT('/api/v1/variant-groups/{group_id}', {
+      params: { path: { group_id: savedGroupId.value } },
+      body: {
+        pipeline_id: selectedPipelineId.value,
+        name: `${groupName.value.trim()} (default: ${variantName})`,
+        description: groupDescription.value || null,
+        variants: [variantDef] as unknown as components['schemas']['VariantDef'][],
+      },
+    })
+
+    if (err) {
+      error.value = `Failed to promote variant: ${JSON.stringify(err)}`
+    }
+  } catch (e: unknown) {
+    error.value = `Failed to promote variant: ${e instanceof Error ? e.message : String(e)}`
+  } finally {
+    promotingName.value = null
+  }
+}
+
+onMounted(async () => {
+  await Promise.all([
+    fetchPipelines(),
+    fetchVariantGroups(),
+    fetchModelBackends(),
+  ])
+  loading.value = false
+})
+
+watch(selectedPipelineId, async (id) => {
+  if (id) {
+    selectedGroupId.value = ''
+    groupName.value = ''
+    groupDescription.value = ''
+    variants.value = []
+    runEntries.value.clear()
+    savedGroupId.value = null
+    await fetchSnapshotForPipeline(id)
+  }
+})
+
+watch(selectedGroupId, async (id) => {
+  if (id) {
+    const group = variantGroups.value.find(g => g.id === id)
+    if (group) {
+      groupName.value = group.name
+      groupDescription.value = group.description || ''
+      const formVariants: VariantForm[] = group.variants.map((v: unknown) => {
+        const vd = v as { name: string; weight: number; run_context_overrides?: Record<string, unknown> }
+        return {
+          id: crypto.randomUUID(),
+          name: vd.name,
+          modelBackendId: ((vd.run_context_overrides || {}) as Record<string, string>)['model_backend_id'] ?? null,
+          weight: Math.round((vd.weight || 0) * 100),
+        }
+      })
+      variants.value = formVariants
+      savedGroupId.value = group.id
+    }
+  } else {
+    groupName.value = ''
+    groupDescription.value = ''
+    variants.value = []
+    savedGroupId.value = null
+  }
+})
+
+async function fetchPipelines() {
+  try {
+    const { data, error: err } = await api.GET('/api/v1/pipelines')
+    if (err) return
+    const listResp = data as unknown as { items: PipelineItem[]; total: number; page: number; page_size: number }
+    pipelines.value = listResp.items ?? []
+    if (listResp.items.length > 0 && !selectedPipelineId.value) {
+      selectedPipelineId.value = listResp.items[0].id
+    }
+  } catch {
+    // Non-critical
+  }
+}
+
+async function fetchVariantGroups() {
+  try {
+    const { data, error: err } = await api.GET('/api/v1/variant-groups')
+    if (err) return
+    variantGroups.value = (data ?? []) as unknown as VariantGroup[]
+  } catch {
+    // Non-critical
+  }
+}
+
+async function fetchModelBackends() {
+  try {
+    const { data, error: err } = await api.GET('/api/v1/model-backends')
+    if (err) return
+    const resp = data as unknown as { items: ModelBackend[]; total: number; page: number; page_size: number }
+    modelBackends.value = resp.items ?? []
+  } catch {
+    // Non-critical
+  }
+}
+
+async function fetchSnapshotForPipeline(pipelineId: string) {
+  try {
+    const { data } = await api.GET('/api/v1/pipelines/{pipeline_id}/snapshots', {
+      params: { path: { pipeline_id: pipelineId } },
+    })
+    if (data) {
+      const resp = data as unknown as { items: Array<{ id: string; tag: string | null }>; total: number }
+      if (resp.items.length > 0) {
+        snapshotId.value = resp.items[0].id
+      }
+    }
+  } catch {
+    // Non-critical
+  }
+}
+
+function delay(ms: number): Promise<void> {
+  return new Promise(resolve => setTimeout(resolve, ms))
+}
+</script>

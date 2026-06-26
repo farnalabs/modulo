@@ -355,7 +355,7 @@ def test_replace_pipeline_graph_rejects_excessive_node_count(client: TestClient)
         json={"nodes": nodes, "edges": []},
     )
     assert resp.status_code == 422
-    assert "exceeds maximum" in resp.json()["detail"][0]["msg"]
+    assert "exceeds maximum" in resp.json()["error"]["detail"]
 
 
 def test_replace_pipeline_graph_rejects_excessive_edge_count(client: TestClient) -> None:
@@ -376,7 +376,7 @@ def test_replace_pipeline_graph_rejects_excessive_edge_count(client: TestClient)
         },
     )
     assert resp.status_code == 422
-    assert "exceeds maximum" in resp.json()["detail"][0]["msg"]
+    assert "exceeds maximum" in resp.json()["error"]["detail"]
 
 
 @pytest.mark.parametrize(

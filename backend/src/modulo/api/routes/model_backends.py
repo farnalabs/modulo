@@ -41,6 +41,7 @@ class ModelBackendCreate(BaseModel):
     api_key: str = Field(..., min_length=1)
     default_params: dict[str, Any] = {}
     visibility: str = Field(default="org")
+    fallback_backend_ids: list[uuid.UUID] | None = None
 
 
 class ModelBackendUpdate(BaseModel):
@@ -50,6 +51,7 @@ class ModelBackendUpdate(BaseModel):
     api_key: str | None = Field(None, min_length=1)
     default_params: dict[str, Any] | None = None
     visibility: str | None = None
+    fallback_backend_ids: list[uuid.UUID] | None = None
 
 
 class ModelBackendResponse(BaseModel):
@@ -62,6 +64,7 @@ class ModelBackendResponse(BaseModel):
     has_credentials: bool
     default_params: dict[str, Any]
     visibility: str
+    fallback_backend_ids: list[uuid.UUID] | None = None
     created_by: uuid.UUID
     created_at: datetime
     updated_at: datetime
@@ -77,6 +80,10 @@ class ModelBackendListResponse(BaseModel):
 
 
 def _to_response(mb: Any) -> ModelBackendResponse:
+    raw_fallback_ids = getattr(mb, "fallback_backend_ids", None)
+    fallback_ids: list[uuid.UUID] | None = None
+    if raw_fallback_ids:
+        fallback_ids = [uuid.UUID(fid) if isinstance(fid, str) else fid for fid in raw_fallback_ids]
     return ModelBackendResponse(
         id=mb.id,
         organisation_id=mb.organisation_id,
@@ -87,6 +94,7 @@ def _to_response(mb: Any) -> ModelBackendResponse:
         has_credentials=bool(mb.credentials_ciphertext),
         default_params=mb.default_params,
         visibility=mb.visibility,
+        fallback_backend_ids=fallback_ids,
         created_by=mb.created_by,
         created_at=mb.created_at,
         updated_at=mb.updated_at,
@@ -123,6 +131,9 @@ async def create_model_backend_endpoint(
     async with session.begin():
         await set_rls_org(session, principal.organisation_id)
         await set_rls_user_context(session, principal.user_id, principal.org_role)
+        fallback_ids: list[str] | None = None
+        if body.fallback_backend_ids:
+            fallback_ids = [str(fid) for fid in body.fallback_backend_ids]
         mb = await create_model_backend(
             session,
             org_id=principal.organisation_id,
@@ -134,6 +145,7 @@ async def create_model_backend_endpoint(
             created_by=principal.user_id,
             default_params=body.default_params,
             visibility=body.visibility,
+            fallback_backend_ids=fallback_ids,
         )
     return _to_response(mb)
 

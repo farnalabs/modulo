@@ -191,6 +191,86 @@ async def list_eval_definitions(
     )
 
 
+# ---------------------------------------------------------------------------
+# GET /api/v1/evals/coverage  (must be before /evals/{eval_id} to avoid conflict)
+# ---------------------------------------------------------------------------
+
+
+@router.get("/evals/coverage", status_code=status.HTTP_200_OK)
+async def eval_coverage(
+    pipeline_id: uuid.UUID = Query(..., description="Pipeline ID"),
+    session: AsyncSession = Depends(get_db_session),
+    principal: AuthenticatedPrincipal = Depends(get_current_user),
+) -> dict[str, Any]:
+    """Return eval coverage map for a pipeline."""
+    async with session.begin():
+        await set_rls_org(session, principal.organisation_id)
+        await set_rls_user_context(session, principal.user_id, principal.org_role)
+
+        pipeline = (
+            await session.execute(
+                select(Pipeline).where(
+                    Pipeline.id == pipeline_id,
+                    Pipeline.organisation_id == principal.organisation_id,
+                )
+            )
+        ).scalar_one_or_none()
+        if pipeline is None:
+            raise HTTPException(status_code=404, detail="Pipeline not found")
+
+        nodes_raw = pipeline.graph_nodes_json or []
+        node_ids = [str(n.get("id")) for n in nodes_raw if n.get("id")]
+
+        eval_defs_rows = (
+            (
+                await session.execute(
+                    select(EvalDefinition).where(
+                        EvalDefinition.pipeline_id == pipeline_id,
+                        EvalDefinition.node_id.in_([uuid.UUID(nid) for nid in node_ids if nid]),
+                    )
+                )
+            )
+            .scalars()
+            .all()
+        )
+
+    eval_count_by_node: dict[str, int] = {}
+    for ed in eval_defs_rows:
+        nid = str(ed.node_id)
+        eval_count_by_node[nid] = eval_count_by_node.get(nid, 0) + 1
+
+    covered_count = 0
+    nodes_result: list[dict[str, Any]] = []
+    for n in nodes_raw:
+        nid = str(n.get("id", ""))
+        name = n.get("name") or n.get("label", "") or nid
+        count = eval_count_by_node.get(nid, 0)
+        has_evals = count > 0
+        if has_evals:
+            covered_count += 1
+        nodes_result.append(
+            {
+                "node_id": nid,
+                "name": name,
+                "has_evals": has_evals,
+                "eval_count": count,
+            }
+        )
+
+    total = len(nodes_result)
+    pct = round(covered_count / total * 100, 1) if total else 0.0
+
+    return {
+        "nodes": nodes_result,
+        "summary": {
+            "total_nodes": total,
+            "covered_nodes": covered_count,
+            "uncovered_nodes": total - covered_count,
+            "coverage_pct": pct,
+        },
+    }
+
+
 @router.get("/evals/{eval_id}", response_model=dict[str, Any])
 async def get_eval_definition(
     eval_id: uuid.UUID,
@@ -474,86 +554,6 @@ async def compare_evals(
             "variant_name": "B",
         },
         "results": compared,
-    }
-
-
-# ---------------------------------------------------------------------------
-# GET /api/v1/evals/coverage
-# ---------------------------------------------------------------------------
-
-
-@router.get("/evals/coverage", status_code=status.HTTP_200_OK)
-async def eval_coverage(
-    pipeline_id: uuid.UUID = Query(..., description="Pipeline ID"),
-    session: AsyncSession = Depends(get_db_session),
-    principal: AuthenticatedPrincipal = Depends(get_current_user),
-) -> dict[str, Any]:
-    """Return eval coverage map for a pipeline."""
-    async with session.begin():
-        await set_rls_org(session, principal.organisation_id)
-        await set_rls_user_context(session, principal.user_id, principal.org_role)
-
-        pipeline = (
-            await session.execute(
-                select(Pipeline).where(
-                    Pipeline.id == pipeline_id,
-                    Pipeline.organisation_id == principal.organisation_id,
-                )
-            )
-        ).scalar_one_or_none()
-        if pipeline is None:
-            raise HTTPException(status_code=404, detail="Pipeline not found")
-
-        nodes_raw = pipeline.graph_nodes_json or []
-        node_ids = [str(n.get("id")) for n in nodes_raw if n.get("id")]
-
-        eval_defs_rows = (
-            (
-                await session.execute(
-                    select(EvalDefinition).where(
-                        EvalDefinition.pipeline_id == pipeline_id,
-                        EvalDefinition.node_id.in_([uuid.UUID(nid) for nid in node_ids if nid]),
-                    )
-                )
-            )
-            .scalars()
-            .all()
-        )
-
-    eval_count_by_node: dict[str, int] = {}
-    for ed in eval_defs_rows:
-        nid = str(ed.node_id)
-        eval_count_by_node[nid] = eval_count_by_node.get(nid, 0) + 1
-
-    covered_count = 0
-    nodes_result: list[dict[str, Any]] = []
-    for n in nodes_raw:
-        nid = str(n.get("id", ""))
-        name = n.get("name") or n.get("label", "") or nid
-        count = eval_count_by_node.get(nid, 0)
-        has_evals = count > 0
-        if has_evals:
-            covered_count += 1
-        nodes_result.append(
-            {
-                "node_id": nid,
-                "name": name,
-                "has_evals": has_evals,
-                "eval_count": count,
-            }
-        )
-
-    total = len(nodes_result)
-    pct = round(covered_count / total * 100, 1) if total else 0.0
-
-    return {
-        "nodes": nodes_result,
-        "summary": {
-            "total_nodes": total,
-            "covered_nodes": covered_count,
-            "uncovered_nodes": total - covered_count,
-            "coverage_pct": pct,
-        },
     }
 
 

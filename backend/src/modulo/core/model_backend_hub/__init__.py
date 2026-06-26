@@ -4,7 +4,7 @@ Usage:
     hub = ModelBackendHub()
     async with hub:
         await hub.initialise(model_backend_rows, secrets_backend=secrets_backend)
-        backend = hub.get(backend_id)
+        backend = await hub.get(backend_id)
         reply = await backend.invoke(messages)
     # After __aexit__: all backend references discarded, API keys gone.
 """
@@ -12,7 +12,7 @@ Usage:
 import asyncio
 import json
 import uuid
-from collections.abc import Sequence
+from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass
 from typing import Any
 
@@ -37,6 +37,7 @@ class RotatedResult:
     backend: ModelBackendBase
     rotated: bool
     original_id: uuid.UUID | None = None
+    used_fallback_id: uuid.UUID | None = None
 
 
 class BackendNotFoundError(KeyError):
@@ -72,6 +73,7 @@ class ModelBackendHub:
     def __init__(self) -> None:
         self._backends: dict[uuid.UUID, ModelBackendBase] = {}
         self._healthy: dict[uuid.UUID, bool] = {}
+        self._fallbacks: dict[uuid.UUID, list[uuid.UUID]] = {}
 
     async def __aenter__(self) -> "ModelBackendHub":
         return self
@@ -79,6 +81,7 @@ class ModelBackendHub:
     async def __aexit__(self, *_: object) -> None:
         self._backends.clear()
         self._healthy.clear()
+        self._fallbacks.clear()
 
     def register(self, backend_id: uuid.UUID, backend: ModelBackendBase) -> None:
         """Register a pre-built backend (e.g. StubModelBackend adapter in tests)."""
@@ -99,18 +102,48 @@ class ModelBackendHub:
             creds: dict[str, Any] = json.loads(raw_str)
             backend = _build_backend(mb.provider, mb.model_id, creds, mb.default_params or {})
             self.register(mb.id, backend)
+            fallback_ids = getattr(mb, "fallback_backend_ids", None)
+            if fallback_ids:
+                self._fallbacks[mb.id] = [uuid.UUID(fid) if isinstance(fid, str) else fid for fid in fallback_ids]
             del raw_str, creds
 
-    def get(self, backend_id: uuid.UUID) -> ModelBackendBase:
-        """Return the backend. Raises BackendUnavailableError if marked unhealthy."""
+    async def get(
+        self,
+        backend_id: uuid.UUID,
+        *,
+        audit_logger: Callable[[dict[str, Any]], Awaitable[None]] | None = None,
+    ) -> ModelBackendBase:
+        """Return the backend, trying fallbacks if the primary is unhealthy.
+
+        Raises BackendUnavailableError if no backend (primary or fallback) is healthy.
+        If *audit_logger* is provided and a fallback is used, the logger is called
+        with a dict containing event_type, primary_id, fallback_id, provider info.
+        """
         if backend_id not in self._backends:
             raise BackendNotFoundError(backend_id)
-        if not self._healthy.get(backend_id, False):
-            raise BackendUnavailableError(backend_id)
-        return self._backends[backend_id]
+        if self._healthy.get(backend_id, False):
+            return self._backends[backend_id]
+
+        fallbacks = self._fallbacks.get(backend_id, [])
+        for fallback_id in fallbacks:
+            if fallback_id not in self._backends:
+                continue
+            if self._healthy.get(fallback_id, False):
+                if audit_logger is not None:
+                    await audit_logger({
+                        "event_type": "model_failover",
+                        "primary_id": str(backend_id),
+                        "fallback_id": str(fallback_id),
+                    })
+                return self._backends[fallback_id]
+
+        raise BackendUnavailableError(backend_id)
 
     def get_with_rotation(self, backend_id: uuid.UUID) -> RotatedResult:
-        """Return the requested backend if healthy; else rotate to first healthy one.
+        """Return the requested backend if healthy; else rotate through fallbacks.
+
+        Uses the configured ``fallback_backend_ids`` in order. Falls back to
+        scanning all registered backends if no fallbacks are configured.
 
         Returns a RotatedResult so the caller can detect when a fallback was used.
         """
@@ -120,12 +153,24 @@ class ModelBackendHub:
                 rotated=False,
                 original_id=backend_id,
             )
+        fallbacks = self._fallbacks.get(backend_id, [])
+        for fallback_id in fallbacks:
+            if fallback_id not in self._backends:
+                continue
+            if self._healthy.get(fallback_id, False):
+                return RotatedResult(
+                    backend=self._backends[fallback_id],
+                    rotated=True,
+                    original_id=backend_id,
+                    used_fallback_id=fallback_id,
+                )
         for oid, backend in self._backends.items():
             if self._healthy.get(oid, False):
                 return RotatedResult(
                     backend=backend,
                     rotated=True,
                     original_id=backend_id,
+                    used_fallback_id=oid,
                 )
         raise BackendUnavailableError(backend_id)
 

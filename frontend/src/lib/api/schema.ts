@@ -194,6 +194,50 @@ export interface paths {
       }
     }
   }
+  '/api/v1/admin/audit': {
+    get: {
+      parameters: {
+        query: {
+          cursor?: string
+          limit?: number
+          event_type?: string
+          user_id?: string
+          entity_type?: string
+          from_date?: string
+          to_date?: string
+        }
+      }
+      responses: {
+        200: {
+          content: {
+            'application/json': components['schemas']['AuditLogListResponse']
+          }
+        }
+      }
+    }
+  }
+  '/api/v1/admin/audit/export': {
+    get: {
+      parameters: {
+        query: {
+          page?: number
+          page_size?: number
+          event_type?: string
+          user_id?: string
+          entity_type?: string
+          from_date?: string
+          to_date?: string
+        }
+      }
+      responses: {
+        200: {
+          content: {
+            'application/json': components['schemas']['AuditExportResponse']
+          }
+        }
+      }
+    }
+  }
   '/api/v1/connectors': {
     get: {
       responses: {
@@ -332,6 +376,20 @@ export interface paths {
         }
       }
     }
+    post: {
+      requestBody: {
+        content: {
+          'application/json': components['schemas']['CreateVariantGroupRequest']
+        }
+      }
+      responses: {
+        201: {
+          content: {
+            'application/json': components['schemas']['VariantGroupResponse']
+          }
+        }
+      }
+    }
   }
   '/api/v1/variant-groups/{group_id}': {
     get: {
@@ -344,6 +402,31 @@ export interface paths {
             'application/json': components['schemas']['VariantGroupResponse']
           }
         }
+      }
+    }
+    put: {
+      parameters: {
+        path: { group_id: string }
+      }
+      requestBody: {
+        content: {
+          'application/json': components['schemas']['CreateVariantGroupRequest']
+        }
+      }
+      responses: {
+        200: {
+          content: {
+            'application/json': components['schemas']['VariantGroupResponse']
+          }
+        }
+      }
+    }
+    delete: {
+      parameters: {
+        path: { group_id: string }
+      }
+      responses: {
+        204: { description: 'No content' }
       }
     }
   }
@@ -361,6 +444,31 @@ export interface paths {
         200: {
           content: {
             'application/json': components['schemas']['RunVariantResponse']
+          }
+        }
+      }
+    }
+  }
+  '/api/v1/model-backends': {
+    get: {
+      responses: {
+        200: {
+          content: {
+            'application/json': components['schemas']['ModelBackendListResponse']
+          }
+        }
+      }
+    }
+  }
+  '/api/v1/pipelines/{pipeline_id}/snapshots': {
+    get: {
+      parameters: {
+        path: { pipeline_id: string }
+      }
+      responses: {
+        200: {
+          content: {
+            'application/json': components['schemas']['SnapshotListResponse']
           }
         }
       }
@@ -403,6 +511,47 @@ export interface paths {
         200: {
           content: {
             'application/json': components['schemas']['RunEvalListResponse']
+          }
+        }
+      }
+    }
+  }
+  '/api/v1/settings/observability': {
+    get: {
+      responses: {
+        200: {
+          content: {
+            'application/json': components['schemas']['OtelSettingsResponse']
+          }
+        }
+      }
+    }
+    put: {
+      requestBody: {
+        content: {
+          'application/json': components['schemas']['OtelSettingsUpdate']
+        }
+      }
+      responses: {
+        200: {
+          content: {
+            'application/json': components['schemas']['OtelSettingsResponse']
+          }
+        }
+      }
+    }
+  }
+  '/api/v1/settings/observability/test': {
+    post: {
+      requestBody: {
+        content: {
+          'application/json': components['schemas']['TestOtelConfig']
+        }
+      }
+      responses: {
+        200: {
+          content: {
+            'application/json': components['schemas']['TestSpanResult']
           }
         }
       }
@@ -468,6 +617,30 @@ export interface components {
       user_id: string
       role: string
     }
+    OtelSettingsResponse: {
+      otlp_endpoint: string
+      otlp_headers: { [key: string]: string }
+      export_interval_seconds: number
+      langsmith_enabled: boolean
+      has_langsmith_api_key: boolean
+      effective_otlp_endpoint: string
+      env_override_active: boolean
+    }
+    OtelSettingsUpdate: {
+      otlp_endpoint?: string | null
+      otlp_headers?: { [key: string]: string } | null
+      export_interval_seconds?: number | null
+      langsmith_enabled?: boolean | null
+      langsmith_api_key?: string | null
+    }
+    TestOtelConfig: {
+      otlp_endpoint: string
+      otlp_headers?: { [key: string]: string }
+    }
+    TestSpanResult: {
+      success: boolean
+      message: string
+    }
     AdminUserListItem: {
       id: string
       email: string
@@ -531,6 +704,30 @@ export interface components {
       success: boolean
       message: string
       provider_info: Record<string, unknown> | null
+    }
+    AuditEventResponse: {
+      id: string
+      event_type: string
+      actor_user_id: string | null
+      resource_type: string | null
+      resource_id: string | null
+      payload_json: { [key: string]: unknown }
+      request_id: string | null
+      previous_hash: string | null
+      created_at: string | null
+    }
+    AuditLogListResponse: {
+      items: components['schemas']['AuditEventResponse'][]
+      total: number
+      next_cursor: string | null
+      prev_cursor: string | null
+      limit: number
+    }
+    AuditExportResponse: {
+      items: components['schemas']['AuditEventResponse'][]
+      total: number
+      page: number
+      page_size: number
     }
     ConnectorItem: {
       id: string
@@ -628,6 +825,15 @@ export interface components {
       page: number
       page_size: number
     }
+    CreateVariantGroupRequest: {
+      pipeline_id: string
+      name: string
+      description?: string | null
+      variants: components['schemas']['VariantDef'][]
+      selection_strategy?: string
+      max_concurrent_runs?: number
+      degraded_evals?: boolean
+    }
     VariantGroupResponse: {
       id: string
       pipeline_id: string
@@ -648,6 +854,39 @@ export interface components {
       run_context_overrides: Record<string, unknown>
       eval_definition_ids: string[]
     }
+    ModelBackendResponse: {
+      id: string
+      organisation_id: string
+      name: string
+      display_name: string
+      provider: string
+      model_id: string
+      has_credentials: boolean
+      default_params: Record<string, unknown>
+      visibility: string
+      created_by: string
+      created_at: string
+      updated_at: string
+    }
+    ModelBackendListResponse: {
+      items: components['schemas']['ModelBackendResponse'][]
+      total: number
+      page: number
+      page_size: number
+    }
+    SnapshotItem: {
+      id: string
+      pipeline_id: string
+      snapshot_version: number
+      tag: string | null
+      notes: string | null
+      created_at: string | null
+      created_by: string | null
+    }
+    SnapshotListResponse: {
+      items: components['schemas']['SnapshotItem'][]
+      total: number
+    }
     RunVariantRequest: {
       input_payload?: Record<string, unknown>
     }
@@ -666,6 +905,7 @@ export interface components {
       total_cost_usd: number | null
       token_consumption: Record<string, unknown> | null
       trace_id: string | null
+      node_token_usage: Record<string, unknown> | null
     }
     RunIOResponse: {
       run_id: string

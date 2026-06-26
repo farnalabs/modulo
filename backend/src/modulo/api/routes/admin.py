@@ -12,6 +12,8 @@ from modulo.api.dependencies import get_db_session
 from modulo.auth.dependencies import get_current_user
 from modulo.auth.jwt import AuthenticatedPrincipal
 from modulo.auth.passwords import hash_password, validate_password_strength
+from modulo.core.eval_engine.okr import track_okr_progress
+from modulo.core.eval_engine.regression import detect_regressions
 from modulo.db.crud.organisation import get_organisation, update_organisation
 from modulo.db.crud.publisher import (
     create_publisher,
@@ -1309,6 +1311,142 @@ async def eval_dashboard(
         by_type=by_type,
         coverage_gaps=coverage_gaps,
         recent_results=recent_results,
+    )
+
+
+# ── Eval Regression Alerts ────────────────────────────────────────────────
+
+
+class RegressionAlertResponse(BaseModel):
+    eval_id: str
+    eval_name: str
+    prev_pass_rate: float
+    current_pass_rate: float
+    drop_pct: float
+    trend: str
+    affected_run_ids: list[str]
+
+
+class RegressionAlertsResponse(BaseModel):
+    alerts: list[RegressionAlertResponse]
+    total_regressions: int
+    threshold: float
+    lookback_days: int
+
+
+@router.get("/evals/regressions", response_model=RegressionAlertsResponse)
+async def eval_regressions(
+    days: int = Query(default=7, ge=1, le=90, description="Lookback period in days"),
+    threshold: float = Query(
+        default=0.15, ge=0.0, le=1.0, description="Minimum drop fraction to trigger an alert"
+    ),
+    current_user: AuthenticatedPrincipal = Depends(get_current_user),
+    session: AsyncSession = Depends(get_db_session),
+) -> RegressionAlertsResponse:
+    if current_user.org_role != "admin":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only admin users can access eval regressions",
+        )
+
+    async with session.begin():
+        await set_rls_org(session, current_user.organisation_id)
+        alerts = await detect_regressions(
+            session,
+            org_id=current_user.organisation_id,
+            days=days,
+            threshold=threshold,
+        )
+
+    return RegressionAlertsResponse(
+        alerts=[
+            RegressionAlertResponse(
+                eval_id=str(a.eval_id),
+                eval_name=a.eval_name,
+                prev_pass_rate=a.prev_pass_rate,
+                current_pass_rate=a.current_pass_rate,
+                drop_pct=a.drop_pct,
+                trend=a.trend,
+                affected_run_ids=[str(rid) for rid in a.affected_run_ids],
+            )
+            for a in alerts
+        ],
+        total_regressions=len(alerts),
+        threshold=threshold,
+        lookback_days=days,
+    )
+
+
+# ── OKR-Aligned Eval Suite Progress ────────────────────────────────────────
+
+
+class OkrTrendPointResponse(BaseModel):
+    period: str
+    pass_rate: float
+    total_evals: int
+    passed_evals: int
+
+
+class OkrProgressResponse(BaseModel):
+    suite_id: str
+    suite_name: str
+    current_score: float
+    pass_threshold: float | None
+    trend: list[OkrTrendPointResponse]
+    trend_direction: str
+    days_to_target: int | None
+    breach: bool
+
+
+@router.get("/evals/okr-progress/{suite_id}", response_model=OkrProgressResponse)
+async def okr_progress(
+    suite_id: str,
+    target_date: str | None = Query(
+        default=None,
+        description="Optional ISO 8601 target date (e.g. 2026-09-30) for days-to-target",
+    ),
+    current_user: AuthenticatedPrincipal = Depends(get_current_user),
+    session: AsyncSession = Depends(get_db_session),
+) -> OkrProgressResponse:
+    if current_user.org_role != "admin":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only admin users can access OKR progress",
+        )
+
+    async with session.begin():
+        await set_rls_org(session, current_user.organisation_id)
+
+        try:
+            progress = await track_okr_progress(
+                session,
+                org_id=current_user.organisation_id,
+                suite_id=suite_id,
+                target_date=target_date,
+            )
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=str(exc),
+            ) from exc
+
+    return OkrProgressResponse(
+        suite_id=progress.suite_id,
+        suite_name=progress.suite_name,
+        current_score=progress.current_score,
+        pass_threshold=progress.pass_threshold,
+        trend=[
+            OkrTrendPointResponse(
+                period=t.period,
+                pass_rate=t.pass_rate,
+                total_evals=t.total_evals,
+                passed_evals=t.passed_evals,
+            )
+            for t in progress.trend
+        ],
+        trend_direction=progress.trend_direction,
+        days_to_target=progress.days_to_target,
+        breach=progress.breach,
     )
 
 

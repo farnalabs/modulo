@@ -39,6 +39,7 @@ class ModelBackend(OrgScoped):
     status: Mapped[str] = mapped_column(String(30), nullable=False, server_default="active")
     last_health_check_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     last_health_check_error: Mapped[str | None] = mapped_column(String(2000))
+    fallback_backend_ids: Mapped[list[uuid.UUID] | None] = mapped_column(JSON, nullable=True)
     created_by: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("users.id", ondelete="RESTRICT"), nullable=False
     )

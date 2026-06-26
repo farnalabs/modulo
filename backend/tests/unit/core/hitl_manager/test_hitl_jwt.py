@@ -62,17 +62,56 @@ def _session_get(return_value: Any = None) -> AsyncMock:
     return session
 
 
-def _session_update(*, rows_returned: int = 1, gate: HitlClaim | None = None) -> AsyncMock:
+def _session_claim(
+    *,
+    pre_check_gate: HitlClaim | None = None,
+    claimed_gate: HitlClaim | None = None,
+) -> AsyncMock:
+    """Session mock for claim(): pre-check SELECT, UPDATE RETURNING, post-check SELECT."""
+    session = AsyncMock()
+    session.add = MagicMock()
+    session.flush = AsyncMock()
+
+    pre_result = MagicMock()
+    pre_result.scalar_one_or_none.return_value = pre_check_gate
+
+    update_result = MagicMock()
+    update_result.scalar_one_or_none.return_value = uuid.uuid4() if pre_check_gate is not None else None
+
+    post_result = MagicMock()
+    post_result.scalar_one_or_none.return_value = claimed_gate
+
+    call_count = 0
+
+    async def _execute(stmt: Any) -> Any:
+        nonlocal call_count
+        call_count += 1
+        if call_count == 1:
+            return pre_result
+        if call_count == 2:
+            return update_result
+        return post_result
+
+    session.execute = _execute
+    return session
+
+
+def _session_decide(
+    *,
+    update_returns_id: uuid.UUID | None = None,
+    diagnosis_gate: HitlClaim | None = None,
+    session_get_gate: HitlClaim | None = None,
+) -> AsyncMock:
+    """Session mock for _decide(): UPDATE RETURNING, optional diagnosis SELECT, session.get."""
     session = AsyncMock()
     session.add = MagicMock()
     session.flush = AsyncMock()
 
     update_result = MagicMock()
-    update_result.scalar_one_or_none.return_value = uuid.uuid4() if rows_returned > 0 else None
-    update_result.all.return_value = [(_RUN, _GATE)] * rows_returned
+    update_result.scalar_one_or_none.return_value = update_returns_id
 
-    get_result = MagicMock()
-    get_result.scalar_one_or_none.return_value = gate
+    diag_result = MagicMock()
+    diag_result.scalar_one_or_none.return_value = diagnosis_gate
 
     call_count = 0
 
@@ -81,9 +120,10 @@ def _session_update(*, rows_returned: int = 1, gate: HitlClaim | None = None) ->
         call_count += 1
         if call_count == 1:
             return update_result
-        return get_result
+        return diag_result
 
     session.execute = _execute
+    session.get = AsyncMock(return_value=session_get_gate)
     return session
 
 
@@ -106,12 +146,13 @@ def _make_jwt_kwargs(**overrides: Any) -> dict[str, Any]:
 
 async def test_claim_succeeds_with_jwt_secret_key() -> None:
     """claim() with a secret_key still succeeds and returns the gate."""
+    unclaimed_gate = _gate()  # no decision, no claimed_by
     claimed_gate = _gate(
         claimed_by=_USER,
         claim_token="jwt-will-be-set",
         expires_at=datetime.now(UTC) + timedelta(minutes=15),
     )
-    session = _session_update(rows_returned=1, gate=claimed_gate)
+    session = _session_claim(pre_check_gate=unclaimed_gate, claimed_gate=claimed_gate)
     mgr = HITLManager(secret_key=_KEY)
     result = await mgr.claim(
         session, run_id=_RUN, gate_id=_GATE, org_id=_ORG, claimant_id=_USER
@@ -160,7 +201,8 @@ async def test_approve_validates_jwt_scope() -> None:
         str(_USER), _KEY, run_id=str(_RUN), gate_id=_GATE, client_id=str(_USER),
     )
     gate = _gate(claimed_by=_USER, claim_token=token, expires_at=future)
-    session = _session_get(return_value=gate)
+    gate_decided = _gate(decision="approved", claim_token=None, claimed_by=None)
+    session = _session_decide(update_returns_id=gate.id, session_get_gate=gate_decided)
     mgr = HITLManager(secret_key=_KEY)
     result = await mgr.approve(
         session, run_id=_RUN, gate_id=_GATE, org_id=_ORG, claim_token=token,
@@ -171,14 +213,12 @@ async def test_approve_validates_jwt_scope() -> None:
 
 async def test_approve_rejects_expired_jwt() -> None:
     """approve() rejects a JWT whose exp is in the past."""
-    past = datetime.now(UTC) - timedelta(minutes=1)
     token = create_claim_token(
         str(_USER), _KEY,
         run_id=str(_RUN), gate_id=_GATE, client_id=str(_USER),
         expiry_minutes=-1,
     )
-    gate = _gate(claimed_by=_USER, claim_token=token, expires_at=past)
-    session = _session_get(return_value=gate)
+    session = AsyncMock()
     mgr = HITLManager(secret_key=_KEY)
     with pytest.raises(ClaimTokenExpiredError):
         await mgr.approve(
@@ -187,20 +227,14 @@ async def test_approve_rejects_expired_jwt() -> None:
 
 
 async def test_approve_rejects_client_id_mismatch() -> None:
-    """approve() rejects a JWT whose client_id doesn't match the stored claim. Note: the
-    HITL JWT design scopes to run_id+gate_id only; the stored claim_token is compared
-    as a string. This test verifies that a token with a *different* run_id is rejected."""
-    future = datetime.now(UTC) + timedelta(minutes=5)
-    # Claimed by USER but we use the SAME user in the JWT — scope check passes.
-    # Create a token with a different run_id
+    """approve() rejects a JWT scoped to a different run_id."""
     token = create_claim_token(
         str(_USER), _KEY,
         run_id=str(uuid.uuid4()),  # wrong run_id
         gate_id=_GATE,
         client_id=str(_USER),
     )
-    gate = _gate(claimed_by=_USER, claim_token=token, expires_at=future)
-    session = _session_get(return_value=gate)
+    session = AsyncMock()
     mgr = HITLManager(secret_key=_KEY)
     with pytest.raises(ClaimTokenInvalidError):
         await mgr.approve(
@@ -210,13 +244,11 @@ async def test_approve_rejects_client_id_mismatch() -> None:
 
 async def test_approve_rejects_wrong_gate_id() -> None:
     """approve() rejects a JWT with non-matching gate_id."""
-    future = datetime.now(UTC) + timedelta(minutes=5)
     token = create_claim_token(
         str(_USER), _KEY,
         run_id=str(_RUN), gate_id="wrong-gate", client_id=str(_USER),
     )
-    gate = _gate(claimed_by=_USER, claim_token=token, expires_at=future)
-    session = _session_get(return_value=gate)
+    session = AsyncMock()
     mgr = HITLManager(secret_key=_KEY)
     with pytest.raises(ClaimTokenInvalidError):
         await mgr.approve(
@@ -226,14 +258,12 @@ async def test_approve_rejects_wrong_gate_id() -> None:
 
 async def test_approve_rejects_tampered_token() -> None:
     """approve() rejects a JWT that has been tampered with."""
-    future = datetime.now(UTC) + timedelta(minutes=5)
     stored_token = create_claim_token(
         str(_USER), _KEY,
         run_id=str(_RUN), gate_id=_GATE, client_id=str(_USER),
     )
     tampered = stored_token[:-5] + "XXXXX"
-    gate = _gate(claimed_by=_USER, claim_token=stored_token, expires_at=future)
-    session = _session_get(return_value=gate)
+    session = AsyncMock()
     mgr = HITLManager(secret_key=_KEY)
     with pytest.raises(ClaimTokenInvalidError):
         await mgr.approve(
@@ -253,7 +283,8 @@ async def test_reject_validates_jwt() -> None:
         str(_USER), _KEY, run_id=str(_RUN), gate_id=_GATE, client_id=str(_USER),
     )
     gate = _gate(claimed_by=_USER, claim_token=token, expires_at=future)
-    session = _session_get(return_value=gate)
+    gate_decided = _gate(decision="rejected", claim_token=None, claimed_by=None)
+    session = _session_decide(update_returns_id=gate.id, session_get_gate=gate_decided)
     mgr = HITLManager(secret_key=_KEY)
     result = await mgr.reject(
         session, run_id=_RUN, gate_id=_GATE, org_id=_ORG, claim_token=token,
@@ -264,14 +295,12 @@ async def test_reject_validates_jwt() -> None:
 
 async def test_reject_rejects_expired_jwt() -> None:
     """reject() rejects an expired JWT."""
-    past = datetime.now(UTC) - timedelta(minutes=1)
     token = create_claim_token(
         str(_USER), _KEY,
         run_id=str(_RUN), gate_id=_GATE, client_id=str(_USER),
         expiry_minutes=-1,
     )
-    gate = _gate(claimed_by=_USER, claim_token=token, expires_at=past)
-    session = _session_get(return_value=gate)
+    session = AsyncMock()
     mgr = HITLManager(secret_key=_KEY)
     with pytest.raises(ClaimTokenExpiredError):
         await mgr.reject(
@@ -286,9 +315,9 @@ async def test_reject_rejects_expired_jwt() -> None:
 
 async def test_approve_opaque_token_backwards_compat() -> None:
     """approve() still works with opaque (non-JWT) tokens when secret_key is set."""
-    future = datetime.now(UTC) + timedelta(minutes=5)
-    gate = _gate(claimed_by=_USER, claim_token="opaque-token-123", expires_at=future)
-    session = _session_get(return_value=gate)
+    gate_decided = _gate(decision="approved", claim_token=None, claimed_by=None)
+    gate = _gate(claimed_by=_USER, claim_token="opaque-token-123")
+    session = _session_decide(update_returns_id=gate.id, session_get_gate=gate_decided)
     mgr = HITLManager(secret_key=_KEY)
     result = await mgr.approve(
         session, run_id=_RUN, gate_id=_GATE, org_id=_ORG, claim_token="opaque-token-123",
@@ -298,9 +327,9 @@ async def test_approve_opaque_token_backwards_compat() -> None:
 
 async def test_reject_opaque_token_backwards_compat() -> None:
     """reject() still works with opaque (non-JWT) tokens when secret_key is set."""
-    future = datetime.now(UTC) + timedelta(minutes=5)
-    gate = _gate(claimed_by=_USER, claim_token="opaque-token-456", expires_at=future)
-    session = _session_get(return_value=gate)
+    gate_decided = _gate(decision="rejected", claim_token=None, claimed_by=None)
+    gate = _gate(claimed_by=_USER, claim_token="opaque-token-456")
+    session = _session_decide(update_returns_id=gate.id, session_get_gate=gate_decided)
     mgr = HITLManager(secret_key=_KEY)
     result = await mgr.reject(
         session, run_id=_RUN, gate_id=_GATE, org_id=_ORG, claim_token="opaque-token-456",
@@ -310,9 +339,9 @@ async def test_reject_opaque_token_backwards_compat() -> None:
 
 async def test_approve_no_secret_key_still_uses_opaque() -> None:
     """Without a secret_key, HITLManager uses opaque tokens (no change)."""
-    future = datetime.now(UTC) + timedelta(minutes=5)
-    gate = _gate(claimed_by=_USER, claim_token="plain-token", expires_at=future)
-    session = _session_get(return_value=gate)
+    gate_decided = _gate(decision="approved", claim_token=None, claimed_by=None)
+    gate = _gate(claimed_by=_USER, claim_token="plain-token")
+    session = _session_decide(update_returns_id=gate.id, session_get_gate=gate_decided)
     mgr = HITLManager()  # no secret_key
     result = await mgr.approve(
         session, run_id=_RUN, gate_id=_GATE, org_id=_ORG, claim_token="plain-token",
@@ -337,25 +366,24 @@ async def test_gate_not_found_with_jwt_manager() -> None:
 
 async def test_already_decided_with_jwt_manager() -> None:
     """GateAlreadyDecidedError still raised when secret_key is configured."""
-    gate = _gate(decision="approved")
-    session = _session_get(return_value=gate)
+    gate_decided = _gate(decision="approved")
+    # Use opaque token so JWT validation is skipped; error comes from DB diagnosis
+    session = _session_decide(update_returns_id=None, diagnosis_gate=gate_decided)
     mgr = HITLManager(secret_key=_KEY)
     with pytest.raises(GateAlreadyDecidedError):
         await mgr.approve(
-            session, run_id=_RUN, gate_id=_GATE, org_id=_ORG, claim_token="anything",
+            session, run_id=_RUN, gate_id=_GATE, org_id=_ORG, claim_token="opaque-already-decided",
         )
 
 
 async def test_approve_rejects_jwt_with_wrong_key() -> None:
     """A JWT signed with a different key is rejected as invalid."""
-    future = datetime.now(UTC) + timedelta(minutes=5)
     different_key = "a_completely_different_key_1234567890123"
     token = create_claim_token(
         str(_USER), different_key,
         run_id=str(_RUN), gate_id=_GATE, client_id=str(_USER),
     )
-    gate = _gate(claimed_by=_USER, claim_token=token, expires_at=future)
-    session = _session_get(return_value=gate)
+    session = AsyncMock()
     mgr = HITLManager(secret_key=_KEY)
     with pytest.raises(ClaimTokenInvalidError):
         await mgr.approve(

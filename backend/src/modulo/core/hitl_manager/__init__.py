@@ -24,7 +24,7 @@ import uuid
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
-from jose import JWTError
+from jose import ExpiredSignatureError, JWTError
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -408,6 +408,18 @@ class HITLManager:
         decision: str,
     ) -> HitlClaim:
         now = datetime.now(UTC)
+
+        # Validate JWT signature and scope before attempting the SQL UPDATE.
+        # Expiry is checked separately via the SQL WHERE clause (expires_at > now)
+        # so that the DB remains the authoritative source of truth for TTL.
+        if self._secret_key and self._looks_like_jwt(claim_token):
+            try:
+                _decode_claim_jwt(claim_token, self._secret_key, run_id=str(run_id), gate_id=gate_id)
+            except ExpiredSignatureError:
+                raise ClaimTokenExpiredError() from None
+            except JWTError:
+                raise ClaimTokenInvalidError() from None
+
         stmt = (
             update(HitlClaim)
             .where(

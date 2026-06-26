@@ -70,10 +70,10 @@ def test_no_auth_configured_does_not_raise(caplog: pytest.LogCaptureFixture) -> 
     import logging
 
     with caplog.at_level(logging.WARNING, logger="modulo.settings"):
-        s = _make()
+        s = _make(modulo_admin_password="", modulo_users="")
     assert not s.modulo_admin_password
     assert not s.modulo_users
-    assert any("login is disabled" in r.message for r in caplog.records)
+    assert any("no_auth_configured" in r.message or "login is disabled" in r.message for r in caplog.records)
 
 
 def test_admin_password_set_no_warning(caplog: pytest.LogCaptureFixture) -> None:
