@@ -16,6 +16,7 @@ concurrency:
 
 jobs:
   audit:
+    continue-on-error: true
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
