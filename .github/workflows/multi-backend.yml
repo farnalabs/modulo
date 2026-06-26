@@ -1,7 +1,8 @@
-name: CI
+name: Multi-Backend Tests
 
 on:
   push:
+    branches: [main]
   pull_request:
 
 concurrency:
@@ -9,26 +10,8 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  backend-lint:
-    name: Lint (Backend)
-    runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: backend
-    steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v5
-        with:
-          python-version: "3.12"
-          enable-cache: true
-      - run: uv sync --frozen
-      - run: ruff check .
-      - run: mypy .
-      - run: bandit -r .
-      - run: semgrep --config=../.semgrep/ .
-
-  backend-test:
-    name: Test (Backend ${{ matrix.backend }})
+  multi-backend:
+    name: ${{ matrix.backend }}
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -38,11 +21,11 @@ jobs:
           - backend: sqlite
             database_url: "sqlite+aiosqlite:///./test.db"
             modulo_db: sqlite
-            pytest_marker: "not awaiting-implementation and not integration"
+            pytest_marker: "not integration"
           - backend: mariadb
             database_url: "mysql+asyncmy://modulo:modulo@localhost:5435/modulo"
             modulo_db: mariadb
-            pytest_marker: "not awaiting-implementation and not integration"
+            pytest_marker: "not integration"
     services:
       mariadb:
         image: mariadb:11.4
@@ -74,33 +57,3 @@ jobs:
           FERNET_KEY: "vK-xU7GqHLflg_GqzJ1FqWI7pHWoHSIyukf4wx-tMHI="
           DATABASE_URL: ${{ matrix.database_url }}
           MODULO_DB: ${{ matrix.modulo_db }}
-
-  frontend:
-    name: Frontend
-    runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: frontend
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: "20"
-          cache: npm
-          cache-dependency-path: frontend/package-lock.json
-      - run: npm ci
-      - run: npm run lint
-      - run: npm run type-check
-      - run: npm run test:unit
-      - run: npm run build
-
-  gitleaks:
-    name: Secret scan
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-      - uses: gitleaks/gitleaks-action@v2
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
