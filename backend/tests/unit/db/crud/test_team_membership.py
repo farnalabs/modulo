@@ -30,7 +30,7 @@ def _make_membership(**overrides: object) -> MagicMock:
     m.organisation_id = overrides.get("organisation_id", _ORG_ID)
     m.team_id = overrides.get("team_id", _TEAM_ID)
     m.user_id = overrides.get("user_id", _USER_ID)
-    m.role = overrides.get("role", "member")
+    m.role = overrides.get("role", "viewer")
     return m
 
 
@@ -47,14 +47,14 @@ class TestAddMember:
                 org_id=_ORG_ID,
                 team_id=_TEAM_ID,
                 user_id=_USER_ID,
-                role="member",
+                role="viewer",
             )
 
             mock_membership.assert_called_once_with(
                 organisation_id=_ORG_ID,
                 team_id=_TEAM_ID,
                 user_id=_USER_ID,
-                role="member",
+                role="viewer",
             )
             mock_session.add.assert_called_once()
             mock_session.flush.assert_awaited_once()
@@ -119,7 +119,7 @@ class TestGetMembership:
 class TestListTeamMembers:
     async def test_returns_paginated_members(self, mock_session: AsyncMock) -> None:
         members = [
-            _make_membership(user_id=uuid.uuid4(), role="member"),
+            _make_membership(user_id=uuid.uuid4(), role="viewer"),
             _make_membership(user_id=uuid.uuid4(), role="admin"),
         ]
 

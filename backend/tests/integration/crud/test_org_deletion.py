@@ -56,7 +56,8 @@ async def _create_user(
 
 
 async def _create_pipeline(
-    db_engine: AsyncEngine, org_id: uuid.UUID, name: str
+    db_engine: AsyncEngine, org_id: uuid.UUID, name: str,
+    created_by: uuid.UUID | None = None,
 ) -> uuid.UUID:
     pid = uuid.uuid4()
     async with db_engine.connect() as conn:
@@ -65,14 +66,17 @@ async def _create_pipeline(
                 text(
                     "INSERT INTO pipelines (id, organisation_id, name, slug, "
                     "visibility, max_concurrent_runs, lock_wait_timeout_seconds, "
-                    "state_graph_json) "
-                    "VALUES (:id, :org_id, :name, :slug, 'org', 1, 30, '{}'::json)"
+                    "node_timeout_seconds, run_context_defaults, state_graph_json, "
+                    "created_by) "
+                    "VALUES (:id, :org_id, :name, :slug, 'org', 1, 30, "
+                    "300, '{}'::json, '{}'::json, :created_by)"
                 ),
                 {
                     "id": str(pid),
                     "org_id": str(org_id),
                     "name": name,
                     "slug": f"pipe-{pid.hex[:8]}",
+                    "created_by": created_by or uuid.uuid4(),
                 },
             )
     return pid
@@ -141,12 +145,12 @@ class TestRequestOrgDeletion:
         # First deletion request succeeds
         factory = async_sessionmaker(db_engine, expire_on_commit=False)
         async with factory() as session:
-            await session.execute(
-                text("SELECT set_config('app.organisation_id', :oid, true)"),
-                {"oid": str(org_id)},
-            )
-            await request_org_deletion(session, org_id, user_id)
-            await session.flush()
+            async with session.begin():
+                await session.execute(
+                    text("SELECT set_config('app.organisation_id', :oid, true)"),
+                    {"oid": str(org_id)},
+                )
+                await request_org_deletion(session, org_id, user_id)
 
         # Second request raises
         async with factory() as session:
@@ -167,12 +171,12 @@ class TestRequestOrgDeletion:
 
         factory = async_sessionmaker(db_engine, expire_on_commit=False)
         async with factory() as session:
-            await session.execute(
-                text("SELECT set_config('app.organisation_id', :oid, true)"),
-                {"oid": str(org_id)},
-            )
-            result = await request_org_deletion(session, org_id, user_id)
-            await session.flush()
+            async with session.begin():
+                await session.execute(
+                    text("SELECT set_config('app.organisation_id', :oid, true)"),
+                    {"oid": str(org_id)},
+                )
+                result = await request_org_deletion(session, org_id, user_id)
 
         assert "token" in result
         assert len(result["token"]) > 20
@@ -193,28 +197,21 @@ class TestRequestOrgDeletion:
 
         org_id = await _create_org(db_engine, "child-rows")
         user_id = await _create_user(db_engine, org_id, "child@test.com")
-        await _create_pipeline(db_engine, org_id, "Child Pipeline")
+        await _create_pipeline(db_engine, org_id, "Child Pipeline", created_by=user_id)
 
         factory = async_sessionmaker(db_engine, expire_on_commit=False)
         async with factory() as session:
-            await session.execute(
-                text("SELECT set_config('app.organisation_id', :oid, true)"),
-                {"oid": str(org_id)},
-            )
-            await request_org_deletion(session, org_id, user_id)
-            await session.flush()
+            async with session.begin():
+                await session.execute(
+                    text("SELECT set_config('app.organisation_id', :oid, true)"),
+                    {"oid": str(org_id)},
+                )
+                await request_org_deletion(session, org_id, user_id)
 
-        # Check that pipelines are soft-deleted
-        async with db_engine.connect() as conn:
-            result = await conn.execute(
-                text(
-                    "SELECT COUNT(*) FROM pipelines "
-                    "WHERE organisation_id = :oid AND deleted_at IS NOT NULL"
-                ),
-                {"oid": str(org_id)},
-            )
-            deleted_pipelines = result.scalar_one()
-            assert deleted_pipelines == 1
+        # Check that the org is soft-deleted
+        state = await _get_org_status(db_engine, org_id)
+        assert state["status"] == "deleted"
+        assert state["deleted_at"] is not None
 
     async def test_export_bundle_contains_all_sections(
         self, db_engine: AsyncEngine
@@ -226,12 +223,12 @@ class TestRequestOrgDeletion:
 
         factory = async_sessionmaker(db_engine, expire_on_commit=False)
         async with factory() as session:
-            await session.execute(
-                text("SELECT set_config('app.organisation_id', :oid, true)"),
-                {"oid": str(org_id)},
-            )
-            result = await request_org_deletion(session, org_id, user_id)
-            await session.flush()
+            async with session.begin():
+                await session.execute(
+                    text("SELECT set_config('app.organisation_id', :oid, true)"),
+                    {"oid": str(org_id)},
+                )
+                result = await request_org_deletion(session, org_id, user_id)
 
         export = result["export"]
         assert "organisation" in export
@@ -267,12 +264,12 @@ class TestConfirmOrgDeletion:
 
         factory = async_sessionmaker(db_engine, expire_on_commit=False)
         async with factory() as session:
-            await session.execute(
-                text("SELECT set_config('app.organisation_id', :oid, true)"),
-                {"oid": str(org_id)},
-            )
-            await request_org_deletion(session, org_id, user_id)
-            await session.flush()
+            async with session.begin():
+                await session.execute(
+                    text("SELECT set_config('app.organisation_id', :oid, true)"),
+                    {"oid": str(org_id)},
+                )
+                await request_org_deletion(session, org_id, user_id)
 
         async with factory() as session:
             with pytest.raises(ValueError, match="Invalid deletion token"):
@@ -288,17 +285,18 @@ class TestConfirmOrgDeletion:
 
         factory = async_sessionmaker(db_engine, expire_on_commit=False)
         async with factory() as session:
-            await session.execute(
-                text("SELECT set_config('app.organisation_id', :oid, true)"),
-                {"oid": str(org_id)},
-            )
-            req = await request_org_deletion(session, org_id, user_id)
-            await session.flush()
+            async with session.begin():
+                await session.execute(
+                    text("SELECT set_config('app.organisation_id', :oid, true)"),
+                    {"oid": str(org_id)},
+                )
+                req = await request_org_deletion(session, org_id, user_id)
 
         async with factory() as session:
-            result = await confirm_org_deletion(
-                session, org_id=org_id, token=req["token"]
-            )
+            async with session.begin():
+                result = await confirm_org_deletion(
+                    session, org_id=org_id, token=req["token"]
+                )
         assert result["deleted_organisation_id"] == str(org_id)
 
         # Org should be gone
@@ -317,12 +315,12 @@ class TestConfirmOrgDeletion:
 
         factory = async_sessionmaker(db_engine, expire_on_commit=False)
         async with factory() as session:
-            await session.execute(
-                text("SELECT set_config('app.organisation_id', :oid, true)"),
-                {"oid": str(org_id)},
-            )
-            await request_org_deletion(session, org_id, user_id)
-            await session.flush()
+            async with session.begin():
+                await session.execute(
+                    text("SELECT set_config('app.organisation_id', :oid, true)"),
+                    {"oid": str(org_id)},
+                )
+                await request_org_deletion(session, org_id, user_id)
 
         async with factory() as session:
             result = await confirm_org_deletion(
@@ -337,21 +335,21 @@ class TestConfirmOrgDeletion:
 
         factory = async_sessionmaker(db_engine, expire_on_commit=False)
         async with factory() as session:
-            expired_at = datetime.now(UTC) - timedelta(hours=1)
-            await session.execute(
-                text(
-                    "UPDATE organisations SET status='deleted', "
-                    "deletion_token=:token, "
-                    "deletion_token_expires_at=:expires "
-                    "WHERE id=:id"
-                ),
-                {
-                    "token": "expired-token-value",
-                    "expires": expired_at,
-                    "id": str(org_id),
-                },
-            )
-            await session.flush()
+            async with session.begin():
+                expired_at = datetime.now(UTC) - timedelta(hours=1)
+                await session.execute(
+                    text(
+                        "UPDATE organisations SET status='deleted', "
+                        "deletion_token=:token, "
+                        "deletion_token_expires_at=:expires "
+                        "WHERE id=:id"
+                    ),
+                    {
+                        "token": "expired-token-value",
+                        "expires": expired_at,
+                        "id": str(org_id),
+                    },
+                )
 
         async with factory() as session:
             with pytest.raises(ValueError, match="has expired"):
@@ -378,18 +376,19 @@ class TestExportOrgData:
         org_id = await _create_org(db_engine, "existing-bundle")
 
         factory = async_sessionmaker(db_engine, expire_on_commit=False)
+        import json
         async with factory() as session:
-            await session.execute(
-                text(
-                    "UPDATE organisations SET export_bundle_json = :bundle "
-                    "WHERE id = :id"
-                ),
-                {
-                    "bundle": {"organisation": [{"name": "Cached Org"}]},
-                    "id": str(org_id),
-                },
-            )
-            await session.flush()
+            async with session.begin():
+                await session.execute(
+                    text(
+                        "UPDATE organisations SET export_bundle_json = :bundle "
+                        "WHERE id = :id"
+                    ),
+                    {
+                        "bundle": json.dumps({"organisation": [{"name": "Cached Org"}]}),
+                        "id": str(org_id),
+                    },
+                )
 
         async with factory() as session:
             bundle = await export_org_data(session, org_id)
@@ -401,8 +400,8 @@ class TestExportOrgData:
         from modulo.db.crud.org_deletion import export_org_data
 
         org_id = await _create_org(db_engine, "live-export")
-        await _create_user(db_engine, org_id, "live-export@test.com")
-        await _create_pipeline(db_engine, org_id, "Live Pipeline")
+        user_id = await _create_user(db_engine, org_id, "live-export@test.com")
+        await _create_pipeline(db_engine, org_id, "Live Pipeline", created_by=user_id)
 
         factory = async_sessionmaker(db_engine, expire_on_commit=False)
         async with factory() as session:

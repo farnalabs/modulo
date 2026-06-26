@@ -15,7 +15,7 @@ async def add_team_member(
     org_id: uuid.UUID,
     team_id: uuid.UUID,
     user_id: uuid.UUID,
-    role: str = "member",
+    role: str = "viewer",
 ) -> TeamMembership:
     membership = TeamMembership(
         organisation_id=org_id,

@@ -43,9 +43,7 @@ async def _ensure_active_transaction(session: AsyncSession) -> str:
         )
     bind = session.get_bind()
     if asyncio.iscoroutine(bind):
-        # AsyncSession — get_bind() returns a coroutine
         bind = await bind
-    # Sync Session — get_bind() returns Engine directly
     return bind.dialect.name
 
 

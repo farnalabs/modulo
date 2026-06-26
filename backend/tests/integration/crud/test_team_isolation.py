@@ -71,20 +71,20 @@ async def test_teams_isolated_between_orgs(db_engine: AsyncEngine) -> None:
     factory = async_sessionmaker(db_engine, expire_on_commit=False)
 
     async with factory() as session:
-        await session.execute(
-            text("SELECT set_config('app.organisation_id', :oid, true)"),
-            {"oid": str(org_a)},
-        )
-        await create_team(session, org_id=org_a, name="Team A", created_by=user_a)
-        await session.flush()
+        async with session.begin():
+            await session.execute(
+                text("SELECT set_config('app.organisation_id', :oid, true)"),
+                {"oid": str(org_a)},
+            )
+            await create_team(session, org_id=org_a, name="Team A", created_by=user_a)
 
     async with factory() as session:
-        await session.execute(
-            text("SELECT set_config('app.organisation_id', :oid, true)"),
-            {"oid": str(org_b)},
-        )
-        await create_team(session, org_id=org_b, name="Team B", created_by=user_b)
-        await session.flush()
+        async with session.begin():
+            await session.execute(
+                text("SELECT set_config('app.organisation_id', :oid, true)"),
+                {"oid": str(org_b)},
+            )
+            await create_team(session, org_id=org_b, name="Team B", created_by=user_b)
 
     async with factory() as session:
         await session.execute(
@@ -117,12 +117,12 @@ async def test_team_name_unique_per_org(db_engine: AsyncEngine) -> None:
     factory = async_sessionmaker(db_engine, expire_on_commit=False)
 
     async with factory() as session:
-        await session.execute(
-            text("SELECT set_config('app.organisation_id', :oid, true)"),
-            {"oid": str(org)},
-        )
-        await create_team(session, org_id=org, name="Unique Name", created_by=user)
-        await session.flush()
+        async with session.begin():
+            await session.execute(
+                text("SELECT set_config('app.organisation_id', :oid, true)"),
+                {"oid": str(org)},
+            )
+            await create_team(session, org_id=org, name="Unique Name", created_by=user)
 
     async with factory() as session:
         await session.execute(
@@ -175,28 +175,27 @@ async def test_memberships_isolated_between_orgs(db_engine: AsyncEngine) -> None
     factory = async_sessionmaker(db_engine, expire_on_commit=False)
 
     async with factory() as session:
-        await session.execute(
-            text("SELECT set_config('app.organisation_id', :oid, true)"),
-            {"oid": str(org_a)},
-        )
-        team_a = await create_team(
-            session, org_id=org_a, name="Mem Team A", created_by=user_a1
-        )
-        await session.flush()
-        await add_team_member(
-            session, org_id=org_a, team_id=team_a.id, user_id=user_a2, role="member"
-        )
-        await session.flush()
+        async with session.begin():
+            await session.execute(
+                text("SELECT set_config('app.organisation_id', :oid, true)"),
+                {"oid": str(org_a)},
+            )
+            team_a = await create_team(
+                session, org_id=org_a, name="Mem Team A", created_by=user_a1
+            )
+            await add_team_member(
+                session, org_id=org_a, team_id=team_a.id, user_id=user_a2, role="viewer"
+            )
 
     async with factory() as session:
-        await session.execute(
-            text("SELECT set_config('app.organisation_id', :oid, true)"),
-            {"oid": str(org_b)},
-        )
-        team_b = await create_team(
-            session, org_id=org_b, name="Mem Team B", created_by=user_b
-        )
-        await session.flush()
+        async with session.begin():
+            await session.execute(
+                text("SELECT set_config('app.organisation_id', :oid, true)"),
+                {"oid": str(org_b)},
+            )
+            team_b = await create_team(
+                session, org_id=org_b, name="Mem Team B", created_by=user_b
+            )
 
     async with factory() as session:
         await session.execute(
@@ -230,18 +229,17 @@ async def test_membership_unique_per_team_user(db_engine: AsyncEngine) -> None:
     factory = async_sessionmaker(db_engine, expire_on_commit=False)
 
     async with factory() as session:
-        await session.execute(
-            text("SELECT set_config('app.organisation_id', :oid, true)"),
-            {"oid": str(org)},
-        )
-        team = await create_team(
-            session, org_id=org, name="Dup Test Team", created_by=user
-        )
-        await session.flush()
-        await add_team_member(
-            session, org_id=org, team_id=team.id, user_id=user, role="member"
-        )
-        await session.flush()
+        async with session.begin():
+            await session.execute(
+                text("SELECT set_config('app.organisation_id', :oid, true)"),
+                {"oid": str(org)},
+            )
+            team = await create_team(
+                session, org_id=org, name="Dup Test Team", created_by=user
+            )
+            await add_team_member(
+                session, org_id=org, team_id=team.id, user_id=user, role="viewer"
+            )
 
     async with factory() as session:
         await session.execute(
@@ -340,12 +338,12 @@ async def test_membership_round_trip(db_engine: AsyncEngine) -> None:
         await session.flush()
 
         membership = await add_team_member(
-            session, org_id=org, team_id=team.id, user_id=user_b, role="member"
+            session, org_id=org, team_id=team.id, user_id=user_b, role="viewer"
         )
         await session.flush()
         assert membership.team_id == team.id
         assert membership.user_id == user_b
-        assert membership.role == "member"
+        assert membership.role == "viewer"
 
         fetched = await get_membership(session, membership.id)
         assert fetched is not None

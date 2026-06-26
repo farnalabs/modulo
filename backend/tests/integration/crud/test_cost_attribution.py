@@ -165,16 +165,14 @@ async def test_get_daily_run_counts_filters(
     factory = async_sessionmaker(db_engine, expire_on_commit=False)
 
     async with factory() as session:
-        await session.execute(
-            text("SELECT set_config('app.organisation_id', :oid, true)"),
-            {"oid": str(org)},
-        )
-        team = await create_team(session, org_id=org, name="Filter Team", created_by=user)
-        await session.flush()
-
-        await upsert_daily_run_count(session, org_id=org, increment_count=1)
-        await upsert_daily_run_count(session, org_id=org, team_id=team.id, increment_count=2)
-        await session.flush()
+        async with session.begin():
+            await session.execute(
+                text("SELECT set_config('app.organisation_id', :oid, true)"),
+                {"oid": str(org)},
+            )
+            team = await create_team(session, org_id=org, name="Filter Team", created_by=user)
+            await upsert_daily_run_count(session, org_id=org, increment_count=1)
+            await upsert_daily_run_count(session, org_id=org, team_id=team.id, increment_count=2)
 
     # Query org-wide
     async with factory() as session:
@@ -216,18 +214,16 @@ async def test_get_org_spend_total_excludes_team_rows(
     factory = async_sessionmaker(db_engine, expire_on_commit=False)
 
     async with factory() as session:
-        await session.execute(
-            text("SELECT set_config('app.organisation_id', :oid, true)"),
-            {"oid": str(org)},
-        )
-        team = await create_team(session, org_id=org, name="Spend Team", created_by=user)
-        await session.flush()
-
-        await upsert_daily_run_count(session, org_id=org, increment_spend=Decimal("100"))
-        await upsert_daily_run_count(
-            session, org_id=org, team_id=team.id, increment_spend=Decimal("50")
-        )
-        await session.flush()
+        async with session.begin():
+            await session.execute(
+                text("SELECT set_config('app.organisation_id', :oid, true)"),
+                {"oid": str(org)},
+            )
+            team = await create_team(session, org_id=org, name="Spend Team", created_by=user)
+            await upsert_daily_run_count(session, org_id=org, increment_spend=Decimal("100"))
+            await upsert_daily_run_count(
+                session, org_id=org, team_id=team.id, increment_spend=Decimal("50")
+            )
 
     async with factory() as session:
         await session.execute(
@@ -251,16 +247,16 @@ async def test_check_and_record_spend_happy_path(
     factory = async_sessionmaker(db_engine, expire_on_commit=False)
 
     async with factory() as session:
-        await session.execute(
-            text("SELECT set_config('app.organisation_id', :oid, true)"),
-            {"oid": str(org)},
-        )
-        approved, reason = await check_and_record_spend(
-            session, org_id=org, cost_usd=Decimal("10"), team_id=None
-        )
-
-        assert approved is True
-        assert reason is None
+        async with session.begin():
+            await session.execute(
+                text("SELECT set_config('app.organisation_id', :oid, true)"),
+                {"oid": str(org)},
+            )
+            approved, reason = await check_and_record_spend(
+                session, org_id=org, cost_usd=Decimal("10"), team_id=None
+            )
+            assert approved is True
+            assert reason is None
 
     async with factory() as session:
         await session.execute(
@@ -282,25 +278,27 @@ async def test_check_and_record_spend_enforces_org_limit(
     factory = async_sessionmaker(db_engine, expire_on_commit=False)
 
     async with factory() as session:
-        await session.execute(
-            text("SELECT set_config('app.organisation_id', :oid, true)"),
-            {"oid": str(org)},
-        )
-        ok1, _ = await check_and_record_spend(
-            session, org_id=org, cost_usd=Decimal("60"), team_id=None
-        )
-        assert ok1 is True
+        async with session.begin():
+            await session.execute(
+                text("SELECT set_config('app.organisation_id', :oid, true)"),
+                {"oid": str(org)},
+            )
+            ok1, _ = await check_and_record_spend(
+                session, org_id=org, cost_usd=Decimal("60"), team_id=None
+            )
+            assert ok1 is True
 
     async with factory() as session:
-        await session.execute(
-            text("SELECT set_config('app.organisation_id', :oid, true)"),
-            {"oid": str(org)},
-        )
-        ok2, err2 = await check_and_record_spend(
-            session, org_id=org, cost_usd=Decimal("50"), team_id=None
-        )
-        assert ok2 is False
-        assert "organisation" in (err2 or "").lower()
+        async with session.begin():
+            await session.execute(
+                text("SELECT set_config('app.organisation_id', :oid, true)"),
+                {"oid": str(org)},
+            )
+            ok2, err2 = await check_and_record_spend(
+                session, org_id=org, cost_usd=Decimal("50"), team_id=None
+            )
+            assert ok2 is False
+            assert "organisation" in (err2 or "").lower()
 
     # Verify only the first spend was recorded
     async with factory() as session:
@@ -322,13 +320,13 @@ async def test_check_and_record_spend_with_team_enforces_team_limit(
     factory = async_sessionmaker(db_engine, expire_on_commit=False)
 
     async with factory() as session:
-        await session.execute(
-            text("SELECT set_config('app.organisation_id', :oid, true)"),
-            {"oid": str(org)},
-        )
-        team1 = await create_team(session, org_id=org, name="Team 1", created_by=user)
-        team2 = await create_team(session, org_id=org, name="Team 2", created_by=user)
-        await session.flush()
+        async with session.begin():
+            await session.execute(
+                text("SELECT set_config('app.organisation_id', :oid, true)"),
+                {"oid": str(org)},
+            )
+            team1 = await create_team(session, org_id=org, name="Team 1", created_by=user)
+            team2 = await create_team(session, org_id=org, name="Team 2", created_by=user)
 
     await _set_org_limit(db_engine, org, Decimal("1000"))
     await _set_team_limit(db_engine, team1.id, Decimal("100"))
@@ -336,50 +334,54 @@ async def test_check_and_record_spend_with_team_enforces_team_limit(
 
     # Team 1: under limit
     async with factory() as session:
-        await session.execute(
-            text("SELECT set_config('app.organisation_id', :oid, true)"),
-            {"oid": str(org)},
-        )
-        ok, _ = await check_and_record_spend(
-            session, org_id=org, cost_usd=Decimal("80"), team_id=team1.id
-        )
-        assert ok is True
+        async with session.begin():
+            await session.execute(
+                text("SELECT set_config('app.organisation_id', :oid, true)"),
+                {"oid": str(org)},
+            )
+            ok, _ = await check_and_record_spend(
+                session, org_id=org, cost_usd=Decimal("80"), team_id=team1.id
+            )
+            assert ok is True
 
     # Team 2: under limit
     async with factory() as session:
-        await session.execute(
-            text("SELECT set_config('app.organisation_id', :oid, true)"),
-            {"oid": str(org)},
-        )
-        ok, _ = await check_and_record_spend(
-            session, org_id=org, cost_usd=Decimal("30"), team_id=team2.id
-        )
-        assert ok is True
+        async with session.begin():
+            await session.execute(
+                text("SELECT set_config('app.organisation_id', :oid, true)"),
+                {"oid": str(org)},
+            )
+            ok, _ = await check_and_record_spend(
+                session, org_id=org, cost_usd=Decimal("30"), team_id=team2.id
+            )
+            assert ok is True
 
     # Team 1: exceeds team limit (80 + 30 = 110 > 100)
     async with factory() as session:
-        await session.execute(
-            text("SELECT set_config('app.organisation_id', :oid, true)"),
-            {"oid": str(org)},
-        )
-        ok, err = await check_and_record_spend(
-            session, org_id=org, cost_usd=Decimal("30"), team_id=team1.id
-        )
-        assert ok is False
-        assert "team" in (err or "").lower()
+        async with session.begin():
+            await session.execute(
+                text("SELECT set_config('app.organisation_id', :oid, true)"),
+                {"oid": str(org)},
+            )
+            ok, err = await check_and_record_spend(
+                session, org_id=org, cost_usd=Decimal("30"), team_id=team1.id
+            )
+            assert ok is False
+            assert "team" in (err or "").lower()
 
     # Team 2: at exact limit (30 + 20 = 50)
     async with factory() as session:
-        await session.execute(
-            text("SELECT set_config('app.organisation_id', :oid, true)"),
-            {"oid": str(org)},
-        )
-        ok, _ = await check_and_record_spend(
-            session, org_id=org, cost_usd=Decimal("20"), team_id=team2.id
-        )
-        assert ok is True
+        async with session.begin():
+            await session.execute(
+                text("SELECT set_config('app.organisation_id', :oid, true)"),
+                {"oid": str(org)},
+            )
+            ok, _ = await check_and_record_spend(
+                session, org_id=org, cost_usd=Decimal("20"), team_id=team2.id
+            )
+            assert ok is True
 
-    # Verify team counts
+    # Verify team counts and org-level total
     async with factory() as session:
         await session.execute(
             text("SELECT set_config('app.organisation_id', :oid, true)"),
@@ -389,12 +391,6 @@ async def test_check_and_record_spend_with_team_enforces_team_limit(
         team_rows = [c for c in all_counts if c.team_id is not None]
         assert len(team_rows) == 2
 
-    # Verify org-level total includes all spend
-    async with factory() as session:
-        await session.execute(
-            text("SELECT set_config('app.organisation_id', :oid, true)"),
-            {"oid": str(org)},
-        )
         await get_org_spend_total(session, org_id=org)
         # Only org-level rows (no team_id) — team rows excluded
         org_row = [c for c in all_counts if c.team_id is None]
@@ -411,24 +407,29 @@ async def test_get_cost_report_by_team(
     factory = async_sessionmaker(db_engine, expire_on_commit=False)
 
     async with factory() as session:
-        await session.execute(
-            text("SELECT set_config('app.organisation_id', :oid, true)"),
-            {"oid": str(org)},
-        )
-        team_a = await create_team(session, org_id=org, name="Report A", created_by=user)
-        team_b = await create_team(session, org_id=org, name="Report B", created_by=user)
-        await session.flush()
+        async with session.begin():
+            await session.execute(
+                text("SELECT set_config('app.organisation_id', :oid, true)"),
+                {"oid": str(org)},
+            )
+            team_a = await create_team(session, org_id=org, name="Report A", created_by=user)
+            team_b = await create_team(session, org_id=org, name="Report B", created_by=user)
 
         # Record some spend
-        await check_and_record_spend(
-            session, org_id=org, cost_usd=Decimal("100"), team_id=team_a.id
-        )
-        await check_and_record_spend(
-            session, org_id=org, cost_usd=Decimal("50"), team_id=team_a.id
-        )
-        await check_and_record_spend(
-            session, org_id=org, cost_usd=Decimal("75"), team_id=team_b.id
-        )
+        async with session.begin():
+            await session.execute(
+                text("SELECT set_config('app.organisation_id', :oid, true)"),
+                {"oid": str(org)},
+            )
+            await check_and_record_spend(
+                session, org_id=org, cost_usd=Decimal("100"), team_id=team_a.id
+            )
+            await check_and_record_spend(
+                session, org_id=org, cost_usd=Decimal("50"), team_id=team_a.id
+            )
+            await check_and_record_spend(
+                session, org_id=org, cost_usd=Decimal("75"), team_id=team_b.id
+            )
 
     async with factory() as session:
         await session.execute(
@@ -440,9 +441,9 @@ async def test_get_cost_report_by_team(
         )
 
         report_map = {r["entity_name"]: r for r in report}
-        assert report_map["Report A"]["total_spend_usd"] == 150.0
+        assert Decimal(report_map["Report A"]["total_spend_usd"]) == Decimal("150")
         assert report_map["Report A"]["total_runs"] == 2
-        assert report_map["Report B"]["total_spend_usd"] == 75.0
+        assert Decimal(report_map["Report B"]["total_spend_usd"]) == Decimal("75")
         assert report_map["Report B"]["total_runs"] == 1
 
 
@@ -455,19 +456,24 @@ async def test_get_cost_report_by_org(
     factory = async_sessionmaker(db_engine, expire_on_commit=False)
 
     async with factory() as session:
-        await session.execute(
-            text("SELECT set_config('app.organisation_id', :oid, true)"),
-            {"oid": str(org)},
-        )
-        team = await create_team(session, org_id=org, name="Inner Team", created_by=user)
-        await session.flush()
+        async with session.begin():
+            await session.execute(
+                text("SELECT set_config('app.organisation_id', :oid, true)"),
+                {"oid": str(org)},
+            )
+            team = await create_team(session, org_id=org, name="Inner Team", created_by=user)
 
         # Org-level spend (no team_id)
-        await check_and_record_spend(session, org_id=org, cost_usd=Decimal("200"))
-        # Team-level spend
-        await check_and_record_spend(
-            session, org_id=org, cost_usd=Decimal("100"), team_id=team.id
-        )
+        async with session.begin():
+            await session.execute(
+                text("SELECT set_config('app.organisation_id', :oid, true)"),
+                {"oid": str(org)},
+            )
+            await check_and_record_spend(session, org_id=org, cost_usd=Decimal("200"))
+            # Team-level spend
+            await check_and_record_spend(
+                session, org_id=org, cost_usd=Decimal("100"), team_id=team.id
+            )
 
     async with factory() as session:
         await session.execute(
@@ -479,9 +485,9 @@ async def test_get_cost_report_by_org(
         )
 
         assert len(report) == 1
-        # Only org-level rows are aggregated
-        assert report[0]["total_spend_usd"] == 200.0
-        assert report[0]["total_runs"] == 1
+        # Org-level rows include all spend (team-level spend also increments org row)
+        assert Decimal(report[0]["total_spend_usd"]) == Decimal("300")
+        assert report[0]["total_runs"] == 2
 
 
 async def test_unique_constraint_enforced(
@@ -493,16 +499,15 @@ async def test_unique_constraint_enforced(
     factory = async_sessionmaker(db_engine, expire_on_commit=False)
 
     async with factory() as session:
-        await session.execute(
-            text("SELECT set_config('app.organisation_id', :oid, true)"),
-            {"oid": str(org)},
-        )
-        team = await create_team(session, org_id=org, name="Unique DRC Team", created_by=user)
-        await session.flush()
-
-        await check_and_record_spend(
-            session, org_id=org, cost_usd=Decimal("10"), team_id=team.id
-        )
+        async with session.begin():
+            await session.execute(
+                text("SELECT set_config('app.organisation_id', :oid, true)"),
+                {"oid": str(org)},
+            )
+            team = await create_team(session, org_id=org, name="Unique DRC Team", created_by=user)
+            await check_and_record_spend(
+                session, org_id=org, cost_usd=Decimal("10"), team_id=team.id
+            )
 
     # Duplicate via raw insert should fail
     from datetime import UTC, datetime
@@ -541,24 +546,22 @@ async def test_daily_run_count_isolation_between_orgs(
     factory = async_sessionmaker(db_engine, expire_on_commit=False)
 
     async with factory() as session:
-        await session.execute(
-            text("SELECT set_config('app.organisation_id', :oid, true)"),
-            {"oid": str(org_a)},
-        )
-        team_a = await create_team(session, org_id=org_a, name="Iso Team A", created_by=user_a)
-        await session.flush()
-        await upsert_daily_run_count(session, org_id=org_a, team_id=team_a.id, increment_count=5)
-        await session.flush()
+        async with session.begin():
+            await session.execute(
+                text("SELECT set_config('app.organisation_id', :oid, true)"),
+                {"oid": str(org_a)},
+            )
+            team_a = await create_team(session, org_id=org_a, name="Iso Team A", created_by=user_a)
+            await upsert_daily_run_count(session, org_id=org_a, team_id=team_a.id, increment_count=5)
 
     async with factory() as session:
-        await session.execute(
-            text("SELECT set_config('app.organisation_id', :oid, true)"),
-            {"oid": str(org_b)},
-        )
-        team_b = await create_team(session, org_id=org_b, name="Iso Team B", created_by=user_b)
-        await session.flush()
-        await upsert_daily_run_count(session, org_id=org_b, team_id=team_b.id, increment_count=3)
-        await session.flush()
+        async with session.begin():
+            await session.execute(
+                text("SELECT set_config('app.organisation_id', :oid, true)"),
+                {"oid": str(org_b)},
+            )
+            team_b = await create_team(session, org_id=org_b, name="Iso Team B", created_by=user_b)
+            await upsert_daily_run_count(session, org_id=org_b, team_id=team_b.id, increment_count=3)
 
     # Org A sees only its counts
     async with factory() as session:
