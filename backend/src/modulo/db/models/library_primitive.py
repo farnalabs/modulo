@@ -11,8 +11,8 @@ from sqlalchemy import (
     Numeric,
     String,
     UniqueConstraint,
+    Uuid,
 )
-from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
 from modulo.db.models.base import OrgScoped
@@ -67,7 +67,7 @@ class LibraryPrimitive(OrgScoped):
     content_json: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
     source_url: Mapped[str | None] = mapped_column(String(2000))
     forked_from: Mapped[uuid.UUID | None] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("library_primitives.id", ondelete="RESTRICT")
+        Uuid(), ForeignKey("library_primitives.id", ondelete="RESTRICT")
     )
     checksum: Mapped[str | None] = mapped_column(String(128))
     ed25519_signature: Mapped[str | None] = mapped_column(String(256))
@@ -77,19 +77,19 @@ class LibraryPrimitive(OrgScoped):
     average_rating: Mapped[Decimal | None] = mapped_column(Numeric(3, 2))
     review_count: Mapped[int | None] = mapped_column(Integer)
     owner_team_id: Mapped[uuid.UUID | None] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("teams.id", ondelete="RESTRICT")
+        Uuid(), ForeignKey("teams.id", ondelete="RESTRICT")
     )
     visibility: Mapped[str] = mapped_column(String(10), nullable=False, server_default="org")
     contribution_status: Mapped[str | None] = mapped_column(String(20))
     created_by: Mapped[uuid.UUID | None] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL")
+        Uuid(), ForeignKey("users.id", ondelete="SET NULL")
     )
     version_group_id: Mapped[uuid.UUID | None] = mapped_column(
-        UUID(as_uuid=True),
+        Uuid(),
         nullable=True,
     )
     update_available_version_id: Mapped[uuid.UUID | None] = mapped_column(
-        UUID(as_uuid=True),
+        Uuid(),
         ForeignKey("library_primitives.id", ondelete="SET NULL"),
         nullable=True,
     )

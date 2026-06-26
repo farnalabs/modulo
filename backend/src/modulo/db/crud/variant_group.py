@@ -140,9 +140,9 @@ def pick_variant_weighted(
     weights = [float(v.get("weight", 1.0)) for v in variants]
     total = sum(weights)
     if total <= 0:
-        return random.choice(variants)  # noqa: S311
+        return random.choice(variants)
 
-    r = random.random() * total  # noqa: S311
+    r = random.random() * total
     cumulative = 0.0
     for i, w in enumerate(weights):
         cumulative += w

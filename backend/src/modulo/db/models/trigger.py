@@ -12,8 +12,8 @@ from sqlalchemy import (
     Integer,
     Numeric,
     String,
+    Uuid,
 )
-from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
 from modulo.db.models.base import OrgScoped
@@ -30,7 +30,7 @@ class Trigger(OrgScoped):
     )
 
     pipeline_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True),
+        Uuid(),
         ForeignKey("pipelines.id", ondelete="CASCADE"),
         nullable=False,
         index=True,
@@ -41,7 +41,7 @@ class Trigger(OrgScoped):
     daily_spend_limit: Mapped[Decimal | None] = mapped_column(Numeric(12, 4))
     config_json: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False, default=dict)
     created_by: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("users.id", ondelete="RESTRICT"), nullable=False
+        Uuid(), ForeignKey("users.id", ondelete="RESTRICT"), nullable=False
     )
     # Cron-specific fields (nullable for non-cron trigger types)
     cron_expression: Mapped[str | None] = mapped_column(String(100), nullable=True)

@@ -6,8 +6,7 @@ and allowed redirect URIs.
 
 import uuid
 
-from sqlalchemy import ForeignKey, String, Text
-from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy import ForeignKey, String, Text, Uuid
 from sqlalchemy.orm import Mapped, mapped_column
 
 from modulo.db.models.base import OrgScoped
@@ -23,5 +22,5 @@ class OAuthClient(OrgScoped):
     scopes: Mapped[str] = mapped_column(Text, nullable=False, comment="Space-separated scope values")
     redirect_uris: Mapped[str] = mapped_column(Text, nullable=False, comment="Space-separated allowed redirect URIs")
     created_by: Mapped[uuid.UUID | None] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+        Uuid(), ForeignKey("users.id", ondelete="SET NULL"), nullable=True
     )

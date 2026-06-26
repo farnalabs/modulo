@@ -1,8 +1,7 @@
 import uuid
 from typing import Any
 
-from sqlalchemy import JSON, CheckConstraint, ForeignKey, String, UniqueConstraint
-from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy import JSON, CheckConstraint, ForeignKey, String, UniqueConstraint, Uuid
 from sqlalchemy.orm import Mapped, mapped_column
 
 from modulo.db.models.base import OrgScoped
@@ -25,13 +24,13 @@ class PipelineEdge(OrgScoped):
     )
 
     pipeline_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True),
+        Uuid(),
         ForeignKey("pipelines.id", ondelete="CASCADE"),
         nullable=False,
         index=True,
     )
-    source_node_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
-    target_node_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    source_node_id: Mapped[uuid.UUID] = mapped_column(Uuid(), nullable=False)
+    target_node_id: Mapped[uuid.UUID] = mapped_column(Uuid(), nullable=False)
     edge_type: Mapped[str] = mapped_column(String(15), nullable=False, server_default="normal")
     hitl_gate_config: Mapped[dict[str, Any] | None] = mapped_column(JSON)
     condition_expression: Mapped[str | None] = mapped_column(String(500), nullable=True)

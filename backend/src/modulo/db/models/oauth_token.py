@@ -7,8 +7,7 @@ Token families implement rotation detection (reuse pattern from user token_famil
 import uuid
 from datetime import datetime
 
-from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, String, Text, func
-from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, String, Text, Uuid, func
 from sqlalchemy.orm import Mapped, mapped_column
 
 from modulo.db.models.base import Base
@@ -21,7 +20,7 @@ class OAuthAuthorizationCode(Base):
     code: Mapped[str] = mapped_column(String(128), primary_key=True)
     client_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
     organisation_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True),
+        Uuid(),
         ForeignKey("organisations.id", ondelete="CASCADE"),
         nullable=False,
         index=True,
@@ -44,10 +43,10 @@ class OAuthTokenFamily(Base):
     __tablename__ = "oauth_token_families"
     __table_args__ = {"comment": "Token families for MCP OAuth access token rotation"}  # type: ignore[misc]  # noqa: RUF012
 
-    family_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    family_id: Mapped[uuid.UUID] = mapped_column(Uuid(), primary_key=True, default=uuid.uuid4)
     client_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
     organisation_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True),
+        Uuid(),
         ForeignKey("organisations.id", ondelete="CASCADE"),
         nullable=False,
         index=True,

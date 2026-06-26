@@ -1,8 +1,7 @@
 import uuid
 from typing import Any
 
-from sqlalchemy import JSON, ForeignKey, ForeignKeyConstraint, Integer, String, Text
-from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy import JSON, ForeignKey, ForeignKeyConstraint, Integer, String, Text, Uuid
 from sqlalchemy.orm import Mapped, mapped_column
 
 from modulo.db.models.base import OrgScoped
@@ -35,14 +34,14 @@ class Agent(OrgScoped):
 
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     description: Mapped[str | None] = mapped_column(String(2000))
-    input_schema_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    input_schema_id: Mapped[uuid.UUID] = mapped_column(Uuid(), nullable=False)
     input_schema_version: Mapped[str] = mapped_column(String(50), nullable=False)
-    output_schema_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    output_schema_id: Mapped[uuid.UUID] = mapped_column(Uuid(), nullable=False)
     output_schema_version: Mapped[str] = mapped_column(String(50), nullable=False)
     prompt_template: Mapped[str] = mapped_column(Text, nullable=False)
     prompt_version_history: Mapped[list[dict[str, Any]]] = mapped_column(JSON, nullable=False, default=list)
     model_backend_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("model_backends.id", ondelete="RESTRICT"), nullable=False
+        Uuid(), ForeignKey("model_backends.id", ondelete="RESTRICT"), nullable=False
     )
     connector_type_refs: Mapped[list[dict[str, Any]]] = mapped_column(JSON, nullable=False, default=list)
     required_environment_capabilities: Mapped[list[str]] = mapped_column(JSON, nullable=False, default=list)
@@ -50,8 +49,8 @@ class Agent(OrgScoped):
     retry_policy: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False, default=dict)
     token_budget: Mapped[int | None] = mapped_column(Integer)
     library_id: Mapped[uuid.UUID | None] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("library_primitives.id", ondelete="SET NULL")
+        Uuid(), ForeignKey("library_primitives.id", ondelete="SET NULL")
     )
     created_by: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("users.id", ondelete="RESTRICT"), nullable=False
+        Uuid(), ForeignKey("users.id", ondelete="RESTRICT"), nullable=False
     )
