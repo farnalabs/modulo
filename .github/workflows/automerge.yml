@@ -14,19 +14,13 @@ jobs:
     if: >
       !github.event.pull_request.draft &&
       (
-        (github.event.action == 'labeled' && github.event.label.name == 'ready for review') ||
-        github.event.action == 'ready_for_review'
-      )
+        github.event.action == 'labeled' ||
+        github.event.action == 'ready_for_review' ||
+        github.event.action == 'synchronize'
+      ) &&
+      contains(github.event.pull_request.labels.*.name, 'ready for review')
     runs-on: ubuntu-latest
     steps:
-      - name: Wait for CI checks to pass
-        uses: lewagon/wait-on-check-action@v1.3.4
-        with:
-          ref: ${{ github.event.pull_request.head.sha }}
-          repo-token: ${{ secrets.GITHUB_TOKEN }}
-          wait-interval: 30
-          running-workflow-name: 'Auto-merge'
-          allowed-checks: 'lint,unit'
       - name: Enable auto-merge (squash)
         run: |
           gh pr merge ${{ github.event.pull_request.number }} \
