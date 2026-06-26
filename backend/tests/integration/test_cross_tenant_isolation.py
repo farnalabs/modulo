@@ -89,6 +89,12 @@ async def _seed_user(engine: AsyncEngine, org_id: uuid.UUID, email: str) -> uuid
 @pytest_asyncio.fixture(scope="module")
 async def rls_role(db_engine: AsyncEngine) -> str:
     role = await _create_test_role(db_engine)
+    # Ensure FORCE RLS is applied for all test tables
+    async with db_engine.connect() as conn:
+        for tbl in ("pipelines", "agents", "schemas", "connector_instances",
+                     "schema_versions", "model_backends"):
+            await conn.execute(text(f"ALTER TABLE {tbl} FORCE ROW LEVEL SECURITY"))
+        await conn.commit()
     yield role
     await _drop_role(db_engine, role)
 
