@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       semver_bump:
-        description: 'Semver bump type'
+        description: 'Semver bump type (ignored if tag is set)'
         required: true
         default: 'patch'
         type: choice
@@ -12,6 +12,11 @@ on:
           - patch
           - minor
           - major
+      tag:
+        description: 'Explicit tag (e.g. v1.2.3). Overrides auto-bump. Leave empty for default.'
+        required: false
+        default: ''
+        type: string
   schedule:
     - cron: '0 9 * * 1'
 
@@ -22,6 +27,7 @@ jobs:
       has_changes: ${{ steps.check.outputs.has_changes }}
       last_tag: ${{ steps.check.outputs.last_tag }}
       next_version: ${{ steps.check.outputs.next_version }}
+      explicit_tag: ${{ steps.check.outputs.explicit_tag }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -31,17 +37,22 @@ jobs:
       - name: Check for releasable changes
         id: check
         run: |
+          EXPLICIT_TAG="${{ inputs.tag }}"
+
+          # If an explicit tag is given, skip the changes check and use it directly
+          if [ -n "$EXPLICIT_TAG" ]; then
+            echo "Explicit tag provided: $EXPLICIT_TAG"
+            echo "has_changes=true" >> $GITHUB_OUTPUT
+            echo "explicit_tag=$EXPLICIT_TAG" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+          echo "explicit_tag=" >> $GITHUB_OUTPUT
+
           LAST_TAG=$(git tag --list 'v*' --sort=-version:refname | head -1 || echo "")
           if [ -z "$LAST_TAG" ]; then
             echo "No previous release tag found — first release"
             echo "has_changes=true" >> $GITHUB_OUTPUT
             echo "last_tag=" >> $GITHUB_OUTPUT
-
-            if [ "${{ github.event_name }}" == "schedule" ]; then
-              echo "next_version=0.1.0" >> $GITHUB_OUTPUT
-            else
-              echo "Manual trigger — version will be determined from inputs"
-            fi
             exit 0
           fi
 
@@ -71,6 +82,15 @@ jobs:
       - name: Determine next version
         id: determine
         run: |
+          EXPLICIT_TAG="${{ needs.check.outputs.explicit_tag }}"
+
+          # If an explicit tag was given, use it directly
+          if [ -n "$EXPLICIT_TAG" ]; then
+            CLEAN="${EXPLICIT_TAG#v}"
+            echo "version=$CLEAN" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+
           LAST_TAG="${{ needs.check.outputs.last_tag }}"
 
           if [ "${{ github.event_name }}" == "workflow_dispatch" ]; then
