@@ -1,0 +1,146 @@
+name: Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      semver_bump:
+        description: 'Semver bump type'
+        required: true
+        default: 'patch'
+        type: choice
+        options:
+          - patch
+          - minor
+          - major
+  schedule:
+    - cron: '0 9 * * 1'
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    outputs:
+      has_changes: ${{ steps.check.outputs.has_changes }}
+      last_tag: ${{ steps.check.outputs.last_tag }}
+      next_version: ${{ steps.check.outputs.next_version }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+
+      - name: Check for releasable changes
+        id: check
+        run: |
+          LAST_TAG=$(git tag --list 'v*' --sort=-version:refname | head -1 || echo "")
+          if [ -z "$LAST_TAG" ]; then
+            echo "No previous release tag found — first release"
+            echo "has_changes=true" >> $GITHUB_OUTPUT
+            echo "last_tag=" >> $GITHUB_OUTPUT
+
+            if [ "${{ github.event_name }}" == "schedule" ]; then
+              echo "next_version=0.1.0" >> $GITHUB_OUTPUT
+            else
+              echo "Manual trigger — version will be determined from inputs"
+            fi
+            exit 0
+          fi
+
+          echo "last_tag=$LAST_TAG" >> $GITHUB_OUTPUT
+          COMMITS_SINCE=$(git log "$LAST_TAG"..HEAD --oneline | wc -l)
+          echo "Commits since $LAST_TAG: $COMMITS_SINCE"
+
+          if [ "$COMMITS_SINCE" -eq 0 ]; then
+            echo "has_changes=false" >> $GITHUB_OUTPUT
+            echo "No new commits since $LAST_TAG — nothing to release."
+          else
+            echo "has_changes=true" >> $GITHUB_OUTPUT
+          fi
+
+  version:
+    needs: [check]
+    if: needs.check.outputs.has_changes == 'true'
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.determine.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+
+      - name: Determine next version
+        id: determine
+        run: |
+          LAST_TAG="${{ needs.check.outputs.last_tag }}"
+
+          if [ "${{ github.event_name }}" == "workflow_dispatch" ]; then
+            BUMP="${{ inputs.semver_bump }}"
+          else
+            BUMP="patch"
+          fi
+
+          if [ -z "$LAST_TAG" ]; then
+            echo "version=0.1.0" >> $GITHUB_OUTPUT
+          else
+            CLEAN="${LAST_TAG#v}"
+            IFS='.' read -r MAJOR MINOR PATCH <<< "$CLEAN"
+            case "$BUMP" in
+              major) echo "version=$((MAJOR + 1)).0.0" >> $GITHUB_OUTPUT ;;
+              minor) echo "version=$MAJOR.$((MINOR + 1)).0" >> $GITHUB_OUTPUT ;;
+              patch) echo "version=$MAJOR.$MINOR.$((PATCH + 1))" >> $GITHUB_OUTPUT ;;
+            esac
+          fi
+
+  release:
+    needs: [check, version]
+    if: needs.check.outputs.has_changes == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+
+      - name: Configure git
+        run: |
+          git config user.name "github-actions"
+          git config user.email "actions@github.com"
+
+      - name: Update version files
+        run: |
+          VERSION="${{ needs.version.outputs.version }}"
+          TAG="v$VERSION"
+          CHANGE_DATE=$(date -d "+3 years" +%Y-%m-%d)
+          echo "Releasing $TAG (Change Date: $CHANGE_DATE)"
+
+          # --- LICENSE ---
+          sed -i "s/The Licensed Work is Modulo, version .*/The Licensed Work is Modulo, version $VERSION./" LICENSE
+          sed -i "s/Change Date: .*/Change Date: $CHANGE_DATE/" LICENSE
+
+          # --- backend/pyproject.toml ---
+          sed -i "s/^version = \".*\"/version = \"$VERSION\"/" backend/pyproject.toml
+
+          # --- frontend/package.json ---
+          sed -i "s/\"version\": \".*\"/\"version\": \"$VERSION\"/" frontend/package.json
+
+          # --- docs/prd.md ---
+          sed -i "s/^\*\*Version\*\*: .*\$/**Version**: $VERSION/" docs/prd.md
+          sed -i "s/^\*\*Date\*\*: .*\$/**Date**: $(date +%Y-%m-%d)/" docs/prd.md
+
+          # --- Placeholder: Docker build & publish ---
+          # TODO: docker buildx build --platform linux/amd64,linux/arm64 \
+          #   -t farnalabs/modulo:$TAG -t farnalabs/modulo:latest .
+          # TODO: docker push farnalabs/modulo:$TAG
+          # TODO: docker push farnalabs/modulo:latest
+
+          # --- Commit & tag ---
+          git add LICENSE backend/pyproject.toml frontend/package.json docs/prd.md
+          git commit -m "release: $TAG"
+          git tag -a "$TAG" -m "Modulo $TAG"
+
+          # --- Placeholder: GitHub release ---
+          # TODO: gh release create $TAG --title "Modulo $TAG" --notes "See changelog in docs/prd.md"
+
+      - name: Push release
+        run: |
+          git push origin HEAD --tags
