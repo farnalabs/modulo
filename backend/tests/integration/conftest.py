@@ -89,6 +89,27 @@ def migrated_db_url(db_url: str) -> str:
                          "VARCHAR(30) DEFAULT 'manual_approval'")
                 )
 
+            # pipelines: missing slug column
+            if "slug" not in cols:
+                await conn.execute(
+                    text("ALTER TABLE pipelines ADD COLUMN slug VARCHAR(255)")
+                )
+
+            # pipeline_snapshots: missing config_json column
+            snap_cols = await _existing_cols(conn, "pipeline_snapshots")
+            if "config_json" not in snap_cols:
+                await conn.execute(
+                    text("ALTER TABLE pipeline_snapshots ADD COLUMN config_json JSON DEFAULT '{}'::json")
+                )
+
+            # connector_instances: allowed_operations is JSON but ORM uses text[]
+            ci_cols = await _existing_cols(conn, "connector_instances")
+            if "allowed_operations" in ci_cols:
+                await conn.execute(
+                    text("ALTER TABLE connector_instances ALTER COLUMN allowed_operations TYPE JSON "
+                         "USING allowed_operations::JSON")
+                )
+
             # webhook_payloads: ORM expects raw_body + raw_payload (migration has payload_ciphertext)
             cols = await _existing_cols(conn, "webhook_payloads")
             if "raw_body" not in cols:
