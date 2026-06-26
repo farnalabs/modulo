@@ -2,7 +2,7 @@ name: Auto-merge
 
 on:
   pull_request:
-    types: [labeled, ready_for_review, synchronize]
+    types: [opened, synchronize, labeled, unlabeled, ready_for_review]
 
 permissions:
   contents: write
@@ -11,17 +11,24 @@ permissions:
 jobs:
   automerge:
     name: Enable auto-merge
-    if: >
-      !github.event.pull_request.draft &&
-      (
-        github.event.action == 'labeled' ||
-        github.event.action == 'ready_for_review' ||
-        github.event.action == 'synchronize'
-      ) &&
-      contains(github.event.pull_request.labels.*.name, 'ready for review')
     runs-on: ubuntu-latest
     steps:
+      - uses: actions/checkout@v4
+      - name: Check PR is not draft and has ready label
+        id: check_labels
+        run: |
+          PR_JSON=$(gh pr view ${{ github.event.pull_request.number }} --json isDraft,labels)
+          IS_DRAFT=$(echo "$PR_JSON" | jq -r '.isDraft')
+          HAS_LABEL=$(echo "$PR_JSON" | jq -r '.labels[] | select(.name == "ready for review") | .name')
+          if [ "$IS_DRAFT" = "false" ] && [ -n "$HAS_LABEL" ]; then
+            echo "matched=true" >> $GITHUB_OUTPUT
+          else
+            echo "matched=false" >> $GITHUB_OUTPUT
+          fi
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       - name: Enable auto-merge (squash)
+        if: steps.check_labels.outputs.matched == 'true'
         run: |
           gh pr merge ${{ github.event.pull_request.number }} \
             --auto \
