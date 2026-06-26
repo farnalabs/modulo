@@ -2,7 +2,7 @@ name: Auto-merge
 
 on:
   pull_request:
-    types: [labeled, ready_for_review, synchronize]
+    types: [opened, synchronize, labeled, unlabeled, ready_for_review]
 
 permissions:
   contents: write
@@ -13,15 +13,22 @@ jobs:
     name: Enable auto-merge
     if: >
       !github.event.pull_request.draft &&
-      (
-        github.event.action == 'labeled' ||
-        github.event.action == 'ready_for_review' ||
-        github.event.action == 'synchronize'
-      ) &&
       contains(github.event.pull_request.labels.*.name, 'ready for review')
     runs-on: ubuntu-latest
     steps:
+      - name: Check PR labels
+        id: check_labels
+        run: |
+          LABELS=$(gh pr view ${{ github.event.pull_request.number }} --json labels -t '{{range .labels}}{{.name}}{{"\n"}}{{end}}')
+          if echo "$LABELS" | grep -q "ready for review"; then
+            echo "matched=true" >> $GITHUB_OUTPUT
+          else
+            echo "matched=false" >> $GITHUB_OUTPUT
+          fi
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       - name: Enable auto-merge (squash)
+        if: steps.check_labels.outputs.matched == 'true'
         run: |
           gh pr merge ${{ github.event.pull_request.number }} \
             --auto \
