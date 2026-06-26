@@ -11,16 +11,15 @@ permissions:
 jobs:
   automerge:
     name: Enable auto-merge
-    if: >
-      !github.event.pull_request.draft &&
-      contains(github.event.pull_request.labels.*.name, 'ready for review')
     runs-on: ubuntu-latest
     steps:
-      - name: Check PR labels
+      - name: Check PR is not draft and has ready label
         id: check_labels
         run: |
-          LABELS=$(gh pr view ${{ github.event.pull_request.number }} --json labels -t '{{range .labels}}{{.name}}{{"\n"}}{{end}}')
-          if echo "$LABELS" | grep -q "ready for review"; then
+          PR_JSON=$(gh pr view ${{ github.event.pull_request.number }} --json isDraft,labels)
+          IS_DRAFT=$(echo "$PR_JSON" | jq -r '.isDraft')
+          HAS_LABEL=$(echo "$PR_JSON" | jq -r '.labels[] | select(.name == "ready for review") | .name')
+          if [ "$IS_DRAFT" = "false" ] && [ -n "$HAS_LABEL" ]; then
             echo "matched=true" >> $GITHUB_OUTPUT
           else
             echo "matched=false" >> $GITHUB_OUTPUT
