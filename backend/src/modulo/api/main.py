@@ -24,6 +24,7 @@ from modulo.api.middleware.correlation_id import CorrelationIdMiddleware
 from modulo.api.middleware.cors_logging import CorsLoggingMiddleware
 from modulo.api.middleware.rate_limiter import RateLimitMiddleware
 from modulo.api.routes.admin import router as admin_router
+from modulo.api.routes.admin_feature_flags import router as admin_feature_flags_router
 from modulo.api.routes.admin_notifications import router as admin_notifications_router
 from modulo.api.routes.admin_rate_limits import router as admin_rate_limits_router
 from modulo.api.routes.admin_sso import router as admin_sso_router
@@ -453,6 +454,7 @@ app.add_middleware(RateLimitMiddleware)
 app.add_middleware(CatchAllMiddleware)
 
 app.include_router(admin_router)
+app.include_router(admin_feature_flags_router)
 app.include_router(admin_rate_limits_router)
 app.include_router(admin_sso_router)
 app.include_router(auth_router)

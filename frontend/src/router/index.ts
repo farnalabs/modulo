@@ -14,6 +14,7 @@ import VariantCompareView from '../views/VariantCompareView.vue'
 import ABTestModelsView from '../views/ABTestModelsView.vue'
 import RunDetailView from '../views/RunDetailView.vue'
 import AdminAuditView from '../views/AdminAuditView.vue'
+import AdminFeatureFlagsView from '../views/AdminFeatureFlagsView.vue'
 import TeamComparisonView from '../views/TeamComparisonView.vue'
 import PipelineEditorView from '../views/PipelineEditorView.vue'
 
@@ -99,6 +100,11 @@ const router = createRouter({
       path: '/admin/audit',
       name: 'admin-audit',
       component: AdminAuditView,
+    },
+    {
+      path: '/admin/feature-flags',
+      name: 'admin-feature-flags',
+      component: AdminFeatureFlagsView,
     },
     {
       path: '/admin/teams/comparison',
