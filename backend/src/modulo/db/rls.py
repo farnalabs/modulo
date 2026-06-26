@@ -9,6 +9,7 @@ On generic backends (MariaDB, SQLite), tenant scoping stores the org_id in
 into every SELECT/UPDATE/DELETE automatically.
 """
 
+import asyncio
 import logging
 import uuid
 
@@ -29,13 +30,21 @@ async def _ensure_active_transaction(session: AsyncSession) -> str:
 
     Shared preamble for set_rls_org and set_rls_user_context to avoid
     duplicating the in_transaction guard and get_bind call.
+
+    Works with both async (AsyncSession) and sync (Session) sessions.
+    For sync sessions, get_bind() returns a sync Engine directly;
+    for async sessions, it returns a coroutine that must be awaited.
     """
     if not session.in_transaction():
         raise RuntimeError(
             "set_rls_* requires an active transaction; "
             "wrap the call in `async with session.begin():`"
         )
-    bind = await session.get_bind()
+    bind = session.get_bind()
+    if asyncio.iscoroutine(bind):
+        # AsyncSession — get_bind() returns a coroutine
+        bind = await bind
+    # Sync Session — get_bind() returns Engine directly
     return bind.dialect.name
 
 
