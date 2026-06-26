@@ -18,7 +18,7 @@ class Settings(BaseSettings):
     secret_key: str = Field(...)
     # FERNET_KEY encrypts stored connector credentials — separate from JWT secret.
     fernet_key: str = Field(...)
-    redis_url: str = Field("redis://localhost:6379/0")
+    redis_url: str = Field("")
     debug: bool = Field(False)
 
     # Alpha auth — at least one of these must be non-empty for login to work.

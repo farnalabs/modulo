@@ -65,6 +65,7 @@ from modulo.api.routes.triggers import router as triggers_router
 from modulo.api.routes.variants import router as variants_router
 from modulo.api.routes.viewmodel import router as viewmodel_router
 from modulo.api.routes.webhooks import router as webhooks_router
+from modulo.core.in_process_scheduler import start_schedulers
 from modulo.core.logging_config import configure_logging
 from modulo.otel_bridge import setup_otel, shutdown_otel
 from modulo.settings import Settings, get_settings
@@ -371,6 +372,16 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
     if settings.modulo_db.lower() == "sqlite":
         logger.warning("startup.sqlite_mode")
 
+    _scheduler_tasks: list[asyncio.Task] = []
+    if not settings.redis_url:
+        _scheduler_tasks = await start_schedulers()
+        logger.info(
+            "startup.no_redis — cron and polling triggers use in-process schedulers. "
+            "For multi-replica deployments, configure REDIS_URL."
+        )
+    else:
+        logger.info("startup.redis_configured — Celery beat available for distributed scheduling")
+
     setup_otel(
         service_name=settings.modulo_otel_service_name,
         telemetry_enabled=settings.modulo_telemetry_enabled,
@@ -419,8 +430,15 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
     retention_task = asyncio.create_task(_run_retention_loop())
     yield
     retention_task.cancel()
+    for st in _scheduler_tasks:
+        st.cancel()
     try:
         await retention_task
+        for st in _scheduler_tasks:
+            try:
+                await st
+            except asyncio.CancelledError:
+                pass
     except asyncio.CancelledError:
         pass
     shutdown_otel()
