@@ -14,8 +14,7 @@ import uuid
 
 from sqlalchemy import event, text
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
-from sqlalchemy.orm import ORMExecuteState
-from sqlalchemy.orm import Session as SASession
+from sqlalchemy.orm import ORMExecuteState, Session as SASession
 
 _log = logging.getLogger(__name__)
 
@@ -143,18 +142,25 @@ def _inject_tenant_filter(execute_state: ORMExecuteState) -> None:
         return
 
     stmt = execute_state.statement
-
-    if not hasattr(stmt, "column_descriptions"):
-        return
-
     injected = False
-    for desc in stmt.column_descriptions:
-        entity = desc.get("entity")
-        if entity is None or entity is object:
-            continue
-        if hasattr(entity, _TENANT_COLUMN):
-            stmt = stmt.where(getattr(entity, _TENANT_COLUMN) == org_id)
-            injected = True
+
+    # SELECT / bulk operations expose entities via column_descriptions.
+    if hasattr(stmt, "column_descriptions"):
+        for desc in stmt.column_descriptions:
+            entity = desc.get("entity")
+            if entity is None or entity is object:
+                continue
+            if hasattr(entity, _TENANT_COLUMN):
+                stmt = stmt.where(getattr(entity, _TENANT_COLUMN) == org_id)
+                injected = True
+
+    # ORM UPDATE/DELETE expose entities via all_mapper_classes.
+    if not injected and execute_state.all_mapper_classes:
+        for mapper in execute_state.all_mapper_classes:
+            entity = mapper.class_
+            if hasattr(entity, _TENANT_COLUMN):
+                stmt = stmt.where(getattr(entity, _TENANT_COLUMN) == org_id)
+                injected = True
 
     if injected:
         execute_state.statement = stmt
