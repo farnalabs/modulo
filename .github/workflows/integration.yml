@@ -2,11 +2,7 @@ name: Integration Tests
 
 on:
   push:
-    paths:
-      - 'backend/**'
-      - 'frontend/**'
-      - '.github/workflows/**'
-  pull_request:
+    branches: [main]
     paths:
       - 'backend/**'
       - 'frontend/**'
