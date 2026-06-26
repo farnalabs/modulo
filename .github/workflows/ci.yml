@@ -1,0 +1,127 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+env:
+  PYTHON_VERSION: "3.13"
+  NODE_VERSION: "22"
+
+jobs:
+  lint-backend:
+    name: Lint (backend)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ./backend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      - name: Install deps
+        run: uv sync --all-extras
+      - name: Ruff
+        run: uv run ruff check . --output-format github
+      - name: mypy
+        run: uv run mypy . || true  # non-blocking per AGENTS.md
+      - name: Bandit
+        run: uv run bandit -r . || true  # non-blocking
+      - name: Semgrep
+        uses: semgrep/semgrep-action@v1
+        with:
+          config: .semgrep/
+        env:
+          SEMGREP_RULES: .semgrep/
+
+  test-backend-unit:
+    name: Unit tests (backend)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ./backend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      - name: Install deps
+        run: uv sync --all-extras
+      - name: Run unit tests
+        run: uv run python -m pytest tests/unit/ -q --tb=line --no-header
+
+  test-frontend:
+    name: Unit tests (frontend)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ./frontend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: ./frontend/package-lock.json
+      - name: Install deps
+        run: npm ci
+      - name: Type-check
+        run: npx vue-tsc --noEmit
+        continue-on-error: true
+      - name: Vitest
+        run: npx vitest run
+
+  test-backend-integration:
+    name: Integration tests (backend)
+    runs-on: ubuntu-latest
+    needs: [lint-backend, test-backend-unit]
+    defaults:
+      run:
+        working-directory: ./backend
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: modulo
+          POSTGRES_PASSWORD: modulo
+          POSTGRES_DB: modulo
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+      redis:
+        image: redis:7
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      - name: Install deps
+        run: uv sync --all-extras
+      - name: Run migrations
+        run: uv run alembic upgrade heads
+        env:
+          DATABASE_URL: postgresql+asyncpg://modulo:modulo@localhost:5432/modulo
+          MODULO_DB: postgres
+          SECRET_KEY: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+          FERNET_KEY: vK-xU7GqHLflg_GqzJ1FqWI7pHWoHSIyukf4wx-tMHI=
+      - name: Run integration tests
+        run: uv run python -m pytest tests/integration/ -q --tb=line --no-header
+        env:
+          DATABASE_URL: postgresql+asyncpg://modulo:modulo@localhost:5432/modulo
+          MODULO_DB: postgres
+          SECRET_KEY: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+          FERNET_KEY: vK-xU7GqHLflg_GqzJ1FqWI7pHWoHSIyukf4wx-tMHI=
