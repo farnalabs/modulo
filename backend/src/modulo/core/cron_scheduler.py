@@ -1,21 +1,10 @@
-"""Celery beat scheduler that reads cron trigger rows from the database.
+"""Cron trigger scheduler — supports both Celery beat and in-process asyncio.
 
 Architecture
 ------------
-*DatabaseCronScheduler* is a custom Celery beat ``Scheduler`` that queries
-the ``triggers`` table for rows where ``trigger_type = 'cron'``,
-``active = true``, and ``next_fire_at <= now()``.
-
-On each tick it creates a Celery ``Huey``-like entry per matching trigger,
-firing a task that:
-  1. Re-reads the trigger row (with ``FOR UPDATE`` to serialise)
-  2. Checks concurrency limits (``max_concurrent_runs``)
-  3. Creates a ``Run`` via ``create_run()``
-  4. Logs a ``TriggerEvent``
-  5. Updates ``last_fired_at`` and ``next_fire_at``
-
-The scheduler runs inside the ``celery beat`` process and does **not** hold
-an open DB session between ticks — it opens a new connection per tick.
+Fire logic lives in ``fire_cron_trigger()`` — used by both Celery beat
+(``CronFireTask`` / ``DatabaseCronScheduler``) and the in-process scheduler
+(``InProcessCronScheduler`` in ``modulo.core.in_process_scheduler``).
 """
 
 import datetime
@@ -23,8 +12,6 @@ import logging
 import uuid
 from typing import Any
 
-from celery import Celery, Task
-from celery.beat import ScheduleEntry, Scheduler
 from croniter import croniter
 from sqlalchemy import select, text, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
@@ -34,6 +21,17 @@ from modulo.db.models.run import Run
 from modulo.db.models.trigger import Trigger
 from modulo.db.models.trigger_event import TriggerEvent
 from modulo.settings import get_settings
+
+try:
+    from celery import Celery, Task
+    from celery.beat import ScheduleEntry, Scheduler
+except ImportError:
+    import typing
+
+    if typing.TYPE_CHECKING:
+        from celery import Celery, Task  # noqa: F401
+        from celery.beat import ScheduleEntry, Scheduler  # noqa: F401
+    Celery = Task = ScheduleEntry = Scheduler = object
 
 _log = logging.getLogger(__name__)
 
@@ -78,16 +76,10 @@ def compute_next_fire(cron_expression: str, after: datetime.datetime | None = No
 # Celery task — fire one cron trigger
 # ---------------------------------------------------------------------------
 
-celery_app_global: Celery | None = None
-
-
 def get_celery_app() -> Celery:
-    global celery_app_global
-    if celery_app_global is None:
-        from modulo.celery_app import celery_app as _app
+    from modulo.celery_app import get_celery_app as _get_celery_app
 
-        celery_app_global = _app
-    return celery_app_global
+    return _get_celery_app()
 
 
 class CronFireTask(Task):
@@ -117,7 +109,7 @@ class CronFireTask(Task):
         import asyncio
 
         return asyncio.run(
-            _fire_cron_trigger(
+            fire_cron_trigger(
                 trigger_id=uuid.UUID(trigger_id),
                 org_id=uuid.UUID(org_id),
                 pipeline_id=uuid.UUID(pipeline_id),
@@ -127,7 +119,7 @@ class CronFireTask(Task):
         )
 
 
-async def _fire_cron_trigger(
+async def fire_cron_trigger(
     *,
     trigger_id: uuid.UUID,
     org_id: uuid.UUID,
@@ -135,7 +127,12 @@ async def _fire_cron_trigger(
     snapshot_id: uuid.UUID,
     cron_expression: str,
 ) -> dict[str, Any]:
-    """Core fire logic — runs inside asyncio.run() inside the Celery task."""
+    """Fire a cron trigger — creates a run in the database.
+
+    Shared between Celery beat tasks and the in-process asyncio scheduler.
+    Opens its own DB connection so it can be called from both sync (Celery)
+    and async contexts.
+    """
     settings = get_settings()
     engine = create_async_engine(settings.database_url)
     factory = async_sessionmaker(engine, expire_on_commit=False)

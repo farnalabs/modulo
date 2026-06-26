@@ -1,22 +1,8 @@
 """Polling trigger — connector-driven condition evaluation and run creation.
 
-Architecture
-------------
-*DatabasePollingScheduler* is a Celery beat scheduler that queries the
-``triggers`` table for rows where ``trigger_type = 'polling'``,
-``active = true``, and ``next_fire_at <= now()``.
-
-On each tick it creates a schedule entry per matching trigger, firing
-a ``PollingFireTask`` that:
-  1. Re-reads the trigger row (with ``FOR UPDATE`` to serialise)
-  2. Loads the configured ``ConnectorInstance`` and decrypts its credentials
-  3. Builds a one-shot connector and runs ``poll_query`` via ``connector.query()``
-  4. Evaluates the ``condition_expression`` (JMESPath) against the result
-  5. If the condition is met: creates a ``Run`` via ``create_run()``
-  6. Logs a ``TriggerEvent`` with status ``condition_met``, ``no_match``, or ``poll_error``
-  7. Updates ``last_fired_at`` and ``next_fire_at``
-
-Celery + Redis are required; there is no in-memory scheduler fallback.
+Fire logic lives in ``fire_polling_trigger()`` — used by both Celery beat
+(``PollingFireTask`` / ``DatabasePollingScheduler``) and the in-process
+scheduler (``InProcessPollingScheduler`` in ``modulo.core.in_process_scheduler``).
 """
 
 import datetime
@@ -27,8 +13,6 @@ import uuid
 from typing import Any
 
 import jmespath
-from celery import Celery, Task
-from celery.beat import ScheduleEntry, Scheduler
 from sqlalchemy import select, text, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
@@ -40,6 +24,17 @@ from modulo.db.models.run import Run
 from modulo.db.models.trigger import Trigger
 from modulo.db.models.trigger_event import TriggerEvent
 from modulo.settings import get_settings
+
+try:
+    from celery import Celery, Task
+    from celery.beat import ScheduleEntry, Scheduler
+except ImportError:
+    import typing
+
+    if typing.TYPE_CHECKING:
+        from celery import Celery, Task  # noqa: F401
+        from celery.beat import ScheduleEntry, Scheduler  # noqa: F401
+    Celery = Task = ScheduleEntry = Scheduler = object
 
 _log = logging.getLogger(__name__)
 
@@ -142,16 +137,10 @@ def evaluate_condition(
 # Celery task — fire one polling trigger
 # ---------------------------------------------------------------------------
 
-celery_app_global: Celery | None = None
-
-
 def get_celery_app() -> Celery:
-    global celery_app_global
-    if celery_app_global is None:
-        from modulo.celery_app import celery_app as _app
+    from modulo.celery_app import get_celery_app as _get_celery_app
 
-        celery_app_global = _app
-    return celery_app_global
+    return _get_celery_app()
 
 
 class PollingFireTask(Task):  # type: ignore[misc]
@@ -179,7 +168,7 @@ class PollingFireTask(Task):  # type: ignore[misc]
         import asyncio
 
         return asyncio.run(
-            _fire_polling_trigger(
+            fire_polling_trigger(
                 trigger_id=uuid.UUID(trigger_id),
                 org_id=uuid.UUID(org_id),
                 pipeline_id=uuid.UUID(pipeline_id),
@@ -190,7 +179,7 @@ class PollingFireTask(Task):  # type: ignore[misc]
         )
 
 
-async def _fire_polling_trigger(
+async def fire_polling_trigger(
     *,
     trigger_id: uuid.UUID,
     org_id: uuid.UUID,
@@ -199,7 +188,12 @@ async def _fire_polling_trigger(
     poll_query: str,
     condition_expression: str | None,
 ) -> dict[str, Any]:
-    """Core fire logic — runs inside ``asyncio.run()`` inside the Celery task."""
+    """Fire a polling trigger — runs the connector query and evaluates the condition.
+
+    Shared between Celery beat tasks and the in-process asyncio scheduler.
+    Opens its own DB connection so it can be called from both sync (Celery)
+    and async contexts.
+    """
     settings = get_settings()
     factory = async_sessionmaker(_get_engine(), expire_on_commit=False)
 
@@ -446,7 +440,8 @@ class DatabasePollingScheduler(Scheduler):  # type: ignore[misc]
     Queries the ``triggers`` table for enabled polling rows whose
     ``next_fire_at <= now()`` and creates one ``DatabasePollingEntry`` per match.
 
-    Celery + Redis are required; there is no in-memory scheduler fallback.
+    Used only when Celery + Redis are available. Falls back to the in-process
+    ``InProcessPollingScheduler`` when Redis is not configured.
     """
 
     Entry = DatabasePollingEntry
@@ -599,3 +594,7 @@ async def _log_poll_event(
     session.add(event)
     await session.flush()
     return event
+
+
+# Backward-compatible alias — tests import the old private name.
+_fire_polling_trigger = fire_polling_trigger
