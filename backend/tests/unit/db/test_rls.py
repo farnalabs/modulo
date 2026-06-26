@@ -13,10 +13,18 @@ _USER_ID = uuid.UUID("00000000-0000-0000-0000-000000000002")
 _ORG_ROLE = "admin"
 
 
-def _make_session(*, in_tx: bool = True) -> AsyncMock:
+def _make_session(*, in_tx: bool = True, dialect: str = "postgresql") -> AsyncMock:
     session = AsyncMock(spec=AsyncSession)
     session.in_transaction.return_value = in_tx
     session.execute = AsyncMock()
+
+    bind = MagicMock()
+    bind.dialect.name = dialect
+
+    async def _get_bind() -> MagicMock:
+        return bind
+
+    session.get_bind = _get_bind
     return session
 
 
@@ -70,6 +78,7 @@ class TestSetRlsUserContext:
 class TestRegisterRlsResetHook:
     def test_registers_checkout_listener(self) -> None:
         engine = MagicMock()
+        engine.dialect.name = "postgresql"
         engine.sync_engine = MagicMock()
 
         with patch("modulo.db.rls.event.listens_for") as mock_listens:

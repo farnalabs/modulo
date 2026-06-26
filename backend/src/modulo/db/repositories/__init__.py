@@ -16,7 +16,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.db.crud.base import PageResult
 from modulo.db.repositories.base import BaseRepository
+from modulo.db.repositories.generic import GenericRepository
 from modulo.db.repositories.locks import BaseLockService, _build_lock_service
+from modulo.db.repositories.postgres import PostgresRepository
 
 
 def _build_repository(
@@ -25,10 +27,8 @@ def _build_repository(
 ) -> BaseRepository:
     match db_type:
         case "postgres":
-            from modulo.db.repositories.postgres import PostgresRepository
             return PostgresRepository(session_factory)
         case _:
-            from modulo.db.repositories.generic import GenericRepository
             return GenericRepository(session_factory)
 
 
@@ -42,12 +42,13 @@ class RepositoryHub:
     def __init__(
         self,
         session_factory: Callable[[], AsyncGenerator[AsyncSession, None]],
+        db_type: str | None = None,
     ) -> None:
-        from modulo.settings import get_settings
-
-        settings = get_settings()
-        self._repo: BaseRepository = _build_repository(settings.modulo_db, session_factory)
-        self._lock_service: BaseLockService = _build_lock_service(settings.modulo_db)
+        if db_type is None:
+            from modulo.settings import get_settings
+            db_type = get_settings().modulo_db.lower()
+        self._repo: BaseRepository = _build_repository(db_type, session_factory)
+        self._lock_service: BaseLockService = _build_lock_service(db_type)
 
     @property
     def repo(self) -> BaseRepository:

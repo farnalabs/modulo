@@ -1,7 +1,6 @@
 """Postgres-specific repository — relies on RLS for tenant isolation."""
 
 import uuid
-from collections.abc import AsyncGenerator, Callable
 
 from sqlalchemy import Select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -18,12 +17,6 @@ class PostgresRepository(BaseRepository):
     returns the statement unchanged because the RLS policy ``rls_org_isolation``
     already filters every query on ``organisation_id``.
     """
-
-    def __init__(
-        self,
-        session_factory: Callable[[], AsyncGenerator[AsyncSession, None]],
-    ) -> None:
-        super().__init__(session_factory)
 
     async def set_org_context(self, session: AsyncSession, org_id: uuid.UUID) -> None:
         await set_rls_org(session, org_id)

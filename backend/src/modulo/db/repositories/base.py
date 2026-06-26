@@ -17,6 +17,19 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from modulo.db.crud.base import PageResult
 
 
+def extract_orm_entity(stmt: Select) -> type | None:
+    """Walk the statement's column descriptions to find the ORM entity.
+
+    Shared utility used by GenericRepository.apply_tenant_filter and
+    rls._inject_tenant_filter to avoid duplicating entity-detection logic.
+    """
+    for desc in stmt.column_descriptions:
+        entity = desc.get("entity")
+        if entity is not None:
+            return entity
+    return None
+
+
 class BaseRepository(ABC):
     """Thin abstraction over session operations with tenant awareness.
 
@@ -60,6 +73,10 @@ class BaseRepository(ABC):
         pagination strategy.  Override in a subclass for cursor-based or
         keyset pagination.
         """
+        if page < 1:
+            raise ValueError("page must be >= 1")
+        if page_size < 1:
+            raise ValueError("page_size must be >= 1")
         offset = (page - 1) * page_size
 
         count_stmt = sa_select(func.count()).select_from(stmt.order_by(None).subquery())

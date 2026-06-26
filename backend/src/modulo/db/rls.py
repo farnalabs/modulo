@@ -14,12 +14,27 @@ import uuid
 
 from sqlalchemy import event, text
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
-from sqlalchemy.orm import ORMExecuteState
+from sqlalchemy.orm import ORMExecuteState, Session as SASession
 
 _log = logging.getLogger(__name__)
 
 _TENANT_KEY = "org_id"
 _TENANT_COLUMN = "organisation_id"
+
+
+async def _ensure_active_transaction(session: AsyncSession) -> str:
+    """Verify an active transaction exists and return the dialect name.
+
+    Shared preamble for set_rls_org and set_rls_user_context to avoid
+    duplicating the in_transaction guard and get_bind call.
+    """
+    if not session.in_transaction():
+        raise RuntimeError(
+            "set_rls_* requires an active transaction; "
+            "wrap the call in `async with session.begin():`"
+        )
+    bind = await session.get_bind()
+    return bind.dialect.name
 
 
 async def set_rls_org(session: AsyncSession, org_id: uuid.UUID) -> None:
@@ -32,11 +47,7 @@ async def set_rls_org(session: AsyncSession, org_id: uuid.UUID) -> None:
     Generic backends (MariaDB, SQLite): stores *org_id* in ``session.info``
     for the ``do_orm_execute`` tenant-filter listener to pick up.
     """
-    if not session.in_transaction():
-        raise RuntimeError("set_rls_org requires an active transaction; wrap the call in `async with session.begin():`")
-
-    bind = await session.get_bind()
-    dialect = bind.dialect.name
+    dialect = await _ensure_active_transaction(session)
 
     if dialect == "postgresql":
         # set_config(name, value, is_local=true) is equivalent to SET LOCAL and
@@ -57,13 +68,7 @@ async def set_rls_user_context(session: AsyncSession, user_id: uuid.UUID, org_ro
     Postgres: calls ``set_config`` for ``app.user_id`` and ``app.org_role``.
     Generic backends: stores values in ``session.info`` for future use.
     """
-    if not session.in_transaction():
-        raise RuntimeError(
-            "set_rls_user_context requires an active transaction; wrap the call in `async with session.begin():`"
-        )
-
-    bind = await session.get_bind()
-    dialect = bind.dialect.name
+    dialect = await _ensure_active_transaction(session)
 
     if dialect == "postgresql":
         await session.execute(
@@ -92,6 +97,11 @@ def register_rls_reset_hook(engine: AsyncEngine) -> None:
     connection pool, so there is nothing to reset at the pool level).
 
     Must be called once after the engine is created, typically in session.py.
+
+    Note: For asyncpg, ``set_config`` is already transaction-scoped via
+    ``is_local=true``, so the pool-level reset is defense-in-depth only.
+    The sync connection API (``cursor()``) is compatible with all DBAPI2
+    drivers including asyncpg's sync proxy.
     """
     dialect = engine.dialect.name
     if dialect != "postgresql":
@@ -104,16 +114,17 @@ def register_rls_reset_hook(engine: AsyncEngine) -> None:
         connection_record: object,
         connection_proxy: object,
     ) -> None:
-        with dbapi_connection.cursor() as cursor:  # type: ignore[attr-defined]
-            try:
-                cursor.execute("SELECT set_config('app.organisation_id', '', false)")
-                cursor.execute("SELECT set_config('app.user_id', '', false)")
-                cursor.execute("SELECT set_config('app.org_role', '', false)")
-            except Exception:
-                _log.warning(
-                    "rls_reset_hook: failed to clear RLS session context on checkout",
-                    exc_info=True,
-                )
+        try:
+            cursor = dbapi_connection.cursor()  # type: ignore[attr-defined]
+            cursor.execute("SELECT set_config('app.organisation_id', '', false)")
+            cursor.execute("SELECT set_config('app.user_id', '', false)")
+            cursor.execute("SELECT set_config('app.org_role', '', false)")
+            cursor.close()
+        except Exception:
+            _log.warning(
+                "rls_reset_hook: failed to clear RLS session context on checkout",
+                exc_info=True,
+            )
 
 
 def _inject_tenant_filter(execute_state: ORMExecuteState) -> None:
@@ -131,24 +142,33 @@ def _inject_tenant_filter(execute_state: ORMExecuteState) -> None:
         return
 
     stmt = execute_state.statement
+    injected = False
 
-    if not hasattr(stmt, "column_descriptions"):
-        return
+    # SELECT / bulk operations expose entities via column_descriptions.
+    if hasattr(stmt, "column_descriptions"):
+        for desc in stmt.column_descriptions:
+            entity = desc.get("entity")
+            if entity is None or entity is object:
+                continue
+            if hasattr(entity, _TENANT_COLUMN):
+                stmt = stmt.where(getattr(entity, _TENANT_COLUMN) == org_id)
+                injected = True
 
-    for desc in stmt.column_descriptions:
-        entity = desc.get("entity")
-        if entity is None or entity is object:
-            continue
-        if hasattr(entity, _TENANT_COLUMN):
-            stmt = stmt.where(getattr(entity, _TENANT_COLUMN) == org_id)
-            break
+    # ORM UPDATE/DELETE expose entities via all_mapper_classes.
+    if not injected and execute_state.all_mapper_classes:
+        for mapper in execute_state.all_mapper_classes:
+            entity = mapper.class_
+            if hasattr(entity, _TENANT_COLUMN):
+                stmt = stmt.where(getattr(entity, _TENANT_COLUMN) == org_id)
+                injected = True
 
-    if stmt is not execute_state.statement:
+    if injected:
         execute_state.statement = stmt
 
 
 def register_tenant_filter() -> None:
-    """Register a ``do_orm_execute`` listener on the AsyncSession class.
+    """Register a ``do_orm_execute`` listener on the ORM ``Session`` class
+    (propagates to ``AsyncSession`` instances).
 
     Only activates for non-Postgres backends where RLS is unavailable.
     Reads ``org_id`` from ``session.info`` (set by ``set_rls_org``) and injects
@@ -158,14 +178,10 @@ def register_tenant_filter() -> None:
     same 200+ CRUD functions and 30+ route handlers work on MariaDB and SQLite
     without any code changes.
     """
-    from modulo.settings import get_settings
-
     db_type = get_settings().modulo_db.lower()
     if db_type == "postgres":
         _log.info("Skipping ORM tenant filter — Postgres RLS handles scoping")
         return
-
-    from sqlalchemy.orm import Session as SASession
 
     _log.info("Registering ORM tenant filter for %s backend", db_type)
     event.listen(SASession, "do_orm_execute", _inject_tenant_filter)

@@ -17,6 +17,7 @@ from abc import ABC, abstractmethod
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
+_POLL_INTERVAL = 0.05  # 50 ms between pg_try_advisory_lock attempts
 _TIMEOUT_ERR = "Could not acquire lock {key!r} within {timeout}s"
 
 
@@ -60,23 +61,22 @@ class PostgresLock(BaseLockService):
         timeout: float | None = None,
     ) -> None:
         key1, key2 = _str_to_lock_keys(key)
-
+        deadline = None
         if timeout is not None:
-            try:
-                await asyncio.wait_for(
-                    session.execute(
-                        text("SELECT pg_advisory_lock(:key1, :key2)"),
-                        {"key1": key1, "key2": key2},
-                    ),
-                    timeout=timeout,
-                )
-            except TimeoutError as exc:
-                raise LockAcquireError(_TIMEOUT_ERR.format(key=key, timeout=timeout)) from exc
-        else:
-            await session.execute(
-                text("SELECT pg_advisory_lock(:key1, :key2)"),
+            deadline = asyncio.get_event_loop().time() + timeout
+
+        while True:
+            result = await session.execute(
+                text("SELECT pg_try_advisory_lock(:key1, :key2)"),
                 {"key1": key1, "key2": key2},
             )
+            if result.scalar_one():
+                return
+
+            if deadline is not None and asyncio.get_event_loop().time() >= deadline:
+                raise LockAcquireError(_TIMEOUT_ERR.format(key=key, timeout=timeout))
+
+            await asyncio.sleep(_POLL_INTERVAL)
 
     async def release_lock(self, session: AsyncSession, key: str) -> None:
         key1, key2 = _str_to_lock_keys(key)
@@ -86,16 +86,21 @@ class PostgresLock(BaseLockService):
         )
 
 
+# Shared state so all GenericLock instances share the same lock namespace,
+# even when RepositoryHub is constructed multiple times.
+_generic_locks: dict[str, asyncio.Lock] = {}
+_generic_owners: dict[str, int] = {}
+_generic_dict_lock = asyncio.Lock()
+
+
 class GenericLock(BaseLockService):
     """In-memory lock for single-process backends (SQLite, MariaDB).
 
-    Uses an ``asyncio.Lock`` per key.  The *session* parameter is accepted
+    Uses an ``asyncio.Lock`` per key (shared across all instances),
+    tracking ownership by task ID so that timeout / error paths cannot
+    release another task's lock.  The *session* parameter is accepted
     for interface compatibility but is not used.
     """
-
-    def __init__(self) -> None:
-        self._locks: dict[str, asyncio.Lock] = {}
-        self._dict_lock = asyncio.Lock()
 
     async def acquire_lock(
         self,
@@ -103,10 +108,10 @@ class GenericLock(BaseLockService):
         key: str,
         timeout: float | None = None,
     ) -> None:
-        async with self._dict_lock:
-            if key not in self._locks:
-                self._locks[key] = asyncio.Lock()
-        lock = self._locks[key]
+        async with _generic_dict_lock:
+            if key not in _generic_locks:
+                _generic_locks[key] = asyncio.Lock()
+        lock = _generic_locks[key]
 
         if timeout is not None:
             try:
@@ -116,10 +121,22 @@ class GenericLock(BaseLockService):
         else:
             await lock.acquire()
 
+        owner = id(asyncio.current_task())
+        async with _generic_dict_lock:
+            _generic_owners[key] = owner
+
     async def release_lock(self, session: AsyncSession, key: str) -> None:
-        lock = self._locks.get(key)
-        if lock is not None and lock.locked():
-            lock.release()
+        owner = id(asyncio.current_task())
+        async with _generic_dict_lock:
+            actual = _generic_owners.get(key)
+            if actual is None or actual != owner:
+                return
+            del _generic_owners[key]
+            lock = _generic_locks.get(key)
+            if lock is not None:
+                lock.release()
+                if not lock.locked():
+                    del _generic_locks[key]
 
 
 def _str_to_lock_keys(key: str) -> tuple[int, int]:
