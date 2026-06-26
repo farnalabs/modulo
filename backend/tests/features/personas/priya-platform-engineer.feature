@@ -3,21 +3,21 @@ Feature: Priya — Platform Engineer at a Scaling Org
   I want to roll out agentic SDLC team-by-team with central policy
   So that we capture AI's speed without expanding risk
 
-  @goal-priya-self-hosted-k8s @awaiting-implementation
+  @goal-priya-self-hosted-k8s @delivered
   Scenario: Priya deploys Modulo on existing Kubernetes infrastructure
     Given I have a Kubernetes cluster with Postgres and Redis
     When I deploy the Modulo Helm chart
     Then the application starts and runs health checks
     And all data stays within the cluster's VPC
 
-  @goal-priya-sso-okta @awaiting-implementation
+  @goal-priya-sso-okta @delivered
   Scenario: Priya integrates Okta SSO with JIT provisioning
     Given my org uses Okta for identity
     When I configure the OIDC provider with my Okta tenant
     Then users authenticate via Okta SSO
     And new users are JIT-provisioned with org role "viewer"
 
-  @goal-priya-team-isolation @awaiting-implementation
+  @goal-priya-team-isolation @delivered
   Scenario: Priya isolates teams so they only see their own pipelines
     Given org "acme" has teams "alpha" and "beta"
     And team "alpha" owns pipeline "payment-workflow"
@@ -41,7 +41,7 @@ Feature: Priya — Platform Engineer at a Scaling Org
     And a 6th run is triggered
     Then the 6th run is rejected with a concurrency limit error
 
-  @goal-priya-ab-test-models @awaiting-implementation
+  @goal-priya-ab-test-models @delivered
   Scenario: Priya A/B tests Claude Sonnet vs GPT-4o on the same pipeline
     Given pipeline "code-review" has two variant groups
     When variant A routes to Claude Sonnet
@@ -50,7 +50,7 @@ Feature: Priya — Platform Engineer at a Scaling Org
     Then each variant produces a result with eval scores
     And I can compare eval scores side-by-side
 
-  @goal-priya-eval-gate @awaiting-implementation
+  @goal-priya-eval-gate @delivered
   Scenario: Priya enforces minimum eval thresholds per team
     Given team "alpha" has eval suite with pass_threshold 0.85
     When a pipeline run completes with eval score 0.72
@@ -65,7 +65,7 @@ Feature: Priya — Platform Engineer at a Scaling Org
     And the plaintext key never appears in logs, state, or traces
     And only admins can view or edit the backend configuration
 
-  @goal-priya-auto-failover @awaiting-implementation
+  @goal-priya-auto-failover @delivered
   Scenario: Priya's pipelines fail over when a model provider has an outage
     Given model backend "openai-gpt4" health check returns unhealthy
     And pipeline "ticket-writer" is configured with fallback backend "claude-sonnet"
@@ -73,14 +73,14 @@ Feature: Priya — Platform Engineer at a Scaling Org
     Then the unhealthy backend is skipped
     And the fallback backend is used for the run
 
-  @goal-priya-org-dashboard @awaiting-implementation
+  @goal-priya-org-dashboard @delivered
   Scenario: Priya sees org-wide adoption metrics
     Given 3 teams are using Modulo with active pipelines
     When I navigate to the organisation dashboard
     Then I see total runs, active pipelines, and avg eval pass rate
     And I see token spend broken down by team
 
-  @goal-priya-feedback-loop @awaiting-implementation
+  @goal-priya-feedback-loop @delivered
   Scenario: Priya's HITL rejections grow the eval suite automatically
     Given a HITL rejection on node "ticket-writer" with reason "missing edge case"
     When the rejection is recorded

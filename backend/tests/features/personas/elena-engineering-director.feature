@@ -3,7 +3,7 @@ Feature: Elena — VP / Director of Engineering
   I want visibility into how agentic delivery is performing across my teams
   So that I can make data-driven decisions about automation investment
 
-  @goal-elena-org-dashboard @awaiting-implementation
+  @goal-elena-org-dashboard @delivered
   Scenario: Elena sees a consolidated org dashboard
     Given my org has 4 teams each with 2-3 active pipelines
     When I navigate to the org dashboard
@@ -11,7 +11,7 @@ Feature: Elena — VP / Director of Engineering
     And I see a breakdown by team
     And I see a trend chart over the last 30 days
 
-  @goal-elena-team-comparison @awaiting-implementation
+  @goal-elena-team-comparison @delivered
   Scenario: Elena compares eval pass rates across teams
     Given team "alpha" has 92% eval pass rate
     And team "beta" has 74% eval pass rate
@@ -19,7 +19,7 @@ Feature: Elena — VP / Director of Engineering
     Then I can see pass rates side by side
     And I can drill into team "beta" to see which pipelines are dragging the average
 
-  @goal-elena-cost-by-team @awaiting-implementation
+  @goal-elena-cost-by-team @delivered
   Scenario: Elena sees token spend by team and pipeline
     Given team "alpha" has token spend of $240 this month
     And team "beta" has token spend of $180 this month
@@ -28,7 +28,7 @@ Feature: Elena — VP / Director of Engineering
     And I see spend per pipeline within each team
     And I see average cost per run
 
-  @goal-elena-eval-trend @awaiting-implementation
+  @goal-elena-eval-trend @delivered
   Scenario: Elena spots a quality regression in her eval dashboard
     Given pipeline "prd-to-tickets" had 90% eval pass rate last month
     And this month the rate dropped to 72%
@@ -45,7 +45,7 @@ Feature: Elena — VP / Director of Engineering
     And the warning recommends splitting into sub-pipelines
     And the warning is visible on the pipeline overview page
 
-  @goal-elena-ab-test-results @awaiting-implementation
+  @goal-elena-ab-test-results @delivered
   Scenario: Elena decides between models based on eval comparison
     Given pipeline "code-review" ran variant A (Claude) and variant B (GPT-4o)
     When I open the variant comparison view
@@ -53,7 +53,7 @@ Feature: Elena — VP / Director of Engineering
     And I see token cost for both variants
     And I can promote one variant as the new default
 
-  @goal-elena-quality-report @awaiting-implementation
+  @goal-elena-quality-report @delivered
   Scenario: Elena receives a weekly quality report via Slack
     Given a scheduled quality report is configured
     When the report runs every Monday
@@ -70,7 +70,7 @@ Feature: Elena — VP / Director of Engineering
     Then I see per-node status and eval results
     And I see the agent outputs for each node
 
-  @goal-elena-okr-alignment @awaiting-implementation
+  @goal-elena-okr-alignment @delivered
   Scenario: Elena aligns eval suites with team OKRs
     Given team "alpha" has an OKR for "improve ticket quality"
     When I create an eval suite with cases covering ticket completeness
@@ -78,7 +78,7 @@ Feature: Elena — VP / Director of Engineering
     Then the eval suite runs on every ticket-writing pipeline
     And I can track OKR progress via the eval pass rate trend
 
-  @goal-elena-human-effort-trend @awaiting-implementation
+  @goal-elena-human-effort-trend @delivered
   Scenario: Elena sees whether HITL effort is decreasing over time
     Given 3 months of run data with HITL decisions
     When I view the human effort trend chart
