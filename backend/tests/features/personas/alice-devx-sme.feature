@@ -3,7 +3,7 @@ Feature: Alice — Head of DevX at an SME
   I want to progressively migrate our SDLC to agentic delivery
   So that we gain speed without losing auditability or human control
 
-  @goal-alice-model-current-sdlc @awaiting-implementation
+  @goal-alice-model-current-sdlc @delivered
   Scenario: Alice models her current SDLC with manual nodes
     Given my team uses: PRD writing (manual), ticket grooming (manual), implementation (manual), deploy (HITL)
     When I create a pipeline with 4 nodes
@@ -13,7 +13,7 @@ Feature: Alice — Head of DevX at an SME
     And the pipeline is executable with no AI agents configured
     And each manual node produces a log entry when completed
 
-  @goal-alice-replace-step @awaiting-implementation
+  @goal-alice-replace-step @delivered
   Scenario: Alice replaces a manual QA step with an agent
     Given pipeline "current-sdlc" has node "qa-review" set to manual
     When I change node "qa-review" type from "manual" to "agent"
@@ -30,7 +30,7 @@ Feature: Alice — Head of DevX at an SME
     And the HITL gate has human_only true
     And no MCP tool can approve this gate
 
-  @goal-alice-hitl-proof @awaiting-implementation
+  @goal-alice-hitl-proof @delivered
   Scenario: Alice proves HITL compliance to an auditor
     Given pipeline "current-sdlc" has completed 3 runs with HITL approvals
     When I export the audit log for those runs
@@ -38,7 +38,7 @@ Feature: Alice — Head of DevX at an SME
     And each audit event records: who, when, which gate, and the decision
     And the audit log is append-only
 
-  @goal-alice-rollback-step @awaiting-implementation
+  @goal-alice-rollback-step @delivered
   Scenario: Alice reverts a step replacement when the agent underperforms
     Given node "qa-review" is currently type "agent"
     When I set node "qa-review" back to type "manual"
@@ -57,7 +57,7 @@ Feature: Alice — Head of DevX at an SME
     Then the forked workflow is saved as a local primitive
     And the forked_from metadata points to the community original
 
-  @goal-alice-team-rbac @awaiting-implementation
+  @goal-alice-team-rbac @delivered
   Scenario: Alice's team owns pipeline config but QA can only view
     Given team "devx" has role "operator"
     And team "qa" has role "viewer"
@@ -67,7 +67,7 @@ Feature: Alice — Head of DevX at an SME
     Then the pipeline is visible in read-only mode
     And no edit controls are shown
 
-  @goal-alice-soc2-evidence @awaiting-implementation
+  @goal-alice-soc2-evidence @delivered
   Scenario: Alice's SOC 2 auditor reviews HITL evidence
     Given a completed run with 2 HITL approvals and 1 HITL rejection
     When I navigate to the run detail
@@ -83,7 +83,7 @@ Feature: Alice — Head of DevX at an SME
     Then the pipeline saves successfully
     And the node reads from GitLab on the next run
 
-  @goal-alice-incremental-trust @awaiting-implementation
+  @goal-alice-incremental-trust @delivered
   Scenario: Alice adds automated evals before increasing agent autonomy
     Given pipeline "current-sdlc" has agent node "ticket-writer"
     When I add an eval suite to the node with pass_threshold 0.8

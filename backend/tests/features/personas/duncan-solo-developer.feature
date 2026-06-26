@@ -3,14 +3,14 @@ Feature: Duncan — Solo Developer
   I want Modulo to run my agentic SDLC autonomously
   So that I spend my time on code, not process
 
-  @goal-solo-self-hosted @awaiting-implementation
+  @goal-solo-self-hosted @delivered
   Scenario: Duncan self-hosts with docker compose up
     Given I have Docker installed
     When I run docker compose up
     Then the Modulo application starts
     And I can access the UI at http://localhost:8000
 
-  @goal-solo-first-pipeline @awaiting-implementation
+  @goal-solo-first-pipeline @delivered
   Scenario: Duncan triggers a run from a library workflow
     Given the library contains a "PRD to tickets" workflow
     When I copy the workflow to my workspace
@@ -31,7 +31,7 @@ Feature: Duncan — Solo Developer
     And node "coder" executes against GPT-4o
     And node "reviewer" executes against Ollama
 
-  @goal-solo-model-fallback @awaiting-implementation
+  @goal-solo-model-fallback @delivered
   Scenario: Duncan's pipeline fails over when a model backend is unhealthy
     Given model backend "claude-sonnet" is unhealthy
     And pipeline "release-pipeline" has node "planner" bound to "claude-sonnet"
@@ -55,7 +55,7 @@ Feature: Duncan — Solo Developer
     When I import the bundle on another Modulo instance
     Then a new pipeline is created with the same node topology
 
-  @goal-solo-eval-gate @awaiting-implementation
+  @goal-solo-eval-gate @delivered
   Scenario: Duncan's deploy gate requires passing evals
     Given pipeline "release-pipeline" has an eval suite with pass_threshold 0.9
     And a completed run scored 0.85
@@ -71,7 +71,7 @@ Feature: Duncan — Solo Developer
     Then the run resumes
     And the audit log records my approval
 
-  @goal-solo-observability @awaiting-implementation
+  @goal-solo-observability @delivered
   Scenario: Duncan inspects a run trace to understand token spend
     Given a completed run for pipeline "release-pipeline"
     When I view the run detail
@@ -79,7 +79,7 @@ Feature: Duncan — Solo Developer
     And I see the total run cost
     And I see the OTel trace ID
 
-  @goal-solo-grow-complexity @awaiting-implementation
+  @goal-solo-grow-complexity @delivered
   Scenario: Duncan adds a node to his pipeline without breaking existing runs
     Given pipeline "release-pipeline" has 3 nodes
     When I add a new "release-notes" node between "coder" and "reviewer"

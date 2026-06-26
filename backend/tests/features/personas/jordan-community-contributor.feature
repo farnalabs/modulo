@@ -17,7 +17,7 @@ Feature: Jordan — Community Contributor / Library Author
     Then a local copy is created with forked_from set to the community source
     And I can edit the agent prompts for my project conventions
 
-  @goal-jordan-contribute-primitive @awaiting-implementation
+  @goal-jordan-contribute-primitive @delivered
   Scenario: Jordan contributes a new agent to the community library
     Given I have built a "release-notes" agent with schema and prompts
     When I submit the agent as a library contribution
@@ -25,7 +25,7 @@ Feature: Jordan — Community Contributor / Library Author
     And automated checks run: schema validity, prompt safety, eval coverage
     And if all checks pass, the contribution enters the review queue
 
-  @goal-jordan-contribution-provenance @awaiting-implementation
+  @goal-jordan-contribution-provenance @delivered
   Scenario: Jordan's contribution carries versioned provenance
     Given I submitted "release-notes" agent version 1.0.0
     When another user views the agent in the library
@@ -39,14 +39,14 @@ Feature: Jordan — Community Contributor / Library Author
     Then I see 47 downloads and 4.2 average rating
     And I see user reviews with comments
 
-  @goal-jordan-contribution-update @awaiting-implementation
+  @goal-jordan-contribution-update @delivered
   Scenario: Jordan updates his contributed primitive with improvements
     Given my "release-notes" agent is published at version 1.0.0
     When I submit version 1.1.0 with improved prompts
     Then the new version is available in the library
     And existing users see an update notification
 
-  @goal-jordan-eval-packaging @awaiting-implementation
+  @goal-jordan-eval-packaging @delivered
   Scenario: Jordan packages evals alongside his contributed agent
     Given I want contributors to verify my agent's quality
     When I include an eval suite in my library contribution
