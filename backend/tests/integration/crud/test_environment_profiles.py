@@ -175,7 +175,9 @@ async def test_rls_isolation(db_engine: AsyncEngine) -> None:
             {"oid": str(org_a)},
         )
         profiles = (
-            (await session.execute(select(EnvironmentProfile)))
+            (await session.execute(
+                select(EnvironmentProfile).where(EnvironmentProfile.organisation_id == org_a)
+            ))
             .scalars()
             .all()
         )

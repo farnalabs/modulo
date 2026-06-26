@@ -12,6 +12,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.db.models.daily_run_count import OrgDailyRunCount
 
+_UNSET = object()
+
 
 async def upsert_daily_run_count(
     session: AsyncSession,
@@ -58,15 +60,23 @@ async def get_daily_run_counts(
     session: AsyncSession,
     *,
     org_id: uuid.UUID,
-    team_id: uuid.UUID | None = None,
+    team_id: uuid.UUID | None | object = _UNSET,
     since: date | None = None,
     until: date | None = None,
 ) -> list[OrgDailyRunCount]:
-    """List daily run counts for an org, optionally filtered by team and date range."""
+    """List daily run counts for an org, optionally filtered by team and date range.
+
+    Pass team_id=None to filter for org-level rows only (team_id IS NULL).
+    Omit team_id entirely to return all rows for the org.
+    """
     q = select(OrgDailyRunCount).where(
         OrgDailyRunCount.organisation_id == org_id,
     )
-    if team_id is not None:
+    if team_id is _UNSET:
+        pass  # No team filter — return all rows
+    elif team_id is None:
+        q = q.where(OrgDailyRunCount.team_id.is_(None))  # Org-level rows only
+    else:
         q = q.where(OrgDailyRunCount.team_id == team_id)
     if since is not None:
         q = q.where(OrgDailyRunCount.run_date >= since)
