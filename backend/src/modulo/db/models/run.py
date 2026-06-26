@@ -31,7 +31,7 @@ class Run(OrgScoped):
     __tablename__ = "runs"
     __table_args__ = (
         CheckConstraint(
-            "trigger_type IN ('manual', 'webhook', 'cron', 'polling', 'agent_signal')",
+            "trigger_type IN ('manual', 'webhook', 'cron', 'polling', 'agent_signal', 'correction')",
             name="ck_runs_trigger_type",
         ),
         CheckConstraint(
@@ -55,6 +55,9 @@ class Run(OrgScoped):
     )
     trigger_type: Mapped[str] = mapped_column(String(20), nullable=False)
     status: Mapped[str] = mapped_column(String(30), nullable=False, server_default="pending")
+    parent_run_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("runs.id", ondelete="SET NULL"), nullable=True, index=True
+    )
     owner_team_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("teams.id", ondelete="RESTRICT")
     )

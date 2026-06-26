@@ -87,12 +87,23 @@ def _graph_json_hash(graph_json: dict[str, Any]) -> str:
 
 
 def _seed_state(snapshot: PipelineSnapshot, input_payload: dict[str, Any]) -> dict[str, Any]:
-    """Build the initial LangGraph state for a run."""
+    """Build the initial LangGraph state for a run.
+
+    If *input_payload* contains a ``_feedback_correction`` key, it is
+    promoted to the top-level ``run_context`` as ``feedback_correction``
+    and removed from the input dict so the pipeline agents never see it
+    as part of their normal input.
+    """
     run_context: dict[str, Any] = {
         **snapshot.run_context_defaults,
         "cancelled": False,
         "input": input_payload,
     }
+    # Promote feedback_correction from input_payload to run_context
+    # so the entire graph can access rejection metadata.
+    feedback_correction = input_payload.pop("_feedback_correction", None)
+    if feedback_correction:
+        run_context["feedback_correction"] = feedback_correction
     # Seed autonomy from snapshot-level default so gate nodes can resolve it.
     if snapshot.default_autonomy_level:
         run_context["_pipeline_default_autonomy"] = snapshot.default_autonomy_level

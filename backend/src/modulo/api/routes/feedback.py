@@ -25,7 +25,7 @@ from modulo.api.dependencies import get_db_session
 from modulo.auth.dependencies import get_current_user
 from modulo.auth.jwt import AuthenticatedPrincipal
 from modulo.core.feedback_manager import FeedbackManager
-from modulo.db.crud.run import create_run, get_run
+from modulo.db.crud.run import get_run
 from modulo.db.models.run import Run
 from modulo.db.rls import set_rls_org
 
@@ -341,31 +341,15 @@ async def review_feedback(
                     detail="Feedback has no associated run — cannot create correction run",
                 )
 
-            original_run = await get_run(session, record.run_id)
-            if original_run is None:
+            try:
+                new_run_id = await mgr.spawn_correction_run(record_id)
+            except ValueError as exc:
                 raise HTTPException(
                     status_code=status.HTTP_404_NOT_FOUND,
-                    detail="Original run not found",
+                    detail=str(exc),
                 )
 
-            correction_run = await create_run(
-                session,
-                org_id=principal.organisation_id,
-                pipeline_id=original_run.pipeline_id,
-                snapshot_id=original_run.snapshot_id,
-                trigger_type="correction",
-                input_payload=original_run.input_payload or {},
-                created_by=principal.user_id,
-            )
-
-            record = await mgr.link_correction_run(record_id, correction_run.id)
-            if record is None:
-                raise HTTPException(
-                    status_code=status.HTTP_409_CONFLICT,
-                    detail="Cannot link correction run to feedback record",
-                )
-
-            correction_run_id = str(correction_run.id)
+            correction_run_id = str(new_run_id)
 
     return {
         "id": str(record.id),

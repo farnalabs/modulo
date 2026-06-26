@@ -237,6 +237,91 @@ export interface paths {
       }
     }
   }
+  '/api/v1/feedback/inbox': {
+    get: {
+      parameters: {
+        query: {
+          status?: string
+          pipeline_id?: string
+          agent_id?: string
+          date_from?: string
+          date_to?: string
+          page?: number
+          page_size?: number
+        }
+      }
+      responses: {
+        200: {
+          content: {
+            'application/json': components['schemas']['FeedbackInboxResponse']
+          }
+        }
+      }
+    }
+  }
+  '/api/v1/feedback/inbox/{record_id}': {
+    get: {
+      parameters: {
+        path: { record_id: string }
+      }
+      responses: {
+        200: {
+          content: {
+            'application/json': components['schemas']['FeedbackRecordDetail']
+          }
+        }
+      }
+    }
+  }
+  '/api/v1/feedback/inbox/{record_id}/review': {
+    post: {
+      parameters: {
+        path: { record_id: string }
+      }
+      requestBody: {
+        content: {
+          'application/json': components['schemas']['FeedbackReviewRequest']
+        }
+      }
+      responses: {
+        200: {
+          content: {
+            'application/json': components['schemas']['FeedbackRecordDetail']
+          }
+        }
+      }
+    }
+  }
+  '/api/v1/feedback/proposals': {
+    get: {
+      parameters: {
+        query: {
+          status?: string
+          record_id?: string
+          page?: number
+          page_size?: number
+        }
+      }
+      responses: {
+        200: {
+          content: {
+            'application/json': components['schemas']['FeedbackProposalListResponse']
+          }
+        }
+      }
+    }
+  }
+  '/api/v1/pipelines': {
+    get: {
+      responses: {
+        200: {
+          content: {
+            'application/json': components['schemas']['PipelineListResponse']
+          }
+        }
+      }
+    }
+  }
 }
 
 export interface components {
@@ -394,6 +479,68 @@ export interface components {
     SchemaCreateResponse: {
       id: string
       name: string
+    }
+    FeedbackRecordItem: {
+      id: string
+      pipeline_run_id: string
+      pipeline_name: string
+      agent_name: string | null
+      feedback_type: string
+      status: string
+      handler_type: string | null
+      rejection_reason: string | null
+      summary: string | null
+      created_at: string
+      updated_at: string
+    }
+    FeedbackInboxResponse: {
+      items: components['schemas']['FeedbackRecordItem'][]
+      total: number
+      page: number
+      page_size: number
+    }
+    FeedbackRecordDetail: {
+      id: string
+      pipeline_run_id: string
+      pipeline_name: string
+      agent_name: string | null
+      feedback_type: string
+      status: string
+      handler_type: string | null
+      rejection_reason: string | null
+      rejected_output: unknown
+      correction_proposal: unknown | null
+      annotation: string | null
+      created_at: string
+      updated_at: string
+    }
+    FeedbackReviewRequest: {
+      annotation?: string | null
+      status?: string | null
+    }
+    FeedbackProposalItem: {
+      id: string
+      record_id: string
+      proposed_change: string
+      status: string
+      created_at: string
+    }
+    FeedbackProposalListResponse: {
+      items: components['schemas']['FeedbackProposalItem'][]
+      total: number
+      page: number
+      page_size: number
+    }
+    PipelineItem: {
+      id: string
+      name: string
+      description: string | null
+    }
+    PipelineListResponse: {
+      items: components['schemas']['PipelineItem'][]
+      total: number
+      page: number
+      page_size: number
     }
   }
 }

@@ -1,7 +1,7 @@
 """Unit tests for FeedbackManager service."""
 
 import uuid
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -224,6 +224,154 @@ class TestDetectEvalGap:
 
         is_gap = await mgr.detect_eval_gap(sample_record, eval_suite=[])
         assert is_gap is False
+
+class TestSpawnCorrectionRun:
+    @pytest.fixture
+    def original_run(self) -> MagicMock:
+        r = MagicMock()
+        r.id = uuid.uuid4()
+        r.pipeline_id = uuid.uuid4()
+        r.snapshot_id = uuid.uuid4()
+        r.input_payload = {"user_input": "hello"}
+        r.status = "awaiting_human"
+        return r
+
+    @pytest.fixture
+    def new_run(self) -> MagicMock:
+        r = MagicMock()
+        r.id = uuid.uuid4()
+        return r
+
+    async def test_spawns_correction_run(
+        self,
+        mock_session: AsyncMock,
+        mgr: FeedbackManager,
+        sample_record: FeedbackRecord,
+        original_run: MagicMock,
+        new_run: MagicMock,
+    ) -> None:
+        sample_record.run_id = original_run.id
+
+        with (
+            patch.object(mgr, "get_feedback_record", return_value=sample_record),
+            patch("modulo.core.feedback_manager.get_run", return_value=original_run),
+            patch("modulo.core.feedback_manager.create_run", return_value=new_run) as _mock_create_run,
+            patch.object(mgr, "link_correction_run", AsyncMock(return_value=sample_record)) as _mock_link,
+        ):
+            run_id = await mgr.spawn_correction_run(sample_record.id)
+
+        assert run_id == new_run.id
+        _mock_create_run.assert_called_once()
+        _call_kwargs = _mock_create_run.call_args.kwargs
+        assert _call_kwargs["parent_run_id"] == original_run.id
+        assert _call_kwargs["trigger_type"] == "correction"
+        assert _call_kwargs["pipeline_id"] == original_run.pipeline_id
+        assert _call_kwargs["snapshot_id"] == original_run.snapshot_id
+        injected = _call_kwargs["input_payload"].get("_feedback_correction", {})
+        assert injected["rejection_reason"] == sample_record.rejection_reason
+        assert injected["rejected_output"] == sample_record.rejected_output
+        assert injected["producing_node_id"] == sample_record.producing_node_id
+        assert injected["is_correction_run"] is True
+
+        _mock_link.assert_called_once_with(sample_record.id, new_run.id)
+
+    async def test_merges_run_context_overrides(
+        self,
+        mock_session: AsyncMock,
+        mgr: FeedbackManager,
+        sample_record: FeedbackRecord,
+        original_run: MagicMock,
+        new_run: MagicMock,
+    ) -> None:
+        sample_record.run_id = original_run.id
+
+        with (
+            patch.object(mgr, "get_feedback_record", return_value=sample_record),
+            patch("modulo.core.feedback_manager.get_run", return_value=original_run),
+            patch("modulo.core.feedback_manager.create_run", return_value=new_run) as _mock_create_run,
+            patch.object(mgr, "link_correction_run", AsyncMock(return_value=sample_record)),
+        ):
+            run_id = await mgr.spawn_correction_run(
+                sample_record.id,
+                run_context_overrides={"custom_key": "custom_value"},
+            )
+
+        assert run_id == new_run.id
+        _call_kwargs = _mock_create_run.call_args.kwargs
+        injected = _call_kwargs["input_payload"].get("_feedback_correction", {})
+        assert injected["custom_key"] == "custom_value"
+        assert injected["rejection_reason"] == sample_record.rejection_reason
+
+    async def test_raises_when_feedback_record_not_found(
+        self,
+        mock_session: AsyncMock,
+        mgr: FeedbackManager,
+    ) -> None:
+        with patch.object(mgr, "get_feedback_record", return_value=None):
+            with pytest.raises(ValueError, match="FeedbackRecord .* not found"):
+                await mgr.spawn_correction_run(uuid.uuid4())
+
+    async def test_raises_when_original_run_not_found(
+        self,
+        mock_session: AsyncMock,
+        mgr: FeedbackManager,
+        sample_record: FeedbackRecord,
+    ) -> None:
+        sample_record.run_id = uuid.uuid4()
+        with (
+            patch.object(mgr, "get_feedback_record", return_value=sample_record),
+            patch("modulo.core.feedback_manager.get_run", return_value=None),
+        ):
+            with pytest.raises(ValueError, match="Original run .* not found"):
+                await mgr.spawn_correction_run(sample_record.id)
+
+    async def test_copies_input_payload(
+        self,
+        mock_session: AsyncMock,
+        mgr: FeedbackManager,
+        sample_record: FeedbackRecord,
+        original_run: MagicMock,
+        new_run: MagicMock,
+    ) -> None:
+        sample_record.run_id = original_run.id
+
+        with (
+            patch.object(mgr, "get_feedback_record", return_value=sample_record),
+            patch("modulo.core.feedback_manager.get_run", return_value=original_run),
+            patch("modulo.core.feedback_manager.create_run", return_value=new_run) as _mock_create_run,
+            patch.object(mgr, "link_correction_run", AsyncMock(return_value=sample_record)),
+        ):
+            await mgr.spawn_correction_run(sample_record.id)
+
+        _call_kwargs = _mock_create_run.call_args.kwargs
+        payload = _call_kwargs["input_payload"]
+        assert payload["user_input"] == "hello"
+        assert "_feedback_correction" in payload
+
+    async def test_handles_empty_input_payload(
+        self,
+        mock_session: AsyncMock,
+        mgr: FeedbackManager,
+        sample_record: FeedbackRecord,
+        original_run: MagicMock,
+        new_run: MagicMock,
+    ) -> None:
+        original_run.input_payload = None
+        sample_record.run_id = original_run.id
+
+        with (
+            patch.object(mgr, "get_feedback_record", return_value=sample_record),
+            patch("modulo.core.feedback_manager.get_run", return_value=original_run),
+            patch("modulo.core.feedback_manager.create_run", return_value=new_run) as _mock_create_run,
+            patch.object(mgr, "link_correction_run", AsyncMock(return_value=sample_record)),
+        ):
+            run_id = await mgr.spawn_correction_run(sample_record.id)
+
+        assert run_id == new_run.id
+        _call_kwargs = _mock_create_run.call_args.kwargs
+        injected = _call_kwargs["input_payload"].get("_feedback_correction", {})
+        assert injected["rejection_reason"] == sample_record.rejection_reason
+
 
 class TestGetFeedbackRecordsInbox:
     async def _setup_mock(self, mock_session: AsyncMock, items: list, total: int) -> MagicMock:
