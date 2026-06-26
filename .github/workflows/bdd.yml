@@ -38,6 +38,10 @@ jobs:
       - name: Install Playwright browsers
         working-directory: backend
         run: playwright install --with-deps chromium
+      - name: Pre-create alembic_version table
+        run: |
+          PGPASSWORD=modulo psql -h localhost -U modulo -d modulo -c \
+            "CREATE TABLE IF NOT EXISTS alembic_version (version_num VARCHAR(255) NOT NULL PRIMARY KEY);"
       - name: Run migrations
         working-directory: backend
         run: alembic upgrade heads
