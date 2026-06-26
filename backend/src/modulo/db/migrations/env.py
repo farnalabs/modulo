@@ -1,4 +1,5 @@
 import asyncio
+import logging
 import os
 from logging.config import fileConfig
 
@@ -7,6 +8,8 @@ from sqlalchemy.ext.asyncio import async_engine_from_config
 from sqlalchemy.pool import NullPool
 
 from modulo.db.models import Base
+
+_log = logging.getLogger(__name__)
 
 config = context.config
 if config.config_file_name is not None:
@@ -20,20 +23,44 @@ if _db_url:
 target_metadata = Base.metadata
 
 
+def _detect_backend(url: str) -> str:
+    """Return backend name from URL scheme."""
+    if url.startswith("postgresql"):
+        return "postgresql"
+    if url.startswith("mysql"):
+        return "mysql"
+    if url.startswith("sqlite"):
+        return "sqlite"
+    return "unknown"
+
+
 def run_migrations_offline() -> None:
     url = config.get_main_option("sqlalchemy.url")
+    backend = _detect_backend(url)
+    _log.info("Running migrations offline for %s backend", backend)
+
     context.configure(
         url=url,
         target_metadata=target_metadata,
         literal_binds=True,
         dialect_opts={"paramstyle": "named"},
+        # SQLite does not support ALTER with ALTER TABLE ADD COLUMN in the
+        # same way as Postgres; Alembic handles this with batch mode.
+        render_as_batch=backend == "sqlite",
     )
     with context.begin_transaction():
         context.run_migrations()
 
 
 def do_run_migrations(connection):  # type: ignore[no-untyped-def]
-    context.configure(connection=connection, target_metadata=target_metadata)
+    backend = _detect_backend(str(connection.engine.url))
+    _log.info("Running migrations for %s backend", backend)
+
+    context.configure(
+        connection=connection,
+        target_metadata=target_metadata,
+        render_as_batch=backend == "sqlite",
+    )
     with context.begin_transaction():
         context.run_migrations()
 

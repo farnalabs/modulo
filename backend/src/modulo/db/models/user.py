@@ -36,7 +36,7 @@ class User(OrgScoped):
     auth_provider: Mapped[str] = mapped_column(String(20), nullable=False, server_default="local")
     sso_subject: Mapped[str | None] = mapped_column(String(512))
     password_hash: Mapped[str | None] = mapped_column(String(255))
-    preferences: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False, server_default=sa_text("'{}'::json"))
+    preferences: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False, server_default=sa_text("'{}'"))
     active: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="true")
     last_login: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     organisation: Mapped[Organisation] = relationship()

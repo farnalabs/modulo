@@ -14,8 +14,8 @@ from sqlalchemy import (
     Integer,
     Numeric,
     String,
+    Uuid,
 )
-from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from modulo.db.models.base import OrgScoped
@@ -42,24 +42,24 @@ class Run(OrgScoped):
     )
 
     pipeline_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True),
+        Uuid(),
         ForeignKey("pipelines.id", ondelete="RESTRICT"),
         nullable=False,
         index=True,
     )
     snapshot_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("pipeline_snapshots.id", ondelete="RESTRICT"), nullable=False
+        Uuid(), ForeignKey("pipeline_snapshots.id", ondelete="RESTRICT"), nullable=False
     )
     trigger_id: Mapped[uuid.UUID | None] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("triggers.id", ondelete="SET NULL")
+        Uuid(), ForeignKey("triggers.id", ondelete="SET NULL")
     )
     trigger_type: Mapped[str] = mapped_column(String(20), nullable=False)
     status: Mapped[str] = mapped_column(String(30), nullable=False, server_default="pending")
     owner_team_id: Mapped[uuid.UUID | None] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("teams.id", ondelete="RESTRICT")
+        Uuid(), ForeignKey("teams.id", ondelete="RESTRICT")
     )
     created_by: Mapped[uuid.UUID | None] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL")
+        Uuid(), ForeignKey("users.id", ondelete="SET NULL")
     )
     input_hash: Mapped[str] = mapped_column(String(64), nullable=False)
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))

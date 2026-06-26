@@ -3,8 +3,7 @@ from __future__ import annotations
 import uuid
 from typing import TYPE_CHECKING, Any
 
-from sqlalchemy import JSON, CheckConstraint, ForeignKey, Integer, String
-from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy import JSON, CheckConstraint, ForeignKey, Integer, String, Uuid
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from modulo.db.models.base import OrgScoped
@@ -24,7 +23,7 @@ class VariantGroup(OrgScoped):
     )
 
     pipeline_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True),
+        Uuid(),
         ForeignKey("pipelines.id", ondelete="RESTRICT"),
         nullable=False,
         index=True,

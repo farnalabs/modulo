@@ -44,8 +44,9 @@ class Settings(BaseSettings):
     # SSO defaults
     modulo_sso_default_role: str = Field("runner")
 
-    # "postgres" (default) or "sqlite" — sqlite disables RLS, advisory locks,
-    # flood protection, and other Postgres-specific security features.
+    # "postgres" (default), "sqlite", "mariadb", or "mysql" — sqlite disables RLS,
+    # advisory locks, flood protection, and other Postgres-specific security features.
+    # "mariadb" / "mysql" use asyncmy driver.
     modulo_db: str = Field("postgres")
 
     modulo_ratelimit_bypass_token: str = Field("")
@@ -124,8 +125,8 @@ class Settings(BaseSettings):
     @field_validator("modulo_db")
     @classmethod
     def _validate_db(cls, v: str) -> str:
-        if v.lower() not in ("postgres", "sqlite"):
-            raise ValueError(f"MODULO_DB must be 'postgres' or 'sqlite'; got '{v}'")
+        if v.lower() not in ("postgres", "sqlite", "mariadb", "mysql"):
+            raise ValueError(f"MODULO_DB must be 'postgres', 'sqlite', 'mariadb', or 'mysql'; got '{v}'")
         return v.lower()
 
     @model_validator(mode="after")
@@ -157,6 +158,11 @@ class Settings(BaseSettings):
             _log.warning("settings.sqlite_mode")
             if self.database_url.startswith("postgresql+asyncpg://"):
                 self.database_url = "sqlite+aiosqlite:///./modulo.db"
+                _log.info("settings.database_url_auto_set", extra={"database_url": self.database_url})
+        elif self.modulo_db.lower() in ("mariadb", "mysql"):
+            _log.warning("settings.mariadb_mode")
+            if self.database_url.startswith("postgresql+asyncpg://"):
+                self.database_url = "mysql+asyncmy://modulo:modulo@localhost:5435/modulo"
                 _log.info("settings.database_url_auto_set", extra={"database_url": self.database_url})
         return self
 

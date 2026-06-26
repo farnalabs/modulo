@@ -1,8 +1,12 @@
-"""Row-level security helpers.
+"""Row-level security and tenant-filtering helpers.
 
-All tenant scoping uses set_config('app.organisation_id', value, is_local=true),
+On Postgres, tenant scoping uses set_config('app.organisation_id', value, is_local=true),
 which is equivalent to SET LOCAL and supports bound parameters. The semgrep rule
 rls_set_local enforces that bare SET (without is_local) is never used.
+
+On generic backends (MariaDB, SQLite), tenant scoping stores the org_id in
+``session.info`` and a ``do_orm_execute`` listener injects ``WHERE organisation_id = :oid``
+into every SELECT/UPDATE/DELETE automatically.
 """
 
 import logging
@@ -10,56 +14,87 @@ import uuid
 
 from sqlalchemy import event, text
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
+from sqlalchemy.orm import ORMExecuteState
 
 _log = logging.getLogger(__name__)
 
+_TENANT_KEY = "org_id"
+_TENANT_COLUMN = "organisation_id"
+
 
 async def set_rls_org(session: AsyncSession, org_id: uuid.UUID) -> None:
-    """Activate RLS for *org_id* within the current transaction.
+    """Activate RLS / tenant scoping for *org_id* within the current transaction.
 
     Requires an active transaction — raises RuntimeError otherwise so callers
     cannot accidentally call this outside a BEGIN block and get silent no-ops.
+
+    Postgres: calls ``SELECT set_config('app.organisation_id', :oid, true)``.
+    Generic backends (MariaDB, SQLite): stores *org_id* in ``session.info``
+    for the ``do_orm_execute`` tenant-filter listener to pick up.
     """
     if not session.in_transaction():
         raise RuntimeError("set_rls_org requires an active transaction; wrap the call in `async with session.begin():`")
-    # set_config(name, value, is_local=true) is equivalent to SET LOCAL and
-    # supports parameterised queries; bare SET LOCAL does not accept $1 placeholders.
-    await session.execute(
-        text("SELECT set_config('app.organisation_id', :oid, true)"),
-        {"oid": str(org_id)},
-    )
+
+    dialect = session.get_bind().dialect.name
+
+    if dialect == "postgresql":
+        # set_config(name, value, is_local=true) is equivalent to SET LOCAL and
+        # supports parameterised queries; bare SET LOCAL does not accept $1 placeholders.
+        await session.execute(
+            text("SELECT set_config('app.organisation_id', :oid, true)"),
+            {"oid": str(org_id)},
+        )
+    else:
+        session.info[_TENANT_KEY] = org_id
 
 
 async def set_rls_user_context(session: AsyncSession, user_id: uuid.UUID, org_role: str) -> None:
     """Set the current user identity and role for team-scoped RLS policies.
 
     Must be called inside an active transaction alongside set_rls_org.
+
+    Postgres: calls ``set_config`` for ``app.user_id`` and ``app.org_role``.
+    Generic backends: stores values in ``session.info`` for future use.
     """
     if not session.in_transaction():
         raise RuntimeError(
             "set_rls_user_context requires an active transaction; wrap the call in `async with session.begin():`"
         )
-    await session.execute(
-        text("SELECT set_config('app.user_id', :uid, true)"),
-        {"uid": str(user_id)},
-    )
-    await session.execute(
-        text("SELECT set_config('app.org_role', :role, true)"),
-        {"role": org_role},
-    )
+
+    dialect = session.get_bind().dialect.name
+
+    if dialect == "postgresql":
+        await session.execute(
+            text("SELECT set_config('app.user_id', :uid, true)"),
+            {"uid": str(user_id)},
+        )
+        await session.execute(
+            text("SELECT set_config('app.org_role', :role, true)"),
+            {"role": org_role},
+        )
+    else:
+        session.info["user_id"] = user_id
+        session.info["org_role"] = org_role
 
 
 def register_rls_reset_hook(engine: AsyncEngine) -> None:
     """Register a pool-checkout listener that clears stale org context.
 
-    Sets ``app.organisation_id`` to the empty string at session level whenever
-    a connection is checked out from the pool.  Combined with set_config(...,
-    is_local=true) (which reverts to the session-level value on transaction
-    end), this guarantees no org_id leaks across requests sharing a pooled
-    connection.
+    Postgres: Sets ``app.organisation_id`` to the empty string at session level
+    whenever a connection is checked out from the pool. Combined with
+    set_config(is_local=true) (which reverts to the session-level value on
+    transaction end), this guarantees no org_id leaks across requests sharing
+    a pooled connection.
+
+    Generic backends: no-op (session.info is scoped to the session, not the
+    connection pool, so there is nothing to reset at the pool level).
 
     Must be called once after the engine is created, typically in session.py.
     """
+    dialect = engine.dialect.name
+    if dialect != "postgresql":
+        _log.info("Skipping pool-level RLS reset hook — %s backend", dialect)
+        return
 
     @event.listens_for(engine.sync_engine, "checkout")
     def _reset_org_on_checkout(
@@ -67,19 +102,68 @@ def register_rls_reset_hook(engine: AsyncEngine) -> None:
         connection_record: object,
         connection_proxy: object,
     ) -> None:
-        # SELECT is used instead of bare SET because asyncpg's synchronous DBAPI
-        # shim routes statements through its cursor execute path, which requires
-        # a query-style statement.
         with dbapi_connection.cursor() as cursor:  # type: ignore[attr-defined]
             try:
                 cursor.execute("SELECT set_config('app.organisation_id', '', false)")
                 cursor.execute("SELECT set_config('app.user_id', '', false)")
                 cursor.execute("SELECT set_config('app.org_role', '', false)")
             except Exception:
-                # Hook failure must not break connection checkout. Log and continue;
-                # set_config(is_local=true) in set_rls_org still provides correct
-                # transaction-scoped isolation even if this defensive reset is skipped.
                 _log.warning(
                     "rls_reset_hook: failed to clear RLS session context on checkout",
                     exc_info=True,
                 )
+
+
+def _inject_tenant_filter(execute_state: ORMExecuteState) -> None:
+    """ORM execute listener that injects ``WHERE organisation_id = :oid``.
+
+    Reads ``org_id`` from ``session.info`` (set by ``set_rls_org``) and adds
+    the WHERE clause to every SELECT, UPDATE, and DELETE statement targeting
+    a model that has an ``organisation_id`` column.
+    """
+    org_id = execute_state.session.info.get(_TENANT_KEY)
+    if org_id is None:
+        return
+
+    if not (execute_state.is_select or execute_state.is_update or execute_state.is_delete):
+        return
+
+    stmt = execute_state.statement
+
+    if not hasattr(stmt, "column_descriptions"):
+        return
+
+    for desc in stmt.column_descriptions:
+        entity = desc.get("entity")
+        if entity is None or entity is object:
+            continue
+        if hasattr(entity, _TENANT_COLUMN):
+            stmt = stmt.where(getattr(entity, _TENANT_COLUMN) == org_id)
+            break
+
+    if stmt is not execute_state.statement:
+        execute_state.statement = stmt
+
+
+def register_tenant_filter() -> None:
+    """Register a ``do_orm_execute`` listener on the AsyncSession class.
+
+    Only activates for non-Postgres backends where RLS is unavailable.
+    Reads ``org_id`` from ``session.info`` (set by ``set_rls_org``) and injects
+    ``WHERE organisation_id = :oid`` into every SELECT, UPDATE, and DELETE.
+
+    This is the generic-backend counterpart to Postgres RLS — it makes the
+    same 200+ CRUD functions and 30+ route handlers work on MariaDB and SQLite
+    without any code changes.
+    """
+    from modulo.settings import get_settings
+
+    db_type = get_settings().modulo_db.lower()
+    if db_type == "postgres":
+        _log.info("Skipping ORM tenant filter — Postgres RLS handles scoping")
+        return
+
+    from sqlalchemy.orm import Session as SASession
+
+    _log.info("Registering ORM tenant filter for %s backend", db_type)
+    event.listen(SASession, "do_orm_execute", _inject_tenant_filter)

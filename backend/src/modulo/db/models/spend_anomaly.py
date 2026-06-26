@@ -4,8 +4,7 @@ import uuid
 from datetime import date
 from decimal import Decimal
 
-from sqlalchemy import Boolean, Date, ForeignKey, Numeric
-from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy import Boolean, Date, ForeignKey, Numeric, Uuid
 from sqlalchemy.orm import Mapped, mapped_column
 
 from modulo.db.models.base import OrgScoped
@@ -16,7 +15,7 @@ class SpendAnomaly(OrgScoped):
 
     anomaly_date: Mapped[date] = mapped_column(Date, nullable=False, index=True)
     pipeline_id: Mapped[uuid.UUID | None] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("pipelines.id", ondelete="SET NULL")
+        Uuid(), ForeignKey("pipelines.id", ondelete="SET NULL")
     )
     amount: Mapped[Decimal] = mapped_column(Numeric(14, 6), nullable=False)
     baseline: Mapped[Decimal] = mapped_column(Numeric(14, 6), nullable=False)

@@ -3,8 +3,7 @@ from __future__ import annotations
 import uuid
 from typing import TYPE_CHECKING, Any
 
-from sqlalchemy import JSON, ForeignKey, Integer, String, UniqueConstraint
-from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy import JSON, ForeignKey, Integer, String, UniqueConstraint, Uuid
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from modulo.db.models.base import OrgScoped
@@ -20,17 +19,17 @@ class PipelineSnapshot(OrgScoped):
     __table_args__ = (UniqueConstraint("pipeline_id", "snapshot_version", name="uq_pipeline_snapshot_version"),)
 
     pipeline_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True),
+        Uuid(),
         ForeignKey("pipelines.id", ondelete="RESTRICT"),
         nullable=False,
         index=True,
     )
     snapshot_version: Mapped[int] = mapped_column(Integer, nullable=False)
     created_by: Mapped[uuid.UUID | None] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL")
+        Uuid(), ForeignKey("users.id", ondelete="SET NULL")
     )
     environment_profile_id: Mapped[uuid.UUID | None] = mapped_column(
-        UUID(as_uuid=True),
+        Uuid(),
         ForeignKey("environment_profiles.id", ondelete="SET NULL"),
         nullable=True,
         index=True,

@@ -2,8 +2,7 @@ import uuid
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy import JSON, CheckConstraint, DateTime, ForeignKey, LargeBinary, String
-from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy import JSON, CheckConstraint, DateTime, ForeignKey, LargeBinary, String, Uuid
 from sqlalchemy.orm import Mapped, mapped_column
 
 from modulo.db.models.base import OrgScoped
@@ -22,10 +21,10 @@ class ConnectorInstance(OrgScoped):
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     connector_type_id: Mapped[str] = mapped_column(String(255), nullable=False, index=True)
     owner_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("users.id", ondelete="RESTRICT"), nullable=False
+        Uuid(), ForeignKey("users.id", ondelete="RESTRICT"), nullable=False
     )
     owner_team_id: Mapped[uuid.UUID | None] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("teams.id", ondelete="RESTRICT")
+        Uuid(), ForeignKey("teams.id", ondelete="RESTRICT")
     )
     visibility: Mapped[str] = mapped_column(String(10), nullable=False, server_default="org")
     credentials_ciphertext: Mapped[bytes] = mapped_column(LargeBinary, nullable=False)

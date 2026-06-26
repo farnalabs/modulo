@@ -3,8 +3,7 @@ from __future__ import annotations
 import uuid
 from typing import TYPE_CHECKING, Any
 
-from sqlalchemy import JSON, CheckConstraint, ForeignKey, Integer, String, text
-from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy import JSON, CheckConstraint, ForeignKey, Integer, String, Uuid, text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from modulo.db.models.base import OrgScoped
@@ -36,9 +35,9 @@ class Pipeline(OrgScoped):
 
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     description: Mapped[str | None] = mapped_column(String(2000))
-    stage_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("stages.id", ondelete="SET NULL"))
+    stage_id: Mapped[uuid.UUID | None] = mapped_column(Uuid(), ForeignKey("stages.id", ondelete="SET NULL"))
     owner_team_id: Mapped[uuid.UUID | None] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("teams.id", ondelete="RESTRICT")
+        Uuid(), ForeignKey("teams.id", ondelete="RESTRICT")
     )
     visibility: Mapped[str] = mapped_column(String(10), nullable=False, server_default="org")
     max_concurrent_runs: Mapped[int] = mapped_column(Integer, nullable=False, server_default="5")
@@ -49,7 +48,7 @@ class Pipeline(OrgScoped):
         JSON,
         nullable=False,
         default=list,
-        server_default=text("'[]'::json"),
+        server_default=text("'[]'"),
     )
     default_feedback_handler: Mapped[str | None] = mapped_column(String(50))
     default_autonomy_level: Mapped[str | None] = mapped_column(
@@ -57,7 +56,7 @@ class Pipeline(OrgScoped):
         server_default="manual_approval",
     )
     created_by: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("users.id", ondelete="RESTRICT"), nullable=False
+        Uuid(), ForeignKey("users.id", ondelete="RESTRICT"), nullable=False
     )
     organisation: Mapped[Organisation] = relationship()
     creator: Mapped[User] = relationship()

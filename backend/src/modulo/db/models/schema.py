@@ -1,8 +1,7 @@
 import uuid
 from typing import Any
 
-from sqlalchemy import JSON, Boolean, ForeignKey, Integer, String, UniqueConstraint
-from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy import JSON, Boolean, ForeignKey, Integer, String, UniqueConstraint, Uuid
 from sqlalchemy.orm import Mapped, mapped_column
 
 from modulo.db.models.base import OrgScoped
@@ -16,7 +15,7 @@ class Schema(OrgScoped):
     description: Mapped[str | None] = mapped_column(String(2000))
     abstract_name: Mapped[str | None] = mapped_column(String(255))
     created_by: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("users.id", ondelete="RESTRICT"), nullable=False
+        Uuid(), ForeignKey("users.id", ondelete="RESTRICT"), nullable=False
     )
 
 
@@ -33,7 +32,7 @@ class SchemaVersion(OrgScoped):
     )
 
     schema_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("schemas.id", ondelete="CASCADE"), nullable=False, index=True
+        Uuid(), ForeignKey("schemas.id", ondelete="CASCADE"), nullable=False, index=True
     )
     version: Mapped[str] = mapped_column(String(50), nullable=False)
     version_number: Mapped[int] = mapped_column(Integer, nullable=False)
@@ -41,5 +40,5 @@ class SchemaVersion(OrgScoped):
     published: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="false")
     deprecated: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="false")
     created_by: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("users.id", ondelete="RESTRICT"), nullable=False
+        Uuid(), ForeignKey("users.id", ondelete="RESTRICT"), nullable=False
     )

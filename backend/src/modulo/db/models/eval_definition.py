@@ -3,8 +3,7 @@ from __future__ import annotations
 import uuid
 from typing import Any
 
-from sqlalchemy import JSON, CheckConstraint, Float, ForeignKey, String
-from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy import JSON, CheckConstraint, Float, ForeignKey, String, Uuid
 from sqlalchemy.orm import Mapped, mapped_column
 
 from modulo.db.models.base import OrgScoped
@@ -24,12 +23,12 @@ class EvalDefinition(OrgScoped):
     )
 
     pipeline_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True),
+        Uuid(),
         ForeignKey("pipelines.id", ondelete="CASCADE"),
         nullable=False,
         index=True,
     )
-    node_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
+    node_id: Mapped[uuid.UUID | None] = mapped_column(Uuid(), nullable=True)
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     eval_type: Mapped[str] = mapped_column(String(30), nullable=False)
     config_json: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False, default=dict)
@@ -37,5 +36,5 @@ class EvalDefinition(OrgScoped):
     pass_threshold: Mapped[float | None] = mapped_column(Float, nullable=True)
     suite_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
     created_by: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("users.id", ondelete="RESTRICT"), nullable=False
+        Uuid(), ForeignKey("users.id", ondelete="RESTRICT"), nullable=False
     )

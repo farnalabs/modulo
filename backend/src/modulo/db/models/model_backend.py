@@ -2,8 +2,7 @@ import uuid
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy import JSON, CheckConstraint, DateTime, ForeignKey, LargeBinary, String
-from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy import JSON, CheckConstraint, DateTime, ForeignKey, LargeBinary, String, Uuid
 from sqlalchemy.orm import Mapped, mapped_column
 
 from modulo.db.models.base import OrgScoped
@@ -33,12 +32,12 @@ class ModelBackend(OrgScoped):
     cost_tracking: Mapped[str] = mapped_column(String(10), nullable=False, server_default="enabled")
     currency: Mapped[str] = mapped_column(String(3), nullable=False, server_default="USD")
     owner_team_id: Mapped[uuid.UUID | None] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("teams.id", ondelete="RESTRICT")
+        Uuid(), ForeignKey("teams.id", ondelete="RESTRICT")
     )
     visibility: Mapped[str] = mapped_column(String(10), nullable=False, server_default="org")
     status: Mapped[str] = mapped_column(String(30), nullable=False, server_default="active")
     last_health_check_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     last_health_check_error: Mapped[str | None] = mapped_column(String(2000))
     created_by: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("users.id", ondelete="RESTRICT"), nullable=False
+        Uuid(), ForeignKey("users.id", ondelete="RESTRICT"), nullable=False
     )

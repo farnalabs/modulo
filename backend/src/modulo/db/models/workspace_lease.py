@@ -4,8 +4,7 @@ import uuid
 from datetime import datetime
 from typing import TYPE_CHECKING
 
-from sqlalchemy import JSON, CheckConstraint, DateTime, ForeignKey, String
-from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy import JSON, CheckConstraint, DateTime, ForeignKey, String, Uuid
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from modulo.db.models.base import OrgScoped
@@ -24,13 +23,13 @@ class WorkspaceLease(OrgScoped):
     )
 
     environment_profile_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True),
+        Uuid(),
         ForeignKey("environment_profiles.id", ondelete="RESTRICT"),
         nullable=False,
         index=True,
     )
     run_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True),
+        Uuid(),
         ForeignKey("runs.id", ondelete="SET NULL"),
         nullable=True,
         index=True,
