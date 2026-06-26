@@ -70,7 +70,14 @@ async def _collect_org_export(session: AsyncSession, org: Organisation) -> dict[
     )
 
     def _serialise(records: Any) -> list[dict[str, Any]]:
-        return [{c.name: getattr(r, c.name) for c in r.__table__.columns} for r in records]
+        def _convert(v: Any) -> Any:
+            if isinstance(v, uuid.UUID):
+                return str(v)
+            if isinstance(v, datetime):
+                return v.isoformat()
+            return v
+
+        return [{c.name: _convert(getattr(r, c.name)) for c in r.__table__.columns} for r in records]
 
     return {
         "organisation": _serialise([org]),
