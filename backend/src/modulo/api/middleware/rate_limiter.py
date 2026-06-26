@@ -18,13 +18,18 @@ from modulo.settings import Settings, get_settings
 
 RATELIMIT_BYPASS_HEADER = "MODULO_RATELIMIT_BYPASS_TOKEN"
 
+redis_available: bool = False
+
 _log = logging.getLogger(__name__)
 
 
 def _create_registry(settings: Settings) -> RateLimiterRegistry:
     """Create a rate limiter registry, connecting to Redis if configured."""
+    global redis_available
+
     if settings.modulo_db.lower() == "sqlite":
         _log.info("ratelimit.sqlite_disabled")
+        redis_available = False
         return RateLimiterRegistry(redis_client=None)
 
     if settings.redis_url:
@@ -33,11 +38,13 @@ def _create_registry(settings: Settings) -> RateLimiterRegistry:
 
             client: Any = Redis.from_url(settings.redis_url, decode_responses=False)
             registry = RateLimiterRegistry(redis_client=client)
+            redis_available = True
             _log.info("ratelimit.redis_enabled")
             return registry
         except Exception as exc:
             _log.warning("ratelimit.redis_fallback", extra={"error": str(exc)})
 
+    redis_available = False
     _log.warning("ratelimit.in_memory_mode")
     return RateLimiterRegistry(redis_client=None)
 
@@ -59,6 +66,10 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         ("/mcp", 200, 60),
         ("/api/v1/hitl", 30, 60),
     ]
+
+    @classmethod
+    def set_rules(cls, rules: list[tuple[str, int, int]]) -> None:
+        cls.RULES = rules
 
     def __init__(
         self,

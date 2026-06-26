@@ -3,6 +3,7 @@ import DashboardView from '../views/DashboardView.vue'
 import LibraryView from '../views/LibraryView.vue'
 import LibraryPipelineWizard from '../views/LibraryPipelineWizard.vue'
 import SettingsObservabilityView from '../views/SettingsObservabilityView.vue'
+import SettingsRateLimitsView from '../views/SettingsRateLimitsView.vue'
 import SettingsSsoView from '../views/SettingsSsoView.vue'
 import SettingsTeamsView from '../views/SettingsTeamsView.vue'
 import SchemaInferenceView from '../views/SchemaInferenceView.vue'
@@ -53,6 +54,11 @@ const router = createRouter({
       path: '/settings/sso',
       name: 'settings-sso',
       component: SettingsSsoView,
+    },
+    {
+      path: '/settings/rate-limits',
+      name: 'settings-rate-limits',
+      component: SettingsRateLimitsView,
     },
     {
       path: '/schemas/infer',

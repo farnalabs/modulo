@@ -216,6 +216,31 @@ export interface paths {
       }
     }
   }
+  '/api/v1/admin/rate-limits': {
+    get: {
+      responses: {
+        200: {
+          content: {
+            'application/json': components['schemas']['RateLimitStatusResponse']
+          }
+        }
+      }
+    }
+    put: {
+      requestBody: {
+        content: {
+          'application/json': components['schemas']['RateLimitUpdateRequest']
+        }
+      }
+      responses: {
+        200: {
+          content: {
+            'application/json': components['schemas']['RateLimitStatusResponse']
+          }
+        }
+      }
+    }
+  }
   '/api/v1/admin/audit/export': {
     get: {
       parameters: {
@@ -929,6 +954,23 @@ export interface components {
       total: number
       page: number
       page_size: number
+    }
+    RateLimitRuleResponse: {
+      path_prefix: string
+      max_requests: number
+      window_s: number
+    }
+    RateLimitStatusResponse: {
+      mode: string
+      rules: components['schemas']['RateLimitRuleResponse'][]
+    }
+    RateLimitRuleUpdate: {
+      path_prefix: string
+      max_requests: number
+      window_s: number
+    }
+    RateLimitUpdateRequest: {
+      rules: components['schemas']['RateLimitRuleUpdate'][]
     }
   }
 }
