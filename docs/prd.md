@@ -43,7 +43,7 @@ Modulo is a composition layer, not an opinionated workflow tool. Users define th
 
 **Discipline scope**: the SDLC is the first and primary vertical. The underlying abstractions — typed schemas, swappable connectors, versioned agents, HITL gates, auditable runs — are discipline-agnostic. Any process that moves typed artifacts through a governed, multi-step pipeline could be served by the same platform. Non-SDLC disciplines are a deliberate future expansion; SDLC is the wedge.
 
-> **Core philosophy**: We handle the boilerplate. You define the remainder.
+> **Core philosophy**: We handle the boilerplate. You handle the remainder.
 
 ---
 

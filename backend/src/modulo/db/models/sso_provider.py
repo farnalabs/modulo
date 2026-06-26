@@ -4,10 +4,10 @@ from typing import Any
 from sqlalchemy import JSON, Boolean, String, Text, Uuid
 from sqlalchemy.orm import Mapped, mapped_column
 
-from modulo.db.models.base import Base, TimestampMixin
+from modulo.db.models.base import Base, OrgScoped, TimestampMixin
 
 
-class SsoProvider(Base, TimestampMixin):
+class SsoProvider(OrgScoped):
     __tablename__ = "sso_providers"
 
     id: Mapped[uuid.UUID] = mapped_column(Uuid(), primary_key=True, default=uuid.uuid4)

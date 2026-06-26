@@ -49,6 +49,8 @@ class ShellConnector(ConnectorBase):
         return ConnectorType.SHELL
 
     async def health_check(self) -> HealthResult:
+        if self._runtime_provider is None:
+            return HealthResult(ok=False, detail="Runtime provider not configured")
         return HealthResult(ok=True, detail="ShellConnector ready")
 
     def _check_command_allowed(self, command: list[str]) -> None:

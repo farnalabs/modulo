@@ -55,6 +55,9 @@ def _make_mock_session() -> AsyncMock:
     begin_cm.__aexit__ = AsyncMock(return_value=False)
     session.begin = MagicMock(return_value=begin_cm)
     session.execute = AsyncMock()
+    bind_mock = MagicMock()
+    bind_mock.dialect.name = "postgresql"
+    session.get_bind = AsyncMock(return_value=bind_mock)
     return session
 
 
@@ -419,6 +422,7 @@ class TestOkrProgressEndpoint:
 
     @pytest.fixture()
     def unauth_client(self) -> Generator[TestClient, None, None]:
+        app.dependency_overrides.clear()
         app.dependency_overrides[get_settings] = _make_settings
         yield TestClient(app)
         app.dependency_overrides.clear()

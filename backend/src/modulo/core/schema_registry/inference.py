@@ -56,6 +56,8 @@ def _parse_schema_from_response(response_text: str) -> dict[str, Any]:
     schema = json.loads(text)
     if not isinstance(schema, dict):
         raise ValueError("LLM response is not a JSON object")
+    schema.setdefault("type", "object")
+    schema.setdefault("properties", {})
     return schema
 
 
@@ -80,8 +82,8 @@ class SchemaInferenceService:
         self._timeout = timeout
 
     async def infer(self, samples: list[dict[str, Any]]) -> dict[str, Any]:
-        if not samples or not all(isinstance(r, dict) for r in samples):
-            raise ValueError("samples must be a non-empty list of dicts")
+        if not all(isinstance(r, dict) for r in samples):
+            raise ValueError("samples must be a list of dicts")
 
         messages = _build_infer_prompt(samples, self._system_prompt)
         try:

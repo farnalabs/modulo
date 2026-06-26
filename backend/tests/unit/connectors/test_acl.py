@@ -21,9 +21,9 @@ def test_acl_blocks_unlisted_operation():
         acl.check("write")
 
 
-def test_acl_allows_any_when_empty_ops_list():
-    # Empty list is treated like None — no restriction on operations
-    acl = ConnectorACL(visibility="org", allowed_operations=[])
+def test_acl_allows_any_when_none_ops():
+    # None means no restriction on operations
+    acl = ConnectorACL(visibility="org", allowed_operations=None)
     acl.check("read")
     acl.check("write")
     acl.check("git_push")
