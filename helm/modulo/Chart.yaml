@@ -1,0 +1,34 @@
+apiVersion: v2
+name: modulo
+description: A Helm chart for deploying the Modulo platform on Kubernetes
+type: application
+version: 0.1.0
+appVersion: "0.1.0"
+kubeVersion: ">=1.24"
+
+keywords:
+  - modulo
+  - sdlc
+  - ai-agents
+  - fastapi
+  - vue
+
+home: https://modulo.ai
+sources:
+  - https://github.com/anomalyco/modulo
+
+maintainers:
+  - name: Modulo Team
+    email: dev@modulo.ai
+
+dependencies:
+  - name: postgresql
+    version: "~16.6.0"
+    repository: oci://registry-1.docker.io/bitnamicharts
+    condition: postgresql.enabled
+    alias: postgresql
+  - name: redis
+    version: "~20.16.0"
+    repository: oci://registry-1.docker.io/bitnamicharts
+    condition: redis.enabled
+    alias: redis

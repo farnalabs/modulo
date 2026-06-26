@@ -114,6 +114,129 @@ export interface paths {
       }
     }
   }
+  '/api/v1/admin/sso/providers': {
+    get: {
+      responses: {
+        200: {
+          content: {
+            'application/json': components['schemas']['SsoProviderResponse'][]
+          }
+        }
+      }
+    }
+    post: {
+      requestBody: {
+        content: {
+          'application/json': components['schemas']['SsoProviderCreate']
+        }
+      }
+      responses: {
+        201: {
+          content: {
+            'application/json': components['schemas']['SsoProviderResponse']
+          }
+        }
+      }
+    }
+  }
+  '/api/v1/admin/sso/providers/{provider_id}': {
+    put: {
+      parameters: {
+        path: { provider_id: string }
+      }
+      requestBody: {
+        content: {
+          'application/json': components['schemas']['SsoProviderUpdate']
+        }
+      }
+      responses: {
+        200: {
+          content: {
+            'application/json': components['schemas']['SsoProviderResponse']
+          }
+        }
+      }
+    }
+    delete: {
+      parameters: {
+        path: { provider_id: string }
+      }
+      responses: {
+        204: { description: 'No content' }
+      }
+    }
+  }
+  '/api/v1/admin/sso/providers/{provider_id}/toggle': {
+    put: {
+      parameters: {
+        path: { provider_id: string }
+      }
+      responses: {
+        200: {
+          content: {
+            'application/json': components['schemas']['SsoProviderResponse']
+          }
+        }
+      }
+    }
+  }
+  '/api/v1/admin/sso/providers/{provider_id}/test': {
+    post: {
+      parameters: {
+        path: { provider_id: string }
+      }
+      responses: {
+        200: {
+          content: {
+            'application/json': components['schemas']['SsoProviderTestResult']
+          }
+        }
+      }
+    }
+  }
+  '/api/v1/connectors': {
+    get: {
+      responses: {
+        200: {
+          content: {
+            'application/json': components['schemas']['ConnectorListResponse']
+          }
+        }
+      }
+    }
+  }
+  '/api/v1/schemas/infer': {
+    post: {
+      requestBody: {
+        content: {
+          'application/json': components['schemas']['SchemaInferRequest']
+        }
+      }
+      responses: {
+        200: {
+          content: {
+            'application/json': components['schemas']['SchemaInferResponse']
+          }
+        }
+      }
+    }
+  }
+  '/api/v1/schemas': {
+    post: {
+      requestBody: {
+        content: {
+          'application/json': components['schemas']['SchemaCreateRequest']
+        }
+      }
+      responses: {
+        201: {
+          content: {
+            'application/json': components['schemas']['SchemaCreateResponse']
+          }
+        }
+      }
+    }
+  }
 }
 
 export interface components {
@@ -189,6 +312,88 @@ export interface components {
       total: number
       page: number
       page_size: number
+    }
+    SsoProviderResponse: {
+      id: string
+      provider_type: string
+      name: string
+      client_id: string | null
+      discovery_url: string | null
+      metadata_url: string | null
+      metadata_xml: string | null
+      entity_id: string | null
+      scopes: string[] | null
+      enabled: boolean
+      auto_provision: boolean
+      default_role: string
+      created_at: string
+      updated_at: string
+    }
+    SsoProviderCreate: {
+      provider_type: string
+      name: string
+      client_id?: string | null
+      client_secret?: string | null
+      discovery_url?: string | null
+      metadata_url?: string | null
+      metadata_xml?: string | null
+      entity_id?: string | null
+      scopes?: string[] | null
+      enabled?: boolean
+      auto_provision?: boolean
+      default_role?: string
+    }
+    SsoProviderUpdate: {
+      name?: string | null
+      client_id?: string | null
+      client_secret?: string | null
+      discovery_url?: string | null
+      metadata_url?: string | null
+      metadata_xml?: string | null
+      entity_id?: string | null
+      scopes?: string[] | null
+      enabled?: boolean | null
+      auto_provision?: boolean | null
+      default_role?: string | null
+    }
+    SsoProviderTestResult: {
+      success: boolean
+      message: string
+      provider_info: Record<string, unknown> | null
+    }
+    ConnectorItem: {
+      id: string
+      name: string
+      connector_type: string
+      description: string | null
+    }
+    ConnectorListResponse: {
+      items: components['schemas']['ConnectorItem'][]
+    }
+    SchemaInferRequest: {
+      connector_instance_id: string
+      resource_type: string
+      sample_query?: string | null
+    }
+    SchemaFieldDefinition: {
+      name: string
+      type: string
+      required: boolean
+      description: string | null
+    }
+    SchemaInferResponse: {
+      name: string
+      description: string | null
+      fields: components['schemas']['SchemaFieldDefinition'][]
+    }
+    SchemaCreateRequest: {
+      name: string
+      description?: string | null
+      fields: components['schemas']['SchemaFieldDefinition'][]
+    }
+    SchemaCreateResponse: {
+      id: string
+      name: string
     }
   }
 }

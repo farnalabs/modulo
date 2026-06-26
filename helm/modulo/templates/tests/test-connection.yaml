@@ -1,0 +1,20 @@
+apiVersion: v1
+kind: Pod
+metadata:
+  name: "{{ include "modulo.fullname" . }}-test-connection"
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "modulo.labels" . | nindent 4 }}
+  annotations:
+    "helm.sh/hook": test
+spec:
+  containers:
+    - name: wget
+      image: busybox
+      command:
+        - wget
+      args:
+        - "--timeout=10"
+        - "--spider"
+        - "http://{{ include "modulo.backend.fullname" . }}:{{ .Values.backend.service.port }}/healthz"
+  restartPolicy: Never

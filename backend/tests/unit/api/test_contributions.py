@@ -404,3 +404,157 @@ class TestListContributions:
         assert resp.status_code == 200
         mock_list.assert_awaited_once()
         assert mock_list.call_args.kwargs["contribution_status"] == "draft"
+
+
+class TestSubmitVersion:
+    def test_submit_version_returns_201(self, client: TestClient):
+        prim = _make_mock_primitive(version="1.1", contribution_status="draft")
+
+        with (
+            patch(
+                "modulo.api.routes.contributions.submit_contribution_version",
+                new_callable=AsyncMock,
+                return_value=prim,
+            ),
+            patch("modulo.api.routes.contributions.set_rls_org", new_callable=AsyncMock),
+        ):
+            resp = client.post(
+                f"/api/v1/library/contribute/{_PRIMITIVE_ID}/versions",
+                json={
+                    "name": "My Fixture v2",
+                    "slug": "my-fixture",
+                    "description": "Updated fixture",
+                    "tags": ["test", "v2"],
+                    "fixture_map": {"input": "output_v2"},
+                },
+            )
+
+        assert resp.status_code == 201
+        body = resp.json()
+        assert body["name"] == "Test Fixture"
+        assert body["contribution_status"] == "draft"
+
+    def test_submit_version_404(self, client: TestClient):
+        with (
+            patch(
+                "modulo.api.routes.contributions.submit_contribution_version",
+                new_callable=AsyncMock,
+                side_effect=ContributionNotFoundError("not found"),
+            ),
+            patch("modulo.api.routes.contributions.set_rls_org", new_callable=AsyncMock),
+        ):
+            resp = client.post(
+                f"/api/v1/library/contribute/{uuid.uuid4()}/versions",
+                json={
+                    "name": "Nope",
+                    "slug": "nope",
+                    "fixture_map": {"a": "b"},
+                },
+            )
+
+        assert resp.status_code == 404
+
+    def test_submit_version_409_for_draft_original(self, client: TestClient):
+        with (
+            patch(
+                "modulo.api.routes.contributions.submit_contribution_version",
+                new_callable=AsyncMock,
+                side_effect=ContributionInvalidTransitionError(
+                    "expected 'published', got 'draft'"
+                ),
+            ),
+            patch("modulo.api.routes.contributions.set_rls_org", new_callable=AsyncMock),
+        ):
+            resp = client.post(
+                f"/api/v1/library/contribute/{_PRIMITIVE_ID}/versions",
+                json={
+                    "name": "Nope",
+                    "slug": "nope",
+                    "fixture_map": {"a": "b"},
+                },
+            )
+
+        assert resp.status_code == 409
+
+    def test_submit_version_passes_correct_params(self, client: TestClient):
+        prim = _make_mock_primitive(version="1.1", contribution_status="draft")
+
+        with (
+            patch(
+                "modulo.api.routes.contributions.submit_contribution_version",
+                new_callable=AsyncMock,
+                return_value=prim,
+            ) as mock_version,
+            patch("modulo.api.routes.contributions.set_rls_org", new_callable=AsyncMock),
+        ):
+            resp = client.post(
+                f"/api/v1/library/contribute/{_PRIMITIVE_ID}/versions",
+                json={
+                    "name": "Versioned Fixture",
+                    "slug": "versioned-fixture",
+                    "description": "A versioned fixture",
+                    "tags": ["test"],
+                    "fixture_map": {"prompt": "response"},
+                    "source_run_id": str(uuid.uuid4()),
+                    "source_pipeline_id": str(uuid.uuid4()),
+                },
+            )
+
+        assert resp.status_code == 201
+        mock_version.assert_awaited_once()
+        assert mock_version.call_args.args[2] == _PRIMITIVE_ID
+        assert mock_version.call_args.kwargs["name"] == "Versioned Fixture"
+        assert mock_version.call_args.kwargs["fixture_map"] == {"prompt": "response"}
+
+
+class TestListVersions:
+    def test_list_versions_returns_200(self, client: TestClient):
+        v1 = _make_mock_primitive(version="1.0", contribution_status="published")
+        v2 = _make_mock_primitive(version="1.1", contribution_status="draft", id=uuid.uuid4())
+        versions = [v2, v1]
+
+        with (
+            patch(
+                "modulo.api.routes.contributions.list_contribution_versions",
+                new_callable=AsyncMock,
+                return_value=versions,
+            ),
+            patch("modulo.api.routes.contributions.set_rls_org", new_callable=AsyncMock),
+        ):
+            resp = client.get(f"/api/v1/library/contribute/{_PRIMITIVE_ID}/versions")
+
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["total"] == 2
+        assert len(body["versions"]) == 2
+
+    def test_list_versions_empty(self, client: TestClient):
+        prim = _make_mock_primitive(version="1.0", contribution_status="published")
+
+        with (
+            patch(
+                "modulo.api.routes.contributions.list_contribution_versions",
+                new_callable=AsyncMock,
+                return_value=[prim],
+            ),
+            patch("modulo.api.routes.contributions.set_rls_org", new_callable=AsyncMock),
+        ):
+            resp = client.get(f"/api/v1/library/contribute/{_PRIMITIVE_ID}/versions")
+
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["total"] == 1
+        assert body["versions"][0]["version"] == "1.0"
+
+    def test_list_versions_404(self, client: TestClient):
+        with (
+            patch(
+                "modulo.api.routes.contributions.list_contribution_versions",
+                new_callable=AsyncMock,
+                side_effect=ContributionNotFoundError("not found"),
+            ),
+            patch("modulo.api.routes.contributions.set_rls_org", new_callable=AsyncMock),
+        ):
+            resp = client.get(f"/api/v1/library/contribute/{uuid.uuid4()}/versions")
+
+        assert resp.status_code == 404

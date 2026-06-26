@@ -1,0 +1,367 @@
+# =============================================================================
+# Modulo Helm Chart Values
+# =============================================================================
+# This file contains the default configuration for deploying Modulo on Kubernetes.
+# Override any value via `--set key=value` or a custom values file.
+
+# -- Global settings applied across all components
+global:
+  imageRegistry: ""
+  imagePullSecrets: []
+  storageClass: ""
+
+# =============================================================================
+# Image configuration
+# =============================================================================
+image:
+  registry: ghcr.io
+  repository: anomalyco/modulo
+  pullPolicy: IfNotPresent
+  # Overrides the image tag whose default is the chart appVersion
+  tag: ""
+
+# =============================================================================
+# Backend (FastAPI)
+# =============================================================================
+backend:
+  image:
+    registry: ""
+    repository: modulo-backend
+    pullPolicy: IfNotPresent
+    tag: "0.1.0"
+
+  replicaCount: 2
+
+  # -- Resource limits and requests for the backend container
+  resources:
+    requests:
+      cpu: 250m
+      memory: 256Mi
+    limits:
+      cpu: 1000m
+      memory: 1Gi
+
+  # -- Service configuration
+  service:
+    type: ClusterIP
+    port: 8000
+    targetPort: 8000
+    annotations: {}
+    labels: {}
+
+  # -- Secrets referenced from existing k8s secrets; leave empty to auto-generate
+  existingSecret: ""
+
+  # -- Service account for backend
+  serviceAccount:
+    create: true
+    name: ""
+
+  # -- Security context for the backend pod
+  podSecurityContext:
+    fsGroup: 1000
+    runAsUser: 1000
+    runAsNonRoot: true
+
+  containerSecurityContext:
+    allowPrivilegeEscalation: false
+    capabilities:
+      drop: ["ALL"]
+    readOnlyRootFilesystem: true
+
+  # -- Probe configuration
+  livenessProbe:
+    enabled: true
+    path: /healthz
+    initialDelaySeconds: 30
+    periodSeconds: 10
+    timeoutSeconds: 5
+    failureThreshold: 3
+
+  readinessProbe:
+    enabled: true
+    path: /healthz
+    initialDelaySeconds: 5
+    periodSeconds: 10
+    timeoutSeconds: 3
+    failureThreshold: 2
+
+  startupProbe:
+    enabled: false
+    path: /healthz
+    initialDelaySeconds: 10
+    periodSeconds: 5
+    failureThreshold: 30
+
+  # -- Additional environment variables (plain text)
+  extraEnv: []
+
+  # -- Additional environment variables from secrets
+  extraEnvFrom: []
+
+  # -- Additional volume mounts
+  extraVolumeMounts: []
+
+  # -- Additional volumes
+  extraVolumes: []
+
+  # -- Node selector, affinity, tolerations
+  nodeSelector: {}
+  affinity: {}
+  tolerations: []
+
+  # -- Pod Disruption Budget
+  podDisruptionBudget:
+    enabled: false
+    minAvailable: 1
+
+  # -- Service Monitor (Prometheus Operator)
+  serviceMonitor:
+    enabled: false
+    interval: 30s
+    scrapeTimeout: 10s
+    labels: {}
+
+  # -- Deployment annotations/labels
+  deployment:
+    annotations: {}
+    labels: {}
+
+  podAnnotations: {}
+  podLabels: {}
+
+# =============================================================================
+# Frontend (Vue.js / nginx)
+# =============================================================================
+frontend:
+  image:
+    registry: ""
+    repository: modulo-frontend
+    pullPolicy: IfNotPresent
+    tag: "0.1.0"
+
+  replicaCount: 2
+
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      cpu: 500m
+      memory: 256Mi
+
+  # -- Service configuration
+  service:
+    type: ClusterIP
+    port: 80
+    targetPort: 80
+    annotations: {}
+    labels: {}
+
+  serviceAccount:
+    create: false
+    name: ""
+
+  podSecurityContext:
+    fsGroup: 101
+    runAsUser: 101
+    runAsNonRoot: true
+
+  containerSecurityContext:
+    allowPrivilegeEscalation: false
+    capabilities:
+      drop: ["ALL"]
+    readOnlyRootFilesystem: true
+
+  livenessProbe:
+    enabled: true
+    path: /
+    initialDelaySeconds: 10
+    periodSeconds: 10
+    timeoutSeconds: 3
+    failureThreshold: 3
+
+  readinessProbe:
+    enabled: true
+    path: /
+    initialDelaySeconds: 5
+    periodSeconds: 10
+    timeoutSeconds: 3
+    failureThreshold: 2
+
+  extraEnv: []
+  extraEnvFrom: []
+  extraVolumeMounts: []
+  extraVolumes: []
+  nodeSelector: {}
+  affinity: {}
+  tolerations: []
+
+  podDisruptionBudget:
+    enabled: false
+    minAvailable: 1
+
+  deployment:
+    annotations: {}
+    labels: {}
+
+  podAnnotations: {}
+  podLabels: {}
+
+# =============================================================================
+# Ingress configuration
+# =============================================================================
+ingress:
+  enabled: true
+  className: nginx
+  annotations:
+    cert-manager.io/cluster-issuer: letsencrypt-prod
+    nginx.ingress.kubernetes.io/ssl-redirect: "true"
+    nginx.ingress.kubernetes.io/proxy-body-size: "50m"
+  hosts:
+    - host: modulo.local
+      paths:
+        - path: /
+          pathType: Prefix
+          backend:
+            service: frontend
+            port: 80
+        - path: /api
+          pathType: Prefix
+          backend:
+            service: backend
+            port: 8000
+  tls:
+    - hosts:
+        - modulo.local
+      secretName: modulo-tls
+
+# =============================================================================
+# Secrets configuration
+# =============================================================================
+secrets:
+  # -- Auto-generate a random SECRET_KEY if not provided (recommended for production)
+  SECRET_KEY: ""
+  # -- Auto-generate a random FERNET_KEY if not provided
+  FERNET_KEY: ""
+  # -- External database URL (overrides embedded Postgres)
+  DATABASE_URL: ""
+  # -- External Redis URL (overrides embedded Redis)
+  REDIS_URL: ""
+
+# =============================================================================
+# ConfigMap (non-sensitive configuration)
+# =============================================================================
+configmap:
+  data:
+    CORS_ORIGINS: "*"
+    MODULO_PUBLIC_URL: "http://modulo.local"
+    LOG_LEVEL: "INFO"
+    MODULO_ENV: "production"
+
+# =============================================================================
+# Horizontal Pod Autoscaler
+# =============================================================================
+autoscaling:
+  enabled: false
+  minReplicas: 2
+  maxReplicas: 10
+  targetCPUUtilizationPercentage: 80
+  targetMemoryUtilizationPercentage: 80
+  behavior:
+    scaleDown:
+      stabilizationWindowSeconds: 300
+      policies:
+        - type: Percent
+          value: 100
+          periodSeconds: 15
+    scaleUp:
+      stabilizationWindowSeconds: 0
+      policies:
+        - type: Percent
+          value: 100
+          periodSeconds: 15
+        - type: Pods
+          value: 4
+          periodSeconds: 15
+      selectPolicy: Max
+
+# =============================================================================
+# Persistent Volume Claims
+# =============================================================================
+persistence:
+  enabled: false
+  storageClass: ""
+  accessModes:
+    - ReadWriteOnce
+  size: 10Gi
+  annotations: {}
+
+# =============================================================================
+# PostgreSQL sub-chart (Bitnami)
+# =============================================================================
+postgresql:
+  enabled: true
+  auth:
+    database: modulo
+    username: modulo
+    password: ""
+    existingSecret: ""
+  architecture: standalone
+  primary:
+    persistence:
+      enabled: true
+      size: 10Gi
+      storageClass: ""
+    resources:
+      requests:
+        cpu: 250m
+        memory: 256Mi
+      limits:
+        cpu: 1000m
+        memory: 1Gi
+
+# =============================================================================
+# Redis sub-chart (Bitnami)
+# =============================================================================
+redis:
+  enabled: true
+  auth:
+    enabled: true
+    password: ""
+    existingSecret: ""
+  architecture: standalone
+  master:
+    persistence:
+      enabled: true
+      size: 8Gi
+      storageClass: ""
+    resources:
+      requests:
+        cpu: 100m
+        memory: 128Mi
+      limits:
+        cpu: 500m
+        memory: 512Mi
+
+# =============================================================================
+# ServiceAccount configuration
+# =============================================================================
+serviceAccount:
+  create: true
+  name: "modulo"
+  annotations: {}
+  automountServiceAccountToken: true
+
+# =============================================================================
+# Name overrides
+# =============================================================================
+nameOverride: ""
+fullnameOverride: ""
+
+# =============================================================================
+# Common labels applied to all resources
+# =============================================================================
+commonLabels:
+  app.kubernetes.io/part-of: modulo
+  app.kubernetes.io/managed-by: helm

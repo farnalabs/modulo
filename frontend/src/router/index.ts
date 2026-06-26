@@ -2,7 +2,9 @@ import { createRouter, createWebHistory } from 'vue-router'
 import DashboardView from '../views/DashboardView.vue'
 import LibraryView from '../views/LibraryView.vue'
 import LibraryPipelineWizard from '../views/LibraryPipelineWizard.vue'
+import SettingsSsoView from '../views/SettingsSsoView.vue'
 import SettingsTeamsView from '../views/SettingsTeamsView.vue'
+import SchemaInferenceView from '../views/SchemaInferenceView.vue'
 
 const router = createRouter({
   history: createWebHistory(),
@@ -31,6 +33,16 @@ const router = createRouter({
       path: '/settings/teams',
       name: 'settings-teams',
       component: SettingsTeamsView,
+    },
+    {
+      path: '/settings/sso',
+      name: 'settings-sso',
+      component: SettingsSsoView,
+    },
+    {
+      path: '/schemas/infer',
+      name: 'schema-infer',
+      component: SchemaInferenceView,
     },
   ],
 })

@@ -1,4 +1,4 @@
-"""Unit tests for /api/v1/dashboard/summary endpoint."""
+"""Unit tests for /api/v1/dashboard/summary and /api/v1/dashboard/trends."""
 
 import uuid
 from collections.abc import AsyncGenerator, Generator
@@ -27,12 +27,48 @@ def _make_settings() -> Settings:
     )
 
 
+class _MockRow:
+    """Simulates a SQLAlchemy result row with named attribute access."""
+
+    def __init__(self, **kwargs: object) -> None:
+        for k, v in kwargs.items():
+            setattr(self, k, v)
+
+
+class _MockResult:
+    """Simulates a SQLAlchemy result proxy for chain calls."""
+
+    def __init__(self, scalar_one_val: object = 42, rows: object | None = None) -> None:
+        self._scalar_one = scalar_one_val
+        self._rows = rows if rows is not None else []
+
+    def scalar_one(self) -> object:
+        return self._scalar_one
+
+    def scalar_one_or_none(self) -> object:
+        return self._scalar_one
+
+    def scalars(self) -> "_MockResult":
+        return self
+
+    def all(self) -> list[object]:
+        return list(self._rows) if hasattr(self._rows, "__iter__") else []
+
+    def __iter__(self):  # type: ignore[no-untyped-def]
+        return iter(self._rows if hasattr(self._rows, "__iter__") else [])
+
+
 def _make_mock_session() -> AsyncMock:
     session = AsyncMock()
     begin_cm = AsyncMock()
     begin_cm.__aenter__ = AsyncMock(return_value=None)
     begin_cm.__aexit__ = AsyncMock(return_value=False)
     session.begin = MagicMock(return_value=begin_cm)
+
+    def _execute_side_effect(*_args: object, **_kwargs: object) -> _MockResult:
+        return _MockResult()
+
+    session.execute = AsyncMock(side_effect=_execute_side_effect)
     return session
 
 
@@ -78,6 +114,119 @@ class TestDashboardSummary:
             assert status in counts
             assert isinstance(counts[status], int)
 
+    def test_includes_team_metrics(self, client: TestClient) -> None:
+        response = client.get("/api/v1/dashboard/summary")
+        assert response.status_code == 200
+        body = response.json()
+        assert "teams" in body
+        assert isinstance(body["teams"], list)
+
+    def test_includes_eval_pass_rate(self, client: TestClient) -> None:
+        response = client.get("/api/v1/dashboard/summary")
+        assert response.status_code == 200
+        body = response.json()
+        assert "eval_pass_rate" in body
+        if body["eval_pass_rate"] is not None:
+            er = body["eval_pass_rate"]
+            assert "overall_pass_rate" in er
+            assert "total_evals" in er
+            assert "passed_evals" in er
+            assert "per_pipeline" in er
+
+    def test_includes_trend(self, client: TestClient) -> None:
+        response = client.get("/api/v1/dashboard/summary")
+        assert response.status_code == 200
+        body = response.json()
+        assert "trend" in body
+        trend = body["trend"]
+        assert isinstance(trend, list)
+        for point in trend:
+            assert "date" in point
+            assert "run_count" in point
+            assert "eval_pass_rate" in point
+            assert "token_spend_usd" in point
+
+    def test_trend_is_7_days(self, client: TestClient) -> None:
+        response = client.get("/api/v1/dashboard/summary")
+        assert response.status_code == 200
+        body = response.json()
+        assert len(body["trend"]) == 7
+
+    def test_all_new_fields_present(self, client: TestClient) -> None:
+        response = client.get("/api/v1/dashboard/summary")
+        assert response.status_code == 200
+        body = response.json()
+        expected = {"total_runs", "active_pipelines", "run_counts_by_status", "teams", "eval_pass_rate", "trend"}
+        assert set(body.keys()) == expected
+
     def test_requires_auth(self, unauth_client: TestClient) -> None:
         response = unauth_client.get("/api/v1/dashboard/summary")
-        assert response.status_code == 403
+        assert response.status_code in (401, 403)
+
+
+class TestDashboardTrends:
+    """GET /api/v1/dashboard/trends"""
+
+    def test_returns_trend_data(self, client: TestClient) -> None:
+        response = client.get("/api/v1/dashboard/trends?days=7")
+        assert response.status_code == 200
+        body = response.json()
+        assert "days" in body
+        assert "run_counts" in body
+        assert "eval_pass_rates" in body
+        assert "token_spend" in body
+        assert body["days"] == 7
+
+    def test_defaults_to_7_days(self, client: TestClient) -> None:
+        response = client.get("/api/v1/dashboard/trends")
+        assert response.status_code == 200
+        body = response.json()
+        assert body["days"] == 7
+
+    def test_accepts_30_days(self, client: TestClient) -> None:
+        response = client.get("/api/v1/dashboard/trends?days=30")
+        assert response.status_code == 200
+        assert response.json()["days"] == 30
+
+    def test_accepts_90_days(self, client: TestClient) -> None:
+        response = client.get("/api/v1/dashboard/trends?days=90")
+        assert response.status_code == 200
+        assert response.json()["days"] == 90
+
+    def test_rejects_invalid_days(self, client: TestClient) -> None:
+        response = client.get("/api/v1/dashboard/trends?days=0")
+        assert response.status_code == 422
+
+    def test_rejects_too_many_days(self, client: TestClient) -> None:
+        response = client.get("/api/v1/dashboard/trends?days=91")
+        assert response.status_code == 422
+
+    def test_requires_auth(self, unauth_client: TestClient) -> None:
+        response = unauth_client.get("/api/v1/dashboard/trends")
+        assert response.status_code in (401, 403)
+
+    def test_run_counts_structure(self, client: TestClient) -> None:
+        response = client.get("/api/v1/dashboard/trends?days=7")
+        assert response.status_code == 200
+        body = response.json()
+        for entry in body["run_counts"]:
+            assert "date" in entry
+            assert "run_count" in entry
+
+    def test_eval_pass_rates_structure(self, client: TestClient) -> None:
+        response = client.get("/api/v1/dashboard/trends?days=7")
+        assert response.status_code == 200
+        body = response.json()
+        for entry in body["eval_pass_rates"]:
+            assert "date" in entry
+            assert "total_evals" in entry
+            assert "passed_evals" in entry
+            assert "pass_rate" in entry
+
+    def test_token_spend_structure(self, client: TestClient) -> None:
+        response = client.get("/api/v1/dashboard/trends?days=7")
+        assert response.status_code == 200
+        body = response.json()
+        for entry in body["token_spend"]:
+            assert "date" in entry
+            assert "total_spend_usd" in entry

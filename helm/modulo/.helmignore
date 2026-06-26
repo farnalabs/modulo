@@ -1,0 +1,16 @@
+# Patterns to ignore when packaging Helm charts.
+# This supports the glob/directory pattern syntax from .gitignore files.
+# Comments are supported.
+
+.git
+.gitignore
+**/.gitkeep
+**/.DS_Store
+**/*.tmproj
+*.swp
+*.bak
+*.tmp
+*~
+.charts
+*.md
+AGENTS.md
