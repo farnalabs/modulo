@@ -1,0 +1,53 @@
+name: Quality Gate
+
+on:
+  pull_request:
+    branches: [main]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  backend:
+    name: Backend
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          python-version: "3.12"
+          enable-cache: true
+      - run: uv sync --frozen
+      - run: ruff check .
+      - run: mypy .
+      - run: bandit -r .
+      - run: semgrep --config=../.semgrep/ .
+      - run: uv run lint-imports
+      - name: Tests with coverage
+        run: uv run pytest -m 'not awaiting-implementation' --timeout 60 -q --cov=src/modulo --cov-report=xml --cov-report=term
+        env:
+          SECRET_KEY: "ci-secret-key-not-for-production"
+          FERNET_KEY: "vK-xU7GqHLflg_GqzJ1FqWI7pHWoHSIyukf4wx-tMHI="
+
+  frontend:
+    name: Frontend
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - run: npm ci
+      - run: npm run lint
+      - run: npm run type-check
+      - run: npm run test:unit
+      - run: npm run build

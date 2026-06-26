@@ -2,6 +2,20 @@
 
 Full PRD: `docs/prd.md`. This file covers how to build. Conflicts between files → fix the conflict.
 
+## Git Workflow
+
+**Always use `git worktree` when branching.** Never check out branches in the main working tree. Worktrees live under `.agents/worktrees/<branch-name>/` and keep the main tree on `main` so CI/lint/test tooling always has a stable reference.
+
+```powershell
+# From Development/Product/
+git fetch origin <branch>
+git worktree add .agents/worktrees/<branch-name> <branch>
+# Work in .agents/worktrees/<branch-name>/
+# Commit, push, then clean up:
+git worktree remove .agents/worktrees/<branch-name>
+git branch -d <branch-name>
+```
+
 ## Skills
 
 - **`qa`** — Multi-lens quality review. Invoke with `qa <target-path>`. Runs 7 lenses (correctness, bugs, maintainability, SOLID, DRY, simplification, deps) via parallel subagents, validates findings, and applies fixes. Auto-invokes `lessons-learned` on fixed findings. Path: `.agents/skills/qa/SKILL.md`.
