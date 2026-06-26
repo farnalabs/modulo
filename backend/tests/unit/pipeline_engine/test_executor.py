@@ -95,6 +95,15 @@ def _make_session_factory(session: AsyncMock) -> MagicMock:
     return MagicMock(side_effect=lambda: _ctx())
 
 
+def _mock_graph_validator() -> MagicMock:
+    """Return a GraphValidator class mock whose validate_for_run always succeeds."""
+    validation = MagicMock()
+    validation.is_valid = True
+    mock_cls = MagicMock()
+    mock_cls.return_value.validate_for_run = AsyncMock(return_value=validation)
+    return mock_cls
+
+
 def _mock_compiled(events: list[dict[str, Any]] | None = None) -> MagicMock:
     """Return a compiled graph mock whose astream_events yields the given events."""
 
@@ -210,6 +219,8 @@ async def test_execute_success_transitions_status():
         patch("modulo.core.pipeline_engine.executor.set_rls_org"),
         patch("modulo.core.pipeline_engine.executor.get_or_compile", return_value=compiled),
         patch("modulo.core.pipeline_engine.executor.get_registry", return_value=registry),
+        patch("modulo.core.pipeline_engine.executor.GraphValidator", new=_mock_graph_validator()),
+        patch.object(PipelineExecutor, "_wait_for_capacity_or_fail", _bypass_capacity),
     ):
         executor = PipelineExecutor(MagicMock())
         result = await executor.execute(
@@ -238,6 +249,8 @@ async def test_execute_publishes_run_completed_event():
         patch("modulo.core.pipeline_engine.executor.set_rls_org"),
         patch("modulo.core.pipeline_engine.executor.get_or_compile", return_value=compiled),
         patch("modulo.core.pipeline_engine.executor.get_registry", return_value=registry),
+        patch("modulo.core.pipeline_engine.executor.GraphValidator", new=_mock_graph_validator()),
+        patch.object(PipelineExecutor, "_wait_for_capacity_or_fail", _bypass_capacity),
     ):
         executor = PipelineExecutor(MagicMock())
         await executor.execute(run_id=run.id, org_id=uuid.uuid4(), input_payload={})
@@ -272,6 +285,8 @@ async def test_execute_seeds_state_with_run_context():
         patch("modulo.core.pipeline_engine.executor.set_rls_org"),
         patch("modulo.core.pipeline_engine.executor.get_or_compile", return_value=compiled),
         patch("modulo.core.pipeline_engine.executor.get_registry", return_value=registry),
+        patch("modulo.core.pipeline_engine.executor.GraphValidator", new=_mock_graph_validator()),
+        patch.object(PipelineExecutor, "_wait_for_capacity_or_fail", _bypass_capacity),
     ):
         executor = PipelineExecutor(MagicMock())
         await executor.execute(
@@ -329,6 +344,8 @@ async def test_execute_marks_failed_on_graph_exception():
         patch("modulo.core.pipeline_engine.executor.set_rls_org"),
         patch("modulo.core.pipeline_engine.executor.get_or_compile", return_value=compiled),
         patch("modulo.core.pipeline_engine.executor.get_registry", return_value=registry),
+        patch("modulo.core.pipeline_engine.executor.GraphValidator", new=_mock_graph_validator()),
+        patch.object(PipelineExecutor, "_wait_for_capacity_or_fail", _bypass_capacity),
     ):
         executor = PipelineExecutor(MagicMock())
         result = await executor.execute(

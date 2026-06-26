@@ -16,9 +16,11 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.auth.jwt import create_access_token, create_refresh_token
+from modulo.db.crud.team_membership import add_team_member, get_membership_by_team_and_user, update_member_role
 from modulo.db.crud.token_family import create_family
 from modulo.db.crud.user import get_user_by_email, update_last_login
 from modulo.db.models.organisation import Organisation
+from modulo.db.models.sso_provider import SsoProvider
 from modulo.db.models.user import User
 from modulo.settings import Settings
 
@@ -100,6 +102,56 @@ async def jit_provision_user(
 # ---------------------------------------------------------------------------
 # Token issuance (same shape as existing LoginResponse)
 # ---------------------------------------------------------------------------
+
+
+async def apply_group_mappings(
+    session: AsyncSession,
+    user: User,
+    idp_groups: list[str],
+    group_mappings: list[dict[str, str]],
+) -> None:
+    """Apply SSO group-to-team mappings for a JIT-provisioned user."""
+    for mapping in group_mappings:
+        idp_group = mapping.get("idp_group", "")
+        if idp_group not in idp_groups:
+            continue
+        team_id = uuid.UUID(mapping["team_id"])
+        team_role = mapping.get("team_role", "viewer")
+
+        existing = await get_membership_by_team_and_user(session, team_id, user.id)
+        if existing is not None:
+            if existing.role != team_role:
+                await update_member_role(session, existing.id, team_role)
+        else:
+            await add_team_member(
+                session,
+                org_id=user.organisation_id,
+                team_id=team_id,
+                user_id=user.id,
+                role=team_role,
+            )
+
+
+async def _lookup_provider_by_client_id(
+    session: AsyncSession, client_id: str
+) -> SsoProvider | None:
+    from sqlalchemy import select
+
+    result = await session.execute(
+        select(SsoProvider).where(SsoProvider.client_id == client_id).limit(1)
+    )
+    return result.scalar_one_or_none()
+
+
+async def _lookup_provider_by_entity_id(
+    session: AsyncSession, entity_id: str
+) -> SsoProvider | None:
+    from sqlalchemy import select
+
+    result = await session.execute(
+        select(SsoProvider).where(SsoProvider.entity_id == entity_id).limit(1)
+    )
+    return result.scalar_one_or_none()
 
 
 async def issue_sso_tokens(user: User, session: AsyncSession, settings: Settings) -> dict[str, str]:
@@ -201,6 +253,13 @@ async def oidc_process_callback(
     sso_subject = f"{provider_id}:{claims.get('sub', email)}"
 
     user = await jit_provision_user(session, settings, email, name, "oidc", sso_subject)
+
+    idp_groups: list[str] = claims.get("groups", []) or []
+    if idp_groups:
+        db_provider = await _lookup_provider_by_client_id(session, provider["client_id"])
+        if db_provider is not None and db_provider.group_mappings:
+            await apply_group_mappings(session, user, idp_groups, db_provider.group_mappings)
+
     return await issue_sso_tokens(user, session, settings)
 
 
@@ -397,6 +456,18 @@ async def saml_process_response(
     sso_subject = f"saml:{idp_entity_id}:{name_id}"
 
     user = await jit_provision_user(session, settings, email, display_name, "saml", sso_subject)
+
+    saml_groups: list[str] = []
+    for group_attr in ("groups", "memberOf", "Group"):
+        raw = attrs.get(group_attr, "")
+        if raw:
+            saml_groups = [g.strip() for g in raw.split(",") if g.strip()]
+            break
+    if saml_groups:
+        db_provider = await _lookup_provider_by_entity_id(session, idp_entity_id)
+        if db_provider is not None and db_provider.group_mappings:
+            await apply_group_mappings(session, user, saml_groups, db_provider.group_mappings)
+
     return await issue_sso_tokens(user, session, settings)
 
 

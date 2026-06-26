@@ -63,6 +63,7 @@ def _make_mock_provider(**overrides: object) -> MagicMock:
     provider.enabled = overrides.get("enabled", True)
     provider.auto_provision = overrides.get("auto_provision", True)
     provider.default_role = overrides.get("default_role", "runner")
+    provider.group_mappings = overrides.get("group_mappings", [])
     provider.created_at = _NOW
     provider.updated_at = _NOW
     return provider
@@ -440,3 +441,144 @@ class TestEnvVarSeeding:
         settings.modulo_oidc_providers = "[]"
 
         await _seed_sso_providers(settings)
+
+
+class TestSetGroupMappings:
+    URL = "/api/v1/admin/sso/providers/00000000-0000-0000-0000-000000000010/group-mappings"
+
+    def test_set_mappings(self, client: TestClient) -> None:
+        mock_provider = _make_mock_provider(group_mappings=[
+            {"idp_group": "engineering", "team_id": "00000000-0000-0000-0000-000000000020", "team_role": "operator"},
+            {"idp_group": "viewers", "team_id": "00000000-0000-0000-0000-000000000030", "team_role": "viewer"},
+        ])
+        with patch("modulo.api.routes.admin_sso.set_group_mappings", new=AsyncMock(return_value=mock_provider)):
+            resp = client.put(self.URL, json={
+                "mappings": [
+                    {"idp_group": "engineering", "team_id": "00000000-0000-0000-0000-000000000020", "team_role": "operator"},
+                    {"idp_group": "viewers", "team_id": "00000000-0000-0000-0000-000000000030", "team_role": "viewer"},
+                ],
+            })
+            assert resp.status_code == 200
+            data = resp.json()
+            assert len(data["mappings"]) == 2
+            assert data["mappings"][0]["idp_group"] == "engineering"
+            assert data["mappings"][0]["team_role"] == "operator"
+
+    def test_404_on_missing(self, client: TestClient) -> None:
+        with patch("modulo.api.routes.admin_sso.set_group_mappings", new=AsyncMock(return_value=None)):
+            resp = client.put(self.URL, json={"mappings": []})
+            assert resp.status_code == 404
+
+    def test_requires_auth(self, unauth_client: TestClient) -> None:
+        resp = unauth_client.put(self.URL, json={"mappings": []})
+        assert resp.status_code in (401, 403)
+
+    def test_requires_admin(self, operator_client: TestClient) -> None:
+        resp = operator_client.put(self.URL, json={"mappings": []})
+        assert resp.status_code == 403
+
+
+class TestGetGroupMappings:
+    URL = "/api/v1/admin/sso/providers/00000000-0000-0000-0000-000000000010/group-mappings"
+
+    def test_get_mappings(self, client: TestClient) -> None:
+        mock_provider = _make_mock_provider(group_mappings=[
+            {"idp_group": "engineering", "team_id": "00000000-0000-0000-0000-000000000020", "team_role": "operator"},
+        ])
+        with patch("modulo.api.routes.admin_sso.get_provider", new=AsyncMock(return_value=mock_provider)):
+            resp = client.get(self.URL)
+            assert resp.status_code == 200
+            data = resp.json()
+            assert len(data["mappings"]) == 1
+            assert data["mappings"][0]["idp_group"] == "engineering"
+
+    def test_empty_mappings(self, client: TestClient) -> None:
+        mock_provider = _make_mock_provider(group_mappings=[])
+        with patch("modulo.api.routes.admin_sso.get_provider", new=AsyncMock(return_value=mock_provider)):
+            resp = client.get(self.URL)
+            assert resp.status_code == 200
+            assert resp.json() == {"mappings": []}
+
+    def test_404_on_missing(self, client: TestClient) -> None:
+        with patch("modulo.api.routes.admin_sso.get_provider", new=AsyncMock(return_value=None)):
+            resp = client.get(self.URL)
+            assert resp.status_code == 404
+
+    def test_requires_auth(self, unauth_client: TestClient) -> None:
+        resp = unauth_client.get(self.URL)
+        assert resp.status_code in (401, 403)
+
+    def test_requires_admin(self, operator_client: TestClient) -> None:
+        resp = operator_client.get(self.URL)
+        assert resp.status_code == 403
+
+
+class TestApplyGroupMappings:
+    async def test_adds_new_memberships(self) -> None:
+        from modulo.auth.sso import apply_group_mappings
+
+        session = _make_mock_session()
+        session.execute.return_value = MagicMock(scalar_one_or_none=MagicMock(return_value=None))
+
+        user = MagicMock()
+        user.id = _USER_ID
+        user.organisation_id = _ORG_ID
+
+        mappings = [
+            {"idp_group": "engineering", "team_id": "00000000-0000-0000-0000-000000000020", "team_role": "operator"},
+        ]
+        await apply_group_mappings(session, user, ["engineering", "design"], mappings)
+
+        add_calls = [c for c in session.add.call_args_list if c[0][0].__class__.__name__ == "TeamMembership"]
+        assert len(add_calls) == 1
+
+    async def test_skips_non_matching_groups(self) -> None:
+        from modulo.auth.sso import apply_group_mappings
+
+        session = _make_mock_session()
+
+        user = MagicMock()
+        user.id = _USER_ID
+        user.organisation_id = _ORG_ID
+
+        mappings = [
+            {"idp_group": "engineering", "team_id": "00000000-0000-0000-0000-000000000020", "team_role": "operator"},
+        ]
+        await apply_group_mappings(session, user, ["design"], mappings)
+
+        add_calls = [c for c in session.add.call_args_list if c[0][0].__class__.__name__ == "TeamMembership"]
+        assert len(add_calls) == 0
+
+    async def test_skips_empty_mappings(self) -> None:
+        from modulo.auth.sso import apply_group_mappings
+
+        session = _make_mock_session()
+
+        user = MagicMock()
+        user.id = _USER_ID
+        user.organisation_id = _ORG_ID
+
+        await apply_group_mappings(session, user, ["engineering"], [])
+
+        add_calls = [c for c in session.add.call_args_list if c[0][0].__class__.__name__ == "TeamMembership"]
+        assert len(add_calls) == 0
+
+    async def test_updates_existing_membership_role(self) -> None:
+        from modulo.auth.sso import apply_group_mappings
+
+        session = _make_mock_session()
+        existing = MagicMock()
+        existing.id = _USER_ID
+        existing.role = "viewer"
+        session.execute.return_value = MagicMock(scalar_one_or_none=MagicMock(return_value=existing))
+
+        user = MagicMock()
+        user.id = _USER_ID
+        user.organisation_id = _ORG_ID
+
+        mappings = [
+            {"idp_group": "engineering", "team_id": "00000000-0000-0000-0000-000000000020", "team_role": "operator"},
+        ]
+        await apply_group_mappings(session, user, ["engineering"], mappings)
+
+        assert existing.role == "operator"

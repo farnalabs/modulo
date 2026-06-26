@@ -90,3 +90,16 @@ async def toggle_provider(session: AsyncSession, provider_id: uuid.UUID) -> SsoP
     provider.enabled = not provider.enabled
     await session.flush()
     return provider
+
+
+async def set_group_mappings(
+    session: AsyncSession,
+    provider_id: uuid.UUID,
+    mappings: list[dict[str, object]],
+) -> SsoProvider | None:
+    provider = await get_provider(session, provider_id)
+    if provider is None:
+        return None
+    provider.group_mappings = mappings
+    await session.flush()
+    return provider

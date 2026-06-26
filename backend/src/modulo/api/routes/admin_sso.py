@@ -16,6 +16,7 @@ from modulo.db.crud.sso_provider import (
     delete_provider,
     get_provider,
     list_providers,
+    set_group_mappings,
     toggle_provider,
     update_provider,
 )
@@ -351,3 +352,51 @@ async def toggle_provider_endpoint(
             detail="SSO provider not found",
         )
     return SsoProviderResponse.from_orm(provider)
+
+
+class GroupMappingItem(BaseModel):
+    idp_group: str
+    team_id: str
+    team_role: str = "viewer"
+
+
+class GroupMappingsRequest(BaseModel):
+    mappings: list[GroupMappingItem]
+
+
+class GroupMappingsResponse(BaseModel):
+    mappings: list[GroupMappingItem]
+
+
+@router.put("/providers/{provider_id}/group-mappings", response_model=GroupMappingsResponse)
+async def set_group_mappings_endpoint(
+    provider_id: uuid.UUID,
+    body: GroupMappingsRequest,
+    current_user: AuthenticatedPrincipal = Depends(get_current_user),
+    session: AsyncSession = Depends(get_db_session),
+) -> GroupMappingsResponse:
+    _require_admin(current_user)
+    mappings_dict = [m.model_dump() for m in body.mappings]
+    provider = await set_group_mappings(session, provider_id, mappings_dict)
+    if provider is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="SSO provider not found",
+        )
+    return GroupMappingsResponse(mappings=[GroupMappingItem(**m) for m in provider.group_mappings])
+
+
+@router.get("/providers/{provider_id}/group-mappings", response_model=GroupMappingsResponse)
+async def get_group_mappings_endpoint(
+    provider_id: uuid.UUID,
+    current_user: AuthenticatedPrincipal = Depends(get_current_user),
+    session: AsyncSession = Depends(get_db_session),
+) -> GroupMappingsResponse:
+    _require_admin(current_user)
+    provider = await get_provider(session, provider_id)
+    if provider is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="SSO provider not found",
+        )
+    return GroupMappingsResponse(mappings=[GroupMappingItem(**m) for m in provider.group_mappings])

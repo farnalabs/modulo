@@ -1,6 +1,7 @@
 import uuid
+from typing import Any
 
-from sqlalchemy import Boolean, String, Text
+from sqlalchemy import JSON, Boolean, String, Text
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -23,3 +24,4 @@ class SsoProvider(Base, TimestampMixin):
     enabled: Mapped[bool] = mapped_column(Boolean, default=True, server_default="true")
     auto_provision: Mapped[bool] = mapped_column(Boolean, default=True, server_default="true")
     default_role: Mapped[str] = mapped_column(String(32), default="runner", server_default="runner")
+    group_mappings: Mapped[list[dict[str, Any]]] = mapped_column(JSON, nullable=False, server_default="[]")

@@ -5,6 +5,7 @@ import LibraryPipelineWizard from '../views/LibraryPipelineWizard.vue'
 import SettingsSsoView from '../views/SettingsSsoView.vue'
 import SettingsTeamsView from '../views/SettingsTeamsView.vue'
 import SchemaInferenceView from '../views/SchemaInferenceView.vue'
+import OnboardingWizard from '../views/OnboardingWizard.vue'
 
 const router = createRouter({
   history: createWebHistory(),
@@ -43,6 +44,11 @@ const router = createRouter({
       path: '/schemas/infer',
       name: 'schema-infer',
       component: SchemaInferenceView,
+    },
+    {
+      path: '/onboarding',
+      name: 'onboarding',
+      component: OnboardingWizard,
     },
   ],
 })
