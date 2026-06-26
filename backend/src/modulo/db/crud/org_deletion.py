@@ -204,7 +204,7 @@ async def batch_delete_langgraph_checkpoints(
     for tbl in ("checkpoint_writes", "checkpoints"):
         while True:
             _sql = (
-                f"DELETE FROM langgraph.{tbl} "  # noqa: S608
+                f"DELETE FROM langgraph.{tbl} "  # noqa: S608  # nosec B608
                 "WHERE ctid IN ("
                 f"  SELECT ctid FROM langgraph.{tbl} "
                 "  WHERE created_at < :cutoff "
