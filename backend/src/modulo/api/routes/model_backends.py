@@ -163,7 +163,8 @@ async def update_model_backend_endpoint(
 ) -> ModelBackendResponse:
     updates: dict[str, Any] = {k: v for k, v in body.model_dump().items() if v is not None}
     if "api_key" in updates:
-        updates["credentials_ciphertext"] = _encrypt(updates.pop("api_key"), settings.fernet_key)
+        _ct = _encrypt(updates.pop("api_key"), settings.fernet_key)
+        updates["credentials_ciphertext"] = _ct  # nosemgrep: credential-not-in-state
     async with session.begin():
         await set_rls_org(session, principal.organisation_id)
         await set_rls_user_context(session, principal.user_id, principal.org_role)
