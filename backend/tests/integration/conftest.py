@@ -1,6 +1,7 @@
 """Integration test fixtures — spins up a real Postgres via Testcontainers."""
 
 import asyncio
+import os
 from pathlib import Path
 
 import pytest
@@ -56,7 +57,17 @@ def migrated_db_url(db_url: str) -> str:
         await eng.dispose()
 
     asyncio.run(_ensure_alembic_table())
-    command.upgrade(config, "head")
+    # Override DATABASE_URL so alembic env.py uses the testcontainer, not any
+    # CI env var pointing at the service postgres.
+    _prev = os.environ.get("DATABASE_URL")
+    os.environ["DATABASE_URL"] = db_url
+    try:
+        command.upgrade(config, "head")
+    finally:
+        if _prev is None:
+            os.environ.pop("DATABASE_URL", None)
+        else:
+            os.environ["DATABASE_URL"] = _prev
 
     async def _existing_cols(conn, table: str) -> set[str]:
         result = await conn.execute(
