@@ -77,6 +77,7 @@ dependencies = [
 ]
 
 [project.scripts]
+modulo = "modulo.cli.backup:cli"
 modulo-migrate = "modulo.cli.migrate:cli"
 
 [project.optional-dependencies]
