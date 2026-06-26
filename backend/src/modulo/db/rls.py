@@ -16,6 +16,8 @@ from sqlalchemy import event, text
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
 from sqlalchemy.orm import ORMExecuteState, Session as SASession
 
+from modulo.settings import get_settings
+
 _log = logging.getLogger(__name__)
 
 _TENANT_KEY = "org_id"
