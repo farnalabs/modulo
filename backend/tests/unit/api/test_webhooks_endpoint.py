@@ -47,6 +47,24 @@ def _make_mock_session() -> AsyncMock:
     return session
 
 
+@pytest.fixture(autouse=True)
+def _patch_snapshot_creator() -> Generator[None, None, None]:
+    """Patch create_snapshot_from_live_graph for all webhook tests.
+
+    The receive_webhook route now fetches the trigger and creates a snapshot
+    before calling handle_webhook. This fixture stubs out the snapshot creation
+    so tests can focus on handle_webhook behaviour.
+    """
+    mock_snapshot = MagicMock()
+    mock_snapshot.id = uuid.uuid4()
+    with patch(
+        "modulo.db.crud.pipeline_snapshot.create_snapshot_from_live_graph",
+        new_callable=AsyncMock,
+        return_value=mock_snapshot,
+    ):
+        yield
+
+
 @pytest.fixture()
 def client() -> Generator[TestClient, None, None]:
     mock_session = _make_mock_session()

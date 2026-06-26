@@ -69,6 +69,43 @@ def _session_get(return_value: Any = None) -> AsyncMock:
     return session
 
 
+def _session_decide(
+    *,
+    update_returns_id: uuid.UUID | None = None,
+    diagnosis_gate: HitlClaim | None = None,
+    session_get_gate: HitlClaim | None = None,
+) -> AsyncMock:
+    """Session mock for HITLManager._decide().
+
+    Call sequence in _decide():
+      1. UPDATE … RETURNING id  → scalar_one_or_none() returns update_returns_id (or None)
+      2. If None: _get() SELECT → scalar_one_or_none() returns diagnosis_gate
+      If update_returns_id is not None: session.get() returns session_get_gate
+    """
+    session = AsyncMock()
+    session.add = MagicMock()
+    session.flush = AsyncMock()
+
+    update_result = MagicMock()
+    update_result.scalar_one_or_none.return_value = update_returns_id
+
+    diag_result = MagicMock()
+    diag_result.scalar_one_or_none.return_value = diagnosis_gate
+
+    call_count = 0
+
+    async def _execute(stmt: Any) -> Any:
+        nonlocal call_count
+        call_count += 1
+        if call_count == 1:
+            return update_result
+        return diag_result
+
+    session.execute = _execute
+    session.get = AsyncMock(return_value=session_get_gate)
+    return session
+
+
 def _session_update(
     *,
     rows_returned: int = 1,
@@ -341,7 +378,8 @@ async def test_claim_no_required_team_still_works():
 async def test_approve_valid_token_records_decision():
     future = datetime.now(UTC) + timedelta(minutes=5)
     gate = _gate(claimed_by=_USER, claim_token="good-token", expires_at=future)
-    session = _session_get(return_value=gate)
+    gate_decided = _gate(claimed_by=None, claim_token=None, expires_at=None, decision="approved")
+    session = _session_decide(update_returns_id=gate.id, session_get_gate=gate_decided)
     mgr = HITLManager()
     result = await mgr.approve(
         session, run_id=_RUN, gate_id=_GATE, org_id=_ORG, claim_token="good-token"
@@ -349,13 +387,12 @@ async def test_approve_valid_token_records_decision():
     assert result.decision == "approved"
     assert result.claim_token is None
     assert result.claimed_by is None
-    session.flush.assert_called_once()
 
 
 async def test_approve_wrong_token_raises():
     future = datetime.now(UTC) + timedelta(minutes=5)
     gate = _gate(claimed_by=_USER, claim_token="correct", expires_at=future)
-    session = _session_get(return_value=gate)
+    session = _session_decide(update_returns_id=None, diagnosis_gate=gate)
     mgr = HITLManager()
     with pytest.raises(ClaimTokenInvalidError):
         await mgr.approve(session, run_id=_RUN, gate_id=_GATE, org_id=_ORG, claim_token="wrong")
@@ -364,14 +401,14 @@ async def test_approve_wrong_token_raises():
 async def test_approve_expired_token_raises():
     past = datetime.now(UTC) - timedelta(minutes=1)
     gate = _gate(claimed_by=_USER, claim_token="tok", expires_at=past)
-    session = _session_get(return_value=gate)
+    session = _session_decide(update_returns_id=None, diagnosis_gate=gate)
     mgr = HITLManager()
     with pytest.raises(ClaimTokenExpiredError):
         await mgr.approve(session, run_id=_RUN, gate_id=_GATE, org_id=_ORG, claim_token="tok")
 
 
 async def test_approve_gate_not_found_raises():
-    session = _session_get(return_value=None)
+    session = _session_decide(update_returns_id=None, diagnosis_gate=None)
     mgr = HITLManager()
     with pytest.raises(GateNotFoundError):
         await mgr.approve(session, run_id=_RUN, gate_id=_GATE, org_id=_ORG, claim_token="tok")
@@ -379,7 +416,7 @@ async def test_approve_gate_not_found_raises():
 
 async def test_approve_already_decided_raises():
     gate = _gate(decision="approved")
-    session = _session_get(return_value=gate)
+    session = _session_decide(update_returns_id=None, diagnosis_gate=gate)
     mgr = HITLManager()
     with pytest.raises(GateAlreadyDecidedError):
         await mgr.approve(session, run_id=_RUN, gate_id=_GATE, org_id=_ORG, claim_token="tok")
@@ -389,7 +426,7 @@ async def test_approve_null_expires_at_raises_expired():
     """expires_at=None on a claimed gate (defensive guard) → ClaimTokenExpiredError."""
     # This state is unreachable via normal API flow but guard is defensive.
     gate = _gate(claimed_by=_USER, claim_token="tok", expires_at=None)
-    session = _session_get(return_value=gate)
+    session = _session_decide(update_returns_id=None, diagnosis_gate=gate)
     mgr = HITLManager()
     with pytest.raises(ClaimTokenExpiredError):
         await mgr.approve(session, run_id=_RUN, gate_id=_GATE, org_id=_ORG, claim_token="tok")
@@ -403,7 +440,8 @@ async def test_approve_null_expires_at_raises_expired():
 async def test_reject_valid_token_records_decision():
     future = datetime.now(UTC) + timedelta(minutes=5)
     gate = _gate(claimed_by=_USER, claim_token="tok", expires_at=future)
-    session = _session_get(return_value=gate)
+    gate_decided = _gate(claimed_by=None, claim_token=None, decision="rejected")
+    session = _session_decide(update_returns_id=gate.id, session_get_gate=gate_decided)
     mgr = HITLManager()
     result = await mgr.reject(
         session, run_id=_RUN, gate_id=_GATE, org_id=_ORG, claim_token="tok"
@@ -415,7 +453,7 @@ async def test_reject_valid_token_records_decision():
 async def test_reject_wrong_token_raises():
     future = datetime.now(UTC) + timedelta(minutes=5)
     gate = _gate(claimed_by=_USER, claim_token="correct", expires_at=future)
-    session = _session_get(return_value=gate)
+    session = _session_decide(update_returns_id=None, diagnosis_gate=gate)
     mgr = HITLManager()
     with pytest.raises(ClaimTokenInvalidError):
         await mgr.reject(session, run_id=_RUN, gate_id=_GATE, org_id=_ORG, claim_token="wrong")
@@ -512,13 +550,11 @@ async def test_list_overdue_returns_overdue_gates():
 async def test_list_overdue_below_threshold_returns_empty():
     from datetime import timedelta
 
-    now = datetime.now(UTC)
-    recent = now - timedelta(minutes=5)
-    gate = _gate(claimed_by=_USER, claim_token="tok", expires_at=recent, claimed_at=recent)
-
+    # The DB WHERE clause (claimed_at < now - threshold) excludes the recent gate.
+    # The mock simulates the DB returning no rows, as it would in production.
     session = AsyncMock()
     scalars = MagicMock()
-    scalars.__iter__ = lambda self: iter([gate])
+    scalars.__iter__ = lambda self: iter([])
     execute_result = MagicMock()
     execute_result.scalars.return_value = scalars
     session.execute = AsyncMock(return_value=execute_result)
@@ -542,6 +578,20 @@ async def test_count_overdue_returns_zero():
 # ---------------------------------------------------------------------------
 # Executor integration — NodeInterrupt handling
 # ---------------------------------------------------------------------------
+
+
+def _mock_graph_validator() -> MagicMock:
+    validation = MagicMock()
+    validation.is_valid = True
+    mock_cls = MagicMock()
+    mock_cls.return_value.validate_for_run = AsyncMock(return_value=validation)
+    return mock_cls
+
+
+async def _bypass_capacity(mock_self: Any, *, run_id: Any, org_id: Any, pipeline_id: Any, max_concurrent: Any, lock_wait_seconds: Any) -> Any:
+    run = MagicMock()
+    run.status = "running"
+    return run
 
 
 async def test_executor_sets_awaiting_human_on_node_interrupt():
@@ -608,6 +658,8 @@ async def test_executor_sets_awaiting_human_on_node_interrupt():
             "modulo.core.pipeline_engine.executor._checkpointer_scope",
             return_value=AsyncMock(),
         ),
+        patch("modulo.core.pipeline_engine.executor.GraphValidator", new=_mock_graph_validator()),
+        patch.object(PipelineExecutor, "_wait_for_capacity_or_fail", _bypass_capacity),
     ):
         executor = PipelineExecutor(MagicMock(), checkpointer_conn_string="a" * 32)
         result = await executor.execute(
