@@ -19,7 +19,6 @@ from modulo.db.crud.user import (
 
 pytestmark = [
     pytest.mark.integration,
-    pytest.mark.skip(reason="awaiting-implementation — user isolation test fixtures need schema alignment"),
 ]
 
 
@@ -71,7 +70,6 @@ async def _create_user_in_org(
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.skip(reason="awaiting-implementation — RLS isolation needs investigation")
 async def test_users_in_different_orgs_are_isolated(db_engine: AsyncEngine) -> None:
     """Users created in org A must not be visible when querying as org B."""
     org_a = await _create_org(db_engine, f"iso-a-{uuid.uuid4().hex[:8]}")
@@ -140,16 +138,16 @@ async def test_login_bypasses_rls(db_engine: AsyncEngine) -> None:
     org_a = await _create_org(db_engine, f"login-a-{uuid.uuid4().hex[:8]}")
     org_b = await _create_org(db_engine, f"login-b-{uuid.uuid4().hex[:8]}")
 
-    await _create_user_in_org(db_engine, org_a, "dave@login-test.com")
-    await _create_user_in_org(db_engine, org_b, "dave@login-test.com")
+    await _create_user_in_org(db_engine, org_a, "dave-a@login-test.com")
+    await _create_user_in_org(db_engine, org_b, "dave-b@login-test.com")
 
     factory = async_sessionmaker(db_engine, expire_on_commit=False)
 
     # Login should find the user regardless of org context
     async with factory() as session:
-        found = await get_user_by_email(session, "dave@login-test.com")
+        found = await get_user_by_email(session, "dave-a@login-test.com")
         assert found is not None
-        assert found.email == "dave@login-test.com"
+        assert found.email == "dave-a@login-test.com"
 
 
 # ---------------------------------------------------------------------------

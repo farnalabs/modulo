@@ -15,7 +15,6 @@ from modulo.core.feedback_manager import FeedbackManager
 
 pytestmark = [
     pytest.mark.integration,
-    pytest.mark.skip(reason="awaiting-implementation — schema drift"),
 ]
 
 

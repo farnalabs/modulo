@@ -1,7 +1,8 @@
 name: BDD / E2E Tests
 
 on:
-  workflow_dispatch:
+  push:
+    branches: [main]
 
 jobs:
   bdd:
@@ -17,6 +18,15 @@ jobs:
           - 5432:5432
         options: >-
           --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 5
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
           --health-interval 5s
           --health-timeout 5s
           --health-retries 5
@@ -68,12 +78,13 @@ jobs:
           MODULO_USERS: "admin:admin"
           CORS_ORIGINS: "http://localhost:4173"
           MODULO_PLUGIN_DISCOVERY: "false"
+          REDIS_URL: "redis://redis:6379/0"
       - name: Serve frontend
         working-directory: frontend
         run: npm run preview -- --port 4173 &
       - name: Wait for healthz
         run: |
-          for i in $(seq 1 30); do
+          for i in $(seq 1 60); do
             if curl -sf http://localhost:8000/healthz > /dev/null 2>&1; then
               echo "Backend healthy after ${i}s"
               exit 0

@@ -81,12 +81,32 @@ def migrated_db_url(db_url: str) -> str:
         """Add ORM columns missing from migrations to make CRUD functions work."""
         eng = create_async_engine(db_url)
         async with eng.connect() as conn:
-            # pipelines: missing default_autonomy_level
+            # pipelines: missing default_autonomy_level, slug
             cols = await _existing_cols(conn, "pipelines")
             if "default_autonomy_level" not in cols:
                 await conn.execute(
                     text("ALTER TABLE pipelines ADD COLUMN default_autonomy_level "
                          "VARCHAR(30) DEFAULT 'manual_approval'")
+                )
+            if "slug" not in cols:
+                await conn.execute(
+                    text("ALTER TABLE pipelines ADD COLUMN slug VARCHAR(255)")
+                )
+
+            # pipeline_snapshots: missing config_json
+            cols = await _existing_cols(conn, "pipeline_snapshots")
+            if "config_json" not in cols:
+                await conn.execute(
+                    text("ALTER TABLE pipeline_snapshots ADD COLUMN config_json JSON "
+                         "NOT NULL DEFAULT '{}'::json")
+                )
+
+            # feedback_records: missing needs_human_review
+            cols = await _existing_cols(conn, "feedback_records")
+            if "needs_human_review" not in cols:
+                await conn.execute(
+                    text("ALTER TABLE feedback_records ADD COLUMN needs_human_review "
+                         "BOOLEAN DEFAULT false")
                 )
 
             # webhook_payloads: ORM expects raw_body + raw_payload (migration has payload_ciphertext)

@@ -42,6 +42,7 @@ class PipelineSnapshot(OrgScoped):
     tag: Mapped[str | None] = mapped_column(String(100), nullable=True)
     notes: Mapped[str | None] = mapped_column(String(2000), nullable=True)
     default_autonomy_level: Mapped[str | None] = mapped_column(String(30))
+    config_json: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False, default=dict)
     run_context_defaults: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False, default=dict)
     organisation: Mapped[Organisation] = relationship()
     pipeline: Mapped[Pipeline] = relationship()

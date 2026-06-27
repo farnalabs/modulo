@@ -55,6 +55,7 @@ class Pipeline(OrgScoped):
         String(30),
         server_default="manual_approval",
     )
+    slug: Mapped[str | None] = mapped_column(String(255), nullable=True)
     created_by: Mapped[uuid.UUID] = mapped_column(
         Uuid(), ForeignKey("users.id", ondelete="RESTRICT"), nullable=False
     )
