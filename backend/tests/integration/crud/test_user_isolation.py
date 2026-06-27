@@ -10,11 +10,6 @@ import pytest
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker
 
-pytestmark = [
-    pytest.mark.integration,
-    pytest.mark.skip(reason="awaiting-implementation — user isolation test fixtures need schema alignment"),
-]
-
 from modulo.auth.passwords import hash_password, password_entropy_bits, validate_password_strength
 from modulo.db.crud.user import (
     get_user_by_email,
@@ -22,7 +17,10 @@ from modulo.db.crud.user import (
     list_users_for_org,
 )
 
-pytestmark = pytest.mark.integration
+pytestmark = [
+    pytest.mark.integration,
+    pytest.mark.skip(reason="awaiting-implementation — user isolation test fixtures need schema alignment"),
+]
 
 
 async def _create_org(db_engine: AsyncEngine, slug: str) -> uuid.UUID:
