@@ -29,5 +29,5 @@ celery_app.conf.update(
     result_serializer="json",
     timezone="UTC",
     enable_utc=True,
-    beat_scheduler="modulo.core.cron_scheduler:DatabaseCronScheduler",
+    beat_scheduler="modulo.core.composite_scheduler:CompositeScheduler",
 )

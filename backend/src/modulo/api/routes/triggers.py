@@ -83,6 +83,7 @@ class CronConfigUpdate(BaseModel):
     cron_timezone: str | None = None
     active: bool | None = None
     snapshot_id: str | None = None
+    input_template: dict[str, Any] | None = None
 
 
 @router.patch("/triggers/{trigger_id}/cron", status_code=status.HTTP_200_OK)
@@ -144,6 +145,9 @@ async def update_cron_config(
         if body.snapshot_id is not None:
             trigger.config_json = {**(trigger.config_json or {}), "snapshot_id": body.snapshot_id}
 
+        if body.input_template is not None:
+            trigger.config_json = {**(trigger.config_json or {}), "input_template": body.input_template}
+
         await session.flush()
 
     return {
@@ -152,6 +156,7 @@ async def update_cron_config(
         "cron_timezone": trigger.cron_timezone,
         "active": trigger.active,
         "next_fire_at": trigger.next_fire_at.isoformat() if trigger.next_fire_at else None,
+        "input_template": trigger.config_json.get("input_template") if trigger.config_json else None,
     }
 
 
@@ -392,6 +397,7 @@ async def create_trigger(
         "cron_timezone": trigger.cron_timezone,
         "last_fired_at": trigger.last_fired_at.isoformat() if trigger.last_fired_at else None,
         "next_fire_at": trigger.next_fire_at.isoformat() if trigger.next_fire_at else None,
+        "input_template": trigger.config_json.get("input_template") if trigger.config_json else None,
     }
 
 

@@ -96,11 +96,13 @@ def _make_gate_kickback_router(
     reject_target_str: str,
 ) -> Callable[[dict[str, Any]], str]:
     """Build a router that kicks back to reject_target on HITL rejection."""
+
     def _router(state: dict[str, Any]) -> str:
         decision = state.get("_hitl_decision")
         if decision and isinstance(decision, dict) and decision.get("action") == "rejected":
             return reject_target_str
         return normal_target
+
     return _router
 
 
