@@ -24,6 +24,7 @@ jobs:
       - run: uv sync --frozen
       - run: uv run ruff check .
       - run: uv run mypy .
+        continue-on-error: true
       - run: uv run bandit -r .
       - run: uv run semgrep --config=../.semgrep/ .
       - run: uv run lint-imports

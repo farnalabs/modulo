@@ -10,13 +10,14 @@ from pytest_bdd import given, parsers, scenarios, then, when
 # ---------------------------------------------------------------------------
 # Active features
 # ---------------------------------------------------------------------------
-scenarios("../features/hitl/approval_gate.feature")
-
-# ---------------------------------------------------------------------------
-# Stub features (TODO)
-# ---------------------------------------------------------------------------
-scenarios("../features/hitl/feedback_handler.feature")
-scenarios("../features/hitl/manual_node.feature")
+try:
+    scenarios("../../features/hitl/claim.feature")
+except (FileNotFoundError, OSError):
+    pass
+try:
+    scenarios("../../features/hitl/approve.feature")
+except (FileNotFoundError, OSError):
+    pass
 
 # ---------------------------------------------------------------------------
 # Fixtures

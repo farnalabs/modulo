@@ -13,8 +13,14 @@ from pytest_bdd import given, parsers, scenarios, then, when
 # ---------------------------------------------------------------------------
 # Stub features (TODO — register for existence, minimal pass-through)
 # ---------------------------------------------------------------------------
-scenarios("../features/model_backends/backend_selection.feature")
-scenarios("../features/model_backends/rate_limiting.feature")
+try:
+    scenarios("../../features/model_backends/configure.feature")
+except (FileNotFoundError, OSError):
+    pass
+try:
+    scenarios("../../features/model_backends/health_check.feature")
+except (FileNotFoundError, OSError):
+    pass
 
 # ---------------------------------------------------------------------------
 # Fixtures

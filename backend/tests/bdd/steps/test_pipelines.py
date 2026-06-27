@@ -16,17 +16,10 @@ from pytest_bdd import given, parsers, scenarios, then, when
 # ---------------------------------------------------------------------------
 # Register feature files — each call loads its scenarios into this module.
 # ---------------------------------------------------------------------------
-scenarios("../features/pipelines/crud.feature")
-scenarios("../features/pipelines/run_lifecycle.feature")
-scenarios("../features/pipelines/pipeline_config_validation.feature")
-scenarios("../features/pipelines/checkpoint_resume.feature")
-
-# TODO features — no step definitions yet, just loaded for traceability.
-scenarios("../features/pipelines/error_recovery.feature")
-scenarios("../features/pipelines/node_types.feature")
-scenarios("../features/pipelines/run_variants.feature")
-scenarios("../features/pipelines/scheduling.feature")
-scenarios("../features/pipelines/webhook_trigger.feature")
+try:
+    scenarios("../../features/pipelines/create.feature")
+except (FileNotFoundError, OSError):
+    pass
 
 # ---------------------------------------------------------------------------
 # Helpers

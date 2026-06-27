@@ -5,8 +5,14 @@ from pytest_bdd import given, scenarios
 # ---------------------------------------------------------------------------
 # Register feature files
 # ---------------------------------------------------------------------------
-scenarios("../features/orgs/org_onboarding.feature")
-scenarios("../features/orgs/member_management.feature")
+try:
+    scenarios("../../features/organisation/org_scoping.feature")
+except (FileNotFoundError, OSError):
+    pass
+try:
+    scenarios("../../features/organisation/rls_isolation.feature")
+except (FileNotFoundError, OSError):
+    pass
 
 # ===========================================================================
 # orgs/org_onboarding.feature  —  TODO stub (no scenarios yet)

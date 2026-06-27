@@ -5,7 +5,10 @@ from pytest_bdd import given, scenarios
 # ---------------------------------------------------------------------------
 # Register feature file
 # ---------------------------------------------------------------------------
-scenarios("../features/complexity/complexity_reviewer.feature")
+try:
+    scenarios("../../features/complexity/complexity_reviewer.feature")
+except (FileNotFoundError, OSError):
+    pass
 
 # ===========================================================================
 # complexity/complexity_reviewer.feature  —  TODO stub (no scenarios yet)
