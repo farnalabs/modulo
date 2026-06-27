@@ -192,6 +192,7 @@ def build_graph_from_json(
         role: str | None = node_def.get("role")
         timeout: float | None = node_def.get("timeout_seconds")
         node_type: str = node_def.get("node_type", "agent")
+        max_input_length: int | None = node_def.get("max_input_length")
 
         if node_type == "manual":
             graph.add_node(
@@ -201,7 +202,7 @@ def build_graph_from_json(
         else:
             graph.add_node(
                 node_id,
-                make_node_fn(node_def, role=role, timeout=timeout),
+                make_node_fn(node_def, role=role, timeout=timeout, max_input_length=max_input_length),
             )
 
     # Build reject-edge lookup for kick-back routing.
