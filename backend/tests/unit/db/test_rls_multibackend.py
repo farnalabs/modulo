@@ -1,12 +1,10 @@
 """Unit tests for db/rls.py multi-backend behavior — set_rls_org, _inject_tenant_filter."""
 
 import uuid
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-from sqlalchemy import Select
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm import ORMExecuteState
 
 from modulo.db.rls import _inject_tenant_filter, set_rls_org
 

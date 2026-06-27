@@ -378,8 +378,8 @@ class TestExportCosts:
 
 
 class TestCreateReport:
-    ENDPOINT = "/api/v1/admin/costs/reports"
-    PAYLOAD = {
+    ENDPOINT: ClassVar[str] = "/api/v1/admin/costs/reports"
+    PAYLOAD: ClassVar[dict] = {
         "period": "monthly",
         "group_by": "team",
         "format": "csv",

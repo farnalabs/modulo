@@ -153,7 +153,7 @@ class TestDownloadTracking:
             ) as mock_update,
             patch("modulo.core.library_service.set_rls_org", AsyncMock()),
         ):
-            result = await copy_to_adapt(
+            await copy_to_adapt(
                 session,
                 org_id=org_id,
                 primitive_id=primitive_id,

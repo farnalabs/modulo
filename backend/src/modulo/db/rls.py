@@ -15,7 +15,8 @@ import uuid
 
 from sqlalchemy import event, text
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
-from sqlalchemy.orm import ORMExecuteState, Session as SASession
+from sqlalchemy.orm import ORMExecuteState
+from sqlalchemy.orm import Session as SASession
 
 from modulo.settings import get_settings
 

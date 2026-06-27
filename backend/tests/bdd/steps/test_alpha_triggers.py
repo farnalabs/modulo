@@ -13,7 +13,7 @@ scenarios("../../features/triggers/webhook_payload_mapping.feature")
 scenarios("../../features/triggers/flood_protection.feature")
 scenarios("../../features/triggers/trigger_event_log.feature")
 
-from tests.bdd.conftest import make_mock_pipeline
+from tests.bdd.conftest import make_mock_pipeline  # noqa: E402
 
 
 @given(parsers.parse('org "{org}" has pipeline "{name}"'))

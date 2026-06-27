@@ -1,6 +1,5 @@
 """Unit tests for schema migration."""
 
-import pytest
 
 from modulo.core.schema_registry.migration import (
     MigrationPlan,

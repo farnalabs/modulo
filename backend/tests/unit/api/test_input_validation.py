@@ -13,7 +13,7 @@ route-level validation via TestClient (ensures FastAPI rejects bad input).
 import uuid
 from collections.abc import AsyncGenerator, Generator
 from datetime import UTC, datetime
-from unittest.mock import ANY, AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi.testclient import TestClient

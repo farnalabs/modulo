@@ -548,7 +548,6 @@ async def test_list_overdue_returns_overdue_gates():
 
 
 async def test_list_overdue_below_threshold_returns_empty():
-    from datetime import timedelta
 
     # The DB WHERE clause (claimed_at < now - threshold) excludes the recent gate.
     # The mock simulates the DB returning no rows, as it would in production.
@@ -588,7 +587,7 @@ def _mock_graph_validator() -> MagicMock:
     return mock_cls
 
 
-async def _bypass_capacity(mock_self: Any, *, run_id: Any, org_id: Any, pipeline_id: Any, max_concurrent: Any, lock_wait_seconds: Any) -> Any:
+async def _bypass_capacity(mock_self: Any, *, run_id: Any, org_id: Any, pipeline_id: Any, max_concurrent: Any, lock_wait_seconds: Any) -> Any:  # noqa: E501
     run = MagicMock()
     run.status = "running"
     return run

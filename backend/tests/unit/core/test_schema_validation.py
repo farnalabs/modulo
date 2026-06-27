@@ -1,6 +1,5 @@
 """Unit tests for schema union/array validation."""
 
-import pytest
 
 from modulo.core.schema_registry.validation import (
     validate_array_schema,

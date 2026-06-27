@@ -25,17 +25,17 @@ from modulo.core.schema_registry.validation import (
 )
 
 __all__ = [
+    "FieldChange",
+    "MigrationPlan",
     "SchemaGenerationError",
     "SchemaGenerationService",
     "SchemaInferenceError",
     "SchemaInferenceService",
-    "FieldChange",
-    "MigrationPlan",
+    "SchemaValidationError",
+    "SchemaValidationResult",
     "apply_migration",
     "create_migration",
     "transform_field",
-    "SchemaValidationError",
-    "SchemaValidationResult",
     "validate_array_schema",
     "validate_union_and_array",
     "validate_union_schema",

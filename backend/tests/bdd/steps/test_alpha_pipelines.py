@@ -8,7 +8,7 @@ from pytest_bdd import given, parsers, scenarios, then, when
 scenarios("../../features/pipelines/create.feature")
 scenarios("../../features/pipelines/concurrency.feature")
 
-from tests.bdd.conftest import make_mock_pipeline
+from tests.bdd.conftest import make_mock_pipeline  # noqa: E402
 
 
 @given(parsers.parse('org "{org}" has pipeline "{name}" with max_concurrent_runs {limit:d}'))

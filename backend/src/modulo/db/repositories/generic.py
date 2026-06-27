@@ -27,12 +27,10 @@ class GenericRepository(BaseRepository):
         await set_rls_org(session, org_id)
 
     def apply_tenant_filter(self, stmt: Select, org_id: uuid.UUID) -> Select:
-        injected = False
         for desc in stmt.column_descriptions:
             entity = desc.get("entity")
             if entity is None or entity is object:
                 continue
             if hasattr(entity, _TENANT_COLUMN):
                 stmt = stmt.where(getattr(entity, _TENANT_COLUMN) == org_id)
-                injected = True
         return stmt

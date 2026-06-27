@@ -7,7 +7,6 @@ Usage:
 
 from __future__ import annotations
 
-import asyncio
 import hashlib
 import json
 import logging
@@ -106,7 +105,7 @@ def _run_pg_dump(raw_url: str, output: Path, timeout: int = 300) -> None:
         raw_url,
     ]
     with output.open("wb") as f:
-        result = subprocess.run(cmd, stdout=f, stderr=subprocess.PIPE, timeout=timeout)
+        result = subprocess.run(cmd, stdout=f, stderr=subprocess.PIPE, timeout=timeout)  # noqa: S603 — cmd is a hardcoded list, not user input
     if result.returncode != 0:
         raise RuntimeError(f"pg_dump failed: {result.stderr.decode().strip()}")
 
@@ -114,7 +113,7 @@ def _run_pg_dump(raw_url: str, output: Path, timeout: int = 300) -> None:
 def _run_psql(raw_url: str, input_path: Path, timeout: int = 600) -> None:
     cmd = ["psql", "-q", "-v", "ON_ERROR_STOP=1", raw_url]
     with input_path.open("rb") as f:
-        result = subprocess.run(cmd, stdin=f, stderr=subprocess.PIPE, stdout=subprocess.PIPE, timeout=timeout)
+        result = subprocess.run(cmd, stdin=f, capture_output=True, timeout=timeout)  # noqa: S603 — cmd is a hardcoded list with trusted input
     if result.returncode != 0:
         raise RuntimeError(f"psql restore failed: {result.stderr.decode().strip()}")
 
@@ -151,10 +150,8 @@ def _export_credentials_references_sync(raw_url: str) -> dict[str, list[dict[str
         for table in tables:
             rows: list[dict[str, Any]] = []
             with conn.cursor() as cur:
-                cur.execute(
-                    f"SELECT id, organisation_id, name, credentials_ciphertext "
-                    f"FROM {table} ORDER BY id"
-                )
+                _sql = f"SELECT id, organisation_id, name, credentials_ciphertext FROM {table} ORDER BY id"  # noqa: S608 — table is from a hardcoded allowlist
+                cur.execute(_sql)
                 for row in cur:
                     row["id"] = str(row["id"])
                     row["organisation_id"] = str(row["organisation_id"])
@@ -217,7 +214,7 @@ def _re_encrypt_credentials_sync(
                     plaintext = old_fernet.decrypt(old_ct)
                     new_ct = new_fernet.encrypt(plaintext)
                     cur.execute(
-                        f"UPDATE {table} SET credentials_ciphertext = %s WHERE id = %s",
+                        f"UPDATE {table} SET credentials_ciphertext = %s WHERE id = %s",  # noqa: S608 — table is from a hardcoded allowlist
                         (new_ct, uuid.UUID(row["id"])),
                     )
                     rekeyed += 1
@@ -310,7 +307,7 @@ def backup(db_url: str | None, output_dir: Path | None) -> None:
 
     except Exception as exc:
         click.echo(f"Backup failed: {exc}", err=True)
-        raise click.ClickException(str(exc))
+        raise click.ClickException(str(exc)) from exc
 
 
 @cli.command()
@@ -390,4 +387,4 @@ def restore(backup_dir: Path, db_url: str | None, yes: bool, previous_fernet_key
 
     except Exception as exc:
         click.echo(f"Restore failed: {exc}", err=True)
-        raise click.ClickException(str(exc))
+        raise click.ClickException(str(exc)) from exc

@@ -13,7 +13,7 @@ scenarios("../../features/mcp/human_only.feature")
 scenarios("../../features/mcp/library_browse.feature")
 scenarios("../../features/mcp/onboarding.feature")
 
-from tests.bdd.conftest import make_mock_pipeline
+from tests.bdd.conftest import make_mock_pipeline  # noqa: E402
 
 
 @given("an MCP server is running at /mcp")

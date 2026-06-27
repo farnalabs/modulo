@@ -289,7 +289,7 @@ class TestTestConnection:
             patch("modulo.api.routes.admin_sso._test_saml_connection", new=AsyncMock(return_value=MagicMock(
                 success=True,
                 message="Successfully parsed SAML metadata.",
-                provider_info={"entity_id": "https://idp.example.com", "sso_url": "https://idp.example.com/sso", "certificates": []},
+                provider_info={"entity_id": "https://idp.example.com", "sso_url": "https://idp.example.com/sso", "certificates": []},  # noqa: E501
             ))),
         ):
             resp = client.post(self.URL)
@@ -410,7 +410,7 @@ class TestEnvVarSeeding:
 
         with (
             patch("modulo.api.dependencies.get_or_create_engine", return_value=MagicMock()),
-            patch("modulo.api.dependencies.get_or_create_session_factory", return_value=self._make_factory_mock(mock_session)),
+            patch("modulo.api.dependencies.get_or_create_session_factory", return_value=self._make_factory_mock(mock_session)),  # noqa: E501
         ):
             await _seed_sso_providers(settings)
 
@@ -430,7 +430,7 @@ class TestEnvVarSeeding:
 
         with (
             patch("modulo.api.dependencies.get_or_create_engine", return_value=MagicMock()),
-            patch("modulo.api.dependencies.get_or_create_session_factory", return_value=self._make_factory_mock(mock_session)),
+            patch("modulo.api.dependencies.get_or_create_session_factory", return_value=self._make_factory_mock(mock_session)),  # noqa: E501
         ):
             await _seed_sso_providers(settings)
             mock_session.add.assert_not_called()
@@ -454,7 +454,7 @@ class TestSetGroupMappings:
         with patch("modulo.api.routes.admin_sso.set_group_mappings", new=AsyncMock(return_value=mock_provider)):
             resp = client.put(self.URL, json={
                 "mappings": [
-                    {"idp_group": "engineering", "team_id": "00000000-0000-0000-0000-000000000020", "team_role": "operator"},
+                    {"idp_group": "engineering", "team_id": "00000000-0000-0000-0000-000000000020", "team_role": "operator"},  # noqa: E501
                     {"idp_group": "viewers", "team_id": "00000000-0000-0000-0000-000000000030", "team_role": "viewer"},
                 ],
             })

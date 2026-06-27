@@ -502,7 +502,7 @@ def input_contains_injection_payloads(ctx):
 
 @then("the input is sanitised before reaching the agent prompt")
 def input_sanitised_before_agent(ctx, request):
-    user_input = ctx.get("user_input", "evil input")
+    ctx.get("user_input", "evil input")
     ctx["sanitised_input"] = "<sanitised>"
     ctx["sanitised"] = True
     request.node._sanitised = True
@@ -1409,7 +1409,7 @@ def claim_gate(ctx):
 
 @when("I approve the gate with my decision")
 def approve_gate(client, request, ctx):
-    from unittest.mock import patch, AsyncMock
+    from unittest.mock import AsyncMock, patch
 
     if not ctx.get("gate_claimed"):
         ctx["gate_claimed"] = True
@@ -1474,7 +1474,7 @@ def hitl_gate_human_only(value: str, ctx):
 
 @then("no MCP tool can approve this gate")
 def no_mcp_can_approve(ctx):
-    from unittest.mock import patch, AsyncMock
+    from unittest.mock import AsyncMock, patch
     mock_mgr = MagicMock()
     mock_mgr.approve = AsyncMock(side_effect=PermissionError("human_only"))
     with patch("modulo.core.hitl_manager.HITLManager", return_value=mock_mgr):
@@ -1553,7 +1553,7 @@ def alice_create_connector_instance(request):
 
 @when(parsers.parse('I update the node\'s connector binding to "{provider_name}"'))
 def alice_update_connector_binding(provider_name: str, request):
-    mock_pipeline = getattr(request.node, "_mock_pipeline", None)
+    getattr(request.node, "_mock_pipeline", None)
     request.node._resp_body = {"status": "ok"}
     request.node._updated_connector = provider_name
 
@@ -1590,7 +1590,7 @@ def hitl_triggers_notification(ctx):
 
 @then("a webhook POST is sent to the configured Slack endpoint")
 def webhook_post_to_slack(ctx):
-    from unittest.mock import patch, AsyncMock
+    from unittest.mock import AsyncMock, patch
     mock_notifier = MagicMock()
     mock_notifier.send = AsyncMock(return_value=True)
     with patch("modulo.core.notifier.Notifier", return_value=mock_notifier):
@@ -1693,9 +1693,7 @@ def tickets_created_in_issue_tracker(request):
 
 @given(parsers.parse('model backend "{name}" is unhealthy'))
 def model_backend_unhealthy(name: str, request):
-    request.node._unhealthy_backends = getattr(
-        request.node, "_unhealthy_backends", []
-    ) + [name]
+    request.node._unhealthy_backends = [*getattr(request.node, "_unhealthy_backends", []), name]
 
 
 @given(
@@ -1832,61 +1830,6 @@ def deploy_does_not_proceed(ctx):
 
 
 # ===========================================================================
-# Duncan: goal-solo-single-hitl
-# ===========================================================================
-
-
-@given(parsers.parse('a run is waiting at HITL gate "{gate_id}"'))
-def run_waiting_at_hitl_gate(gate_id: str, ctx):
-    ctx["run_status"] = "awaiting_human"
-    ctx["gate_id"] = gate_id
-    ctx["run_id"] = uuid.uuid4()
-    from datetime import UTC, datetime, timedelta
-    ctx["claim_token"] = "valid_token_" + uuid.uuid4().hex
-    mock_gate = MagicMock()
-    mock_gate.run_id = ctx["run_id"]
-    mock_gate.gate_id = gate_id
-    mock_gate.claimed_by = None
-    mock_gate.claimed_at = None
-    mock_gate.claim_token = ctx["claim_token"]
-    mock_gate.expires_at = datetime.now(UTC) + timedelta(minutes=15)
-    mock_gate.decision = None
-    ctx["mock_gate"] = mock_gate
-
-
-@when("I claim the gate")
-def claim_gate(ctx):
-    ctx["gate_claimed"] = True
-    ctx["run_status"] = "claimed"
-
-
-@when("I approve the gate with my decision")
-def approve_gate(client, request, ctx):
-    from unittest.mock import patch, AsyncMock
-
-    if not ctx.get("gate_claimed"):
-        ctx["gate_claimed"] = True
-    ctx["decision"] = "approved"
-    mock_mgr = MagicMock()
-    mock_mgr.approve = AsyncMock(return_value=ctx["mock_gate"])
-    with patch("modulo.core.hitl_manager.HITLManager", return_value=mock_mgr):
-        request.node._resp = {"status": "approved", "run_id": str(ctx["run_id"])}
-        request.node._resp_status = 200
-
-
-@then("the run resumes")
-def the_run_resumes(ctx):
-    ctx["run_status"] = "running"
-    assert ctx.get("decision") == "approved", "Run was not approved"
-    assert ctx["run_status"] == "running", "Run did not resume"
-
-
-@then("the audit log records my approval")
-def audit_log_records_approval(ctx):
-    assert ctx.get("decision") == "approved", "No approval decision to record"
-
-
-# ===========================================================================
 
 # Duncan: goal-solo-observability
 # ===========================================================================
@@ -1961,11 +1904,11 @@ def check_docker_available():
 @when("I run docker compose up")
 def start_compose_stack(ctx):
     """Start Postgres and Redis via testcontainers, configure app, start TestClient."""
+    from fastapi.testclient import TestClient
     from testcontainers.postgres import PostgresContainer
     from testcontainers.redis import RedisContainer
-    from modulo.settings import Settings
+
     from modulo.api.main import app
-    from fastapi.testclient import TestClient
 
     # Start Postgres
     pg = PostgresContainer("postgres:16-alpine")

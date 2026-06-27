@@ -5,7 +5,7 @@ from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 from httpx import ASGITransport, AsyncClient
 
-from modulo.api.middleware.correlation_id import CorrelationIdMiddleware, REQUEST_ID_HEADER
+from modulo.api.middleware.correlation_id import REQUEST_ID_HEADER, CorrelationIdMiddleware
 from modulo.core.logging_config import correlation_id_var
 
 
@@ -68,7 +68,7 @@ async def test_correlation_id_contextvar_propagated(app: FastAPI) -> None:
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as client:
         resp = await client.get("/test")
-    cid = resp.json()["correlation_id"]
+    resp.json()["correlation_id"]
     assert correlation_id_var.get() is None
 
 

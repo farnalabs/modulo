@@ -158,7 +158,7 @@ def unauth_client() -> Generator[TestClient, None, None]:
 # Common step definitions (shared across all step files)
 # ---------------------------------------------------------------------------
 
-from pytest_bdd import given, parsers
+from pytest_bdd import given, parsers  # noqa: E402
 
 
 @given(parsers.parse('I am authenticated as an admin in org "{org}"'))

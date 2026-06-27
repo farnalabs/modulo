@@ -16,10 +16,10 @@ os.environ.setdefault("SECRET_KEY", "a" * 32)
 os.environ.setdefault("FERNET_KEY", "a" * 32)
 os.environ.setdefault("MODULO_DB", "sqlite")
 
-import modulo.db.models  # noqa: F401, E402
-from modulo.db.models.base import Base  # noqa: E402
-from modulo.db.models.organisation import Organisation  # noqa: E402
-from modulo.db.models.user import User  # noqa: E402
+import modulo.db.models  # noqa: F401
+from modulo.db.models.base import Base
+from modulo.db.models.organisation import Organisation
+from modulo.db.models.user import User
 
 _DB_URL = "sqlite+aiosqlite:///./test_multi_backend.db"
 _DB_PATH = "./test_multi_backend.db"
@@ -40,7 +40,7 @@ async def _tables(_engine):
     async with _engine.begin() as conn:
         await conn.run_sync(Base.metadata.drop_all)
     await _engine.dispose()
-    if os.path.exists(_DB_PATH):
+    if os.path.exists(_DB_PATH):  # noqa: ASYNC240 — test fixture cleanup, not a hot path
         os.remove(_DB_PATH)
 
 

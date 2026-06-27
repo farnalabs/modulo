@@ -3,7 +3,7 @@ POST /api/v1/evals/from-run."""
 
 import uuid
 from collections.abc import AsyncGenerator, Generator
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -28,7 +28,7 @@ _RUN_B = uuid.UUID("00000000-0000-0000-0000-000000000041")
 _RESULT_A1 = uuid.UUID("00000000-0000-0000-0000-000000000050")
 _RESULT_B1 = uuid.UUID("00000000-0000-0000-0000-000000000051")
 
-_DT = datetime(2025, 6, 1, 12, 0, 0, tzinfo=timezone.utc)
+_DT = datetime(2025, 6, 1, 12, 0, 0, tzinfo=UTC)
 
 
 def _make_settings() -> Settings:

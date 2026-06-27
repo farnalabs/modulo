@@ -155,7 +155,7 @@ class TestWebhookDeduplication:
         async with factory() as session:
             async with session.begin():
                 await set_rls_org(session, test_org)
-                run, event, _ = await engine.handle_webhook(
+                _run, event, _ = await engine.handle_webhook(
                     session, trigger_id=trigger_id, org_id=test_org,
                     raw_body=body, raw_payload=raw_payload,
                     hmac_signature=sig, modulo_timestamp=ts,

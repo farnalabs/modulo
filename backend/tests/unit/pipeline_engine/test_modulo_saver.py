@@ -18,10 +18,10 @@ class _AsyncIter:
         except StopIteration:
             raise StopAsyncIteration
 
-import pytest
-from cryptography.fernet import Fernet
+import pytest  # noqa: E402
+from cryptography.fernet import Fernet  # noqa: E402
 
-from modulo.core.pipeline_engine.modulo_saver import ModuloPostgresSaver
+from modulo.core.pipeline_engine.modulo_saver import ModuloPostgresSaver  # noqa: E402
 
 _FERNET_KEY = Fernet.generate_key().decode()
 _ORG_ID = uuid.uuid4()

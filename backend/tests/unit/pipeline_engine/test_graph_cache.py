@@ -414,32 +414,6 @@ def test_gate_with_reject_target_compiles():
     compiled = build_graph_from_json(graph)
     assert compiled is not None
 
-def test_gate_with_reject_target_compiles():
-    """A graph with a gate that has reject_target compiles without error."""
-    graph: dict[str, Any] = {
-        "nodes": [
-            {"id": "source", "role": None},
-            {"id": "target", "role": None},
-            {"id": "kickback_target", "role": None},
-        ],
-        "edges": [
-            {
-                "source": "source",
-                "target": "target",
-                "type": "normal",
-                "hitl_gate_config": {
-                    "label": "Review",
-                    "description": "Gate",
-                    "reject_target": "kickback_target",
-                    "claim_expiry_minutes": 60,
-                    "human_only": False,
-                },
-            },
-        ],
-    }
-    compiled = build_graph_from_json(graph)
-    assert compiled is not None
-
 
 def test_gate_without_reject_target_compiles():
     """A gate without reject_target (no kickback) compiles normally."""

@@ -7,15 +7,11 @@ import shutil
 import tarfile
 import tempfile
 from pathlib import Path
-from unittest.mock import patch
 
 import pytest
-
 from scripts.restore import (
-    decrypt_archive,
     extract_archive,
     get_db_url,
-    hash_file,
     read_checksums,
     resolve_passphrase,
     verify_hashes,

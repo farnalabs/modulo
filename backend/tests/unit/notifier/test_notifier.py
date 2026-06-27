@@ -443,7 +443,7 @@ def _make_scalar_result(endpoints: list[NotificationEndpoint]) -> MagicMock:
     return result
 
 
-def _make_session_factory(endpoints_by_team: list[NotificationEndpoint], endpoints_org: list[NotificationEndpoint]) -> MagicMock:
+def _make_session_factory(endpoints_by_team: list[NotificationEndpoint], endpoints_org: list[NotificationEndpoint]) -> MagicMock:  # noqa: E501
     """Build a session factory that returns team endpoints first, then org-wide on second call."""
     call_count = [0]
 

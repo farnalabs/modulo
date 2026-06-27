@@ -73,8 +73,8 @@ async def test_users_in_different_orgs_are_isolated(db_engine: AsyncEngine) -> N
     org_a = await _create_org(db_engine, f"iso-a-{uuid.uuid4().hex[:8]}")
     org_b = await _create_org(db_engine, f"iso-b-{uuid.uuid4().hex[:8]}")
 
-    user_a = await _create_user_in_org(db_engine, org_a, "alice@iso-test.com")
-    user_b = await _create_user_in_org(db_engine, org_b, "bob@iso-test.com")
+    await _create_user_in_org(db_engine, org_a, "alice@iso-test.com")
+    await _create_user_in_org(db_engine, org_b, "bob@iso-test.com")
 
     factory = async_sessionmaker(db_engine, expire_on_commit=False)
 
