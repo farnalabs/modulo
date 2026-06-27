@@ -10,7 +10,7 @@ concurrency:
 
 jobs:
   lint:
-    runs-on: [self-hosted, windows, docker]
+    runs-on: self-hosted
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v5

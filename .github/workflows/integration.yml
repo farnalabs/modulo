@@ -14,7 +14,7 @@ concurrency:
 
 jobs:
   integration:
-    runs-on: [self-hosted, windows, docker]
+    runs-on: self-hosted
     services:
       postgres:
         image: postgres:16-alpine
