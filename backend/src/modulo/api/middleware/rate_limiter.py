@@ -13,6 +13,7 @@ from fastapi import FastAPI, Request, Response
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.status import HTTP_429_TOO_MANY_REQUESTS
 
+from modulo.core.rate_limiter import AuthRateLimiter as AuthRateLimiterCls
 from modulo.core.rate_limiter import RateLimiterRegistry
 from modulo.settings import Settings, get_settings
 
@@ -124,3 +125,103 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         forwarded = request.headers.get("X-Forwarded-For", "")
         ip = forwarded.split(",")[0].strip() if forwarded else request.client.host if request.client else "unknown"
         return f"{ip}:{request.url.path}"
+
+
+# ---------------------------------------------------------------------------
+# Auth-specific rate limiter
+# ---------------------------------------------------------------------------
+
+_auth_rate_limiter: AuthRateLimiterCls | None = None
+
+
+def get_auth_rate_limiter(settings: Settings | None = None) -> AuthRateLimiterCls:
+    """Return the singleton auth rate limiter, creating it if necessary."""
+    global _auth_rate_limiter
+    if _auth_rate_limiter is not None:
+        return _auth_rate_limiter
+
+    resolved = settings or get_settings()
+    max_attempts = resolved.modulo_auth_max_attempts
+    window_s = resolved.modulo_auth_window_seconds
+
+    if not resolved.modulo_auth_rate_limit_enabled:
+        _auth_rate_limiter = AuthRateLimiterCls(
+            redis_client=None,
+            max_attempts=max_attempts,
+            window_s=window_s,
+        )
+        return _auth_rate_limiter
+
+    if resolved.redis_url:
+        try:
+            from redis.asyncio import Redis
+
+            client: Any = Redis.from_url(resolved.redis_url, decode_responses=False)
+            _auth_rate_limiter = AuthRateLimiterCls(
+                redis_client=client,
+                max_attempts=max_attempts,
+                window_s=window_s,
+            )
+            return _auth_rate_limiter
+        except Exception as exc:
+            _log.warning("auth_ratelimit.redis_fallback", extra={"error": str(exc)})
+
+    _auth_rate_limiter = AuthRateLimiterCls(
+        redis_client=None,
+        max_attempts=max_attempts,
+        window_s=window_s,
+    )
+    return _auth_rate_limiter
+
+
+class AuthRateLimitMiddleware(BaseHTTPMiddleware):
+    """Rate-limits auth endpoints by IP with exponential backoff.
+
+    Returns 429 with ``Retry-After`` header when the IP has exceeded
+    the allowed number of failed attempts within the sliding window.
+    """
+
+    def __init__(
+        self,
+        app: FastAPI,
+        settings: Settings | None = None,
+        rate_limiter: AuthRateLimiterCls | None = None,
+    ) -> None:
+        super().__init__(app)
+        resolved = settings or get_settings()
+        self._bypass_token = resolved.modulo_ratelimit_bypass_token
+        self._rate_limiter = rate_limiter or get_auth_rate_limiter(resolved)
+
+    async def dispatch(self, request: Request, call_next: Any) -> Response:
+        if not self._should_rate_limit(request):
+            return await call_next(request)
+
+        ip = self._client_ip(request)
+        allowed, retry_after = await self._rate_limiter.check_login(ip)
+        if not allowed:
+            _log.warning("auth_ratelimit.exceeded", extra={"ip": ip, "retry_after": retry_after})
+            return Response(
+                status_code=HTTP_429_TOO_MANY_REQUESTS,
+                content='{"detail":"Too many login attempts. Try again later.","error_code":"rate_limit_exceeded"}',
+                media_type="application/json",
+                headers={"Retry-After": str(retry_after)},
+            )
+
+        return await call_next(request)
+
+    def _should_rate_limit(self, request: Request) -> bool:
+        if request.method not in ("POST", "PUT", "PATCH"):
+            return False
+        token = request.headers.get(RATELIMIT_BYPASS_HEADER, "")
+        if token and self._bypass_token and token == self._bypass_token:
+            return False
+        return request.url.path.startswith("/api/v1/auth/")
+
+    @staticmethod
+    def _client_ip(request: Request) -> str:
+        forwarded = request.headers.get("X-Forwarded-For", "")
+        if forwarded:
+            return forwarded.split(",")[0].strip()
+        if request.client:
+            return request.client.host
+        return "unknown"

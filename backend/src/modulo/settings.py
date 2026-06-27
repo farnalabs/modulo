@@ -19,6 +19,7 @@ class Settings(BaseSettings):
     # FERNET_KEY encrypts stored connector credentials — separate from JWT secret.
     fernet_key: str = Field(...)
     redis_url: str = Field("redis://localhost:6379/0")
+    modulo_ws_token_ttl_seconds: int = Field(60)
     debug: bool = Field(False)
 
     # Alpha auth — at least one of these must be non-empty for login to work.
@@ -50,6 +51,11 @@ class Settings(BaseSettings):
     modulo_db: str = Field("postgres")
 
     modulo_ratelimit_bypass_token: str = Field("")
+
+    # Auth-specific rate limiting
+    modulo_auth_rate_limit_enabled: bool = Field(True)
+    modulo_auth_max_attempts: int = Field(10)
+    modulo_auth_window_seconds: int = Field(60)
 
     # Inactivity timeout in minutes (default 480 = 8h). Set to 0 to disable.
     inactivity_timeout_minutes: int = Field(480)
@@ -169,4 +175,4 @@ class Settings(BaseSettings):
 
 @lru_cache
 def get_settings() -> Settings:
-    return Settings()
+    return Settings()  # type: ignore[call-arg]
