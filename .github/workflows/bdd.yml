@@ -68,6 +68,7 @@ jobs:
           MODULO_PUBLIC_URL: "http://localhost:8000"
           MODULO_USERS: "admin:admin"
           CORS_ORIGINS: "http://localhost:4173"
+          MODULO_PLUGIN_DISCOVERY: "false"
       - name: Serve frontend
         working-directory: frontend
         run: npm run preview -- --port 4173 &
