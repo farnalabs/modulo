@@ -1,8 +1,6 @@
 """Unit tests for eval suite aggregation and pass_threshold blocking."""
 
-from uuid import UUID, uuid4
-
-import pytest
+from uuid import uuid4
 
 from modulo.core.eval_engine import (
     EvalResult,

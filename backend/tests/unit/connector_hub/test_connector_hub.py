@@ -272,7 +272,7 @@ async def test_initialise_creates_shell_connector():
         credentials_ciphertext=_encrypt({}),
     )
     backend = create_secrets_backend(fernet_key=_KEY, backend_name="fernet")
-    provider = _HubFakeRuntimeProvider()
+    _HubFakeRuntimeProvider()
     with patch.object(backend, 'get_secret', return_value="{}"):
         hub = ConnectorHub(secrets_backend=backend)
         await hub.initialise([ci])

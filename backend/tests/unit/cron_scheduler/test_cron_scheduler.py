@@ -61,7 +61,7 @@ class TestDatabaseCronEntry:
             cron_expression="* * * * *",
             next_fire_at=now,
         )
-        due, delay = entry.is_due()
+        due, _delay = entry.is_due()
         assert due is True
 
     def test_repr(self):

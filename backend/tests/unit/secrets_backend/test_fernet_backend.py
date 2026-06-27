@@ -5,7 +5,6 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from cryptography.fernet import Fernet
-from sqlalchemy import text
 
 from modulo.core.secrets_backend.fernet import FernetSecretsBackend
 from modulo.db.models.secret import Secret
@@ -20,7 +19,7 @@ def _set_org_id(session: MagicMock) -> None:
     real_execute = session.execute
 
     async def mock_execute(stmt, *args, **kwargs):
-        compiled = str(stmt) if hasattr(stmt, "__str__") else str(stmt)
+        compiled = str(stmt)
         result = MagicMock()
         if "current_setting" in compiled:
             result.scalar.return_value = str(_ORG_ID)
@@ -117,7 +116,7 @@ class TestSetSecret:
     async def test_no_rls_context_raises(self, mock_session):
         async def mock_execute(stmt, *args, **kwargs):
             result = MagicMock()
-            compiled = str(stmt) if hasattr(stmt, "__str__") else str(stmt)
+            compiled = str(stmt)
             if "current_setting" in compiled:
                 result.scalar.return_value = None
             else:

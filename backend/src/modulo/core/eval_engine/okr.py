@@ -193,11 +193,14 @@ async def track_okr_progress(
     total_all = trend_row.total_all if trend_row and trend_row.total_all else 0
     passed_all = trend_row.passed_all if trend_row and trend_row.passed_all else 0
 
+    def _tp(period: str, total: int, passed: int) -> OkrTrendPoint:
+        return OkrTrendPoint(period=period, pass_rate=_rate(total, passed), total_evals=total, passed_evals=passed)
+
     trend = [
-        OkrTrendPoint(period="7d", pass_rate=_rate(total_7d, passed_7d), total_evals=total_7d, passed_evals=passed_7d),
-        OkrTrendPoint(period="14d", pass_rate=_rate(total_14d, passed_14d), total_evals=total_14d, passed_evals=passed_14d),
-        OkrTrendPoint(period="30d", pass_rate=_rate(total_30d, passed_30d), total_evals=total_30d, passed_evals=passed_30d),
-        OkrTrendPoint(period="overall", pass_rate=_rate(total_all, passed_all), total_evals=total_all, passed_evals=passed_all),
+        _tp("7d", total_7d, passed_7d),
+        _tp("14d", total_14d, passed_14d),
+        _tp("30d", total_30d, passed_30d),
+        _tp("overall", total_all, passed_all),
     ]
 
     # Use 7d rate as current score; fall back to overall

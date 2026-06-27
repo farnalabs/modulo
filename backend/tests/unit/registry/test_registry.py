@@ -24,7 +24,7 @@ from modulo.core.registry import (
 
 class TestCrypto:
     def test_generate_key_and_fingerprint(self):
-        private, public = generate_signing_key()
+        _private, public = generate_signing_key()
         fp = fingerprint(public)
         assert len(fp) == 16
         assert isinstance(fp, str)
@@ -174,7 +174,7 @@ class _PreserveRegistry:
 
 class TestPublish(_PreserveRegistry):
     async def test_publish_new_primitive(self):
-        private, public = generate_signing_key()
+        private, _public = generate_signing_key()
         key_hex = private.private_bytes_raw().hex()
         original_count = len(_BUILTIN_REGISTRY)
 

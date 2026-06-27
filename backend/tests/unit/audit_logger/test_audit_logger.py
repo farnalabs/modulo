@@ -35,12 +35,12 @@ class TestEventHash:
 
     def test_org_id_changes_result(self):
         h1 = _compute_event_hash("e", None, None, None, {}, None, None, EVENT_ID, ORG_ID, "t")
-        h2 = _compute_event_hash("e", None, None, None, {}, None, None, EVENT_ID, "00000000-0000-0000-0000-000000000003", "t")
+        h2 = _compute_event_hash("e", None, None, None, {}, None, None, EVENT_ID, "00000000-0000-0000-0000-000000000003", "t")  # noqa: E501
         assert h1 != h2
 
     def test_event_id_changes_result(self):
         h1 = _compute_event_hash("e", None, None, None, {}, None, None, EVENT_ID, ORG_ID, "t")
-        h2 = _compute_event_hash("e", None, None, None, {}, None, None, "00000000-0000-0000-0000-000000000099", ORG_ID, "t")
+        h2 = _compute_event_hash("e", None, None, None, {}, None, None, "00000000-0000-0000-0000-000000000099", ORG_ID, "t")  # noqa: E501
         assert h1 != h2
 
 
@@ -183,7 +183,7 @@ class TestVerifyChain:
         created_at2 = MagicMock()
         created_at2.isoformat = MagicMock(return_value="t2")
 
-        h1 = _compute_event_hash("e1", None, None, None, {}, None, None, str(event_id1), str(org_id), "t1")
+        _compute_event_hash("e1", None, None, None, {}, None, None, str(event_id1), str(org_id), "t1")
 
         e1 = MagicMock(spec=["id", "organisation_id", "event_type", "actor_user_id",
                              "resource_type", "resource_id", "payload_json",

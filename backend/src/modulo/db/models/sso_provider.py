@@ -4,7 +4,7 @@ from typing import Any
 from sqlalchemy import JSON, Boolean, String, Text, Uuid
 from sqlalchemy.orm import Mapped, mapped_column
 
-from modulo.db.models.base import Base, OrgScoped, TimestampMixin
+from modulo.db.models.base import OrgScoped
 
 
 class SsoProvider(OrgScoped):

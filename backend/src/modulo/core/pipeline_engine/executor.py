@@ -330,12 +330,12 @@ class PipelineExecutor:
         total_tokens: int | None = None
         if node_token_usage:
             total_tokens = sum(n["total_tokens"] for n in node_token_usage.values())
-            _INPUT_RATE = Decimal("0.00001")
-            _OUTPUT_RATE = Decimal("0.00003")
+            input_rate = Decimal("0.00001")
+            output_rate = Decimal("0.00003")
             total_cost = Decimal("0")
             for n_data in node_token_usage.values():
-                n_cost = Decimal(str(n_data.get("input_tokens", 0))) * _INPUT_RATE
-                n_cost += Decimal(str(n_data.get("output_tokens", 0))) * _OUTPUT_RATE
+                n_cost = Decimal(str(n_data.get("input_tokens", 0))) * input_rate
+                n_cost += Decimal(str(n_data.get("output_tokens", 0))) * output_rate
                 n_data["cost_usd"] = float(n_cost)
                 total_cost += n_cost
 
@@ -502,13 +502,12 @@ class PipelineExecutor:
         if node_token_usage:
             total_tokens = sum(n["total_tokens"] for n in node_token_usage.values())
 
-            # Estimate cost at $10/1M input tokens, $30/1M output tokens (Claude Haiku).
-            _INPUT_RATE = Decimal("0.00001")
-            _OUTPUT_RATE = Decimal("0.00003")
+            input_rate = Decimal("0.00001")
+            output_rate = Decimal("0.00003")
             total_cost = Decimal("0")
             for n_data in node_token_usage.values():
-                n_cost = Decimal(str(n_data.get("input_tokens", 0))) * _INPUT_RATE
-                n_cost += Decimal(str(n_data.get("output_tokens", 0))) * _OUTPUT_RATE
+                n_cost = Decimal(str(n_data.get("input_tokens", 0))) * input_rate
+                n_cost += Decimal(str(n_data.get("output_tokens", 0))) * output_rate
                 n_data["cost_usd"] = float(n_cost)
                 total_cost += n_cost
             total_cost_usd_val = total_cost
@@ -645,7 +644,9 @@ class PipelineExecutor:
                         llm_output = output.get("llm_output", {}) if isinstance(output, dict) else {}
                         token_usage = llm_output.get("token_usage", {}) if isinstance(llm_output, dict) else {}
                         if isinstance(token_usage, dict):
-                            node_data = node_token_usage.setdefault(node_name, {"input_tokens": 0, "output_tokens": 0, "total_tokens": 0})
+                            node_data = node_token_usage.setdefault(
+                                node_name, {"input_tokens": 0, "output_tokens": 0, "total_tokens": 0}
+                            )
                             pt = token_usage.get("prompt_tokens", 0) or 0
                             ct = token_usage.get("completion_tokens", 0) or 0
                             tt = token_usage.get("total_tokens", 0) or 0

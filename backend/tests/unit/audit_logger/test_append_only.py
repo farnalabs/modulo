@@ -14,7 +14,6 @@ import uuid
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from sqlalchemy import event as sa_event
 
 from modulo.core.audit_logger.append_only import register_append_only_guard
 from modulo.db.models.audit_event import AuditEvent

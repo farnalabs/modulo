@@ -9,7 +9,7 @@ scenarios("../../features/errors/retry.feature")
 scenarios("../../features/errors/failed_state.feature")
 scenarios("../../features/errors/recovery.feature")
 
-from tests.bdd.conftest import make_mock_run
+from tests.bdd.conftest import make_mock_run  # noqa: E402
 
 
 @given(parsers.parse('a run that failed at node {failed:d} of {total:d}'))

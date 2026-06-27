@@ -537,7 +537,7 @@ class TestTokenFamily:
 
         session = _make_session(family)
 
-        fam_id, new_seq = await rotate_oauth_token_family(
+        _fam_id, new_seq = await rotate_oauth_token_family(
             session,
             family_id=str(family.family_id),
             current_sequence=0,

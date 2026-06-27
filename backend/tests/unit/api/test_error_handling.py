@@ -67,7 +67,6 @@ def _make_app() -> FastAPI:
 
     @app.get("/test/internal-error")
     async def internal_error() -> None:
-        msg: str = "unexpected"
         raise ValueError("Something broke internally")
 
     @app.post("/test/validation")

@@ -13,7 +13,6 @@ from modulo.db.repositories.locks import (
     _build_lock_service,
     _generic_locks,
     _generic_owners,
-    _generic_dict_lock,
     _str_to_lock_keys,
 )
 
