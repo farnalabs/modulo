@@ -24,8 +24,9 @@ from modulo.api.middleware.catch_all import CatchAllMiddleware
 from modulo.api.middleware.correlation_id import CorrelationIdMiddleware
 from modulo.api.middleware.cors_logging import CorsLoggingMiddleware
 from modulo.api.middleware.deprecation_headers import DeprecationHeaderMiddleware
-from modulo.api.middleware.security_headers import SecurityHeadersMiddleware
 from modulo.api.middleware.rate_limiter import AuthRateLimitMiddleware, RateLimitMiddleware
+from modulo.api.middleware.security_headers import SecurityHeadersMiddleware
+from modulo.api.middleware.sensitive_mask import router as sensitive_router
 from modulo.api.routes.admin import router as admin_router
 from modulo.api.routes.admin_feature_flags import router as admin_feature_flags_router
 from modulo.api.routes.admin_notifications import router as admin_notifications_router
@@ -507,6 +508,7 @@ app.include_router(determination_router)
 app.include_router(evals_router)
 app.include_router(admin_notifications_router)
 app.include_router(notifications_router)
+app.include_router(sensitive_router)
 app.include_router(observability_router)
 app.include_router(variants_router)
 app.include_router(feedback_router)
