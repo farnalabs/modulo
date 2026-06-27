@@ -10,6 +10,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.api.dependencies import get_db_session
+from modulo.api.middleware.sensitive_mask import SensitiveValue
 from modulo.auth.dependencies import get_current_user
 from modulo.auth.jwt import AuthenticatedPrincipal
 from modulo.db.crud.sso_provider import (
@@ -62,6 +63,7 @@ class SsoProviderResponse(BaseModel):
     provider_type: str
     name: str
     client_id: str | None = None
+    client_secret: SensitiveValue | None = None
     discovery_url: str | None = None
     metadata_url: str | None = None
     metadata_xml: str | None = None
@@ -91,6 +93,7 @@ class SsoProviderResponse(BaseModel):
             provider_type=provider.provider_type,
             name=provider.name,
             client_id=provider.client_id,
+            client_secret=provider.client_secret,
             discovery_url=provider.discovery_url,
             metadata_url=provider.metadata_url,
             metadata_xml=provider.metadata_xml,
