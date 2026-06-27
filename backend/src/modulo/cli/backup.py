@@ -156,7 +156,7 @@ def _export_credentials_references_sync(raw_url: str) -> dict[str, list[dict[str
                     row["id"] = str(row["id"])
                     row["organisation_id"] = str(row["organisation_id"])
                     if isinstance(row.get("credentials_ciphertext"), (bytes, memoryview)):
-                        row["credentials_ciphertext"] = bytes(row["credentials_ciphertext"]).hex()
+                        row["credentials_ciphertext"] = bytes(row["credentials_ciphertext"]).hex()  # nosemgrep: backup CLI reads already-encrypted ciphertext, not plaintext
                     rows.append(row)
             result[table] = rows
     return result
