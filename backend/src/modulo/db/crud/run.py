@@ -15,6 +15,7 @@ from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.db.crud.base import PageResult
+from modulo.db.crud.pagination import CursorPaginator
 from modulo.db.models.run import Run
 
 
@@ -99,6 +100,7 @@ async def list_runs(
     status: str | None = None,
     page: int = 1,
     page_size: int = 20,
+    cursor: str | None = None,
 ) -> PageResult[Run]:
     q = select(Run)
     count_q = select(func.count()).select_from(Run)
@@ -108,6 +110,25 @@ async def list_runs(
     if status is not None:
         q = q.where(Run.status == status)
         count_q = count_q.where(Run.status == status)
+
+    if cursor is not None:
+        paginator = CursorPaginator()
+        cp = await paginator.paginate(
+            session,
+            q,
+            cursor=cursor,
+            limit=page_size,
+            model=Run,
+            compute_total=True,
+        )
+        return PageResult(
+            items=cp.items,
+            total=cp.total or 0,
+            page=page,
+            page_size=page_size,
+            next_cursor=cp.next_cursor,
+            has_more=cp.has_more,
+        )
 
     offset = (page - 1) * page_size
     total = (await session.execute(count_q)).scalar_one()

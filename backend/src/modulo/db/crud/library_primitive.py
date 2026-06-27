@@ -10,6 +10,7 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.db.crud.base import PageResult, apply_updates
+from modulo.db.crud.pagination import CursorPaginator
 from modulo.db.models.library_primitive import LibraryPrimitive
 
 
@@ -76,6 +77,7 @@ async def list_library_primitives(
     page_size: int = 20,
     primitive_type: str | None = None,
     search: str | None = None,
+    cursor: str | None = None,
 ) -> PageResult[LibraryPrimitive]:
     conditions = []
 
@@ -85,6 +87,28 @@ async def list_library_primitives(
     if search is not None and search.strip():
         term = f"%{search.strip()}%"
         conditions.append(LibraryPrimitive.name.ilike(term))
+
+    if cursor is not None:
+        paginator = CursorPaginator()
+        stmt = select(LibraryPrimitive)
+        if conditions:
+            stmt = stmt.where(*conditions)
+        cp = await paginator.paginate(
+            session,
+            stmt,
+            cursor=cursor,
+            limit=page_size,
+            model=LibraryPrimitive,
+            compute_total=True,
+        )
+        return PageResult(
+            items=cp.items,
+            total=cp.total or 0,
+            page=page,
+            page_size=page_size,
+            next_cursor=cp.next_cursor,
+            has_more=cp.has_more,
+        )
 
     count_stmt = select(func.count()).select_from(LibraryPrimitive)
     if conditions:

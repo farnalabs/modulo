@@ -18,7 +18,8 @@ from modulo.api.dependencies import get_db_session
 from modulo.api.middleware.sensitive_mask import mask_config_json
 from modulo.auth.dependencies import get_current_user
 from modulo.auth.jwt import AuthenticatedPrincipal
-from modulo.connectors.github import GitHubConnector, REQUIRED_SCOPES as GITHUB_REQUIRED_SCOPES
+from modulo.connectors.github import REQUIRED_SCOPES as GITHUB_REQUIRED_SCOPES
+from modulo.connectors.github import GitHubConnector
 from modulo.db.crud.connector_instance import (
     create_connector_instance,
     delete_connector_instance,
@@ -74,6 +75,8 @@ class ConnectorListResponse(BaseModel):
     total: int
     page: int
     page_size: int
+    next_cursor: str | None = None
+    has_more: bool = False
 
 
 def _to_response(ci: Any) -> ConnectorResponse:
@@ -96,18 +99,21 @@ def _to_response(ci: Any) -> ConnectorResponse:
 async def list_connectors_endpoint(
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
+    cursor: str | None = Query(default=None),
     session: AsyncSession = Depends(get_db_session),
     principal: AuthenticatedPrincipal = Depends(get_current_user),
 ) -> ConnectorListResponse:
     async with session.begin():
         await set_rls_org(session, principal.organisation_id)
         await set_rls_user_context(session, principal.user_id, principal.org_role)
-        result = await list_connector_instances(session, page=page, page_size=page_size)
+        result = await list_connector_instances(session, page=page, page_size=page_size, cursor=cursor)
     return ConnectorListResponse(
         items=[_to_response(ci) for ci in result.items],
         total=result.total,
         page=result.page,
         page_size=result.page_size,
+        next_cursor=result.next_cursor,
+        has_more=result.has_more,
     )
 
 
