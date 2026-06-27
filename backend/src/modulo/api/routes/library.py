@@ -42,6 +42,7 @@ from modulo.db.crud.pipeline import (
 from modulo.db.crud.rating import (
     get_rating_aggregate,
     list_ratings_for_primitive,
+    submit_abuse_report,
     submit_rating,
     update_primitive_ratings_aggregate,
 )
@@ -151,6 +152,28 @@ class RatingAggregateResponse(BaseModel):
 
 class RatingListResponse(BaseModel):
     items: list[RatingResponse]
+    total: int
+
+
+class AbuseReportSubmit(BaseModel):
+    rating_id: uuid.UUID | None = None
+    reason: str = Field(..., min_length=10, max_length=500)
+
+
+class AbuseReportResponse(BaseModel):
+    id: uuid.UUID
+    primitive_id: uuid.UUID
+    rating_id: uuid.UUID | None
+    reporter_user_id: uuid.UUID | None
+    reason: str
+    status: str
+    created_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
+class AbuseReportListResponse(BaseModel):
+    items: list[AbuseReportResponse]
     total: int
 
 
@@ -668,6 +691,31 @@ async def submit_rating_endpoint(
         )
         await update_primitive_ratings_aggregate(session, primitive_id)
     return RatingResponse.model_validate(rating)
+
+
+@router.post(
+    "/{primitive_id}/ratings/abuse",
+    response_model=AbuseReportResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+async def submit_abuse_report_endpoint(
+    primitive_id: uuid.UUID,
+    body: AbuseReportSubmit,
+    session: AsyncSession = Depends(get_db_session),
+    principal: AuthenticatedPrincipal = Depends(get_current_user),
+) -> AbuseReportResponse:
+    async with session.begin():
+        await set_rls_org(session, principal.organisation_id)
+        await set_rls_user_context(session, principal.user_id, principal.org_role)
+        report = await submit_abuse_report(
+            session,
+            org_id=principal.organisation_id,
+            primitive_id=primitive_id,
+            rating_id=body.rating_id,
+            reporter_user_id=principal.user_id,
+            reason=body.reason,
+        )
+    return AbuseReportResponse.model_validate(report)
 
 
 # ---------------------------------------------------------------------------
