@@ -77,6 +77,8 @@ async def _collect_org_export(session: AsyncSession, org: Organisation) -> dict[
                 val = getattr(r, c.name)
                 if isinstance(val, uuid.UUID):
                     val = str(val)
+                elif isinstance(val, datetime):
+                    val = val.isoformat()
                 row[c.name] = val
             result.append(row)
         return result
