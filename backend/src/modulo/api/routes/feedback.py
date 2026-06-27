@@ -25,7 +25,6 @@ from modulo.api.dependencies import get_db_session
 from modulo.auth.dependencies import get_current_user
 from modulo.auth.jwt import AuthenticatedPrincipal
 from modulo.core.feedback_manager import FeedbackManager
-from modulo.db.crud.run import get_run
 from modulo.db.models.run import Run
 from modulo.db.rls import set_rls_org
 
@@ -349,7 +348,7 @@ async def review_feedback(
                 raise HTTPException(
                     status_code=status.HTTP_404_NOT_FOUND,
                     detail=str(exc),
-                )
+                ) from exc
 
             correction_run_id = str(new_run_id)
 

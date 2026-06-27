@@ -890,7 +890,8 @@ async def revert_node_to_manual_endpoint(
             )
 
         target["node_type"] = "manual"
-        target["output_schema_id"] = str(output_schema_id) if not isinstance(output_schema_id, str) else output_schema_id
+        sid = str(output_schema_id) if not isinstance(output_schema_id, str) else output_schema_id
+        target["output_schema_id"] = sid
         target.pop("agent_id", None)
         target.pop("connector_binding", None)
         if not target.get("label"):

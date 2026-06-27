@@ -1,7 +1,5 @@
 """API changelog endpoint — lists version history for the Modulo API."""
 
-from datetime import date
-
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
