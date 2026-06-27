@@ -1,0 +1,47 @@
+from collections.abc import Awaitable, Callable
+
+from fastapi import FastAPI, Request, Response
+from starlette.middleware.base import BaseHTTPMiddleware
+
+from modulo.settings import get_settings
+
+
+class SecurityHeadersMiddleware(BaseHTTPMiddleware):
+    """Adds security-related HTTP response headers to every response.
+
+    Headers set:
+    - Content-Security-Policy
+    - Strict-Transport-Security (only when not debug)
+    - X-Frame-Options
+    - X-Content-Type-Options
+    - Referrer-Policy
+    - Permissions-Policy
+    """
+
+    def __init__(self, app: FastAPI) -> None:
+        super().__init__(app)
+        self._csp = "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'"
+        self._hsts = "max-age=31536000; includeSubDomains"
+        self._xfo = "DENY"
+        self._cto = "nosniff"
+        self._referrer = "strict-origin-when-cross-origin"
+        self._permissions = "camera=(), microphone=(), geolocation=()"
+
+    async def dispatch(
+        self,
+        request: Request,
+        call_next: Callable[[Request], Awaitable[Response]],
+    ) -> Response:
+        response: Response = await call_next(request)
+
+        settings = get_settings()
+
+        response.headers["Content-Security-Policy"] = self._csp
+        if not settings.debug:
+            response.headers["Strict-Transport-Security"] = self._hsts
+        response.headers["X-Frame-Options"] = self._xfo
+        response.headers["X-Content-Type-Options"] = self._cto
+        response.headers["Referrer-Policy"] = self._referrer
+        response.headers["Permissions-Policy"] = self._permissions
+
+        return response

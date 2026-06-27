@@ -24,6 +24,7 @@ from modulo.api.middleware.catch_all import CatchAllMiddleware
 from modulo.api.middleware.correlation_id import CorrelationIdMiddleware
 from modulo.api.middleware.cors_logging import CorsLoggingMiddleware
 from modulo.api.middleware.deprecation_headers import DeprecationHeaderMiddleware
+from modulo.api.middleware.security_headers import SecurityHeadersMiddleware
 from modulo.api.middleware.rate_limiter import AuthRateLimitMiddleware, RateLimitMiddleware
 from modulo.api.routes.admin import router as admin_router
 from modulo.api.routes.admin_feature_flags import router as admin_feature_flags_router
@@ -469,6 +470,7 @@ app.add_middleware(CorrelationIdMiddleware)
 app.add_middleware(RateLimitMiddleware)  # type: ignore[arg-type]
 app.add_middleware(AuthRateLimitMiddleware)  # type: ignore[arg-type]
 app.add_middleware(DeprecationHeaderMiddleware)  # type: ignore[arg-type]
+app.add_middleware(SecurityHeadersMiddleware)  # type: ignore[arg-type]
 app.add_middleware(CatchAllMiddleware)
 
 app.include_router(health_router)
