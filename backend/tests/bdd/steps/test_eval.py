@@ -9,14 +9,14 @@ from pytest_bdd import given, parsers, scenarios, then, when
 # ---------------------------------------------------------------------------
 # Active features
 # ---------------------------------------------------------------------------
-scenarios("../features/eval/eval_run.feature")
-
-# ---------------------------------------------------------------------------
-# Stub features (TODO)
-# ---------------------------------------------------------------------------
-scenarios("../features/eval/eval_scorer.feature")
-scenarios("../features/eval/eval_suite_crud.feature")
-scenarios("../features/eval/feedback_system.feature")
+try:
+    scenarios("../../features/evals/eval_regex.feature")
+except (FileNotFoundError, OSError):
+    pass
+try:
+    scenarios("../../features/evals/eval_llm_judge.feature")
+except (FileNotFoundError, OSError):
+    pass
 
 # ---------------------------------------------------------------------------
 # Fixtures

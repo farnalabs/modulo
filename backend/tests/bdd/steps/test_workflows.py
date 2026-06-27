@@ -9,9 +9,9 @@ from unittest.mock import MagicMock, patch
 import pytest
 from pytest_bdd import given, parsers, scenarios, then, when
 
-scenarios("../features/workflows/export.feature")
-scenarios("../features/workflows/import.feature")
-scenarios("../features/workflows/binding.feature")
+scenarios("../../features/workflows/export.feature")
+scenarios("../../features/workflows/import.feature")
+scenarios("../../features/workflows/binding.feature")
 
 PIPELINE_ID = uuid.UUID("00000000-0000-0000-0000-0000000000f0")
 MISSING_ID = uuid.UUID("00000000-0000-0000-0000-000000099999")

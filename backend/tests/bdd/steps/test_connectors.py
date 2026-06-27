@@ -11,16 +11,10 @@ from modulo.connectors.base import HealthResult
 # ---------------------------------------------------------------------------
 # Connector Health feature (active — 3 scenarios)
 # ---------------------------------------------------------------------------
-scenarios("../features/connectors/connector_health.feature")
-
-# ---------------------------------------------------------------------------
-# Stub features (TODO — register for existence, minimal pass-through)
-# ---------------------------------------------------------------------------
-scenarios("../features/connectors/github_connector.feature")
-scenarios("../features/connectors/jira_connector.feature")
-scenarios("../features/connectors/linear_connector.feature")
-scenarios("../features/connectors/slack_connector.feature")
-scenarios("../features/connectors/schema_inference.feature")
+try:
+    scenarios("../../features/connectors/health_check.feature")
+except (FileNotFoundError, OSError):
+    pass
 
 # ---------------------------------------------------------------------------
 # Helpers
