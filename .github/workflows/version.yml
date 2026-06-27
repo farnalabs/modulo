@@ -7,10 +7,14 @@ on:
 permissions:
   contents: write
 
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   tag:
     name: Bump version and tag
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, windows, docker]
     outputs:
       tag: ${{ steps.semver.outputs.tag }}
     steps:

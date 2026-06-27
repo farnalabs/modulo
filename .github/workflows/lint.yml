@@ -4,9 +4,13 @@ on:
   push:
   pull_request:
 
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   lint:
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, windows, docker]
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v5

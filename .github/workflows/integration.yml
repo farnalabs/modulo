@@ -8,9 +8,13 @@ on:
       - 'frontend/**'
       - '.github/workflows/**'
 
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   integration:
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, windows, docker]
     services:
       postgres:
         image: postgres:16-alpine
