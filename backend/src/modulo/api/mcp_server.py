@@ -904,7 +904,10 @@ async def resource_library() -> str:
             tags_str = ", ".join(p.tags) if p.tags else ""
             rating_str = f"{p.average_rating:.1f}" if p.average_rating is not None else "N/A"
             desc = f" — {p.description}" if p.description else ""
-            lines.append(f"- {p.name} (id={p.id}, type={p.primitive_type}, v{p.version}, tags=[{tags_str}], rating={rating_str}){desc}")
+            lines.append(
+                f"- {p.name} (id={p.id}, type={p.primitive_type}, "
+                f"v{p.version}, tags=[{tags_str}], rating={rating_str}){desc}"
+            )
         header = f"Library ({result.total} primitives):"
         return header + "\n" + "\n".join(lines)
     except Exception:
