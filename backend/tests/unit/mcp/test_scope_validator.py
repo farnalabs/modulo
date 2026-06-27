@@ -120,6 +120,7 @@ class TestConstants:
             "copy_library_primitive",
             "list_pending_hitl",
             "get_run_output",
+            "get_trigger_events",
         }
         assert set(TOOL_SCOPE_REQUIREMENTS) == expected_tools
 

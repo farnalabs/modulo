@@ -14,6 +14,7 @@ Org context validated per-event for streaming (SSE) connections.
 """
 
 import contextvars
+import json
 import logging
 import uuid
 from collections.abc import AsyncGenerator
@@ -53,6 +54,7 @@ from modulo.core.hitl_manager import (
 )
 from modulo.core.library_service import (
     CommunityPrimitiveReadOnlyError,
+    get_primitive_by_slug,
     list_primitives,
 )
 from modulo.core.library_service import (
@@ -708,6 +710,70 @@ async def browse_library(
         return _tool_error("Failed to browse library")
 
 
+@mcp.tool(
+    description=(
+        "Get recent trigger events for a given trigger or pipeline. "
+        "Filter by trigger_id and/or pipeline_id. Returns events ordered "
+        "by most recent first."
+    ),
+)
+async def get_trigger_events(
+    trigger_id: str | None = None,
+    pipeline_id: str | None = None,
+    limit: int = 20,
+) -> dict[str, Any]:
+    try:
+        if not await validate_current_auth():
+            return _tool_error("Token revoked or expired — re-authenticate")
+        check_tool_scope(_ctx_role.get(None), "get_trigger_events")
+        from sqlalchemy import select
+
+        from modulo.db.models.trigger import Trigger
+        from modulo.db.models.trigger_event import TriggerEvent
+
+        org_id = _ctx_org_id.get(_PLACEHOLDER_ORG_ID)
+        async with _session(org_id) as s:
+            q = (
+                select(TriggerEvent)
+                .where(TriggerEvent.organisation_id == org_id)
+                .order_by(TriggerEvent.created_at.desc(), TriggerEvent.id.desc())
+                .limit(limit)
+            )
+
+            if trigger_id is not None:
+                tid = uuid.UUID(trigger_id)
+                q = q.where(TriggerEvent.trigger_id == tid)
+
+            if pipeline_id is not None:
+                pid = uuid.UUID(pipeline_id)
+                q = q.join(Trigger, TriggerEvent.trigger_id == Trigger.id).where(
+                    Trigger.pipeline_id == pid,
+                )
+
+            rows = (await s.execute(q)).scalars().all()
+
+        return {
+            "events": [
+                {
+                    "id": str(e.id),
+                    "trigger_id": str(e.trigger_id),
+                    "trigger_type": e.trigger_type,
+                    "validation_result": e.validation_result,
+                    "created_at": e.created_at.isoformat() if e.created_at else None,
+                    "run_id": str(e.run_id) if e.run_id else None,
+                }
+                for e in rows
+            ],
+            "count": len(rows),
+            "limit": limit,
+        }
+    except MCPAuthorizationError as exc:
+        return {"error": "insufficient_scope", "detail": exc.message}
+    except Exception:
+        _log.exception("get_trigger_events failed")
+        return _tool_error("Failed to get trigger events")
+
+
 # ---------------------------------------------------------------------------
 # Resources
 # ---------------------------------------------------------------------------
@@ -841,6 +907,76 @@ async def resource_schemas() -> str:
     return f"Schemas ({len(schemas)}):\n" + "\n".join(lines)
 
 
+@mcp.resource("modulo://schemas/{schema_id}@{version}")
+async def resource_schema_detail(schema_id: str, version: str) -> str:
+    if not await validate_current_auth():
+        return "error: Token revoked or expired — re-authenticate"
+    from sqlalchemy import select
+
+    from modulo.db.models.schema import Schema, SchemaVersion
+
+    org_id = _ctx_org_id.get(_PLACEHOLDER_ORG_ID)
+    sid = uuid.UUID(schema_id)
+    async with _session(org_id) as s:
+        schema = await s.get(Schema, sid)
+        if schema is None:
+            return f"Schema {schema_id} not found."
+
+        if version == "latest":
+            result = await s.execute(
+                select(SchemaVersion)
+                .where(SchemaVersion.schema_id == sid)
+                .order_by(SchemaVersion.version_number.desc())
+                .limit(1)
+            )
+            sv = result.scalar_one_or_none()
+        else:
+            result = await s.execute(
+                select(SchemaVersion).where(
+                    SchemaVersion.schema_id == sid,
+                    SchemaVersion.version == version,
+                )
+            )
+            sv = result.scalar_one_or_none()
+
+        if sv is None:
+            return f"Schema version '{version}' not found for schema {schema_id}."
+
+    defn = sv.definition_json or {}
+    schema_type = defn.get("type", "object")
+
+    fields: list[dict[str, Any]] = []
+    if "properties" in defn:
+        required_set = set(defn.get("required", []))
+        for name, prop in defn["properties"].items():
+            fields.append({
+                "name": name,
+                "type": prop.get("type", "unknown"),
+                "required": name in required_set,
+            })
+    elif "fields" in defn:
+        for f in defn["fields"]:
+            fields.append({
+                "name": f.get("name", "?"),
+                "type": f.get("type", "unknown"),
+                "required": f.get("required", False),
+            })
+
+    lines = [
+        f"Schema: {schema.name}",
+        f"ID: {schema.id}",
+        f"Type: {schema_type}",
+        f"Version: {sv.version}",
+        f"Created: {sv.created_at.isoformat()}",
+        f"Fields ({len(fields)}):",
+    ]
+    for f in fields:
+        req = "required" if f["required"] else "optional"
+        lines.append(f"  - {f['name']}: {f['type']} ({req})")
+
+    return "\n".join(lines)
+
+
 @mcp.resource("modulo://connectors")
 async def resource_connectors() -> str:
     if not await validate_current_auth():
@@ -913,6 +1049,42 @@ async def resource_library() -> str:
     except Exception:
         _log.exception("resource_library failed")
         return "error: Failed to browse library"
+
+
+@mcp.resource("modulo://library/{primitive_type}/{slug}")
+async def resource_library_detail(primitive_type: str, slug: str) -> str:
+    """Get details of a single library primitive by type and slug."""
+    if not await validate_current_auth():
+        return "error: Token revoked or expired — re-authenticate"
+    try:
+        org_id = _ctx_org_id.get(_PLACEHOLDER_ORG_ID)
+        async with _session(org_id) as s:
+            p = await get_primitive_by_slug(s, org_id, primitive_type, slug)
+        if p is None:
+            return f"Library primitive '{slug}' of type '{primitive_type}' not found."
+
+        tags_str = ", ".join(p.tags) if p.tags else ""
+        rating_str = f"{p.average_rating:.2f}" if p.average_rating is not None else "N/A"
+        downloads_str = str(p.download_count) if p.download_count is not None else "0"
+        desc = p.description or "(no description)"
+        content_summary_str = json.dumps(p.content_json, indent=2)
+
+        parts = [
+            f"Name: {p.name}",
+            f"ID: {p.id}",
+            f"Type: {p.primitive_type}",
+            f"Version: {p.version}",
+            f"Author: {p.author}",
+            f"Tags: [{tags_str}]",
+            f"Average Rating: {rating_str}",
+            f"Download Count: {downloads_str}",
+            f"Description: {desc}",
+            f"\nContent Summary:\n{content_summary_str}",
+        ]
+        return "\n".join(parts)
+    except Exception:
+        _log.exception("resource_library_detail failed")
+        return "error: Failed to get library primitive detail"
 
 
 # ---------------------------------------------------------------------------
