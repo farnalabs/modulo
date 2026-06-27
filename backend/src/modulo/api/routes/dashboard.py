@@ -321,7 +321,11 @@ async def dashboard_trends(
                 "approved_count": approved,
                 "rejected_count": rejected,
                 "rejection_rate": round(rejected / total * 100, 1) if total > 0 else 0.0,
-                "avg_time_to_approve_ms": round(float(row.avg_time_to_approve_ms), 1) if row.avg_time_to_approve_ms else None,
+                "avg_time_to_approve_ms": (
+                    round(float(row.avg_time_to_approve_ms), 1)
+                    if row.avg_time_to_approve_ms
+                    else None
+                ),
             }
 
         # Build daily hitl series aligned with the trend date range

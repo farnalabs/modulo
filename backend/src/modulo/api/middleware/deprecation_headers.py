@@ -4,7 +4,11 @@ Usage:
     from modulo.api.middleware.deprecation_headers import DeprecationHeaderMiddleware
 
     app.add_middleware(DeprecationHeaderMiddleware)
-    DeprecationHeaderMiddleware.deprecate("/api/v1/old-endpoint", sunset="2026-09-01", migration_url="/docs/migrations/v2")
+    DeprecationHeaderMiddleware.deprecate(
+        "/api/v1/old-endpoint",
+        sunset="2026-09-01",
+        migration_url="/docs/migrations/v2",
+    )
 """
 
 from collections.abc import Awaitable, Callable
@@ -23,7 +27,7 @@ class DeprecationHeaderMiddleware(BaseHTTPMiddleware):
     prefix along with an optional sunset date and migration URL.
     """
 
-    _registry: _DeprecationRegistry = {}
+    _registry: _DeprecationRegistry
 
     @classmethod
     def deprecate(
@@ -51,6 +55,7 @@ class DeprecationHeaderMiddleware(BaseHTTPMiddleware):
 
     def __init__(self, app: FastAPI) -> None:
         super().__init__(app)
+        type(self)._registry = {}
 
     async def dispatch(
         self,
