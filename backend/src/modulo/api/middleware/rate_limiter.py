@@ -10,6 +10,7 @@ import logging
 from typing import Any, ClassVar
 
 from fastapi import FastAPI, Request, Response
+from jose import jwt as jose_jwt
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.status import HTTP_429_TOO_MANY_REQUESTS
 
@@ -122,9 +123,38 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
 
     @staticmethod
     def _client_key(request: Request) -> str:
+        path = request.url.path
+
+        # 1. Auth principal set by outer middleware (MCP sub-app)
+        principal = request.scope.get("auth_principal")
+        if principal:
+            if principal["type"] == "api_key":
+                return f"ak:{principal['org_id']}:{principal['prefix']}:{path}"
+            if principal["type"] == "user":
+                return f"user:{principal['org_id']}:{principal['user_id']}:{path}"
+
+        # 2. Parse Authorization header directly
+        auth_header = request.headers.get("Authorization", "")
+        if auth_header.startswith("Bearer "):
+            token = auth_header[len("Bearer ") :].strip()
+
+            if token.startswith("mk_"):
+                prefix = token[3:11]
+                return f"ak:none:{prefix}:{path}"
+
+            try:
+                claims = jose_jwt.get_unverified_claims(token)
+                org_id = claims.get("org_id", "")
+                user_id = claims.get("user_id", "")
+                if org_id and user_id:
+                    return f"user:{org_id}:{user_id}:{path}"
+            except Exception as exc:
+                _log.debug("ratelimit.jwt_decode_failed", extra={"error": str(exc)})
+
+        # 3. Fallback to IP-based keying
         forwarded = request.headers.get("X-Forwarded-For", "")
         ip = forwarded.split(",")[0].strip() if forwarded else request.client.host if request.client else "unknown"
-        return f"{ip}:{request.url.path}"
+        return f"ip:{ip}:{path}"
 
 
 # ---------------------------------------------------------------------------

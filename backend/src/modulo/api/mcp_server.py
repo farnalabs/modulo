@@ -183,6 +183,11 @@ class McpAuthMiddleware(BaseHTTPMiddleware):
                 _ctx_key_id.set(key.id)
                 _ctx_auth_token.set(token)
                 _ctx_auth_type.set("api_key")
+                request.scope["auth_principal"] = {
+                    "type": "api_key",
+                    "org_id": str(org_id),
+                    "prefix": token[3:11],
+                }
             except ApiKeyInvalidError:
                 return Response(
                     '{"error":"unauthorized","detail":"Invalid or revoked API key"}',
@@ -240,6 +245,11 @@ class McpAuthMiddleware(BaseHTTPMiddleware):
         _ctx_key_id.set(uuid.UUID(int=0))  # sentinel for OAuth clients
         _ctx_auth_token.set(token)
         _ctx_auth_type.set("oauth")
+        request.scope["auth_principal"] = {
+            "type": "user",
+            "org_id": str(claims.organisation_id),
+            "user_id": str(claims.client_id),
+        }
 
         resp = await call_next(request)
         return resp
@@ -930,8 +940,8 @@ def build_mcp_asgi_app() -> Starlette:
     app = Starlette(
         routes=all_routes,
         middleware=[
-            Middleware(RateLimiterMiddleware),  # type: ignore[arg-type]
             Middleware(McpAuthMiddleware),
+            Middleware(RateLimiterMiddleware),  # type: ignore[arg-type]
         ],
     )
     return app
