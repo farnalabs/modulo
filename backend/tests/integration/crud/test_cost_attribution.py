@@ -255,10 +255,9 @@ async def test_check_and_record_spend_happy_path(
             text("SELECT set_config('app.organisation_id', :oid, true)"),
             {"oid": str(org)},
         )
-        async with session.begin():
-            approved, reason = await check_and_record_spend(
-                session, org_id=org, cost_usd=Decimal("10"), team_id=None
-            )
+        approved, reason = await check_and_record_spend(
+            session, org_id=org, cost_usd=Decimal("10"), team_id=None
+        )
 
         assert approved is True
         assert reason is None
@@ -287,23 +286,21 @@ async def test_check_and_record_spend_enforces_org_limit(
             text("SELECT set_config('app.organisation_id', :oid, true)"),
             {"oid": str(org)},
         )
-        async with session.begin():
-            ok1, _ = await check_and_record_spend(
-                session, org_id=org, cost_usd=Decimal("60"), team_id=None
-            )
-            assert ok1 is True
+        ok1, _ = await check_and_record_spend(
+            session, org_id=org, cost_usd=Decimal("60"), team_id=None
+        )
+        assert ok1 is True
 
     async with factory() as session:
         await session.execute(
             text("SELECT set_config('app.organisation_id', :oid, true)"),
             {"oid": str(org)},
         )
-        async with session.begin():
-            ok2, err2 = await check_and_record_spend(
-                session, org_id=org, cost_usd=Decimal("50"), team_id=None
-            )
-            assert ok2 is False
-            assert "organisation" in (err2 or "").lower()
+        ok2, err2 = await check_and_record_spend(
+            session, org_id=org, cost_usd=Decimal("50"), team_id=None
+        )
+        assert ok2 is False
+        assert "organisation" in (err2 or "").lower()
 
     # Verify only the first spend was recorded
     async with factory() as session:
@@ -343,11 +340,10 @@ async def test_check_and_record_spend_with_team_enforces_team_limit(
             text("SELECT set_config('app.organisation_id', :oid, true)"),
             {"oid": str(org)},
         )
-        async with session.begin():
-            ok, _ = await check_and_record_spend(
-                session, org_id=org, cost_usd=Decimal("80"), team_id=team1.id
-            )
-            assert ok is True
+        ok, _ = await check_and_record_spend(
+            session, org_id=org, cost_usd=Decimal("80"), team_id=team1.id
+        )
+        assert ok is True
 
     # Team 2: under limit
     async with factory() as session:
@@ -355,11 +351,10 @@ async def test_check_and_record_spend_with_team_enforces_team_limit(
             text("SELECT set_config('app.organisation_id', :oid, true)"),
             {"oid": str(org)},
         )
-        async with session.begin():
-            ok, _ = await check_and_record_spend(
-                session, org_id=org, cost_usd=Decimal("30"), team_id=team2.id
-            )
-            assert ok is True
+        ok, _ = await check_and_record_spend(
+            session, org_id=org, cost_usd=Decimal("30"), team_id=team2.id
+        )
+        assert ok is True
 
     # Team 1: exceeds team limit (80 + 30 = 110 > 100)
     async with factory() as session:
@@ -367,12 +362,11 @@ async def test_check_and_record_spend_with_team_enforces_team_limit(
             text("SELECT set_config('app.organisation_id', :oid, true)"),
             {"oid": str(org)},
         )
-        async with session.begin():
-            ok, err = await check_and_record_spend(
-                session, org_id=org, cost_usd=Decimal("30"), team_id=team1.id
-            )
-            assert ok is False
-            assert "team" in (err or "").lower()
+        ok, err = await check_and_record_spend(
+            session, org_id=org, cost_usd=Decimal("30"), team_id=team1.id
+        )
+        assert ok is False
+        assert "team" in (err or "").lower()
 
     # Team 2: at exact limit (30 + 20 = 50)
     async with factory() as session:
@@ -380,11 +374,10 @@ async def test_check_and_record_spend_with_team_enforces_team_limit(
             text("SELECT set_config('app.organisation_id', :oid, true)"),
             {"oid": str(org)},
         )
-        async with session.begin():
-            ok, _ = await check_and_record_spend(
-                session, org_id=org, cost_usd=Decimal("20"), team_id=team2.id
-            )
-            assert ok is True
+        ok, _ = await check_and_record_spend(
+            session, org_id=org, cost_usd=Decimal("20"), team_id=team2.id
+        )
+        assert ok is True
 
     # Verify team counts
     async with factory() as session:
@@ -427,18 +420,15 @@ async def test_get_cost_report_by_team(
         await session.flush()
 
         # Record some spend
-        async with session.begin():
-            await check_and_record_spend(
-                session, org_id=org, cost_usd=Decimal("100"), team_id=team_a.id
-            )
-        async with session.begin():
-            await check_and_record_spend(
-                session, org_id=org, cost_usd=Decimal("50"), team_id=team_a.id
-            )
-        async with session.begin():
-            await check_and_record_spend(
-                session, org_id=org, cost_usd=Decimal("75"), team_id=team_b.id
-            )
+        await check_and_record_spend(
+            session, org_id=org, cost_usd=Decimal("100"), team_id=team_a.id
+        )
+        await check_and_record_spend(
+            session, org_id=org, cost_usd=Decimal("50"), team_id=team_a.id
+        )
+        await check_and_record_spend(
+            session, org_id=org, cost_usd=Decimal("75"), team_id=team_b.id
+        )
 
     async with factory() as session:
         await session.execute(
@@ -473,13 +463,11 @@ async def test_get_cost_report_by_org(
         await session.flush()
 
         # Org-level spend (no team_id)
-        async with session.begin():
-            await check_and_record_spend(session, org_id=org, cost_usd=Decimal("200"))
+        await check_and_record_spend(session, org_id=org, cost_usd=Decimal("200"))
         # Team-level spend
-        async with session.begin():
-            await check_and_record_spend(
-                session, org_id=org, cost_usd=Decimal("100"), team_id=team.id
-            )
+        await check_and_record_spend(
+            session, org_id=org, cost_usd=Decimal("100"), team_id=team.id
+        )
 
     async with factory() as session:
         await session.execute(
@@ -512,10 +500,9 @@ async def test_unique_constraint_enforced(
         team = await create_team(session, org_id=org, name="Unique DRC Team", created_by=user)
         await session.flush()
 
-        async with session.begin():
-            await check_and_record_spend(
-                session, org_id=org, cost_usd=Decimal("10"), team_id=team.id
-            )
+        await check_and_record_spend(
+            session, org_id=org, cost_usd=Decimal("10"), team_id=team.id
+        )
 
     # Duplicate via raw insert should fail
     from datetime import UTC, datetime

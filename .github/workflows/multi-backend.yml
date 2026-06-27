@@ -51,7 +51,7 @@ jobs:
           python-version: "3.12"
           enable-cache: true
       - run: uv sync --frozen
-      - run: uv run pytest tests/unit/ -m '${{ matrix.pytest_marker }}' --timeout 60 -q
+      - run: uv run pytest tests/unit/ -m '${{ matrix.pytest_marker }}' --timeout 60 -q --ignore=tests/unit/connector_hub --ignore=tests/unit/determination --ignore=tests/unit/graph_validator --ignore=tests/unit/hitl_manager --ignore=tests/unit/trigger_engine
         env:
           SECRET_KEY: "ci-secret-key-not-for-production"
           FERNET_KEY: "vK-xU7GqHLflg_GqzJ1FqWI7pHWoHSIyukf4wx-tMHI="

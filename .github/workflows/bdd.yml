@@ -32,7 +32,7 @@ jobs:
           node-version: "20"
       - name: Install backend deps
         working-directory: backend
-        run: uv pip install -e ".[dev]"
+        run: uv sync --frozen
       - name: Install Playwright browsers
         working-directory: backend
         run: playwright install --with-deps chromium
@@ -42,7 +42,7 @@ jobs:
             "CREATE TABLE IF NOT EXISTS alembic_version (version_num VARCHAR(255) NOT NULL PRIMARY KEY);"
       - name: Run migrations
         working-directory: backend
-        run: alembic upgrade heads
+        run: uv run alembic upgrade heads
         env:
           DATABASE_URL: "postgresql+asyncpg://modulo:modulo@localhost:5432/modulo"
           SECRET_KEY: "ci-secret-key-for-github-actions-testing-only"
@@ -55,7 +55,7 @@ jobs:
         run: npm run build
       - name: Start backend
         working-directory: backend
-        run: uvicorn modulo.api.main:app --host 0.0.0.0 --port 8000 &
+        run: uv run uvicorn modulo.api.main:app --host 0.0.0.0 --port 8000 &
         shell: bash
         env:
           DATABASE_URL: "postgresql+asyncpg://modulo:modulo@localhost:5432/modulo"
@@ -69,7 +69,7 @@ jobs:
         run: npm run preview -- --port 4173 &
       - name: Wait for services
         run: |
-          npx wait-on http://localhost:8000/health http://localhost:4173 --timeout 30000
+          npx wait-on http://localhost:8000/healthz http://localhost:4173 --timeout 30000
       - name: Run BDD tests
         working-directory: backend
         run: |
