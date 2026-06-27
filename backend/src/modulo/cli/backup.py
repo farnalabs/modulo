@@ -156,7 +156,8 @@ def _export_credentials_references_sync(raw_url: str) -> dict[str, list[dict[str
                     row["id"] = str(row["id"])
                     row["organisation_id"] = str(row["organisation_id"])
                     if isinstance(row.get("credentials_ciphertext"), (bytes, memoryview)):
-                        row["credentials_ciphertext"] = bytes(row["credentials_ciphertext"]).hex()  # nosemgrep: credential-not-in-state
+                        ct = bytes(row["credentials_ciphertext"])
+                        row["credentials_ciphertext"] = ct.hex()  # nosemgrep: credential-not-in-state
                     rows.append(row)
             result[table] = rows
     return result
