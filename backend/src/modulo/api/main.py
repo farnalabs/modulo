@@ -3,6 +3,7 @@ import json
 import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from datetime import UTC, datetime
 
 from fastapi import FastAPI
 from fastapi.exceptions import RequestValidationError
@@ -23,7 +24,7 @@ from modulo.api.middleware.catch_all import CatchAllMiddleware
 from modulo.api.middleware.correlation_id import CorrelationIdMiddleware
 from modulo.api.middleware.cors_logging import CorsLoggingMiddleware
 from modulo.api.middleware.deprecation_headers import DeprecationHeaderMiddleware
-from modulo.api.middleware.rate_limiter import RateLimitMiddleware
+from modulo.api.middleware.rate_limiter import AuthRateLimitMiddleware, RateLimitMiddleware
 from modulo.api.routes.admin import router as admin_router
 from modulo.api.routes.admin_feature_flags import router as admin_feature_flags_router
 from modulo.api.routes.admin_notifications import router as admin_notifications_router
@@ -42,6 +43,7 @@ from modulo.api.routes.determination import router as determination_router
 from modulo.api.routes.environments import router as environments_router
 from modulo.api.routes.evals import router as evals_router
 from modulo.api.routes.feedback import router as feedback_router
+from modulo.api.routes.health import router as health_router
 from modulo.api.routes.hitl import router as hitl_router
 from modulo.api.routes.library import router as library_router
 from modulo.api.routes.mcp_oauth import router as mcp_oauth_router
@@ -70,6 +72,9 @@ from modulo.otel_bridge import setup_otel, shutdown_otel
 from modulo.settings import Settings, get_settings
 
 logger = logging.getLogger(__name__)
+
+# Uptime tracking — set at module import time, read by health endpoints.
+_START_TIME = datetime.now(UTC)
 
 
 async def _verify_db_connectivity(settings: Settings) -> None:
@@ -462,9 +467,11 @@ app.add_middleware(
 )
 app.add_middleware(CorrelationIdMiddleware)
 app.add_middleware(RateLimitMiddleware)  # type: ignore[arg-type]
+app.add_middleware(AuthRateLimitMiddleware)  # type: ignore[arg-type]
 app.add_middleware(DeprecationHeaderMiddleware)  # type: ignore[arg-type]
 app.add_middleware(CatchAllMiddleware)
 
+app.include_router(health_router)
 app.include_router(admin_router)
 app.include_router(admin_feature_flags_router)
 app.include_router(admin_rate_limits_router)
@@ -513,8 +520,3 @@ app.mount("/mcp", build_mcp_asgi_app())
 
 app.add_exception_handler(StarletteHTTPException, http_exception_handler)  # type: ignore[arg-type]
 app.add_exception_handler(RequestValidationError, validation_exception_handler)  # type: ignore[arg-type]
-
-
-@app.get("/healthz")
-async def health() -> dict[str, str]:
-    return {"status": "ok"}
