@@ -1,0 +1,248 @@
+"""OIDC ID token signature verification via JWKS.
+
+Fetches the JWKS from the provider's ``jwks_uri`` (discovered via the
+OpenID Connect discovery document), caches it in memory with a 1-hour TTL,
+and verifies the ``id_token`` JWT signature using the matching JWK.
+
+Validation performed:
+- ``iss`` matches the provider's issuer
+- ``aud`` matches the client_id
+- ``exp`` is not expired
+- JWT signature matches the key from the JWKS
+"""
+
+import base64
+import json
+import logging
+import time
+from typing import Any
+
+import httpx
+from jose import jwk
+from jose import jwt as jose_jwt
+from jose.exceptions import JWKError, JWTError
+
+_log = logging.getLogger(__name__)
+
+_JWKS_CACHE_TTL = 3600  # 1 hour
+_jwks_cache: dict[str, tuple[float, list[dict[str, Any]]]] = {}
+
+
+class OidcVerifyError(Exception):
+    """Raised when OIDC ID token verification fails."""
+
+
+# ---------------------------------------------------------------------------
+# Cache management
+# ---------------------------------------------------------------------------
+
+
+def clear_jwks_cache() -> None:
+    """Clear the JWKS cache (for testing or manual invalidation)."""
+    _jwks_cache.clear()
+
+
+def _cache_get(jwks_uri: str) -> list[dict[str, Any]] | None:
+    entry = _jwks_cache.get(jwks_uri)
+    if entry is None:
+        return None
+    expires_at, keys = entry
+    if time.time() - expires_at >= _JWKS_CACHE_TTL:
+        _jwks_cache.pop(jwks_uri, None)
+        return None
+    return keys
+
+
+def _cache_set(jwks_uri: str, keys: list[dict[str, Any]]) -> None:
+    _jwks_cache[jwks_uri] = (time.time(), keys)
+
+
+# ---------------------------------------------------------------------------
+# JWKS fetching
+# ---------------------------------------------------------------------------
+
+
+async def _fetch_jwks_uri(discovery_url: str) -> str:
+    """Fetch the ``jwks_uri`` from the provider's OpenID discovery document."""
+    async with httpx.AsyncClient() as client:
+        resp = await client.get(discovery_url, timeout=10)
+        resp.raise_for_status()
+        disc: dict[str, Any] = resp.json()
+    jwks_uri = disc.get("jwks_uri")
+    if not jwks_uri:
+        raise OidcVerifyError("No jwks_uri in discovery document")
+    return str(jwks_uri)
+
+
+async def _fetch_jwks(jwks_uri: str) -> list[dict[str, Any]]:
+    """Fetch the JWKS, using a cached copy within the TTL window."""
+    cached = _cache_get(jwks_uri)
+    if cached is not None:
+        return cached
+
+    async with httpx.AsyncClient() as client:
+        resp = await client.get(jwks_uri, timeout=10)
+        resp.raise_for_status()
+        data: dict[str, Any] = resp.json()
+
+    raw_keys = data.get("keys", data if isinstance(data, list) else [])
+    if not isinstance(raw_keys, list) or not raw_keys:
+        raise OidcVerifyError("No keys in JWKS response")
+
+    _cache_set(jwks_uri, raw_keys)
+    return raw_keys
+
+
+async def _fetch_jwks_force(jwks_uri: str) -> list[dict[str, Any]]:
+    """Bypass cache and fetch JWKS fresh (used on rotation retry)."""
+    _jwks_cache.pop(jwks_uri, None)
+    return await _fetch_jwks(jwks_uri)
+
+
+# ---------------------------------------------------------------------------
+# JWK selection
+# ---------------------------------------------------------------------------
+
+
+def _find_jwk(jwks: list[dict[str, Any]], kid: str | None) -> dict[str, Any]:
+    """Find the JWK matching the given ``kid``.
+
+    Falls back to the first key in the set if no ``kid`` is provided
+    (some providers omit ``kid`` from the JWT header).
+    """
+    if kid:
+        for key in jwks:
+            if key.get("kid") == kid:
+                return key
+
+        # No match found — callers should retry with a fresh JWKS fetch
+        raise OidcVerifyError(f"No JWK found with kid '{kid}'")
+
+    return jwks[0]
+
+
+# ---------------------------------------------------------------------------
+# ID token header decoding
+# ---------------------------------------------------------------------------
+
+
+def _decode_jwt_header(token: str) -> dict[str, Any]:
+    """Decode the JWT header without signature verification."""
+    parts = token.split(".")
+    if len(parts) != 3:
+        raise OidcVerifyError("Invalid JWT format: expected 3 dot-separated segments")
+    try:
+        padded = parts[0] + "=" * (4 - len(parts[0]) % 4)
+        return dict(json.loads(base64.urlsafe_b64decode(padded)))
+    except (ValueError, json.JSONDecodeError) as exc:
+        raise OidcVerifyError(f"Failed to decode JWT header: {exc}") from exc
+
+
+# ---------------------------------------------------------------------------
+# Public API
+# ---------------------------------------------------------------------------
+
+
+async def verify_id_token(
+    id_token: str,
+    jwks_uri: str,
+    client_id: str,
+    issuer: str,
+) -> dict[str, Any]:
+    """Verify an OIDC ID token using the provider's JWKS.
+
+    Args:
+        id_token: The raw JWT string returned by the token endpoint.
+        jwks_uri: The provider's JWKS URI (from the discovery document).
+        client_id: The OAuth 2.0 client ID (validates the ``aud`` claim).
+        issuer: The expected issuer URL (validates the ``iss`` claim).
+
+    Returns:
+        The verified claims dict on success.
+
+    Raises:
+        OidcVerifyError: If signature verification or claim validation fails.
+    """
+    header = _decode_jwt_header(id_token)
+    kid = header.get("kid")
+    alg = header.get("alg", "RS256")
+
+    jwks = await _fetch_jwks(jwks_uri)
+
+    try:
+        jwk_dict = _find_jwk(jwks, kid)
+    except OidcVerifyError:
+        if kid:
+            jwks = await _fetch_jwks_force(jwks_uri)
+            jwk_dict = _find_jwk(jwks, kid)
+        else:
+            raise
+
+    return await _decode_and_verify(id_token, jwk_dict, alg, client_id, issuer, jwks_uri)
+
+
+async def verify_id_token_with_discovery(
+    id_token: str,
+    discovery_url: str,
+    client_id: str,
+) -> dict[str, Any]:
+    """Verify an OIDC ID token using the provider's discovery URL.
+
+    Fetches the discovery document internally to obtain the JWKS URI and
+    issuer. Prefer :func:`verify_id_token` when you already have the JWKS
+    URI and issuer from a previously fetched discovery document.
+    """
+    jwks_uri = await _fetch_jwks_uri(discovery_url)
+
+    async with httpx.AsyncClient() as client:
+        resp = await client.get(discovery_url, timeout=10)
+        resp.raise_for_status()
+        disc: dict[str, Any] = resp.json()
+
+    issuer = disc.get("issuer", "")
+    if not issuer:
+        raise OidcVerifyError("No issuer in discovery document")
+
+    return await verify_id_token(id_token, jwks_uri, client_id, issuer)
+
+
+async def _decode_and_verify(
+    id_token: str,
+    jwk_dict: dict[str, Any],
+    alg: str,
+    client_id: str,
+    issuer: str,
+    jwks_uri: str,
+) -> dict[str, Any]:
+    """Construct the key from JWK and verify the JWT."""
+    try:
+        key = jwk.construct(jwk_dict)
+    except JWKError as exc:
+        raise OidcVerifyError(f"Failed to construct key from JWK: {exc}") from exc
+
+    try:
+        claims = jose_jwt.decode(
+            id_token,
+            key,
+            algorithms=[alg],
+            audience=client_id,
+            issuer=issuer,
+        )
+    except JWTError as exc:
+        _log.info("oidc_verify.retry_on_failure", extra={"jwks_uri": jwks_uri})
+        _jwks_cache.pop(jwks_uri, None)
+        try:
+            jwks = await _fetch_jwks_force(jwks_uri)
+            jwk_dict = _find_jwk(jwks, jwk_dict.get("kid"))
+            key = jwk.construct(jwk_dict)
+            claims = jose_jwt.decode(
+                id_token,
+                key,
+                algorithms=[alg],
+                audience=client_id,
+                issuer=issuer,
+            )
+        except (JWTError, JWKError, OidcVerifyError) as exc2:
+            raise OidcVerifyError(f"ID token verification failed after retry: {exc2}") from exc
+
+    return dict(claims)

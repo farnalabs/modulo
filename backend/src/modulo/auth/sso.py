@@ -16,6 +16,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.auth.jwt import create_access_token, create_refresh_token
+from modulo.auth.oidc_verify import OidcVerifyError, verify_id_token
 from modulo.db.crud.team_membership import add_team_member, get_membership_by_team_and_user, update_member_role
 from modulo.db.crud.token_family import create_family
 from modulo.db.crud.user import get_user_by_email, update_last_login
@@ -238,7 +239,17 @@ async def oidc_process_callback(
     )
 
     id_token = token_data.get("id_token", "")
-    claims = _decode_id_token_claims(id_token)
+
+    jwks_uri = disc.get("jwks_uri", "")
+    issuer = disc.get("issuer", "")
+    if jwks_uri and issuer:
+        try:
+            claims = await verify_id_token(id_token, jwks_uri, provider["client_id"], issuer)
+        except OidcVerifyError as exc:
+            raise ValueError(str(exc)) from None
+    else:
+        claims = _decode_id_token_claims(id_token)
+        _log.warning("sso.oidc_no_discovery_metadata", extra={"provider_id": provider_id})
 
     email = claims.get("email", "") or claims.get("sub", "")
     name = claims.get("name", "") or claims.get("preferred_username", "") or email.split("@")[0]
