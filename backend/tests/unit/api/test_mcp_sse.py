@@ -14,12 +14,14 @@ from modulo.api.mcp_server import (
     _ctx_org_id,
     _ctx_role,
     copy_library_primitive,
+    get_run_output,
     get_run_status,
     list_pending_hitl,
     list_pipelines_tool,
     resource_connectors,
     resource_hitl_gate,
     resource_model_backends,
+    resource_pipeline_detail,
     resource_pipelines,
     resource_run,
     resource_schemas,
@@ -277,11 +279,33 @@ class TestHandlerPerEventAuth:
         mock_validate_auth.assert_called_once()
 
     @patch("modulo.api.mcp_server.validate_current_auth", return_value=False)
+    @patch("modulo.api.mcp_server._session")
+    async def test_get_run_output_returns_auth_error(
+        self,
+        mock_session: AsyncMock,
+        mock_validate_auth: AsyncMock,
+    ) -> None:
+        result = await get_run_output(run_id=str(uuid.uuid4()), node_id="node1")
+        assert result["error"] == "internal_error"
+        mock_validate_auth.assert_called_once()
+
+    @patch("modulo.api.mcp_server.validate_current_auth", return_value=False)
     async def test_resource_pipelines_returns_auth_error(
         self,
         mock_validate_auth: AsyncMock,
     ) -> None:
         result = await resource_pipelines()
+        assert "revoked" in result.lower() or "expired" in result.lower()
+        mock_validate_auth.assert_called_once()
+
+    @patch("modulo.api.mcp_server.validate_current_auth", return_value=False)
+    @patch("modulo.api.mcp_server._session")
+    async def test_resource_pipeline_detail_returns_auth_error(
+        self,
+        mock_session: AsyncMock,
+        mock_validate_auth: AsyncMock,
+    ) -> None:
+        result = await resource_pipeline_detail(pipeline_id=str(uuid.uuid4()))
         assert "revoked" in result.lower() or "expired" in result.lower()
         mock_validate_auth.assert_called_once()
 
