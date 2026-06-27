@@ -10,10 +10,12 @@ from modulo.core.pipeline_engine.executor import (
     RunNotFoundError,
 )
 from modulo.core.pipeline_engine.graph_cache import build_graph_from_json, evict, get_or_compile
+from modulo.core.pipeline_engine.modulo_saver import ModuloPostgresSaver
 
 __all__ = [
     "ContextSetterViolationError",
     "GraphValidationError",
+    "ModuloPostgresSaver",
     "PipelineExecutor",
     "RunCancelledError",
     "RunNotFoundError",

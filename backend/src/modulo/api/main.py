@@ -325,12 +325,18 @@ async def _seed_sso_providers(settings: Settings) -> None:
                 )
 
 
-async def _init_checkpointer(conn_string: str) -> None:
+async def _init_checkpointer(conn_string: str, fernet_key: str) -> None:
     """Ensure the langgraph.* checkpointer schema exists on startup."""
-    try:
-        from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
+    import uuid
 
-        async with AsyncPostgresSaver.from_conn_string(conn_string) as saver:
+    try:
+        from modulo.core.pipeline_engine.modulo_saver import ModuloPostgresSaver
+
+        async with ModuloPostgresSaver.from_conn_string(
+            conn_string,
+            organisation_id=uuid.UUID(int=0),
+            fernet_key=fernet_key,
+        ) as saver:
             await saver.setup()
             logger.info("startup.checkpointer_initialised")
     except Exception:
@@ -413,7 +419,10 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
     await _seed_sso_providers(settings)
 
     # Initialise the LangGraph checkpointer schema (langgraph.* tables).
-    await _init_checkpointer(pg_connection_string(settings.database_url))
+    await _init_checkpointer(
+        pg_connection_string(settings.database_url),
+        settings.fernet_key,
+    )
 
     # Start the run retention background loop.
     retention_task = asyncio.create_task(_run_retention_loop())

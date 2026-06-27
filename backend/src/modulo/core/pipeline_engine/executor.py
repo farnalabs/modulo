@@ -24,7 +24,6 @@ from datetime import UTC, datetime
 from decimal import Decimal
 from typing import Any
 
-from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
 from langgraph.errors import NodeInterrupt
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker
@@ -47,6 +46,7 @@ from modulo.core.pipeline_engine.decorator import (
 )
 from modulo.core.pipeline_engine.event_broker import RunEventBroker, get_registry
 from modulo.core.pipeline_engine.graph_cache import build_graph_from_json, get_or_compile
+from modulo.core.pipeline_engine.modulo_saver import ModuloPostgresSaver
 from modulo.db.crud.run import (
     count_active_runs_for_pipeline,
     get_run,
@@ -144,9 +144,15 @@ def _strip_asyncpg(url: str) -> str:
 @asynccontextmanager
 async def _checkpointer_scope(
     conn_string: str,
-) -> AsyncIterator[AsyncPostgresSaver]:
-    """Create an AsyncPostgresSaver for the duration of a single run execution."""
-    async with AsyncPostgresSaver.from_conn_string(conn_string) as saver:
+    organisation_id: uuid.UUID,
+    fernet_key: str | None = None,
+) -> AsyncIterator[ModuloPostgresSaver]:
+    """Create a ModuloPostgresSaver for the duration of a single run execution."""
+    async with ModuloPostgresSaver.from_conn_string(
+        conn_string,
+        organisation_id=organisation_id,
+        fernet_key=fernet_key,
+    ) as saver:
         yield saver
 
 
@@ -308,7 +314,14 @@ class PipelineExecutor:
         node_token_usage: dict[str, Any] | None = None
         broker = get_registry().get_or_create(run_id)
         try:
-            async with _checkpointer_scope(self._checkpointer_conn_string) as saver:
+            from modulo.settings import get_settings
+
+            _settings = get_settings()
+            async with _checkpointer_scope(
+                self._checkpointer_conn_string,
+                organisation_id=org_id,
+                fernet_key=_settings.fernet_key,
+            ) as saver:
                 compiled.checkpointer = saver
                 await compiled.aupdate_state(config, {"_hitl_decision": resume_data})
                 final_status, error_code, _, node_token_usage = await self._stream_graph(
@@ -458,7 +471,14 @@ class PipelineExecutor:
             node_ids = {str(n["id"]) for n in graph_json.get("nodes", [])}
 
             if self._checkpointer_conn_string:
-                async with _checkpointer_scope(self._checkpointer_conn_string) as saver:
+                from modulo.settings import get_settings
+
+                _settings = get_settings()
+                async with _checkpointer_scope(
+                    self._checkpointer_conn_string,
+                    organisation_id=org_id,
+                    fernet_key=_settings.fernet_key,
+                ) as saver:
                     compiled.checkpointer = saver
                     final_status, error_code, error_detail, node_token_usage = await self._stream_graph(
                         compiled, initial_state, config, node_ids, broker, run_id
