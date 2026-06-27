@@ -107,6 +107,8 @@ class LibraryPrimitiveListResponse(BaseModel):
     total: int
     page: int
     page_size: int
+    next_cursor: str | None = None
+    has_more: bool = False
 
 
 class LibraryPrimitiveCreate(BaseModel):
@@ -243,6 +245,7 @@ class PipelineFromTemplateResponse(BaseModel):
 async def list_library_primitives_endpoint(
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
+    cursor: str | None = Query(default=None),
     primitive_type: str | None = None,
     search: str | None = None,
     source: str | None = None,
@@ -261,12 +264,15 @@ async def list_library_primitives_endpoint(
             page=page,
             page_size=page_size,
             include_community=include_community,
+            cursor=cursor,
         )
     return LibraryPrimitiveListResponse(
         items=[LibraryPrimitiveResponse.model_validate(p) for p in result.items],
         total=result.total,
         page=result.page,
         page_size=result.page_size,
+        next_cursor=result.next_cursor,
+        has_more=result.has_more,
     )
 
 

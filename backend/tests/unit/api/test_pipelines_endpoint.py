@@ -98,6 +98,8 @@ def test_list_pipelines_returns_200(client: TestClient) -> None:
     page_result.total = 1
     page_result.page = 1
     page_result.page_size = 20
+    page_result.next_cursor = None
+    page_result.has_more = False
 
     with (
         patch("modulo.api.routes.pipelines.list_pipelines", return_value=page_result),
