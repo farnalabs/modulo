@@ -1,5 +1,6 @@
 """POST /api/v1/runs — manual pipeline trigger and run lifecycle endpoints."""
 
+import json
 import logging
 import uuid
 from decimal import Decimal
@@ -7,7 +8,7 @@ from typing import Any
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, status
 from pydantic import BaseModel, Field
-from sqlalchemy import select
+from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
 from modulo.api.dependencies import (
@@ -16,6 +17,7 @@ from modulo.api.dependencies import (
     get_or_create_engine,
     pg_connection_string,
 )
+from modulo.api.middleware.sensitive_mask import is_sensitive_key, mask_sensitive_value
 from modulo.auth.dependencies import get_current_user
 from modulo.auth.jwt import AuthenticatedPrincipal
 from modulo.core.pipeline_engine.executor import PipelineExecutor
@@ -33,7 +35,7 @@ from modulo.db.crud.run import (
 from modulo.db.models.agent import Agent
 from modulo.db.models.pipeline_snapshot import PipelineSnapshot
 from modulo.db.rls import set_rls_org
-from modulo.settings import get_settings
+from modulo.settings import Settings, get_settings
 
 _log = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/v1/runs", tags=["runs"])
@@ -407,3 +409,314 @@ async def get_run_workspace_events(
         }
         for evt in events
     ]
+
+
+# ---------------------------------------------------------------------------
+# Node output inspection
+# ---------------------------------------------------------------------------
+
+
+def _mask_output_value(value: Any, *, _depth: int = 0) -> Any:
+    """Recursively mask sensitive string fields in *value*.
+
+    Traverses dicts, lists, and simple values.  String values whose keys
+    match :func:`is_sensitive_key` are replaced with the standard mask.
+    Nones and non-string atomic values pass through unchanged.
+    """
+    if _depth > 20:
+        return value
+    if isinstance(value, dict):
+        return {
+            k: (
+                mask_sensitive_value(v)
+                if isinstance(v, str) and is_sensitive_key(k)
+                else _mask_output_value(v, _depth=_depth + 1)
+            )
+            for k, v in value.items()
+        }
+    if isinstance(value, list):
+        return [_mask_output_value(item, _depth=_depth + 1) for item in value]
+    return value
+
+
+class NodeOutputResponse(BaseModel):
+    run_id: uuid.UUID
+    node_id: str
+    output: Any = None
+
+
+@router.get("/{run_id}/nodes/{node_id}/output", response_model=NodeOutputResponse)
+async def get_run_node_output(
+    run_id: uuid.UUID,
+    node_id: str,
+    session: AsyncSession = Depends(get_db_session),
+    principal: AuthenticatedPrincipal = Depends(get_current_user),
+) -> NodeOutputResponse:
+    """Return a specific node's output from a completed pipeline run.
+
+    Sensitive fields (keys matching *token*, *secret*, *api_key*,
+    *password*, *key*, *credential*) in the output are masked with
+    bullet characters.
+    """
+    async with session.begin():
+        await set_rls_org(session, principal.organisation_id)
+        run = await get_run(session, run_id)
+
+    if run is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Run not found")
+
+    outputs = run.outputs_json or {}
+    node_output = outputs.get(node_id)
+    if node_output is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Node {node_id} not found in run outputs",
+        )
+
+    masked = _mask_output_value(node_output)
+    return NodeOutputResponse(run_id=run_id, node_id=node_id, output=masked)
+
+
+# ---------------------------------------------------------------------------
+# Prompt reveal (PRD §8.9)
+# ---------------------------------------------------------------------------
+
+
+class PromptRevealResponse(BaseModel):
+    prompt: str
+    messages: list[dict[str, str]]
+    token_count: int
+
+
+def _mask_prompt_text(text: str) -> str:
+    """Mask sensitive credential-like values in prompt text.
+
+    Replaces values following sensitive keys (token, secret, api_key,
+    password, key, credential) with bullet characters.
+    """
+    import re
+    masked = text
+    patterns = [
+        (r'(api_key["\']?\s*[:=]\s*["\']?)[^"\'}\s,]+', r'\1' + "\u2022\u2022\u2022\u2022\u2022\u2022"),
+        (r'(secret["\']?\s*[:=]\s*["\']?)[^"\'}\s,]+', r'\1' + "\u2022\u2022\u2022\u2022\u2022\u2022"),
+        (r'(token["\']?\s*[:=]\s*["\']?)[^"\'}\s,]+', r'\1' + "\u2022\u2022\u2022\u2022\u2022\u2022"),
+        (r'(password["\']?\s*[:=]\s*["\']?)[^"\'}\s,]+', r'\1' + "\u2022\u2022\u2022\u2022\u2022\u2022"),
+        (r'(credential["\']?\s*[:=]\s*["\']?)[^"\'}\s,]+', r'\1' + "\u2022\u2022\u2022\u2022\u2022\u2022"),
+    ]
+    for pattern, replacement in patterns:
+        masked = re.sub(pattern, replacement, masked, flags=re.IGNORECASE)
+    return masked
+
+
+def _mask_message_list(messages: list[dict[str, str]]) -> list[dict[str, str]]:
+    """Apply sensitive masking to all message content."""
+    return [
+        {"role": m["role"], "content": _mask_prompt_text(m["content"])}
+        for m in messages
+    ]
+
+
+def _estimate_tokens(text: str) -> int:
+    """Estimate token count using a 4-char-per-token heuristic."""
+    return max(1, len(text) // 4)
+
+
+async def _get_checkpoint_state(
+    session: AsyncSession,
+    thread_id: str,
+    organisation_id: uuid.UUID,
+    fernet_key: str | None = None,
+) -> dict[str, Any] | None:
+    """Fetch the latest checkpoint state for a thread, decrypting if needed."""
+    from cryptography.fernet import Fernet
+
+    result = await session.execute(
+        text("""
+            SELECT checkpoint, checkpoint_id
+            FROM checkpoints
+            WHERE organisation_id = :org_id
+              AND thread_id = :thread_id
+              AND checkpoint_ns = ''
+            ORDER BY checkpoint_id DESC
+            LIMIT 1
+        """),
+        {"org_id": organisation_id, "thread_id": thread_id},
+    )
+    row = result.fetchone()
+    if row is None:
+        return None
+
+    raw_checkpoint = row[0]
+    if isinstance(raw_checkpoint, str):
+        try:
+            wrapper = json.loads(raw_checkpoint)
+            if isinstance(wrapper, dict) and wrapper.get("__encrypted__") and fernet_key:
+                f = Fernet(fernet_key.encode())
+                decrypted = f.decrypt(wrapper["data"].encode())
+                raw_checkpoint = json.loads(decrypted.decode())
+        except (json.JSONDecodeError, Exception) as exc:
+            _log.warning("checkpoint.decrypt_skip", extra={"error": str(exc)[:200]})
+    elif isinstance(raw_checkpoint, dict):
+        if raw_checkpoint.get("__encrypted__") and fernet_key:
+            try:
+                f = Fernet(fernet_key.encode())
+                decrypted = f.decrypt(raw_checkpoint["data"].encode())
+                raw_checkpoint = json.loads(decrypted.decode())
+            except Exception as exc:
+                _log.warning("checkpoint.decrypt_skip", extra={"error": str(exc)[:200]})
+
+    if isinstance(raw_checkpoint, dict):
+        return raw_checkpoint.get("channel_values")
+    return None
+
+
+def _build_messages_from_agent_and_state(
+    agent: Agent | None,
+    input_payload: dict[str, Any] | None,
+    outputs_json: dict[str, Any] | None,
+    checkpoint_state: dict[str, Any] | None,
+    node_id: str,
+) -> list[dict[str, str]]:
+    """Reconstruct the LLM messages for a node from agent + run data.
+
+    Builds system message from the agent's prompt_template, user message
+    from the input payload or checkpoint state, and assistant messages
+    from previous node outputs.
+    """
+    messages: list[dict[str, str]] = []
+
+    if agent is not None:
+        system_content = agent.prompt_template or ""
+        if system_content:
+            messages.append({"role": "system", "content": system_content})
+
+    # Build conversation history from previous node outputs.
+    if outputs_json:
+        for prev_node_id, output in outputs_json.items():
+            if prev_node_id == node_id:
+                continue
+            if isinstance(output, str):
+                messages.append({"role": "assistant", "content": output})
+            elif isinstance(output, dict):
+                content = json.dumps(output, default=str)
+                messages.append({"role": "assistant", "content": content})
+
+    # Current user input — prefer checkpoint state, fall back to run input_payload.
+    user_input: dict[str, Any] | None = None
+    if checkpoint_state:
+        run_ctx = checkpoint_state.get("run_context") or {}
+        user_input = run_ctx.get("input")
+    if user_input is None and input_payload:
+        user_input = input_payload
+
+    if user_input is not None:
+        if isinstance(user_input, str):
+            messages.append({"role": "user", "content": user_input})
+        else:
+            messages.append({"role": "user", "content": json.dumps(user_input, default=str)})
+
+    return messages
+
+
+def _lookup_agent_for_node(
+    graph_json: dict[str, Any],
+    node_id: str,
+) -> uuid.UUID | None:
+    """Find the agent_id for a node in the graph definition."""
+    nodes = graph_json.get("nodes", [])
+    for node in nodes:
+        if str(node.get("id")) == node_id:
+            agent_id = node.get("agent_id")
+            if agent_id is not None:
+                return uuid.UUID(str(agent_id))
+            return None
+    return None
+
+
+@router.post("/{run_id}/nodes/{node_id}/prompt/reveal", response_model=PromptRevealResponse)
+async def reveal_node_prompt(
+    run_id: uuid.UUID,
+    node_id: str,
+    session: AsyncSession = Depends(get_db_session),
+    principal: AuthenticatedPrincipal = Depends(get_current_user),
+    settings: Settings = Depends(get_settings),
+) -> PromptRevealResponse:
+    """Reconstruct and reveal the exact prompt sent to the LLM for a node.
+
+    Returns the full prompt text, structured messages (system, user,
+    assistant), and an estimated token count. Sensitive credential-like
+    values are masked.
+    """
+    async with session.begin():
+        await set_rls_org(session, principal.organisation_id)
+        run = await get_run(session, run_id)
+
+    if run is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Run not found")
+
+    # Load snapshot to get graph definition.
+    snapshot_id = run.snapshot_id
+    snapshot_result = await session.execute(
+        select(PipelineSnapshot).where(PipelineSnapshot.id == snapshot_id)
+    )
+    snapshot = snapshot_result.scalar_one_or_none()
+    if snapshot is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Snapshot {snapshot_id} not found for run",
+        )
+
+    graph_json: dict[str, Any] = snapshot.graph_json
+
+    # Verify node exists in the graph.
+    agent_id = _lookup_agent_for_node(graph_json, node_id)
+    if agent_id is None:
+        # Check if node exists at all (even non-agent nodes).
+        node_ids = {str(n.get("id")) for n in graph_json.get("nodes", [])}
+        if node_id not in node_ids:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Node {node_id} not found in pipeline graph",
+            )
+
+    # Load agent for prompt template (if this is an agent node).
+    agent: Agent | None = None
+    if agent_id is not None:
+        agent_result = await session.execute(select(Agent).where(Agent.id == agent_id))
+        agent = agent_result.scalar_one_or_none()
+        if agent is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Agent {agent_id} not found for node {node_id}",
+            )
+
+    # Try to load checkpoint state for richer prompt reconstruction.
+    thread_id = run.langgraph_thread_id
+    checkpoint_state = await _get_checkpoint_state(
+        session,
+        thread_id,
+        principal.organisation_id,
+        fernet_key=settings.fernet_key,
+    )
+
+    messages = _build_messages_from_agent_and_state(
+        agent=agent,
+        input_payload=run.input_payload,
+        outputs_json=run.outputs_json,
+        checkpoint_state=checkpoint_state,
+        node_id=node_id,
+    )
+
+    # Apply masking to protect sensitive values.
+    masked_messages = _mask_message_list(messages)
+    full_prompt = "\n\n".join(
+        f"<{m['role'].upper()}>\n{m['content']}\n</{m['role'].upper()}>"
+        for m in masked_messages
+    )
+    token_count = _estimate_tokens(full_prompt)
+
+    return PromptRevealResponse(
+        prompt=full_prompt,
+        messages=masked_messages,
+        token_count=token_count,
+    )
