@@ -21,7 +21,7 @@ dependencies = [
     "fastapi>=0.111.0",
     "uvicorn[standard]>=0.49.0",
     "websockets>=12.0",
-    "python-multipart>=0.0.9",
+    "python-multipart>=0.0.32",
     # LangGraph + LangChain
     # PYSEC-2026-83 / CVE-2026-28277: RCE via msgpack checkpoint deserialization
     "langgraph>=1.0.10",
