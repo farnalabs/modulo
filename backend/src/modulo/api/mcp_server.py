@@ -887,25 +887,29 @@ async def resource_library() -> str:
     """
     if not await validate_current_auth():
         return "error: Token revoked or expired — re-authenticate"
-    org_id = _ctx_org_id.get(_PLACEHOLDER_ORG_ID)
-    async with _session(org_id) as s:
-        result = await list_primitives(
-            s,
-            org_id,
-            page=1,
-            page_size=50,
-            include_community=True,
-        )
-    if not result.items:
-        return "Library is empty."
-    lines: list[str] = []
-    for p in result.items:
-        tags_str = ", ".join(p.tags) if p.tags else ""
-        rating_str = f"{p.average_rating:.1f}" if p.average_rating is not None else "N/A"
-        desc = f" — {p.description}" if p.description else ""
-        lines.append(f"- {p.name} (id={p.id}, type={p.primitive_type}, v{p.version}, tags=[{tags_str}], rating={rating_str}){desc}")
-    header = f"Library ({result.total} primitives):"
-    return header + "\n" + "\n".join(lines)
+    try:
+        org_id = _ctx_org_id.get(_PLACEHOLDER_ORG_ID)
+        async with _session(org_id) as s:
+            result = await list_primitives(
+                s,
+                org_id,
+                page=1,
+                page_size=50,
+                include_community=True,
+            )
+        if not result.items:
+            return "Library is empty."
+        lines: list[str] = []
+        for p in result.items:
+            tags_str = ", ".join(p.tags) if p.tags else ""
+            rating_str = f"{p.average_rating:.1f}" if p.average_rating is not None else "N/A"
+            desc = f" — {p.description}" if p.description else ""
+            lines.append(f"- {p.name} (id={p.id}, type={p.primitive_type}, v{p.version}, tags=[{tags_str}], rating={rating_str}){desc}")
+        header = f"Library ({result.total} primitives):"
+        return header + "\n" + "\n".join(lines)
+    except Exception:
+        _log.exception("resource_library failed")
+        return "error: Failed to browse library"
 
 
 # ---------------------------------------------------------------------------
