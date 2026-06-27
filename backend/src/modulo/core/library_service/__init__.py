@@ -471,6 +471,7 @@ async def list_primitives(
     page: int = 1,
     page_size: int = 20,
     include_community: bool = True,
+    cursor: str | None = None,
 ) -> PageResult[LibraryPrimitive]:
     """Return org-scoped and community primitives merged into a single page."""
     await set_rls_org(session, org_id)
@@ -480,6 +481,7 @@ async def list_primitives(
         page_size=page_size,
         primitive_type=primitive_type,
         search=search,
+        cursor=cursor,
     )
 
     community: list[LibraryPrimitive] = (
@@ -492,6 +494,8 @@ async def list_primitives(
         total=org_page.total + len(community),
         page=page,
         page_size=page_size,
+        next_cursor=org_page.next_cursor,
+        has_more=org_page.has_more,
     )
 
 

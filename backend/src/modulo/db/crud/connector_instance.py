@@ -10,6 +10,7 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.db.crud.base import PageResult, apply_updates
+from modulo.db.crud.pagination import CursorPaginator
 from modulo.db.models.connector_instance import ConnectorInstance
 
 
@@ -52,7 +53,27 @@ async def list_connector_instances(
     *,
     page: int = 1,
     page_size: int = 20,
+    cursor: str | None = None,
 ) -> PageResult[ConnectorInstance]:
+    if cursor is not None:
+        paginator = CursorPaginator()
+        cp = await paginator.paginate(
+            session,
+            select(ConnectorInstance),
+            cursor=cursor,
+            limit=page_size,
+            model=ConnectorInstance,
+            compute_total=True,
+        )
+        return PageResult(
+            items=cp.items,
+            total=cp.total or 0,
+            page=page,
+            page_size=page_size,
+            next_cursor=cp.next_cursor,
+            has_more=cp.has_more,
+        )
+
     offset = (page - 1) * page_size
     total = (await session.execute(select(func.count()).select_from(ConnectorInstance))).scalar_one()
     items = list(
