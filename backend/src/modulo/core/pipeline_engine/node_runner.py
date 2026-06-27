@@ -49,6 +49,7 @@ from langgraph.errors import NodeInterrupt
 
 from modulo.core.eval_engine import EvalDefinition, EvalEngine
 from modulo.core.pipeline_engine.decorator import cancellable_node
+from modulo.core.pipeline_engine.input_truncation import truncate_input
 from modulo.core.run_context.autonomy import (
     effective_autonomy_level,
     should_notify_on_complete,
@@ -78,18 +79,29 @@ def make_node_fn(
     *,
     role: str | None = None,
     timeout: float | None = None,
+    max_input_length: int | None = None,
 ) -> Any:
     """Return a decorated async node function for use in a StateGraph.
 
     At this phase the node body is a stub: it records node entry in state["artifacts"]
     and returns.  Real agent invocation is wired in once ModelBackendHub and
     ConnectorHub are plumbed into the run context (phase2-10 execution path).
+
+    When *max_input_length* is set, input text from ``run_context["input"]`` is
+    truncated before being passed to the LLM.
     """
     node_id: str = str(node_def["id"])
 
     @cancellable_node(timeout=timeout, role=role)
     async def _node(state: dict[str, Any]) -> dict[str, Any]:
         artifacts: list[dict[str, Any]] = list(state.get("artifacts") or [])
+
+        # Truncate input if max_input_length is configured for this agent.
+        run_context: dict[str, Any] = state.get("run_context") or {}
+        raw_input = run_context.get("input", {})
+        if max_input_length is not None and isinstance(raw_input, str):
+            run_context["input"] = truncate_input(raw_input, max_input_length)
+
         artifacts.append({"node_id": node_id, "status": "executed"})
         return {"artifacts": artifacts}
 

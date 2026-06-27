@@ -33,6 +33,7 @@ async def create_agent(
     evals: list[dict[str, Any]] | None = None,
     retry_policy: dict[str, Any] | None = None,
     token_budget: int | None = None,
+    max_input_length: int | None = None,
     library_id: uuid.UUID | None = None,
 ) -> Agent:
     agent = Agent(
@@ -50,6 +51,7 @@ async def create_agent(
         evals=evals,
         retry_policy=retry_policy or {},
         token_budget=token_budget,
+        max_input_length=max_input_length,
         library_id=library_id,
     )
     session.add(agent)
