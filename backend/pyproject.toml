@@ -16,7 +16,7 @@ description = "Self-hosted agentic SDLC platform"
 requires-python = ">=3.12"
 dependencies = [
     # Settings
-    "pydantic-settings>=2.3.0",
+    "pydantic-settings>=2.14.2",
     # API
     "fastapi>=0.111.0",
     "uvicorn[standard]>=0.30.0",
