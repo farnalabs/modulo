@@ -35,7 +35,7 @@ jobs:
         run: uv sync --frozen
       - name: Install Playwright browsers
         working-directory: backend
-        run: playwright install --with-deps chromium
+        run: uv run playwright install --with-deps chromium
       - name: Pre-create alembic_version table
         run: |
           PGPASSWORD=modulo psql -h localhost -U modulo -d modulo -c \
@@ -73,7 +73,7 @@ jobs:
       - name: Run BDD tests
         working-directory: backend
         run: |
-          pytest tests/bdd/ \
+          uv run pytest tests/bdd/ \
             -m e2e \
             --base-url http://localhost:4173 \
             -q
