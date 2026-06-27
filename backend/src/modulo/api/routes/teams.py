@@ -6,7 +6,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from modulo.api.dependencies import get_db_session
+from modulo.api.dependencies import get_db_session, require_feature
 from modulo.auth.dependencies import get_current_user
 from modulo.auth.jwt import AuthenticatedPrincipal
 from modulo.auth.team_rbac import ORG_ROLE_HIERARCHY, TEAM_ROLE_HIERARCHY
@@ -27,7 +27,11 @@ from modulo.db.crud.team_membership import (
 from modulo.db.crud.user import get_user_by_id_org
 from modulo.db.rls import set_rls_org, set_rls_user_context
 
-router = APIRouter(prefix="/api/v1/teams", tags=["teams"])
+router = APIRouter(
+    prefix="/api/v1/teams",
+    tags=["teams"],
+    dependencies=[require_feature("team_rbac")],
+)
 
 
 class CreateTeamRequest(BaseModel):

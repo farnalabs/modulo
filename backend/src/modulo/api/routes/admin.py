@@ -8,7 +8,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy import case, func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from modulo.api.dependencies import get_db_session
+from modulo.api.dependencies import get_db_session, require_feature
 from modulo.auth.dependencies import get_current_user
 from modulo.auth.jwt import AuthenticatedPrincipal
 from modulo.auth.passwords import hash_password, validate_password_strength
@@ -375,7 +375,12 @@ class AdminCreateTeamResponse(BaseModel):
     created_at: str
 
 
-@router.post("/teams", response_model=AdminCreateTeamResponse, status_code=status.HTTP_201_CREATED)
+@router.post(
+    "/teams",
+    response_model=AdminCreateTeamResponse,
+    status_code=status.HTTP_201_CREATED,
+    dependencies=[require_feature("team_rbac")],
+)
 async def admin_create_team(
     body: AdminCreateTeamRequest,
     current_user: AuthenticatedPrincipal = Depends(get_current_user),
@@ -703,7 +708,7 @@ class AdminTeamListResponse(BaseModel):
     page_size: int
 
 
-@router.get("/teams", response_model=AdminTeamListResponse)
+@router.get("/teams", response_model=AdminTeamListResponse, dependencies=[require_feature("team_rbac")])
 async def admin_list_teams(
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
@@ -757,7 +762,7 @@ async def admin_list_teams(
     )
 
 
-@router.put("/teams/{team_id}", response_model=AdminTeamItem)
+@router.put("/teams/{team_id}", response_model=AdminTeamItem, dependencies=[require_feature("team_rbac")])
 async def admin_update_team(
     team_id: uuid.UUID,
     body: AdminUpdateTeamRequest,
@@ -792,7 +797,7 @@ async def admin_update_team(
     )
 
 
-@router.delete("/teams/{team_id}", status_code=status.HTTP_204_NO_CONTENT)
+@router.delete("/teams/{team_id}", status_code=status.HTTP_204_NO_CONTENT, dependencies=[require_feature("team_rbac")])
 async def admin_delete_team(
     team_id: uuid.UUID,
     current_user: AuthenticatedPrincipal = Depends(get_current_user),

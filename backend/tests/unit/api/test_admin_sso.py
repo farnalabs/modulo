@@ -28,6 +28,7 @@ def _make_settings() -> Settings:
         secret_key=_VALID_32,
         fernet_key=_VALID_32,
         modulo_admin_password="testpass",
+        modulo_license_key="test-license-key",
         modulo_oidc_providers=json.dumps(
             [
                 {
