@@ -77,7 +77,7 @@ class RedisSlidingWindowRateLimiter:
         pipe.expire(redis_key, window_s * 2)
         _, _, count, _ = await pipe.execute()
 
-        return count <= max_requests
+        return bool(count <= max_requests)
 
 
 class RateLimiterRegistry:

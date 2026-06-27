@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import uuid
 from datetime import datetime
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from sqlalchemy import JSON, CheckConstraint, DateTime, ForeignKey, String, Uuid
 from sqlalchemy.orm import Mapped, mapped_column, relationship
@@ -38,6 +38,6 @@ class WorkspaceLease(OrgScoped):
     status: Mapped[str] = mapped_column(String(20), nullable=False, default="pending")
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
-    resource_usage_json: Mapped[dict | None] = mapped_column(JSON, nullable=True, default=None)
+    resource_usage_json: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True, default=None)
 
     environment_profile: Mapped[EnvironmentProfile] = relationship()

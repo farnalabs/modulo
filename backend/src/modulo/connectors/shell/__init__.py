@@ -66,6 +66,8 @@ class ShellConnector(ConnectorBase):
             )
 
     async def query(self, q: ConnectorQuery) -> ConnectorResult:
+        if self._runtime_provider is None:
+            raise ValueError("Runtime provider not configured")
         provider_ref: str | None = q.filters.get("provider_ref")
         if not provider_ref:
             raise ValueError("provider_ref is required in query filters")
@@ -99,6 +101,8 @@ class ShellConnector(ConnectorBase):
                 raise ValueError(f"Unsupported shell query resource: {q.resource!r}")
 
     async def write(self, payload: ConnectorPayload) -> dict[str, Any]:
+        if self._runtime_provider is None:
+            raise ValueError("Runtime provider not configured")
         provider_ref: str | None = payload.data.get("provider_ref")
         if not provider_ref:
             raise ValueError("provider_ref is required in payload data")

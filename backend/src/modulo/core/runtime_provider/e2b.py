@@ -63,21 +63,23 @@ class E2BRuntimeProvider(RuntimeProvider):
         ``labels`` dict contains ``repo_url`` the repository is cloned into
         ``/home/user/repo`` and optionally checked out to ``repo_ref``.
         """
-        from e2b import Sandbox
+        from e2b import Sandbox  # type: ignore[import-untyped]
 
         template_id = spec.image_ref.strip() if spec.image_ref else "default"
 
         sandbox = await asyncio.to_thread(
-            lambda: Sandbox(api_key=self._api_key, template=template_id),  # type: ignore[call-arg]
+            lambda: Sandbox(api_key=self._api_key, template=template_id),
         )
 
-        self._sandboxes[sandbox.id] = sandbox  # type: ignore[attr-defined]
+        self._sandboxes[sandbox.id] = sandbox
 
         repo_url = spec.labels.get("repo_url", "")
         if repo_url:
             await self._clone_repo(sandbox, repo_url, spec.labels)
 
-        return sandbox.id  # type: ignore[no-any-return,attr-defined]
+        result = sandbox.id
+        assert isinstance(result, str)
+        return result
 
     async def exec_command(
         self,

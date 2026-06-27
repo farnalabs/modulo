@@ -1,6 +1,7 @@
 """Postgres-specific repository — relies on RLS for tenant isolation."""
 
 import uuid
+from typing import Any
 
 from sqlalchemy import Select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -21,5 +22,5 @@ class PostgresRepository(BaseRepository):
     async def set_org_context(self, session: AsyncSession, org_id: uuid.UUID) -> None:
         await set_rls_org(session, org_id)
 
-    def apply_tenant_filter(self, stmt: Select, org_id: uuid.UUID) -> Select:
+    def apply_tenant_filter(self, stmt: Select[Any], org_id: uuid.UUID) -> Select[Any]:
         return stmt

@@ -2,6 +2,7 @@
 
 import copy
 import uuid
+from typing import Any
 
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -132,8 +133,8 @@ async def rollback_to_snapshot(
     return new_snapshot
 
 
-def _compute_node_changes(na: dict, nb: dict) -> dict:
-    changes: dict = {}
+def _compute_node_changes(na: dict[str, Any], nb: dict[str, Any]) -> dict[str, Any]:
+    changes: dict[str, Any] = {}
     for key in ("agent_id", "label", "node_type"):
         if na.get(key) != nb.get(key):
             changes[key] = {"old": na.get(key), "new": nb.get(key)}
@@ -157,7 +158,7 @@ async def diff_snapshots(
     session: AsyncSession,
     snapshot_id_a: uuid.UUID,
     snapshot_id_b: uuid.UUID,
-) -> dict | None:
+) -> dict[str, Any] | None:
     """Compare two snapshots and return structural differences with per-field changes."""
     a = await get_snapshot(session, snapshot_id_a)
     b = await get_snapshot(session, snapshot_id_b)
@@ -221,7 +222,7 @@ async def diff_snapshots(
                 }
             )
 
-    def _rebuild_graph(snapshot: PipelineSnapshot) -> dict:
+    def _rebuild_graph(snapshot: PipelineSnapshot) -> dict[str, Any]:
         graph = snapshot.graph_json
         return {
             "nodes": [

@@ -5,6 +5,7 @@ Each sample is a dict with connector_type, resource, and raw records.
 """
 
 import uuid
+from typing import Any
 
 from modulo.connectors.base import ConnectorBase, ConnectorQuery, ConnectorType
 from modulo.core.connector_hub import ConnectorHub
@@ -18,7 +19,7 @@ class ScanSample:
         connector_id: uuid.UUID,
         connector_type: ConnectorType,
         resource: str,
-        records: list[dict],
+        records: list[dict[str, Any]],
         sample_count: int,
         error: str | None = None,
     ) -> None:
@@ -33,12 +34,14 @@ class ScanSample:
 _SAMPLE_LIMIT = 25
 
 
-def _repo_name(rec: dict) -> str:
+def _repo_name(rec: dict[str, Any]) -> str:
     """Extract a repo/project identifier from a record.
 
     Handles GitHub (full_name or name) and GitLab (path_with_namespace or name) formats.
     """
-    return rec.get("full_name") or rec.get("path_with_namespace") or rec.get("name", "")
+    name = rec.get("full_name") or rec.get("path_with_namespace") or rec.get("name", "")
+    assert isinstance(name, str)
+    return name
 
 
 def _add(
@@ -46,7 +49,7 @@ def _add(
     connector_id: uuid.UUID,
     ct: ConnectorType,
     resource: str,
-    records: list[dict],
+    records: list[dict[str, Any]],
     sample_count: int,
     error: str | None = None,
 ) -> None:
@@ -65,7 +68,7 @@ async def _sample_connector(connector_id: uuid.UUID, connector: ConnectorBase) -
             return samples
 
         case ConnectorType.GITHUB:
-            repos: list[dict] = []
+            repos: list[dict[str, Any]] = []
             try:
                 r = await connector.query(ConnectorQuery(resource="repos", limit=_SAMPLE_LIMIT))
                 repos = r.records
@@ -84,7 +87,7 @@ async def _sample_connector(connector_id: uuid.UUID, connector: ConnectorBase) -
                     _add(samples, connector_id, ct, "pulls", [], 0, str(exc)[:200])
 
         case ConnectorType.GITLAB:
-            projects: list[dict] = []
+            projects: list[dict[str, Any]] = []
             try:
                 r = await connector.query(ConnectorQuery(resource="projects", limit=_SAMPLE_LIMIT))
                 projects = r.records

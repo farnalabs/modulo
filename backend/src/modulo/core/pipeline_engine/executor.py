@@ -280,9 +280,9 @@ class PipelineExecutor:
                         pipeline_id=e.pipeline_id,
                         node_id=node_key,
                         name=e.name,
-                        eval_type=e.eval_type,  # type: ignore[arg-type]
+                        eval_type=e.eval_type,
                         config=e.config_json,
-                        failure_behaviour=e.failure_behaviour,  # type: ignore[arg-type]
+                        failure_behaviour=e.failure_behaviour,
                         pass_threshold=e.pass_threshold,
                         suite_id=e.suite_id,
                     )
@@ -410,9 +410,9 @@ class PipelineExecutor:
                         pipeline_id=e.pipeline_id,
                         node_id=node_key,
                         name=e.name,
-                        eval_type=e.eval_type,  # type: ignore[arg-type]
+                        eval_type=e.eval_type,
                         config=e.config_json,
-                        failure_behaviour=e.failure_behaviour,  # type: ignore[arg-type]
+                        failure_behaviour=e.failure_behaviour,
                         pass_threshold=e.pass_threshold,
                         suite_id=e.suite_id,
                     )

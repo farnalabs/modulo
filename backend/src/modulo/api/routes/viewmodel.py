@@ -6,6 +6,7 @@ GET /api/v1/viewmodel/current — single-request aggregate for the frontend
 
 import uuid
 from datetime import datetime
+from typing import Any
 
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel, Field
@@ -49,11 +50,11 @@ class MeResponse(BaseModel):
     team_memberships: list[TeamMembershipInfo]
     team_memberships_truncated: bool
     org_role: str
-    preferences: dict = {}
+    preferences: dict[str, Any] = {}
 
 
 class UpdatePreferencesRequest(BaseModel):
-    preferences: dict = Field(default_factory=dict)
+    preferences: dict[str, Any] = Field(default_factory=dict)
 
 
 class PipelineSummary(BaseModel):

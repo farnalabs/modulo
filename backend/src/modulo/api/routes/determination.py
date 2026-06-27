@@ -10,6 +10,7 @@ from modulo.api.dependencies import get_db_session
 from modulo.auth.dependencies import get_current_user
 from modulo.connectors.base import ConnectorType
 from modulo.core.connector_hub import ConnectorDecryptError, ConnectorHub
+from modulo.core.secrets_backend import create_secrets_backend
 from modulo.db.crud.connector_instance import list_connector_instances
 from modulo.db.models.connector_instance import ConnectorInstance
 from modulo.db.rls import set_rls_org
@@ -118,9 +119,9 @@ async def _load_and_scan(settings: Settings) -> tuple[list[ScanSample], list[Fin
         ci for ci in instances.items if ci.connector_type_id in {t.value for t in _DETERMINATION_SCOPES}
     ]
 
-    async with ConnectorHub(fernet_key=settings.fernet_key) as hub:
+    async with ConnectorHub(secrets_backend=create_secrets_backend(fernet_key=settings.fernet_key)) as hub:
         try:
-            hub.initialise(relevant)
+            await hub.initialise(relevant)
         except ConnectorDecryptError as exc:
             raise HTTPException(
                 status_code=status.HTTP_502_BAD_GATEWAY,
@@ -148,9 +149,9 @@ async def run_determination(
         ci for ci in instances.items if ci.connector_type_id in {t.value for t in _DETERMINATION_SCOPES}
     ]
 
-    async with ConnectorHub(fernet_key=settings.fernet_key) as hub:
+    async with ConnectorHub(secrets_backend=create_secrets_backend(fernet_key=settings.fernet_key)) as hub:
         try:
-            hub.initialise(relevant)
+            await hub.initialise(relevant)
         except ConnectorDecryptError as exc:
             raise HTTPException(
                 status_code=status.HTTP_502_BAD_GATEWAY,
@@ -191,9 +192,9 @@ async def create_determination_draft(
         ci for ci in instances.items if ci.connector_type_id in {t.value for t in _DETERMINATION_SCOPES}
     ]
 
-    async with ConnectorHub(fernet_key=settings.fernet_key) as hub:
+    async with ConnectorHub(secrets_backend=create_secrets_backend(fernet_key=settings.fernet_key)) as hub:
         try:
-            hub.initialise(relevant)
+            await hub.initialise(relevant)
         except ConnectorDecryptError as exc:
             raise HTTPException(
                 status_code=status.HTTP_502_BAD_GATEWAY,

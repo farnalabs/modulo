@@ -6,6 +6,7 @@ Extends Starlette's CORSMiddleware to add:
 """
 
 import logging
+from typing import Any
 
 from starlette.datastructures import Headers
 from starlette.middleware.cors import CORSMiddleware as StarletteCORSMiddleware
@@ -18,7 +19,7 @@ class CorsLoggingMiddleware(StarletteCORSMiddleware):
     def __init__(
         self,
         app: ASGIApp,
-        **kwargs,
+        **kwargs: Any,
     ) -> None:
         super().__init__(app, **kwargs)
 

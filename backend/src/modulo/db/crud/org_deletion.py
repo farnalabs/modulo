@@ -213,7 +213,7 @@ async def batch_delete_langgraph_checkpoints(
             )
             stmt = text(_sql)
             result = await session.execute(stmt, {"cutoff": cutoff, "limit": batch_size})
-            count = result.rowcount
+            count = result.rowcount if hasattr(result, "rowcount") else 0
             deleted_total += count
             if count < batch_size:
                 break

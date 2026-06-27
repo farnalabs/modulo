@@ -564,13 +564,13 @@ class SnapshotResponse(BaseModel):
 
 
 class SnapshotDetailResponse(SnapshotResponse):
-    graph_json: dict | None = None
-    connector_bindings_json: list[dict] | None = None
-    schema_pins_json: list[dict] | None = None
-    prompt_pins_json: list[dict] | None = None
-    model_backend_pins_json: list[dict] | None = None
+    graph_json: dict[str, Any] | None = None
+    connector_bindings_json: list[dict[str, Any]] | None = None
+    schema_pins_json: list[dict[str, Any]] | None = None
+    prompt_pins_json: list[dict[str, Any]] | None = None
+    model_backend_pins_json: list[dict[str, Any]] | None = None
     default_autonomy_level: str | None = None
-    run_context_defaults: dict | None = None
+    run_context_defaults: dict[str, Any] | None = None
 
 
 class SnapshotTagUpdate(BaseModel):
@@ -589,14 +589,14 @@ class SnapshotDiffQuery(BaseModel):
 
 
 class SnapshotDiffResponse(BaseModel):
-    snapshot_a: dict
-    snapshot_b: dict
-    nodes_added: list[dict]
-    nodes_removed: list[dict]
-    nodes_modified: list[dict]
-    edges_added: list[dict]
-    edges_removed: list[dict]
-    edges_modified: list[dict]
+    snapshot_a: dict[str, Any]
+    snapshot_b: dict[str, Any]
+    nodes_added: list[dict[str, Any]]
+    nodes_removed: list[dict[str, Any]]
+    nodes_modified: list[dict[str, Any]]
+    edges_added: list[dict[str, Any]]
+    edges_removed: list[dict[str, Any]]
+    edges_modified: list[dict[str, Any]]
 
 
 def _snapshot_to_response(s: Any) -> SnapshotResponse:
@@ -905,7 +905,7 @@ async def revert_node_to_manual_endpoint(
     return _graph_response(saved_nodes, saved_edges)
 
 
-def _find_node_in_list(nodes: list[dict], node_id: uuid.UUID) -> dict | None:
+def _find_node_in_list(nodes: list[dict[str, Any]], node_id: uuid.UUID) -> dict[str, Any] | None:
     """Find a node dict by ID within a list of node dicts."""
     node_id_str = str(node_id)
     for n in nodes:
@@ -920,7 +920,7 @@ def _find_node_in_list(nodes: list[dict], node_id: uuid.UUID) -> dict | None:
     return None
 
 
-def _edge_to_dict(e: Any) -> dict:
+def _edge_to_dict(e: Any) -> dict[str, Any]:
     return {
         "id": str(e.id),
         "source_node_id": str(e.source_node_id),
@@ -935,9 +935,9 @@ async def _save_graph(
     session: AsyncSession,
     pipeline_id: uuid.UUID,
     org_id: uuid.UUID,
-    nodes: list[dict],
+    nodes: list[dict[str, Any]],
     edges: list[Any],
-) -> tuple[list[dict], list[Any]] | None:
+) -> tuple[list[dict[str, Any]], list[Any]] | None:
     """Persist updated nodes + edges via replace_pipeline_graph.
 
     Accepts edges as either ORM model instances (PipelineEdge) or plain dicts.

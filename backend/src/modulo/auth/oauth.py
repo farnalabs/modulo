@@ -15,6 +15,7 @@ import secrets
 import uuid
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
+from typing import Any
 
 from jose import JWTError, jwt
 from sqlalchemy import delete as sa_delete
@@ -138,7 +139,7 @@ async def validate_client_secret(session: AsyncSession, client_id: str, client_s
     return client
 
 
-async def list_oauth_clients(session: AsyncSession, org_id: uuid.UUID) -> list[dict]:
+async def list_oauth_clients(session: AsyncSession, org_id: uuid.UUID) -> list[dict[str, Any]]:
     result = await session.execute(
         select(OAuthClient).where(OAuthClient.organisation_id == org_id).order_by(OAuthClient.created_at.desc())
     )

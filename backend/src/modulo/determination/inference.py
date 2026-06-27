@@ -71,8 +71,8 @@ def infer(samples: list[ScanSample]) -> list[Finding]:
     findings: list[Finding] = []
 
     repo_names: list[str] = []
-    pull_requests: list[dict] = []
-    issues: list[dict] = []
+    pull_requests: list[dict[str, Any]] = []
+    issues: list[dict[str, Any]] = []
     issue_statuses: list[str] = []
     has_ci_config = False
     has_planning_stage = False

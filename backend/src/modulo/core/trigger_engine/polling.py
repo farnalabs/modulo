@@ -48,7 +48,7 @@ _ACTIVE_STATUSES = ("pending", "running", "awaiting_human", "claimed", "waiting_
 _engine = None
 
 
-def _get_engine():
+def _get_engine() -> Any:
     global _engine
     if _engine is None:
         from modulo.settings import get_settings

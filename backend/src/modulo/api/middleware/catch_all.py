@@ -1,8 +1,10 @@
 import logging
+from typing import Any
 
 from fastapi import Request
 from fastapi.responses import JSONResponse
 from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.responses import Response
 
 from modulo.api.models.error import ErrorDetail, ErrorResponse
 
@@ -10,10 +12,10 @@ logger = logging.getLogger(__name__)
 
 
 class CatchAllMiddleware(BaseHTTPMiddleware):
-    async def dispatch(self, request: Request, call_next):
+    async def dispatch(self, request: Request, call_next: Any) -> Response:
         try:
             response = await call_next(request)
-            return response
+            return response  # type: ignore[no-any-return]
         except Exception:
             rid = getattr(request.state, "request_id", None)
             logger.exception(

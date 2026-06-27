@@ -210,7 +210,11 @@ async def get_run_stats(
         }
 
     completed_runs = [r for r in runs if r.completed_at and r.started_at]
-    durations_ms = sorted(int((r.completed_at - r.started_at).total_seconds() * 1000) for r in completed_runs)
+    durations_ms = sorted(
+        int((r.completed_at - r.started_at).total_seconds() * 1000)
+        for r in completed_runs
+        if r.completed_at is not None and r.started_at is not None
+    )
 
     success_count = sum(1 for r in runs if r.status == "complete")
     success_rate = round(success_count / total, 4)
@@ -229,6 +233,8 @@ async def get_run_stats(
 
     for r in completed_runs:
         day = r.created_at.strftime("%Y-%m-%d")
+        if r.completed_at is None or r.started_at is None:
+            continue
         ms = int((r.completed_at - r.started_at).total_seconds() * 1000)
         dur_by_day[day].append(ms)
 
@@ -241,9 +247,9 @@ async def get_run_stats(
         "total_runs": total,
         "success_rate": success_rate,
         "avg_duration_ms": avg_duration,
-        "p50_duration_ms": int(_percentile(durations_ms, 50)),
-        "p95_duration_ms": int(_percentile(durations_ms, 95)),
-        "p99_duration_ms": int(_percentile(durations_ms, 99)),
+        "p50_duration_ms": int(_percentile([float(x) for x in durations_ms], 50)),
+        "p95_duration_ms": int(_percentile([float(x) for x in durations_ms], 95)),
+        "p99_duration_ms": int(_percentile([float(x) for x in durations_ms], 99)),
         "runs_by_day": [{"date": d, **v} for d, v in sorted(by_day.items())],
         "failure_by_reason": [
             {"reason": r, "count": c} for r, c in sorted(failure_reasons.items(), key=lambda x: -x[1])

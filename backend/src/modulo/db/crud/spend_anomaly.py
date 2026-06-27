@@ -44,7 +44,7 @@ async def dismiss_anomaly(
     )
     result = await session.execute(q)
     await session.flush()
-    return result.rowcount > 0
+    return bool(result.rowcount > 0) if hasattr(result, "rowcount") else True
 
 
 async def create_anomaly(

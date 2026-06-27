@@ -56,7 +56,7 @@ class FeedbackManager:
         gate_id: str,
         rejected_by: UUID,
         rejection_reason: str,
-        rejected_output: dict,
+        rejected_output: dict[str, Any],
         producing_node_id: str,
         producing_agent_id: UUID | None = None,
         feedback_handler_type: str = "human",
@@ -91,7 +91,7 @@ class FeedbackManager:
         page: int = 1,
         page_size: int = 20,
         include_total: bool = True,
-    ) -> dict:
+    ) -> dict[str, Any]:
         conditions = [FeedbackRecord.organisation_id == self._org_id]
         if status:
             conditions.append(FeedbackRecord.feedback_status == status)
@@ -182,7 +182,7 @@ class FeedbackManager:
         self,
         record: FeedbackRecord,
         eval_engine: EvalEngine | None = None,
-        eval_suite: list | None = None,
+        eval_suite: list[Any] | None = None,
     ) -> bool:
         """Run the pipeline's eval suite against the rejected output.
 

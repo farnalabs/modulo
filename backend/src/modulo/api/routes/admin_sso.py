@@ -1,6 +1,7 @@
 import json
 import logging
 import uuid
+from typing import Any
 
 import httpx
 from defusedxml import ElementTree as ET  # noqa: N817
@@ -73,7 +74,7 @@ class SsoProviderResponse(BaseModel):
     updated_at: str
 
     @classmethod
-    def from_orm(cls, provider) -> "SsoProviderResponse":
+    def from_orm(cls, provider: Any) -> "SsoProviderResponse":
         scopes = None
         if provider.scopes:
             try:
@@ -106,7 +107,7 @@ class SsoProviderResponse(BaseModel):
 class SsoProviderTestResult(BaseModel):
     success: bool
     message: str
-    provider_info: dict | None = None
+    provider_info: dict[str, Any] | None = None
 
 
 def _require_admin(principal: AuthenticatedPrincipal) -> None:
@@ -124,7 +125,7 @@ async def get_providers(
 ) -> list[SsoProviderResponse]:
     _require_admin(current_user)
     providers = await list_providers(session)
-    return [SsoProviderResponse.from_orm(p) for p in providers]
+    return [SsoProviderResponse.from_orm(p) for p in providers]  # type: ignore[pydantic-orm]
 
 
 @router.post("/providers", response_model=SsoProviderResponse, status_code=status.HTTP_201_CREATED)
@@ -149,7 +150,7 @@ async def create_provider_endpoint(
         auto_provision=body.auto_provision,
         default_role=body.default_role,
     )
-    return SsoProviderResponse.from_orm(provider)
+    return SsoProviderResponse.from_orm(provider)  # type: ignore[pydantic-orm]
 
 
 @router.put("/providers/{provider_id}", response_model=SsoProviderResponse)
@@ -170,7 +171,7 @@ async def update_provider_endpoint(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="SSO provider not found",
         )
-    return SsoProviderResponse.from_orm(provider)
+    return SsoProviderResponse.from_orm(provider)  # type: ignore[pydantic-orm]
 
 
 @router.delete("/providers/{provider_id}", status_code=status.HTTP_204_NO_CONTENT)
@@ -215,7 +216,7 @@ async def test_provider_connection(
         )
 
 
-async def _test_oidc_connection(provider) -> SsoProviderTestResult:
+async def _test_oidc_connection(provider: Any) -> SsoProviderTestResult:
     if not provider.discovery_url:
         return SsoProviderTestResult(
             success=False,
@@ -267,7 +268,7 @@ async def _test_oidc_connection(provider) -> SsoProviderTestResult:
     )
 
 
-async def _test_saml_connection(provider) -> SsoProviderTestResult:
+async def _test_saml_connection(provider: Any) -> SsoProviderTestResult:
     metadata_xml = provider.metadata_xml
     if not metadata_xml and provider.metadata_url:
         try:
@@ -351,7 +352,7 @@ async def toggle_provider_endpoint(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="SSO provider not found",
         )
-    return SsoProviderResponse.from_orm(provider)
+    return SsoProviderResponse.from_orm(provider)  # type: ignore[pydantic-orm]
 
 
 class GroupMappingItem(BaseModel):

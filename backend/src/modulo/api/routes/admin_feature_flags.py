@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import Any
+
 from fastapi import APIRouter, Depends, HTTPException, status
 
 from modulo.core.feature_flags import FeatureFlagRegistry
@@ -19,7 +21,7 @@ def _build_registry(settings: Settings) -> FeatureFlagRegistry:
 @router.get("")
 async def list_feature_flags(
     settings: Settings = Depends(get_settings),
-) -> dict:
+) -> dict[str, Any]:
     registry = _build_registry(settings)
     has_key = bool(settings.modulo_license_key)
     tier = "enterprise" if has_key else "free"
@@ -55,7 +57,7 @@ async def list_feature_flags(
 async def get_feature_flag(
     flag_name: str,
     settings: Settings = Depends(get_settings),
-) -> dict:
+) -> dict[str, Any]:
     registry = _build_registry(settings)
     flag = registry.get_flag(flag_name)
     if flag is None:
