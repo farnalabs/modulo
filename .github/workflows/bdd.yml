@@ -72,15 +72,22 @@ jobs:
       - name: Serve frontend
         working-directory: frontend
         run: npm run preview -- --port 4173 &
-      - name: Wait for services
+      - name: Wait for healthz
         run: |
-          npx wait-on http://localhost:8000/healthz http://localhost:4173 --timeout 60000 || {
-            echo "=== Backend log ==="
-            head -100 /tmp/backend.log
-            echo "=== Process check ==="
-            ps aux | grep uvicorn || true
-            exit 1
-          }
+          for i in $(seq 1 30); do
+            if curl -sf http://localhost:8000/healthz > /dev/null 2>&1; then
+              echo "Backend healthy after ${i}s"
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "=== Backend log ==="
+          head -100 /tmp/backend.log || echo "(no backend log)"
+          echo "=== Process check ==="
+          ps aux | grep uvicorn || echo "(no uvicorn process)"
+          exit 1
+      - name: Wait for frontend
+        run: npx wait-on http://localhost:4173 --timeout 30000
       - name: Run BDD tests
         working-directory: backend
         run: |
