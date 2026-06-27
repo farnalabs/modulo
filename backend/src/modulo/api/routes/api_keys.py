@@ -13,6 +13,7 @@ from modulo.auth.api_key import create_api_key, list_api_keys, revoke_api_key, u
 from modulo.auth.dependencies import get_current_user
 from modulo.auth.jwt import AuthenticatedPrincipal
 from modulo.auth.team_rbac import ORG_ROLE_HIERARCHY
+from modulo.core.feature_flags import PlanContext
 from modulo.db.rls import set_rls_org, set_rls_user_context
 from modulo.settings import Settings, get_settings
 
@@ -54,6 +55,15 @@ class McpConfigResponse(BaseModel):
     config_snippet: dict[str, Any]
 
 
+def _require_team_rbac(settings: Settings) -> None:
+    ctx = PlanContext(settings)
+    if not ctx.feature_enabled("team_rbac"):
+        raise HTTPException(
+            status_code=status.HTTP_402_PAYMENT_REQUIRED,
+            detail="Team-scoped API keys require an upgraded plan",
+        )
+
+
 def _require_admin(principal: AuthenticatedPrincipal) -> None:
     if ORG_ROLE_HIERARCHY.get(principal.org_role, -1) < ORG_ROLE_HIERARCHY["admin"]:
         raise HTTPException(
@@ -67,6 +77,7 @@ async def create_api_key_endpoint(
     body: ApiKeyCreate,
     session: AsyncSession = Depends(get_db_session),
     principal: AuthenticatedPrincipal = Depends(get_current_user),
+    settings: Settings = Depends(get_settings),
 ) -> ApiKeyCreatedResponse:
     if body.role not in ("operator", "runner"):
         raise HTTPException(
@@ -75,6 +86,7 @@ async def create_api_key_endpoint(
         )
     team_id: uuid.UUID | None = None
     if body.team_id is not None:
+        _require_team_rbac(settings)
         _require_admin(principal)
         team_id = uuid.UUID(body.team_id)
     expires_at: datetime | None = None
@@ -120,6 +132,7 @@ async def update_api_key_endpoint(
     body: ApiKeyUpdate,
     session: AsyncSession = Depends(get_db_session),
     principal: AuthenticatedPrincipal = Depends(get_current_user),
+    settings: Settings = Depends(get_settings),
 ) -> dict[str, Any]:
     if body.role is not None and body.role not in ("operator", "runner"):
         raise HTTPException(
@@ -128,6 +141,7 @@ async def update_api_key_endpoint(
         )
     team_id: uuid.UUID | None = None
     if body.team_id is not None:
+        _require_team_rbac(settings)
         _require_admin(principal)
         team_id = uuid.UUID(body.team_id)
     async with session.begin():

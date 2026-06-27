@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Any
 
 
 @dataclass
@@ -121,6 +122,22 @@ _KNOWN_FLAGS: list[FeatureFlag] = [
         tier="v2",
     ),
 ]
+
+
+class PlanContext:
+    """Resolved plan context — determines which features are available for the current deployment."""
+
+    def __init__(self, settings: Any = None, *, has_license_key: bool = False, tier: str = "free") -> None:
+        if settings is not None:
+            has_license_key = bool(settings.modulo_license_key)
+            tier = "enterprise" if has_license_key else "free"
+        self._registry = FeatureFlagRegistry(current_tier=tier, has_license_key=has_license_key)
+
+    def feature_enabled(self, name: str) -> bool:
+        flag = self._registry.get_flag(name)
+        if flag is None:
+            return False
+        return flag.currently_active
 
 
 class FeatureFlagRegistry:

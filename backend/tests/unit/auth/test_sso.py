@@ -31,6 +31,7 @@ def _override(**kwargs: str | bool) -> Settings:
         "database_url": "postgresql+asyncpg://localhost/test",
         "secret_key": _VALID_32,
         "fernet_key": _VALID_32,
+        "modulo_license_key": "test-license",
         "modulo_oidc_providers": json.dumps(
             [
                 {
@@ -206,14 +207,10 @@ class TestSsoProvidersEndpoint:
         assert resp.json()["saml"] is True
 
     def test_saml_disabled_without_license(self, client: TestClient) -> None:
-        """SAML not exposed when license is absent, even if SAML config is present."""
-        _override_settings(
-            modulo_saml_enabled=True,
-            modulo_saml_idp_metadata_url="https://idp.example.com/metadata",
-        )
+        """SSO endpoint returns 402 when license is absent."""
+        _override_settings(modulo_license_key="", modulo_saml_enabled=True)
         resp = client.get("/api/v1/auth/sso/providers")
-        assert resp.status_code == 200
-        assert resp.json()["saml"] is False
+        assert resp.status_code == 402
 
 
 # ---------------------------------------------------------------------------
@@ -247,14 +244,17 @@ class TestOidcLoginEndpoint:
 
 class TestSamlRoutes:
     def test_saml_login_requires_license(self, client: TestClient) -> None:
+        _override_settings(modulo_license_key="")
         resp = client.get("/api/v1/auth/saml/login", follow_redirects=False)
         assert resp.status_code == 402
 
     def test_saml_acs_requires_license(self, client: TestClient) -> None:
+        _override_settings(modulo_license_key="")
         resp = client.post("/api/v1/auth/saml/acs", data={})
         assert resp.status_code == 402
 
     def test_saml_metadata_requires_license(self, client: TestClient) -> None:
+        _override_settings(modulo_license_key="")
         resp = client.get("/api/v1/auth/saml/metadata")
         assert resp.status_code == 402
 
@@ -276,9 +276,7 @@ class TestSamlRoutes:
         assert resp.status_code == 400
 
     def test_saml_metadata_with_license(self, client: TestClient) -> None:
-        _override_settings(
-            modulo_license_key="license-123",
-        )
+        # Default fixture already has a license key
         resp = client.get("/api/v1/auth/saml/metadata")
         assert resp.status_code == 200
         assert "EntityDescriptor" in resp.text
@@ -690,7 +688,7 @@ class TestSamlGetAuthUrl:
     async def test_raises_when_no_license(self) -> None:
         from modulo.auth.sso import saml_get_auth_url
 
-        settings = _override(modulo_saml_enabled=True)
+        settings = _override(modulo_license_key="", modulo_saml_enabled=True)
         with pytest.raises(ValueError, match="requires a license"):
             await saml_get_auth_url(settings, "http://localhost/acs")
 
@@ -752,7 +750,7 @@ class TestSamlProcessResponse:
     async def test_raises_when_no_license(self) -> None:
         from modulo.auth.sso import saml_process_response
 
-        settings = _override(modulo_saml_enabled=True)
+        settings = _override(modulo_license_key="", modulo_saml_enabled=True)
         session = AsyncMock(spec=AsyncSession)
         with pytest.raises(ValueError, match="requires a license"):
             await saml_process_response("response", settings, session)
