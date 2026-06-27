@@ -18,6 +18,7 @@ from modulo.api.dependencies import get_db_session
 from modulo.api.middleware.sensitive_mask import mask_config_json
 from modulo.auth.dependencies import get_current_user
 from modulo.auth.jwt import AuthenticatedPrincipal
+from modulo.connectors.github import GitHubConnector, REQUIRED_SCOPES as GITHUB_REQUIRED_SCOPES
 from modulo.db.crud.connector_instance import (
     create_connector_instance,
     delete_connector_instance,
