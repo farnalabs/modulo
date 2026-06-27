@@ -549,11 +549,14 @@ async def _get_checkpoint_state(
     raw_checkpoint = row[0]
     if isinstance(raw_checkpoint, str):
         try:
-            wrapper = json.loads(raw_checkpoint)
-            if isinstance(wrapper, dict) and wrapper.get("__encrypted__") and fernet_key:
-                f = Fernet(fernet_key.encode())
-                decrypted = f.decrypt(wrapper["data"].encode())
-                raw_checkpoint = json.loads(decrypted.decode())
+            parsed = json.loads(raw_checkpoint)
+            if isinstance(parsed, dict):
+                if parsed.get("__encrypted__") and fernet_key:
+                    f = Fernet(fernet_key.encode())
+                    decrypted = f.decrypt(parsed["data"].encode())
+                    raw_checkpoint = json.loads(decrypted.decode())
+                else:
+                    raw_checkpoint = parsed
         except (json.JSONDecodeError, Exception) as exc:
             _log.warning("checkpoint.decrypt_skip", extra={"error": str(exc)[:200]})
     elif isinstance(raw_checkpoint, dict):
