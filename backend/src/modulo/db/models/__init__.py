@@ -19,6 +19,7 @@ from modulo.db.models.organisation import Organisation
 from modulo.db.models.pipeline import Pipeline
 from modulo.db.models.pipeline_edge import PipelineEdge
 from modulo.db.models.pipeline_snapshot import PipelineSnapshot
+from modulo.db.models.primitive_abuse_report import PrimitiveAbuseReport
 from modulo.db.models.primitive_rating import PrimitiveRating
 from modulo.db.models.publisher import Publisher
 from modulo.db.models.run import Run
@@ -63,6 +64,7 @@ __all__ = [
     "Pipeline",
     "PipelineEdge",
     "PipelineSnapshot",
+    "PrimitiveAbuseReport",
     "PrimitiveRating",
     "Publisher",
     "Run",
