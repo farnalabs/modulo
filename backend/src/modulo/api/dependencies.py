@@ -42,7 +42,7 @@ def get_or_create_engine(settings: Settings) -> AsyncEngine:
     """
     global _engine
     if _engine is None:
-        _engine = create_async_engine(settings.database_url, pool_pre_ping=True)
+        _engine = create_async_engine(settings.database_url, pool_pre_ping=True, connect_args={"timeout": 10})
     return _engine
 
 

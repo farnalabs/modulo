@@ -13,7 +13,6 @@ from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker
 
 pytestmark = [
     pytest.mark.integration,
-    pytest.mark.skip(reason="awaiting-implementation — team isolation test fixtures need schema alignment"),
 ]
 
 
@@ -62,7 +61,6 @@ async def _create_user(
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.skip(reason="awaiting-implementation — RLS isolation needs investigation")
 async def test_teams_isolated_between_orgs(db_engine: AsyncEngine) -> None:
     """Teams created in org A must not be visible when querying as org B."""
     org_a = await _create_org(db_engine, f"team-iso-a-{uuid.uuid4().hex[:8]}")
@@ -111,7 +109,6 @@ async def test_teams_isolated_between_orgs(db_engine: AsyncEngine) -> None:
         assert "Team A" not in names_b
 
 
-@pytest.mark.skip(reason="awaiting-implementation — DBAPIError not raised")
 async def test_team_name_unique_per_org(db_engine: AsyncEngine) -> None:
     """Two teams in the same org must not share a name."""
     org = await _create_org(db_engine, f"unique-{uuid.uuid4().hex[:8]}")
@@ -189,7 +186,7 @@ async def test_memberships_isolated_between_orgs(db_engine: AsyncEngine) -> None
         )
         await session.flush()
         await add_team_member(
-            session, org_id=org_a, team_id=team_a.id, user_id=user_a2, role="member"
+            session, org_id=org_a, team_id=team_a.id, user_id=user_a2, role="viewer"
         )
         await session.flush()
 
@@ -244,7 +241,7 @@ async def test_membership_unique_per_team_user(db_engine: AsyncEngine) -> None:
         )
         await session.flush()
         await add_team_member(
-            session, org_id=org, team_id=team.id, user_id=user, role="member"
+            session, org_id=org, team_id=team.id, user_id=user, role="viewer"
         )
         await session.flush()
 
@@ -255,7 +252,7 @@ async def test_membership_unique_per_team_user(db_engine: AsyncEngine) -> None:
         )
         with pytest.raises(DBAPIError):
             await add_team_member(
-                session, org_id=org, team_id=team.id, user_id=user, role="admin"
+                session, org_id=org, team_id=team.id, user_id=user, role="operator"
             )
             await session.flush()
 
@@ -345,7 +342,7 @@ async def test_membership_round_trip(db_engine: AsyncEngine) -> None:
         await session.flush()
 
         membership = await add_team_member(
-            session, org_id=org, team_id=team.id, user_id=user_b, role="member"
+            session, org_id=org, team_id=team.id, user_id=user_b, role="viewer"
         )
         await session.flush()
         assert membership.team_id == team.id
