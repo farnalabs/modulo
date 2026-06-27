@@ -1,4 +1,24 @@
 export interface paths {
+  '/api/v1/admin/notifications/deliveries': {
+    get: {
+      parameters: {
+        query?: {
+          cursor?: string
+          limit?: number
+          status?: string
+          from?: string
+          to?: string
+        }
+      }
+      responses: {
+        200: {
+          content: {
+            'application/json': components['schemas']['DeliveryLogResponse']
+          }
+        }
+      }
+    }
+  }
   '/api/v1/dashboard/summary': {
     get: {
       responses: {
@@ -597,6 +617,22 @@ export interface paths {
 
 export interface components {
   schemas: {
+    DeliveryLogEntry: {
+      id: string
+      event_type: string
+      status: string
+      attempt_count: number
+      response_code: number | null
+      last_error: string | null
+      response_body: string | null
+      endpoint_url: string | null
+      created_at: string
+    }
+    DeliveryLogResponse: {
+      items: components['schemas']['DeliveryLogEntry'][]
+      next_cursor: string | null
+      total: number
+    }
     DashboardSummaryResponse: {
       total_runs: number
       active_pipelines: number
