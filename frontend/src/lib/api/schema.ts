@@ -214,6 +214,25 @@ export interface paths {
       }
     }
   }
+  '/api/v1/admin/trigger-events': {
+    get: {
+      parameters: {
+        query: {
+          trigger_type?: string
+          validation_result?: string
+          cursor?: string
+          limit?: number
+        }
+      }
+      responses: {
+        200: {
+          content: {
+            'application/json': components['schemas']['TriggerEventListResponse']
+          }
+        }
+      }
+    }
+  }
   '/api/v1/admin/audit': {
     get: {
       parameters: {
@@ -1026,6 +1045,22 @@ export interface components {
     }
     RateLimitUpdateRequest: {
       rules: components['schemas']['RateLimitRuleUpdate'][]
+    }
+    TriggerEventItem: {
+      id: string
+      trigger_id: string
+      trigger_type: string
+      validation_result: string
+      received_at: string | null
+      created_at: string | null
+      run_id: string | null
+      error_detail: string | null
+    }
+    TriggerEventListResponse: {
+      items: components['schemas']['TriggerEventItem'][]
+      next_cursor: string | null
+      prev_cursor: string | null
+      total: number
     }
   }
 }

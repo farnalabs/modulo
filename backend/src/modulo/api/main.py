@@ -34,6 +34,7 @@ from modulo.api.routes.admin_license import router as admin_license_router
 from modulo.api.routes.admin_notifications import router as admin_notifications_router
 from modulo.api.routes.admin_rate_limits import router as admin_rate_limits_router
 from modulo.api.routes.admin_sso import router as admin_sso_router
+from modulo.api.routes.admin_triggers import router as admin_triggers_router
 from modulo.api.routes.agents import router as agents_router
 from modulo.api.routes.api_keys import router as api_keys_router
 from modulo.api.routes.audit import router as audit_router
@@ -484,6 +485,7 @@ app.include_router(admin_feature_flags_router)
 app.include_router(admin_license_router)
 app.include_router(admin_rate_limits_router)
 app.include_router(admin_sso_router)
+app.include_router(admin_triggers_router)
 app.include_router(auth_router)
 app.include_router(changelog_router)
 app.include_router(sso_router)
