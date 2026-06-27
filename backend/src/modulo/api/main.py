@@ -64,6 +64,7 @@ from modulo.api.routes.runs import router as runs_router
 from modulo.api.routes.schemas import router as schemas_router
 from modulo.api.routes.scim import router as scim_router
 from modulo.api.routes.sso import router as sso_router
+from modulo.api.routes.stages import router as stages_router
 from modulo.api.routes.teams import router as teams_router
 from modulo.api.routes.templates import router as templates_router
 from modulo.api.routes.triggers import pipeline_triggers_router
@@ -518,6 +519,7 @@ app.include_router(variants_router)
 app.include_router(feedback_router)
 app.include_router(plugins_router)
 app.include_router(scim_router)
+app.include_router(stages_router)
 app.include_router(templates_router)
 app.include_router(onboarding_router)
 app.include_router(environments_router)
