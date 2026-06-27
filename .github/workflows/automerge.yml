@@ -17,7 +17,7 @@ jobs:
     name: Enable auto-merge
     runs-on: self-hosted
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Enable auto-merge (squash)
         run: |
           PR_JSON=$(gh pr view ${{ github.event.pull_request.number }} --json isDraft,labels)

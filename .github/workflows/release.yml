@@ -33,7 +33,7 @@ jobs:
       next_version: ${{ steps.check.outputs.next_version }}
       explicit_tag: ${{ steps.check.outputs.explicit_tag }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
           fetch-tags: true
@@ -78,7 +78,7 @@ jobs:
     outputs:
       version: ${{ steps.determine.outputs.version }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
           fetch-tags: true
@@ -120,7 +120,7 @@ jobs:
     if: needs.check.outputs.has_changes == 'true'
     runs-on: self-hosted
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
           fetch-tags: true
