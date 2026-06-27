@@ -22,10 +22,12 @@ async def test_expire_once_resets_stale_claims() -> None:
     ]
     session.execute = AsyncMock(return_value=update_result)
 
-    factory = MagicMock(side_effect=lambda: AsyncMock(
-        __aenter__=AsyncMock(return_value=session),
-        __aexit__=AsyncMock(return_value=False),
-    ))
+    factory = MagicMock(
+        side_effect=lambda: AsyncMock(
+            __aenter__=AsyncMock(return_value=session),
+            __aexit__=AsyncMock(return_value=False),
+        )
+    )
 
     with patch.object(job, "_session_factory", factory):
         expired = await job._expire_once()
@@ -49,10 +51,12 @@ async def test_expire_once_empty_when_none_stale() -> None:
     update_result.all.return_value = []
     session.execute = AsyncMock(return_value=update_result)
 
-    factory = MagicMock(side_effect=lambda: AsyncMock(
-        __aenter__=AsyncMock(return_value=session),
-        __aexit__=AsyncMock(return_value=False),
-    ))
+    factory = MagicMock(
+        side_effect=lambda: AsyncMock(
+            __aenter__=AsyncMock(return_value=session),
+            __aexit__=AsyncMock(return_value=False),
+        )
+    )
 
     with patch.object(job, "_session_factory", factory):
         expired = await job._expire_once()

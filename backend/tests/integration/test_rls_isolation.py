@@ -29,21 +29,11 @@ async def test_set_local_resets_after_commit(db_engine: AsyncEngine) -> None:
                 text("SELECT set_config('app.organisation_id', :oid, true)"),
                 {"oid": str(org_id)},
             )
-            mid_tx = (
-                await conn.execute(
-                    text("SELECT current_setting('app.organisation_id', true)")
-                )
-            ).scalar()
+            mid_tx = (await conn.execute(text("SELECT current_setting('app.organisation_id', true)"))).scalar()
             assert mid_tx == str(org_id), "org_id should be visible mid-transaction"
 
-        post_commit = (
-            await conn.execute(
-                text("SELECT current_setting('app.organisation_id', true)")
-            )
-        ).scalar()
-        assert post_commit in (None, ""), (
-            f"org_id leaked after commit: {post_commit!r}"
-        )
+        post_commit = (await conn.execute(text("SELECT current_setting('app.organisation_id', true)"))).scalar()
+        assert post_commit in (None, ""), f"org_id leaked after commit: {post_commit!r}"
 
 
 async def test_set_local_resets_after_rollback(db_engine: AsyncEngine) -> None:
@@ -61,14 +51,8 @@ async def test_set_local_resets_after_rollback(db_engine: AsyncEngine) -> None:
         except RuntimeError:
             pass
 
-        post_rollback = (
-            await conn.execute(
-                text("SELECT current_setting('app.organisation_id', true)")
-            )
-        ).scalar()
-        assert post_rollback in (None, ""), (
-            f"org_id leaked after rollback: {post_rollback!r}"
-        )
+        post_rollback = (await conn.execute(text("SELECT current_setting('app.organisation_id', true)"))).scalar()
+        assert post_rollback in (None, ""), f"org_id leaked after rollback: {post_rollback!r}"
 
 
 async def test_second_transaction_does_not_inherit_org_id(db_engine: AsyncEngine) -> None:
@@ -83,14 +67,8 @@ async def test_second_transaction_does_not_inherit_org_id(db_engine: AsyncEngine
             )
 
         async with conn.begin():
-            val = (
-                await conn.execute(
-                    text("SELECT current_setting('app.organisation_id', true)")
-                )
-            ).scalar()
-            assert val in (None, ""), (
-                f"org_id leaked into second transaction: {val!r}"
-            )
+            val = (await conn.execute(text("SELECT current_setting('app.organisation_id', true)"))).scalar()
+            assert val in (None, ""), f"org_id leaked into second transaction: {val!r}"
 
 
 # ---------------------------------------------------------------------------
@@ -113,11 +91,7 @@ async def test_set_rls_org_sets_correct_guc(db_engine: AsyncEngine) -> None:
     async with factory() as session:
         async with session.begin():
             await set_rls_org(session, org_id)
-            val = (
-                await session.execute(
-                    text("SELECT current_setting('app.organisation_id', true)")
-                )
-            ).scalar()
+            val = (await session.execute(text("SELECT current_setting('app.organisation_id', true)"))).scalar()
             assert val == str(org_id)
 
 
@@ -151,12 +125,7 @@ async def test_rls_policies_exist_on_all_org_scoped_tables(
         tables_with_policy = {
             row[0]
             for row in (
-                await conn.execute(
-                    text(
-                        "SELECT tablename FROM pg_policies "
-                        "WHERE policyname = 'rls_org_isolation'"
-                    )
-                )
+                await conn.execute(text("SELECT tablename FROM pg_policies WHERE policyname = 'rls_org_isolation'"))
             ).fetchall()
         }
 
@@ -186,11 +155,7 @@ async def test_rls_filters_rows_for_non_superuser(db_engine: AsyncEngine) -> Non
 
     async with db_engine.connect() as conn:
         await conn.execute(text(f'CREATE ROLE "{role}"'))
-        await conn.execute(
-            text(
-                f'GRANT SELECT, INSERT ON organisations, audit_events TO "{role}"'
-            )
-        )
+        await conn.execute(text(f'GRANT SELECT, INSERT ON organisations, audit_events TO "{role}"'))
         await conn.execute(text("COMMIT"))
 
     try:
@@ -227,17 +192,12 @@ async def test_rls_filters_rows_for_non_superuser(db_engine: AsyncEngine) -> Non
                     row[0]
                     for row in (
                         await conn.execute(
-                            text(
-                                "SELECT id::text FROM audit_events "
-                                "WHERE id = ANY(:ids)"
-                            ),
+                            text("SELECT id::text FROM audit_events WHERE id = ANY(:ids)"),
                             {"ids": [str(event_a), str(event_b)]},
                         )
                     ).fetchall()
                 }
-            assert visible == {str(event_a)}, (
-                f"org_a should only see its own event; got {visible}"
-            )
+            assert visible == {str(event_a)}, f"org_a should only see its own event; got {visible}"
 
         # Enforcement: as non-superuser with org_b context, only event_b visible
         async with db_engine.connect() as conn:
@@ -251,17 +211,12 @@ async def test_rls_filters_rows_for_non_superuser(db_engine: AsyncEngine) -> Non
                     row[0]
                     for row in (
                         await conn.execute(
-                            text(
-                                "SELECT id::text FROM audit_events "
-                                "WHERE id = ANY(:ids)"
-                            ),
+                            text("SELECT id::text FROM audit_events WHERE id = ANY(:ids)"),
                             {"ids": [str(event_a), str(event_b)]},
                         )
                     ).fetchall()
                 }
-            assert visible == {str(event_b)}, (
-                f"org_b should only see its own event; got {visible}"
-            )
+            assert visible == {str(event_b)}, f"org_b should only see its own event; got {visible}"
 
     finally:
         async with db_engine.connect() as conn:

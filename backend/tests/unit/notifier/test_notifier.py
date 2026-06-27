@@ -102,10 +102,12 @@ async def test_get_subscribed_endpoints_returns_matching() -> None:
     session = AsyncMock()
     session.execute = AsyncMock(return_value=result)
 
-    factory = MagicMock(side_effect=lambda: AsyncMock(
-        __aenter__=AsyncMock(return_value=session),
-        __aexit__=AsyncMock(return_value=False),
-    ))
+    factory = MagicMock(
+        side_effect=lambda: AsyncMock(
+            __aenter__=AsyncMock(return_value=session),
+            __aexit__=AsyncMock(return_value=False),
+        )
+    )
 
     n = Notifier(MagicMock(), _KEY)
     with patch.object(n, "_session_factory", factory):
@@ -124,10 +126,12 @@ async def test_get_subscribed_endpoints_skips_unsubscribed() -> None:
     session = AsyncMock()
     session.execute = AsyncMock(return_value=result)
 
-    factory = MagicMock(side_effect=lambda: AsyncMock(
-        __aenter__=AsyncMock(return_value=session),
-        __aexit__=AsyncMock(return_value=False),
-    ))
+    factory = MagicMock(
+        side_effect=lambda: AsyncMock(
+            __aenter__=AsyncMock(return_value=session),
+            __aexit__=AsyncMock(return_value=False),
+        )
+    )
 
     n = Notifier(MagicMock(), _KEY)
     with patch.object(n, "_session_factory", factory):
@@ -145,10 +149,12 @@ async def test_get_subscribed_endpoints_skips_auto_disabled() -> None:
     session = AsyncMock()
     session.execute = AsyncMock(return_value=result)
 
-    factory = MagicMock(side_effect=lambda: AsyncMock(
-        __aenter__=AsyncMock(return_value=session),
-        __aexit__=AsyncMock(return_value=False),
-    ))
+    factory = MagicMock(
+        side_effect=lambda: AsyncMock(
+            __aenter__=AsyncMock(return_value=session),
+            __aexit__=AsyncMock(return_value=False),
+        )
+    )
 
     n = Notifier(MagicMock(), _KEY)
     with patch.object(n, "_session_factory", factory):
@@ -196,9 +202,12 @@ async def _do_dispatch(
     """Helper to call _dispatch_to_endpoint with a real httpx.AsyncClient."""
     async with httpx.AsyncClient() as client:
         return await n._dispatch_to_endpoint(
-            client, ep, event_type,
+            client,
+            ep,
+            event_type,
             payload or {"run_id": str(run_id or _RUN)},
-            run_id or _RUN, retain_payload=retain_payload,
+            run_id or _RUN,
+            retain_payload=retain_payload,
         )
 
 
@@ -206,9 +215,11 @@ async def test_dispatch_successful_delivery() -> None:
     ep = _fake_endpoint()
     n = Notifier(MagicMock(), _KEY)
 
-    with patch.object(n, "_record_delivery", AsyncMock()) as mock_record, \
-         patch.object(n, "_increment_dead_letter", AsyncMock()) as mock_dead, \
-         patch.object(n, "_reset_dead_letter", AsyncMock()) as mock_reset:
+    with (
+        patch.object(n, "_record_delivery", AsyncMock()) as mock_record,
+        patch.object(n, "_increment_dead_letter", AsyncMock()) as mock_dead,
+        patch.object(n, "_reset_dead_letter", AsyncMock()) as mock_reset,
+    ):
         async with respx.mock:
             respx.post(ep.url).mock(Response(200, text="OK"))
             result = await _do_dispatch(n, ep)
@@ -225,8 +236,10 @@ async def test_dispatch_retries_then_dead_letters() -> None:
     ep = _fake_endpoint()
     n = Notifier(MagicMock(), _KEY)
 
-    with patch.object(n, "_record_delivery", AsyncMock()), \
-         patch.object(n, "_increment_dead_letter", AsyncMock()) as mock_dead:
+    with (
+        patch.object(n, "_record_delivery", AsyncMock()),
+        patch.object(n, "_increment_dead_letter", AsyncMock()) as mock_dead,
+    ):
         async with respx.mock:
             respx.post(ep.url).mock(Response(500, text="Server Error"))
             result = await _do_dispatch(n, ep, "run_failed")
@@ -240,8 +253,7 @@ async def test_dispatch_network_failure_then_dead_letters() -> None:
     ep = _fake_endpoint()
     n = Notifier(MagicMock(), _KEY)
 
-    with patch.object(n, "_record_delivery", AsyncMock()), \
-         patch.object(n, "_increment_dead_letter", AsyncMock()):
+    with patch.object(n, "_record_delivery", AsyncMock()), patch.object(n, "_increment_dead_letter", AsyncMock()):
         async with respx.mock:
             respx.post(ep.url).mock(side_effect=httpx.ConnectError("Connection refused"))
             result = await _do_dispatch(n, ep, "run_failed")
@@ -256,15 +268,22 @@ async def test_dispatch_retains_payload_when_requested() -> None:
     record_kwargs: dict[str, Any] = {}
 
     async def _record(
-        endpoint: Any, event_type: str, run_id: Any, status: str,
-        attempt_count: int, response_code: Any, last_error: Any,
+        endpoint: Any,
+        event_type: str,
+        run_id: Any,
+        status: str,
+        attempt_count: int,
+        response_code: Any,
+        last_error: Any,
         payload_ciphertext: Any,
     ) -> None:
         record_kwargs.update(payload_ciphertext=payload_ciphertext)
 
-    with patch.object(n, "_record_delivery", _record), \
-         patch.object(n, "_increment_dead_letter", AsyncMock()), \
-         patch.object(n, "_reset_dead_letter", AsyncMock()):
+    with (
+        patch.object(n, "_record_delivery", _record),
+        patch.object(n, "_increment_dead_letter", AsyncMock()),
+        patch.object(n, "_reset_dead_letter", AsyncMock()),
+    ):
         async with respx.mock:
             respx.post(ep.url).mock(Response(200))
             await _do_dispatch(n, ep, retain_payload=True)
@@ -290,10 +309,12 @@ async def test_increment_dead_letter_does_not_auto_disable_below_threshold() -> 
     session.begin = MagicMock(return_value=begin_cm)
     session.execute = AsyncMock(return_value=scalar_result)
 
-    factory = MagicMock(side_effect=lambda: AsyncMock(
-        __aenter__=AsyncMock(return_value=session),
-        __aexit__=AsyncMock(return_value=False),
-    ))
+    factory = MagicMock(
+        side_effect=lambda: AsyncMock(
+            __aenter__=AsyncMock(return_value=session),
+            __aexit__=AsyncMock(return_value=False),
+        )
+    )
 
     n = Notifier(MagicMock(), _KEY)
     with patch.object(n, "_session_factory", factory):
@@ -325,10 +346,12 @@ async def test_increment_dead_letter_auto_disables_at_threshold() -> None:
 
     session.execute = AsyncMock(side_effect=execute_side_effect)
 
-    factory = MagicMock(side_effect=lambda: AsyncMock(
-        __aenter__=AsyncMock(return_value=session),
-        __aexit__=AsyncMock(return_value=False),
-    ))
+    factory = MagicMock(
+        side_effect=lambda: AsyncMock(
+            __aenter__=AsyncMock(return_value=session),
+            __aexit__=AsyncMock(return_value=False),
+        )
+    )
 
     n = Notifier(MagicMock(), _KEY)
     with patch.object(n, "_session_factory", factory):
@@ -354,10 +377,15 @@ async def test_dispatch_event_with_subscriber_sends_notification() -> None:
     ep = _fake_endpoint()
     n = Notifier(MagicMock(), _KEY)
 
-    with patch.object(n, "_get_subscribed_endpoints", AsyncMock(return_value=[ep])) as mock_get, \
-         patch.object(n, "_dispatch_to_endpoint") as mock_dispatch:
+    with (
+        patch.object(n, "_get_subscribed_endpoints", AsyncMock(return_value=[ep])) as mock_get,
+        patch.object(n, "_dispatch_to_endpoint") as mock_dispatch,
+    ):
         mock_dispatch.return_value = DispatchResult(
-            endpoint_id=ep.id, status="delivered", attempt_count=1, response_code=200,
+            endpoint_id=ep.id,
+            status="delivered",
+            attempt_count=1,
+            response_code=200,
         )
 
         results = await n.dispatch_event(_ORG, "hitl_awaiting", {"run_id": str(_RUN)})
@@ -380,10 +408,15 @@ async def test_team_scoped_dispatch_routes_to_team_endpoints() -> None:
     team_ep = _fake_endpoint(team_id=_TEAM)
     n = Notifier(MagicMock(), _KEY)
 
-    with patch.object(n, "_get_subscribed_endpoints", AsyncMock(return_value=[team_ep])) as mock_get, \
-         patch.object(n, "_dispatch_to_endpoint") as mock_dispatch:
+    with (
+        patch.object(n, "_get_subscribed_endpoints", AsyncMock(return_value=[team_ep])) as mock_get,
+        patch.object(n, "_dispatch_to_endpoint") as mock_dispatch,
+    ):
         mock_dispatch.return_value = DispatchResult(
-            endpoint_id=team_ep.id, status="delivered", attempt_count=1, response_code=200,
+            endpoint_id=team_ep.id,
+            status="delivered",
+            attempt_count=1,
+            response_code=200,
         )
 
         results = await n.dispatch_event(_ORG, "hitl_awaiting", {"run_id": str(_RUN)}, team_id=_TEAM)
@@ -399,12 +432,15 @@ async def test_team_scoped_dispatch_falls_back_to_org_wide() -> None:
     n = Notifier(MagicMock(), _KEY)
 
     # Simulate: first query returns empty (no team endpoints), second returns org-wide
-    with patch.object(
-        n, "_get_subscribed_endpoints", AsyncMock(return_value=[org_ep])
-    ) as mock_get, \
-         patch.object(n, "_dispatch_to_endpoint") as mock_dispatch:
+    with (
+        patch.object(n, "_get_subscribed_endpoints", AsyncMock(return_value=[org_ep])) as mock_get,
+        patch.object(n, "_dispatch_to_endpoint") as mock_dispatch,
+    ):
         mock_dispatch.return_value = DispatchResult(
-            endpoint_id=org_ep.id, status="delivered", attempt_count=1, response_code=200,
+            endpoint_id=org_ep.id,
+            status="delivered",
+            attempt_count=1,
+            response_code=200,
         )
 
         results = await n.dispatch_event(_ORG, "hitl_awaiting", {"run_id": str(_RUN)}, team_id=_TEAM)
@@ -419,12 +455,15 @@ async def test_org_wide_dispatch_excludes_team_endpoints() -> None:
     org_ep = _fake_endpoint(team_id=None)
     n = Notifier(MagicMock(), _KEY)
 
-    with patch.object(
-        n, "_get_subscribed_endpoints", AsyncMock(return_value=[org_ep])
-    ) as mock_get, \
-         patch.object(n, "_dispatch_to_endpoint") as mock_dispatch:
+    with (
+        patch.object(n, "_get_subscribed_endpoints", AsyncMock(return_value=[org_ep])) as mock_get,
+        patch.object(n, "_dispatch_to_endpoint") as mock_dispatch,
+    ):
         mock_dispatch.return_value = DispatchResult(
-            endpoint_id=org_ep.id, status="delivered", attempt_count=1, response_code=200,
+            endpoint_id=org_ep.id,
+            status="delivered",
+            attempt_count=1,
+            response_code=200,
         )
         results = await n.dispatch_event(_ORG, "hitl_awaiting", {"run_id": str(_RUN)})
 
@@ -443,7 +482,9 @@ def _make_scalar_result(endpoints: list[NotificationEndpoint]) -> MagicMock:
     return result
 
 
-def _make_session_factory(endpoints_by_team: list[NotificationEndpoint], endpoints_org: list[NotificationEndpoint]) -> MagicMock:  # noqa: E501
+def _make_session_factory(
+    endpoints_by_team: list[NotificationEndpoint], endpoints_org: list[NotificationEndpoint]
+) -> MagicMock:
     """Build a session factory that returns team endpoints first, then org-wide on second call."""
     call_count = [0]
 
@@ -456,10 +497,12 @@ def _make_session_factory(endpoints_by_team: list[NotificationEndpoint], endpoin
     session = AsyncMock()
     session.execute = AsyncMock(side_effect=execute_side_effect)
 
-    factory = MagicMock(side_effect=lambda: AsyncMock(
-        __aenter__=AsyncMock(return_value=session),
-        __aexit__=AsyncMock(return_value=False),
-    ))
+    factory = MagicMock(
+        side_effect=lambda: AsyncMock(
+            __aenter__=AsyncMock(return_value=session),
+            __aexit__=AsyncMock(return_value=False),
+        )
+    )
     return factory
 
 
@@ -512,10 +555,12 @@ async def test_get_subscribed_endpoints_no_team_id_skips_team_endpoints() -> Non
     session = AsyncMock()
     session.execute = AsyncMock(side_effect=execute_side_effect)
 
-    factory = MagicMock(side_effect=lambda: AsyncMock(
-        __aenter__=AsyncMock(return_value=session),
-        __aexit__=AsyncMock(return_value=False),
-    ))
+    factory = MagicMock(
+        side_effect=lambda: AsyncMock(
+            __aenter__=AsyncMock(return_value=session),
+            __aexit__=AsyncMock(return_value=False),
+        )
+    )
 
     n = Notifier(MagicMock(), _KEY)
     with patch.object(n, "_session_factory", factory):

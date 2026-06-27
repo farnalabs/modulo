@@ -100,9 +100,7 @@ _OPTIMIZE_URL = f"/api/v1/agents/{_AGENT_ID}/prompts/v1/optimize"
 class TestOptimizePrompt:
     def test_optimize_returns_suggested_prompt(self, client: TestClient) -> None:
         agent = _make_agent()
-        agent.prompt_version_history = [
-            {"version": "v1", "template": "Hello", "created_at": _NOW.isoformat()}
-        ]
+        agent.prompt_version_history = [{"version": "v1", "template": "Hello", "created_at": _NOW.isoformat()}]
         mock_optimizer = MagicMock()
         mock_optimizer.optimize = AsyncMock(
             return_value=MagicMock(
@@ -113,9 +111,7 @@ class TestOptimizePrompt:
         )
 
         mock_backend = AsyncMock()
-        mock_backend.invoke = AsyncMock(
-            return_value=MagicMock(content="Optimized suggestion")
-        )
+        mock_backend.invoke = AsyncMock(return_value=MagicMock(content="Optimized suggestion"))
 
         mock_mb = MagicMock()
         mock_mb.id = _BACKEND_ID
@@ -199,6 +195,7 @@ class TestOptimizePrompt:
             json={"eval_result_ids": []},
         )
         assert resp.status_code == 422
+
 
 _APPLY_URL = f"/api/v1/agents/{_AGENT_ID}/prompts/v2/apply"
 

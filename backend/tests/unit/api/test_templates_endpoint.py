@@ -281,12 +281,9 @@ def test_create_from_template_with_hitl_gate(client: TestClient) -> None:
                 },
             ],
             "graph_nodes": [
-                {"id": "n1", "node_type": "agent", "agent_index": 0,
-                    "label": "A", "position": {"x": 0, "y": 0}},
-                {"id": "n2", "node_type": "manual", "label": "Gate",
-                    "position": {"x": 200, "y": 0}},
-                {"id": "n3", "node_type": "agent", "agent_index": 1,
-                    "label": "B", "position": {"x": 400, "y": 0}},
+                {"id": "n1", "node_type": "agent", "agent_index": 0, "label": "A", "position": {"x": 0, "y": 0}},
+                {"id": "n2", "node_type": "manual", "label": "Gate", "position": {"x": 200, "y": 0}},
+                {"id": "n3", "node_type": "agent", "agent_index": 1, "label": "B", "position": {"x": 400, "y": 0}},
             ],
             "edges": [
                 {"source_node_id": "n1", "target_node_id": "n2", "edge_type": "normal"},

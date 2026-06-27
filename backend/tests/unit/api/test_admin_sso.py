@@ -28,14 +28,16 @@ def _make_settings() -> Settings:
         secret_key=_VALID_32,
         fernet_key=_VALID_32,
         modulo_admin_password="testpass",
-        modulo_oidc_providers=json.dumps([
-            {
-                "provider_id": "google",
-                "client_id": "google-client-id",
-                "client_secret": "google-client-secret",
-                "discovery_url": "https://accounts.google.com/.well-known/openid-configuration",
-            }
-        ]),
+        modulo_oidc_providers=json.dumps(
+            [
+                {
+                    "provider_id": "google",
+                    "client_id": "google-client-id",
+                    "client_secret": "google-client-secret",
+                    "discovery_url": "https://accounts.google.com/.well-known/openid-configuration",
+                }
+            ]
+        ),
     )
 
 
@@ -151,47 +153,61 @@ class TestCreateProvider:
     def test_create_oidc_provider(self, client: TestClient) -> None:
         mock_provider = _make_mock_provider()
         with patch("modulo.api.routes.admin_sso.create_provider", new=AsyncMock(return_value=mock_provider)):
-            resp = client.post(self.URL, json={
-                "provider_type": "oidc",
-                "name": "Test OIDC",
-                "client_id": "test-client-id",
-                "client_secret": "test-secret",
-                "discovery_url": "https://example.com/.well-known/openid-configuration",
-                "scopes": ["openid", "profile"],
-                "auto_provision": True,
-                "default_role": "operator",
-            })
+            resp = client.post(
+                self.URL,
+                json={
+                    "provider_type": "oidc",
+                    "name": "Test OIDC",
+                    "client_id": "test-client-id",
+                    "client_secret": "test-secret",
+                    "discovery_url": "https://example.com/.well-known/openid-configuration",
+                    "scopes": ["openid", "profile"],
+                    "auto_provision": True,
+                    "default_role": "operator",
+                },
+            )
             assert resp.status_code == 201
             data = resp.json()
             assert data["name"] == "Test OIDC Provider"
             assert data["provider_type"] == "oidc"
 
     def test_create_saml_provider(self, client: TestClient) -> None:
-        mock_provider = _make_mock_provider(provider_type="saml", name="Test SAML", metadata_url="https://idp.example.com/metadata")
+        mock_provider = _make_mock_provider(
+            provider_type="saml", name="Test SAML", metadata_url="https://idp.example.com/metadata"
+        )
         with patch("modulo.api.routes.admin_sso.create_provider", new=AsyncMock(return_value=mock_provider)):
-            resp = client.post(self.URL, json={
-                "provider_type": "saml",
-                "name": "Test SAML",
-                "metadata_url": "https://idp.example.com/metadata",
-                "entity_id": "modulo",
-            })
+            resp = client.post(
+                self.URL,
+                json={
+                    "provider_type": "saml",
+                    "name": "Test SAML",
+                    "metadata_url": "https://idp.example.com/metadata",
+                    "entity_id": "modulo",
+                },
+            )
             assert resp.status_code == 201
             data = resp.json()
             assert data["provider_type"] == "saml"
 
     def test_validates_provider_type(self, client: TestClient) -> None:
-        resp = client.post(self.URL, json={
-            "provider_type": "invalid",
-            "name": "Test",
-        })
+        resp = client.post(
+            self.URL,
+            json={
+                "provider_type": "invalid",
+                "name": "Test",
+            },
+        )
         assert resp.status_code == 422
 
     def test_validates_default_role(self, client: TestClient) -> None:
-        resp = client.post(self.URL, json={
-            "provider_type": "oidc",
-            "name": "Test",
-            "default_role": "admin",
-        })
+        resp = client.post(
+            self.URL,
+            json={
+                "provider_type": "oidc",
+                "name": "Test",
+                "default_role": "admin",
+            },
+        )
         assert resp.status_code == 422
 
 
@@ -260,11 +276,16 @@ class TestTestConnection:
         }
         with (
             patch("modulo.api.routes.admin_sso.get_provider", new=AsyncMock(return_value=mock_provider)),
-            patch("modulo.api.routes.admin_sso._test_oidc_connection", new=AsyncMock(return_value=MagicMock(
-                success=True,
-                message="Successfully connected to OIDC provider. Endpoints discovered.",
-                provider_info=mock_discovery,
-            ))),
+            patch(
+                "modulo.api.routes.admin_sso._test_oidc_connection",
+                new=AsyncMock(
+                    return_value=MagicMock(
+                        success=True,
+                        message="Successfully connected to OIDC provider. Endpoints discovered.",
+                        provider_info=mock_discovery,
+                    )
+                ),
+            ),
         ):
             resp = client.post(self.URL)
             assert resp.status_code == 200
@@ -280,17 +301,26 @@ class TestTestConnection:
                 '<md:EntityDescriptor xmlns:md="urn:oasis:names:tc:SAML:2.0:metadata" entityID="https://idp.example.com">'
                 '  <md:IDPSSODescriptor protocolSupportEnumeration="urn:oasis:names:tc:SAML:2.0:protocol">'
                 '    <md:SingleSignOnService Binding="urn:oasis:names:tc:SAML:2.0:bindings:HTTP-Redirect" Location="https://idp.example.com/sso"/>'
-                '  </md:IDPSSODescriptor>'
-                '</md:EntityDescriptor>'
+                "  </md:IDPSSODescriptor>"
+                "</md:EntityDescriptor>"
             ),
         )
         with (
             patch("modulo.api.routes.admin_sso.get_provider", new=AsyncMock(return_value=mock_provider)),
-            patch("modulo.api.routes.admin_sso._test_saml_connection", new=AsyncMock(return_value=MagicMock(
-                success=True,
-                message="Successfully parsed SAML metadata.",
-                provider_info={"entity_id": "https://idp.example.com", "sso_url": "https://idp.example.com/sso", "certificates": []},  # noqa: E501
-            ))),
+            patch(
+                "modulo.api.routes.admin_sso._test_saml_connection",
+                new=AsyncMock(
+                    return_value=MagicMock(
+                        success=True,
+                        message="Successfully parsed SAML metadata.",
+                        provider_info={
+                            "entity_id": "https://idp.example.com",
+                            "sso_url": "https://idp.example.com/sso",
+                            "certificates": [],
+                        },
+                    )
+                ),
+            ),
         ):
             resp = client.post(self.URL)
             assert resp.status_code == 200
@@ -306,6 +336,7 @@ class TestTestConnection:
 class TestOidcConnection:
     async def test_missing_discovery_url(self) -> None:
         from modulo.api.routes.admin_sso import _test_oidc_connection
+
         provider = _make_mock_provider(discovery_url=None)
         result = await _test_oidc_connection(provider)
         assert result.success is False
@@ -313,6 +344,7 @@ class TestOidcConnection:
 
     async def test_discovery_fetch_failure(self) -> None:
         from modulo.api.routes.admin_sso import _test_oidc_connection
+
         provider = _make_mock_provider()
         with patch("httpx.AsyncClient.get", new=AsyncMock(side_effect=Exception("Connection refused"))):
             result = await _test_oidc_connection(provider)
@@ -320,14 +352,17 @@ class TestOidcConnection:
 
     async def test_successful_discovery(self) -> None:
         from modulo.api.routes.admin_sso import _test_oidc_connection
+
         provider = _make_mock_provider()
         mock_resp = AsyncMock()
         mock_resp.raise_for_status = MagicMock()
-        mock_resp.json = MagicMock(return_value={
-            "issuer": "https://example.com",
-            "authorization_endpoint": "https://example.com/auth",
-            "token_endpoint": "https://example.com/token",
-        })
+        mock_resp.json = MagicMock(
+            return_value={
+                "issuer": "https://example.com",
+                "authorization_endpoint": "https://example.com/auth",
+                "token_endpoint": "https://example.com/token",
+            }
+        )
         with patch("httpx.AsyncClient.get", new=AsyncMock(return_value=mock_resp)):
             result = await _test_oidc_connection(provider)
             assert result.success is True
@@ -343,17 +378,18 @@ class TestSamlConnection:
         '    <md:SingleSignOnService Binding="urn:oasis:names:tc:SAML:2.0:bindings:HTTP-Redirect" Location="https://idp.example.com/sso"/>'
         '    <md:KeyDescriptor use="signing">'
         '      <md:KeyInfo xmlns:ds="http://www.w3.org/2000/09/xmldsig#">'
-        '        <ds:X509Data>'
-        '          <ds:X509Certificate>MIIDazCCAlMCFQCu8R7F9ABC123def456ghi789jkl012</ds:X509Certificate>'
-        '        </ds:X509Data>'
-        '      </md:KeyInfo>'
-        '    </md:KeyDescriptor>'
-        '  </md:IDPSSODescriptor>'
-        '</md:EntityDescriptor>'
+        "        <ds:X509Data>"
+        "          <ds:X509Certificate>MIIDazCCAlMCFQCu8R7F9ABC123def456ghi789jkl012</ds:X509Certificate>"
+        "        </ds:X509Data>"
+        "      </md:KeyInfo>"
+        "    </md:KeyDescriptor>"
+        "  </md:IDPSSODescriptor>"
+        "</md:EntityDescriptor>"
     )
 
     async def test_missing_metadata(self) -> None:
         from modulo.api.routes.admin_sso import _test_saml_connection
+
         provider = _make_mock_provider(provider_type="saml", metadata_url=None, metadata_xml=None)
         result = await _test_saml_connection(provider)
         assert result.success is False
@@ -361,6 +397,7 @@ class TestSamlConnection:
 
     async def test_successful_parse(self) -> None:
         from modulo.api.routes.admin_sso import _test_saml_connection
+
         provider = _make_mock_provider(provider_type="saml", metadata_xml=self.SAML_METADATA)
         result = await _test_saml_connection(provider)
         assert result.success is True
@@ -370,6 +407,7 @@ class TestSamlConnection:
 
     async def test_missing_idp_descriptor(self) -> None:
         from modulo.api.routes.admin_sso import _test_saml_connection
+
         bad_xml = (
             '<?xml version="1.0"?>'
             '<md:EntityDescriptor xmlns:md="urn:oasis:names:tc:SAML:2.0:metadata" entityID="test"/>'
@@ -381,6 +419,7 @@ class TestSamlConnection:
 
     async def test_invalid_xml(self) -> None:
         from modulo.api.routes.admin_sso import _test_saml_connection
+
         provider = _make_mock_provider(provider_type="saml", metadata_xml="not xml at all")
         result = await _test_saml_connection(provider)
         assert result.success is False
@@ -402,15 +441,17 @@ class TestEnvVarSeeding:
 
     async def test_seeds_from_env_var(self) -> None:
         from modulo.api.main import _seed_sso_providers
+
         settings = _make_settings()
         mock_session = _make_mock_session()
-        mock_session.execute.return_value = (
-            MagicMock(scalar_one_or_none=MagicMock(return_value=None))
-        )
+        mock_session.execute.return_value = MagicMock(scalar_one_or_none=MagicMock(return_value=None))
 
         with (
             patch("modulo.api.dependencies.get_or_create_engine", return_value=MagicMock()),
-            patch("modulo.api.dependencies.get_or_create_session_factory", return_value=self._make_factory_mock(mock_session)),  # noqa: E501
+            patch(
+                "modulo.api.dependencies.get_or_create_session_factory",
+                return_value=self._make_factory_mock(mock_session),
+            ),
         ):
             await _seed_sso_providers(settings)
 
@@ -422,21 +463,24 @@ class TestEnvVarSeeding:
 
     async def test_skips_if_providers_exist(self) -> None:
         from modulo.api.main import _seed_sso_providers
+
         settings = _make_settings()
         mock_session = _make_mock_session()
-        mock_session.execute.return_value = (
-            MagicMock(scalar_one_or_none=MagicMock(return_value=object()))
-        )
+        mock_session.execute.return_value = MagicMock(scalar_one_or_none=MagicMock(return_value=object()))
 
         with (
             patch("modulo.api.dependencies.get_or_create_engine", return_value=MagicMock()),
-            patch("modulo.api.dependencies.get_or_create_session_factory", return_value=self._make_factory_mock(mock_session)),  # noqa: E501
+            patch(
+                "modulo.api.dependencies.get_or_create_session_factory",
+                return_value=self._make_factory_mock(mock_session),
+            ),
         ):
             await _seed_sso_providers(settings)
             mock_session.add.assert_not_called()
 
     async def test_skips_if_empty_env_var(self) -> None:
         from modulo.api.main import _seed_sso_providers
+
         settings = _make_settings()
         settings.modulo_oidc_providers = "[]"
 
@@ -447,17 +491,34 @@ class TestSetGroupMappings:
     URL = "/api/v1/admin/sso/providers/00000000-0000-0000-0000-000000000010/group-mappings"
 
     def test_set_mappings(self, client: TestClient) -> None:
-        mock_provider = _make_mock_provider(group_mappings=[
-            {"idp_group": "engineering", "team_id": "00000000-0000-0000-0000-000000000020", "team_role": "operator"},
-            {"idp_group": "viewers", "team_id": "00000000-0000-0000-0000-000000000030", "team_role": "viewer"},
-        ])
+        mock_provider = _make_mock_provider(
+            group_mappings=[
+                {
+                    "idp_group": "engineering",
+                    "team_id": "00000000-0000-0000-0000-000000000020",
+                    "team_role": "operator",
+                },
+                {"idp_group": "viewers", "team_id": "00000000-0000-0000-0000-000000000030", "team_role": "viewer"},
+            ]
+        )
         with patch("modulo.api.routes.admin_sso.set_group_mappings", new=AsyncMock(return_value=mock_provider)):
-            resp = client.put(self.URL, json={
-                "mappings": [
-                    {"idp_group": "engineering", "team_id": "00000000-0000-0000-0000-000000000020", "team_role": "operator"},  # noqa: E501
-                    {"idp_group": "viewers", "team_id": "00000000-0000-0000-0000-000000000030", "team_role": "viewer"},
-                ],
-            })
+            resp = client.put(
+                self.URL,
+                json={
+                    "mappings": [
+                        {
+                            "idp_group": "engineering",
+                            "team_id": "00000000-0000-0000-0000-000000000020",
+                            "team_role": "operator",
+                        },
+                        {
+                            "idp_group": "viewers",
+                            "team_id": "00000000-0000-0000-0000-000000000030",
+                            "team_role": "viewer",
+                        },
+                    ],
+                },
+            )
             assert resp.status_code == 200
             data = resp.json()
             assert len(data["mappings"]) == 2
@@ -482,9 +543,15 @@ class TestGetGroupMappings:
     URL = "/api/v1/admin/sso/providers/00000000-0000-0000-0000-000000000010/group-mappings"
 
     def test_get_mappings(self, client: TestClient) -> None:
-        mock_provider = _make_mock_provider(group_mappings=[
-            {"idp_group": "engineering", "team_id": "00000000-0000-0000-0000-000000000020", "team_role": "operator"},
-        ])
+        mock_provider = _make_mock_provider(
+            group_mappings=[
+                {
+                    "idp_group": "engineering",
+                    "team_id": "00000000-0000-0000-0000-000000000020",
+                    "team_role": "operator",
+                },
+            ]
+        )
         with patch("modulo.api.routes.admin_sso.get_provider", new=AsyncMock(return_value=mock_provider)):
             resp = client.get(self.URL)
             assert resp.status_code == 200

@@ -59,7 +59,11 @@ async def test_concrete_provider_works() -> None:
             return f"ws-{spec.environment_profile_id}"
 
         async def exec_command(
-            self, provider_ref: str, command: list[str], *, timeout: int | None = None,  # noqa: ASYNC109
+            self,
+            provider_ref: str,
+            command: list[str],
+            *,
+            timeout: int | None = None,  # noqa: ASYNC109
         ) -> ExecResult:
             return ExecResult(exit_code=0, stdout="ok", stderr="")
 

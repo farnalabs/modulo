@@ -159,9 +159,7 @@ def _session_update(
 async def test_create_gate_inserts_new_row():
     session = _session_get(return_value=None)
     mgr = HITLManager()
-    _gate = await mgr.create_gate(
-        session, run_id=_RUN, gate_id=_GATE, pipeline_id=_PIPELINE, org_id=_ORG
-    )
+    _gate = await mgr.create_gate(session, run_id=_RUN, gate_id=_GATE, pipeline_id=_PIPELINE, org_id=_ORG)
     session.add.assert_called_once()
     session.flush.assert_called_once()
     added = session.add.call_args[0][0]
@@ -174,9 +172,7 @@ async def test_create_gate_idempotent_if_exists():
     existing = _gate()
     session = _session_get(return_value=existing)
     mgr = HITLManager()
-    result = await mgr.create_gate(
-        session, run_id=_RUN, gate_id=_GATE, pipeline_id=_PIPELINE, org_id=_ORG
-    )
+    result = await mgr.create_gate(session, run_id=_RUN, gate_id=_GATE, pipeline_id=_PIPELINE, org_id=_ORG)
     assert result is existing
     session.add.assert_not_called()
 
@@ -224,9 +220,7 @@ async def test_claim_custom_expiry_minutes_is_applied():
     )
     session = _session_update(rows_returned=1, gate=claimed_gate, pre_check_gate=pre_check)
     mgr = HITLManager()
-    result = await mgr.claim(
-        session, run_id=_RUN, gate_id=_GATE, org_id=_ORG, claimant_id=_USER, expiry_minutes=60
-    )
+    result = await mgr.claim(session, run_id=_RUN, gate_id=_GATE, org_id=_ORG, claimant_id=_USER, expiry_minutes=60)
     assert result is claimed_gate
 
 
@@ -381,9 +375,7 @@ async def test_approve_valid_token_records_decision():
     gate_decided = _gate(claimed_by=None, claim_token=None, expires_at=None, decision="approved")
     session = _session_decide(update_returns_id=gate.id, session_get_gate=gate_decided)
     mgr = HITLManager()
-    result = await mgr.approve(
-        session, run_id=_RUN, gate_id=_GATE, org_id=_ORG, claim_token="good-token"
-    )
+    result = await mgr.approve(session, run_id=_RUN, gate_id=_GATE, org_id=_ORG, claim_token="good-token")
     assert result.decision == "approved"
     assert result.claim_token is None
     assert result.claimed_by is None
@@ -443,9 +435,7 @@ async def test_reject_valid_token_records_decision():
     gate_decided = _gate(claimed_by=None, claim_token=None, decision="rejected")
     session = _session_decide(update_returns_id=gate.id, session_get_gate=gate_decided)
     mgr = HITLManager()
-    result = await mgr.reject(
-        session, run_id=_RUN, gate_id=_GATE, org_id=_ORG, claim_token="tok"
-    )
+    result = await mgr.reject(session, run_id=_RUN, gate_id=_GATE, org_id=_ORG, claim_token="tok")
     assert result.decision == "rejected"
     assert result.claim_token is None
 
@@ -587,7 +577,9 @@ def _mock_graph_validator() -> MagicMock:
     return mock_cls
 
 
-async def _bypass_capacity(mock_self: Any, *, run_id: Any, org_id: Any, pipeline_id: Any, max_concurrent: Any, lock_wait_seconds: Any) -> Any:  # noqa: E501
+async def _bypass_capacity(
+    mock_self: Any, *, run_id: Any, org_id: Any, pipeline_id: Any, max_concurrent: Any, lock_wait_seconds: Any
+) -> Any:
     run = MagicMock()
     run.status = "running"
     return run
@@ -647,9 +639,7 @@ async def test_executor_sets_awaiting_human_on_node_interrupt():
             return_value=session_factory,
         ),
         patch("modulo.core.pipeline_engine.executor.get_run", return_value=run),
-        patch(
-            "modulo.core.pipeline_engine.executor.update_run_status", return_value=final_run
-        ) as mock_update,
+        patch("modulo.core.pipeline_engine.executor.update_run_status", return_value=final_run) as mock_update,
         patch("modulo.core.pipeline_engine.executor.set_rls_org"),
         patch("modulo.core.pipeline_engine.executor.get_or_compile", return_value=compiled),
         patch("modulo.core.pipeline_engine.executor.get_registry", return_value=registry),
@@ -661,9 +651,7 @@ async def test_executor_sets_awaiting_human_on_node_interrupt():
         patch.object(PipelineExecutor, "_wait_for_capacity_or_fail", _bypass_capacity),
     ):
         executor = PipelineExecutor(MagicMock(), checkpointer_conn_string="a" * 32)
-        result = await executor.execute(
-            run_id=run.id, org_id=uuid.uuid4(), input_payload={}
-        )
+        result = await executor.execute(run_id=run.id, org_id=uuid.uuid4(), input_payload={})
 
     assert result is final_run
     final_update_call = mock_update.call_args_list[-1]

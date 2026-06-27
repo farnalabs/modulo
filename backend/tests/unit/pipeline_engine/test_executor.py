@@ -108,7 +108,7 @@ def _mock_compiled(events: list[dict[str, Any]] | None = None) -> MagicMock:
     """Return a compiled graph mock whose astream_events yields the given events."""
 
     async def _astream(state: Any, config: Any, *, version: str = "v1") -> Any:
-        for e in (events or []):
+        for e in events or []:
             yield e
 
     c = MagicMock()
@@ -155,9 +155,7 @@ def test_graph_json_hash_is_order_independent():
 
 
 def test_graph_json_hash_differs_for_different_content():
-    assert _graph_json_hash({"nodes": [], "edges": []}) != _graph_json_hash(
-        {"nodes": [{"id": "x"}], "edges": []}
-    )
+    assert _graph_json_hash({"nodes": [], "edges": []}) != _graph_json_hash({"nodes": [{"id": "x"}], "edges": []})
 
 
 # ---------------------------------------------------------------------------
@@ -223,9 +221,7 @@ async def test_execute_success_transitions_status():
         patch.object(PipelineExecutor, "_wait_for_capacity_or_fail", _bypass_capacity),
     ):
         executor = PipelineExecutor(MagicMock())
-        result = await executor.execute(
-            run_id=run.id, org_id=uuid.uuid4(), input_payload={"x": 1}
-        )
+        result = await executor.execute(run_id=run.id, org_id=uuid.uuid4(), input_payload={"x": 1})
 
     assert result is final_run
     calls = mock_update.call_args_list
@@ -289,9 +285,7 @@ async def test_execute_seeds_state_with_run_context():
         patch.object(PipelineExecutor, "_wait_for_capacity_or_fail", _bypass_capacity),
     ):
         executor = PipelineExecutor(MagicMock())
-        await executor.execute(
-            run_id=run.id, org_id=uuid.uuid4(), input_payload={"task": "do it"}
-        )
+        await executor.execute(run_id=run.id, org_id=uuid.uuid4(), input_payload={"task": "do it"})
 
     assert captured_state["run_context"]["cancelled"] is False
     assert captured_state["run_context"]["input"] == {"task": "do it"}
@@ -315,9 +309,7 @@ async def test_execute_raises_when_run_not_found():
     ):
         executor = PipelineExecutor(MagicMock())
         with pytest.raises(RunNotFoundError):
-            await executor.execute(
-                run_id=uuid.uuid4(), org_id=uuid.uuid4(), input_payload={}
-            )
+            await executor.execute(run_id=uuid.uuid4(), org_id=uuid.uuid4(), input_payload={})
 
 
 # ---------------------------------------------------------------------------
@@ -348,9 +340,7 @@ async def test_execute_marks_failed_on_graph_exception():
         patch.object(PipelineExecutor, "_wait_for_capacity_or_fail", _bypass_capacity),
     ):
         executor = PipelineExecutor(MagicMock())
-        result = await executor.execute(
-            run_id=run.id, org_id=uuid.uuid4(), input_payload={}
-        )
+        result = await executor.execute(run_id=run.id, org_id=uuid.uuid4(), input_payload={})
 
     assert result is final_run
     calls = mock_update.call_args_list
@@ -416,9 +406,7 @@ async def test_execute_sets_awaiting_human_on_node_interrupt():
         patch.object(PipelineExecutor, "_wait_for_capacity_or_fail", _bypass_capacity),
     ):
         executor = PipelineExecutor(MagicMock())
-        result = await executor.execute(
-            run_id=run.id, org_id=uuid.uuid4(), input_payload={}
-        )
+        result = await executor.execute(run_id=run.id, org_id=uuid.uuid4(), input_payload={})
 
     assert result is final_run
     final_update = mock_update.call_args_list[-1]
@@ -535,9 +523,7 @@ async def test_execute_times_out_when_at_capacity():
         ),
     ):
         executor = PipelineExecutor(MagicMock())
-        result = await executor.execute(
-            run_id=run.id, org_id=uuid.uuid4(), input_payload={}
-        )
+        result = await executor.execute(run_id=run.id, org_id=uuid.uuid4(), input_payload={})
 
     assert result.status == "pending"
 
@@ -572,9 +558,7 @@ async def test_execute_proceeds_when_under_capacity():
     ):
         executor = PipelineExecutor(MagicMock())
         executor._capacity_poll_interval = 0.01
-        result = await executor.execute(
-            run_id=run.id, org_id=uuid.uuid4(), input_payload={}
-        )
+        result = await executor.execute(run_id=run.id, org_id=uuid.uuid4(), input_payload={})
 
     assert result.status == "running"
 
@@ -607,9 +591,7 @@ async def test_execute_sets_cancelled_on_run_cancelled_error():
         patch.object(PipelineExecutor, "_wait_for_capacity_or_fail", _bypass_capacity),
     ):
         executor = PipelineExecutor(MagicMock())
-        result = await executor.execute(
-            run_id=run.id, org_id=uuid.uuid4(), input_payload={}
-        )
+        result = await executor.execute(run_id=run.id, org_id=uuid.uuid4(), input_payload={})
 
     assert result.status == "cancelled"
 
@@ -634,9 +616,7 @@ async def test_execute_sets_eval_failed_on_eval_blocked_error():
     snapshot = _make_snapshot()
     session = _make_session(snapshot)
     factory = _make_session_factory(session)
-    compiled = _mock_compiled_raising(
-        EvalBlockedError("test-eval", "score 0.3 below threshold 0.8")
-    )
+    compiled = _mock_compiled_raising(EvalBlockedError("test-eval", "score 0.3 below threshold 0.8"))
     registry = _mock_registry()
 
     with (
@@ -653,9 +633,7 @@ async def test_execute_sets_eval_failed_on_eval_blocked_error():
         patch("modulo.core.pipeline_engine.executor.GraphValidator", new=_mock_graph_validator()),
     ):
         executor = PipelineExecutor(MagicMock())
-        result = await executor.execute(
-            run_id=run.id, org_id=uuid.uuid4(), input_payload={}
-        )
+        result = await executor.execute(run_id=run.id, org_id=uuid.uuid4(), input_payload={})
 
     assert result is final_run
     calls = mock_update.call_args_list
@@ -671,9 +649,7 @@ async def test_execute_publishes_run_failed_on_eval_blocked():
     snapshot = _make_snapshot()
     session = _make_session(snapshot)
     factory = _make_session_factory(session)
-    compiled = _mock_compiled_raising(
-        EvalBlockedError("test-eval", "regex mismatch")
-    )
+    compiled = _mock_compiled_raising(EvalBlockedError("test-eval", "regex mismatch"))
     registry = _mock_registry()
 
     with (
@@ -693,9 +669,7 @@ async def test_execute_publishes_run_failed_on_eval_blocked():
         await executor.execute(run_id=run.id, org_id=uuid.uuid4(), input_payload={})
 
     broker = registry.get_or_create.return_value
-    published_events = [
-        call.args for call in broker.publish.call_args_list if call.args[0] == "run_failed"
-    ]
+    published_events = [call.args for call in broker.publish.call_args_list if call.args[0] == "run_failed"]
     assert len(published_events) == 1
     payload = published_events[0][1]
     assert payload["error"] == "eval_blocked"
@@ -710,9 +684,7 @@ async def test_execute_eval_failed_stores_error_detail():
     snapshot = _make_snapshot()
     session = _make_session(snapshot)
     factory = _make_session_factory(session)
-    compiled = _mock_compiled_raising(
-        EvalBlockedError("quality-check", "failed llm judge")
-    )
+    compiled = _mock_compiled_raising(EvalBlockedError("quality-check", "failed llm judge"))
     registry = _mock_registry()
 
     with (
@@ -746,10 +718,12 @@ async def test_execute_fails_on_bad_graph():
     from modulo.core.pipeline_engine.executor import GraphValidationError
 
     run = _make_run()
-    snapshot = _make_snapshot({
-        "nodes": [{"id": "a"}],
-        "edges": [{"source": "a", "target": "a", "type": "normal"}],
-    })
+    snapshot = _make_snapshot(
+        {
+            "nodes": [{"id": "a"}],
+            "edges": [{"source": "a", "target": "a", "type": "normal"}],
+        }
+    )
     session = _make_session(snapshot)
     factory = _make_session_factory(session)
     registry = _mock_registry()
@@ -762,9 +736,7 @@ async def test_execute_fails_on_bad_graph():
     ):
         executor = PipelineExecutor(MagicMock())
         with pytest.raises(GraphValidationError, match=r"cycle|entry"):
-            await executor.execute(
-                run_id=run.id, org_id=uuid.uuid4(), input_payload={}
-            )
+            await executor.execute(run_id=run.id, org_id=uuid.uuid4(), input_payload={})
 
 
 # ---------------------------------------------------------------------------
@@ -798,12 +770,8 @@ async def test_execute_fails_on_checkpointer_connection_error():
     ):
         mock_scope.side_effect = ConnectionError("db not available")
 
-        executor = PipelineExecutor(
-            MagicMock(), checkpointer_conn_string="postgresql://bad:5432/db"
-        )
-        result = await executor.execute(
-            run_id=run.id, org_id=uuid.uuid4(), input_payload={}
-        )
+        executor = PipelineExecutor(MagicMock(), checkpointer_conn_string="postgresql://bad:5432/db")
+        result = await executor.execute(run_id=run.id, org_id=uuid.uuid4(), input_payload={})
 
     assert result is final_run
     # Should have been marked failed, not stuck in running

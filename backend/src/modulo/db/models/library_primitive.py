@@ -76,14 +76,10 @@ class LibraryPrimitive(OrgScoped):
     download_count: Mapped[int | None] = mapped_column(Integer)
     average_rating: Mapped[Decimal | None] = mapped_column(Numeric(3, 2))
     review_count: Mapped[int | None] = mapped_column(Integer)
-    owner_team_id: Mapped[uuid.UUID | None] = mapped_column(
-        Uuid(), ForeignKey("teams.id", ondelete="RESTRICT")
-    )
+    owner_team_id: Mapped[uuid.UUID | None] = mapped_column(Uuid(), ForeignKey("teams.id", ondelete="RESTRICT"))
     visibility: Mapped[str] = mapped_column(String(10), nullable=False, server_default="org")
     contribution_status: Mapped[str | None] = mapped_column(String(20))
-    created_by: Mapped[uuid.UUID | None] = mapped_column(
-        Uuid(), ForeignKey("users.id", ondelete="SET NULL")
-    )
+    created_by: Mapped[uuid.UUID | None] = mapped_column(Uuid(), ForeignKey("users.id", ondelete="SET NULL"))
     version_group_id: Mapped[uuid.UUID | None] = mapped_column(
         Uuid(),
         nullable=True,

@@ -58,9 +58,7 @@ def _make_oauth_client(**overrides: object) -> MagicMock:
     c = MagicMock()
     c.id = uuid.uuid4()
     c.client_id = overrides.get("client_id", "test_client_123")
-    c.client_secret_hash = overrides.get(
-        "client_secret_hash", _hash_secret("supersecret")
-    )
+    c.client_secret_hash = overrides.get("client_secret_hash", _hash_secret("supersecret"))
     c.name = overrides.get("name", "Test Client")
     c.scopes = overrides.get("scopes", "trigger:run hitl:review")
     c.redirect_uris = overrides.get("redirect_uris", "http://localhost/callback")
@@ -159,6 +157,7 @@ class TestOAuthClientCRUD:
     async def test_list_returns_dicts(self) -> None:
         c = _make_oauth_client()
         from datetime import datetime
+
         c.created_at = datetime(2025, 1, 1, tzinfo=UTC)
         mock_scalars = MagicMock()
         mock_scalars.__iter__.return_value = iter([c])
@@ -221,9 +220,7 @@ class TestValidateClientSecret:
             await validate_client_secret(session, "bad_id", "secret")
 
     async def test_wrong_secret_raises(self) -> None:
-        fake = _make_oauth_client(
-            client_secret_hash=_hash_secret("correct-horse")
-        )
+        fake = _make_oauth_client(client_secret_hash=_hash_secret("correct-horse"))
         session = _make_session(fake)
         with pytest.raises(InvalidClientError, match="mismatch"):
             await validate_client_secret(session, fake.client_id, "wrong-secret")
@@ -419,17 +416,26 @@ class TestOAuthAccessToken:
 
     def test_decode_wrong_key_raises(self) -> None:
         token = create_oauth_access_token(
-            "c", _SECRET_KEY, organisation_id=str(_ORG_ID),
-            scopes=[], token_family="f", token_sequence=0,
+            "c",
+            _SECRET_KEY,
+            organisation_id=str(_ORG_ID),
+            scopes=[],
+            token_family="f",
+            token_sequence=0,
         )
         with pytest.raises(JWTError):
             decode_oauth_access_token(token, "x" * 32)
 
     def test_decode_wrong_purpose_raises(self) -> None:
         claims = {
-            "sub": "c", "org_id": str(_ORG_ID), "scopes": "",
-            "purpose": "access", "token_family": "f", "token_sequence": 0,
-            "iat": datetime.now(UTC), "exp": datetime.now(UTC) + timedelta(hours=1),
+            "sub": "c",
+            "org_id": str(_ORG_ID),
+            "scopes": "",
+            "purpose": "access",
+            "token_family": "f",
+            "token_sequence": 0,
+            "iat": datetime.now(UTC),
+            "exp": datetime.now(UTC) + timedelta(hours=1),
         }
         token = jose_jwt.encode(claims, _SECRET_KEY, algorithm="HS256")
         with pytest.raises(JWTError, match="purpose"):
@@ -437,9 +443,13 @@ class TestOAuthAccessToken:
 
     def test_decode_missing_sub_raises(self) -> None:
         claims = {
-            "org_id": str(_ORG_ID), "scopes": "",
-            "purpose": "oauth_access", "token_family": "f", "token_sequence": 0,
-            "iat": datetime.now(UTC), "exp": datetime.now(UTC) + timedelta(hours=1),
+            "org_id": str(_ORG_ID),
+            "scopes": "",
+            "purpose": "oauth_access",
+            "token_family": "f",
+            "token_sequence": 0,
+            "iat": datetime.now(UTC),
+            "exp": datetime.now(UTC) + timedelta(hours=1),
         }
         token = jose_jwt.encode(claims, _SECRET_KEY, algorithm="HS256")
         with pytest.raises(JWTError, match="sub"):
@@ -447,9 +457,13 @@ class TestOAuthAccessToken:
 
     def test_decode_missing_org_id_raises(self) -> None:
         claims = {
-            "sub": "c", "scopes": "",
-            "purpose": "oauth_access", "token_family": "f", "token_sequence": 0,
-            "iat": datetime.now(UTC), "exp": datetime.now(UTC) + timedelta(hours=1),
+            "sub": "c",
+            "scopes": "",
+            "purpose": "oauth_access",
+            "token_family": "f",
+            "token_sequence": 0,
+            "iat": datetime.now(UTC),
+            "exp": datetime.now(UTC) + timedelta(hours=1),
         }
         token = jose_jwt.encode(claims, _SECRET_KEY, algorithm="HS256")
         with pytest.raises(JWTError, match="org_id"):
@@ -457,9 +471,13 @@ class TestOAuthAccessToken:
 
     def test_decode_missing_token_family_raises(self) -> None:
         claims = {
-            "sub": "c", "org_id": str(_ORG_ID), "scopes": "",
-            "purpose": "oauth_access", "token_sequence": 0,
-            "iat": datetime.now(UTC), "exp": datetime.now(UTC) + timedelta(hours=1),
+            "sub": "c",
+            "org_id": str(_ORG_ID),
+            "scopes": "",
+            "purpose": "oauth_access",
+            "token_sequence": 0,
+            "iat": datetime.now(UTC),
+            "exp": datetime.now(UTC) + timedelta(hours=1),
         }
         token = jose_jwt.encode(claims, _SECRET_KEY, algorithm="HS256")
         with pytest.raises(JWTError, match="token_family"):
@@ -467,9 +485,13 @@ class TestOAuthAccessToken:
 
     def test_decode_missing_token_sequence_raises(self) -> None:
         claims = {
-            "sub": "c", "org_id": str(_ORG_ID), "scopes": "",
-            "purpose": "oauth_access", "token_family": "f",
-            "iat": datetime.now(UTC), "exp": datetime.now(UTC) + timedelta(hours=1),
+            "sub": "c",
+            "org_id": str(_ORG_ID),
+            "scopes": "",
+            "purpose": "oauth_access",
+            "token_family": "f",
+            "iat": datetime.now(UTC),
+            "exp": datetime.now(UTC) + timedelta(hours=1),
         }
         token = jose_jwt.encode(claims, _SECRET_KEY, algorithm="HS256")
         with pytest.raises(JWTError, match="token_sequence"):
@@ -477,9 +499,14 @@ class TestOAuthAccessToken:
 
     def test_decode_malformed_org_id_raises(self) -> None:
         claims = {
-            "sub": "c", "org_id": "not-a-uuid", "scopes": "",
-            "purpose": "oauth_access", "token_family": "f", "token_sequence": 0,
-            "iat": datetime.now(UTC), "exp": datetime.now(UTC) + timedelta(hours=1),
+            "sub": "c",
+            "org_id": "not-a-uuid",
+            "scopes": "",
+            "purpose": "oauth_access",
+            "token_family": "f",
+            "token_sequence": 0,
+            "iat": datetime.now(UTC),
+            "exp": datetime.now(UTC) + timedelta(hours=1),
         }
         token = jose_jwt.encode(claims, _SECRET_KEY, algorithm="HS256")
         with pytest.raises(JWTError, match="org_id"):
@@ -487,8 +514,12 @@ class TestOAuthAccessToken:
 
     def test_decode_expired_token_raises(self) -> None:
         claims = {
-            "sub": "c", "org_id": str(_ORG_ID), "scopes": "",
-            "purpose": "oauth_access", "token_family": "f", "token_sequence": 0,
+            "sub": "c",
+            "org_id": str(_ORG_ID),
+            "scopes": "",
+            "purpose": "oauth_access",
+            "token_family": "f",
+            "token_sequence": 0,
             "iat": datetime.now(UTC) - timedelta(hours=2),
             "exp": datetime.now(UTC) - timedelta(hours=1),
         }
@@ -521,9 +552,7 @@ class TestTokenFamily:
         session.add = MagicMock()
         session.flush = AsyncMock()
 
-        fam_id, seq = await create_oauth_token_family(
-            session, client_id="cid", org_id=_ORG_ID
-        )
+        fam_id, seq = await create_oauth_token_family(session, client_id="cid", org_id=_ORG_ID)
         assert isinstance(fam_id, str)
         assert seq == 0
 
@@ -623,17 +652,27 @@ class TestTokenFamily:
         family.is_blacklisted = False
 
         session = _make_session(family)
-        assert await check_oauth_token_family_valid(
-            session, family_id=str(family.family_id),
-            client_id="cid", org_id=_ORG_ID,
-        ) is True
+        assert (
+            await check_oauth_token_family_valid(
+                session,
+                family_id=str(family.family_id),
+                client_id="cid",
+                org_id=_ORG_ID,
+            )
+            is True
+        )
 
     async def test_check_family_blacklisted(self) -> None:
         session = _make_session(None)
-        assert await check_oauth_token_family_valid(
-            session, family_id=str(uuid.uuid4()),
-            client_id="cid", org_id=_ORG_ID,
-        ) is False
+        assert (
+            await check_oauth_token_family_valid(
+                session,
+                family_id=str(uuid.uuid4()),
+                client_id="cid",
+                org_id=_ORG_ID,
+            )
+            is False
+        )
 
 
 # ---------------------------------------------------------------------------

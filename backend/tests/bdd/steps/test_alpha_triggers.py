@@ -21,7 +21,7 @@ def org_has_pipeline(org: str, name: str, request):
     request.node._pipeline_name = name
 
 
-@when(parsers.parse('I POST /api/pipelines/{pipeline}/runs with empty run_context'))
+@when(parsers.parse("I POST /api/pipelines/{pipeline}/runs with empty run_context"))
 def trigger_manual_run(pipeline: str, client, request):
     with (
         patch("modulo.core.pipeline_engine.run_crud.set_rls_org"),
@@ -63,9 +63,7 @@ def trigger_run_with_context(pipeline: str, branch: str, client, request):
 @then(parsers.parse("the response status is {status:d}"))
 def check_status(status: int, request):
     resp = request.node._resp
-    assert resp.status_code == status, (
-        f"Expected status {status}, got {resp.status_code}: {resp.text[:200]}"
-    )
+    assert resp.status_code == status, f"Expected status {status}, got {resp.status_code}: {resp.text[:200]}"
 
 
 @then(parsers.parse('a run is created with status "{status}"'))
@@ -92,21 +90,13 @@ def trigger_nonexistent(slug: str, client, request):
     request.node._resp = resp
 
 
-@given(
-    parsers.parse(
-        'org "{org}" has pipeline "{name}" with status "{status}"'
-    )
-)
+@given(parsers.parse('org "{org}" has pipeline "{name}" with status "{status}"'))
 def pipeline_with_status(org: str, name: str, status: str, request):
     request.node._pipeline_name = name
     request.node._pipeline_status = status
 
 
-@given(
-    parsers.parse(
-        'org "{org}" has pipeline "{name}" with webhook secret "{secret}"'
-    )
-)
+@given(parsers.parse('org "{org}" has pipeline "{name}" with webhook secret "{secret}"'))
 def pipeline_with_webhook_secret(org: str, name: str, secret: str, request):
     request.node._pipeline_name = name
     request.node._webhook_secret = secret
@@ -118,11 +108,7 @@ def pipeline_no_webhook_secret(org: str, name: str, request):
     request.node._webhook_secret = None
 
 
-@when(
-    parsers.parse(
-        'I POST /api/webhooks/{pipeline} with payload {payload} and valid HMAC'
-    )
-)
+@when(parsers.parse("I POST /api/webhooks/{pipeline} with payload {payload} and valid HMAC"))
 def webhook_valid_hmac(pipeline: str, payload, client, request):
     payload_dict = json.loads(payload) if isinstance(payload, str) else payload
     with (
@@ -152,11 +138,7 @@ def webhook_valid_hmac(pipeline: str, payload, client, request):
     request.node._resp = resp
 
 
-@when(
-    parsers.parse(
-        'I POST /api/webhooks/{pipeline} with payload {payload} and invalid HMAC'
-    )
-)
+@when(parsers.parse("I POST /api/webhooks/{pipeline} with payload {payload} and invalid HMAC"))
 def webhook_invalid_hmac(pipeline: str, payload, client, request):
     payload_dict = json.loads(payload) if isinstance(payload, str) else payload
     with (
@@ -170,11 +152,7 @@ def webhook_invalid_hmac(pipeline: str, payload, client, request):
     request.node._resp = resp
 
 
-@when(
-    parsers.parse(
-        'I POST /api/webhooks/{pipeline} with payload {payload} and no HMAC'
-    )
-)
+@when(parsers.parse("I POST /api/webhooks/{pipeline} with payload {payload} and no HMAC"))
 def webhook_no_hmac(pipeline: str, payload, client, request):
     payload_dict = json.loads(payload) if isinstance(payload, str) else payload
     resp = client.post(f"/api/webhooks/{pipeline}", json=payload_dict)
@@ -196,7 +174,7 @@ def trigger_event_has_payload(request):
     pass
 
 
-@then(parsers.parse('the TriggerEvent has payload {payload}'))
+@then(parsers.parse("the TriggerEvent has payload {payload}"))
 def trigger_event_payload(payload: str, request):
     pass
 
@@ -216,7 +194,7 @@ def trigger_event_error(request):
     pass
 
 
-@then(parsers.parse('the run has run_context with {key} {value}'))
+@then(parsers.parse("the run has run_context with {key} {value}"))
 def check_run_context(key: str, value, request):
     pass
 
@@ -227,21 +205,13 @@ def check_trigger_type(ttype: str, request):
     assert data.get("trigger_type") == ttype
 
 
-@given(
-    parsers.parse(
-        'org "{org}" has pipeline "{name}" with payload mapping {mapping}'
-    )
-)
+@given(parsers.parse('org "{org}" has pipeline "{name}" with payload mapping {mapping}'))
 def pipeline_with_payload_mapping(org: str, name: str, mapping, request):
     request.node._pipeline_name = name
     request.node._payload_mapping = json.loads(mapping) if isinstance(mapping, str) else mapping
 
 
-@when(
-    parsers.parse(
-        'I POST /api/webhooks/{pipeline} with same payload {payload} and valid HMAC'
-    )
-)
+@when(parsers.parse("I POST /api/webhooks/{pipeline} with same payload {payload} and valid HMAC"))
 def webhook_duplicate(pipeline: str, payload, client, request):
     payload_dict = json.loads(payload) if isinstance(payload, str) else payload
     with (

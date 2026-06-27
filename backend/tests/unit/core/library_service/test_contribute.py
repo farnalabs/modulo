@@ -89,9 +89,7 @@ class TestContributeFixture:
         assert call_kwargs["author"] == created_by.hex
         assert call_kwargs["created_by"] == created_by
         assert call_kwargs["content_json"]["fixture_map"] == {"input": "output"}
-        mock_update.assert_awaited_once_with(
-            session, prim.id, {"contribution_status": CONTRIBUTION_DRAFT}
-        )
+        mock_update.assert_awaited_once_with(session, prim.id, {"contribution_status": CONTRIBUTION_DRAFT})
 
     async def test_creates_draft_with_no_description(self):
         session = _mock_session()
@@ -289,9 +287,7 @@ class TestSubmitForReview:
                 return_value=updated,
             ),
         ):
-            result = await submit_contribution_for_review(
-                session, org_id, prim_id, created_by=created_by
-            )
+            result = await submit_contribution_for_review(session, org_id, prim_id, created_by=created_by)
 
         assert result.contribution_status == CONTRIBUTION_REVIEW_QUEUE
         assert result is updated
@@ -310,9 +306,7 @@ class TestSubmitForReview:
             ),
         ):
             with pytest.raises(ContributionNotFoundError, match=str(prim_id)):
-                await submit_contribution_for_review(
-                    session, org_id, prim_id, created_by=uuid.uuid4()
-                )
+                await submit_contribution_for_review(session, org_id, prim_id, created_by=uuid.uuid4())
 
     async def test_submit_when_already_published_raises(self):
         session = _mock_session()
@@ -329,9 +323,7 @@ class TestSubmitForReview:
             ),
         ):
             with pytest.raises(ContributionInvalidTransitionError, match=str(prim_id)):
-                await submit_contribution_for_review(
-                    session, org_id, prim_id, created_by=uuid.uuid4()
-                )
+                await submit_contribution_for_review(session, org_id, prim_id, created_by=uuid.uuid4())
 
     async def test_submit_when_already_in_review_queue_raises(self):
         session = _mock_session()
@@ -348,9 +340,7 @@ class TestSubmitForReview:
             ),
         ):
             with pytest.raises(ContributionInvalidTransitionError):
-                await submit_contribution_for_review(
-                    session, org_id, prim_id, created_by=uuid.uuid4()
-                )
+                await submit_contribution_for_review(session, org_id, prim_id, created_by=uuid.uuid4())
 
     async def test_submit_update_returns_none_raises_not_found(self):
         """If the update returns None (e.g. concurrent delete), raise."""
@@ -374,9 +364,7 @@ class TestSubmitForReview:
             ),
         ):
             with pytest.raises(ContributionNotFoundError):
-                await submit_contribution_for_review(
-                    session, org_id, prim_id, created_by=created_by
-                )
+                await submit_contribution_for_review(session, org_id, prim_id, created_by=created_by)
 
 
 class TestPublish:

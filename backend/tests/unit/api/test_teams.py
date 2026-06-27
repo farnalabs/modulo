@@ -116,9 +116,7 @@ def operator_client() -> Generator[TestClient, None, None]:
 
 class TestListTeams:
     def test_returns_200(self, client: TestClient) -> None:
-        page_result = MagicMock(
-            items=[_make_team()], total=1, page=1, page_size=20
-        )
+        page_result = MagicMock(items=[_make_team()], total=1, page=1, page_size=20)
         with (
             patch("modulo.api.routes.teams.list_teams", return_value=page_result),
             patch("modulo.api.routes.teams.set_rls_org"),
@@ -209,9 +207,7 @@ class TestUpdateTeam:
             patch("modulo.api.routes.teams.set_rls_org"),
             patch("modulo.api.routes.teams.set_rls_user_context"),
         ):
-            resp = client.patch(
-                f"/api/v1/teams/{_TEAM_ID}", json={"name": "Updated"}
-            )
+            resp = client.patch(f"/api/v1/teams/{_TEAM_ID}", json={"name": "Updated"})
         assert resp.status_code == 200
         assert resp.json()["name"] == "Updated"
 
@@ -221,9 +217,7 @@ class TestUpdateTeam:
             patch("modulo.api.routes.teams.set_rls_org"),
             patch("modulo.api.routes.teams.set_rls_user_context"),
         ):
-            resp = client.patch(
-                f"/api/v1/teams/{uuid.uuid4()}", json={"name": "x"}
-            )
+            resp = client.patch(f"/api/v1/teams/{uuid.uuid4()}", json={"name": "x"})
         assert resp.status_code == 404
 
     def test_empty_name_returns_422(self, client: TestClient) -> None:
@@ -351,9 +345,7 @@ class TestAddMember:
 
 class TestListMembers:
     def test_returns_200(self, client: TestClient) -> None:
-        page_result = MagicMock(
-            items=[_make_membership()], total=1, page=1, page_size=20
-        )
+        page_result = MagicMock(items=[_make_membership()], total=1, page=1, page_size=20)
         with (
             patch(
                 "modulo.api.routes.teams.list_team_members",
@@ -390,15 +382,11 @@ class TestRemoveMember:
                 "modulo.api.routes.teams.get_membership",
                 return_value=_make_membership(),
             ),
-            patch(
-                "modulo.api.routes.teams.remove_team_member", return_value=True
-            ),
+            patch("modulo.api.routes.teams.remove_team_member", return_value=True),
             patch("modulo.api.routes.teams.set_rls_org"),
             patch("modulo.api.routes.teams.set_rls_user_context"),
         ):
-            resp = client.delete(
-                f"/api/v1/teams/{_TEAM_ID}/members/{_MEMBERSHIP_ID}"
-            )
+            resp = client.delete(f"/api/v1/teams/{_TEAM_ID}/members/{_MEMBERSHIP_ID}")
         assert resp.status_code == 204
 
     def test_not_found_returns_404(self, client: TestClient) -> None:
@@ -407,15 +395,11 @@ class TestRemoveMember:
                 "modulo.api.routes.teams.get_membership",
                 return_value=None,
             ),
-            patch(
-                "modulo.api.routes.teams.remove_team_member", return_value=False
-            ),
+            patch("modulo.api.routes.teams.remove_team_member", return_value=False),
             patch("modulo.api.routes.teams.set_rls_org"),
             patch("modulo.api.routes.teams.set_rls_user_context"),
         ):
-            resp = client.delete(
-                f"/api/v1/teams/{_TEAM_ID}/members/{uuid.uuid4()}"
-            )
+            resp = client.delete(f"/api/v1/teams/{_TEAM_ID}/members/{uuid.uuid4()}")
         assert resp.status_code == 404
 
 

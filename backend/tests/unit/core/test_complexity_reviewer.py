@@ -73,6 +73,7 @@ class TestContextSetterRole:
     @pytest.mark.asyncio
     async def test_context_setter_can_write_to_run_context(self):
         """A node with role='context_setter' should be allowed to write to run_context."""
+
         @cancellable_node(role="context_setter")
         async def context_setter_node(state: dict[str, Any]) -> dict[str, Any]:
             return {
@@ -83,9 +84,11 @@ class TestContextSetterRole:
                 }
             }
 
-        result = await context_setter_node({
-            "run_context": {"cancelled": False, "input": {}},
-        })
+        result = await context_setter_node(
+            {
+                "run_context": {"cancelled": False, "input": {}},
+            }
+        )
         assert result["run_context"]["model_tier"] == "tier-2"
         assert result["run_context"]["estimated_tokens"] == 1500
         assert "Moderate" in result["run_context"]["complexity_reason"]
@@ -93,6 +96,7 @@ class TestContextSetterRole:
     @pytest.mark.asyncio
     async def test_non_context_setter_cannot_write_to_run_context(self):
         """A node without context_setter role should raise ContextSetterViolationError."""
+
         @cancellable_node(role="standard")
         async def standard_node(state: dict[str, Any]) -> dict[str, Any]:
             return {
@@ -102,26 +106,32 @@ class TestContextSetterRole:
             }
 
         with pytest.raises(ContextSetterViolationError) as exc_info:
-            await standard_node({
-                "run_context": {"cancelled": False, "input": {}},
-            })
+            await standard_node(
+                {
+                    "run_context": {"cancelled": False, "input": {}},
+                }
+            )
         assert "context_setter" in str(exc_info.value).lower()
 
     @pytest.mark.asyncio
     async def test_context_setter_without_run_context_ok(self):
         """A context_setter can return state without run_context."""
+
         @cancellable_node(role="context_setter")
         async def context_setter_node(state: dict[str, Any]) -> dict[str, Any]:
             return {"artifacts": [{"status": "ok"}]}
 
-        result = await context_setter_node({
-            "run_context": {"cancelled": False, "input": {}},
-        })
+        result = await context_setter_node(
+            {
+                "run_context": {"cancelled": False, "input": {}},
+            }
+        )
         assert len(result["artifacts"]) == 1
 
     @pytest.mark.asyncio
     async def test_complexity_reviewer_style_node(self):
         """A full style test mimicking the complexity reviewer's expected behaviour."""
+
         @cancellable_node(role="context_setter")
         async def complexity_reviewer(state: dict[str, Any]) -> dict[str, Any]:
             # Read artifact from state
@@ -133,18 +143,19 @@ class TestContextSetterRole:
                     "model_tier": "tier-2" if token_estimate > 500 else "tier-1",
                     "estimated_tokens": token_estimate,
                     "complexity_reason": (
-                        f"Input is {token_estimate} tokens, "
-                        f"{'complex' if token_estimate > 500 else 'simple'} analysis"
+                        f"Input is {token_estimate} tokens, {'complex' if token_estimate > 500 else 'simple'} analysis"
                     ),
                 }
             }
 
-        result = await complexity_reviewer({
-            "run_context": {
-                "cancelled": False,
-                "input": {"code": "def hello(): pass"},
-            },
-        })
+        result = await complexity_reviewer(
+            {
+                "run_context": {
+                    "cancelled": False,
+                    "input": {"code": "def hello(): pass"},
+                },
+            }
+        )
 
         assert "model_tier" in result["run_context"]
         assert "estimated_tokens" in result["run_context"]
@@ -154,14 +165,17 @@ class TestContextSetterRole:
     @pytest.mark.asyncio
     async def test_context_setter_cancellation_still_works(self):
         """Cancellation should work even for context_setter nodes."""
+
         @cancellable_node(role="context_setter")
         async def context_setter_node(state: dict[str, Any]) -> dict[str, Any]:
             return {"run_context": {"model_tier": "tier-1"}}
 
         with pytest.raises(RuntimeError) as exc_info:
-            await context_setter_node({
-                "run_context": {"cancelled": True, "input": {}},
-            })
+            await context_setter_node(
+                {
+                    "run_context": {"cancelled": True, "input": {}},
+                }
+            )
         assert "cancelled" in str(exc_info.value).lower()
 
 

@@ -59,7 +59,7 @@ async def test_initialise_creates_filesystem_connector(tmp_path):
         credentials_ciphertext=_encrypt({}),
     )
     backend = create_secrets_backend(fernet_key=_KEY, backend_name="fernet")
-    with patch.object(backend, 'get_secret', return_value="{}"):
+    with patch.object(backend, "get_secret", return_value="{}"):
         hub = ConnectorHub(secrets_backend=backend)
         await hub.initialise([ci])
     connector = hub.get(ci.id)
@@ -73,7 +73,7 @@ async def test_initialise_creates_github_connector():
         credentials_ciphertext=_encrypt({"token": "ghp_test"}),
     )
     backend = create_secrets_backend(fernet_key=_KEY, backend_name="fernet")
-    with patch.object(backend, 'get_secret', return_value='{"token": "ghp_test"}'):
+    with patch.object(backend, "get_secret", return_value='{"token": "ghp_test"}'):
         hub = ConnectorHub(secrets_backend=backend)
         await hub.initialise([ci])
     connector = hub.get(ci.id)
@@ -96,7 +96,7 @@ async def test_aexit_clears_connectors(tmp_path):
         config_json={"base_path": str(tmp_path)},
     )
     backend = create_secrets_backend(fernet_key=_KEY, backend_name="fernet")
-    with patch.object(backend, 'get_secret', return_value="{}"):
+    with patch.object(backend, "get_secret", return_value="{}"):
         hub = ConnectorHub(secrets_backend=backend)
         async with hub:
             await hub.initialise([ci])
@@ -112,7 +112,7 @@ async def test_connector_ids_property(tmp_path):
     id2 = uuid.uuid4()
     base = {"base_path": str(tmp_path)}
     backend = create_secrets_backend(fernet_key=_KEY, backend_name="fernet")
-    with patch.object(backend, 'get_secret', return_value="{}"):
+    with patch.object(backend, "get_secret", return_value="{}"):
         hub = ConnectorHub(secrets_backend=backend)
         await hub.initialise(
             [
@@ -130,7 +130,7 @@ async def test_wrong_fernet_key_raises_decrypt_error():
         connector_type_id="filesystem",
     )
     backend = create_secrets_backend(fernet_key=other_key, backend_name="fernet")
-    with patch.object(backend, 'get_secret', side_effect=KeyError(str(ci.id))):
+    with patch.object(backend, "get_secret", side_effect=KeyError(str(ci.id))):
         hub = ConnectorHub(secrets_backend=backend)
         with pytest.raises(ConnectorDecryptError) as exc_info:
             await hub.initialise([ci])
@@ -145,7 +145,7 @@ async def test_missing_base_path_in_config_raises():
         credentials_ciphertext=_encrypt({}),
     )
     backend = create_secrets_backend(fernet_key=_KEY, backend_name="fernet")
-    with patch.object(backend, 'get_secret', return_value="{}"):
+    with patch.object(backend, "get_secret", return_value="{}"):
         hub = ConnectorHub(secrets_backend=backend)
         with pytest.raises(ValueError, match="base_path"):
             await hub.initialise([ci])
@@ -158,7 +158,7 @@ async def test_unknown_connector_type_raises():
         credentials_ciphertext=_encrypt({}),
     )
     backend = create_secrets_backend(fernet_key=_KEY, backend_name="fernet")
-    with patch.object(backend, 'get_secret', return_value="{}"):
+    with patch.object(backend, "get_secret", return_value="{}"):
         hub = ConnectorHub(secrets_backend=backend)
         with pytest.raises(ValueError, match="Unknown connector type"):
             await hub.initialise([ci])
@@ -173,11 +173,15 @@ async def test_initialise_plugin_fallback_connector():
         @property
         def connector_type(self) -> ConnectorType:
             return ConnectorType.CUSTOM
+
         async def health_check(self) -> "HealthResult":
             from modulo.connectors.base import HealthResult
+
             return HealthResult(ok=True)
+
         async def query(self, q: ConnectorQuery) -> ConnectorResult:
             return ConnectorResult(records=[{"p": True}])
+
         async def write(self, payload: ConnectorPayload) -> dict[str, Any]:
             return {"p": True}
 
@@ -198,7 +202,7 @@ async def test_initialise_plugin_fallback_connector():
     )
     backend = create_secrets_backend(fernet_key=_KEY, backend_name="fernet")
     with (
-        patch.object(backend, 'get_secret', return_value="{}"),
+        patch.object(backend, "get_secret", return_value="{}"),
         patch("modulo.core.connector_hub.get_plugin_registry", return_value=reg),
     ):
         hub = ConnectorHub(secrets_backend=backend)
@@ -217,7 +221,7 @@ async def test_initialise_plugin_fallback_not_registered_raises():
     )
     backend = create_secrets_backend(fernet_key=_KEY, backend_name="fernet")
     with (
-        patch.object(backend, 'get_secret', return_value="{}"),
+        patch.object(backend, "get_secret", return_value="{}"),
     ):
         hub = ConnectorHub(secrets_backend=backend)
         with pytest.raises(ValueError, match="Unknown connector type"):
@@ -230,7 +234,7 @@ async def test_initialise_is_additive(tmp_path):
     id2 = uuid.uuid4()
     base = {"base_path": str(tmp_path)}
     backend = create_secrets_backend(fernet_key=_KEY, backend_name="fernet")
-    with patch.object(backend, 'get_secret', return_value="{}"):
+    with patch.object(backend, "get_secret", return_value="{}"):
         hub = ConnectorHub(secrets_backend=backend)
         await hub.initialise([_FakeCI(id=id1, connector_type_id="filesystem", config_json=base)])
         await hub.initialise([_FakeCI(id=id2, connector_type_id="filesystem", config_json=base)])
@@ -251,9 +255,14 @@ class _HubFakeRuntimeProvider:
         return "ws-fake"
 
     async def exec_command(
-        self, provider_ref: str, command: list[str], *, timeout: int | None = None  # noqa: ASYNC109
+        self,
+        provider_ref: str,
+        command: list[str],
+        *,
+        timeout: int | None = None,  # noqa: ASYNC109
     ) -> Any:
         from modulo.core.runtime_provider import ExecResult
+
         return ExecResult(exit_code=0, stdout="", stderr="")
 
     async def destroy_workspace(self, provider_ref: str) -> None:
@@ -273,7 +282,7 @@ async def test_initialise_creates_shell_connector():
     )
     backend = create_secrets_backend(fernet_key=_KEY, backend_name="fernet")
     _HubFakeRuntimeProvider()
-    with patch.object(backend, 'get_secret', return_value="{}"):
+    with patch.object(backend, "get_secret", return_value="{}"):
         hub = ConnectorHub(secrets_backend=backend)
         await hub.initialise([ci])
     connector = hub.get(ci.id)
@@ -289,7 +298,7 @@ async def test_initialise_shell_no_runtime_provider_raises():
         credentials_ciphertext=_encrypt({}),
     )
     backend = create_secrets_backend(fernet_key=_KEY, backend_name="fernet")
-    with patch.object(backend, 'get_secret', return_value="{}"):
+    with patch.object(backend, "get_secret", return_value="{}"):
         hub = ConnectorHub(secrets_backend=backend)
         with pytest.raises(ValueError, match="RuntimeProvider"):
             await hub.initialise([ci])

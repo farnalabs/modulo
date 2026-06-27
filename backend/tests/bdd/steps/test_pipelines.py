@@ -37,9 +37,7 @@ def _map_url(url: str) -> str:
     return url.replace("/api/", "/api/v1/")
 
 
-def _patch_set_rls(
-    patches: list[Any], module_path: str = "modulo.api.routes.pipelines.set_rls_org"
-) -> None:
+def _patch_set_rls(patches: list[Any], module_path: str = "modulo.api.routes.pipelines.set_rls_org") -> None:
     """Patch *set_rls_org* in the given module path so it's a silent no-op."""
     patcher = patch(module_path, new_callable=AsyncMock)
     patcher.start()
@@ -246,9 +244,7 @@ def a_running_pipeline(request: pytest.FixtureRequest) -> None:
 
 
 @when(parsers.parse('I POST {url} with name "{name}" and valid config'))
-def crud_post_pipeline(
-    client, url: str, name: str, request: pytest.FixtureRequest, patches: list[Any]
-) -> None:
+def crud_post_pipeline(client, url: str, name: str, request: pytest.FixtureRequest, patches: list[Any]) -> None:
     """Create a pipeline via POST /api/v1/pipelines."""
     from tests.bdd.conftest import make_mock_pipeline
 
@@ -319,9 +315,7 @@ def crud_get_url(client, url: str, request: pytest.FixtureRequest, patches: list
 
 
 @when(parsers.parse("I PATCH {url} with new config"))
-def crud_patch_pipeline(
-    client, url: str, request: pytest.FixtureRequest, patches: list[Any]
-) -> None:
+def crud_patch_pipeline(client, url: str, request: pytest.FixtureRequest, patches: list[Any]) -> None:
     """Update a pipeline via PATCH."""
     from tests.bdd.conftest import make_mock_pipeline
 
@@ -348,9 +342,7 @@ def crud_patch_pipeline(
 
 
 @when(parsers.parse("I DELETE {url}"))
-def crud_delete_pipeline(
-    client, url: str, request: pytest.FixtureRequest, patches: list[Any]
-) -> None:
+def crud_delete_pipeline(client, url: str, request: pytest.FixtureRequest, patches: list[Any]) -> None:
     """Delete a pipeline via DELETE."""
     actual_url = _map_url(url)
 
@@ -477,9 +469,7 @@ def node_raises_exception(request: pytest.FixtureRequest) -> None:
 
 
 @when(parsers.parse('I trigger a run with run_context branch="{branch}"'))
-def trigger_with_run_context(
-    client, branch: str, request: pytest.FixtureRequest, patches: list[Any]
-) -> None:
+def trigger_with_run_context(client, branch: str, request: pytest.FixtureRequest, patches: list[Any]) -> None:
     """Trigger a run and verify run_context merging.
 
     This uses the same mock setup as the regular trigger run step, but
@@ -550,9 +540,7 @@ def trigger_with_run_context(
 
 
 @when(parsers.parse('I POST /api/pipelines with config missing "{field}"'))
-def validation_missing_field(
-    client, field: str, request: pytest.FixtureRequest, patches: list[Any]
-) -> None:
+def validation_missing_field(client, field: str, request: pytest.FixtureRequest, patches: list[Any]) -> None:
     """POST a pipeline creation body missing a required field.
 
     ``field`` is the name of the required field that is omitted, e.g.
@@ -568,9 +556,7 @@ def validation_missing_field(
 
 
 @when(parsers.parse("I POST /api/pipelines with a node of type {node_type}"))
-def validation_unknown_node_type(
-    client, node_type: str, request: pytest.FixtureRequest, patches: list[Any]
-) -> None:
+def validation_unknown_node_type(client, node_type: str, request: pytest.FixtureRequest, patches: list[Any]) -> None:
     """POST a graph-body referencing an unknown node type.
 
     Currently the POST /api/v1/pipelines endpoint does not accept a graph —
@@ -589,11 +575,7 @@ def validation_unknown_node_type(
     _store_response(request, resp)
 
 
-@when(
-    parsers.parse(
-        "I POST /api/pipelines with a config where node A depends on B and B depends on A"
-    )
-)
+@when(parsers.parse("I POST /api/pipelines with a config where node A depends on B and B depends on A"))
 def validation_cycle(client, request: pytest.FixtureRequest, patches: list[Any]) -> None:
     """POST a graph body with a cycle.
 
@@ -687,9 +669,7 @@ def checkpoint_persisted(request: pytest.FixtureRequest) -> None:
 @then(parsers.parse("the response status is {status:d}"))
 def check_status(request: pytest.FixtureRequest, status: int) -> None:
     resp = request.node._resp
-    assert resp.status_code == status, (
-        f"Expected status {status}, got {resp.status_code}. Body: {resp.text[:500]}"
-    )
+    assert resp.status_code == status, f"Expected status {status}, got {resp.status_code}. Body: {resp.text[:500]}"
 
 
 @then("the response contains id and slug")
@@ -716,9 +696,7 @@ def check_pipeline_count(request: pytest.FixtureRequest, count: int) -> None:
 @then(parsers.parse('the response name is "{name}"'))
 def check_response_name(request: pytest.FixtureRequest, name: str) -> None:
     body = request.node._resp_body
-    assert body.get("name") == name, (
-        f"Expected name {name!r}, got {body.get('name')!r}. Full body: {body}"
-    )
+    assert body.get("name") == name, f"Expected name {name!r}, got {body.get('name')!r}. Full body: {body}"
 
 
 @then(parsers.parse('the error mentions "{field}"'))
@@ -732,9 +710,7 @@ def check_error_mentions(request: pytest.FixtureRequest, field: str) -> None:
         detail = str(body.get("detail", body))
     else:
         detail = str(body)
-    assert field.lower() in detail.lower(), (
-        f"Expected error to mention {field!r}, got: {detail[:500]}"
-    )
+    assert field.lower() in detail.lower(), f"Expected error to mention {field!r}, got: {detail[:500]}"
 
 
 # ---------------------------------------------------------------------------
@@ -753,9 +729,7 @@ def check_run_status(request: pytest.FixtureRequest, status: str) -> None:
         mock_run = getattr(request.node, "_mock_run", None)
         run_status = getattr(request.node, "_run_status", None)
         if mock_run is not None:
-            assert mock_run.status == status, (
-                f"Expected mock status {status!r}, got {mock_run.status!r}"
-            )
+            assert mock_run.status == status, f"Expected mock status {status!r}, got {mock_run.status!r}"
         elif run_status is not None:
             assert run_status == status, f"Expected _run_status {status!r}, got {run_status!r}"
 
@@ -773,9 +747,7 @@ def check_run_has_final_state(request: pytest.FixtureRequest) -> None:
         assert body["final_state"] is not None
     else:
         mock_run = getattr(request.node, "_mock_run", None)
-        assert mock_run is not None and mock_run.final_state is not None, (
-            "Expected run to have a final_state"
-        )
+        assert mock_run is not None and mock_run.final_state is not None, "Expected run to have a final_state"
 
 
 @then("the run has an error_detail")
@@ -785,17 +757,13 @@ def check_run_has_error_detail(request: pytest.FixtureRequest) -> None:
         assert body["error_detail"] is not None
     else:
         mock_run = getattr(request.node, "_mock_run", None)
-        assert mock_run is not None and mock_run.error_detail is not None, (
-            "Expected run to have an error_detail"
-        )
+        assert mock_run is not None and mock_run.error_detail is not None, "Expected run to have an error_detail"
 
 
 @then(parsers.parse('the effective run context branch is "{expected_branch}"'))
 def check_effective_run_context(request: pytest.FixtureRequest, expected_branch: str) -> None:
     effective = getattr(request.node, "_effective_run_context", None)
-    assert effective is not None, (
-        "No effective run context stored — the when step must set _effective_run_context"
-    )
+    assert effective is not None, "No effective run context stored — the when step must set _effective_run_context"
     assert effective.get("branch") == expected_branch, (
         f"Expected run context branch {expected_branch!r}, got {effective.get('branch')!r}"
     )
@@ -826,9 +794,7 @@ def run_restarts_from_node(request: pytest.FixtureRequest, node: int) -> None:
     # Without a real endpoint, we assert the response code to show
     # the route was reached (even if it returned 404/501).
     resp = request.node._resp
-    assert resp.status_code in (200, 202), (
-        f"Resume endpoint returned {resp.status_code}: {resp.text[:300]}"
-    )
+    assert resp.status_code in (200, 202), f"Resume endpoint returned {resp.status_code}: {resp.text[:300]}"
 
 
 @then(parsers.parse("node {node:d} is not re-executed"))

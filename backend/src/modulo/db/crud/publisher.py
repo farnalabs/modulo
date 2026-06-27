@@ -18,17 +18,13 @@ TRUST_TIER_AMBER = "amber"
 VALID_TIERS = frozenset({TRUST_TIER_GREEN, TRUST_TIER_AMBER})
 
 
-async def get_publisher(
-    session: AsyncSession, publisher_id: uuid.UUID
-) -> Publisher | None:
+async def get_publisher(session: AsyncSession, publisher_id: uuid.UUID) -> Publisher | None:
     stmt = select(Publisher).where(Publisher.id == publisher_id)
     result = await session.execute(stmt)
     return result.scalar_one_or_none()
 
 
-async def get_publisher_by_key(
-    session: AsyncSession, org_id: uuid.UUID, public_key_hex: str
-) -> Publisher | None:
+async def get_publisher_by_key(session: AsyncSession, org_id: uuid.UUID, public_key_hex: str) -> Publisher | None:
     stmt = select(Publisher).where(
         Publisher.organisation_id == org_id,
         Publisher.public_key_hex == public_key_hex,
@@ -37,9 +33,7 @@ async def get_publisher_by_key(
     return result.scalar_one_or_none()
 
 
-async def get_publisher_by_name(
-    session: AsyncSession, org_id: uuid.UUID, name: str
-) -> Publisher | None:
+async def get_publisher_by_name(session: AsyncSession, org_id: uuid.UUID, name: str) -> Publisher | None:
     stmt = select(Publisher).where(
         Publisher.organisation_id == org_id,
         Publisher.name == name,
@@ -134,9 +128,7 @@ async def update_publisher(
     return publisher
 
 
-async def delete_publisher(
-    session: AsyncSession, publisher_id: uuid.UUID
-) -> bool:
+async def delete_publisher(session: AsyncSession, publisher_id: uuid.UUID) -> bool:
     publisher = await get_publisher(session, publisher_id)
     if publisher is None:
         return False

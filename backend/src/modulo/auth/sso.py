@@ -132,25 +132,17 @@ async def apply_group_mappings(
             )
 
 
-async def _lookup_provider_by_client_id(
-    session: AsyncSession, client_id: str
-) -> SsoProvider | None:
+async def _lookup_provider_by_client_id(session: AsyncSession, client_id: str) -> SsoProvider | None:
     from sqlalchemy import select
 
-    result = await session.execute(
-        select(SsoProvider).where(SsoProvider.client_id == client_id).limit(1)
-    )
+    result = await session.execute(select(SsoProvider).where(SsoProvider.client_id == client_id).limit(1))
     return result.scalar_one_or_none()
 
 
-async def _lookup_provider_by_entity_id(
-    session: AsyncSession, entity_id: str
-) -> SsoProvider | None:
+async def _lookup_provider_by_entity_id(session: AsyncSession, entity_id: str) -> SsoProvider | None:
     from sqlalchemy import select
 
-    result = await session.execute(
-        select(SsoProvider).where(SsoProvider.entity_id == entity_id).limit(1)
-    )
+    result = await session.execute(select(SsoProvider).where(SsoProvider.entity_id == entity_id).limit(1))
     return result.scalar_one_or_none()
 
 

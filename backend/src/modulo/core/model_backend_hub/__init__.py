@@ -130,11 +130,13 @@ class ModelBackendHub:
                 continue
             if self._healthy.get(fallback_id, False):
                 if audit_logger is not None:
-                    await audit_logger({
-                        "event_type": "model_failover",
-                        "primary_id": str(backend_id),
-                        "fallback_id": str(fallback_id),
-                    })
+                    await audit_logger(
+                        {
+                            "event_type": "model_failover",
+                            "primary_id": str(backend_id),
+                            "fallback_id": str(fallback_id),
+                        }
+                    )
                 return self._backends[fallback_id]
 
         raise BackendUnavailableError(backend_id)

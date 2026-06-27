@@ -52,9 +52,7 @@ class TestGenericRepository:
         stmt.where.assert_called_once()
         assert result is where_return
 
-    def test_apply_tenant_filter_adds_where_for_all_org_entities_in_join(
-        self, repo: GenericRepository
-    ) -> None:
+    def test_apply_tenant_filter_adds_where_for_all_org_entities_in_join(self, repo: GenericRepository) -> None:
         stmt = MagicMock(spec=Select)
         stmt.column_descriptions = [
             {"entity": EntityWithOrg},
@@ -69,9 +67,7 @@ class TestGenericRepository:
         assert where_return.where.call_count == 1
         assert result is not stmt
 
-    def test_apply_tenant_filter_skips_entities_without_org_column(
-        self, repo: GenericRepository
-    ) -> None:
+    def test_apply_tenant_filter_skips_entities_without_org_column(self, repo: GenericRepository) -> None:
         stmt = MagicMock(spec=Select)
         stmt.column_descriptions = [
             {"entity": EntityWithoutOrg},
@@ -85,9 +81,7 @@ class TestGenericRepository:
         stmt.where.assert_called_once()
         assert result is where_return
 
-    def test_apply_tenant_filter_skips_none_and_object_entities(
-        self, repo: GenericRepository
-    ) -> None:
+    def test_apply_tenant_filter_skips_none_and_object_entities(self, repo: GenericRepository) -> None:
         stmt = MagicMock(spec=Select)
         stmt.column_descriptions = [
             {"entity": None},
@@ -102,9 +96,7 @@ class TestGenericRepository:
         stmt.where.assert_called_once()
         assert result is where_return
 
-    def test_apply_tenant_filter_returns_stmt_unchanged_when_no_match(
-        self, repo: GenericRepository
-    ) -> None:
+    def test_apply_tenant_filter_returns_stmt_unchanged_when_no_match(self, repo: GenericRepository) -> None:
         stmt = MagicMock(spec=Select)
         stmt.column_descriptions = [{"entity": EntityWithoutOrg}]
 
@@ -113,9 +105,7 @@ class TestGenericRepository:
         stmt.where.assert_not_called()
         assert result is stmt
 
-    def test_apply_tenant_filter_returns_stmt_when_descriptions_empty(
-        self, repo: GenericRepository
-    ) -> None:
+    def test_apply_tenant_filter_returns_stmt_when_descriptions_empty(self, repo: GenericRepository) -> None:
         stmt = MagicMock(spec=Select)
         stmt.column_descriptions = []
 

@@ -37,6 +37,7 @@ def audit_events_exist(count: int, request):
 @when(parsers.parse("I GET /api/admin/audit?limit={limit:d}"))
 def get_audit_log(limit: int, client, request):
     from datetime import datetime
+
     with (
         patch("modulo.core.pipeline_engine.run_crud.set_rls_org"),
         patch(
@@ -181,6 +182,7 @@ def claimed_gate(gate: str, request):
 @when("I approve the run")
 def approve_run(client, request):
     from modulo.hitl_manager import ApproveResult
+
     run_id = getattr(request.node, "_run_id", uuid.uuid4())
     with (
         patch(

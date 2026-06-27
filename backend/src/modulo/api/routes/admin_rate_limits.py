@@ -46,10 +46,7 @@ async def get_rate_limits(
     current_user: AuthenticatedPrincipal = Depends(get_current_user),
 ) -> RateLimitStatusResponse:
     _require_admin(current_user)
-    rules = [
-        RateLimitRuleResponse(path_prefix=p, max_requests=m, window_s=w)
-        for p, m, w in RateLimitMiddleware.RULES
-    ]
+    rules = [RateLimitRuleResponse(path_prefix=p, max_requests=m, window_s=w) for p, m, w in RateLimitMiddleware.RULES]
     return RateLimitStatusResponse(
         mode="redis" if redis_available else "in_memory",
         rules=rules,
@@ -70,10 +67,7 @@ async def update_rate_limits(
         )
     RateLimitMiddleware.set_rules(new_rules)
     _log.info("ratelimit.rules_updated", extra={"rules": new_rules})
-    rules = [
-        RateLimitRuleResponse(path_prefix=p, max_requests=m, window_s=w)
-        for p, m, w in RateLimitMiddleware.RULES
-    ]
+    rules = [RateLimitRuleResponse(path_prefix=p, max_requests=m, window_s=w) for p, m, w in RateLimitMiddleware.RULES]
     return RateLimitStatusResponse(
         mode="redis" if redis_available else "in_memory",
         rules=rules,

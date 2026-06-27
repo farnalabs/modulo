@@ -309,7 +309,10 @@ def test_migrate_data_source_no_versions_returns_404(client: TestClient) -> None
     to_schema = _make_schema()
     with (
         patch("modulo.api.routes.schemas.get_schema", side_effect=[from_schema, to_schema]),
-        patch("modulo.api.routes.schemas.list_schema_versions", return_value=MagicMock(items=[], total=0, page=1, page_size=20)),  # noqa: E501
+        patch(
+            "modulo.api.routes.schemas.list_schema_versions",
+            return_value=MagicMock(items=[], total=0, page=1, page_size=20),
+        ),
         patch("modulo.api.routes.schemas.set_rls_org"),
     ):
         resp = client.post(

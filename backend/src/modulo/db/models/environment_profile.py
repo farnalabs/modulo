@@ -21,7 +21,5 @@ class EnvironmentProfile(OrgScoped):
     persistence_policy: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False, default=dict)
     timeout_seconds: Mapped[int] = mapped_column(Integer, nullable=False, default=3600)
     resource_limits_json: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False, default=dict)
-    created_by: Mapped[uuid.UUID | None] = mapped_column(
-        Uuid(), ForeignKey("users.id", ondelete="SET NULL")
-    )
+    created_by: Mapped[uuid.UUID | None] = mapped_column(Uuid(), ForeignKey("users.id", ondelete="SET NULL"))
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)

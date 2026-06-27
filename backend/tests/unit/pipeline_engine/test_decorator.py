@@ -190,6 +190,7 @@ async def test_db_check_raises_when_cancelled():
 
     set_cancellation_check(_mock_db_check)
     try:
+
         @cancellable_node()
         async def node(state: dict[str, Any]) -> dict[str, Any]:
             return {}
@@ -211,6 +212,7 @@ async def test_db_check_not_called_when_state_already_cancelled():
 
     set_cancellation_check(_mock_db_check)
     try:
+
         @cancellable_node()
         async def node(state: dict[str, Any]) -> dict[str, Any]:
             return {}
@@ -233,6 +235,7 @@ async def test_node_runs_when_db_check_returns_false():
 
     set_cancellation_check(_mock_db_check)
     try:
+
         @cancellable_node()
         async def node(state: dict[str, Any]) -> dict[str, Any]:
             call_count[0] += 1
@@ -287,6 +290,7 @@ async def test_context_var_isolation():
 
         set_cancellation_check(_check_a)
         try:
+
             @cancellable_node()
             async def node_a(state: dict[str, Any]) -> dict[str, Any]:
                 return {}
@@ -303,6 +307,7 @@ async def test_context_var_isolation():
 
         set_cancellation_check(_check_b)
         try:
+
             @cancellable_node()
             async def node_b(state: dict[str, Any]) -> dict[str, Any]:
                 return {"from": "b"}

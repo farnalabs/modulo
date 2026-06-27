@@ -154,9 +154,7 @@ async def test_claim_succeeds_with_jwt_secret_key() -> None:
     )
     session = _session_claim(pre_check_gate=unclaimed_gate, claimed_gate=claimed_gate)
     mgr = HITLManager(secret_key=_KEY)
-    result = await mgr.claim(
-        session, run_id=_RUN, gate_id=_GATE, org_id=_ORG, claimant_id=_USER
-    )
+    result = await mgr.claim(session, run_id=_RUN, gate_id=_GATE, org_id=_ORG, claimant_id=_USER)
     assert result is claimed_gate
 
 
@@ -198,14 +196,22 @@ async def test_approve_validates_jwt_scope() -> None:
     """approve() validates a well-formed JWT with matching scope."""
     future = datetime.now(UTC) + timedelta(minutes=5)
     token = create_claim_token(
-        str(_USER), _KEY, run_id=str(_RUN), gate_id=_GATE, client_id=str(_USER),
+        str(_USER),
+        _KEY,
+        run_id=str(_RUN),
+        gate_id=_GATE,
+        client_id=str(_USER),
     )
     gate = _gate(claimed_by=_USER, claim_token=token, expires_at=future)
     gate_decided = _gate(decision="approved", claim_token=None, claimed_by=None)
     session = _session_decide(update_returns_id=gate.id, session_get_gate=gate_decided)
     mgr = HITLManager(secret_key=_KEY)
     result = await mgr.approve(
-        session, run_id=_RUN, gate_id=_GATE, org_id=_ORG, claim_token=token,
+        session,
+        run_id=_RUN,
+        gate_id=_GATE,
+        org_id=_ORG,
+        claim_token=token,
     )
     assert result.decision == "approved"
     assert result.claim_token is None
@@ -214,22 +220,30 @@ async def test_approve_validates_jwt_scope() -> None:
 async def test_approve_rejects_expired_jwt() -> None:
     """approve() rejects a JWT whose exp is in the past."""
     token = create_claim_token(
-        str(_USER), _KEY,
-        run_id=str(_RUN), gate_id=_GATE, client_id=str(_USER),
+        str(_USER),
+        _KEY,
+        run_id=str(_RUN),
+        gate_id=_GATE,
+        client_id=str(_USER),
         expiry_minutes=-1,
     )
     session = AsyncMock()
     mgr = HITLManager(secret_key=_KEY)
     with pytest.raises(ClaimTokenExpiredError):
         await mgr.approve(
-            session, run_id=_RUN, gate_id=_GATE, org_id=_ORG, claim_token=token,
+            session,
+            run_id=_RUN,
+            gate_id=_GATE,
+            org_id=_ORG,
+            claim_token=token,
         )
 
 
 async def test_approve_rejects_client_id_mismatch() -> None:
     """approve() rejects a JWT scoped to a different run_id."""
     token = create_claim_token(
-        str(_USER), _KEY,
+        str(_USER),
+        _KEY,
         run_id=str(uuid.uuid4()),  # wrong run_id
         gate_id=_GATE,
         client_id=str(_USER),
@@ -238,36 +252,54 @@ async def test_approve_rejects_client_id_mismatch() -> None:
     mgr = HITLManager(secret_key=_KEY)
     with pytest.raises(ClaimTokenInvalidError):
         await mgr.approve(
-            session, run_id=_RUN, gate_id=_GATE, org_id=_ORG, claim_token=token,
+            session,
+            run_id=_RUN,
+            gate_id=_GATE,
+            org_id=_ORG,
+            claim_token=token,
         )
 
 
 async def test_approve_rejects_wrong_gate_id() -> None:
     """approve() rejects a JWT with non-matching gate_id."""
     token = create_claim_token(
-        str(_USER), _KEY,
-        run_id=str(_RUN), gate_id="wrong-gate", client_id=str(_USER),
+        str(_USER),
+        _KEY,
+        run_id=str(_RUN),
+        gate_id="wrong-gate",
+        client_id=str(_USER),
     )
     session = AsyncMock()
     mgr = HITLManager(secret_key=_KEY)
     with pytest.raises(ClaimTokenInvalidError):
         await mgr.approve(
-            session, run_id=_RUN, gate_id=_GATE, org_id=_ORG, claim_token=token,
+            session,
+            run_id=_RUN,
+            gate_id=_GATE,
+            org_id=_ORG,
+            claim_token=token,
         )
 
 
 async def test_approve_rejects_tampered_token() -> None:
     """approve() rejects a JWT that has been tampered with."""
     stored_token = create_claim_token(
-        str(_USER), _KEY,
-        run_id=str(_RUN), gate_id=_GATE, client_id=str(_USER),
+        str(_USER),
+        _KEY,
+        run_id=str(_RUN),
+        gate_id=_GATE,
+        client_id=str(_USER),
     )
     tampered = stored_token[:-5] + "XXXXX"
     session = AsyncMock()
     mgr = HITLManager(secret_key=_KEY)
     with pytest.raises(ClaimTokenInvalidError):
         await mgr.approve(
-            session, run_id=_RUN, gate_id=_GATE, org_id=_ORG, claim_token=tampered,
+            session,
+            run_id=_RUN,
+            gate_id=_GATE,
+            org_id=_ORG,
+            claim_token=tampered,
         )
 
 
@@ -280,14 +312,22 @@ async def test_reject_validates_jwt() -> None:
     """reject() validates a well-formed JWT claim token."""
     future = datetime.now(UTC) + timedelta(minutes=5)
     token = create_claim_token(
-        str(_USER), _KEY, run_id=str(_RUN), gate_id=_GATE, client_id=str(_USER),
+        str(_USER),
+        _KEY,
+        run_id=str(_RUN),
+        gate_id=_GATE,
+        client_id=str(_USER),
     )
     gate = _gate(claimed_by=_USER, claim_token=token, expires_at=future)
     gate_decided = _gate(decision="rejected", claim_token=None, claimed_by=None)
     session = _session_decide(update_returns_id=gate.id, session_get_gate=gate_decided)
     mgr = HITLManager(secret_key=_KEY)
     result = await mgr.reject(
-        session, run_id=_RUN, gate_id=_GATE, org_id=_ORG, claim_token=token,
+        session,
+        run_id=_RUN,
+        gate_id=_GATE,
+        org_id=_ORG,
+        claim_token=token,
     )
     assert result.decision == "rejected"
     assert result.claim_token is None
@@ -296,15 +336,22 @@ async def test_reject_validates_jwt() -> None:
 async def test_reject_rejects_expired_jwt() -> None:
     """reject() rejects an expired JWT."""
     token = create_claim_token(
-        str(_USER), _KEY,
-        run_id=str(_RUN), gate_id=_GATE, client_id=str(_USER),
+        str(_USER),
+        _KEY,
+        run_id=str(_RUN),
+        gate_id=_GATE,
+        client_id=str(_USER),
         expiry_minutes=-1,
     )
     session = AsyncMock()
     mgr = HITLManager(secret_key=_KEY)
     with pytest.raises(ClaimTokenExpiredError):
         await mgr.reject(
-            session, run_id=_RUN, gate_id=_GATE, org_id=_ORG, claim_token=token,
+            session,
+            run_id=_RUN,
+            gate_id=_GATE,
+            org_id=_ORG,
+            claim_token=token,
         )
 
 
@@ -320,7 +367,11 @@ async def test_approve_opaque_token_backwards_compat() -> None:
     session = _session_decide(update_returns_id=gate.id, session_get_gate=gate_decided)
     mgr = HITLManager(secret_key=_KEY)
     result = await mgr.approve(
-        session, run_id=_RUN, gate_id=_GATE, org_id=_ORG, claim_token="opaque-token-123",
+        session,
+        run_id=_RUN,
+        gate_id=_GATE,
+        org_id=_ORG,
+        claim_token="opaque-token-123",
     )
     assert result.decision == "approved"
 
@@ -332,7 +383,11 @@ async def test_reject_opaque_token_backwards_compat() -> None:
     session = _session_decide(update_returns_id=gate.id, session_get_gate=gate_decided)
     mgr = HITLManager(secret_key=_KEY)
     result = await mgr.reject(
-        session, run_id=_RUN, gate_id=_GATE, org_id=_ORG, claim_token="opaque-token-456",
+        session,
+        run_id=_RUN,
+        gate_id=_GATE,
+        org_id=_ORG,
+        claim_token="opaque-token-456",
     )
     assert result.decision == "rejected"
 
@@ -344,7 +399,11 @@ async def test_approve_no_secret_key_still_uses_opaque() -> None:
     session = _session_decide(update_returns_id=gate.id, session_get_gate=gate_decided)
     mgr = HITLManager()  # no secret_key
     result = await mgr.approve(
-        session, run_id=_RUN, gate_id=_GATE, org_id=_ORG, claim_token="plain-token",
+        session,
+        run_id=_RUN,
+        gate_id=_GATE,
+        org_id=_ORG,
+        claim_token="plain-token",
     )
     assert result.decision == "approved"
 
@@ -360,7 +419,11 @@ async def test_gate_not_found_with_jwt_manager() -> None:
     mgr = HITLManager(secret_key=_KEY)
     with pytest.raises(GateNotFoundError):
         await mgr.approve(
-            session, run_id=_RUN, gate_id=_GATE, org_id=_ORG, claim_token="anything",
+            session,
+            run_id=_RUN,
+            gate_id=_GATE,
+            org_id=_ORG,
+            claim_token="anything",
         )
 
 
@@ -372,7 +435,11 @@ async def test_already_decided_with_jwt_manager() -> None:
     mgr = HITLManager(secret_key=_KEY)
     with pytest.raises(GateAlreadyDecidedError):
         await mgr.approve(
-            session, run_id=_RUN, gate_id=_GATE, org_id=_ORG, claim_token="opaque-already-decided",
+            session,
+            run_id=_RUN,
+            gate_id=_GATE,
+            org_id=_ORG,
+            claim_token="opaque-already-decided",
         )
 
 
@@ -380,12 +447,19 @@ async def test_approve_rejects_jwt_with_wrong_key() -> None:
     """A JWT signed with a different key is rejected as invalid."""
     different_key = "a_completely_different_key_1234567890123"
     token = create_claim_token(
-        str(_USER), different_key,
-        run_id=str(_RUN), gate_id=_GATE, client_id=str(_USER),
+        str(_USER),
+        different_key,
+        run_id=str(_RUN),
+        gate_id=_GATE,
+        client_id=str(_USER),
     )
     session = AsyncMock()
     mgr = HITLManager(secret_key=_KEY)
     with pytest.raises(ClaimTokenInvalidError):
         await mgr.approve(
-            session, run_id=_RUN, gate_id=_GATE, org_id=_ORG, claim_token=token,
+            session,
+            run_id=_RUN,
+            gate_id=_GATE,
+            org_id=_ORG,
+            claim_token=token,
         )

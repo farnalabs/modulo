@@ -9,6 +9,7 @@ from modulo.core.secrets_backend.aws import AWSSecretsManagerBackend
 
 try:
     import boto3  # noqa: F401
+
     _BOTO3_AVAILABLE = True
 except ImportError:
     _BOTO3_AVAILABLE = False
@@ -21,11 +22,14 @@ pytestmark = pytest.mark.skipif(
 
 @pytest.fixture(autouse=True)
 def _env():
-    with patch.dict(os.environ, {
-        "AWS_REGION": "us-east-1",
-        "AWS_ACCESS_KEY_ID": "test-key",
-        "AWS_SECRET_ACCESS_KEY": "test-secret",
-    }):
+    with patch.dict(
+        os.environ,
+        {
+            "AWS_REGION": "us-east-1",
+            "AWS_ACCESS_KEY_ID": "test-key",
+            "AWS_SECRET_ACCESS_KEY": "test-secret",
+        },
+    ):
         yield
 
 
@@ -58,9 +62,7 @@ class TestAWSSecretsManagerBackend:
 
     async def test_get_secret_unknown_key_raises(self, mock_boto3):
         backend = _make_backend()
-        backend._client.get_secret_value.side_effect = (
-            backend._client.exceptions.ResourceNotFoundException()
-        )
+        backend._client.get_secret_value.side_effect = backend._client.exceptions.ResourceNotFoundException()
 
         with pytest.raises(KeyError):
             await backend.get_secret("unknown-key")
@@ -74,14 +76,13 @@ class TestAWSSecretsManagerBackend:
 
     async def test_set_secret_updates_existing(self, mock_boto3):
         backend = _make_backend()
-        backend._client.create_secret.side_effect = (
-            backend._client.exceptions.ResourceExistsException()
-        )
+        backend._client.create_secret.side_effect = backend._client.exceptions.ResourceExistsException()
 
         await backend.set_secret("my-key", "my-value")
 
         backend._client.update_secret.assert_called_once_with(
-            SecretId="my-key", SecretString="my-value",
+            SecretId="my-key",
+            SecretString="my-value",
         )
 
     async def test_delete_secret_removes_from_aws(self, mock_boto3):
@@ -93,9 +94,7 @@ class TestAWSSecretsManagerBackend:
 
     async def test_delete_secret_noop_when_missing(self, mock_boto3):
         backend = _make_backend()
-        backend._client.delete_secret.side_effect = (
-            backend._client.exceptions.ResourceNotFoundException()
-        )
+        backend._client.delete_secret.side_effect = backend._client.exceptions.ResourceNotFoundException()
 
         # Should not raise despite the underlying AWS exception
         await backend.delete_secret("missing-key")

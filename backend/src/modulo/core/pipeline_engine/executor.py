@@ -47,6 +47,7 @@ from modulo.core.pipeline_engine.decorator import (
 from modulo.core.pipeline_engine.event_broker import RunEventBroker, get_registry
 from modulo.core.pipeline_engine.graph_cache import build_graph_from_json, get_or_compile
 from modulo.core.pipeline_engine.modulo_saver import ModuloPostgresSaver
+from modulo.core.trigger_engine.agent_signal import fire_agent_signal
 from modulo.db.crud.run import (
     count_active_runs_for_pipeline,
     get_run,
@@ -453,6 +454,7 @@ class PipelineExecutor:
         error_code: str | None = None
         error_detail: str | None = None
         node_token_usage: dict[str, Any] | None = None
+        completed_node_outputs: dict[str, Any] = {}
         broker = get_registry().get_or_create(run_id)
         set_cancellation_check(_check_db_cancellation)
         try:
@@ -481,11 +483,13 @@ class PipelineExecutor:
                 ) as saver:
                     compiled.checkpointer = saver
                     final_status, error_code, error_detail, node_token_usage = await self._stream_graph(
-                        compiled, initial_state, config, node_ids, broker, run_id
+                        compiled, initial_state, config, node_ids, broker, run_id,
+                        completed_node_outputs=completed_node_outputs,
                     )
             else:
                 final_status, error_code, error_detail, node_token_usage = await self._stream_graph(
-                    compiled, initial_state, config, node_ids, broker, run_id
+                    compiled, initial_state, config, node_ids, broker, run_id,
+                    completed_node_outputs=completed_node_outputs,
                 )
         except Exception as exc:
             _log.exception("pipeline.execution_error", extra={"run_id": str(run_id)})
@@ -515,6 +519,28 @@ class PipelineExecutor:
                                 },
                             )
                             break
+
+            # Fire agent_signal triggers for each completed node.
+            if final_status == "complete" and completed_node_outputs:
+                async with self._session_factory() as session:
+                    async with session.begin():
+                        await set_rls_org(session, org_id)
+                        for node_id, node_output in completed_node_outputs.items():
+                            signal_results = await fire_agent_signal(
+                                session,
+                                org_id=org_id,
+                                source_run_id=run_id,
+                                source_pipeline_id=pipeline_id,
+                                completed_node_id=node_id,
+                                node_output=node_output,
+                            )
+                            for sr in signal_results:
+                                _log.info(
+                                    "agent_signal.%s trigger=%s run=%s",
+                                    sr["status"],
+                                    sr.get("trigger_id", "?"),
+                                    sr.get("run_id", "?"),
+                                )
 
         # Compute aggregate token/cost data from per-node usage.
         total_tokens: int | None = None
@@ -641,8 +667,12 @@ class PipelineExecutor:
         node_ids: set[str],
         broker: RunEventBroker,
         run_id: uuid.UUID,
+        completed_node_outputs: dict[str, Any] | None = None,
     ) -> tuple[str, str | None, str | None, dict[str, Any] | None]:
         """Stream graph execution, mapping events to broker publishes.
+
+        If *completed_node_outputs* is provided (a mutable dict), it will be
+        populated with ``{node_id: output_data}`` for each completed node.
 
         Returns (final_status, error_code, error_detail, node_token_usage).
         """
@@ -655,6 +685,15 @@ class PipelineExecutor:
                     broker.publish(event_type, payload)
 
                 event_kind = lg_event.get("event", "")
+                # Capture node output for agent_signal trigger firing.
+                if event_kind == "on_chain_end":
+                    name = lg_event.get("name", "")
+                    if name in node_ids and completed_node_outputs is not None:
+                        data = lg_event.get("data", {})
+                        output = data.get("output") if isinstance(data, dict) else None
+                        if output is not None:
+                            completed_node_outputs[name] = output
+
                 if event_kind in ("on_chat_model_end", "on_llm_end"):
                     metadata = lg_event.get("metadata") or {}
                     node_name = metadata.get("langgraph_node")

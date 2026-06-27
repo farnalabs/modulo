@@ -55,6 +55,7 @@ def connector_write(filename: str, content: str, request):
 @when(parsers.parse('the connector tries to read "{path}"'))
 def connector_read_path(path: str, request):
     from modulo.connectors.filesystem import PathTraversalError
+
     try:
         raise PathTraversalError("Path traversal blocked")
     except PathTraversalError:
@@ -75,11 +76,7 @@ def connector_read_from_branch(filename: str, branch: str, request):
     request.node._connector_result = mock_connector
 
 
-@when(
-    parsers.parse(
-        'the connector creates an issue with title "{title}" and body "{body}"'
-    )
-)
+@when(parsers.parse('the connector creates an issue with title "{title}" and body "{body}"'))
 def connector_create_issue(title: str, body: str, request):
     mock_connector = MagicMock()
     mock_connector.create_issue.return_value = {"id": 1, "title": title}
@@ -131,9 +128,10 @@ def pr_exists(num: int, request):
     request.node._pr_number = num
 
 
-@when(parsers.parse('I GET /api/connectors/{connector_id}/health'))
+@when(parsers.parse("I GET /api/connectors/{connector_id}/health"))
 def get_connector_health(connector_id, client, request):
     from modulo.connectors.base import HealthResult
+
     health = HealthResult(
         ok=getattr(request.node, "_connector_healthy", True),
         detail="healthy" if getattr(request.node, "_connector_healthy", True) else "Connection failed",
@@ -178,11 +176,7 @@ def no_connector(conn_id: str, request):
     request.node._missing_connector = conn_id
 
 
-@when(
-    parsers.parse(
-        'I GET /api/connectors/{connector_id}/health'
-    )
-)
+@when(parsers.parse("I GET /api/connectors/{connector_id}/health"))
 def get_connector_health_missing(connector_id, client, request):
     resp = client.get(f"/api/connectors/{connector_id}/health")
     request.node._resp = resp
@@ -194,20 +188,12 @@ def org_has_connector(org: str, name: str, request):
     request.node._connector_org = org
 
 
-@given(
-    parsers.parse(
-        'the connector reads "README.md" from branch "main"'
-    )
-)
+@given(parsers.parse('the connector reads "README.md" from branch "main"'))
 def connector_main_readme(request):
     pass
 
 
-@given(
-    parsers.parse(
-        'the operation returns a "not_found" error'
-    )
-)
+@given(parsers.parse('the operation returns a "not_found" error'))
 def operation_not_found(request):
     pass
 

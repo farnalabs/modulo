@@ -193,9 +193,7 @@ def test_list_deliveries_status_filter(client: TestClient) -> None:
             yield session
 
         client.app.dependency_overrides[get_db_session] = override_session
-        resp = client.get(
-            f"/api/v1/admin/notifications/{_WEBHOOK_ID}/deliveries?status=failed"
-        )
+        resp = client.get(f"/api/v1/admin/notifications/{_WEBHOOK_ID}/deliveries?status=failed")
         client.app.dependency_overrides[get_db_session] = app.dependency_overrides[get_db_session]
 
     assert resp.status_code == 200
@@ -278,9 +276,7 @@ def test_list_all_deliveries_date_filter(client: TestClient) -> None:
         client.app.dependency_overrides[get_db_session] = override_session
         from_date = urllib.parse.quote((datetime.now(UTC) - timedelta(days=7)).isoformat())
         to_date = urllib.parse.quote(datetime.now(UTC).isoformat())
-        resp = client.get(
-            f"/api/v1/admin/notifications/deliveries?from={from_date}&to={to_date}"
-        )
+        resp = client.get(f"/api/v1/admin/notifications/deliveries?from={from_date}&to={to_date}")
         client.app.dependency_overrides[get_db_session] = app.dependency_overrides[get_db_session]
 
     assert resp.status_code == 200

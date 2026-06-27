@@ -23,8 +23,7 @@ async def _create_org(db_engine: AsyncEngine, slug: str) -> uuid.UUID:
         async with conn.begin():
             await conn.execute(
                 text(
-                    "INSERT INTO organisations (id, name, slug, settings_json) "
-                    "VALUES (:id, :name, :slug, '{}'::json)"
+                    "INSERT INTO organisations (id, name, slug, settings_json) VALUES (:id, :name, :slug, '{}'::json)"
                 ),
                 {
                     "id": str(org_id),
@@ -35,9 +34,7 @@ async def _create_org(db_engine: AsyncEngine, slug: str) -> uuid.UUID:
     return org_id
 
 
-async def _create_user(
-    db_engine: AsyncEngine, org_id: uuid.UUID, email: str
-) -> uuid.UUID:
+async def _create_user(db_engine: AsyncEngine, org_id: uuid.UUID, email: str) -> uuid.UUID:
     user_id = uuid.uuid4()
     async with db_engine.connect() as conn:
         async with conn.begin():
@@ -135,15 +132,11 @@ async def test_team_name_unique_per_org(db_engine: AsyncEngine) -> None:
             {"oid": str(org)},
         )
         with pytest.raises(DBAPIError):
-            await create_team(
-                session, org_id=org, name="Unique Name", created_by=user
-            )
+            await create_team(session, org_id=org, name="Unique Name", created_by=user)
             await session.flush()
 
     # Same name in a different org must succeed
-    other_org = await _create_org(
-        db_engine, f"unique-other-{uuid.uuid4().hex[:8]}"
-    )
+    other_org = await _create_org(db_engine, f"unique-other-{uuid.uuid4().hex[:8]}")
     other_user = await _create_user(db_engine, other_org, "other@test.com")
     factory = async_sessionmaker(db_engine, expire_on_commit=False)
     async with factory() as session:
@@ -184,13 +177,9 @@ async def test_memberships_isolated_between_orgs(db_engine: AsyncEngine) -> None
             text("SELECT set_config('app.organisation_id', :oid, true)"),
             {"oid": str(org_a)},
         )
-        team_a = await create_team(
-            session, org_id=org_a, name="Mem Team A", created_by=user_a1
-        )
+        team_a = await create_team(session, org_id=org_a, name="Mem Team A", created_by=user_a1)
         await session.flush()
-        await add_team_member(
-            session, org_id=org_a, team_id=team_a.id, user_id=user_a2, role="member"
-        )
+        await add_team_member(session, org_id=org_a, team_id=team_a.id, user_id=user_a2, role="member")
         await session.flush()
 
     async with factory() as session:
@@ -198,9 +187,7 @@ async def test_memberships_isolated_between_orgs(db_engine: AsyncEngine) -> None
             text("SELECT set_config('app.organisation_id', :oid, true)"),
             {"oid": str(org_b)},
         )
-        team_b = await create_team(
-            session, org_id=org_b, name="Mem Team B", created_by=user_b
-        )
+        team_b = await create_team(session, org_id=org_b, name="Mem Team B", created_by=user_b)
         await session.flush()
 
     async with factory() as session:
@@ -208,9 +195,7 @@ async def test_memberships_isolated_between_orgs(db_engine: AsyncEngine) -> None
             text("SELECT set_config('app.organisation_id', :oid, true)"),
             {"oid": str(org_a)},
         )
-        members_a = await list_team_members(
-            session, team_id=team_a.id, page=1, page_size=50
-        )
+        members_a = await list_team_members(session, team_id=team_a.id, page=1, page_size=50)
         assert len(members_a.items) == 1
 
     async with factory() as session:
@@ -218,9 +203,7 @@ async def test_memberships_isolated_between_orgs(db_engine: AsyncEngine) -> None
             text("SELECT set_config('app.organisation_id', :oid, true)"),
             {"oid": str(org_b)},
         )
-        members_b = await list_team_members(
-            session, team_id=team_b.id, page=1, page_size=50
-        )
+        members_b = await list_team_members(session, team_id=team_b.id, page=1, page_size=50)
         assert len(members_b.items) == 0
 
 
@@ -239,13 +222,9 @@ async def test_membership_unique_per_team_user(db_engine: AsyncEngine) -> None:
             text("SELECT set_config('app.organisation_id', :oid, true)"),
             {"oid": str(org)},
         )
-        team = await create_team(
-            session, org_id=org, name="Dup Test Team", created_by=user
-        )
+        team = await create_team(session, org_id=org, name="Dup Test Team", created_by=user)
         await session.flush()
-        await add_team_member(
-            session, org_id=org, team_id=team.id, user_id=user, role="member"
-        )
+        await add_team_member(session, org_id=org, team_id=team.id, user_id=user, role="member")
         await session.flush()
 
     async with factory() as session:
@@ -254,9 +233,7 @@ async def test_membership_unique_per_team_user(db_engine: AsyncEngine) -> None:
             {"oid": str(org)},
         )
         with pytest.raises(DBAPIError):
-            await add_team_member(
-                session, org_id=org, team_id=team.id, user_id=user, role="admin"
-            )
+            await add_team_member(session, org_id=org, team_id=team.id, user_id=user, role="admin")
             await session.flush()
 
 
@@ -303,9 +280,7 @@ async def test_crud_team_round_trip(db_engine: AsyncEngine) -> None:
         listed = await list_teams(session, org, page=1, page_size=50)
         assert any(t.id == created.id for t in listed.items)
 
-        updated = await update_team(
-            session, created.id, {"name": "Updated Team", "description": "Updated"}
-        )
+        updated = await update_team(session, created.id, {"name": "Updated Team", "description": "Updated"})
         assert updated is not None
         assert updated.name == "Updated Team"
 
@@ -339,14 +314,10 @@ async def test_membership_round_trip(db_engine: AsyncEngine) -> None:
             text("SELECT set_config('app.organisation_id', :oid, true)"),
             {"oid": str(org)},
         )
-        team = await create_team(
-            session, org_id=org, name="Mem CRUD Team", created_by=user_a
-        )
+        team = await create_team(session, org_id=org, name="Mem CRUD Team", created_by=user_a)
         await session.flush()
 
-        membership = await add_team_member(
-            session, org_id=org, team_id=team.id, user_id=user_b, role="member"
-        )
+        membership = await add_team_member(session, org_id=org, team_id=team.id, user_id=user_b, role="member")
         await session.flush()
         assert membership.team_id == team.id
         assert membership.user_id == user_b
@@ -355,15 +326,11 @@ async def test_membership_round_trip(db_engine: AsyncEngine) -> None:
         fetched = await get_membership(session, membership.id)
         assert fetched is not None
 
-        by_team_user = await get_membership_by_team_and_user(
-            session, team.id, user_b
-        )
+        by_team_user = await get_membership_by_team_and_user(session, team.id, user_b)
         assert by_team_user is not None
         assert by_team_user.id == membership.id
 
-        members = await list_team_members(
-            session, team_id=team.id, page=1, page_size=50
-        )
+        members = await list_team_members(session, team_id=team.id, page=1, page_size=50)
         assert len(members.items) == 1
 
         updated = await update_member_role(session, membership.id, "admin")

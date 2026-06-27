@@ -52,9 +52,7 @@ def client() -> Generator[TestClient, None, None]:
     app.dependency_overrides[get_settings] = _make_settings
     app.dependency_overrides[get_db_session] = override_session
     app.dependency_overrides[_get_engine] = lambda: MagicMock()
-    app.dependency_overrides[get_scim_principal] = lambda: ScimPrincipal(
-        organisation_id=_ORG_ID
-    )
+    app.dependency_overrides[get_scim_principal] = lambda: ScimPrincipal(organisation_id=_ORG_ID)
     yield TestClient(app)
     app.dependency_overrides.clear()
 
@@ -184,9 +182,7 @@ class TestAuthEdgeCases:
 
     def test_no_org_in_db_returns_500(self) -> None:
         mock_session = _make_mock_session()
-        mock_session.execute = AsyncMock(
-            return_value=AsyncMock(scalar_one_or_none=MagicMock(return_value=None))
-        )
+        mock_session.execute = AsyncMock(return_value=AsyncMock(scalar_one_or_none=MagicMock(return_value=None)))
 
         async def override_session() -> AsyncGenerator[AsyncMock, None]:
             yield mock_session
@@ -318,9 +314,7 @@ class TestPaginationEdgeCases:
 
 
 class TestInputValidation:
-    def test_create_user_missing_username_returns_422(
-        self, client: TestClient
-    ) -> None:
+    def test_create_user_missing_username_returns_422(self, client: TestClient) -> None:
         body = {"schemas": ["urn:ietf:params:scim:schemas:core:2.0:User"]}
         resp = client.post(
             "/scim/v2/Users",
@@ -329,9 +323,7 @@ class TestInputValidation:
         )
         assert resp.status_code == 422
 
-    def test_create_user_invalid_schemas_returns_422(
-        self, client: TestClient
-    ) -> None:
+    def test_create_user_invalid_schemas_returns_422(self, client: TestClient) -> None:
         body = {**_USER_CREATE_BODY, "schemas": ["urn:ietf:params:scim:schemas:core:2.0:Group"]}
         with (
             patch("modulo.db.crud.user.get_user_by_email", return_value=None),
@@ -349,9 +341,7 @@ class TestInputValidation:
         # FastAPI does not validate schemas content; it just accepts
         assert resp.status_code == 201
 
-    def test_create_group_missing_displayname_returns_422(
-        self, client: TestClient
-    ) -> None:
+    def test_create_group_missing_displayname_returns_422(self, client: TestClient) -> None:
         body = {"schemas": ["urn:ietf:params:scim:schemas:core:2.0:Group"]}
         resp = client.post(
             "/scim/v2/Groups",
@@ -360,9 +350,7 @@ class TestInputValidation:
         )
         assert resp.status_code == 422
 
-    def test_create_group_invalid_member_ref_is_skipped(
-        self, client: TestClient
-    ) -> None:
+    def test_create_group_invalid_member_ref_is_skipped(self, client: TestClient) -> None:
         body = {**_GROUP_CREATE_BODY, "members": [{"value": "not-a-uuid", "type": "User"}]}
         with (
             patch("modulo.db.crud.team.get_team_by_name", return_value=None),
@@ -546,9 +534,7 @@ class TestPatchEdgeCases:
             )
         assert resp.status_code == 200
 
-    def test_patch_group_unsupported_op_is_ignored(
-        self, client: TestClient
-    ) -> None:
+    def test_patch_group_unsupported_op_is_ignored(self, client: TestClient) -> None:
         mock_team = MagicMock()
         mock_team.id = _TEAM_ID
         mock_team.organisation_id = _ORG_ID
@@ -698,9 +684,7 @@ class TestServiceProviderConfig:
         )
         assert resp.status_code == 200
         data = resp.json()
-        assert data["schemas"] == [
-            "urn:ietf:params:scim:schemas:core:2.0:ServiceProviderConfig"
-        ]
+        assert data["schemas"] == ["urn:ietf:params:scim:schemas:core:2.0:ServiceProviderConfig"]
         assert data["patch"]["supported"] is True
 
 
@@ -1174,9 +1158,7 @@ class TestLicenseGate:
         app.dependency_overrides[get_settings] = _settings_no_license
         app.dependency_overrides[get_db_session] = lambda: _make_mock_session()
         app.dependency_overrides[_get_engine] = lambda: MagicMock()
-        app.dependency_overrides[get_scim_principal] = lambda: ScimPrincipal(
-            organisation_id=_ORG_ID
-        )
+        app.dependency_overrides[get_scim_principal] = lambda: ScimPrincipal(organisation_id=_ORG_ID)
         resp = TestClient(app).get(
             "/scim/v2/Users",
             headers={"Authorization": f"Bearer {_SCIM_TOKEN}"},

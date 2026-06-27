@@ -1337,9 +1337,7 @@ class RegressionAlertsResponse(BaseModel):
 @router.get("/evals/regressions", response_model=RegressionAlertsResponse)
 async def eval_regressions(
     days: int = Query(default=7, ge=1, le=90, description="Lookback period in days"),
-    threshold: float = Query(
-        default=0.15, ge=0.0, le=1.0, description="Minimum drop fraction to trigger an alert"
-    ),
+    threshold: float = Query(default=0.15, ge=0.0, le=1.0, description="Minimum drop fraction to trigger an alert"),
     current_user: AuthenticatedPrincipal = Depends(get_current_user),
     session: AsyncSession = Depends(get_db_session),
 ) -> RegressionAlertsResponse:
@@ -1559,9 +1557,7 @@ async def admin_create_publisher(
                 detail="A publisher with this name already exists",
             )
 
-        existing_key = await get_publisher_by_key(
-            session, current_user.organisation_id, body.public_key_hex
-        )
+        existing_key = await get_publisher_by_key(session, current_user.organisation_id, body.public_key_hex)
         if existing_key is not None:
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
@@ -1628,9 +1624,7 @@ async def admin_update_publisher(
         if "public_key_hex" in updates:
             key_val = updates["public_key_hex"]
             assert isinstance(key_val, str)
-            existing_key = await get_publisher_by_key(
-                session, current_user.organisation_id, key_val
-            )
+            existing_key = await get_publisher_by_key(session, current_user.organisation_id, key_val)
             if existing_key is not None and existing_key.id != publisher_id:
                 raise HTTPException(
                     status_code=status.HTTP_409_CONFLICT,

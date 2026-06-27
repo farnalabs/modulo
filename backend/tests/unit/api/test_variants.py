@@ -54,6 +54,7 @@ class TestVariantToResponse:
         group.max_concurrent_runs = 5
         group.degraded_evals = False
         from datetime import datetime
+
         group.created_at = datetime.now(UTC)
         group.updated_at = datetime.now(UTC)
 
@@ -84,6 +85,7 @@ class TestCreateGroup:
             mock_group.max_concurrent_runs = 5
             mock_group.degraded_evals = False
             from datetime import datetime
+
             mock_group.created_at = datetime.now(UTC)
             mock_group.updated_at = datetime.now(UTC)
             mock_create.return_value = mock_group
@@ -126,6 +128,7 @@ class TestGetGroup:
             mock_group.max_concurrent_runs = 5
             mock_group.degraded_evals = False
             from datetime import datetime
+
             mock_group.created_at = datetime.now(UTC)
             mock_group.updated_at = datetime.now(UTC)
             mock_get.return_value = mock_group
@@ -315,6 +318,7 @@ class TestUpdateGroup:
             mock_group.max_concurrent_runs = 5
             mock_group.degraded_evals = False
             from datetime import datetime
+
             mock_group.created_at = datetime.now(UTC)
             mock_group.updated_at = datetime.now(UTC)
             mock_update.return_value = mock_group
@@ -377,6 +381,7 @@ class TestListGroups:
             mock_group.max_concurrent_runs = 5
             mock_group.degraded_evals = False
             from datetime import datetime
+
             mock_group.created_at = datetime.now(UTC)
             mock_group.updated_at = datetime.now(UTC)
             mock_list.return_value = ([mock_group], 1)

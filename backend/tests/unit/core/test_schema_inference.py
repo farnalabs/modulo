@@ -27,6 +27,7 @@ class _FakeBackend:
         if self._fail:
             raise RuntimeError("LLM unavailable")
         from langchain_core.messages import AIMessage
+
         return AIMessage(content=self._response or "{}")
 
     def stream(self, messages: list, **kwargs: object) -> object:
@@ -60,7 +61,7 @@ class TestParseSchemaFromResponse:
         assert "id" in result["properties"]
 
     def test_strips_markdown_fences(self) -> None:
-        raw = "```json\n{\"type\": \"object\", \"properties\": {}}\n```"
+        raw = '```json\n{"type": "object", "properties": {}}\n```'
         result = _parse_schema_from_response(raw)
         assert result["type"] == "object"
 
@@ -70,17 +71,17 @@ class TestParseSchemaFromResponse:
         assert result["properties"] == {}
 
     def test_strips_markdown_without_lang_hint(self) -> None:
-        raw = "```\n{\"type\": \"object\"}\n```"
+        raw = '```\n{"type": "object"}\n```'
         result = _parse_schema_from_response(raw)
         assert result["type"] == "object"
 
     def test_strips_leading_trailing_whitespace(self) -> None:
-        raw = "  \n  {\"type\": \"object\"}  \n  "
+        raw = '  \n  {"type": "object"}  \n  '
         result = _parse_schema_from_response(raw)
         assert result["type"] == "object"
 
     def test_strips_markdown_surrounded_by_whitespace(self) -> None:
-        raw = "\n\n```\n{\"type\": \"object\"}\n```\n\n"
+        raw = '\n\n```\n{"type": "object"}\n```\n\n'
         result = _parse_schema_from_response(raw)
         assert result["type"] == "object"
 
@@ -107,9 +108,7 @@ class TestSchemaInferenceService:
 
     async def test_infer_handles_markdown_wrapped_response(self) -> None:
         schema = {"type": "object", "properties": {}}
-        backend = _FakeBackend(
-            response=f"```json\n{json.dumps(schema)}\n```"
-        )
+        backend = _FakeBackend(response=f"```json\n{json.dumps(schema)}\n```")
         service = SchemaInferenceService(backend)
         result = await service.infer([{"a": 1}])
         assert result == schema
@@ -188,6 +187,7 @@ class TestSchemaInferenceService:
 
             async def invoke(self, messages: list, **kwargs: object) -> object:
                 from langchain_core.messages import AIMessage
+
                 return AIMessage(content=["non-string", "content"])
 
             def stream(self, messages: list, **kwargs: object) -> object:

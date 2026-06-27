@@ -293,6 +293,7 @@ def _make_mock_entry_point(
 
         def _fail(*a: object, **kw: object) -> object:
             raise load_side_effect("boom")
+
         loader.load = _fail
     else:
         loader.load = lambda: load_result
@@ -331,7 +332,8 @@ def test_discover_plugins_no_plugins():
 def test_discover_plugins_connector_entry_point():
     registry = PluginRegistry()
     mock_ep = _make_mock_entry_point(
-        "modulo.connectors", "my_demo_connector",
+        "modulo.connectors",
+        "my_demo_connector",
         load_result=_discovery_stub_builder,
     )
     with patch(
@@ -351,7 +353,8 @@ def test_discover_plugins_connector_entry_point():
 def test_discover_plugins_backend_entry_point():
     registry = PluginRegistry()
     mock_ep = _make_mock_entry_point(
-        "modulo.model_backends", "my_demo_backend",
+        "modulo.model_backends",
+        "my_demo_backend",
         load_result=_build_stub_backend,
     )
     with patch(
@@ -368,12 +371,8 @@ def test_discover_plugins_backend_entry_point():
 def test_discover_plugins_both_groups():
     """Discovering from both entry-point groups populates connectors and backends."""
     registry = PluginRegistry()
-    ep1 = _make_mock_entry_point(
-        "modulo.connectors", "c1", dist_name="pkg-a", load_result=_discovery_stub_builder
-    )
-    ep2 = _make_mock_entry_point(
-        "modulo.model_backends", "b1", dist_name="pkg-b", load_result=_build_stub_backend
-    )
+    ep1 = _make_mock_entry_point("modulo.connectors", "c1", dist_name="pkg-a", load_result=_discovery_stub_builder)
+    ep2 = _make_mock_entry_point("modulo.model_backends", "b1", dist_name="pkg-b", load_result=_build_stub_backend)
     with patch(
         "modulo.core.plugin_registry.importlib.metadata.entry_points",
         side_effect=[[ep1], [ep2]],
@@ -388,12 +387,8 @@ def test_discover_plugins_both_groups():
 def test_discover_plugins_duplicate_plugin_id():
     """When two entry points share the same dist name, the second overwrites the first."""
     registry = PluginRegistry()
-    ep1 = _make_mock_entry_point(
-        "modulo.connectors", "c1", dist_name="pkg-x", load_result=_discovery_stub_builder
-    )
-    ep2 = _make_mock_entry_point(
-        "modulo.model_backends", "b1", dist_name="pkg-x", load_result=_build_stub_backend
-    )
+    ep1 = _make_mock_entry_point("modulo.connectors", "c1", dist_name="pkg-x", load_result=_discovery_stub_builder)
+    ep2 = _make_mock_entry_point("modulo.model_backends", "b1", dist_name="pkg-x", load_result=_build_stub_backend)
     with patch(
         "modulo.core.plugin_registry.importlib.metadata.entry_points",
         side_effect=[[ep1], [ep2]],
@@ -424,7 +419,8 @@ def test_discover_plugins_entry_point_load_failure():
     """If an entry point's load() raises, the plugin is marked unhealthy and skipped."""
     registry = PluginRegistry()
     fail_ep = _make_mock_entry_point(
-        "modulo.connectors", "failing_con",
+        "modulo.connectors",
+        "failing_con",
         dist_name="pkg-broken",
         load_side_effect=ImportError,
     )

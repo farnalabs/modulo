@@ -96,9 +96,7 @@ class TestCreateFeedback:
 
         with (
             patch("modulo.api.routes.feedback.set_rls_org"),
-            patch(
-                "modulo.api.routes.feedback.FeedbackManager.create_feedback_record"
-            ) as mock_create,
+            patch("modulo.api.routes.feedback.FeedbackManager.create_feedback_record") as mock_create,
         ):
             mock_create.return_value = _make_mock_record()
 
@@ -121,9 +119,7 @@ class TestCreateFeedback:
     def test_returns_404_when_run_not_found(self, client: TestClient) -> None:
         with (
             patch("modulo.api.routes.feedback.set_rls_org"),
-            patch(
-                "modulo.api.routes.feedback.FeedbackManager.create_feedback_record"
-            ) as mock_create,
+            patch("modulo.api.routes.feedback.FeedbackManager.create_feedback_record") as mock_create,
         ):
             mock_create.side_effect = HTTPException(status_code=404, detail="Run not found")
             resp = client.post(
@@ -293,9 +289,7 @@ class TestListFeedbackInbox:
 
         with (
             patch("modulo.api.routes.feedback.set_rls_org"),
-            patch(
-                "modulo.api.routes.feedback.FeedbackManager.get_feedback_records_inbox"
-            ) as mock_inbox,
+            patch("modulo.api.routes.feedback.FeedbackManager.get_feedback_records_inbox") as mock_inbox,
         ):
             mock_inbox.return_value = {
                 "items": [mock_record],
@@ -315,9 +309,7 @@ class TestListFeedbackInbox:
     def test_filters_by_type_and_status(self, client: TestClient) -> None:
         with (
             patch("modulo.api.routes.feedback.set_rls_org"),
-            patch(
-                "modulo.api.routes.feedback.FeedbackManager.get_feedback_records_inbox"
-            ) as mock_inbox,
+            patch("modulo.api.routes.feedback.FeedbackManager.get_feedback_records_inbox") as mock_inbox,
         ):
             mock_inbox.return_value = {
                 "items": [],
@@ -335,9 +327,7 @@ class TestListFeedbackInbox:
     def test_filters_by_date_range(self, client: TestClient) -> None:
         with (
             patch("modulo.api.routes.feedback.set_rls_org"),
-            patch(
-                "modulo.api.routes.feedback.FeedbackManager.get_feedback_records_inbox"
-            ) as mock_inbox,
+            patch("modulo.api.routes.feedback.FeedbackManager.get_feedback_records_inbox") as mock_inbox,
         ):
             mock_inbox.return_value = {
                 "items": [],
@@ -347,9 +337,7 @@ class TestListFeedbackInbox:
                 "page_size": 20,
             }
 
-            resp = client.get(
-                "/api/v1/feedback/inbox?date_from=2025-01-01T00:00:00&date_to=2025-12-31T23:59:59"
-            )
+            resp = client.get("/api/v1/feedback/inbox?date_from=2025-01-01T00:00:00&date_to=2025-12-31T23:59:59")
 
         assert resp.status_code == 200
 
@@ -447,9 +435,7 @@ class TestListEvalProposals:
 
         with (
             patch("modulo.api.routes.feedback.set_rls_org"),
-            patch(
-                "modulo.api.routes.feedback.FeedbackManager.get_eval_proposals"
-            ) as mock_proposals,
+            patch("modulo.api.routes.feedback.FeedbackManager.get_eval_proposals") as mock_proposals,
         ):
             mock_proposals.return_value = {
                 "items": [mock_record],
@@ -468,9 +454,7 @@ class TestListEvalProposals:
     def test_returns_empty_when_no_proposals(self, client: TestClient) -> None:
         with (
             patch("modulo.api.routes.feedback.set_rls_org"),
-            patch(
-                "modulo.api.routes.feedback.FeedbackManager.get_eval_proposals"
-            ) as mock_proposals,
+            patch("modulo.api.routes.feedback.FeedbackManager.get_eval_proposals") as mock_proposals,
         ):
             mock_proposals.return_value = {"items": [], "total": 0, "page": 1, "page_size": 20}
 

@@ -49,6 +49,7 @@ class _FakeBackend(ModelBackendBase):
     def stream(self, messages: list[BaseMessage], **kwargs: Any):  # type: ignore[return]
         async def _gen():
             yield AIMessage(content="ok")
+
         return _gen()
 
 
@@ -205,7 +206,7 @@ async def test_initialise_anthropic():
         credentials_ciphertext=_encrypt({"api_key": "sk-ant-test"}),
     )
     backend = create_secrets_backend(fernet_key=_KEY, backend_name="fernet")
-    with patch.object(backend, 'get_secret', return_value='{"api_key": "sk-ant-test"}'):
+    with patch.object(backend, "get_secret", return_value='{"api_key": "sk-ant-test"}'):
         hub = ModelBackendHub()
         with patch("modulo.model_backends.anthropic.ChatAnthropic"):
             await hub.initialise([mb], secrets_backend=backend)
@@ -220,7 +221,7 @@ async def test_initialise_openai():
         credentials_ciphertext=_encrypt({"api_key": "sk-test"}),
     )
     backend = create_secrets_backend(fernet_key=_KEY, backend_name="fernet")
-    with patch.object(backend, 'get_secret', return_value='{"api_key": "sk-test"}'):
+    with patch.object(backend, "get_secret", return_value='{"api_key": "sk-test"}'):
         hub = ModelBackendHub()
         with patch("modulo.model_backends.openai.ChatOpenAI"):
             await hub.initialise([mb], secrets_backend=backend)
@@ -236,7 +237,7 @@ async def test_initialise_wrong_key_raises():
         credentials_ciphertext=Fernet(other_key.encode()).encrypt(b'{"api_key":"x"}'),
     )
     backend = create_secrets_backend(fernet_key=other_key, backend_name="fernet")
-    with patch.object(backend, 'get_secret', side_effect=KeyError(str(mb.id))):
+    with patch.object(backend, "get_secret", side_effect=KeyError(str(mb.id))):
         hub = ModelBackendHub()
         with pytest.raises(BackendDecryptError) as exc_info:
             await hub.initialise([mb], secrets_backend=backend)
@@ -251,7 +252,7 @@ async def test_initialise_ollama():
         credentials_ciphertext=_encrypt({"api_key": "", "base_url": "http://localhost:11434/v1"}),
     )
     backend = create_secrets_backend(fernet_key=_KEY, backend_name="fernet")
-    with patch.object(backend, 'get_secret', return_value='{"api_key": "", "base_url": "http://localhost:11434/v1"}'):
+    with patch.object(backend, "get_secret", return_value='{"api_key": "", "base_url": "http://localhost:11434/v1"}'):
         hub = ModelBackendHub()
         with patch("modulo.model_backends.ollama.ChatOpenAI"):
             await hub.initialise([mb], secrets_backend=backend)
@@ -266,7 +267,7 @@ async def test_initialise_ollama_defaults_base_url():
         credentials_ciphertext=_encrypt({"api_key": ""}),
     )
     backend = create_secrets_backend(fernet_key=_KEY, backend_name="fernet")
-    with patch.object(backend, 'get_secret', return_value='{"api_key": ""}'):
+    with patch.object(backend, "get_secret", return_value='{"api_key": ""}'):
         hub = ModelBackendHub()
         with patch("modulo.model_backends.ollama.ChatOpenAI"):
             await hub.initialise([mb], secrets_backend=backend)
@@ -281,16 +282,22 @@ async def test_initialise_plugin_fallback_backend():
         def __init__(self, api_key: str = "", model_id: str = "", **kwargs: Any) -> None:
             self._key = api_key
             self._mid = model_id
+
         @property
         def backend_id(self) -> str:
             return f"plugin/{self._mid}"
+
         async def invoke(self, messages: list, **kwargs: Any) -> Any:
             from langchain_core.messages import AIMessage
+
             return AIMessage(content="plugin reply")
+
         def stream(self, messages: list, **kwargs: Any) -> Any:
             async def _gen():
                 from langchain_core.messages import AIMessageChunk
+
                 yield AIMessageChunk(content="plugin ")
+
             return _gen()
 
     def _plugin_builder(api_key: str, model_id: str, **kwargs: Any) -> ModelBackendBase:
@@ -311,7 +318,7 @@ async def test_initialise_plugin_fallback_backend():
     )
     backend = create_secrets_backend(fernet_key=_KEY, backend_name="fernet")
     with (
-        patch.object(backend, 'get_secret', return_value='{"api_key": "ck-test"}'),
+        patch.object(backend, "get_secret", return_value='{"api_key": "ck-test"}'),
         patch("modulo.core.model_backend_hub.get_plugin_registry", return_value=reg),
     ):
         hub = ModelBackendHub()
@@ -331,7 +338,7 @@ async def test_initialise_plugin_fallback_not_registered_raises():
         credentials_ciphertext=_encrypt({"api_key": "x"}),
     )
     backend = create_secrets_backend(fernet_key=_KEY, backend_name="fernet")
-    with patch.object(backend, 'get_secret', return_value='{"api_key": "x"}'):
+    with patch.object(backend, "get_secret", return_value='{"api_key": "x"}'):
         hub = ModelBackendHub()
         with pytest.raises(ValueError, match="Unknown model backend provider"):
             await hub.initialise([mb], secrets_backend=backend)
@@ -345,7 +352,7 @@ async def test_initialise_unknown_provider_raises():
         credentials_ciphertext=_encrypt({"api_key": "none"}),
     )
     backend = create_secrets_backend(fernet_key=_KEY, backend_name="fernet")
-    with patch.object(backend, 'get_secret', return_value='{"api_key": "none"}'):
+    with patch.object(backend, "get_secret", return_value='{"api_key": "none"}'):
         hub = ModelBackendHub()
         with pytest.raises(ValueError, match="Unknown model backend provider"):
             await hub.initialise([mb], secrets_backend=backend)
@@ -359,7 +366,7 @@ async def test_initialise_missing_api_key_raises():
         credentials_ciphertext=_encrypt({}),  # no api_key field
     )
     backend = create_secrets_backend(fernet_key=_KEY, backend_name="fernet")
-    with patch.object(backend, 'get_secret', return_value="{}"):
+    with patch.object(backend, "get_secret", return_value="{}"):
         hub = ModelBackendHub()
         with pytest.raises(ValueError, match="api_key"):
             await hub.initialise([mb], secrets_backend=backend)

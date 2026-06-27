@@ -38,11 +38,10 @@ def sample_archive(tmp_dir):
     os.makedirs(content_dir, exist_ok=True)
     Path(os.path.join(content_dir, "modulo.pgdump")).write_text("fake-dump-content")
     Path(os.path.join(content_dir, "secrets.env")).write_text("FERNET_KEY=test\n")
-    Path(os.path.join(content_dir, "manifest.json")).write_text(
-        '{"tool": "modulo-backup", "version": "1"}'
-    )
+    Path(os.path.join(content_dir, "manifest.json")).write_text('{"tool": "modulo-backup", "version": "1"}')
     # write checksums
     from scripts.backup import hash_file as bhash
+
     with open(os.path.join(content_dir, "checksums.sha256"), "w") as f:
         for name in ("modulo.pgdump", "secrets.env", "manifest.json"):
             h = bhash(os.path.join(content_dir, name))
@@ -79,6 +78,7 @@ def test_decrypt_archive_missing_input(tmp_dir, monkeypatch):
     monkeypatch.delenv("DATABASE_URL", raising=False)
     from scripts.restore import decrypt_archive as da
     from scripts.restore import resolve_passphrase as rp
+
     passphrase = rp(None)
     with pytest.raises(SystemExit):
         da("/nonexistent", passphrase, os.path.join(tmp_dir, "out.tar.gz"))

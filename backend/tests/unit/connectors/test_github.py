@@ -17,12 +17,8 @@ def connector():
 
 @respx.mock
 async def test_health_check_ok(connector):
-    respx.get("https://api.github.com/user").mock(
-        return_value=httpx.Response(200, json={"login": "octocat"})
-    )
-    respx.get("https://api.github.com/user/repos").mock(
-        return_value=httpx.Response(200, json=[{"id": 1}])
-    )
+    respx.get("https://api.github.com/user").mock(return_value=httpx.Response(200, json={"login": "octocat"}))
+    respx.get("https://api.github.com/user/repos").mock(return_value=httpx.Response(200, json=[{"id": 1}]))
     result = await connector.health_check()
     assert result.ok is True
     assert result.detail == "octocat"
@@ -30,12 +26,8 @@ async def test_health_check_ok(connector):
 
 @respx.mock
 async def test_health_check_missing_scopes(connector):
-    respx.get("https://api.github.com/user").mock(
-        return_value=httpx.Response(200, json={"login": "octocat"})
-    )
-    respx.get("https://api.github.com/user/repos").mock(
-        return_value=httpx.Response(403, text="forbidden")
-    )
+    respx.get("https://api.github.com/user").mock(return_value=httpx.Response(200, json={"login": "octocat"}))
+    respx.get("https://api.github.com/user/repos").mock(return_value=httpx.Response(403, text="forbidden"))
     result = await connector.health_check()
     assert result.ok is False
     assert "Missing scopes" in result.detail
@@ -43,9 +35,7 @@ async def test_health_check_missing_scopes(connector):
 
 @respx.mock
 async def test_health_check_fail(connector):
-    respx.get("https://api.github.com/user").mock(
-        return_value=httpx.Response(401, text="Unauthorized")
-    )
+    respx.get("https://api.github.com/user").mock(return_value=httpx.Response(401, text="Unauthorized"))
     result = await connector.health_check()
     assert result.ok is False
     assert "401" in result.detail
@@ -54,9 +44,7 @@ async def test_health_check_fail(connector):
 @respx.mock
 async def test_query_repos(connector):
     repos = [{"id": 1, "name": "repo-a"}, {"id": 2, "name": "repo-b"}]
-    respx.get("https://api.github.com/user/repos").mock(
-        return_value=httpx.Response(200, json=repos)
-    )
+    respx.get("https://api.github.com/user/repos").mock(return_value=httpx.Response(200, json=repos))
     result = await connector.query(ConnectorQuery(resource="repos"))
     assert len(result.records) == 2
     assert result.records[0]["name"] == "repo-a"
@@ -80,12 +68,8 @@ async def test_query_file(connector):
 @respx.mock
 async def test_query_pulls(connector):
     prs = [{"number": 42, "title": "Fix bug"}]
-    respx.get("https://api.github.com/repos/owner/repo/pulls").mock(
-        return_value=httpx.Response(200, json=prs)
-    )
-    result = await connector.query(
-        ConnectorQuery(resource="pulls", filters={"repo": "owner/repo"})
-    )
+    respx.get("https://api.github.com/repos/owner/repo/pulls").mock(return_value=httpx.Response(200, json=prs))
+    result = await connector.query(ConnectorQuery(resource="pulls", filters={"repo": "owner/repo"}))
     assert result.records[0]["number"] == 42
 
 

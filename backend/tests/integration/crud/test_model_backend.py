@@ -31,9 +31,7 @@ def _mb_kwargs(test_org: uuid.UUID, test_user: uuid.UUID, *, suffix: str = "") -
     }
 
 
-async def test_create_model_backend(
-    rls_session: AsyncSession, test_org: uuid.UUID, test_user: uuid.UUID
-) -> None:
+async def test_create_model_backend(rls_session: AsyncSession, test_org: uuid.UUID, test_user: uuid.UUID) -> None:
     mb = await create_model_backend(rls_session, **_mb_kwargs(test_org, test_user))
     assert mb.id is not None
     assert mb.provider == "anthropic"
@@ -43,9 +41,7 @@ async def test_create_model_backend(
 async def test_get_model_backend_returns_existing(
     rls_session: AsyncSession, test_org: uuid.UUID, test_user: uuid.UUID
 ) -> None:
-    mb = await create_model_backend(
-        rls_session, **_mb_kwargs(test_org, test_user, suffix="-fetch")
-    )
+    mb = await create_model_backend(rls_session, **_mb_kwargs(test_org, test_user, suffix="-fetch"))
     fetched = await get_model_backend(rls_session, mb.id)
     assert fetched is not None
     assert fetched.id == mb.id
@@ -69,12 +65,8 @@ async def test_list_model_backends_pagination(
     assert page1.page == 1
 
 
-async def test_update_model_backend(
-    rls_session: AsyncSession, test_org: uuid.UUID, test_user: uuid.UUID
-) -> None:
-    mb = await create_model_backend(
-        rls_session, **_mb_kwargs(test_org, test_user, suffix="-upd")
-    )
+async def test_update_model_backend(rls_session: AsyncSession, test_org: uuid.UUID, test_user: uuid.UUID) -> None:
+    mb = await create_model_backend(rls_session, **_mb_kwargs(test_org, test_user, suffix="-upd"))
     updated = await update_model_backend(rls_session, mb.id, {"display_name": "Updated Name"})
     assert updated is not None
     assert updated.display_name == "Updated Name"
@@ -84,12 +76,8 @@ async def test_update_model_backend_unknown_returns_none(rls_session: AsyncSessi
     assert await update_model_backend(rls_session, uuid.uuid4(), {"display_name": "x"}) is None
 
 
-async def test_delete_model_backend(
-    rls_session: AsyncSession, test_org: uuid.UUID, test_user: uuid.UUID
-) -> None:
-    mb = await create_model_backend(
-        rls_session, **_mb_kwargs(test_org, test_user, suffix="-del")
-    )
+async def test_delete_model_backend(rls_session: AsyncSession, test_org: uuid.UUID, test_user: uuid.UUID) -> None:
+    mb = await create_model_backend(rls_session, **_mb_kwargs(test_org, test_user, suffix="-del"))
     assert await delete_model_backend(rls_session, mb.id) is True
     assert await get_model_backend(rls_session, mb.id) is None
 
