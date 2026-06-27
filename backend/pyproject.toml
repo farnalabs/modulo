@@ -100,7 +100,7 @@ dev = [
     "pre-commit>=4.6.0",
     "types-PyYAML>=6.0.12",
     "types-passlib>=1.7.7",
-    "pip-audit>=2.7.0",
+    "pip-audit>=2.10.1",
 ]
 
 [tool.hatch.build.targets.wheel]
@@ -196,7 +196,7 @@ dev = [
     "httpx>=0.28.1",
     "import-linter>=2.1",
     "mypy>=2.1.0",
-    "pip-audit>=2.7.0",
+    "pip-audit>=2.10.1",
     "playwright>=1.60.0",
     "pre-commit>=4.6.0",
     "pytest>=9.1.1",
