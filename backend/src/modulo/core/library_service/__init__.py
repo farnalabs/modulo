@@ -516,6 +516,29 @@ async def get_primitive(
     return _COMMUNITY_BY_ID.get(primitive_id)
 
 
+async def get_primitive_by_slug(
+    session: AsyncSession,
+    org_id: uuid.UUID,
+    primitive_type: str,
+    slug: str,
+) -> LibraryPrimitive | None:
+    """Return a primitive visible to org_id by type and slug, or None.
+
+    Checks the org-scoped DB first, then falls back to in-memory community primitives.
+    """
+    async with session.begin():
+        await set_rls_org(session, org_id)
+        stmt = select(LibraryPrimitive).where(
+            LibraryPrimitive.primitive_type == primitive_type,
+            LibraryPrimitive.slug == slug,
+        )
+        result = await session.execute(stmt)
+        item = result.scalar_one_or_none()
+    if item is not None:
+        return item
+    return _COMMUNITY_BY_SLUG.get((primitive_type, slug))
+
+
 async def copy_to_adapt(
     session: AsyncSession,
     org_id: uuid.UUID,
@@ -977,8 +1000,11 @@ _COMMUNITY_PRIMITIVES.extend(
     ]
 )
 
-# Index for O(1) lookup by id
+# Indexes for O(1) community lookup
 _COMMUNITY_BY_ID: dict[uuid.UUID, LibraryPrimitive] = {p.id: p for p in _COMMUNITY_PRIMITIVES}
+_COMMUNITY_BY_SLUG: dict[tuple[str, str], LibraryPrimitive] = {
+    (p.primitive_type, p.slug): p for p in _COMMUNITY_PRIMITIVES
+}
 
 # Fixture contribution flow
 # ---------------------------------------------------------------------------
