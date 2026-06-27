@@ -62,7 +62,7 @@ dependencies = [
     # Task queue (optional alpha)
     "celery[redis]>=5.4.0",
     "redis>=5.0.0",
-    "croniter>=2.0.0",
+    "croniter>=6.2.2",
     "jmespath>=1.0.1",
     "mcp>=1.0.0",
     # Fixes CVE-2025-64439 (RCE via jsonplus) and CVE-2026-27794 (RCE via pickle)
