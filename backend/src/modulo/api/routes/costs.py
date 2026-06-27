@@ -12,7 +12,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from modulo.api.dependencies import get_db_session
+from modulo.api.dependencies import get_db_session, require_feature
 from modulo.auth.dependencies import get_current_user
 from modulo.auth.jwt import AuthenticatedPrincipal
 from modulo.core.cost_controller import get_cost_report
@@ -88,6 +88,7 @@ async def get_costs(
 
 @router.get("/limits", response_model=SpendLimitResponse)
 async def get_spend_limits(
+    _: None = require_feature("admin_spend_limits"),
     current_user: AuthenticatedPrincipal = Depends(get_current_user),
     session: AsyncSession = Depends(get_db_session),
 ) -> SpendLimitResponse:
@@ -118,6 +119,7 @@ async def get_spend_limits(
 @router.put("/limits/org", response_model=dict[str, Any])
 async def set_org_spend_limit(
     body: SetSpendLimitRequest,
+    _: None = require_feature("admin_spend_limits"),
     current_user: AuthenticatedPrincipal = Depends(get_current_user),
     session: AsyncSession = Depends(get_db_session),
 ) -> dict[str, Any]:
@@ -141,6 +143,7 @@ async def set_org_spend_limit(
 async def set_team_spend_limit(
     team_id: uuid.UUID,
     body: SetSpendLimitRequest,
+    _: None = require_feature("admin_spend_limits"),
     current_user: AuthenticatedPrincipal = Depends(get_current_user),
     session: AsyncSession = Depends(get_db_session),
 ) -> dict[str, Any]:
