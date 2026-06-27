@@ -15,27 +15,46 @@ jobs:
   tag:
     name: Bump version and tag
     runs-on: self-hosted
-    outputs:
-      tag: ${{ steps.semver.outputs.tag }}
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
           fetch-tags: true
 
-      - name: Determine next version
-        id: semver
-        uses: anothrNick/github-tag-action@1.71.0
+      - name: Determine and tag next version
+        shell: pwsh
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          DEFAULT_BUMP: patch
-          WITH_V: true
-          RELEASE_BRANCHES: main
-          INITIAL_VERSION: '0.1.0'
+        run: |
+          $ErrorActionPreference = "Stop"
+          $repo = "$env:GITHUB_REPOSITORY"
 
-      - name: Create GitHub Release
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: ${{ steps.semver.outputs.tag }}
-          generate_release_notes: true
-          make_latest: true
+          # Fetch all tags
+          git fetch --tags origin
+
+          # Get latest tag, default to 0.1.0
+          $latest = git tag --sort=-v:refname | Select-Object -First 1
+          if (-not $latest) { $latest = "v0.1.0" }
+
+          # Bump patch version
+          $parts = $latest.TrimStart("v") -split "\."
+          $newVer = "v{0}.{1}.{2}" -f $parts[0], $parts[1], ([int]$parts[2] + 1)
+          Write-Host "Bumping $latest → $newVer"
+
+          # Tag and push
+          git config user.name "github-actions"
+          git config user.email "actions@github.com"
+          git tag -a $newVer -m "Release $newVer"
+          git push origin $newVer
+
+          # Create release notes from commit log
+          $log = git log "$latest..HEAD" --oneline --no-decorate 2>$null
+          if (-not $log) { $log = "Initial release" }
+
+          $body = @"
+          ## What's Changed
+
+          $log
+          "@
+
+          gh release create $newVer --title "Release $newVer" --notes $body --generate-notes
