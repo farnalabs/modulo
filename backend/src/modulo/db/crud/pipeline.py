@@ -12,6 +12,7 @@ from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.db.crud.base import PageResult, apply_updates
+from modulo.db.crud.pagination import CursorPaginator
 from modulo.db.models.pipeline import Pipeline
 from modulo.db.models.pipeline_edge import PipelineEdge
 
@@ -59,7 +60,27 @@ async def list_pipelines(
     *,
     page: int = 1,
     page_size: int = 20,
+    cursor: str | None = None,
 ) -> PageResult[Pipeline]:
+    if cursor is not None:
+        paginator = CursorPaginator()
+        cp = await paginator.paginate(
+            session,
+            select(Pipeline),
+            cursor=cursor,
+            limit=page_size,
+            model=Pipeline,
+            compute_total=True,
+        )
+        return PageResult(
+            items=cp.items,
+            total=cp.total or 0,
+            page=page,
+            page_size=page_size,
+            next_cursor=cp.next_cursor,
+            has_more=cp.has_more,
+        )
+
     offset = (page - 1) * page_size
     total = (await session.execute(select(func.count()).select_from(Pipeline))).scalar_one()
     items = list(

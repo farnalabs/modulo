@@ -99,6 +99,8 @@ class PipelineListResponse(BaseModel):
     total: int
     page: int
     page_size: int
+    next_cursor: str | None = None
+    has_more: bool = False
 
 
 class GraphPosition(BaseModel):
@@ -308,18 +310,21 @@ async def _resolve_graph_references(
 async def list_pipelines_endpoint(
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=20, ge=1, le=100),
+    cursor: str | None = Query(default=None),
     session: AsyncSession = Depends(get_db_session),
     principal: AuthenticatedPrincipal = Depends(get_current_user),
 ) -> PipelineListResponse:
     async with session.begin():
         await set_rls_org(session, principal.organisation_id)
         await set_rls_user_context(session, principal.user_id, principal.org_role)
-        result = await list_pipelines(session, page=page, page_size=page_size)
+        result = await list_pipelines(session, page=page, page_size=page_size, cursor=cursor)
     return PipelineListResponse(
         items=[PipelineResponse.model_validate(p) for p in result.items],
         total=result.total,
         page=result.page,
         page_size=result.page_size,
+        next_cursor=result.next_cursor,
+        has_more=result.has_more,
     )
 
 
