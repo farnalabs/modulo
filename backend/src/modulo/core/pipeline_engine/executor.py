@@ -44,6 +44,7 @@ from modulo.core.pipeline_engine.decorator import (
     RunCancelledError,
     set_cancellation_check,
 )
+from modulo.core.pipeline_engine.output_filter import OutputRejectedError
 from modulo.core.pipeline_engine.event_broker import RunEventBroker, get_registry
 from modulo.core.pipeline_engine.graph_cache import build_graph_from_json, get_or_compile
 from modulo.core.pipeline_engine.modulo_saver import ModuloPostgresSaver
@@ -723,6 +724,9 @@ class PipelineExecutor:
         except EvalBlockedError as exc:
             broker.publish("run_failed", {"error": "eval_blocked", "detail": str(exc)})
             return "eval_failed", "eval_blocked", str(exc), None
+        except OutputRejectedError as exc:
+            broker.publish("run_failed", {"error": "output_rejected", "detail": str(exc)})
+            return "output_rejected", "output_rejected", str(exc), None
         except RunCancelledError:
             broker.publish("run_cancelled", {})
             return "cancelled", None, None, None
