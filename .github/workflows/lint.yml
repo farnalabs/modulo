@@ -18,7 +18,7 @@ jobs:
           python-version: "3.12.4"
       - name: Install backend deps
         working-directory: backend
-        run: uv pip install -e ".[dev]"
+        run: uv sync --frozen
       - name: Ruff lint
         working-directory: backend
         run: ruff check src/ --exit-zero

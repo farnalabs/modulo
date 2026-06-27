@@ -2,7 +2,6 @@ name: Multi-Backend Tests
 
 on:
   push:
-    branches: [main]
   pull_request:
 
 concurrency:
@@ -10,37 +9,9 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  multi-backend:
-    name: ${{ matrix.backend }}
+  sqlite:
+    name: sqlite
     runs-on: self-hosted
-    strategy:
-      fail-fast: false
-      matrix:
-        backend: [sqlite, mariadb]
-        include:
-          - backend: sqlite
-            database_url: "sqlite+aiosqlite:///./test.db"
-            modulo_db: sqlite
-            pytest_marker: "not integration"
-          - backend: mariadb
-            database_url: "mysql+asyncmy://modulo:modulo@localhost:5435/modulo"
-            modulo_db: mariadb
-            pytest_marker: "not integration"
-    services:
-      mariadb:
-        image: mariadb:11.4
-        env:
-          MARIADB_ROOT_PASSWORD: modulo
-          MARIADB_DATABASE: modulo
-          MARIADB_USER: modulo
-          MARIADB_PASSWORD: modulo
-        ports:
-          - 5435:3306
-        options: >-
-          --health-cmd "healthcheck.sh --connect --innodb_initialized"
-          --health-interval 5s
-          --health-timeout 5s
-          --health-retries 5
     defaults:
       run:
         working-directory: backend
@@ -51,9 +22,50 @@ jobs:
           python-version: "3.12"
           enable-cache: true
       - run: uv sync --frozen
-      - run: uv run pytest tests/unit/ -m '${{ matrix.pytest_marker }}' --timeout 60 -q --ignore=tests/unit/connector_hub --ignore=tests/unit/determination --ignore=tests/unit/graph_validator --ignore=tests/unit/hitl_manager --ignore=tests/unit/trigger_engine
+      - run: uv run pytest tests/unit/ -m 'not integration' --timeout 60 -q --ignore=tests/unit/connector_hub --ignore=tests/unit/determination --ignore=tests/unit/graph_validator --ignore=tests/unit/hitl_manager --ignore=tests/unit/trigger_engine
         env:
           SECRET_KEY: "ci-secret-key-not-for-production"
           FERNET_KEY: "vK-xU7GqHLflg_GqzJ1FqWI7pHWoHSIyukf4wx-tMHI="
-          DATABASE_URL: ${{ matrix.database_url }}
-          MODULO_DB: ${{ matrix.modulo_db }}
+          DATABASE_URL: "sqlite+aiosqlite:///./test.db"
+          MODULO_DB: sqlite
+
+  mariadb:
+    name: mariadb
+    runs-on: self-hosted
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - name: Start MariaDB
+        shell: pwsh
+        run: |
+          docker rm -f modulo-mariadb 2>$null
+          docker run -d --name modulo-mariadb `
+            -e MARIADB_ROOT_PASSWORD=modulo `
+            -e MARIADB_DATABASE=modulo `
+            -e MARIADB_USER=modulo `
+            -e MARIADB_PASSWORD=modulo `
+            -p 5435:3306 `
+            mariadb:11.4
+          Write-Host "Waiting for MariaDB..."
+          for ($i=0; $i -lt 30; $i++) {
+            $ok = docker exec modulo-mariadb mysqladmin ping -uroot -pmodulo 2>$null
+            if ($?) { Write-Host "MariaDB ready"; break }
+            Start-Sleep -Seconds 2
+          }
+      - name: Stop MariaDB
+        if: always()
+        shell: pwsh
+        run: docker rm -f modulo-mariadb 2>$null
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          python-version: "3.12"
+          enable-cache: true
+      - run: uv sync --frozen
+      - run: uv run pytest tests/unit/ -m 'not integration' --timeout 60 -q --ignore=tests/unit/connector_hub --ignore=tests/unit/determination --ignore=tests/unit/graph_validator --ignore=tests/unit/hitl_manager --ignore=tests/unit/trigger_engine
+        env:
+          SECRET_KEY: "ci-secret-key-not-for-production"
+          FERNET_KEY: "vK-xU7GqHLflg_GqzJ1FqWI7pHWoHSIyukf4wx-tMHI="
+          DATABASE_URL: "mysql+asyncmy://modulo:modulo@localhost:5435/modulo"
+          MODULO_DB: mariadb
