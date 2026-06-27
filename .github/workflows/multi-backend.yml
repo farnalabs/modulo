@@ -6,13 +6,13 @@ on:
   pull_request:
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
+  group: ci-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
   multi-backend:
     name: ${{ matrix.backend }}
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, windows, docker]
     strategy:
       fail-fast: false
       matrix:

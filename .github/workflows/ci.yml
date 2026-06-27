@@ -5,13 +5,13 @@ on:
   pull_request:
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
+  group: ci-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
   backend-lint:
     name: Lint (Backend)
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, windows, docker]
     defaults:
       run:
         working-directory: backend
@@ -29,7 +29,7 @@ jobs:
 
   frontend:
     name: Frontend
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, windows, docker]
     defaults:
       run:
         working-directory: frontend
@@ -48,7 +48,7 @@ jobs:
 
   gitleaks:
     name: Secret scan
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, windows, docker]
     steps:
       - uses: actions/checkout@v4
         with:

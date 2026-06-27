@@ -20,9 +20,13 @@ on:
   schedule:
     - cron: '0 9 * * 1'
 
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   check:
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, windows, docker]
     outputs:
       has_changes: ${{ steps.check.outputs.has_changes }}
       last_tag: ${{ steps.check.outputs.last_tag }}
@@ -70,7 +74,7 @@ jobs:
   version:
     needs: [check]
     if: needs.check.outputs.has_changes == 'true'
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, windows, docker]
     outputs:
       version: ${{ steps.determine.outputs.version }}
     steps:
@@ -114,7 +118,7 @@ jobs:
   release:
     needs: [check, version]
     if: needs.check.outputs.has_changes == 'true'
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, windows, docker]
     steps:
       - uses: actions/checkout@v4
         with:

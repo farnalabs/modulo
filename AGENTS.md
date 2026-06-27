@@ -4,7 +4,7 @@ Full PRD: `docs/prd.md`. This file covers how to build. Conflicts between files 
 
 ## Git Workflow
 
-**Always use `git worktree` when branching.** Never check out branches in the main working tree. Worktrees live under `.agents/worktrees/<branch-name>/` and keep the main tree on `main` so CI/lint/test tooling always has a stable reference.
+**Always use `git worktree` when branching.** Never check out branches in the main working tree — it must stay on `main`. Worktrees live under `.agents/worktrees/<branch-name>/`.
 
 ```powershell
 # From Development/Product/
@@ -15,6 +15,12 @@ git worktree add .agents/worktrees/<branch-name> <branch>
 git worktree remove .agents/worktrees/<branch-name>
 git branch -d <branch-name>
 ```
+
+**Gate script:** `..\..\Dev-Harness\tools\gate.ps1` runs all CI checks (ruff, mypy, bandit, pytest, frontend build) and merges the worktree branch to main on success. From the worktree root:
+```powershell
+..\..\Dev-Harness\tools\gate.ps1
+```
+Use `-Fast` to skip mypy + frontend build, `-Yes` to skip confirmation.
 
 ## Skills
 

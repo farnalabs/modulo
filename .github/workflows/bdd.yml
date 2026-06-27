@@ -4,9 +4,13 @@ on:
   push:
     branches: [main]
 
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   bdd:
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, windows, docker]
     services:
       postgres:
         image: postgres:16-alpine

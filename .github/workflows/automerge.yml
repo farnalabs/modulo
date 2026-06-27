@@ -8,10 +8,14 @@ permissions:
   contents: write
   pull-requests: write
 
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   automerge:
     name: Enable auto-merge
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, windows, docker]
     steps:
       - uses: actions/checkout@v4
       - name: Enable auto-merge (squash)
