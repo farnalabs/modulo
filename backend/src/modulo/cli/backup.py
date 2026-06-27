@@ -150,7 +150,7 @@ def _export_credentials_references_sync(raw_url: str) -> dict[str, list[dict[str
         for table in tables:
             rows: list[dict[str, Any]] = []
             with conn.cursor() as cur:
-                _sql = f"SELECT id, organisation_id, name, credentials_ciphertext FROM {table} ORDER BY id"  # noqa: S608 — table is from a hardcoded allowlist
+                _sql = f"SELECT id, organisation_id, name, credentials_ciphertext FROM {table} ORDER BY id"  # noqa: S608  # nosec B608
                 cur.execute(_sql)
                 for row in cur:
                     row["id"] = str(row["id"])
@@ -213,8 +213,8 @@ def _re_encrypt_credentials_sync(
                     old_ct = bytes.fromhex(hex_ct)
                     plaintext = old_fernet.decrypt(old_ct)
                     new_ct = new_fernet.encrypt(plaintext)
-                    cur.execute(
-                        f"UPDATE {table} SET credentials_ciphertext = %s WHERE id = %s",  # noqa: S608 — table is from a hardcoded allowlist
+                    cur.execute(  # nosec B608
+                        f"UPDATE {table} SET credentials_ciphertext = %s WHERE id = %s",  # noqa: S608
                         (new_ct, uuid.UUID(row["id"])),
                     )
                     rekeyed += 1
