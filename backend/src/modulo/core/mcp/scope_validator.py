@@ -29,6 +29,7 @@ TOOL_SCOPE_REQUIREMENTS: dict[str, str] = {
     "copy_library_primitive": "runner",
     "list_pending_hitl": "runner",
     "get_run_output": "runner",
+    "get_trigger_events": "runner",
 }
 
 
