@@ -16,11 +16,13 @@ git worktree remove .agents/worktrees/<branch-name>
 git branch -d <branch-name>
 ```
 
-**Gate script:** `..\..\Dev-Harness\tools\gate.ps1` runs all CI checks (ruff, mypy, bandit, pytest, frontend build) and merges the worktree branch to main on success. From the worktree root:
+**Gate script:** `..\..\Dev-Harness\tools\gate.ps1` runs all CI checks (ruff, mypy, bandit, pytest, frontend build) and merges the worktree branch to local main on success — does NOT push to remote. From the worktree root:
 ```powershell
 ..\..\Dev-Harness\tools\gate.ps1
 ```
 Use `-Fast` to skip mypy + frontend build, `-Yes` to skip confirmation.
+
+**Publish:** A Windows scheduled task runs `publish.ps1` every 4 hours — it tests local main and pushes to remote only if clean. Remote main is always green.
 
 ## Skills
 
