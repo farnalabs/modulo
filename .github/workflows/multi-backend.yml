@@ -12,7 +12,7 @@ concurrency:
 jobs:
   multi-backend:
     name: ${{ matrix.backend }}
-    runs-on: [self-hosted, windows, docker]
+    runs-on: self-hosted
     strategy:
       fail-fast: false
       matrix:

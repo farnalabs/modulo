@@ -26,7 +26,7 @@ concurrency:
 
 jobs:
   check:
-    runs-on: [self-hosted, windows, docker]
+    runs-on: self-hosted
     outputs:
       has_changes: ${{ steps.check.outputs.has_changes }}
       last_tag: ${{ steps.check.outputs.last_tag }}
@@ -74,7 +74,7 @@ jobs:
   version:
     needs: [check]
     if: needs.check.outputs.has_changes == 'true'
-    runs-on: [self-hosted, windows, docker]
+    runs-on: self-hosted
     outputs:
       version: ${{ steps.determine.outputs.version }}
     steps:
@@ -118,7 +118,7 @@ jobs:
   release:
     needs: [check, version]
     if: needs.check.outputs.has_changes == 'true'
-    runs-on: [self-hosted, windows, docker]
+    runs-on: self-hosted
     steps:
       - uses: actions/checkout@v4
         with:
