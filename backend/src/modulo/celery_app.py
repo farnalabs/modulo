@@ -10,7 +10,7 @@ Run a worker with::
     celery -A modulo.celery_app worker --loglevel=info
 """
 
-from celery import Celery
+from celery import Celery  # type: ignore[import-untyped]
 
 from modulo.settings import get_settings
 
@@ -20,7 +20,11 @@ celery_app = Celery(
     "modulo",
     broker=settings.redis_url,
     backend=settings.redis_url,
-    include=["modulo.core.cron_scheduler", "modulo.core.trigger_engine.polling"],
+    include=[
+        "modulo.core.cron_scheduler",
+        "modulo.core.trigger_engine.polling",
+        "modulo.core.reports.scheduler",
+    ],
 )
 
 celery_app.conf.update(
