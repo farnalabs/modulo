@@ -790,6 +790,32 @@ async def resource_pipelines() -> str:
     return f"Pipelines ({result.total} total):\n" + "\n".join(lines)
 
 
+@mcp.resource("modulo://pipelines/{pipeline_id}/runs")
+async def resource_pipeline_runs(pipeline_id: str) -> str:
+    if not await validate_current_auth():
+        return "error: Token revoked or expired — re-authenticate"
+    from modulo.db.crud.run import list_runs
+
+    org_id = _ctx_org_id.get(_PLACEHOLDER_ORG_ID)
+    pid = uuid.UUID(pipeline_id)
+    async with _session(org_id) as s:
+        pipeline = await get_pipeline(s, pid)
+        if pipeline is None:
+            return f"Pipeline {pipeline_id} not found."
+        result = await list_runs(s, pipeline_id=pid, page=1, page_size=50)
+
+    if not result.items:
+        return f"Pipeline '{pipeline.name}' has no runs."
+
+    lines = [
+        f"- Run {r.id} | status={r.status} | trigger={r.trigger_type} | "
+        f"created={r.created_at.isoformat()} | "
+        f"tokens={r.total_tokens or 0} | cost=${r.total_cost_usd or 0}"
+        for r in result.items
+    ]
+    return f"Runs for pipeline {pipeline.name} ({result.total} total):\n" + "\n".join(lines)
+
+
 @mcp.resource("modulo://pipelines/{pipeline_id}")
 async def resource_pipeline_detail(pipeline_id: str) -> str:
     if not await validate_current_auth():
