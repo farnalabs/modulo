@@ -16,6 +16,7 @@ import RunDetailView from '../views/RunDetailView.vue'
 import AdminAuditView from '../views/AdminAuditView.vue'
 import AdminFeatureFlagsView from '../views/AdminFeatureFlagsView.vue'
 import SettingsNotificationLogView from '../views/SettingsNotificationLogView.vue'
+import SettingsTriggerEventLogView from '../views/SettingsTriggerEventLogView.vue'
 import ApiChangelogView from '../views/ApiChangelogView.vue'
 import TeamComparisonView from '../views/TeamComparisonView.vue'
 import PipelineEditorView from '../views/PipelineEditorView.vue'
@@ -102,6 +103,11 @@ const router = createRouter({
       path: '/admin/notification-log',
       name: 'admin-notification-log',
       component: SettingsNotificationLogView,
+    },
+    {
+      path: '/admin/trigger-events',
+      name: 'admin-trigger-events',
+      component: SettingsTriggerEventLogView,
     },
     {
       path: '/admin/audit',
