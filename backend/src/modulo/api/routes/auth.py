@@ -1,9 +1,11 @@
 """Auth routes: login, refresh, logout, me (v1 user management)."""
 
 import logging
+import secrets
 import uuid
 
-from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
+from fastapi.responses import JSONResponse
 from jose import JWTError
 from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -75,13 +77,13 @@ class MeResponse(BaseModel):
     created_at: str
 
 
-@router.post("/login", response_model=LoginResponse)
+@router.post("/login")
 async def login(
     body: LoginRequest,
     request: Request,
     settings: Settings = Depends(get_settings),
     session: AsyncSession = Depends(get_db_session),
-) -> LoginResponse:
+) -> JSONResponse:
     ip = _client_ip(request)
     limiter = get_auth_rate_limiter(settings)
 
@@ -113,15 +115,18 @@ async def login(
         token_family=str(family.family_id),
         token_sequence=0,
     )
-    return LoginResponse(access_token=access_token, refresh_token=refresh_token)
+    content = LoginResponse(access_token=access_token, refresh_token=refresh_token).model_dump()
+    response = JSONResponse(content=content)
+    _set_auth_cookies(response, access_token, settings)
+    return response
 
 
-@router.post("/refresh", response_model=RefreshResponse)
+@router.post("/refresh")
 async def refresh(
     body: RefreshRequest,
     settings: Settings = Depends(get_settings),
     session: AsyncSession = Depends(get_db_session),
-) -> RefreshResponse:
+) -> JSONResponse:
     try:
         claims = decode_refresh_token_claims(body.refresh_token, settings.secret_key)
     except JWTError as exc:
@@ -181,15 +186,18 @@ async def refresh(
         token_family=family_id_str,
         token_sequence=new_sequence,
     )
-    return RefreshResponse(access_token=new_access, refresh_token=new_refresh)
+    content = RefreshResponse(access_token=new_access, refresh_token=new_refresh).model_dump()
+    response = JSONResponse(content=content)
+    _set_auth_cookies(response, new_access, settings)
+    return response
 
 
-@router.post("/logout", response_model=LogoutResponse)
+@router.post("/logout")
 async def logout(
     body: RefreshRequest,
     settings: Settings = Depends(get_settings),
     session: AsyncSession = Depends(get_db_session),
-) -> LogoutResponse:
+) -> JSONResponse:
     try:
         claims = decode_refresh_token_claims(body.refresh_token, settings.secret_key)
     except JWTError as exc:
@@ -206,7 +214,10 @@ async def logout(
         except ValueError:
             pass
 
-    return LogoutResponse(detail="Logged out")
+    content = LogoutResponse(detail="Logged out").model_dump()
+    response = JSONResponse(content=content)
+    _clear_auth_cookies(response, settings)
+    return response
 
 
 @router.post("/ws-token", response_model=WsTokenResponse)
@@ -268,6 +279,71 @@ async def me(
         org_role=user.org_role,
         active=user.active,
         created_at=user.created_at.isoformat(),
+    )
+
+
+class CsrfTokenResponse(BaseModel):
+    csrf_token: str
+
+
+@router.get("/csrf-token", response_model=CsrfTokenResponse)
+async def csrf_token(
+    current_user: AuthenticatedPrincipal = Depends(get_current_user),
+    settings: Settings = Depends(get_settings),
+) -> JSONResponse:
+    token = secrets.token_hex(32)
+    content = CsrfTokenResponse(csrf_token=token).model_dump()
+    response = JSONResponse(content=content)
+    _set_csrf_cookie(response, token, settings)
+    return response
+
+
+def _set_auth_cookies(response: Response, access_token: str, settings: Settings) -> None:
+    secure = not settings.debug
+    response.set_cookie(
+        key="modulo_session",
+        value=access_token,
+        httponly=True,
+        samesite="strict",
+        secure=secure,
+        max_age=900,
+        path="/",
+    )
+    csrf_token_value = secrets.token_hex(32)
+    _set_csrf_cookie(response, csrf_token_value, settings)
+
+
+def _set_csrf_cookie(response: Response, token: str, settings: Settings) -> None:
+    response.set_cookie(
+        key="XSRF-TOKEN",
+        value=token,
+        httponly=False,
+        samesite="strict",
+        secure=not settings.debug,
+        max_age=900,
+        path="/",
+    )
+
+
+def _clear_auth_cookies(response: Response, settings: Settings) -> None:
+    secure = not settings.debug
+    response.set_cookie(
+        key="modulo_session",
+        value="",
+        httponly=True,
+        samesite="strict",
+        secure=secure,
+        max_age=0,
+        path="/",
+    )
+    response.set_cookie(
+        key="XSRF-TOKEN",
+        value="",
+        httponly=False,
+        samesite="strict",
+        secure=secure,
+        max_age=0,
+        path="/",
     )
 
 

@@ -80,6 +80,10 @@ class Settings(BaseSettings):
 
     modulo_otel_service_name: str = Field("modulo")
 
+    # CSRF protection
+    modulo_csrf_enabled: bool = Field(True)
+    modulo_csrf_exempt_paths: str = Field("/api/v1/health,/api/v1/triggers,/api/v1/auth")
+
     # Plugin discovery — when enabled, scans installed packages for entry points
     # registered in the ``modulo.connectors`` and ``modulo.model_backends`` groups.
     # Set to "false" to disable plugin discovery at startup.

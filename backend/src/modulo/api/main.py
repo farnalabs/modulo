@@ -23,6 +23,7 @@ from modulo.api.mcp_server import build_mcp_asgi_app
 from modulo.api.middleware.catch_all import CatchAllMiddleware
 from modulo.api.middleware.correlation_id import CorrelationIdMiddleware
 from modulo.api.middleware.cors_logging import CorsLoggingMiddleware
+from modulo.api.middleware.csrf import CsrfMiddleware
 from modulo.api.middleware.deprecation_headers import DeprecationHeaderMiddleware
 from modulo.api.middleware.rate_limiter import AuthRateLimitMiddleware, RateLimitMiddleware
 from modulo.api.middleware.security_headers import SecurityHeadersMiddleware
@@ -468,6 +469,7 @@ app.add_middleware(
     max_age=_settings.cors_max_age,
 )
 app.add_middleware(CorrelationIdMiddleware)
+app.add_middleware(CsrfMiddleware)
 app.add_middleware(RateLimitMiddleware)  # type: ignore[arg-type]
 app.add_middleware(AuthRateLimitMiddleware)  # type: ignore[arg-type]
 app.add_middleware(DeprecationHeaderMiddleware)  # type: ignore[arg-type]
