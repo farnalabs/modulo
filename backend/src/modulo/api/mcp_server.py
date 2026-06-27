@@ -53,12 +53,13 @@ from modulo.core.hitl_manager import (
 )
 from modulo.core.library_service import (
     CommunityPrimitiveReadOnlyError,
+    list_primitives,
 )
 from modulo.core.library_service import (
     copy_to_adapt as library_copy_to_adapt,
 )
 from modulo.core.mcp.scope_validator import MCPAuthorizationError, check_tool_scope
-from modulo.db.crud.pipeline import list_pipelines
+from modulo.db.crud.pipeline import get_pipeline, list_pipelines
 from modulo.db.crud.run import get_run
 from modulo.db.models.hitl_claim import HitlClaim
 from modulo.db.models.pipeline_edge import PipelineEdge
@@ -264,6 +265,7 @@ mcp = FastMCP(
     instructions=(
         "Modulo is a self-hosted agentic SDLC platform. "
         "Use trigger_pipeline to fire runs, get_run_status to track them, "
+        "get_run_output to inspect node outputs, "
         "and review_hitl to handle human-in-the-loop gates."
     ),
     stateless_http=True,
@@ -374,6 +376,51 @@ async def get_run_status(run_id: str, detail: bool = False) -> dict[str, Any]:
     except Exception:
         _log.exception("get_run_status failed")
         return _tool_error("Failed to get run status")
+
+
+@mcp.tool(
+    description=(
+        "Get a specific node's output from a completed pipeline run. "
+        "Sensitive fields (tokens, secrets, API keys, passwords, credentials) "
+        "are masked in the response."
+    ),
+)
+async def get_run_output(run_id: str, node_id: str) -> dict[str, Any]:
+    try:
+        if not await validate_current_auth():
+            return _tool_error("Token revoked or expired — re-authenticate")
+        check_tool_scope(_ctx_role.get(None), "get_run_output")
+        from modulo.api.routes.runs import _mask_output_value
+
+        org_id = _ctx_org_id.get(_PLACEHOLDER_ORG_ID)
+        rid = uuid.UUID(run_id)
+        async with _session(org_id) as s:
+            run = await get_run(s, rid)
+        if run is None:
+            return {"error": "run_not_found", "run_id": run_id}
+        outputs = run.outputs_json or {}
+        node_output = outputs.get(node_id)
+        if node_output is None:
+            return {"error": "node_output_not_found", "run_id": run_id, "node_id": node_id}
+        masked = _mask_output_value(node_output)
+
+        # Detect masked fields by scanning for the bullet mask character.
+        masked_fields: list[str] = []
+        if isinstance(masked, dict):
+            for k, v in masked.items():
+                if isinstance(v, str) and "\u2022" in v:
+                    masked_fields.append(k)
+
+        return {
+            "node_id": node_id,
+            "output": masked,
+            "masked_fields": masked_fields,
+        }
+    except MCPAuthorizationError as exc:
+        return {"error": "insufficient_scope", "detail": exc.message}
+    except Exception:
+        _log.exception("get_run_output failed")
+        return _tool_error("Failed to get node output")
 
 
 @mcp.tool(description="Cancel a running pipeline run.")
@@ -611,6 +658,56 @@ async def copy_library_primitive(
     }
 
 
+@mcp.tool(
+    description=(
+        "Browse the library of primitives (schemas, agents, workflows, "
+        "pipeline templates, test fixtures). Supports filtering by type, "
+        "text search, and cursor-based pagination."
+    ),
+)
+async def browse_library(
+    primitive_type: str | None = None,
+    search: str | None = None,
+    cursor: str | None = None,
+    limit: int = 20,
+) -> dict[str, Any]:
+    try:
+        if not await validate_current_auth():
+            return _tool_error("Token revoked or expired — re-authenticate")
+        org_id = _ctx_org_id.get(_PLACEHOLDER_ORG_ID)
+        async with _session(org_id) as s:
+            result = await list_primitives(
+                s,
+                org_id,
+                primitive_type=primitive_type,
+                search=search,
+                page=1,
+                page_size=limit,
+                include_community=True,
+                cursor=cursor,
+            )
+        return {
+            "items": [
+                {
+                    "id": str(p.id),
+                    "name": p.name,
+                    "description": p.description,
+                    "type": p.primitive_type,
+                    "version": p.version,
+                    "average_rating": p.average_rating,
+                    "tags": list(p.tags) if p.tags else [],
+                }
+                for p in result.items
+            ],
+            "total": result.total,
+            "next_cursor": result.next_cursor,
+            "has_more": result.has_more,
+        }
+    except Exception:
+        _log.exception("browse_library failed")
+        return _tool_error("Failed to browse library")
+
+
 # ---------------------------------------------------------------------------
 # Resources
 # ---------------------------------------------------------------------------
@@ -625,6 +722,53 @@ async def resource_pipelines() -> str:
         result = await list_pipelines(s, page=1, page_size=50)
     lines = [f"- {p.name} (id={p.id}, visibility={p.visibility})" for p in result.items]
     return f"Pipelines ({result.total} total):\n" + "\n".join(lines)
+
+
+@mcp.resource("modulo://pipelines/{pipeline_id}")
+async def resource_pipeline_detail(pipeline_id: str) -> str:
+    if not await validate_current_auth():
+        return "error: Token revoked or expired — re-authenticate"
+    from sqlalchemy import func, select
+
+    from modulo.db.models.pipeline_snapshot import PipelineSnapshot
+    from modulo.db.models.run import Run
+
+    org_id = _ctx_org_id.get(_PLACEHOLDER_ORG_ID)
+    pid = uuid.UUID(pipeline_id)
+    async with _session(org_id) as s:
+        pipeline = await get_pipeline(s, pid)
+        if pipeline is None:
+            return f"Pipeline {pipeline_id} not found."
+
+        edge_result = await s.execute(
+            select(func.count()).select_from(PipelineEdge).where(PipelineEdge.pipeline_id == pid)
+        )
+        edge_count = edge_result.scalar_one()
+
+        snap_result = await s.execute(
+            select(func.count()).select_from(PipelineSnapshot).where(PipelineSnapshot.pipeline_id == pid)
+        )
+        snapshot_count = snap_result.scalar_one()
+
+        run_result = await s.execute(
+            select(Run.created_at).where(Run.pipeline_id == pid).order_by(Run.created_at.desc()).limit(1)
+        )
+        last_run_at = run_result.scalar_one_or_none()
+
+    parts = [
+        f"Pipeline: {pipeline.name}",
+        f"ID: {pipeline.id}",
+        f"Description: {pipeline.description or '(none)'}",
+        f"Status: {'active' if pipeline.graph_nodes_json else 'inactive'}",
+        f"Visibility: {pipeline.visibility}",
+        f"Created: {pipeline.created_at.isoformat()}",
+        f"Node count: {len(pipeline.graph_nodes_json)}",
+        f"Edge count: {edge_count}",
+        f"Snapshot count: {snapshot_count}",
+    ]
+    if last_run_at:
+        parts.append(f"Last run: {last_run_at.isoformat()}")
+    return "\n".join(parts)
 
 
 @mcp.resource("modulo://runs/{run_id}")
@@ -733,6 +877,35 @@ async def resource_model_backends() -> str:
         backends = list(result.scalars())
     lines = [f"- {b.name} ({b.provider}/{b.model_id})" for b in backends]
     return f"Model Backends ({len(backends)}):\n" + "\n".join(lines)
+
+
+@mcp.resource("modulo://library")
+async def resource_library() -> str:
+    """List library primitives — schemas, agents, workflows, pipeline templates, test fixtures.
+
+    For filtered browsing, use the ``browse_library`` tool instead.
+    """
+    if not await validate_current_auth():
+        return "error: Token revoked or expired — re-authenticate"
+    org_id = _ctx_org_id.get(_PLACEHOLDER_ORG_ID)
+    async with _session(org_id) as s:
+        result = await list_primitives(
+            s,
+            org_id,
+            page=1,
+            page_size=50,
+            include_community=True,
+        )
+    if not result.items:
+        return "Library is empty."
+    lines: list[str] = []
+    for p in result.items:
+        tags_str = ", ".join(p.tags) if p.tags else ""
+        rating_str = f"{p.average_rating:.1f}" if p.average_rating is not None else "N/A"
+        desc = f" — {p.description}" if p.description else ""
+        lines.append(f"- {p.name} (id={p.id}, type={p.primitive_type}, v{p.version}, tags=[{tags_str}], rating={rating_str}){desc}")
+    header = f"Library ({result.total} primitives):"
+    return header + "\n" + "\n".join(lines)
 
 
 # ---------------------------------------------------------------------------

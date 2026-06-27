@@ -28,6 +28,7 @@ TOOL_SCOPE_REQUIREMENTS: dict[str, str] = {
     "review_hitl": "operator",
     "copy_library_primitive": "runner",
     "list_pending_hitl": "runner",
+    "get_run_output": "runner",
 }
 
 
