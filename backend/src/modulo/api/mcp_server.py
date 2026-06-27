@@ -297,6 +297,7 @@ async def trigger_pipeline(
     try:
         if not await validate_current_auth():
             return _tool_error("Token revoked or expired — re-authenticate")
+        check_tool_scope(_ctx_role.get(None), "trigger_pipeline")
         from modulo.db.crud.pipeline import get_pipeline
         from modulo.db.crud.pipeline_snapshot import create_snapshot_from_live_graph
         from modulo.db.crud.run import create_run
@@ -370,6 +371,7 @@ async def cancel_run(run_id: str) -> dict[str, Any]:
     try:
         if not await validate_current_auth():
             return _tool_error("Token revoked or expired — re-authenticate")
+        check_tool_scope(_ctx_role.get(None), "cancel_run")
         from modulo.db.crud.run import request_cancellation
 
         org_id = _ctx_org_id.get(_PLACEHOLDER_ORG_ID)
@@ -391,6 +393,7 @@ async def list_pending_hitl(page: int = 1, page_size: int = 20) -> dict[str, Any
     try:
         if not await validate_current_auth():
             return _tool_error("Token revoked or expired — re-authenticate")
+        check_tool_scope(_ctx_role.get(None), "list_pending_hitl")
         from sqlalchemy import select
 
         org_id = _ctx_org_id.get(_PLACEHOLDER_ORG_ID)
