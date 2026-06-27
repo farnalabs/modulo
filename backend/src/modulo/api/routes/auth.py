@@ -1,25 +1,32 @@
 """Auth routes: login, refresh, logout, me (v1 user management)."""
 
+import logging
 import uuid
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from jose import JWTError
 from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.api.dependencies import get_db_session
+from modulo.api.middleware.rate_limiter import get_auth_rate_limiter
 from modulo.auth.dependencies import get_current_user
 from modulo.auth.jwt import (
     AuthenticatedPrincipal,
     create_access_token,
     create_refresh_token,
-    create_ws_token,
     decode_refresh_token_claims,
 )
+from modulo.auth.jwt import (
+    create_ws_token as create_jwt_ws_token,
+)
 from modulo.auth.passwords import authenticate_db_user
+from modulo.auth.ws_token import create_ws_token as create_opaque_ws_token
 from modulo.db.crud.token_family import advance_sequence, blacklist_family, create_family
 from modulo.db.crud.user import get_user_by_email, get_user_by_id, update_last_login
 from modulo.settings import Settings, get_settings
+
+_log = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/v1/auth", tags=["auth"])
 
@@ -55,8 +62,8 @@ class WsTokenRequest(BaseModel):
 
 class WsTokenResponse(BaseModel):
     ws_token: str
-    token_type: str = "bearer"
-    expires_in_minutes: int = 15
+    token_type: str = "ws-opaque"
+    expires_in_seconds: int = 60
 
 
 class MeResponse(BaseModel):
@@ -71,16 +78,22 @@ class MeResponse(BaseModel):
 @router.post("/login", response_model=LoginResponse)
 async def login(
     body: LoginRequest,
+    request: Request,
     settings: Settings = Depends(get_settings),
     session: AsyncSession = Depends(get_db_session),
 ) -> LoginResponse:
+    ip = _client_ip(request)
+    limiter = get_auth_rate_limiter(settings)
+
     user = await get_user_by_email(session, body.email)
     if not user or not authenticate_db_user(body.password, user):
+        await limiter.record_failure(ip)
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Incorrect email or password",
         )
 
+    await limiter.record_success(ip)
     await update_last_login(session, user.id)
     family = await create_family(session, user.id, user.organisation_id)
 
@@ -201,14 +214,43 @@ async def ws_token(
     current_user: AuthenticatedPrincipal = Depends(get_current_user),
     settings: Settings = Depends(get_settings),
 ) -> WsTokenResponse:
-    token = create_ws_token(
+    principal_json = {
+        "sub": current_user.username,
+        "org_id": str(current_user.organisation_id),
+        "user_id": str(current_user.user_id),
+        "org_role": current_user.org_role,
+    }
+
+    if settings.redis_url:
+        try:
+            from redis.asyncio import Redis
+
+            redis = Redis.from_url(settings.redis_url, decode_responses=False)
+            token = await create_opaque_ws_token(
+                redis,
+                principal_json,
+                ttl=settings.modulo_ws_token_ttl_seconds,
+            )
+            return WsTokenResponse(
+                ws_token=token,
+                token_type="ws-opaque",  # noqa: S106
+                expires_in_seconds=settings.modulo_ws_token_ttl_seconds,
+            )
+        except Exception as exc:
+            _log.warning("ws_token.redis_fallback", extra={"error": str(exc)})
+
+    token = create_jwt_ws_token(
         current_user.username,
         settings.secret_key,
         organisation_id=str(current_user.organisation_id),
         user_id=str(current_user.user_id),
         org_role=current_user.org_role,
     )
-    return WsTokenResponse(ws_token=token)
+    return WsTokenResponse(
+        ws_token=token,
+        token_type="ws-jwt",  # noqa: S106
+        expires_in_seconds=settings.modulo_ws_token_ttl_seconds,
+    )
 
 
 @router.get("/me", response_model=MeResponse)
@@ -227,3 +269,12 @@ async def me(
         active=user.active,
         created_at=user.created_at.isoformat(),
     )
+
+
+def _client_ip(request: Request) -> str:
+    forwarded = request.headers.get("X-Forwarded-For", "")
+    if forwarded:
+        return forwarded.split(",")[0].strip()
+    if request.client:
+        return request.client.host
+    return "unknown"
