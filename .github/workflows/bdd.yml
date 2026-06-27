@@ -55,7 +55,11 @@ jobs:
         run: npm run build
       - name: Start backend
         working-directory: backend
-        run: uv run uvicorn modulo.api.main:app --host 0.0.0.0 --port 8000 &
+        run: |
+          uv run uvicorn modulo.api.main:app --host 0.0.0.0 --port 8000 > /tmp/backend.log 2>&1 &
+          echo "Backend PID: $!"
+          sleep 3
+          head -20 /tmp/backend.log
         shell: bash
         env:
           DATABASE_URL: "postgresql+asyncpg://modulo:modulo@localhost:5432/modulo"
@@ -69,7 +73,13 @@ jobs:
         run: npm run preview -- --port 4173 &
       - name: Wait for services
         run: |
-          npx wait-on http://localhost:8000/healthz http://localhost:4173 --timeout 30000
+          npx wait-on http://localhost:8000/healthz http://localhost:4173 --timeout 60000 || {
+            echo "=== Backend log ==="
+            head -100 /tmp/backend.log
+            echo "=== Process check ==="
+            ps aux | grep uvicorn || true
+            exit 1
+          }
       - name: Run BDD tests
         working-directory: backend
         run: |
