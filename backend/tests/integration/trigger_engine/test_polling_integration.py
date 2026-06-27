@@ -99,7 +99,7 @@ async def seeded_db(db_session: AsyncSession) -> AsyncSession:
             "connector_type_id, name, config_json, visibility, "
             "allowed_operations, credentials_ciphertext) "
             "VALUES (:id, :oid, :uid, 'stub', 'Stub CI', "
-            "'{}'::json, 'org', ARRAY['query']::text[], 'ciphertext') "
+             "'{}'::json, 'org', '[\"query\"]'::json, 'ciphertext') "
             "ON CONFLICT (id) DO NOTHING"
         ),
         {
