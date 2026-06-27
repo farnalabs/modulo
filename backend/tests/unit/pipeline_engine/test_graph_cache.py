@@ -182,10 +182,18 @@ _CONDITIONAL_GRAPH: dict[str, Any] = {
         {"id": "fail-branch", "role": None},
     ],
     "edges": [
-        {"source": "decider", "target": "pass-branch", "type": "conditional",
-         "condition_expression": "artifacts[0].status == 'passed'"},
-        {"source": "decider", "target": "fail-branch", "type": "conditional",
-         "condition_expression": "artifacts[0].status == 'failed'"},
+        {
+            "source": "decider",
+            "target": "pass-branch",
+            "type": "conditional",
+            "condition_expression": "artifacts[0].status == 'passed'",
+        },
+        {
+            "source": "decider",
+            "target": "fail-branch",
+            "type": "conditional",
+            "condition_expression": "artifacts[0].status == 'failed'",
+        },
     ],
 }
 
@@ -232,11 +240,19 @@ async def test_conditional_falls_back_to_default_target():
             {"id": "else-branch", "role": None},
         ],
         "edges": [
-            {"source": "decider", "target": "pass-branch", "type": "conditional",
-             "condition_expression": "artifacts[0].status == 'passed'",
-             "default_target": "else-branch"},
-            {"source": "decider", "target": "else-branch", "type": "conditional",
-             "condition_expression": "artifacts[0].status == 'unknown'"},
+            {
+                "source": "decider",
+                "target": "pass-branch",
+                "type": "conditional",
+                "condition_expression": "artifacts[0].status == 'passed'",
+                "default_target": "else-branch",
+            },
+            {
+                "source": "decider",
+                "target": "else-branch",
+                "type": "conditional",
+                "condition_expression": "artifacts[0].status == 'unknown'",
+            },
         ],
     }
     compiled = build_graph_from_json(graph)
@@ -260,10 +276,18 @@ async def test_conditional_routes_using_artifact_field_values():
             {"id": "low", "role": None},
         ],
         "edges": [
-            {"source": "router", "target": "high", "type": "conditional",
-             "condition_expression": "artifacts[?node_id=='score'].score | [0] | @ > `75`"},
-            {"source": "router", "target": "low", "type": "conditional",
-             "condition_expression": "artifacts[?node_id=='score'].score | [0] | @ <= `75`"},
+            {
+                "source": "router",
+                "target": "high",
+                "type": "conditional",
+                "condition_expression": "artifacts[?node_id=='score'].score | [0] | @ > `75`",
+            },
+            {
+                "source": "router",
+                "target": "low",
+                "type": "conditional",
+                "condition_expression": "artifacts[?node_id=='score'].score | [0] | @ <= `75`",
+            },
         ],
     }
     compiled = build_graph_from_json(graph)
@@ -287,8 +311,12 @@ async def test_conditional_with_normal_fallback():
             {"id": "default-path", "role": None},
         ],
         "edges": [
-            {"source": "decider", "target": "special", "type": "conditional",
-             "condition_expression": "artifacts[0].flag == true"},
+            {
+                "source": "decider",
+                "target": "special",
+                "type": "conditional",
+                "condition_expression": "artifacts[0].flag == true",
+            },
             {"source": "decider", "target": "default-path", "type": "normal"},
         ],
     }
@@ -313,10 +341,18 @@ async def test_conditional_first_matching_wins():
             {"id": "low", "role": None},
         ],
         "edges": [
-            {"source": "router", "target": "high", "type": "conditional",
-             "condition_expression": "artifacts[0].score > `50`"},
-            {"source": "router", "target": "low", "type": "conditional",
-             "condition_expression": "artifacts[0].score <= `50`"},
+            {
+                "source": "router",
+                "target": "high",
+                "type": "conditional",
+                "condition_expression": "artifacts[0].score > `50`",
+            },
+            {
+                "source": "router",
+                "target": "low",
+                "type": "conditional",
+                "condition_expression": "artifacts[0].score <= `50`",
+            },
         ],
     }
     compiled = build_graph_from_json(graph)
@@ -339,9 +375,12 @@ async def test_conditional_accepts_persisted_naming():
             {"id": "target", "role": None},
         ],
         "edges": [
-            {"source_node_id": "router", "target_node_id": "target",
-             "edge_type": "conditional",
-             "condition_expression": "artifacts[0].status == 'ok'"},
+            {
+                "source_node_id": "router",
+                "target_node_id": "target",
+                "edge_type": "conditional",
+                "condition_expression": "artifacts[0].status == 'ok'",
+            },
         ],
     }
     compiled = build_graph_from_json(graph)

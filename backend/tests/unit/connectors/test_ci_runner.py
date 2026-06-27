@@ -54,18 +54,14 @@ def test_gitlab_ci_connector_type(gl_runner):
 
 @respx.mock
 async def test_gh_health_check_ok(gh_runner):
-    respx.get("https://api.github.com/user").mock(
-        return_value=httpx.Response(200, json={"login": "octocat"})
-    )
+    respx.get("https://api.github.com/user").mock(return_value=httpx.Response(200, json={"login": "octocat"}))
     result = await gh_runner.health_check()
     assert result.ok is True
 
 
 @respx.mock
 async def test_gh_health_check_fail(gh_runner):
-    respx.get("https://api.github.com/user").mock(
-        return_value=httpx.Response(401, text="Unauthorized")
-    )
+    respx.get("https://api.github.com/user").mock(return_value=httpx.Response(401, text="Unauthorized"))
     result = await gh_runner.health_check()
     assert result.ok is False
     assert "401" in result.detail
@@ -253,9 +249,7 @@ async def test_gh_list_runs(gh_runner):
 
 @respx.mock
 async def test_gl_health_check_ok(gl_runner):
-    respx.get("https://gitlab.com/api/v4/projects?per_page=1").mock(
-        return_value=httpx.Response(200, json=[{"id": 1}])
-    )
+    respx.get("https://gitlab.com/api/v4/projects?per_page=1").mock(return_value=httpx.Response(200, json=[{"id": 1}]))
     result = await gl_runner.health_check()
     assert result.ok is True
 

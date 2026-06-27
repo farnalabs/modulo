@@ -8,7 +8,12 @@ import pytest
 
 _MIGRATION_PATH = (
     Path(__file__).resolve().parents[3]
-    / "src" / "modulo" / "db" / "migrations" / "versions" / "0025_team_visibility_rls.py"
+    / "src"
+    / "modulo"
+    / "db"
+    / "migrations"
+    / "versions"
+    / "0025_team_visibility_rls.py"
 )
 
 

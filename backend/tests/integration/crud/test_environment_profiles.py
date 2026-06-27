@@ -32,9 +32,7 @@ async def test_create_environment_profile(rls_session: AsyncSession, test_org: u
     rls_session.add(profile)
     await rls_session.flush()
 
-    result = await rls_session.execute(
-        select(EnvironmentProfile).where(EnvironmentProfile.id == profile_id)
-    )
+    result = await rls_session.execute(select(EnvironmentProfile).where(EnvironmentProfile.id == profile_id))
     loaded = result.scalar_one()
     assert loaded.name == "test-env"
     assert loaded.image_ref == "python:3.12-slim"
@@ -122,15 +120,13 @@ async def test_rls_isolation(db_engine: AsyncEngine) -> None:
         async with conn.begin():
             await conn.execute(
                 text(
-                    "INSERT INTO organisations (id, name, slug, settings_json) "
-                    "VALUES (:id, :name, :slug, '{}'::json)"
+                    "INSERT INTO organisations (id, name, slug, settings_json) VALUES (:id, :name, :slug, '{}'::json)"
                 ),
                 {"id": str(org_a), "name": "RLS Org A", "slug": f"rls-a-{org_a.hex[:8]}"},
             )
             await conn.execute(
                 text(
-                    "INSERT INTO organisations (id, name, slug, settings_json) "
-                    "VALUES (:id, :name, :slug, '{}'::json)"
+                    "INSERT INTO organisations (id, name, slug, settings_json) VALUES (:id, :name, :slug, '{}'::json)"
                 ),
                 {"id": str(org_b), "name": "RLS Org B", "slug": f"rls-b-{org_b.hex[:8]}"},
             )
@@ -145,8 +141,10 @@ async def test_rls_isolation(db_engine: AsyncEngine) -> None:
                     "VALUES (:id, :org_id, :name, :image, '[]'::json)"
                 ),
                 {
-                    "id": str(uuid.uuid4()), "org_id": str(org_a),
-                    "name": "org-a-profile", "image": "img:latest",
+                    "id": str(uuid.uuid4()),
+                    "org_id": str(org_a),
+                    "name": "org-a-profile",
+                    "image": "img:latest",
                 },
             )
 
@@ -161,8 +159,10 @@ async def test_rls_isolation(db_engine: AsyncEngine) -> None:
                     "VALUES (:id, :org_id, :name, :image, '[]'::json)"
                 ),
                 {
-                    "id": str(b_id), "org_id": str(org_b),
-                    "name": "org-b-profile", "image": "img:latest",
+                    "id": str(b_id),
+                    "org_id": str(org_b),
+                    "name": "org-b-profile",
+                    "image": "img:latest",
                 },
             )
 
@@ -175,11 +175,7 @@ async def test_rls_isolation(db_engine: AsyncEngine) -> None:
             text("SELECT set_config('app.organisation_id', :oid, true)"),
             {"oid": str(org_a)},
         )
-        profiles = (
-            (await session.execute(select(EnvironmentProfile)))
-            .scalars()
-            .all()
-        )
+        profiles = (await session.execute(select(EnvironmentProfile))).scalars().all()
         names = {p.name for p in profiles}
         assert "org-a-profile" in names
         assert "org-b-profile" not in names

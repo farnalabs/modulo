@@ -106,14 +106,14 @@ def test_infer_schema_returns_200(client: TestClient) -> None:
         patch("modulo.api.routes.schemas.get_connector_instance", return_value=ci),
         patch("modulo.api.routes.schemas.list_model_backends", return_value=page_result),
         patch("modulo.api.routes.schemas.set_rls_org"),
-        patch("modulo.api.routes.schemas.ConnectorHub.sample",
-              return_value=[{"id": "1", "title": "Test"}]),
-        patch("modulo.api.routes.schemas.SchemaInferenceService.infer",
-              return_value=expected_schema),
+        patch("modulo.api.routes.schemas.ConnectorHub.sample", return_value=[{"id": "1", "title": "Test"}]),
+        patch("modulo.api.routes.schemas.SchemaInferenceService.infer", return_value=expected_schema),
         patch("modulo.api.routes.schemas.ConnectorHub.initialise"),
         patch("modulo.api.routes.schemas.ModelBackendHub.initialise"),
-        patch("modulo.api.routes.schemas.ModelBackendHub.backend_ids",
-              new_callable=PropertyMock(return_value=frozenset({backend_id}))),
+        patch(
+            "modulo.api.routes.schemas.ModelBackendHub.backend_ids",
+            new_callable=PropertyMock(return_value=frozenset({backend_id})),
+        ),
         patch("modulo.api.routes.schemas.ModelBackendHub.get", return_value=MagicMock()),
         patch("modulo.api.routes.schemas.create_secrets_backend"),
     ):
@@ -187,12 +187,13 @@ def test_infer_schema_sampling_failure_returns_502(client: TestClient) -> None:
         patch("modulo.api.routes.schemas.list_model_backends", return_value=page_result),
         patch("modulo.api.routes.schemas.set_rls_org"),
         patch("modulo.api.routes.schemas.create_secrets_backend"),
-        patch("modulo.api.routes.schemas.ConnectorHub.sample",
-              side_effect=RuntimeError("Connection refused")),
+        patch("modulo.api.routes.schemas.ConnectorHub.sample", side_effect=RuntimeError("Connection refused")),
         patch("modulo.api.routes.schemas.ConnectorHub.initialise"),
         patch("modulo.api.routes.schemas.ModelBackendHub.initialise"),
-        patch("modulo.api.routes.schemas.ModelBackendHub.backend_ids",
-              new_callable=PropertyMock(return_value=frozenset({backend_id}))),
+        patch(
+            "modulo.api.routes.schemas.ModelBackendHub.backend_ids",
+            new_callable=PropertyMock(return_value=frozenset({backend_id})),
+        ),
         patch("modulo.api.routes.schemas.ModelBackendHub.get", return_value=MagicMock()),
     ):
         resp = client.post(
@@ -218,15 +219,18 @@ def test_infer_schema_inference_failure_returns_502(client: TestClient) -> None:
         patch("modulo.api.routes.schemas.list_model_backends", return_value=page_result),
         patch("modulo.api.routes.schemas.set_rls_org"),
         patch("modulo.api.routes.schemas.create_secrets_backend"),
-        patch("modulo.api.routes.schemas.ConnectorHub.sample",
-              return_value=[{"id": "1"}]),
+        patch("modulo.api.routes.schemas.ConnectorHub.sample", return_value=[{"id": "1"}]),
         patch("modulo.api.routes.schemas.ConnectorHub.initialise"),
         patch("modulo.api.routes.schemas.ModelBackendHub.initialise"),
-        patch("modulo.api.routes.schemas.ModelBackendHub.backend_ids",
-              new_callable=PropertyMock(return_value=frozenset({backend_id}))),
+        patch(
+            "modulo.api.routes.schemas.ModelBackendHub.backend_ids",
+            new_callable=PropertyMock(return_value=frozenset({backend_id})),
+        ),
         patch("modulo.api.routes.schemas.ModelBackendHub.get", return_value=MagicMock()),
-        patch("modulo.api.routes.schemas.SchemaInferenceService.infer",
-              side_effect=SchemaInferenceError("LLM returned garbage")),
+        patch(
+            "modulo.api.routes.schemas.SchemaInferenceService.infer",
+            side_effect=SchemaInferenceError("LLM returned garbage"),
+        ),
     ):
         resp = client.post(
             "/api/v1/schemas/infer",
@@ -261,14 +265,16 @@ def test_infer_schema_defaults_filters_and_limit(client: TestClient) -> None:
         patch("modulo.api.routes.schemas.get_connector_instance", return_value=ci),
         patch("modulo.api.routes.schemas.list_model_backends", return_value=page_result),
         patch("modulo.api.routes.schemas.set_rls_org"),
-        patch("modulo.api.routes.schemas.ConnectorHub.sample",
-              return_value=[{"id": "1"}]),
-        patch("modulo.api.routes.schemas.SchemaInferenceService.infer",
-              return_value={"type": "object", "properties": {}}),
+        patch("modulo.api.routes.schemas.ConnectorHub.sample", return_value=[{"id": "1"}]),
+        patch(
+            "modulo.api.routes.schemas.SchemaInferenceService.infer", return_value={"type": "object", "properties": {}}
+        ),
         patch("modulo.api.routes.schemas.ConnectorHub.initialise"),
         patch("modulo.api.routes.schemas.ModelBackendHub.initialise"),
-        patch("modulo.api.routes.schemas.ModelBackendHub.backend_ids",
-              new_callable=PropertyMock(return_value=frozenset({backend_id}))),
+        patch(
+            "modulo.api.routes.schemas.ModelBackendHub.backend_ids",
+            new_callable=PropertyMock(return_value=frozenset({backend_id})),
+        ),
         patch("modulo.api.routes.schemas.ModelBackendHub.get", return_value=MagicMock()),
         patch("modulo.api.routes.schemas.create_secrets_backend"),
     ):

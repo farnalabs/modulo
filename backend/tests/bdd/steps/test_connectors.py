@@ -80,9 +80,7 @@ def response_ok_true(request):
 @given("a GitHub connector configured with invalid credentials")
 def unhealthy_connector(ctx):
     ctx["connector_id"] = CONNECTOR_ID
-    ctx["health_result"] = HealthResult(
-        ok=False, detail="HTTP 401: Bad credentials"
-    )
+    ctx["health_result"] = HealthResult(ok=False, detail="HTTP 401: Bad credentials")
     ctx["credentials_valid"] = False
     _patch_connector_health(ctx, ok=False, detail="HTTP 401: Bad credentials")
 

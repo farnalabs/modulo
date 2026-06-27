@@ -89,9 +89,7 @@ def _store_response(request: Any, ctx: dict[str, Any], resp: Any) -> None:
 
 
 @given(
-    parsers.parse(
-        'a user exists with email "{email}" and password "{password}"'
-    ),
+    parsers.parse('a user exists with email "{email}" and password "{password}"'),
 )
 def user_exists(email: str, password: str) -> None:
     """Context step: a valid user is registered.
@@ -103,14 +101,10 @@ def user_exists(email: str, password: str) -> None:
 
 
 @when(
-    parsers.parse(
-        'I POST /api/auth/login with email "{email}" and password "{password}"'
-    ),
+    parsers.parse('I POST /api/auth/login with email "{email}" and password "{password}"'),
     target_fixture="login_response",
 )
-def login(
-    client: Any, email: str, password: str, request: Any, ctx: dict[str, Any]
-) -> Any:
+def login(client: Any, email: str, password: str, request: Any, ctx: dict[str, Any]) -> Any:
     """POST /api/v1/auth/login with the given credentials.
 
     Mocks ``authenticate_user`` so the test controls success/failure.
@@ -132,9 +126,7 @@ def login(
 def has_access_token(request: Any) -> None:
     body = request.node.response.json()
     assert "access_token" in body, f"Response missing access_token: {body}"
-    assert isinstance(body["access_token"], str), (
-        f"access_token is not a string: {body['access_token']}"
-    )
+    assert isinstance(body["access_token"], str), f"access_token is not a string: {body['access_token']}"
     assert len(body["access_token"]) > 0, "access_token is empty"
 
 
@@ -142,9 +134,7 @@ def has_access_token(request: Any) -> None:
 def token_encodes_org_id(request: Any) -> None:
     body = request.node.response.json()
     token = body["access_token"]
-    payload: dict[str, object] = jose_jwt.decode(
-        token, _VALID_32, algorithms=["HS256"]
-    )
+    payload: dict[str, object] = jose_jwt.decode(token, _VALID_32, algorithms=["HS256"])
     assert "org_id" in payload, f"Token payload missing org_id: {payload}"
     assert payload["org_id"] is not None
 
@@ -152,9 +142,7 @@ def token_encodes_org_id(request: Any) -> None:
 @then("the response status is 401")
 def status_401(request: Any) -> None:
     resp = request.node.response
-    assert resp.status_code == 401, (
-        f"Expected 401, got {resp.status_code}: {resp.text}"
-    )
+    assert resp.status_code == 401, f"Expected 401, got {resp.status_code}: {resp.text}"
 
 
 # -- Expired token scenario ------------------------------------------------
@@ -179,9 +167,7 @@ def expired_jwt(org_name: str) -> str:
 
 
 @when("I make an authenticated request to /api/pipelines")
-def expired_auth_request(
-    unauth_client: Any, expired_token: str, request: Any, ctx: dict[str, Any]
-) -> None:
+def expired_auth_request(unauth_client: Any, expired_token: str, request: Any, ctx: dict[str, Any]) -> None:
     """GET /api/v1/pipelines with the expired JWT as Bearer."""
     resp = unauth_client.get(
         "/api/v1/pipelines",
@@ -235,9 +221,7 @@ def step_revoked_api_key() -> bool:
 # ===========================================================================
 
 
-def _make_mock_pipeline(
-    name: str, org_id: uuid.UUID, pipeline_id: uuid.UUID
-) -> SimpleNamespace:
+def _make_mock_pipeline(name: str, org_id: uuid.UUID, pipeline_id: uuid.UUID) -> SimpleNamespace:
     """Build a lightweight mock pipeline object."""
     p = SimpleNamespace()
     p.id = pipeline_id
@@ -284,9 +268,7 @@ def authenticate_org(request: Any, org: str) -> None:
 
 
 @when("I GET /api/pipelines", target_fixture="pipelines_response")
-def get_pipelines(
-    request: Any, client: Any, alt_org_client: Any, ctx: dict[str, Any]
-) -> Any:
+def get_pipelines(request: Any, client: Any, alt_org_client: Any, ctx: dict[str, Any]) -> Any:
     """GET /api/v1/pipelines with the correct client for ``current_org``.
 
     Mocks ``list_pipelines`` so only pipelines belonging to the active
@@ -294,15 +276,11 @@ def get_pipelines(
     """
     current = getattr(request.node, "current_org", "acme")
     test_client = alt_org_client if current == "globex" else client
-    all_pipelines: dict[str, dict[str, Any]] = getattr(
-        request.node, "pipelines", {}
-    )
+    all_pipelines: dict[str, dict[str, Any]] = getattr(request.node, "pipelines", {})
 
     with patch("modulo.api.routes.pipelines.list_pipelines") as mock_list:
         org_id = ORG_ID if current == "acme" else ALT_ORG_ID
-        visible = [
-            p["mock"] for p in all_pipelines.values() if p["org_id"] == org_id
-        ]
+        visible = [p["mock"] for p in all_pipelines.values() if p["org_id"] == org_id]
 
         mock_list.return_value = SimpleNamespace(
             items=visible,
@@ -319,28 +297,21 @@ def get_pipelines(
 @then(parsers.parse('I see "{name}"'))
 def see_pipeline(pipelines_response: Any, name: str) -> None:
     assert pipelines_response.status_code == 200, (
-        f"Expected 200, got {pipelines_response.status_code}: "
-        f"{pipelines_response.text}"
+        f"Expected 200, got {pipelines_response.status_code}: {pipelines_response.text}"
     )
     body = pipelines_response.json()
     names = [item["name"] for item in body.get("items", [])]
-    assert name in names, (
-        f"Expected to see pipeline '{name}', but it was not in the "
-        f"response: {names}"
-    )
+    assert name in names, f"Expected to see pipeline '{name}', but it was not in the response: {names}"
 
 
 @then(parsers.parse('I do not see "{name}"'))
 def not_see_pipeline(pipelines_response: Any, name: str) -> None:
     assert pipelines_response.status_code == 200, (
-        f"Expected 200, got {pipelines_response.status_code}: "
-        f"{pipelines_response.text}"
+        f"Expected 200, got {pipelines_response.status_code}: {pipelines_response.text}"
     )
     body = pipelines_response.json()
     names = [item["name"] for item in body.get("items", [])]
-    assert name not in names, (
-        f"Pipeline '{name}' was visible but should not have been: {names}"
-    )
+    assert name not in names, f"Pipeline '{name}' was visible but should not have been: {names}"
 
 
 # -- RLS enforced at the database layer ------------------------------------
@@ -371,10 +342,7 @@ def step_rls_enforced(request: Any, expected: str) -> None:
     try:
         coro = set_rls_org(session, ORG_ID)
         loop.run_until_complete(coro)
-        msg = (
-            "Expected RuntimeError when calling set_rls_org outside a "
-            "transaction, but no error was raised"
-        )
+        msg = "Expected RuntimeError when calling set_rls_org outside a transaction, but no error was raised"
         raise AssertionError(msg)
     except RuntimeError:
         pass  # Expected — RLS requires an active transaction.

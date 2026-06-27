@@ -31,23 +31,22 @@ def _override(**kwargs: str | bool) -> Settings:
         "database_url": "postgresql+asyncpg://localhost/test",
         "secret_key": _VALID_32,
         "fernet_key": _VALID_32,
-        "modulo_oidc_providers": json.dumps([
-            {
-                "provider_id": "google",
-                "client_id": "google-client-id",
-                "client_secret": "google-client-secret",
-                "discovery_url": "https://accounts.google.com/.well-known/openid-configuration",
-            },
-            {
-                "provider_id": "github",
-                "client_id": "github-client-id",
-                "client_secret": "github-client-secret",
-                "discovery_url": (
-                    "https://token.actions.githubusercontent.com/"
-                    ".well-known/openid-configuration"
-                ),
-            },
-        ]),
+        "modulo_oidc_providers": json.dumps(
+            [
+                {
+                    "provider_id": "google",
+                    "client_id": "google-client-id",
+                    "client_secret": "google-client-secret",
+                    "discovery_url": "https://accounts.google.com/.well-known/openid-configuration",
+                },
+                {
+                    "provider_id": "github",
+                    "client_id": "github-client-id",
+                    "client_secret": "github-client-secret",
+                    "discovery_url": ("https://token.actions.githubusercontent.com/.well-known/openid-configuration"),
+                },
+            ]
+        ),
     }
     base.update(kwargs)
     return Settings(**base)  # type: ignore[arg-type]
@@ -146,10 +145,12 @@ class TestOidcProviderParsing:
 
     def test_skips_missing_fields(self) -> None:
         settings = _override(
-            modulo_oidc_providers=json.dumps([
-                {"provider_id": "ok", "client_id": "c", "client_secret": "s", "discovery_url": "u"},
-                {"provider_id": "bad"},
-            ])
+            modulo_oidc_providers=json.dumps(
+                [
+                    {"provider_id": "ok", "client_id": "c", "client_secret": "s", "discovery_url": "u"},
+                    {"provider_id": "bad"},
+                ]
+            )
         )
         providers = parse_oidc_providers(settings)
         assert len(providers) == 1
@@ -176,9 +177,7 @@ class TestJitProvisioning:
             session.execute.return_value = exec_mock
 
             with pytest.raises(RuntimeError, match="No organisation exists"):
-                await jit_provision_user(
-                    session, settings, "new@example.com", "New", "oidc", "google:123"
-                )
+                await jit_provision_user(session, settings, "new@example.com", "New", "oidc", "google:123")
 
 
 # ---------------------------------------------------------------------------
@@ -297,9 +296,7 @@ class TestOidcCallbackEndpoint:
         assert resp.status_code == 400
 
     def test_invalid_state(self, client: TestClient) -> None:
-        resp = client.get(
-            "/api/v1/auth/oidc/google/callback?code=abc&state=tampered"
-        )
+        resp = client.get("/api/v1/auth/oidc/google/callback?code=abc&state=tampered")
         assert resp.status_code == 401
 
 
@@ -329,17 +326,10 @@ class TestSamlMetadataParsing:
             modulo_saml_idp_metadata_xml=self.SAMPLE_IDP_METADATA,
         )
 
-        with (
-            patch("modulo.auth.sso._saml_fetch_idp_metadata", new_callable=AsyncMock)
-            as mock_fetch
-        ):
+        with patch("modulo.auth.sso._saml_fetch_idp_metadata", new_callable=AsyncMock) as mock_fetch:
             mock_fetch.return_value = self.SAMPLE_IDP_METADATA
 
-            url, req_id = asyncio.run(
-                saml_get_auth_url(
-                    settings, "https://modulo.example.com/api/v1/auth/saml/acs"
-                )
-            )
+            url, req_id = asyncio.run(saml_get_auth_url(settings, "https://modulo.example.com/api/v1/auth/saml/acs"))
             assert "idp.example.com" in url
             assert "SAMLRequest" in url
             assert req_id.startswith("_")
@@ -348,12 +338,12 @@ class TestSamlMetadataParsing:
         """Verify SAML response XML parsing extracts NameID and attributes."""
         decoded_saml = (
             '<?xml version="1.0" encoding="UTF-8"?>'
-            '<samlp:Response'
+            "<samlp:Response"
             ' xmlns:samlp="urn:oasis:names:tc:SAML:2.0:protocol"'
             ' xmlns:saml="urn:oasis:names:tc:SAML:2.0:assertion">'
             '  <saml:Assertion ID="_abc123" IssueInstant="2024-01-01T00:00:00Z">'
-            '    <saml:Subject>'
-            '      <saml:NameID'
+            "    <saml:Subject>"
+            "      <saml:NameID"
             '       Format="urn:oasis:names:tc:SAML:1.1:nameid-format:emailAddress">'
             "        user@example.com"
             "      </saml:NameID>"
@@ -405,9 +395,11 @@ class TestDecodeIdTokenClaims:
         from modulo.auth.sso import _decode_id_token_claims
 
         header = base64.urlsafe_b64encode(b'{"alg":"RS256"}').rstrip(b"=").decode()
-        payload = base64.urlsafe_b64encode(
-            b'{"email":"user@example.com","name":"Test User","sub":"abc123"}'
-        ).rstrip(b"=").decode()
+        payload = (
+            base64.urlsafe_b64encode(b'{"email":"user@example.com","name":"Test User","sub":"abc123"}')
+            .rstrip(b"=")
+            .decode()
+        )
         sig = base64.urlsafe_b64encode(b"signature").rstrip(b"=").decode()
         id_token = f"{header}.{payload}.{sig}"
 
@@ -459,9 +451,7 @@ class TestJitProvisioningExtended:
             mock_select.return_value.order_by.return_value.limit.return_value = "query"
             session.execute.return_value = exec_mock
 
-            user = await jit_provision_user(
-                session, settings, "new@example.com", "New User", "oidc", "google:456"
-            )
+            user = await jit_provision_user(session, settings, "new@example.com", "New User", "oidc", "google:456")
 
             assert user.email == "new@example.com"
             assert user.display_name == "New User"
@@ -484,9 +474,7 @@ class TestJitProvisioningExtended:
         with patch("modulo.auth.sso.get_user_by_email", new_callable=AsyncMock) as mock_get:
             mock_get.return_value = existing
 
-            user = await jit_provision_user(
-                session, settings, "existing@example.com", "Existing", "oidc", "google:789"
-            )
+            user = await jit_provision_user(session, settings, "existing@example.com", "Existing", "oidc", "google:789")
 
             assert user is existing
             assert user.sso_subject == "google:789"
@@ -503,7 +491,12 @@ class TestJitProvisioningExtended:
             mock_get.return_value = None
 
             user = await jit_provision_user(
-                session, settings, "user@example.com", "User", "oidc", "sub:1",
+                session,
+                settings,
+                "user@example.com",
+                "User",
+                "oidc",
+                "sub:1",
                 default_org_id=org_id,
             )
 
@@ -524,9 +517,7 @@ class TestJitProvisioningExtended:
             session.execute.return_value = exec_mock
 
             with pytest.raises(RuntimeError, match="No organisation exists"):
-                await jit_provision_user(
-                    session, settings, "new@example.com", "New", "oidc", "google:123"
-                )
+                await jit_provision_user(session, settings, "new@example.com", "New", "oidc", "google:123")
 
 
 # ---------------------------------------------------------------------------
@@ -600,9 +591,7 @@ class TestOidcGetAuthorizeUrl:
                 "authorization_endpoint": "https://accounts.google.com/o/oauth2/v2/auth",
             }
 
-            url, raw_state = await oidc_get_authorize_url(
-                "google", settings, "http://localhost/callback"
-            )
+            url, raw_state = await oidc_get_authorize_url("google", settings, "http://localhost/callback")
 
             assert url.startswith("https://accounts.google.com/o/oauth2/v2/auth")
             assert "client_id=google-client-id" in url
@@ -628,9 +617,9 @@ class TestOidcProcessCallback:
         id_token = (
             base64.urlsafe_b64encode(b'{"alg":"RS256"}').rstrip(b"=").decode()
             + "."
-            + base64.urlsafe_b64encode(
-                b'{"email":"user@example.com","name":"Test User","sub":"abc123"}'
-            ).rstrip(b"=").decode()
+            + base64.urlsafe_b64encode(b'{"email":"user@example.com","name":"Test User","sub":"abc123"}')
+            .rstrip(b"=")
+            .decode()
             + "."
             + "sig"
         )
@@ -672,9 +661,7 @@ class TestOidcProcessCallback:
         session = AsyncMock(spec=AsyncSession)
 
         with pytest.raises(ValueError, match="CSRF"):
-            await oidc_process_callback(
-                "code", "tampered-state", settings, session, "http://localhost/callback"
-            )
+            await oidc_process_callback("code", "tampered-state", settings, session, "http://localhost/callback")
 
     async def test_raises_when_provider_not_found_after_state_check(self) -> None:
         from modulo.auth.sso import oidc_process_callback
@@ -684,9 +671,7 @@ class TestOidcProcessCallback:
         signed = sign_state("ghost:state", settings.secret_key)
 
         with pytest.raises(ValueError, match="not found"):
-            await oidc_process_callback(
-                "code", signed, settings, session, "http://localhost/callback"
-            )
+            await oidc_process_callback("code", signed, settings, session, "http://localhost/callback")
 
 
 # ---------------------------------------------------------------------------
@@ -716,10 +701,7 @@ class TestSamlGetAuthUrl:
             modulo_license_key="lic-123",
             modulo_saml_enabled=True,
         )
-        with (
-            patch("modulo.auth.sso._saml_fetch_idp_metadata", new_callable=AsyncMock)
-            as mock_fetch
-        ):
+        with patch("modulo.auth.sso._saml_fetch_idp_metadata", new_callable=AsyncMock) as mock_fetch:
             mock_fetch.side_effect = ValueError("SAML IdP metadata not configured")
             with pytest.raises(ValueError, match="metadata not configured"):
                 await saml_get_auth_url(settings, "http://localhost/acs")
@@ -786,10 +768,7 @@ class TestSamlProcessResponse:
         session = AsyncMock(spec=AsyncSession)
 
         empty_response = base64.b64encode(b"<root/>").decode()
-        with (
-            patch("modulo.auth.sso._saml_fetch_idp_metadata", new_callable=AsyncMock)
-            as mock_fetch
-        ):
+        with patch("modulo.auth.sso._saml_fetch_idp_metadata", new_callable=AsyncMock) as mock_fetch:
             mock_fetch.return_value = self.SAMPLE_IDP_METADATA
             with pytest.raises(ValueError, match="No SAML Assertion"):
                 await saml_process_response(empty_response, settings, session)
@@ -807,8 +786,7 @@ class TestSamlProcessResponse:
         encoded = base64.b64encode(self.SAML_RESPONSE_XML.encode()).decode()
 
         with (
-            patch("modulo.auth.sso._saml_fetch_idp_metadata", new_callable=AsyncMock)
-            as mock_fetch,
+            patch("modulo.auth.sso._saml_fetch_idp_metadata", new_callable=AsyncMock) as mock_fetch,
             patch("modulo.auth.sso.jit_provision_user", new_callable=AsyncMock) as mock_jit,
             patch("modulo.auth.sso.issue_sso_tokens", new_callable=AsyncMock) as mock_tok,
         ):
@@ -824,7 +802,11 @@ class TestSamlProcessResponse:
 
             assert result["access_token"] == "at-saml"
             mock_jit.assert_awaited_once_with(
-                session, settings, "user@example.com", "Test User", "saml",
+                session,
+                settings,
+                "user@example.com",
+                "Test User",
+                "saml",
                 "saml:https://idp.example.com:user@example.com",
             )
             mock_tok.assert_awaited_once()
@@ -853,9 +835,7 @@ class TestSamlFetchIdpMetadata:
 
             result = await _saml_fetch_idp_metadata(settings)
             assert result == "<md>remote</md>"
-            mock_client.get.assert_awaited_once_with(
-                "https://idp.example.com/metadata", timeout=15
-            )
+            mock_client.get.assert_awaited_once_with("https://idp.example.com/metadata", timeout=15)
 
     async def test_raises_when_not_configured(self) -> None:
         from modulo.auth.sso import _saml_fetch_idp_metadata
@@ -1052,9 +1032,9 @@ class TestOidcCallbackEndpointExtended:
         id_token = (
             base64.urlsafe_b64encode(b'{"alg":"RS256"}').rstrip(b"=").decode()
             + "."
-            + base64.urlsafe_b64encode(
-                b'{"email":"user@example.com","name":"Test User","sub":"abc"}'
-            ).rstrip(b"=").decode()
+            + base64.urlsafe_b64encode(b'{"email":"user@example.com","name":"Test User","sub":"abc"}')
+            .rstrip(b"=")
+            .decode()
             + "."
             + "sig"
         )

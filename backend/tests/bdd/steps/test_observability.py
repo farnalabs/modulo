@@ -29,6 +29,7 @@ except (FileNotFoundError, OSError):
 # Once scenarios are added, matching step definitions must be implemented here.
 # Placeholder: re-export markers so the feature file compiles without error.
 
+
 @given("the observability module is active")
 def _observability_active() -> None:
     """Placeholder — implement when /metrics endpoint is ready."""
@@ -72,6 +73,7 @@ def _response_has_token_usage() -> None:
 # The otel_traces.feature file is a stub with no scenarios yet.
 # Once scenarios are added, matching step definitions must be implemented here.
 
+
 @given("OpenTelemetry is configured")
 def _otel_configured() -> None:
     """Placeholder — implement when LangGraphOtelBridge is done."""
@@ -114,6 +116,7 @@ def _trace_no_credentials() -> None:
 
 # The run_logs.feature file is a stub with no scenarios yet.
 # Once scenarios are added, matching step definitions must be implemented here.
+
 
 @given("a pipeline run is in progress")
 def _run_in_progress() -> None:

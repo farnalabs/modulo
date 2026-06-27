@@ -7,8 +7,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 _MIGRATION_PATH = (
-    Path(__file__).resolve().parents[3]
-    / "src" / "modulo" / "db" / "migrations" / "versions" / "0026_team_rbac_cap.py"
+    Path(__file__).resolve().parents[3] / "src" / "modulo" / "db" / "migrations" / "versions" / "0026_team_rbac_cap.py"
 )
 
 
@@ -97,8 +96,7 @@ class TestMigration0026Upgrade:
                     migration.upgrade()
 
         all_sql = " ".join(
-            str(c[0][0].compile(compile_kwargs={"literal_binds": True}))
-            for c in mock_op.execute.call_args_list
+            str(c[0][0].compile(compile_kwargs={"literal_binds": True})) for c in mock_op.execute.call_args_list
         )
         assert "CREATE OR REPLACE FUNCTION check_team_privilege_cap" in all_sql
         assert "RAISE EXCEPTION" in all_sql
@@ -112,8 +110,7 @@ class TestMigration0026Upgrade:
                     migration.upgrade()
 
         all_sql = " ".join(
-            str(c[0][0].compile(compile_kwargs={"literal_binds": True}))
-            for c in mock_op.execute.call_args_list
+            str(c[0][0].compile(compile_kwargs={"literal_binds": True})) for c in mock_op.execute.call_args_list
         )
         assert "CREATE TRIGGER trg_team_privilege_cap" in all_sql
 

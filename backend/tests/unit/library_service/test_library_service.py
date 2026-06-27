@@ -242,7 +242,11 @@ def test_dogfood_agents_have_environment_capabilities():
     assert dogfood_agents["issue-reader"].content_json["required_environment_capabilities"] == ["egress:github.com"]
     assert dogfood_agents["code-generator"].content_json["required_environment_capabilities"] == []
     assert dogfood_agents["code-applier"].content_json["required_environment_capabilities"] == ["filesystem:write"]
-    assert dogfood_agents["test-runner"].content_json["required_environment_capabilities"] == ["shell:exec", "python3.12", "uv"]  # noqa: E501
+    assert dogfood_agents["test-runner"].content_json["required_environment_capabilities"] == [
+        "shell:exec",
+        "python3.12",
+        "uv",
+    ]
     assert dogfood_agents["pr-creator"].content_json["required_environment_capabilities"] == ["egress:github.com"]
 
 
@@ -337,7 +341,9 @@ async def test_list_primitives_type_filter_propagated():
 
     with (
         patch("modulo.core.library_service.set_rls_org", new_callable=AsyncMock),
-        patch("modulo.core.library_service.list_library_primitives", new_callable=AsyncMock, return_value=org_page) as mock_list,  # noqa: E501
+        patch(
+            "modulo.core.library_service.list_library_primitives", new_callable=AsyncMock, return_value=org_page
+        ) as mock_list,
     ):
         result = await list_primitives(session, org_id, primitive_type="schema")
 

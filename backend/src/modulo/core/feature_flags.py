@@ -138,9 +138,7 @@ class FeatureFlagRegistry:
 
         for flag in self._flags:
             flag_tier_rank = tier_order.get(flag.tier, 0)
-            flag.currently_active = (
-                self._has_license_key and flag_tier_rank <= current_rank
-            )
+            flag.currently_active = self._has_license_key and flag_tier_rank <= current_rank
 
     def refresh(self, current_tier: str, has_license_key: bool) -> None:
         self._current_tier = current_tier

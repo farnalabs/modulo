@@ -9,22 +9,13 @@ scenarios("../../features/notifications/failure_webhook.feature")
 scenarios("../../features/notifications/signing.feature")
 
 
-
-@given(
-    parsers.parse(
-        'pipeline "{name}" has an approval gate at node "{node}"'
-    )
-)
+@given(parsers.parse('pipeline "{name}" has an approval gate at node "{node}"'))
 def pipeline_with_gate(name: str, node: str, request):
     request.node._pipeline_name = name
     request.node._gate_node = node
 
 
-@given(
-    parsers.parse(
-        'the pipeline has HITL webhook configured at "{url}"'
-    )
-)
+@given(parsers.parse('the pipeline has HITL webhook configured at "{url}"'))
 def hitl_webhook_configured(url: str, request):
     request.node._webhook_url = url
     request.node._webhook_type = "hitl"
@@ -52,12 +43,12 @@ def webhook_body_contains_ids(request):
     pass
 
 
-@then(parsers.parse('the webhook payload includes the pipeline name'))
+@then(parsers.parse("the webhook payload includes the pipeline name"))
 def webhook_includes_pipeline_name(request):
     pass
 
 
-@then(parsers.parse('the webhook payload includes the node name'))
+@then(parsers.parse("the webhook payload includes the node name"))
 def webhook_includes_node_name(request):
     pass
 
@@ -72,11 +63,7 @@ def webhook_retried(count: int, request):
     pass
 
 
-@then(
-    parsers.parse(
-        "after {count:d} failures, the event is logged to the dead-letter queue"
-    )
-)
+@then(parsers.parse("after {count:d} failures, the event is logged to the dead-letter queue"))
 def dead_letter_logged(count: int, request):
     pass
 
@@ -127,11 +114,7 @@ def failure_webhook_returns(status: int, request):
     request.node._webhook_status = status
 
 
-@given(
-    parsers.parse(
-        "the failure webhook endpoint has failed {count:d} consecutive times"
-    )
-)
+@given(parsers.parse("the failure webhook endpoint has failed {count:d} consecutive times"))
 def failure_endpoint_failed(count: int, request):
     request.node._consecutive_failures = count
 
@@ -172,7 +155,7 @@ def request_includes_header(header: str, request):
     pass
 
 
-@then(parsers.parse('the signature is a valid HMAC-SHA256 of the payload'))
+@then(parsers.parse("the signature is a valid HMAC-SHA256 of the payload"))
 def valid_hmac_signature(request):
     import hashlib
     import hmac

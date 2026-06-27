@@ -29,6 +29,7 @@ class _StubBackend:
         if self._fail:
             raise RuntimeError("LLM unavailable")
         from langchain_core.messages import AIMessage
+
         return AIMessage(content=self._response or "{}")
 
     def stream(self, messages: list, **kwargs: object) -> object:
@@ -87,9 +88,7 @@ class TestSchemaInferenceFullFlow:
     @pytest.mark.asyncio
     async def test_infer_with_empty_records_list(self) -> None:
         """Empty sample list produces a valid schema from backend."""
-        backend = _StubBackend(
-            response=json.dumps({"type": "object", "properties": {}})
-        )
+        backend = _StubBackend(response=json.dumps({"type": "object", "properties": {}}))
         service = SchemaInferenceService(backend)
         schema = await service.infer([])
         assert schema == {"type": "object", "properties": {}}
@@ -160,6 +159,7 @@ class TestSchemaInferenceFullFlow:
 
             async def invoke(self, messages: list, **kwargs: object) -> object:
                 from langchain_core.messages import AIMessage
+
                 return AIMessage(content=[{"type": "text", "text": "response"}])
 
             def stream(self, messages: list, **kwargs: object) -> object:

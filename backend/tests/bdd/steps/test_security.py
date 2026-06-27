@@ -88,36 +88,26 @@ def save_connector(plaintext_key: str) -> dict[str, Any]:
 def check_fernet_token(saved_credential: dict[str, Any]) -> None:
     """Verify the encrypted value looks like a Fernet token."""
     token = saved_credential["encrypted"]
-    assert isinstance(token, bytes), (
-        f"Fernet token should be bytes, got {type(token)}"
-    )
+    assert isinstance(token, bytes), f"Fernet token should be bytes, got {type(token)}"
     # All Fernet tokens start with the base64-encoded version byte 0x80
     # which decodes to "gAAAAA".
-    assert token.startswith(b"gAAAAA"), (
-        f"Token does not start with Fernet magic bytes: "
-        f"{token[:20]!r}"
-    )
+    assert token.startswith(b"gAAAAA"), f"Token does not start with Fernet magic bytes: {token[:20]!r}"
     # A valid Fernet token can be decoded without error.
     f = Fernet(saved_credential["fernet_key"])
     decrypted = f.decrypt(token)
     assert decrypted == saved_credential["plaintext"].encode(), (
-        f"Round-trip mismatch: got {decrypted!r}, "
-        f"expected {saved_credential['plaintext']!r}"
+        f"Round-trip mismatch: got {decrypted!r}, expected {saved_credential['plaintext']!r}"
     )
 
 
 @then(
     parsers.parse('decrypting with FERNET_KEY yields "{expected}"'),
 )
-def decrypt_with_key(
-    saved_credential: dict[str, Any], expected: str
-) -> None:
+def decrypt_with_key(saved_credential: dict[str, Any], expected: str) -> None:
     """Confirm that decrypting with the same key recovers the plaintext."""
     f = Fernet(saved_credential["fernet_key"])
     decrypted = f.decrypt(saved_credential["encrypted"]).decode()
-    assert decrypted == expected, (
-        f"Decrypted value '{decrypted}' does not match expected '{expected}'"
-    )
+    assert decrypted == expected, f"Decrypted value '{decrypted}' does not match expected '{expected}'"
 
 
 # -- Decrypt on read within a pipeline node --------------------------------
@@ -133,9 +123,7 @@ def decrypt_on_read(encrypted_credential: dict[str, Any]) -> str:
 
 @then("the node receives the plaintext credential")
 def check_plaintext_received(decrypted_value: str) -> None:
-    assert decrypted_value == "my-secret-api-key", (
-        f"Expected 'my-secret-api-key', got '{decrypted_value}'"
-    )
+    assert decrypted_value == "my-secret-api-key", f"Expected 'my-secret-api-key', got '{decrypted_value}'"
 
 
 # -- Wrong FERNET_KEY cannot decrypt ---------------------------------------
@@ -151,9 +139,7 @@ def restart_with_key_b() -> bytes:
 
 
 @when("attempting to decrypt", target_fixture="decrypt_error")
-def attempt_decrypt(
-    credential_key_a: dict[str, Any], wrong_key: bytes
-) -> Exception | None:
+def attempt_decrypt(credential_key_a: dict[str, Any], wrong_key: bytes) -> Exception | None:
     """Try to decrypt key-A-encrypted data with key B."""
     try:
         f = Fernet(wrong_key)
@@ -166,12 +152,10 @@ def attempt_decrypt(
 @then("attempting to decrypt raises InvalidToken")
 def check_invalid_token(decrypt_error: Exception | None) -> None:
     assert decrypt_error is not None, (
-        "Expected InvalidToken when decrypting with wrong key, "
-        "but no exception was raised"
+        "Expected InvalidToken when decrypting with wrong key, but no exception was raised"
     )
     assert isinstance(decrypt_error, InvalidToken), (
-        f"Expected InvalidToken, got {type(decrypt_error).__name__}: "
-        f"{decrypt_error}"
+        f"Expected InvalidToken, got {type(decrypt_error).__name__}: {decrypt_error}"
     )
 
 

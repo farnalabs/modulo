@@ -39,9 +39,7 @@ def _serialized(name: str) -> dict[str, Any]:
 # ---------------------------------------------------------------------------
 
 
-def test_chain_start_creates_span(
-    bridge: LangGraphOtelBridge, exporter: InMemorySpanExporter
-) -> None:
+def test_chain_start_creates_span(bridge: LangGraphOtelBridge, exporter: InMemorySpanExporter) -> None:
     run_id = uuid.uuid4()
     bridge.on_chain_start(_serialized("MyNode"), {}, run_id=run_id)
 
@@ -50,9 +48,7 @@ def test_chain_start_creates_span(
     assert len(spans) == 0, "span should not be finished until on_chain_end"
 
 
-def test_chain_end_finishes_span_ok(
-    bridge: LangGraphOtelBridge, exporter: InMemorySpanExporter
-) -> None:
+def test_chain_end_finishes_span_ok(bridge: LangGraphOtelBridge, exporter: InMemorySpanExporter) -> None:
     run_id = uuid.uuid4()
     bridge.on_chain_start(_serialized("MyNode"), {}, run_id=run_id)
     bridge.on_chain_end({}, run_id=run_id)
@@ -65,9 +61,7 @@ def test_chain_end_finishes_span_ok(
     assert str(run_id) not in bridge._spans
 
 
-def test_chain_error_finishes_span_with_error(
-    bridge: LangGraphOtelBridge, exporter: InMemorySpanExporter
-) -> None:
+def test_chain_error_finishes_span_with_error(bridge: LangGraphOtelBridge, exporter: InMemorySpanExporter) -> None:
     run_id = uuid.uuid4()
     err = ValueError("boom")
     bridge.on_chain_start(_serialized("ErrNode"), {}, run_id=run_id)
@@ -98,9 +92,7 @@ def test_chain_attributes_set(bridge: LangGraphOtelBridge, exporter: InMemorySpa
 # ---------------------------------------------------------------------------
 
 
-def test_parent_child_propagation(
-    bridge: LangGraphOtelBridge, exporter: InMemorySpanExporter
-) -> None:
+def test_parent_child_propagation(bridge: LangGraphOtelBridge, exporter: InMemorySpanExporter) -> None:
     parent_id = uuid.uuid4()
     child_id = uuid.uuid4()
 
@@ -138,9 +130,7 @@ def test_unknown_parent_run_id_is_handled_gracefully(
 # ---------------------------------------------------------------------------
 
 
-def test_llm_start_creates_span(
-    bridge: LangGraphOtelBridge, exporter: InMemorySpanExporter
-) -> None:
+def test_llm_start_creates_span(bridge: LangGraphOtelBridge, exporter: InMemorySpanExporter) -> None:
     run_id = uuid.uuid4()
     bridge.on_llm_start(_serialized("gpt-4"), ["Hello"], run_id=run_id)
 
@@ -149,9 +139,7 @@ def test_llm_start_creates_span(
     assert "gpt-4" in span_name
 
 
-def test_llm_end_records_token_usage(
-    bridge: LangGraphOtelBridge, exporter: InMemorySpanExporter
-) -> None:
+def test_llm_end_records_token_usage(bridge: LangGraphOtelBridge, exporter: InMemorySpanExporter) -> None:
     run_id = uuid.uuid4()
     bridge.on_llm_start(_serialized("gpt-4"), ["Hello"], run_id=run_id)
 
@@ -187,9 +175,7 @@ def test_llm_end_without_token_usage_does_not_raise(
     assert spans[0].status.status_code == StatusCode.OK
 
 
-def test_llm_error_records_exception(
-    bridge: LangGraphOtelBridge, exporter: InMemorySpanExporter
-) -> None:
+def test_llm_error_records_exception(bridge: LangGraphOtelBridge, exporter: InMemorySpanExporter) -> None:
     run_id = uuid.uuid4()
     bridge.on_llm_start(_serialized("gpt-4"), ["Hello"], run_id=run_id)
     bridge.on_llm_error(RuntimeError("rate limit"), run_id=run_id)
@@ -236,9 +222,7 @@ def test_end_without_start_does_not_raise(bridge: LangGraphOtelBridge) -> None:
     bridge.on_tool_end("x", run_id=run_id)
 
 
-def test_spans_dict_empty_after_full_lifecycle(
-    bridge: LangGraphOtelBridge, exporter: InMemorySpanExporter
-) -> None:
+def test_spans_dict_empty_after_full_lifecycle(bridge: LangGraphOtelBridge, exporter: InMemorySpanExporter) -> None:
     root = uuid.uuid4()
     llm = uuid.uuid4()
     tool = uuid.uuid4()

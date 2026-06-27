@@ -521,8 +521,7 @@ def test_trigger_run_input_validation_cycle_detected(client: TestClient) -> None
     snapshot = _make_snapshot()
     snapshot.graph_json = {
         "nodes": [{"id": "a"}, {"id": "b"}],
-        "edges": [{"source_node_id": "a", "target_node_id": "b"},
-                  {"source_node_id": "b", "target_node_id": "a"}],
+        "edges": [{"source_node_id": "a", "target_node_id": "b"}, {"source_node_id": "b", "target_node_id": "a"}],
     }
 
     with (
@@ -570,6 +569,4 @@ async def test_run_in_background_marks_run_failed_on_executor_error() -> None:
         await _run_in_background(executor, run_id, org_id, {})
 
         mock_rls.assert_awaited_once_with(mock_session, org_id)
-        mock_update.assert_awaited_once_with(
-            mock_session, run_id, "failed", error_code="internal_error"
-        )
+        mock_update.assert_awaited_once_with(mock_session, run_id, "failed", error_code="internal_error")

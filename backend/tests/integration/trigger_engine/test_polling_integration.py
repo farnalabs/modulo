@@ -102,7 +102,7 @@ async def seeded_db(db_session: AsyncSession) -> AsyncSession:
             "connector_type_id, name, config_json, visibility, "
             "allowed_operations, credentials_ciphertext) "
             "VALUES (:id, :oid, :uid, 'stub', 'Stub CI', "
-             "'{}'::json, 'org', '[\"query\"]'::json, 'ciphertext') "
+            "'{}'::json, 'org', '[\"query\"]'::json, 'ciphertext') "
             "ON CONFLICT (id) DO NOTHING"
         ),
         {
@@ -150,11 +150,14 @@ async def polling_trigger(seeded_db: AsyncSession) -> dict[str, Any]:
 
 def _make_polling_config_json() -> str:
     return (
-        '{"connector_instance_id": "' + str(_CI_ID)
+        '{"connector_instance_id": "'
+        + str(_CI_ID)
         + '", "poll_query": "select * from issues", '
         + '"condition_expression": "[?status==`open`]", '
         + '"poll_interval_seconds": 60, '
-        + '"snapshot_id": "' + str(_SNAPSHOT_ID) + '"}'
+        + '"snapshot_id": "'
+        + str(_SNAPSHOT_ID)
+        + '"}'
     )
 
 
@@ -208,9 +211,7 @@ async def test_polling_trigger_happy_path(
         async with session.begin():
             await set_rls_org(session, _ORG_ID)
 
-            run_result = await session.execute(
-                select(Run).where(Run.id == run_id)
-            )
+            run_result = await session.execute(select(Run).where(Run.id == run_id))
             run = run_result.scalar_one_or_none()
             assert run is not None, f"Run {run_id} not found in DB"
             assert run.trigger_type == "polling"
@@ -229,9 +230,7 @@ async def test_polling_trigger_happy_path(
             assert event.trigger_type == "polling"
             assert event.run_id == run_id
 
-            trigger_result = await session.execute(
-                select(Trigger).where(Trigger.id == _TRIGGER_ID)
-            )
+            trigger_result = await session.execute(select(Trigger).where(Trigger.id == _TRIGGER_ID))
             trigger = trigger_result.scalar_one_or_none()
             assert trigger is not None
             assert trigger.last_fired_at is not None
@@ -283,9 +282,7 @@ async def test_polling_trigger_no_match(
         async with session.begin():
             await set_rls_org(session, _ORG_ID)
 
-            runs_result = await session.execute(
-                select(Run).where(Run.trigger_id == _TRIGGER_ID)
-            )
+            runs_result = await session.execute(select(Run).where(Run.trigger_id == _TRIGGER_ID))
             runs = runs_result.scalars().all()
             assert len(runs) == 0
 
@@ -320,10 +317,7 @@ async def test_polling_trigger_concurrency_limit(
         async with session.begin():
             await set_rls_org(session, _ORG_ID)
             await session.execute(
-                text(
-                    "UPDATE triggers SET max_concurrent_runs = 2 "
-                    "WHERE id = :id"
-                ),
+                text("UPDATE triggers SET max_concurrent_runs = 2 WHERE id = :id"),
                 {"id": str(_TRIGGER_ID)},
             )
             for i in range(2):

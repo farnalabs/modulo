@@ -42,24 +42,18 @@ class TestAuditAppendOnlyDbTrigger:
         self._org_id = org_id
         return event_id
 
-    async def test_update_trigger_blocks_update(
-        self, db_session: AsyncSession
-    ) -> None:
+    async def test_update_trigger_blocks_update(self, db_session: AsyncSession) -> None:
         """UPDATE on audit_events should be rejected by the Postgres trigger."""
         with pytest.raises(Exception) as exc_info:
             await db_session.execute(
-                text(
-                    "UPDATE audit_events SET event_type = 'modified' WHERE id = :id"
-                ),
+                text("UPDATE audit_events SET event_type = 'modified' WHERE id = :id"),
                 {"id": self._event_id},
             )
             await db_session.commit()
         error_msg = str(exc_info.value).lower()
         assert "append-only" in error_msg or "not permitted" in error_msg
 
-    async def test_delete_trigger_blocks_delete(
-        self, db_session: AsyncSession
-    ) -> None:
+    async def test_delete_trigger_blocks_delete(self, db_session: AsyncSession) -> None:
         """DELETE on audit_events should be rejected by the Postgres trigger."""
         with pytest.raises(Exception) as exc_info:
             await db_session.execute(
@@ -70,9 +64,7 @@ class TestAuditAppendOnlyDbTrigger:
         error_msg = str(exc_info.value).lower()
         assert "append-only" in error_msg or "not permitted" in error_msg
 
-    async def test_event_still_exists_after_attempted_delete(
-        self, db_session: AsyncSession
-    ) -> None:
+    async def test_event_still_exists_after_attempted_delete(self, db_session: AsyncSession) -> None:
         """After a failed DELETE attempt, the event should still exist."""
         # Try to delete
         with pytest.raises(Exception):
@@ -165,9 +157,7 @@ class TestAuditReadOperations:
 
     async def test_select_still_works(self, db_session: AsyncSession) -> None:
         """SELECT on audit_events should still work."""
-        result = await db_session.execute(
-            text("SELECT COUNT(*) FROM audit_events")
-        )
+        result = await db_session.execute(text("SELECT COUNT(*) FROM audit_events"))
         count = result.scalar()
         assert count is not None
 

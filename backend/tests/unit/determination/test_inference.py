@@ -32,9 +32,7 @@ def test_empty_samples_returns_findings():
 
 
 def test_repos_detect_development_stage():
-    samples = [
-        _sample("repos", [{"name": "backend"}, {"name": "frontend"}])
-    ]
+    samples = [_sample("repos", [{"name": "backend"}, {"name": "frontend"}])]
     findings = infer(samples)
     stages = [f for f in findings if f.category == "stage" and "Development" in f.finding]
     assert len(stages) >= 1
@@ -42,9 +40,7 @@ def test_repos_detect_development_stage():
 
 
 def test_pull_requests_detect_code_review():
-    samples = [
-        _sample("pulls", [{"number": 1, "created_at": "2026-06-20T00:00:00Z"}])
-    ]
+    samples = [_sample("pulls", [{"number": 1, "created_at": "2026-06-20T00:00:00Z"}])]
     findings = infer(samples)
     review = [f for f in findings if f.category == "stage" and "Code review" in f.finding]
     assert len(review) == 1
@@ -54,10 +50,13 @@ def test_stale_pr_bottleneck():
     old_date = "2026-06-01T00:00:00Z"
     recent_date = "2026-06-22T00:00:00Z"
     samples = [
-        _sample("pulls", [
-            {"number": 1, "created_at": old_date},
-            {"number": 2, "created_at": recent_date},
-        ])
+        _sample(
+            "pulls",
+            [
+                {"number": 1, "created_at": old_date},
+                {"number": 2, "created_at": recent_date},
+            ],
+        )
     ]
     findings = infer(samples)
     bottlenecks = [f for f in findings if f.category == "bottleneck"]
@@ -139,9 +138,7 @@ def test_confidence_levels_present():
 def test_each_finding_has_evidence():
     samples = [
         _sample("repos", [{"name": "repo"}]),
-        _sample("issues", [
-            {"fields": {"status": {"name": "Backlog"}}}
-        ], connector_type=ConnectorType.JIRA),
+        _sample("issues", [{"fields": {"status": {"name": "Backlog"}}}], connector_type=ConnectorType.JIRA),
     ]
     findings = infer(samples)
     for f in findings:

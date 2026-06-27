@@ -65,7 +65,9 @@ class TestFeedbackFlowUnit:
         assert fetched.feedback_status == "pending"
 
     async def test_get_feedback_record_not_found(
-        self, rls_session: AsyncSession, test_org: uuid.UUID,
+        self,
+        rls_session: AsyncSession,
+        test_org: uuid.UUID,
     ) -> None:
         mgr = FeedbackManager(rls_session, test_org)
         result = await mgr.get_feedback_record(uuid.uuid4())
@@ -95,7 +97,9 @@ class TestFeedbackFlowUnit:
         assert len(result_page2["items"]) == 1
 
     async def test_list_feedback_records_empty(
-        self, rls_session: AsyncSession, test_org: uuid.UUID,
+        self,
+        rls_session: AsyncSession,
+        test_org: uuid.UUID,
     ) -> None:
         mgr = FeedbackManager(rls_session, test_org)
         result = await mgr.get_feedback_records()
@@ -125,7 +129,9 @@ class TestFeedbackFlowUnit:
         assert escalated.feedback_status == "escalated"
 
     async def test_update_status_not_found(
-        self, rls_session: AsyncSession, test_org: uuid.UUID,
+        self,
+        rls_session: AsyncSession,
+        test_org: uuid.UUID,
     ) -> None:
         mgr = FeedbackManager(rls_session, test_org)
         result = await mgr.update_status(uuid.uuid4(), "resolved")
@@ -189,19 +195,25 @@ class TestFeedbackFlowUnit:
         assert record.feedback_handler_type == "ai_correction"
         assert record.rejected_output == {"code": "buggy"}
 
-    async def test_filter_by_status(
-        self, rls_session: AsyncSession, test_org: uuid.UUID, test_user: uuid.UUID
-    ) -> None:
+    async def test_filter_by_status(self, rls_session: AsyncSession, test_org: uuid.UUID, test_user: uuid.UUID) -> None:
         run_id = await _create_seed_run(rls_session, test_org, test_user)
         mgr = FeedbackManager(rls_session, test_org)
 
         r1 = await mgr.create_feedback_record(
-            run_id=run_id, gate_id="g1", rejected_by=test_user,
-            rejection_reason="R1", rejected_output={}, producing_node_id="n1",
+            run_id=run_id,
+            gate_id="g1",
+            rejected_by=test_user,
+            rejection_reason="R1",
+            rejected_output={},
+            producing_node_id="n1",
         )
         await mgr.create_feedback_record(
-            run_id=run_id, gate_id="g2", rejected_by=test_user,
-            rejection_reason="R2", rejected_output={}, producing_node_id="n2",
+            run_id=run_id,
+            gate_id="g2",
+            rejected_by=test_user,
+            rejection_reason="R2",
+            rejected_output={},
+            producing_node_id="n2",
         )
         await mgr.update_status(r1.id, "resolved")
 
@@ -213,7 +225,9 @@ class TestFeedbackFlowUnit:
 
 
 async def _create_seed_run(
-    session: AsyncSession, org_id: uuid.UUID, user_id: uuid.UUID,
+    session: AsyncSession,
+    org_id: uuid.UUID,
+    user_id: uuid.UUID,
 ) -> uuid.UUID:
     """Create a minimal run row needed for feedback FK constraints."""
     run_id = uuid.uuid4()

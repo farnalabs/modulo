@@ -143,9 +143,7 @@ class TestVerifyExport:
 
     def test_verify_mismatch(self) -> None:
         meta = {"export_hash": "aaa"}
-        records = [
-            {"__table__": "users", "id": "1", "__hash__": _hash_record({"id": "1"})}
-        ]
+        records = [{"__table__": "users", "id": "1", "__hash__": _hash_record({"id": "1"})}]
         result = asyncio.run(_verify_export(meta, records))
         assert result is False
 
@@ -171,8 +169,7 @@ class TestAuth:
             org_role="admin",
         )
         runner = CliRunner()
-        result = runner.invoke(cli, ["--token", "fake.jwt.token", "export-org",
-                                     "00000000-0000-0000-0000-000000000001"])
+        result = runner.invoke(cli, ["--token", "fake.jwt.token", "export-org", "00000000-0000-0000-0000-000000000001"])
         # Will fail later due to DB, but auth should pass
         assert "Admin authentication required" not in result.output
 
@@ -216,6 +213,7 @@ class TestExportOrg:
         class FakeResult:
             def scalars(self):
                 return self
+
             def all(self):
                 return []
 
@@ -229,11 +227,17 @@ class TestExportOrg:
 
         output_path = tmp_path / "export.jsonl"
         runner = CliRunner()
-        result = runner.invoke(cli, [
-            "--token", "fake.jwt.token",
-            "export-org", str(org_id),
-            "--output", str(output_path),
-        ])
+        result = runner.invoke(
+            cli,
+            [
+                "--token",
+                "fake.jwt.token",
+                "export-org",
+                str(org_id),
+                "--output",
+                str(output_path),
+            ],
+        )
         assert result.exit_code == 0, f"CLI failed: {result.output}"
         assert "Exported" in result.output
         assert output_path.exists()
@@ -271,11 +275,17 @@ class TestExportOrg:
         mock_session_local.return_value.__aenter__.return_value = mock_session
 
         runner = CliRunner()
-        result = runner.invoke(cli, [
-            "--token", "fake.jwt.token",
-            "export-org", str(org_id),
-            "--output", str(tmp_path / "out.jsonl"),
-        ])
+        result = runner.invoke(
+            cli,
+            [
+                "--token",
+                "fake.jwt.token",
+                "export-org",
+                str(org_id),
+                "--output",
+                str(tmp_path / "out.jsonl"),
+            ],
+        )
         assert result.exit_code != 0
         assert "not found" in result.output
 
@@ -318,17 +328,20 @@ class TestImportOrg:
         mock_session_local.return_value.__aenter__.return_value = mock_session
 
         input_path = tmp_path / "import.jsonl"
-        input_path.write_text(
-            json.dumps({"__meta__": {"version": 1, "export_hash": "abc"}})
-            + "\n"
-        )
+        input_path.write_text(json.dumps({"__meta__": {"version": 1, "export_hash": "abc"}}) + "\n")
 
         runner = CliRunner()
-        result = runner.invoke(cli, [
-            "--token", "fake.jwt.token",
-            "import-org", str(org_id),
-            "--input", str(input_path),
-        ])
+        result = runner.invoke(
+            cli,
+            [
+                "--token",
+                "fake.jwt.token",
+                "import-org",
+                str(org_id),
+                "--input",
+                str(input_path),
+            ],
+        )
         assert result.exit_code == 0, f"CLI failed: {result.output}"
         assert "Loaded" in result.output
         assert "Import complete" in result.output
@@ -367,19 +380,23 @@ class TestImportOrg:
         mock_session_local.return_value.__aenter__.return_value = mock_session
 
         input_path = tmp_path / "import_skip.jsonl"
-        input_path.write_text(
-            json.dumps({"__meta__": {"version": 1, "export_hash": "abc"}})
-            + "\n"
-        )
+        input_path.write_text(json.dumps({"__meta__": {"version": 1, "export_hash": "abc"}}) + "\n")
 
         for strategy in ["skip", "overwrite", "merge"]:
             runner = CliRunner()
-            result = runner.invoke(cli, [
-                "--token", "fake.jwt.token",
-                "import-org", str(org_id),
-                "--input", str(input_path),
-                "--on-conflict", strategy,
-            ])
+            result = runner.invoke(
+                cli,
+                [
+                    "--token",
+                    "fake.jwt.token",
+                    "import-org",
+                    str(org_id),
+                    "--input",
+                    str(input_path),
+                    "--on-conflict",
+                    strategy,
+                ],
+            )
             assert result.exit_code == 0, f"Strategy '{strategy}' failed: {result.output}"
 
 
@@ -389,9 +406,7 @@ class TestImportOrg:
 class TestVerifyExportCmd:
     @patch("modulo.cli.migrate.decode_principal")
     @patch("modulo.cli.migrate._verify_export")
-    def test_verify_success(
-        self, mock_verify: MagicMock, mock_decode: MagicMock, tmp_path: Path
-    ) -> None:
+    def test_verify_success(self, mock_verify: MagicMock, mock_decode: MagicMock, tmp_path: Path) -> None:
         from modulo.auth.jwt import AuthenticatedPrincipal
 
         mock_decode.return_value = AuthenticatedPrincipal(
@@ -403,24 +418,25 @@ class TestVerifyExportCmd:
         mock_verify.return_value = True
 
         input_path = tmp_path / "verify.jsonl"
-        input_path.write_text(
-            json.dumps({"__meta__": {"version": 1, "export_hash": "abc"}})
-            + "\n"
-        )
+        input_path.write_text(json.dumps({"__meta__": {"version": 1, "export_hash": "abc"}}) + "\n")
 
         runner = CliRunner()
-        result = runner.invoke(cli, [
-            "--token", "fake.jwt.token",
-            "verify-export", "00000000-0000-0000-0000-000000000001",
-            "--input", str(input_path),
-        ])
+        result = runner.invoke(
+            cli,
+            [
+                "--token",
+                "fake.jwt.token",
+                "verify-export",
+                "00000000-0000-0000-0000-000000000001",
+                "--input",
+                str(input_path),
+            ],
+        )
         assert result.exit_code == 0
 
     @patch("modulo.cli.migrate.decode_principal")
     @patch("modulo.cli.migrate._verify_export")
-    def test_verify_failure(
-        self, mock_verify: MagicMock, mock_decode: MagicMock, tmp_path: Path
-    ) -> None:
+    def test_verify_failure(self, mock_verify: MagicMock, mock_decode: MagicMock, tmp_path: Path) -> None:
         from modulo.auth.jwt import AuthenticatedPrincipal
 
         mock_decode.return_value = AuthenticatedPrincipal(
@@ -432,17 +448,20 @@ class TestVerifyExportCmd:
         mock_verify.return_value = False
 
         input_path = tmp_path / "verify_fail.jsonl"
-        input_path.write_text(
-            json.dumps({"__meta__": {"version": 1, "export_hash": "wrong"}})
-            + "\n"
-        )
+        input_path.write_text(json.dumps({"__meta__": {"version": 1, "export_hash": "wrong"}}) + "\n")
 
         runner = CliRunner()
-        result = runner.invoke(cli, [
-            "--token", "fake.jwt.token",
-            "verify-export", "00000000-0000-0000-0000-000000000001",
-            "--input", str(input_path),
-        ])
+        result = runner.invoke(
+            cli,
+            [
+                "--token",
+                "fake.jwt.token",
+                "verify-export",
+                "00000000-0000-0000-0000-000000000001",
+                "--input",
+                str(input_path),
+            ],
+        )
         assert result.exit_code != 0
         assert "Verification failed" in result.output
 
@@ -486,6 +505,7 @@ class TestFlags:
         class FakeResult:
             def scalars(self):
                 return self
+
             def all(self):
                 return []
 
@@ -497,12 +517,18 @@ class TestFlags:
         mock_session_local.return_value.__aenter__.return_value = mock_session
 
         runner = CliRunner()
-        result = runner.invoke(cli, [
-            "--token", "fake.jwt.token",
-            "export-org", str(org_id),
-            "--output", str(tmp_path / "p.jsonl"),
-            "--pipelines-only",
-        ])
+        result = runner.invoke(
+            cli,
+            [
+                "--token",
+                "fake.jwt.token",
+                "export-org",
+                str(org_id),
+                "--output",
+                str(tmp_path / "p.jsonl"),
+                "--pipelines-only",
+            ],
+        )
         assert result.exit_code == 0, f"CLI failed: {result.output}"
 
     @patch("modulo.cli.migrate.decode_principal")
@@ -539,18 +565,21 @@ class TestFlags:
         mock_session_local.return_value.__aenter__.return_value = mock_session
 
         input_path = tmp_path / "import_users.jsonl"
-        input_path.write_text(
-            json.dumps({"__meta__": {"version": 1, "export_hash": "abc"}})
-            + "\n"
-        )
+        input_path.write_text(json.dumps({"__meta__": {"version": 1, "export_hash": "abc"}}) + "\n")
 
         runner = CliRunner()
-        result = runner.invoke(cli, [
-            "--token", "fake.jwt.token",
-            "import-org", str(org_id),
-            "--input", str(input_path),
-            "--users-only",
-        ])
+        result = runner.invoke(
+            cli,
+            [
+                "--token",
+                "fake.jwt.token",
+                "import-org",
+                str(org_id),
+                "--input",
+                str(input_path),
+                "--users-only",
+            ],
+        )
         assert result.exit_code == 0, f"CLI failed: {result.output}"
 
 
@@ -584,6 +613,7 @@ class TestAdminSecretAuth:
         class FakeResult:
             def scalars(self):
                 return self
+
             def all(self):
                 return []
 
@@ -595,8 +625,13 @@ class TestAdminSecretAuth:
         mock_session_local.return_value.__aenter__.return_value = mock_session
 
         runner = CliRunner()
-        result = runner.invoke(cli, [
-            "export-org", str(org_id),
-            "--output", str(tmp_path / "secret.jsonl"),
-        ])
+        result = runner.invoke(
+            cli,
+            [
+                "export-org",
+                str(org_id),
+                "--output",
+                str(tmp_path / "secret.jsonl"),
+            ],
+        )
         assert result.exit_code == 0, f"CLI failed: {result.output}"

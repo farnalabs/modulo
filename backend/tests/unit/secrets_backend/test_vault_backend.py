@@ -9,6 +9,7 @@ from modulo.core.secrets_backend.vault import VaultSecretsBackend
 
 try:
     import hvac  # noqa: F401
+
     _HVAC_AVAILABLE = True
 except ImportError:
     _HVAC_AVAILABLE = False
@@ -21,10 +22,13 @@ pytestmark = pytest.mark.skipif(
 
 @pytest.fixture(autouse=True)
 def _env():
-    with patch.dict(os.environ, {
-        "VAULT_ADDR": "http://localhost:8200",
-        "VAULT_TOKEN": "test-token",
-    }):
+    with patch.dict(
+        os.environ,
+        {
+            "VAULT_ADDR": "http://localhost:8200",
+            "VAULT_TOKEN": "test-token",
+        },
+    ):
         yield
 
 
@@ -57,9 +61,7 @@ class TestVaultSecretsBackend:
 
     async def test_get_secret_unknown_key_raises(self, mock_hvac):
         backend = _make_backend(mock_hvac)
-        backend._client.secrets.kv.v2.read_secret_version.side_effect = (
-            mock_hvac.exceptions.InvalidPath()
-        )
+        backend._client.secrets.kv.v2.read_secret_version.side_effect = mock_hvac.exceptions.InvalidPath()
 
         with pytest.raises(KeyError):
             await backend.get_secret("unknown-key")
@@ -80,9 +82,7 @@ class TestVaultSecretsBackend:
 
     async def test_delete_secret_noop_when_missing(self, mock_hvac):
         backend = _make_backend(mock_hvac)
-        backend._client.secrets.kv.v2.delete_metadata_and_all_versions.side_effect = (
-            mock_hvac.exceptions.InvalidPath()
-        )
+        backend._client.secrets.kv.v2.delete_metadata_and_all_versions.side_effect = mock_hvac.exceptions.InvalidPath()
 
         # Should not raise despite the underlying Vault exception
         await backend.delete_secret("missing-key")

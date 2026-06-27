@@ -37,10 +37,7 @@ async def _ensure_active_transaction(session: AsyncSession) -> str:
     for async sessions, it returns a coroutine that must be awaited.
     """
     if not session.in_transaction():
-        raise RuntimeError(
-            "set_rls_* requires an active transaction; "
-            "wrap the call in `async with session.begin():`"
-        )
+        raise RuntimeError("set_rls_* requires an active transaction; wrap the call in `async with session.begin():`")
     bind = session.get_bind()
     if asyncio.iscoroutine(bind):
         # AsyncSession — get_bind() returns a coroutine

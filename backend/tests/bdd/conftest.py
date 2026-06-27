@@ -37,9 +37,7 @@ def browser_context_args(browser_context_args):
 
 @pytest.fixture
 def agent_page(page: Page) -> Page:
-    page.add_init_script(
-        "document.documentElement.setAttribute('data-theme', 'agent')"
-    )
+    page.add_init_script("document.documentElement.setAttribute('data-theme', 'agent')")
     return page
 
 
@@ -104,10 +102,13 @@ def make_mock_run(**kwargs: Any) -> MagicMock:
 def make_mock_snapshot(**kwargs: Any) -> MagicMock:
     s = MagicMock()
     s.id = kwargs.get("id", uuid.uuid4())
-    s.graph_json = kwargs.get("graph_json", {
-        "nodes": [{"id": "node-a", "role": None}],
-        "edges": [],
-    })
+    s.graph_json = kwargs.get(
+        "graph_json",
+        {
+            "nodes": [{"id": "node-a", "role": None}],
+            "edges": [],
+        },
+    )
     s.run_context_defaults = kwargs.get("run_context_defaults", {})
     s.connector_bindings_json = kwargs.get("connector_bindings", [])
     s.schema_pins_json = kwargs.get("schema_pins", [])
@@ -176,13 +177,12 @@ def _bdd_auth_viewer_in_org(org: str) -> None:
     """No-op — viewer_client fixture handles this."""
 
 
-@given(parsers.parse('the response status is {status:d}'))
+@given(parsers.parse("the response status is {status:d}"))
 def _bdd_check_response_status(status: int, request) -> None:
     """Check response status code."""
     resp = request.node._resp
-    assert resp.status_code == status, (
-        f"Expected status {status}, got {resp.status_code}"
-    )
+    assert resp.status_code == status, f"Expected status {status}, got {resp.status_code}"
+
 
 @pytest.fixture
 def alt_org_client(mock_session: AsyncMock) -> Generator[TestClient, None, None]:

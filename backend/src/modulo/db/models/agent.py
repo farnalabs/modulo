@@ -51,6 +51,4 @@ class Agent(OrgScoped):
     library_id: Mapped[uuid.UUID | None] = mapped_column(
         Uuid(), ForeignKey("library_primitives.id", ondelete="SET NULL")
     )
-    created_by: Mapped[uuid.UUID] = mapped_column(
-        Uuid(), ForeignKey("users.id", ondelete="RESTRICT"), nullable=False
-    )
+    created_by: Mapped[uuid.UUID] = mapped_column(Uuid(), ForeignKey("users.id", ondelete="RESTRICT"), nullable=False)

@@ -56,9 +56,7 @@ class TestCreateTeam:
             mock_session.flush.assert_awaited_once()
             assert result is not None
 
-    async def test_creates_with_optional_description(
-        self, mock_session: AsyncMock
-    ) -> None:
+    async def test_creates_with_optional_description(self, mock_session: AsyncMock) -> None:
         with patch("modulo.db.crud.team.Team", return_value=_make_team()) as mock_team:
             from modulo.db.crud.team import create_team
 
@@ -83,9 +81,7 @@ class TestGetTeam:
     async def test_returns_team_when_found(self, mock_session: AsyncMock) -> None:
         team = _make_team()
         scalar = MagicMock(return_value=team)
-        mock_session.execute = AsyncMock(
-            return_value=MagicMock(scalar_one_or_none=scalar)
-        )
+        mock_session.execute = AsyncMock(return_value=MagicMock(scalar_one_or_none=scalar))
 
         from modulo.db.crud.team import get_team
 
@@ -94,9 +90,7 @@ class TestGetTeam:
         assert result.id == _TEAM_ID
 
     async def test_returns_none_when_not_found(self, mock_session: AsyncMock) -> None:
-        mock_session.execute = AsyncMock(
-            return_value=MagicMock(scalar_one_or_none=MagicMock(return_value=None))
-        )
+        mock_session.execute = AsyncMock(return_value=MagicMock(scalar_one_or_none=MagicMock(return_value=None)))
 
         from modulo.db.crud.team import get_team
 
@@ -114,10 +108,12 @@ class TestListTeams:
         scalars = MagicMock()
         scalars.all = MagicMock(return_value=teams)
 
-        mock_session.execute = AsyncMock(side_effect=[
-            count_result,
-            MagicMock(scalars=MagicMock(return_value=scalars)),
-        ])
+        mock_session.execute = AsyncMock(
+            side_effect=[
+                count_result,
+                MagicMock(scalars=MagicMock(return_value=scalars)),
+            ]
+        )
 
         from modulo.db.crud.team import list_teams
 
@@ -132,9 +128,7 @@ class TestListTeams:
 class TestUpdateTeam:
     async def test_updates_and_returns_team(self, mock_session: AsyncMock) -> None:
         team = _make_team(name="Updated")
-        mock_session.execute = AsyncMock(
-            return_value=MagicMock(scalar_one_or_none=MagicMock(return_value=team))
-        )
+        mock_session.execute = AsyncMock(return_value=MagicMock(scalar_one_or_none=MagicMock(return_value=team)))
 
         from modulo.db.crud.team import update_team
 
@@ -144,9 +138,7 @@ class TestUpdateTeam:
         mock_session.flush.assert_awaited_once()
 
     async def test_returns_none_when_not_found(self, mock_session: AsyncMock) -> None:
-        mock_session.execute = AsyncMock(
-            return_value=MagicMock(scalar_one_or_none=MagicMock(return_value=None))
-        )
+        mock_session.execute = AsyncMock(return_value=MagicMock(scalar_one_or_none=MagicMock(return_value=None)))
 
         from modulo.db.crud.team import update_team
 
@@ -157,9 +149,7 @@ class TestUpdateTeam:
 class TestDeleteTeam:
     async def test_deletes_and_returns_true(self, mock_session: AsyncMock) -> None:
         team = _make_team()
-        mock_session.execute = AsyncMock(
-            return_value=MagicMock(scalar_one_or_none=MagicMock(return_value=team))
-        )
+        mock_session.execute = AsyncMock(return_value=MagicMock(scalar_one_or_none=MagicMock(return_value=team)))
 
         from modulo.db.crud.team import delete_team
 
@@ -169,9 +159,7 @@ class TestDeleteTeam:
         mock_session.flush.assert_awaited_once()
 
     async def test_returns_false_when_not_found(self, mock_session: AsyncMock) -> None:
-        mock_session.execute = AsyncMock(
-            return_value=MagicMock(scalar_one_or_none=MagicMock(return_value=None))
-        )
+        mock_session.execute = AsyncMock(return_value=MagicMock(scalar_one_or_none=MagicMock(return_value=None)))
 
         from modulo.db.crud.team import delete_team
 
@@ -182,9 +170,7 @@ class TestDeleteTeam:
 class TestGetTeamByName:
     async def test_returns_team_when_found(self, mock_session: AsyncMock) -> None:
         team = _make_team(name="Unique Team")
-        mock_session.execute = AsyncMock(
-            return_value=MagicMock(scalar_one_or_none=MagicMock(return_value=team))
-        )
+        mock_session.execute = AsyncMock(return_value=MagicMock(scalar_one_or_none=MagicMock(return_value=team)))
 
         from modulo.db.crud.team import get_team_by_name
 
@@ -193,9 +179,7 @@ class TestGetTeamByName:
         assert result.name == "Unique Team"
 
     async def test_returns_none_when_not_found(self, mock_session: AsyncMock) -> None:
-        mock_session.execute = AsyncMock(
-            return_value=MagicMock(scalar_one_or_none=MagicMock(return_value=None))
-        )
+        mock_session.execute = AsyncMock(return_value=MagicMock(scalar_one_or_none=MagicMock(return_value=None)))
 
         from modulo.db.crud.team import get_team_by_name
 

@@ -25,6 +25,7 @@ def _fake_ci(
 ) -> object:
     """Minimal fake ConnectorInstance."""
     from types import SimpleNamespace
+
     return SimpleNamespace(
         id=uuid.uuid4(),
         connector_type_id=connector_type_id,
@@ -70,12 +71,8 @@ async def test_gitlab_scan():
     hub.initialise([ci])
 
     respx.get(f"{_GITLAB_API}/user").mock(httpx.Response(200, json={"username": "testuser"}))
-    respx.get(f"{_GITLAB_API}/projects").mock(
-        httpx.Response(200, json=[{"id": 1, "name": "proj1"}])
-    )
-    respx.get(path__regex=r".*merge_requests.*").mock(
-        httpx.Response(200, json=[{"id": 42, "title": "MR 1"}])
-    )
+    respx.get(f"{_GITLAB_API}/projects").mock(httpx.Response(200, json=[{"id": 1, "name": "proj1"}]))
+    respx.get(path__regex=r".*merge_requests.*").mock(httpx.Response(200, json=[{"id": 42, "title": "MR 1"}]))
 
     samples = await run_scan(hub)
     resources = {s.resource for s in samples}
@@ -93,9 +90,7 @@ async def test_jira_scan():
     hub = ConnectorHub(secrets_backend=create_secrets_backend(fernet_key=_KEY))
     hub.initialise([ci])
 
-    respx.get(f"{_JIRA_BASE}/myself").mock(
-        httpx.Response(200, json={"displayName": "Test User"})
-    )
+    respx.get(f"{_JIRA_BASE}/myself").mock(httpx.Response(200, json={"displayName": "Test User"}))
     respx.post(f"{_JIRA_BASE}/search").mock(
         httpx.Response(
             200,
@@ -159,6 +154,7 @@ async def test_linear_scan():
 @respx.mock
 async def test_filesystem_connector_skipped():
     import tempfile
+
     with tempfile.TemporaryDirectory() as tmpdir:
         ci = _fake_ci("filesystem", config={"base_path": tmpdir})
         hub = ConnectorHub(secrets_backend=create_secrets_backend(fernet_key=_KEY))

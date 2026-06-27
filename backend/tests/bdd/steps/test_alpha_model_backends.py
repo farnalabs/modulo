@@ -10,12 +10,7 @@ scenarios("../../features/model_backends/rotation.feature")
 scenarios("../../features/model_backends/health_check.feature")
 
 
-
-@given(
-    parsers.parse(
-        'I configure an OpenAI model backend with model "{model}" and API key "{key}"'
-    )
-)
+@given(parsers.parse('I configure an OpenAI model backend with model "{model}" and API key "{key}"'))
 def configure_openai(model: str, key: str, client, request):
     with (
         patch("modulo.core.pipeline_engine.run_crud.set_rls_org"),
@@ -42,11 +37,7 @@ def configure_openai(model: str, key: str, client, request):
     request.node._resp = resp
 
 
-@given(
-    parsers.parse(
-        'I configure an Anthropic model backend with model "{model}" and API key "{key}"'
-    )
-)
+@given(parsers.parse('I configure an Anthropic model backend with model "{model}" and API key "{key}"'))
 def configure_anthropic(model: str, key: str, client, request):
     with (
         patch("modulo.core.pipeline_engine.run_crud.set_rls_org"),
@@ -114,28 +105,17 @@ def get_model_backends(client, request):
     request.node._resp = resp
 
 
-@then(
-    parsers.parse(
-        'the response contains a backend with provider "{provider}" and model "{model}"'
-    )
-)
+@then(parsers.parse('the response contains a backend with provider "{provider}" and model "{model}"'))
 def check_backend(provider: str, model: str, request):
     data = request.node._resp.json()
     if isinstance(data, list):
-        found = any(
-            d.get("provider") == provider and d.get("model") == model
-            for d in data
-        )
+        found = any(d.get("provider") == provider and d.get("model") == model for d in data)
         assert found, f"Backend {provider}/{model} not found in {data}"
     else:
         assert data.get("provider") == provider
 
 
-@then(
-    parsers.parse(
-        'the response contains a backend with provider "{provider}"'
-    )
-)
+@then(parsers.parse('the response contains a backend with provider "{provider}"'))
 def check_backend_provider(provider: str, request):
     data = request.node._resp.json()
     if isinstance(data, list):
@@ -153,11 +133,7 @@ def check_key_not_plaintext(request):
     pass
 
 
-@given(
-    parsers.parse(
-        'org "{org}" has a model backend "{name}" with model "{model}"'
-    )
-)
+@given(parsers.parse('org "{org}" has a model backend "{name}" with model "{model}"'))
 def org_has_model_backend(org: str, name: str, model: str, request):
     request.node._mb_name = name
     request.node._mb_model = model
@@ -186,11 +162,7 @@ def check_model_updated(model: str, request):
     assert data.get("model") == model
 
 
-@given(
-    parsers.parse(
-        'org "{org}" has model backends "{primary}" and "{fallback}"'
-    )
-)
+@given(parsers.parse('org "{org}" has model backends "{primary}" and "{fallback}"'))
 def org_has_model_backends(org: str, primary: str, fallback: str, request):
     request.node._mb_primary = primary
     request.node._mb_fallback = fallback
@@ -233,7 +205,7 @@ def health_check_determines(request):
     pass
 
 
-@when(parsers.parse('I check the model backend health'))
+@when(parsers.parse("I check the model backend health"))
 def check_mb_health(client, request):
     mock_health = MagicMock()
     mock_health.ok = True
@@ -265,11 +237,7 @@ def health_auth_error(request):
     pass
 
 
-@given(
-    parsers.parse(
-        'org "{org}" has a model backend "{name}"'
-    )
-)
+@given(parsers.parse('org "{org}" has a model backend "{name}"'))
 def org_has_model_backend_simple(org: str, name: str, request):
     request.node._mb_name = name
 

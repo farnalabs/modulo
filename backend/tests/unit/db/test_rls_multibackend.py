@@ -29,9 +29,7 @@ class EntityWithoutOrg:
     id = None
 
 
-def _make_session(
-    *, in_tx: bool = True, dialect: str = "postgresql", org_id: uuid.UUID | None = None
-) -> AsyncMock:
+def _make_session(*, in_tx: bool = True, dialect: str = "postgresql", org_id: uuid.UUID | None = None) -> AsyncMock:
     session = AsyncMock(spec=AsyncSession)
     session.in_transaction.return_value = in_tx
     session.execute = AsyncMock()

@@ -171,11 +171,13 @@ async def test_get_calls_audit_logger_on_failover(
     audit_logger = AsyncMock()
     result = await hub.get(primary_id, audit_logger=audit_logger)
     assert result is backend_b
-    audit_logger.assert_awaited_once_with({
-        "event_type": "model_failover",
-        "primary_id": str(primary_id),
-        "fallback_id": str(fallback_id),
-    })
+    audit_logger.assert_awaited_once_with(
+        {
+            "event_type": "model_failover",
+            "primary_id": str(primary_id),
+            "fallback_id": str(fallback_id),
+        }
+    )
 
 
 # ---------------------------------------------------------------------------

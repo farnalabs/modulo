@@ -47,9 +47,7 @@ def _make_variants() -> list[dict[str, Any]]:
     ]
 
 
-async def _create_test_pipeline(
-    db_engine: AsyncEngine, org_id: uuid.UUID
-) -> uuid.UUID:
+async def _create_test_pipeline(db_engine: AsyncEngine, org_id: uuid.UUID) -> uuid.UUID:
     pipeline_id = uuid.uuid4()
     async with db_engine.connect() as conn:
         async with conn.begin():
@@ -63,9 +61,7 @@ async def _create_test_pipeline(
     return pipeline_id
 
 
-async def test_create_variant_group(
-    rls_session: AsyncSession, test_org: uuid.UUID, db_engine: AsyncEngine
-) -> None:
+async def test_create_variant_group(rls_session: AsyncSession, test_org: uuid.UUID, db_engine: AsyncEngine) -> None:
     pipeline_id = await _create_test_pipeline(db_engine, test_org)
     variants = _make_variants()
     group = await create_variant_group(
@@ -128,21 +124,15 @@ async def test_list_variant_groups_filtered_by_pipeline(
 ) -> None:
     pipe_a = await _create_test_pipeline(db_engine, test_org)
     pipe_b = await _create_test_pipeline(db_engine, test_org)
-    await create_variant_group(
-        rls_session, org_id=test_org, pipeline_id=pipe_a, name="A-1", variants=[]
-    )
-    await create_variant_group(
-        rls_session, org_id=test_org, pipeline_id=pipe_b, name="B-1", variants=[]
-    )
+    await create_variant_group(rls_session, org_id=test_org, pipeline_id=pipe_a, name="A-1", variants=[])
+    await create_variant_group(rls_session, org_id=test_org, pipeline_id=pipe_b, name="B-1", variants=[])
 
     items_a, total_a = await list_variant_groups(rls_session, pipeline_id=pipe_a)
     assert total_a == 1
     assert items_a[0].name == "A-1"
 
 
-async def test_update_variant_group(
-    rls_session: AsyncSession, test_org: uuid.UUID, db_engine: AsyncEngine
-) -> None:
+async def test_update_variant_group(rls_session: AsyncSession, test_org: uuid.UUID, db_engine: AsyncEngine) -> None:
     pipeline_id = await _create_test_pipeline(db_engine, test_org)
     group = await create_variant_group(
         rls_session,
@@ -151,9 +141,7 @@ async def test_update_variant_group(
         name="Old Name",
         variants=[],
     )
-    updated = await update_variant_group(
-        rls_session, group.id, name="New Name", max_concurrent_runs=10
-    )
+    updated = await update_variant_group(rls_session, group.id, name="New Name", max_concurrent_runs=10)
     assert updated is not None
     assert updated.name == "New Name"
     assert updated.max_concurrent_runs == 10
@@ -165,9 +153,7 @@ async def test_update_variant_group_unknown_returns_none(
     assert await update_variant_group(rls_session, uuid.uuid4(), name="x") is None
 
 
-async def test_delete_variant_group(
-    rls_session: AsyncSession, test_org: uuid.UUID, db_engine: AsyncEngine
-) -> None:
+async def test_delete_variant_group(rls_session: AsyncSession, test_org: uuid.UUID, db_engine: AsyncEngine) -> None:
     pipeline_id = await _create_test_pipeline(db_engine, test_org)
     group = await create_variant_group(
         rls_session,

@@ -217,9 +217,7 @@ class TestUpdateProfile:
         assert resp.status_code in (401, 403)
 
     def test_update_profile_invalid_egress_policy(self, client: TestClient) -> None:
-        resp = client.patch(
-            f"{self.URL}/{_PROFILE_ID}", json={"egress_policy": "bogus"}
-        )
+        resp = client.patch(f"{self.URL}/{_PROFILE_ID}", json={"egress_policy": "bogus"})
         assert resp.status_code == 422
 
 

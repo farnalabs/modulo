@@ -87,21 +87,30 @@ def _configure_execute(
         type_rows = [_make_row(eval_type="llm_judge", total=6, passed=4, failed=2)]
 
     if pipeline_rows is None:
-        pipeline_rows = [_make_row(
-            id=_PIPELINE_ID, name="Data Pipeline",
-            graph_nodes_json=[{"id": str(_NODE_1)}, {"id": str(_NODE_2)}],
-        )]
+        pipeline_rows = [
+            _make_row(
+                id=_PIPELINE_ID,
+                name="Data Pipeline",
+                graph_nodes_json=[{"id": str(_NODE_1)}, {"id": str(_NODE_2)}],
+            )
+        ]
 
     if eval_def_rows is None:
         eval_def_rows = [_make_row(pipeline_id=_PIPELINE_ID, node_id=_NODE_1)]
 
     if recent_rows is None:
-        recent_rows = [_make_row(
-            id=_EVAL_RESULT_1, eval_id=_EVAL_DEF_ID,
-            eval_name="Test Eval", eval_type="llm_judge",
-            passed=True, score=0.95, detail="All good",
-            evaluated_at="2025-06-01T12:00:00+00:00",
-        )]
+        recent_rows = [
+            _make_row(
+                id=_EVAL_RESULT_1,
+                eval_id=_EVAL_DEF_ID,
+                eval_name="Test Eval",
+                eval_type="llm_judge",
+                passed=True,
+                score=0.95,
+                detail="All good",
+                evaluated_at="2025-06-01T12:00:00+00:00",
+            )
+        ]
 
     summary_row = _make_row(total_results=total_results, passed=passed, failed=failed)
 
@@ -282,8 +291,11 @@ class TestEvalDashboardSections:
         resp = client.get(self.URL)
         data = resp.json()
         assert set(data.keys()) == {
-            "summary", "trend", "by_type",
-            "coverage_gaps", "recent_results",
+            "summary",
+            "trend",
+            "by_type",
+            "coverage_gaps",
+            "recent_results",
         }
 
 
@@ -324,9 +336,7 @@ class TestEvalDashboardEmptyState:
 class TestEvalDashboardMultiType:
     URL = "/api/v1/admin/evals/dashboard"
 
-    def test_multiple_type_breakdown(
-        self, client: TestClient, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_multiple_type_breakdown(self, client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
         mock_session = _make_mock_session()
 
         summary_row = _make_row(total_results=10, passed=6, failed=4)

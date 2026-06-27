@@ -142,7 +142,8 @@ async def test_create_workspace_default_template(mock_sandbox_cls: MagicMock) ->
 
 @pytest.mark.asyncio
 async def test_create_workspace_stores_sandbox(
-    mock_sandbox_cls: MagicMock, workspace_spec: WorkspaceSpec,
+    mock_sandbox_cls: MagicMock,
+    workspace_spec: WorkspaceSpec,
 ) -> None:
     provider = E2BRuntimeProvider(api_key="sk-test")
     ref = await provider.create_workspace(workspace_spec)
@@ -544,6 +545,7 @@ async def test_multiple_workspaces_independent(
 
 def test_is_runtime_provider_subclass() -> None:
     from modulo.core.runtime_provider import RuntimeProvider
+
     assert issubclass(E2BRuntimeProvider, RuntimeProvider)
 
 

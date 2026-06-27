@@ -57,12 +57,8 @@ class TestSqliteMultiBackend:
         org_id = uuid.uuid4()
         async with AsyncSession(_engine) as session:
             async with session.begin():
-                session.add(
-                    Organisation(id=org_id, name="Smoke Test Org", slug="smoke-test-org")
-                )
-            result = await session.execute(
-                select(Organisation).where(Organisation.id == org_id)
-            )
+                session.add(Organisation(id=org_id, name="Smoke Test Org", slug="smoke-test-org"))
+            result = await session.execute(select(Organisation).where(Organisation.id == org_id))
             org = result.scalar_one()
             assert org.name == "Smoke Test Org"
             assert org.slug == "smoke-test-org"
@@ -75,21 +71,31 @@ class TestSqliteMultiBackend:
 
         async with AsyncSession(_engine) as session:
             async with session.begin():
-                session.add_all([
-                    Organisation(id=org_a, name="Org A", slug="org-a"),
-                    Organisation(id=org_b, name="Org B", slug="org-b"),
-                ])
+                session.add_all(
+                    [
+                        Organisation(id=org_a, name="Org A", slug="org-a"),
+                        Organisation(id=org_b, name="Org B", slug="org-b"),
+                    ]
+                )
             async with session.begin():
-                session.add_all([
-                    User(
-                        id=user_a_id, organisation_id=org_a,
-                        email="a@test.com", display_name="User A", org_role="admin",
-                    ),
-                    User(
-                        id=user_b_id, organisation_id=org_b,
-                        email="b@test.com", display_name="User B", org_role="runner",
-                    ),
-                ])
+                session.add_all(
+                    [
+                        User(
+                            id=user_a_id,
+                            organisation_id=org_a,
+                            email="a@test.com",
+                            display_name="User A",
+                            org_role="admin",
+                        ),
+                        User(
+                            id=user_b_id,
+                            organisation_id=org_b,
+                            email="b@test.com",
+                            display_name="User B",
+                            org_role="runner",
+                        ),
+                    ]
+                )
 
             session.info["org_id"] = org_a
             result = await session.execute(select(User).where(User.organisation_id == org_a))
@@ -107,14 +113,14 @@ class TestSqliteMultiBackend:
             async with session.begin():
                 session.add(
                     User(
-                        id=user_id, organisation_id=org_id,
-                        email="query@test.com", display_name="Query User",
+                        id=user_id,
+                        organisation_id=org_id,
+                        email="query@test.com",
+                        display_name="Query User",
                         org_role="admin",
                     )
                 )
-            result = await session.execute(
-                select(User).where(User.email == "query@test.com")
-            )
+            result = await session.execute(select(User).where(User.email == "query@test.com"))
             user = result.scalar_one()
             assert user.display_name == "Query User"
             assert user.organisation_id == org_id

@@ -105,9 +105,7 @@ class TestDbConnectivity:
         conn.__aexit__ = AsyncMock(return_value=None)
         engine.connect = MagicMock(return_value=conn)
 
-        with patch(
-            "modulo.api.main.get_or_create_engine", return_value=engine
-        ) as mock_engine:
+        with patch("modulo.api.main.get_or_create_engine", return_value=engine) as mock_engine:
             await _verify_db_connectivity(settings)
             mock_engine.assert_called_once_with(settings)
             conn.execute.assert_awaited_once()
@@ -122,9 +120,7 @@ class TestDbConnectivity:
         engine.connect = MagicMock(return_value=conn)
 
         with (
-            patch(
-                "modulo.api.main.get_or_create_engine", return_value=engine
-            ) as mock_engine,
+            patch("modulo.api.main.get_or_create_engine", return_value=engine) as mock_engine,
             patch("modulo.api.main.asyncio.sleep"),
         ):
             await _verify_db_connectivity(settings)

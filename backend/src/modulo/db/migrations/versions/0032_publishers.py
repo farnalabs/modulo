@@ -51,12 +51,8 @@ def upgrade() -> None:
             server_default=sa.func.now(),
             nullable=False,
         ),
-        sa.UniqueConstraint(
-            "organisation_id", "public_key_hex", name="uq_publishers_org_key"
-        ),
-        sa.UniqueConstraint(
-            "organisation_id", "name", name="uq_publishers_org_name"
-        ),
+        sa.UniqueConstraint("organisation_id", "public_key_hex", name="uq_publishers_org_key"),
+        sa.UniqueConstraint("organisation_id", "name", name="uq_publishers_org_name"),
     )
 
 

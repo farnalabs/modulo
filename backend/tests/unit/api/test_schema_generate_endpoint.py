@@ -91,11 +91,12 @@ def test_generate_schema_returns_200(client: TestClient) -> None:
         patch("modulo.api.routes.schemas.list_model_backends", return_value=page_result),
         patch("modulo.api.routes.schemas.set_rls_org"),
         patch("modulo.api.routes.schemas.ModelBackendHub.initialise"),
-        patch("modulo.api.routes.schemas.ModelBackendHub.backend_ids",
-              new_callable=PropertyMock(return_value=frozenset({backend_id}))),
+        patch(
+            "modulo.api.routes.schemas.ModelBackendHub.backend_ids",
+            new_callable=PropertyMock(return_value=frozenset({backend_id})),
+        ),
         patch("modulo.api.routes.schemas.ModelBackendHub.get", return_value=MagicMock()),
-        patch("modulo.api.routes.schemas.SchemaGenerationService.generate",
-              return_value=expected_schema),
+        patch("modulo.api.routes.schemas.SchemaGenerationService.generate", return_value=expected_schema),
         patch("modulo.api.routes.schemas.create_secrets_backend"),
     ):
         resp = client.post(
@@ -124,11 +125,12 @@ def test_generate_schema_no_examples_returns_200(client: TestClient) -> None:
         patch("modulo.api.routes.schemas.list_model_backends", return_value=page_result),
         patch("modulo.api.routes.schemas.set_rls_org"),
         patch("modulo.api.routes.schemas.ModelBackendHub.initialise"),
-        patch("modulo.api.routes.schemas.ModelBackendHub.backend_ids",
-              new_callable=PropertyMock(return_value=frozenset({backend_id}))),
+        patch(
+            "modulo.api.routes.schemas.ModelBackendHub.backend_ids",
+            new_callable=PropertyMock(return_value=frozenset({backend_id})),
+        ),
         patch("modulo.api.routes.schemas.ModelBackendHub.get", return_value=MagicMock()),
-        patch("modulo.api.routes.schemas.SchemaGenerationService.generate",
-              return_value=expected_schema),
+        patch("modulo.api.routes.schemas.SchemaGenerationService.generate", return_value=expected_schema),
         patch("modulo.api.routes.schemas.create_secrets_backend"),
     ):
         resp = client.post(
@@ -166,11 +168,15 @@ def test_generate_schema_generation_failure_returns_502(client: TestClient) -> N
         patch("modulo.api.routes.schemas.list_model_backends", return_value=page_result),
         patch("modulo.api.routes.schemas.set_rls_org"),
         patch("modulo.api.routes.schemas.ModelBackendHub.initialise"),
-        patch("modulo.api.routes.schemas.ModelBackendHub.backend_ids",
-              new_callable=PropertyMock(return_value=frozenset({backend_id}))),
+        patch(
+            "modulo.api.routes.schemas.ModelBackendHub.backend_ids",
+            new_callable=PropertyMock(return_value=frozenset({backend_id})),
+        ),
         patch("modulo.api.routes.schemas.ModelBackendHub.get", return_value=MagicMock()),
-        patch("modulo.api.routes.schemas.SchemaGenerationService.generate",
-              side_effect=SchemaGenerationError("LLM returned garbage")),
+        patch(
+            "modulo.api.routes.schemas.SchemaGenerationService.generate",
+            side_effect=SchemaGenerationError("LLM returned garbage"),
+        ),
         patch("modulo.api.routes.schemas.create_secrets_backend"),
     ):
         resp = client.post(
@@ -232,11 +238,12 @@ def test_generate_schema_extra_fields_accepted(client: TestClient) -> None:
         patch("modulo.api.routes.schemas.list_model_backends", return_value=page_result),
         patch("modulo.api.routes.schemas.set_rls_org"),
         patch("modulo.api.routes.schemas.ModelBackendHub.initialise"),
-        patch("modulo.api.routes.schemas.ModelBackendHub.backend_ids",
-              new_callable=PropertyMock(return_value=frozenset({backend_id}))),
+        patch(
+            "modulo.api.routes.schemas.ModelBackendHub.backend_ids",
+            new_callable=PropertyMock(return_value=frozenset({backend_id})),
+        ),
         patch("modulo.api.routes.schemas.ModelBackendHub.get", return_value=MagicMock()),
-        patch("modulo.api.routes.schemas.SchemaGenerationService.generate",
-              return_value=expected_schema),
+        patch("modulo.api.routes.schemas.SchemaGenerationService.generate", return_value=expected_schema),
         patch("modulo.api.routes.schemas.create_secrets_backend"),
     ):
         resp = client.post(

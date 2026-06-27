@@ -364,9 +364,7 @@ async def publish_primitive_v2(
         "tags": body.tags,
         "content_json": body.content_json,
     }
-    checksum = hashlib.sha256(
-        json.dumps(payload, separators=(",", ":"), sort_keys=True).encode()
-    ).hexdigest()
+    checksum = hashlib.sha256(json.dumps(payload, separators=(",", ":"), sort_keys=True).encode()).hexdigest()
     signature = crypto_sign_primitive(payload, keypair["private_key"])
 
     entry = await publish_primitive(
@@ -467,9 +465,7 @@ async def verify_registry_primitive_v2(
 
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
-            db_pub = await db_get_publisher_by_key(
-                session, principal.organisation_id, public_key_hex
-            )
+            db_pub = await db_get_publisher_by_key(session, principal.organisation_id, public_key_hex)
             if db_pub is not None:
                 trust_tier = db_pub.trust_tier
                 publisher_name = db_pub.name

@@ -12,7 +12,6 @@ scenarios("../../features/hitl/human_only_gate.feature")
 scenarios("../../features/hitl/overdue_warning.feature")
 
 
-
 @given("a run is waiting at gate {gate}")
 def run_waiting_at_gate(gate: str, request):
     run_id = uuid.uuid4()
@@ -23,6 +22,7 @@ def run_waiting_at_gate(gate: str, request):
 @when(parsers.parse("I POST /api/runs/{run_id}/claim"))
 def claim_gate(run_id, client, request):
     from modulo.hitl_manager import ClaimResult
+
     with (
         patch(
             "modulo.hitl_manager.HITLManager.claim_gate",
@@ -40,9 +40,7 @@ def claim_gate(run_id, client, request):
 @then(parsers.parse("the response status is {status:d}"))
 def check_status(status: int, request):
     resp = request.node._resp
-    assert resp.status_code == status, (
-        f"Expected status {status}, got {resp.status_code}: {resp.text[:200]}"
-    )
+    assert resp.status_code == status, f"Expected status {status}, got {resp.status_code}: {resp.text[:200]}"
 
 
 @then(parsers.parse('I am the claimant of gate "{gate}"'))
@@ -58,6 +56,7 @@ def other_user_claimed(gate: str, request):
 @when(parsers.parse("I POST /api/runs/{run_id}/claim"))
 def claim_gate_conflict(run_id, client, request):
     from modulo.hitl_manager import ClaimResult
+
     with (
         patch(
             "modulo.hitl_manager.HITLManager.claim_gate",
@@ -95,13 +94,10 @@ def i_have_claimed(gate: str, request):
     request.node._gate_id = gate
 
 
-@when(
-    parsers.parse(
-        'I POST /api/runs/{run_id}/approve with claim_token and decision "{decision}"'
-    )
-)
+@when(parsers.parse('I POST /api/runs/{run_id}/approve with claim_token and decision "{decision}"'))
 def approve_with_claim_token(run_id, decision: str, client, request):
     from modulo.hitl_manager import ApproveResult
+
     with (
         patch(
             "modulo.hitl_manager.HITLManager.approve_gate",
@@ -129,13 +125,10 @@ def execution_resumes(node: str, request):
     pass
 
 
-@when(
-    parsers.parse(
-        'I POST /api/runs/{run_id}/approve with decision "{decision}" and no claim_token'
-    )
-)
+@when(parsers.parse('I POST /api/runs/{run_id}/approve with decision "{decision}" and no claim_token'))
 def approve_no_token(run_id, decision: str, client, request):
     from modulo.hitl_manager import ApproveResult
+
     with (
         patch(
             "modulo.hitl_manager.HITLManager.approve_gate",
@@ -154,13 +147,10 @@ def claim_token_expires(request):
     pass
 
 
-@when(
-    parsers.parse(
-        'I POST /api/runs/{run_id}/approve with expired claim_token and decision "{decision}"'
-    )
-)
+@when(parsers.parse('I POST /api/runs/{run_id}/approve with expired claim_token and decision "{decision}"'))
 def approve_expired_token(run_id, decision: str, client, request):
     from modulo.hitl_manager import ApproveResult
+
     with (
         patch(
             "modulo.hitl_manager.HITLManager.approve_gate",
@@ -181,13 +171,10 @@ def approve_expired_token(run_id, decision: str, client, request):
     request.node._resp = resp
 
 
-@when(
-    parsers.parse(
-        'I POST /api/runs/{run_id}/approve with claim_token "{token}" and decision "{decision}"'
-    )
-)
+@when(parsers.parse('I POST /api/runs/{run_id}/approve with claim_token "{token}" and decision "{decision}"'))
 def approve_other_token(run_id, token: str, decision: str, client, request):
     from modulo.hitl_manager import ApproveResult
+
     with (
         patch(
             "modulo.hitl_manager.HITLManager.approve_gate",
@@ -206,12 +193,11 @@ def approve_other_token(run_id, token: str, decision: str, client, request):
 
 
 @when(
-    parsers.parse(
-        'I POST /api/runs/{run_id}/approve with claim_token and decision "{decision}" and reason "{reason}"'
-    )
+    parsers.parse('I POST /api/runs/{run_id}/approve with claim_token and decision "{decision}" and reason "{reason}"')
 )
 def approve_with_reason(run_id, decision: str, reason: str, client, request):
     from modulo.hitl_manager import ApproveResult
+
     with (
         patch(
             "modulo.hitl_manager.HITLManager.approve_gate",
@@ -261,9 +247,10 @@ def run_waiting_human(node: str, request):
     request.node._human_node = node
 
 
-@when(parsers.parse('I POST /api/runs/{run_id}/human-input with data {data}'))
+@when(parsers.parse("I POST /api/runs/{run_id}/human-input with data {data}"))
 def post_human_input(run_id, data, client, request):
     import json
+
     payload = json.loads(data) if isinstance(data, str) else data
     with (
         patch("modulo.hitl_manager.HITLManager.submit_human_input"),
@@ -287,19 +274,16 @@ def remains_waiting_human(request):
     pass
 
 
-@when(parsers.parse('I POST /api/runs/{run_id}/human-input with invalid data {data}'))
+@when(parsers.parse("I POST /api/runs/{run_id}/human-input with invalid data {data}"))
 def post_invalid_human_input(run_id, data, client, request):
     import json
+
     payload = json.loads(data) if isinstance(data, str) else data
     resp = client.post(f"/api/runs/{run_id}/human-input", json=payload)
     request.node._resp = resp
 
 
-@given(
-    parsers.parse(
-        'a run is waiting at gate "{gate}" with timeout {timeout:d}s'
-    )
-)
+@given(parsers.parse('a run is waiting at gate "{gate}" with timeout {timeout:d}s'))
 def run_waiting_with_timeout(gate: str, timeout: int, request):
     request.node._run_id = uuid.uuid4()
     request.node._gate_id = gate
@@ -309,6 +293,7 @@ def run_waiting_with_timeout(gate: str, timeout: int, request):
 @when(parsers.parse("{seconds:d} second passes without approval"))
 def time_passes(seconds: int, request):
     from modulo.hitl_manager import HITLManager
+
     with patch.object(HITLManager, "expire_stale_gates") as mock_expire:
         mock_expire.return_value = [request.node._run_id]
 

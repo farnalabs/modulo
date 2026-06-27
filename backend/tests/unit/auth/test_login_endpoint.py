@@ -43,10 +43,7 @@ def _make_mock_user() -> MagicMock:
 @pytest.fixture(autouse=True)
 def _set_env() -> Generator[None, None, None]:
     """Set required env vars for middleware that calls get_settings() directly."""
-    old = {
-        k: os.environ.pop(k, None)
-        for k in ("DATABASE_URL", "SECRET_KEY", "FERNET_KEY")
-    }
+    old = {k: os.environ.pop(k, None) for k in ("DATABASE_URL", "SECRET_KEY", "FERNET_KEY")}
     os.environ["DATABASE_URL"] = "postgresql+asyncpg://localhost/test"
     os.environ["SECRET_KEY"] = _VALID_32
     os.environ["FERNET_KEY"] = _VALID_32

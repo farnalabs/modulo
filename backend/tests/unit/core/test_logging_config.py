@@ -37,8 +37,13 @@ def test_redact_sensitive_empty() -> None:
 
 def test_correlation_id_filter_injects() -> None:
     record = logging.LogRecord(
-        name="test", level=logging.INFO, pathname=__file__, lineno=1,
-        msg="test", args=(), exc_info=None,
+        name="test",
+        level=logging.INFO,
+        pathname=__file__,
+        lineno=1,
+        msg="test",
+        args=(),
+        exc_info=None,
     )
     assert not hasattr(record, "correlation_id")
 
@@ -53,8 +58,13 @@ def test_correlation_id_filter_injects() -> None:
 
 def test_correlation_id_filter_empty_when_not_set() -> None:
     record = logging.LogRecord(
-        name="test", level=logging.INFO, pathname=__file__, lineno=1,
-        msg="test", args=(), exc_info=None,
+        name="test",
+        level=logging.INFO,
+        pathname=__file__,
+        lineno=1,
+        msg="test",
+        args=(),
+        exc_info=None,
     )
     CorrelationIdFilter().filter(record)
     assert record.correlation_id == ""
@@ -62,8 +72,13 @@ def test_correlation_id_filter_empty_when_not_set() -> None:
 
 def test_sensitive_field_filter_redacts() -> None:
     record = logging.LogRecord(
-        name="test", level=logging.INFO, pathname=__file__, lineno=1,
-        msg="test", args=(), exc_info=None,
+        name="test",
+        level=logging.INFO,
+        pathname=__file__,
+        lineno=1,
+        msg="test",
+        args=(),
+        exc_info=None,
     )
     record.api_key = "should-be-redacted"
     record.safe_field = "should-stay"
@@ -76,10 +91,12 @@ def test_json_output_valid_json() -> None:
     """Test that a log record produces valid JSON."""
     stream = io.StringIO()
     handler = logging.StreamHandler(stream)
-    handler.setFormatter(jsonlogger.JsonFormatter(
-        fmt="%(message)s %(level)s %(name)s",
-        timestamp=True,
-    ))
+    handler.setFormatter(
+        jsonlogger.JsonFormatter(
+            fmt="%(message)s %(level)s %(name)s",
+            timestamp=True,
+        )
+    )
     root = logging.getLogger("test_json")
     root.setLevel(logging.DEBUG)
     root.addHandler(handler)

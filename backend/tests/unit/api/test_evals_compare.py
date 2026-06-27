@@ -114,18 +114,28 @@ class TestEvalCompare:
         run_b = _make_row(id=_RUN_B, created_at=_DT)
         eval_def = _make_row(id=_EVAL_DEF_1, name="Test Eval", node_id=_NODE_1)
         result_a = _make_row(
-            id=_RESULT_A1, run_id=_RUN_A, eval_id=_EVAL_DEF_1, node_id=_NODE_1,
-            passed=True, score=0.95, detail="Good",
+            id=_RESULT_A1,
+            run_id=_RUN_A,
+            eval_id=_EVAL_DEF_1,
+            node_id=_NODE_1,
+            passed=True,
+            score=0.95,
+            detail="Good",
         )
         result_b = _make_row(
-            id=_RESULT_B1, run_id=_RUN_B, eval_id=_EVAL_DEF_1, node_id=_NODE_1,
-            passed=False, score=0.45, detail="Bad",
+            id=_RESULT_B1,
+            run_id=_RUN_B,
+            eval_id=_EVAL_DEF_1,
+            node_id=_NODE_1,
+            passed=False,
+            score=0.45,
+            detail="Bad",
         )
 
         mock_session.execute.side_effect = [
             _make_result(scalar_one_value=None),  # set_rls_org
-            _make_result(scalar_value=None),      # set_rls_user_context (user_id)
-            _make_result(scalar_value=None),      # set_rls_user_context (org_role)
+            _make_result(scalar_value=None),  # set_rls_user_context (user_id)
+            _make_result(scalar_value=None),  # set_rls_user_context (org_role)
             _make_result(scalar_one_value=run_a),
             _make_result(scalar_one_value=run_b),
             _make_result(all_value=[result_a]),
@@ -137,10 +147,13 @@ class TestEvalCompare:
             yield mock_session
 
         app.dependency_overrides[get_db_session] = override_session
-        resp = admin_client.post(self.URL, json={
-            "run_id_a": str(_RUN_A),
-            "run_id_b": str(_RUN_B),
-        })
+        resp = admin_client.post(
+            self.URL,
+            json={
+                "run_id_a": str(_RUN_A),
+                "run_id_b": str(_RUN_B),
+            },
+        )
         assert resp.status_code == 200
         data = resp.json()
         assert data["run_a"]["id"] == str(_RUN_A)
@@ -157,8 +170,8 @@ class TestEvalCompare:
 
         mock_session.execute.side_effect = [
             _make_result(scalar_one_value=None),  # set_rls_org
-            _make_result(scalar_value=None),      # set_rls_user_context (user_id)
-            _make_result(scalar_value=None),      # set_rls_user_context (org_role)
+            _make_result(scalar_value=None),  # set_rls_user_context (user_id)
+            _make_result(scalar_value=None),  # set_rls_user_context (org_role)
             _make_result(scalar_one_value=None),
         ]
 
@@ -166,10 +179,13 @@ class TestEvalCompare:
             yield mock_session
 
         app.dependency_overrides[get_db_session] = override_session
-        resp = admin_client.post(self.URL, json={
-            "run_id_a": str(uuid.uuid4()),
-            "run_id_b": str(_RUN_B),
-        })
+        resp = admin_client.post(
+            self.URL,
+            json={
+                "run_id_a": str(uuid.uuid4()),
+                "run_id_b": str(_RUN_B),
+            },
+        )
         assert resp.status_code == 404
 
     def test_compare_empty_results(self, admin_client: TestClient) -> None:
@@ -180,8 +196,8 @@ class TestEvalCompare:
 
         mock_session.execute.side_effect = [
             _make_result(scalar_one_value=None),  # set_rls_org
-            _make_result(scalar_value=None),      # set_rls_user_context (user_id)
-            _make_result(scalar_value=None),      # set_rls_user_context (org_role)
+            _make_result(scalar_value=None),  # set_rls_user_context (user_id)
+            _make_result(scalar_value=None),  # set_rls_user_context (org_role)
             _make_result(scalar_one_value=run_a),
             _make_result(scalar_one_value=run_b),
             _make_result(all_value=[]),
@@ -193,10 +209,13 @@ class TestEvalCompare:
             yield mock_session
 
         app.dependency_overrides[get_db_session] = override_session
-        resp = admin_client.post(self.URL, json={
-            "run_id_a": str(_RUN_A),
-            "run_id_b": str(_RUN_B),
-        })
+        resp = admin_client.post(
+            self.URL,
+            json={
+                "run_id_a": str(_RUN_A),
+                "run_id_b": str(_RUN_B),
+            },
+        )
         assert resp.status_code == 200
         assert resp.json()["results"] == []
 
@@ -222,8 +241,8 @@ class TestEvalCoverage:
 
         mock_session.execute.side_effect = [
             _make_result(scalar_one_value=None),  # set_rls_org
-            _make_result(scalar_value=None),      # set_rls_user_context (user_id)
-            _make_result(scalar_value=None),      # set_rls_user_context (org_role)
+            _make_result(scalar_value=None),  # set_rls_user_context (user_id)
+            _make_result(scalar_value=None),  # set_rls_user_context (org_role)
             _make_result(scalar_one_value=pipeline),
             _make_result(all_value=[eval_def]),
         ]
@@ -247,8 +266,8 @@ class TestEvalCoverage:
 
         mock_session.execute.side_effect = [
             _make_result(scalar_one_value=None),  # set_rls_org
-            _make_result(scalar_value=None),      # set_rls_user_context (user_id)
-            _make_result(scalar_value=None),      # set_rls_user_context (org_role)
+            _make_result(scalar_value=None),  # set_rls_user_context (user_id)
+            _make_result(scalar_value=None),  # set_rls_user_context (org_role)
             _make_result(scalar_one_value=None),
         ]
 
@@ -270,8 +289,8 @@ class TestEvalCoverage:
 
         mock_session.execute.side_effect = [
             _make_result(scalar_one_value=None),  # set_rls_org
-            _make_result(scalar_value=None),      # set_rls_user_context (user_id)
-            _make_result(scalar_value=None),      # set_rls_user_context (org_role)
+            _make_result(scalar_value=None),  # set_rls_user_context (user_id)
+            _make_result(scalar_value=None),  # set_rls_user_context (org_role)
             _make_result(scalar_one_value=pipeline),
             _make_result(all_value=[]),
         ]
@@ -305,8 +324,8 @@ class TestEvalFromRun:
 
         mock_session.execute.side_effect = [
             _make_result(scalar_one_value=None),  # set_rls_org
-            _make_result(scalar_value=None),      # set_rls_user_context (user_id)
-            _make_result(scalar_value=None),      # set_rls_user_context (org_role)
+            _make_result(scalar_value=None),  # set_rls_user_context (user_id)
+            _make_result(scalar_value=None),  # set_rls_user_context (org_role)
             _make_result(scalar_one_value=run),
         ]
         mock_session.add = MagicMock()
@@ -316,12 +335,15 @@ class TestEvalFromRun:
             yield mock_session
 
         app.dependency_overrides[get_db_session] = override_session
-        resp = admin_client.post(self.URL, json={
-            "run_id": str(_RUN_A),
-            "node_id": str(_NODE_1),
-            "eval_type": "regex",
-            "name": "My Regex Eval",
-        })
+        resp = admin_client.post(
+            self.URL,
+            json={
+                "run_id": str(_RUN_A),
+                "node_id": str(_NODE_1),
+                "eval_type": "regex",
+                "name": "My Regex Eval",
+            },
+        )
         assert resp.status_code == 201
         data = resp.json()
         assert data["name"] == "My Regex Eval"
@@ -335,12 +357,15 @@ class TestEvalFromRun:
             yield mock_session
 
         app.dependency_overrides[get_db_session] = override_session
-        resp = runner_client.post(self.URL, json={
-            "run_id": str(_RUN_A),
-            "node_id": str(_NODE_1),
-            "eval_type": "regex",
-            "name": "My Eval",
-        })
+        resp = runner_client.post(
+            self.URL,
+            json={
+                "run_id": str(_RUN_A),
+                "node_id": str(_NODE_1),
+                "eval_type": "regex",
+                "name": "My Eval",
+            },
+        )
         assert resp.status_code == 403
 
     def test_from_run_run_not_found(self, admin_client: TestClient) -> None:
@@ -348,8 +373,8 @@ class TestEvalFromRun:
 
         mock_session.execute.side_effect = [
             _make_result(scalar_one_value=None),  # set_rls_org
-            _make_result(scalar_value=None),      # set_rls_user_context (user_id)
-            _make_result(scalar_value=None),      # set_rls_user_context (org_role)
+            _make_result(scalar_value=None),  # set_rls_user_context (user_id)
+            _make_result(scalar_value=None),  # set_rls_user_context (org_role)
             _make_result(scalar_one_value=None),
         ]
 
@@ -357,12 +382,15 @@ class TestEvalFromRun:
             yield mock_session
 
         app.dependency_overrides[get_db_session] = override_session
-        resp = admin_client.post(self.URL, json={
-            "run_id": str(uuid.uuid4()),
-            "node_id": str(_NODE_1),
-            "eval_type": "json_schema",
-            "name": "Schema Eval",
-        })
+        resp = admin_client.post(
+            self.URL,
+            json={
+                "run_id": str(uuid.uuid4()),
+                "node_id": str(_NODE_1),
+                "eval_type": "json_schema",
+                "name": "Schema Eval",
+            },
+        )
         assert resp.status_code == 404
 
     def test_from_run_prepopulates_config_by_type(self, admin_client: TestClient) -> None:
@@ -377,8 +405,8 @@ class TestEvalFromRun:
 
             mock_session.execute.side_effect = [
                 _make_result(scalar_one_value=None),  # set_rls_org
-                _make_result(scalar_value=None),      # set_rls_user_context (user_id)
-            _make_result(scalar_value=None),      # set_rls_user_context (org_role)
+                _make_result(scalar_value=None),  # set_rls_user_context (user_id)
+                _make_result(scalar_value=None),  # set_rls_user_context (org_role)
                 _make_result(scalar_one_value=run),
             ]
             mock_session.add = MagicMock()
@@ -388,12 +416,15 @@ class TestEvalFromRun:
                 yield s
 
             app.dependency_overrides[get_db_session] = override_session
-            resp = admin_client.post(self.URL, json={
-                "run_id": str(_RUN_A),
-                "node_id": str(_NODE_1),
-                "eval_type": eval_type,
-                "name": f"{eval_type} Eval",
-            })
+            resp = admin_client.post(
+                self.URL,
+                json={
+                    "run_id": str(_RUN_A),
+                    "node_id": str(_NODE_1),
+                    "eval_type": eval_type,
+                    "name": f"{eval_type} Eval",
+                },
+            )
             assert resp.status_code == 201, f"Failed for {eval_type}"
             data = resp.json()
             assert data["eval_type"] == eval_type

@@ -62,9 +62,7 @@ async def _make_prerequisites(
     return schema.id, sv.version, mb.id
 
 
-async def test_create_agent(
-    rls_session: AsyncSession, test_org: uuid.UUID, test_user: uuid.UUID
-) -> None:
+async def test_create_agent(rls_session: AsyncSession, test_org: uuid.UUID, test_user: uuid.UUID) -> None:
     schema_id, version, mb_id = await _make_prerequisites(rls_session, test_org, test_user)
     agent = await create_agent(
         rls_session,
@@ -83,9 +81,7 @@ async def test_create_agent(
     assert agent.organisation_id == test_org
 
 
-async def test_get_agent_returns_existing(
-    rls_session: AsyncSession, test_org: uuid.UUID, test_user: uuid.UUID
-) -> None:
+async def test_get_agent_returns_existing(rls_session: AsyncSession, test_org: uuid.UUID, test_user: uuid.UUID) -> None:
     schema_id, version, mb_id = await _make_prerequisites(rls_session, test_org, test_user)
     agent = await create_agent(
         rls_session,
@@ -108,9 +104,7 @@ async def test_get_agent_returns_none_for_unknown(rls_session: AsyncSession) -> 
     assert await get_agent(rls_session, uuid.uuid4()) is None
 
 
-async def test_list_agents_pagination(
-    rls_session: AsyncSession, test_org: uuid.UUID, test_user: uuid.UUID
-) -> None:
+async def test_list_agents_pagination(rls_session: AsyncSession, test_org: uuid.UUID, test_user: uuid.UUID) -> None:
     schema_id, version, mb_id = await _make_prerequisites(rls_session, test_org, test_user)
     for i in range(3):
         await create_agent(
@@ -131,9 +125,7 @@ async def test_list_agents_pagination(
     assert page1.page == 1
 
 
-async def test_update_agent(
-    rls_session: AsyncSession, test_org: uuid.UUID, test_user: uuid.UUID
-) -> None:
+async def test_update_agent(rls_session: AsyncSession, test_org: uuid.UUID, test_user: uuid.UUID) -> None:
     schema_id, version, mb_id = await _make_prerequisites(rls_session, test_org, test_user)
     agent = await create_agent(
         rls_session,
@@ -156,9 +148,7 @@ async def test_update_agent_unknown_returns_none(rls_session: AsyncSession) -> N
     assert await update_agent(rls_session, uuid.uuid4(), {"name": "x"}) is None
 
 
-async def test_delete_agent(
-    rls_session: AsyncSession, test_org: uuid.UUID, test_user: uuid.UUID
-) -> None:
+async def test_delete_agent(rls_session: AsyncSession, test_org: uuid.UUID, test_user: uuid.UUID) -> None:
     schema_id, version, mb_id = await _make_prerequisites(rls_session, test_org, test_user)
     agent = await create_agent(
         rls_session,

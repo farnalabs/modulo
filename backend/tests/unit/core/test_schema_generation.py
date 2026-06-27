@@ -26,6 +26,7 @@ class _FakeBackend:
         if self._fail:
             raise RuntimeError("LLM unavailable")
         from langchain_core.messages import AIMessage
+
         return AIMessage(content=self._response or "{}")
 
     def stream(self, messages: list, **kwargs: object) -> object:
@@ -86,9 +87,7 @@ class TestSchemaGenerationService:
 
     async def test_generate_handles_markdown_wrapped_response(self) -> None:
         schema = {"type": "object", "properties": {}}
-        backend = _FakeBackend(
-            response=f"```json\n{json.dumps(schema)}\n```"
-        )
+        backend = _FakeBackend(response=f"```json\n{json.dumps(schema)}\n```")
         service = SchemaGenerationService(backend)
         result = await service.generate("An empty schema")
         assert result == schema
@@ -125,6 +124,7 @@ class TestSchemaGenerationService:
 
             async def invoke(self, messages: list, **kwargs: object) -> object:
                 from langchain_core.messages import AIMessage
+
                 return AIMessage(content=["non-string", "content"])
 
             def stream(self, messages: list, **kwargs: object) -> object:
@@ -145,10 +145,7 @@ class TestSchemaGenerationService:
     async def test_generate_rejects_non_fenced_surrounding_text(self) -> None:
         expected = {"type": "object", "properties": {"id": {"type": "string"}}}
         backend = _FakeBackend(
-            response=(
-                f"Here is your schema:\n{json.dumps(expected)}"
-                "\n\nLet me know if you need changes."
-            )
+            response=(f"Here is your schema:\n{json.dumps(expected)}\n\nLet me know if you need changes.")
         )
         service = SchemaGenerationService(backend)
         with pytest.raises(SchemaGenerationError, match="Failed to parse"):

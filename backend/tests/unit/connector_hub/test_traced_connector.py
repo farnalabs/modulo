@@ -71,9 +71,7 @@ class _FakeConnector(ConnectorBase):
         return {"status": "ok", "path": payload.resource}
 
 
-async def test_health_check_creates_span(
-    traced: _TracedConnector, exporter: InMemorySpanExporter
-) -> None:
+async def test_health_check_creates_span(traced: _TracedConnector, exporter: InMemorySpanExporter) -> None:
     result = await traced.health_check()
 
     assert result.ok is True
@@ -140,9 +138,7 @@ async def test_traced_connector_with_org_id(tracer, exporter: InMemorySpanExport
     assert spans[0].attributes.get("connector.org_id") == "org-123"
 
 
-async def test_traced_connector_without_org_id(
-    traced: _TracedConnector, exporter: InMemorySpanExporter
-) -> None:
+async def test_traced_connector_without_org_id(traced: _TracedConnector, exporter: InMemorySpanExporter) -> None:
     await traced.health_check()
 
     spans = exporter.get_finished_spans()
@@ -151,9 +147,7 @@ async def test_traced_connector_without_org_id(
         assert "connector.org_id" not in spans[0].attributes
 
 
-async def test_query_error_records_exception(
-    traced: _TracedConnector, exporter: InMemorySpanExporter
-) -> None:
+async def test_query_error_records_exception(traced: _TracedConnector, exporter: InMemorySpanExporter) -> None:
     inner = traced._inner
 
     with patch.object(inner, "query", AsyncMock(side_effect=ValueError("connection failed"))):
@@ -168,9 +162,7 @@ async def test_query_error_records_exception(
     assert "exception" in event_names
 
 
-async def test_write_error_records_exception(
-    traced: _TracedConnector, exporter: InMemorySpanExporter
-) -> None:
+async def test_write_error_records_exception(traced: _TracedConnector, exporter: InMemorySpanExporter) -> None:
     inner = traced._inner
 
     with patch.object(inner, "write", AsyncMock(side_effect=PermissionError("access denied"))):
@@ -218,9 +210,7 @@ def _hub_global_exporter() -> InMemorySpanExporter:
     return exporter
 
 
-async def test_hub_integration_health_check(
-    tmp_path, _hub_global_exporter: InMemorySpanExporter
-) -> None:
+async def test_hub_integration_health_check(tmp_path, _hub_global_exporter: InMemorySpanExporter) -> None:
     """ConnectorHub wiring produces spans in health_check."""
     key = Fernet.generate_key().decode()
     ci = _FakeCI(
@@ -231,7 +221,7 @@ async def test_hub_integration_health_check(
     )
 
     backend = create_secrets_backend(fernet_key=key, backend_name="fernet")
-    with patch.object(backend, 'get_secret', return_value="{}"):
+    with patch.object(backend, "get_secret", return_value="{}"):
         hub = ConnectorHub(secrets_backend=backend, org_id="org-42")
         async with hub:
             await hub.initialise([ci])
@@ -249,9 +239,7 @@ async def test_hub_integration_health_check(
     assert span.attributes.get("connector.healthy") is True
 
 
-async def test_hub_integration_query_and_write(
-    tmp_path, _hub_global_exporter: InMemorySpanExporter
-) -> None:
+async def test_hub_integration_query_and_write(tmp_path, _hub_global_exporter: InMemorySpanExporter) -> None:
     """org_id flows through hub to query and write spans."""
     _hub_global_exporter.clear()
 
@@ -264,19 +252,15 @@ async def test_hub_integration_query_and_write(
     )
 
     backend = create_secrets_backend(fernet_key=key, backend_name="fernet")
-    with patch.object(backend, 'get_secret', return_value="{}"):
+    with patch.object(backend, "get_secret", return_value="{}"):
         hub = ConnectorHub(secrets_backend=backend, org_id="tenant-abc")
         async with hub:
             await hub.initialise([ci])
             connector = hub.get(ci.id)
 
-            await connector.query(
-                ConnectorQuery(resource="directory", filters={"path": str(tmp_path)})
-            )
+            await connector.query(ConnectorQuery(resource="directory", filters={"path": str(tmp_path)}))
             out_path = tmp_path / "out.txt"
-            await connector.write(
-                ConnectorPayload(resource="file", data={"content": "hello", "path": str(out_path)})
-            )
+            await connector.write(ConnectorPayload(resource="file", data={"content": "hello", "path": str(out_path)}))
 
     spans = _hub_global_exporter.get_finished_spans()
     assert len(spans) == 2

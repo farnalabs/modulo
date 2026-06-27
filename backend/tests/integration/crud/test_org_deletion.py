@@ -28,17 +28,14 @@ async def _create_org(db_engine: AsyncEngine, suffix: str = "") -> uuid.UUID:
         async with conn.begin():
             await conn.execute(
                 text(
-                    "INSERT INTO organisations (id, name, slug, settings_json) "
-                    "VALUES (:id, :name, :slug, '{}'::json)"
+                    "INSERT INTO organisations (id, name, slug, settings_json) VALUES (:id, :name, :slug, '{}'::json)"
                 ),
                 {"id": str(org_id), "name": f"Deletion Test {suffix}", "slug": slug},
             )
     return org_id
 
 
-async def _create_user(
-    db_engine: AsyncEngine, org_id: uuid.UUID, email: str
-) -> uuid.UUID:
+async def _create_user(db_engine: AsyncEngine, org_id: uuid.UUID, email: str) -> uuid.UUID:
     user_id = uuid.uuid4()
     async with db_engine.connect() as conn:
         async with conn.begin():
@@ -58,9 +55,7 @@ async def _create_user(
     return user_id
 
 
-async def _create_pipeline(
-    db_engine: AsyncEngine, org_id: uuid.UUID, name: str
-) -> uuid.UUID:
+async def _create_pipeline(db_engine: AsyncEngine, org_id: uuid.UUID, name: str) -> uuid.UUID:
     pid = uuid.uuid4()
     async with db_engine.connect() as conn:
         async with conn.begin():
@@ -81,9 +76,7 @@ async def _create_pipeline(
     return pid
 
 
-async def _count_rows(
-    db_engine: AsyncEngine, table: str, org_id: uuid.UUID | None = None
-) -> int:
+async def _count_rows(db_engine: AsyncEngine, table: str, org_id: uuid.UUID | None = None) -> int:
     async with db_engine.connect() as conn:
         if org_id:
             result = await conn.execute(
@@ -95,9 +88,7 @@ async def _count_rows(
         return result.scalar_one()
 
 
-async def _get_org_status(
-    db_engine: AsyncEngine, org_id: uuid.UUID
-) -> dict[str, Any]:
+async def _get_org_status(db_engine: AsyncEngine, org_id: uuid.UUID) -> dict[str, Any]:
     async with db_engine.connect() as conn:
         row = await conn.execute(
             text(
@@ -160,9 +151,7 @@ class TestRequestOrgDeletion:
             with pytest.raises(ValueError, match="already deleted"):
                 await request_org_deletion(session, org_id, user_id)
 
-    async def test_soft_deletes_org_and_sets_token(
-        self, db_engine: AsyncEngine
-    ) -> None:
+    async def test_soft_deletes_org_and_sets_token(self, db_engine: AsyncEngine) -> None:
         from modulo.db.crud.org_deletion import request_org_deletion
 
         org_id = await _create_org(db_engine, "soft-delete")
@@ -189,9 +178,7 @@ class TestRequestOrgDeletion:
         assert state["deletion_token_expires_at"] is not None
         assert state["export_bundle_json"] is not None
 
-    async def test_soft_marks_child_rows(
-        self, db_engine: AsyncEngine
-    ) -> None:
+    async def test_soft_marks_child_rows(self, db_engine: AsyncEngine) -> None:
         from modulo.db.crud.org_deletion import request_org_deletion
 
         org_id = await _create_org(db_engine, "child-rows")
@@ -210,18 +197,13 @@ class TestRequestOrgDeletion:
         # Check that pipelines are soft-deleted
         async with db_engine.connect() as conn:
             result = await conn.execute(
-                text(
-                    "SELECT COUNT(*) FROM pipelines "
-                    "WHERE organisation_id = :oid AND deleted_at IS NOT NULL"
-                ),
+                text("SELECT COUNT(*) FROM pipelines WHERE organisation_id = :oid AND deleted_at IS NOT NULL"),
                 {"oid": str(org_id)},
             )
             deleted_pipelines = result.scalar_one()
             assert deleted_pipelines == 1
 
-    async def test_export_bundle_contains_all_sections(
-        self, db_engine: AsyncEngine
-    ) -> None:
+    async def test_export_bundle_contains_all_sections(self, db_engine: AsyncEngine) -> None:
         from modulo.db.crud.org_deletion import request_org_deletion
 
         org_id = await _create_org(db_engine, "export-test")
@@ -258,9 +240,7 @@ class TestConfirmOrgDeletion:
         factory = async_sessionmaker(db_engine, expire_on_commit=False)
         async with factory() as session:
             with pytest.raises(ValueError, match="Organisation not found"):
-                await confirm_org_deletion(
-                    session, org_id=uuid.uuid4(), token="anything"
-                )
+                await confirm_org_deletion(session, org_id=uuid.uuid4(), token="anything")
 
     async def test_raises_when_token_invalid(self, db_engine: AsyncEngine) -> None:
         from modulo.db.crud.org_deletion import confirm_org_deletion, request_org_deletion
@@ -279,9 +259,7 @@ class TestConfirmOrgDeletion:
 
         async with factory() as session:
             with pytest.raises(ValueError, match="Invalid deletion token"):
-                await confirm_org_deletion(
-                    session, org_id=org_id, token="wrong-token"
-                )
+                await confirm_org_deletion(session, org_id=org_id, token="wrong-token")
 
     async def test_confirms_with_correct_token(self, db_engine: AsyncEngine) -> None:
         from modulo.db.crud.org_deletion import confirm_org_deletion, request_org_deletion
@@ -299,9 +277,7 @@ class TestConfirmOrgDeletion:
             await session.flush()
 
         async with factory() as session:
-            result = await confirm_org_deletion(
-                session, org_id=org_id, token=req["token"]
-            )
+            result = await confirm_org_deletion(session, org_id=org_id, token=req["token"])
         assert result["deleted_organisation_id"] == str(org_id)
 
         # Org should be gone
@@ -328,9 +304,7 @@ class TestConfirmOrgDeletion:
             await session.flush()
 
         async with factory() as session:
-            result = await confirm_org_deletion(
-                session, org_id=org_id, token="ignored", immediate=True
-            )
+            result = await confirm_org_deletion(session, org_id=org_id, token="ignored", immediate=True)
         assert result["deleted_organisation_id"] == str(org_id)
 
     async def test_raises_when_token_expired(self, db_engine: AsyncEngine) -> None:
@@ -358,9 +332,7 @@ class TestConfirmOrgDeletion:
 
         async with factory() as session:
             with pytest.raises(ValueError, match="has expired"):
-                await confirm_org_deletion(
-                    session, org_id=org_id, token="expired-token-value"
-                )
+                await confirm_org_deletion(session, org_id=org_id, token="expired-token-value")
 
 
 # ── Tests: export_org_data ──────────────────────────────────────────
@@ -383,10 +355,7 @@ class TestExportOrgData:
         factory = async_sessionmaker(db_engine, expire_on_commit=False)
         async with factory() as session:
             await session.execute(
-                text(
-                    "UPDATE organisations SET export_bundle_json = :bundle "
-                    "WHERE id = :id"
-                ),
+                text("UPDATE organisations SET export_bundle_json = :bundle WHERE id = :id"),
                 {
                     "bundle": {"organisation": [{"name": "Cached Org"}]},
                     "id": str(org_id),
@@ -398,9 +367,7 @@ class TestExportOrgData:
             bundle = await export_org_data(session, org_id)
         assert bundle["organisation"][0]["name"] == "Cached Org"
 
-    async def test_collects_live_data_when_no_bundle(
-        self, db_engine: AsyncEngine
-    ) -> None:
+    async def test_collects_live_data_when_no_bundle(self, db_engine: AsyncEngine) -> None:
         from modulo.db.crud.org_deletion import export_org_data
 
         org_id = await _create_org(db_engine, "live-export")
@@ -421,9 +388,7 @@ class TestExportOrgData:
 
 
 class TestBatchDeleteLanggraphCheckpoints:
-    async def test_returns_zero_when_no_checkpoint_tables(
-        self, db_engine: AsyncEngine
-    ) -> None:
+    async def test_returns_zero_when_no_checkpoint_tables(self, db_engine: AsyncEngine) -> None:
         """If the langgraph schema does not exist, the function should handle it."""
         from modulo.db.crud.org_deletion import batch_delete_langgraph_checkpoints
 
