@@ -64,7 +64,7 @@ dependencies = [
     "redis>=5.0.0",
     "croniter>=6.2.2",
     "jmespath>=1.0.1",
-    "mcp>=1.0.0",
+    "mcp>=1.28.1",
     # Fixes CVE-2025-64439 (RCE via jsonplus) and CVE-2026-27794 (RCE via pickle)
     "langgraph-checkpoint-postgres>=3.0.0",
     "psycopg-binary>=3.3.4",
