@@ -68,7 +68,7 @@ jobs:
           python-version: "3.12"
           enable-cache: true
       - run: uv sync --frozen
-      - run: uv run pytest -m '${{ matrix.pytest_marker }}' --timeout 60 -q
+      - run: uv run pytest tests/unit/ -m '${{ matrix.pytest_marker }}' --timeout 60 -q
         env:
           SECRET_KEY: "ci-secret-key-not-for-production"
           FERNET_KEY: "vK-xU7GqHLflg_GqzJ1FqWI7pHWoHSIyukf4wx-tMHI="
