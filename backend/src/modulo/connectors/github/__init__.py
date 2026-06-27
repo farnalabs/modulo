@@ -16,7 +16,7 @@ from modulo.connectors.base import (
 _GITHUB_API = "https://api.github.com"
 _API_VERSION = "2022-11-28"
 
-REQUIRED_SCOPES = frozenset({"repo:read", "repo:write", "pull_requests:write"})
+REQUIRED_SCOPES = frozenset({"repo", "read:org"})
 
 
 class GitHubConnector(ConnectorBase):
@@ -49,12 +49,29 @@ class GitHubConnector(ConnectorBase):
     def _client(self) -> httpx.AsyncClient:
         return httpx.AsyncClient(base_url=_GITHUB_API, headers=self._headers(), timeout=30)
 
-    async def health_check(self) -> HealthResult:
-        """Check API access and verify required scopes via representative endpoints.
+    async def verify_scopes(self) -> set[str]:
+        """Verify the token has required OAuth scopes via ``X-OAuth-Scopes`` header.
 
-        Required scopes: repo:read, repo:write, pull_requests:write.
-        Scope verification is done by attempting actual API calls — a 401/403
-        on the endpoint indicates the scope is missing.
+        Returns the set of missing scopes (empty if all present).
+        Raises ``ValueError`` if the API call fails (non-200).
+        """
+        async with self._client() as client:
+            r = await client.get("/user")
+
+        if r.status_code != 200:
+            raise ValueError(f"Cannot verify scopes: HTTP {r.status_code}")
+
+        header_value = r.headers.get("X-OAuth-Scopes", "")
+        token_scopes: set[str] = set()
+        if header_value.strip():
+            token_scopes = {s.strip() for s in header_value.split(",")}
+
+        return set(REQUIRED_SCOPES - token_scopes)
+
+    async def health_check(self) -> HealthResult:
+        """Check API access and verify required OAuth scopes via ``X-OAuth-Scopes`` header.
+
+        Required scopes: ``repo``, ``read:org``.
         """
         async with self._client() as client:
             r = await client.get("/user")
@@ -64,11 +81,17 @@ class GitHubConnector(ConnectorBase):
 
         user_login = r.json().get("login", "")
 
-        # Verify repo:read scope by attempting to list repos
-        async with self._client() as client:
-            repos_r = await client.get("/user/repos", params={"per_page": 1})
-            if repos_r.status_code in (401, 403):
-                return HealthResult(ok=False, detail="Missing scopes: repo:read")
+        header_value = r.headers.get("X-OAuth-Scopes", "")
+        token_scopes: set[str] = set()
+        if header_value.strip():
+            token_scopes = {s.strip() for s in header_value.split(",")}
+
+        missing = REQUIRED_SCOPES - token_scopes
+        if missing:
+            return HealthResult(
+                ok=False,
+                detail=f"Missing scopes: {', '.join(sorted(missing))}. Required: {', '.join(sorted(REQUIRED_SCOPES))}",
+            )
 
         return HealthResult(ok=True, detail=user_login)
 

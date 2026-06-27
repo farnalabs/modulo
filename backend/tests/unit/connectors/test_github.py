@@ -17,8 +17,9 @@ def connector():
 
 @respx.mock
 async def test_health_check_ok(connector):
-    respx.get("https://api.github.com/user").mock(return_value=httpx.Response(200, json={"login": "octocat"}))
-    respx.get("https://api.github.com/user/repos").mock(return_value=httpx.Response(200, json=[{"id": 1}]))
+    respx.get("https://api.github.com/user").mock(
+        return_value=httpx.Response(200, json={"login": "octocat"}, headers={"X-OAuth-Scopes": "repo, read:org"}),
+    )
     result = await connector.health_check()
     assert result.ok is True
     assert result.detail == "octocat"
@@ -26,11 +27,13 @@ async def test_health_check_ok(connector):
 
 @respx.mock
 async def test_health_check_missing_scopes(connector):
-    respx.get("https://api.github.com/user").mock(return_value=httpx.Response(200, json={"login": "octocat"}))
-    respx.get("https://api.github.com/user/repos").mock(return_value=httpx.Response(403, text="forbidden"))
+    respx.get("https://api.github.com/user").mock(
+        return_value=httpx.Response(200, json={"login": "octocat"}, headers={"X-OAuth-Scopes": "repo"}),
+    )
     result = await connector.health_check()
     assert result.ok is False
     assert "Missing scopes" in result.detail
+    assert "read:org" in result.detail
 
 
 @respx.mock
