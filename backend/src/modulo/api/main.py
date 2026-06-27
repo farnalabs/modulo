@@ -437,7 +437,7 @@ app = FastAPI(
 _settings = get_settings()
 _cors_origins = [o.strip() for o in _settings.cors_origins.split(",") if o.strip()]
 app.add_middleware(
-    CorsLoggingMiddleware,
+    CorsLoggingMiddleware,  # type: ignore[arg-type]
     allow_origins=_cors_origins,
     allow_credentials=True,
     allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
@@ -452,8 +452,8 @@ app.add_middleware(
     max_age=_settings.cors_max_age,
 )
 app.add_middleware(CorrelationIdMiddleware)
-app.add_middleware(RateLimitMiddleware)
-app.add_middleware(DeprecationHeaderMiddleware)
+app.add_middleware(RateLimitMiddleware)  # type: ignore[arg-type]
+app.add_middleware(DeprecationHeaderMiddleware)  # type: ignore[arg-type]
 app.add_middleware(CatchAllMiddleware)
 
 app.include_router(admin_router)
@@ -502,8 +502,8 @@ app.include_router(environments_router)
 # Auth is enforced by McpAuthMiddleware inside the sub-app.
 app.mount("/mcp", build_mcp_asgi_app())
 
-app.add_exception_handler(StarletteHTTPException, http_exception_handler)
-app.add_exception_handler(RequestValidationError, validation_exception_handler)
+app.add_exception_handler(StarletteHTTPException, http_exception_handler)  # type: ignore[arg-type]
+app.add_exception_handler(RequestValidationError, validation_exception_handler)  # type: ignore[arg-type]
 
 
 @app.get("/healthz")

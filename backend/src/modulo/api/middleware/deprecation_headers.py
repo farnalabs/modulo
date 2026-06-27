@@ -70,7 +70,7 @@ class DeprecationHeaderMiddleware(BaseHTTPMiddleware):
             response.headers["Deprecation"] = "true"
             sunset = rule.get("sunset")
             if sunset:
-                response.headers["Sunset"] = sunset  # type: ignore[arg-type]
+                response.headers["Sunset"] = sunset
             migration_url = rule.get("migration_url")
             if migration_url:
                 response.headers["Link"] = f'{migration_url}; rel="deprecation"'

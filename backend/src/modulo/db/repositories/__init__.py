@@ -61,13 +61,13 @@ class RepositoryHub:
     async def set_org_context(self, session: AsyncSession, org_id: uuid.UUID) -> None:
         await self._repo.set_org_context(session, org_id)
 
-    def apply_tenant_filter(self, stmt: Select, org_id: uuid.UUID) -> Select:
+    def apply_tenant_filter(self, stmt: Select[Any], org_id: uuid.UUID) -> Select[Any]:
         return self._repo.apply_tenant_filter(stmt, org_id)
 
     async def paginate(
         self,
         session: AsyncSession,
-        stmt: Select,
+        stmt: Select[Any],
         page: int,
         page_size: int,
     ) -> PageResult[Any]:

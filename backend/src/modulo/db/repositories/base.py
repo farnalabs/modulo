@@ -17,7 +17,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from modulo.db.crud.base import PageResult
 
 
-def extract_orm_entity(stmt: Select) -> type | None:
+def extract_orm_entity(stmt: Select[Any]) -> type | None:
     """Walk the statement's column descriptions to find the ORM entity.
 
     Shared utility used by GenericRepository.apply_tenant_filter and
@@ -26,6 +26,7 @@ def extract_orm_entity(stmt: Select) -> type | None:
     for desc in stmt.column_descriptions:
         entity = desc.get("entity")
         if entity is not None:
+            assert isinstance(entity, type)
             return entity
     return None
 
@@ -53,7 +54,7 @@ class BaseRepository(ABC):
         """
 
     @abstractmethod
-    def apply_tenant_filter(self, stmt: Select, org_id: uuid.UUID) -> Select:
+    def apply_tenant_filter(self, stmt: Select[Any], org_id: uuid.UUID) -> Select[Any]:
         """Augment *stmt* with an ``organisation_id = :org_id`` clause.
 
         Postgres returns the statement unchanged (RLS policies handle
@@ -63,7 +64,7 @@ class BaseRepository(ABC):
     async def paginate(
         self,
         session: AsyncSession,
-        stmt: Select,
+        stmt: Select[Any],
         page: int,
         page_size: int,
     ) -> PageResult[Any]:

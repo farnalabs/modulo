@@ -110,9 +110,11 @@ async def scim_create_group(
     *,
     org_id: uuid.UUID,
     display_name: str,
-    created_by: uuid.UUID,
+    created_by: uuid.UUID | None = None,
     description: str | None = None,
 ) -> Team:
+    if created_by is None:
+        created_by = uuid.UUID(int=0)
     return await create_team(
         session,
         org_id=org_id,

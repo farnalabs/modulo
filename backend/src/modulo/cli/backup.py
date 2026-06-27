@@ -231,7 +231,7 @@ def _print_size(backup_dir: Path) -> None:
     click.echo(f"Total size: {_human_size(total)}")
 
 
-def _human_size(size: int) -> str:
+def _human_size(size: float) -> str:
     for unit in ("B", "KB", "MB", "GB"):
         if size < 1024:
             return f"{size:.1f} {unit}"

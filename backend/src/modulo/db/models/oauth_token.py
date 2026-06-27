@@ -15,7 +15,7 @@ from modulo.db.models.base import Base
 
 class OAuthAuthorizationCode(Base):
     __tablename__ = "oauth_authorization_codes"
-    __table_args__ = {"comment": "One-time authorization codes for OAuth 2.0 flow"}  # type: ignore[misc]  # noqa: RUF012
+    __table_args__ = {"comment": "One-time authorization codes for OAuth 2.0 flow"}  # noqa: RUF012
 
     code: Mapped[str] = mapped_column(String(128), primary_key=True)
     client_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
@@ -41,7 +41,7 @@ class OAuthTokenFamily(Base):
     """
 
     __tablename__ = "oauth_token_families"
-    __table_args__ = {"comment": "Token families for MCP OAuth access token rotation"}  # type: ignore[misc]  # noqa: RUF012
+    __table_args__ = {"comment": "Token families for MCP OAuth access token rotation"}  # noqa: RUF012
 
     family_id: Mapped[uuid.UUID] = mapped_column(Uuid(), primary_key=True, default=uuid.uuid4)
     client_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)

@@ -81,7 +81,7 @@ async def receive_webhook(
             trigger_row = await session.execute(select(Trigger).where(Trigger.id == trigger_id))
             trigger = trigger_row.scalar_one_or_none()
             if trigger is None:
-                raise TriggerNotFoundError()
+                raise TriggerNotFoundError(trigger_id=trigger_id)
             snapshot = await create_snapshot_from_live_graph(session, pipeline_id=trigger.pipeline_id, created_by=None)
             if snapshot is None:
                 raise HTTPException(
@@ -154,7 +154,7 @@ async def replay_webhook(
             trigger_row = await session.execute(select(Trigger).where(Trigger.id == trigger_id))
             trigger = trigger_row.scalar_one_or_none()
             if trigger is None:
-                raise TriggerNotFoundError()
+                raise TriggerNotFoundError(trigger_id=trigger_id)
             snapshot = await create_snapshot_from_live_graph(session, pipeline_id=trigger.pipeline_id, created_by=None)
             if snapshot is None:
                 raise HTTPException(

@@ -15,7 +15,7 @@ Sensitive data (credentials, API keys, user content) is never included in span a
 import json
 import uuid
 from collections.abc import Sequence
-from typing import Any
+from typing import Any, cast
 
 from opentelemetry import trace
 from opentelemetry.trace import Status, StatusCode
@@ -193,15 +193,15 @@ class _TracedConnector(ConnectorBase):
                 raise
 
     async def health_check(self) -> HealthResult:
-        return await self._run_with_tracing(
+        return cast(HealthResult, await self._run_with_tracing(
             f"connector.{self._inner.connector_type}.health_check",
             "health_check",
             self._inner.health_check,
             post_span=lambda span, result: span.set_attribute("connector.healthy", result.ok),
-        )
+        ))
 
     async def query(self, q: ConnectorQuery) -> ConnectorResult:
-        return await self._run_with_tracing(
+        return cast(ConnectorResult, await self._run_with_tracing(
             f"connector.{self._inner.connector_type}.query",
             "query",
             self._inner.query,
@@ -210,15 +210,15 @@ class _TracedConnector(ConnectorBase):
             post_span=lambda span, result: (
                 span.set_attribute("connector.result_total", result.total) if result.total is not None else None
             ),
-        )
+        ))
 
     async def write(self, payload: ConnectorPayload) -> dict[str, Any]:
-        return await self._run_with_tracing(
+        return cast(dict[str, Any], await self._run_with_tracing(
             f"connector.{self._inner.connector_type}.write",
             "write",
             self._inner.write,
             payload,
-        )
+        ))
 
 
 def _get_cred(creds: dict[str, Any], key: str, type_id: str) -> Any:

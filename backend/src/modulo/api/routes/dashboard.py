@@ -381,7 +381,7 @@ async def dashboard_trends(
             .order_by(func.date(FeedbackRecord.created_at))
         )
         feedback_rows = (await session.execute(feedback_volume_query)).all()
-        feedback_by_date: dict[str, dict[str, int]] = {}
+        feedback_by_date: dict[str, dict[str, Any]] = {}
         for row in feedback_rows:
             feedback_by_date[str(row.feedback_date)] = {
                 "feedback_count": int(row.feedback_count),

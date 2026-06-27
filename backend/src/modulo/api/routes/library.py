@@ -679,7 +679,7 @@ def _build_pipeline_from_template(
     primitive: Any,
     name_override: str | None,
     description_override: str | None,
-) -> tuple[str, str | None, list[dict[str, Any]], list[dict[str, Any]], int, int]:
+) -> tuple[Any, str | None, list[dict[str, Any]], list[dict[str, Any]], int, int]:
     """Extract pipeline structure from a library primitive's content_json.
 
     Returns (name, description, graph_nodes, edges, agent_count, edge_count).

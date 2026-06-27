@@ -6,7 +6,7 @@ from datetime import datetime
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
-from jsonschema import Draft202012Validator, ValidationError
+from jsonschema import Draft202012Validator, ValidationError  # type: ignore[import-untyped]
 from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 

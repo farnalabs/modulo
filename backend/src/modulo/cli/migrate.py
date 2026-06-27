@@ -17,7 +17,7 @@ from typing import Any, Literal
 
 import click
 from sqlalchemy import select
-from tqdm import tqdm
+from tqdm import tqdm  # type: ignore[import-untyped]
 
 from modulo.auth.jwt import decode_principal
 from modulo.db.crud.organisation import get_organisation
@@ -234,12 +234,12 @@ async def _import_org_data(
             row_data.pop("organisation_id", None)
             row_id = row_data.get("id")
 
-            pk_cols = list(model_cls.__table__.primary_key.columns.keys())
+            pk_cols = list(model_cls.__table__.primary_key.columns.keys())  # type: ignore[attr-defined]
             pk_col = pk_cols[0] if pk_cols else "id"
             try:
                 existing = None
                 if row_id:
-                    stmt = select(model_cls).where(getattr(model_cls, pk_col) == uuid.UUID(row_id))
+                    stmt: Any = select(model_cls).where(getattr(model_cls, pk_col) == uuid.UUID(row_id))
                     existing = (await session.execute(stmt)).scalar_one_or_none()
 
                 if existing is not None and strategy == "skip":

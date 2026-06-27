@@ -26,7 +26,9 @@ def _normalize_type(raw: Any) -> str | None:
     if isinstance(raw, str):
         return raw
     if isinstance(raw, list) and len(raw) == 1:
-        return raw[0]
+        val = raw[0]
+        assert isinstance(val, str)
+        return val
     return None
 
 

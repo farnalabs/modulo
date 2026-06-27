@@ -127,7 +127,7 @@ def _make_conditional_router(
 
     def _router(state: dict[str, Any]) -> str:
         for compiled_expr, target in compiled:
-            result = compiled_expr.search(state)  # type: ignore[union-attr]
+            result = compiled_expr.search(state)
             if _is_truthy(result):
                 return target
         if normal_targets:
@@ -177,7 +177,7 @@ def build_graph_from_json(
 
     Returns a compiled LangGraph that accepts dict[str, Any] state.
     """
-    graph: StateGraph = StateGraph(dict)
+    graph: StateGraph[Any] = StateGraph(dict[str, Any])
 
     nodes: list[dict[str, Any]] = graph_json.get("nodes", [])
     edges: list[dict[str, Any]] = graph_json.get("edges", [])

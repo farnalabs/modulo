@@ -356,10 +356,10 @@ async def get_anomalies(
             window = [s for _, s in daily_spends[max(0, i - 7) : i] if s is not None]
             if not window:
                 continue
-            avg = sum(float(w) for w in window) / len(window)
+            avg = sum(float(str(w)) for w in window) / len(window)
             if avg == 0:
                 continue
-            spend_val = float(spend) if spend else 0.0
+            spend_val = float(str(spend)) if spend else 0.0
             ratio = spend_val / avg
             if ratio > 2.0:
                 anomalies.append(
@@ -392,11 +392,11 @@ async def get_anomalies(
 
         # Merge: use stored dismissed status, and include stored anomalies
         seen_dates: set[str] = set()
-        for a in anomalies:
-            key = a["anomaly_date"]
+        for a in anomalies:  # type: ignore[assignment]
+            key = a["anomaly_date"]  # type: ignore[index]
             seen_dates.add(key)
             if key in stored_dict:
-                a["dismissed"] = stored_dict[key]["dismissed"]
+                a["dismissed"] = stored_dict[key]["dismissed"]  # type: ignore[index]
 
         for key, sa in stored_dict.items():
             if key not in seen_dates:

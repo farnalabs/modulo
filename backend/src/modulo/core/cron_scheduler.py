@@ -71,6 +71,7 @@ def compute_next_fire(cron_expression: str, after: datetime.datetime | None = No
     base = after or datetime.datetime.now(datetime.UTC)
     cron = croniter(cron_expression, base)
     next_dt = cron.get_next(datetime.datetime)
+    assert isinstance(next_dt, datetime.datetime)
     return next_dt
 
 
@@ -90,7 +91,7 @@ def get_celery_app() -> Celery:
     return celery_app_global
 
 
-class CronFireTask(Task):
+class CronFireTask(Task):  # type: ignore[misc]
     """Task that fires a single cron trigger — creates a Run and logs a TriggerEvent.
 
     Runs inside a Celery worker process.
@@ -215,7 +216,7 @@ async def _fire_cron_trigger(
 # ---------------------------------------------------------------------------
 
 
-class DatabaseCronEntry(ScheduleEntry):
+class DatabaseCronEntry(ScheduleEntry):  # type: ignore[misc]
     """A single schedule entry representing one cron trigger row."""
 
     def __init__(
@@ -275,7 +276,7 @@ class DatabaseCronEntry(ScheduleEntry):
         return f"<DatabaseCronEntry trigger={self._trigger_id} next={self._next_fire_at.isoformat()}>"
 
 
-class DatabaseCronScheduler(Scheduler):
+class DatabaseCronScheduler(Scheduler):  # type: ignore[misc]
     """Celery beat scheduler that reads cron triggers from the database.
 
     On each tick (default every 30 s via ``max_interval``), the scheduler
@@ -296,7 +297,7 @@ class DatabaseCronScheduler(Scheduler):
     def tick(self) -> float:
         """Called periodically by Celery beat. Syncs with DB and returns seconds until next tick."""
         self._sync_with_db()
-        return super().tick()
+        return float(super().tick())
 
     def _sync_with_db(self) -> None:
         """Query the database and update the in-memory schedule."""

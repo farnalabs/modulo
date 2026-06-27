@@ -107,12 +107,14 @@ class McpAuthMiddleware(BaseHTTPMiddleware):
         # Allow unauthenticated access to the health check endpoint.
         clean = request.url.path.rstrip("/")
         if clean in ("/mcp/healthz", "/healthz"):
-            return await call_next(request)  # type: ignore[no-any-return]
+            resp: Response = await call_next(request)
+            return resp
 
         # Allow unauthenticated access to the OAuth protocol endpoints.
         # These endpoints manage their own auth via client_id + client_secret.
         if clean in ("/mcp/oauth/authorize", "/mcp/oauth/token"):
-            return await call_next(request)
+            resp2: Response = await call_next(request)
+            return resp2
 
         auth_header = request.headers.get("Authorization", "")
         if not auth_header.startswith("Bearer "):
@@ -138,8 +140,8 @@ class McpAuthMiddleware(BaseHTTPMiddleware):
                     status_code=401,
                     media_type="application/json",
                 )
-            resp: Response = await call_next(request)
-            return resp
+            resp3: Response = await call_next(request)
+            return resp3
 
         # Try OAuth access token (JWT).
         settings = get_settings()
@@ -831,7 +833,7 @@ def build_mcp_asgi_app() -> Starlette:
     app = Starlette(
         routes=all_routes,
         middleware=[
-            Middleware(RateLimiterMiddleware),
+            Middleware(RateLimiterMiddleware),  # type: ignore[arg-type]
             Middleware(McpAuthMiddleware),
         ],
     )

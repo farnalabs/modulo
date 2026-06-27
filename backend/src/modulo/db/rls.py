@@ -163,7 +163,7 @@ def _inject_tenant_filter(execute_state: ORMExecuteState) -> None:
             if entity is None or entity is object:
                 continue
             if hasattr(entity, _TENANT_COLUMN):
-                stmt = stmt.where(getattr(entity, _TENANT_COLUMN) == org_id)
+                stmt = stmt.where(getattr(entity, _TENANT_COLUMN) == org_id)  # type: ignore[attr-defined,union-attr]
                 injected = True
 
     # ORM UPDATE/DELETE expose entities via all_mapper_classes.
@@ -171,7 +171,7 @@ def _inject_tenant_filter(execute_state: ORMExecuteState) -> None:
         for mapper in execute_state.all_mapper_classes:
             entity = mapper.class_
             if hasattr(entity, _TENANT_COLUMN):
-                stmt = stmt.where(getattr(entity, _TENANT_COLUMN) == org_id)
+                stmt = stmt.where(getattr(entity, _TENANT_COLUMN) == org_id)  # type: ignore[attr-defined]
                 injected = True
 
     if injected:
