@@ -36,6 +36,7 @@ from modulo.connectors.gitlab import GitLabConnector
 from modulo.connectors.jira import JiraConnector
 from modulo.connectors.linear import LinearConnector
 from modulo.connectors.slack import SlackConnector
+from modulo.core.pipeline_engine.output_filter import filter_payload_for_injection
 from modulo.core.plugin_registry import get_plugin_registry
 from modulo.core.secrets_backend import SecretsBackend
 from modulo.db.models.connector_instance import ConnectorInstance
@@ -219,6 +220,7 @@ class _TracedConnector(ConnectorBase):
         )
 
     async def write(self, payload: ConnectorPayload) -> dict[str, Any]:
+        filter_payload_for_injection(payload)
         return cast(
             dict[str, Any],
             await self._run_with_tracing(
