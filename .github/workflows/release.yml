@@ -147,6 +147,9 @@ jobs:
           sed -i "s/^\*\*Version\*\*: .*\$/**Version**: $VERSION/" docs/prd.md
           sed -i "s/^\*\*Date\*\*: .*\$/**Date**: $(date +%Y-%m-%d)/" docs/prd.md
 
+          # --- Generate SBOM ---
+          python backend/scripts/generate-sbom.py --output sbom.json
+
           # --- Placeholder: Docker build & publish ---
           # TODO: docker buildx build --platform linux/amd64,linux/arm64 \
           #   -t farnalabs/modulo:$TAG -t farnalabs/modulo:latest .
@@ -154,12 +157,18 @@ jobs:
           # TODO: docker push farnalabs/modulo:latest
 
           # --- Commit & tag ---
-          git add LICENSE backend/pyproject.toml frontend/package.json docs/prd.md
+          git add LICENSE backend/pyproject.toml frontend/package.json docs/prd.md sbom.json
           git commit -m "release: $TAG"
           git tag -a "$TAG" -m "Modulo $TAG"
 
           # --- Placeholder: GitHub release ---
           # TODO: gh release create $TAG --title "Modulo $TAG" --notes "See changelog in docs/prd.md"
+
+      - name: Upload SBOM artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: sbom
+          path: sbom.json
 
       - name: Push release
         run: |
