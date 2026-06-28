@@ -37,9 +37,8 @@ asyncio.run(fix())
 " 2>&1 || echo "WARNING: Schema fix step failed — continuing anyway"
 .venv/bin/alembic upgrade head || echo "WARNING: Migration failed — continuing anyway"
 
-if [ "$MODULO_DEMO_MODE" = "true" ]; then
-  echo "=== Ensuring admin user has known password ==="
-  .venv/bin/python3 -c "
+echo "=== Ensuring app.modulo.run admin user exists ==="
+.venv/bin/python3 -c "
 import os
 os.environ['DATABASE_URL'] = os.environ.get('DATABASE_URL', '')
 from modulo.db.session import AsyncSessionLocal
@@ -49,21 +48,23 @@ import asyncio
 async def fix():
     async with AsyncSessionLocal() as s:
         async with s.begin():
-            r = await s.execute(select(text('id')).select_from(text('users')).where(text(\"email = 'admin'\")))
-            row = r.one_or_none()
-            if row:
+            for email, role in [('admin@modulo.run', 'admin'), ('admin', 'admin')]:
+                r = await s.execute(select(text('id')).select_from(text('users')).where(text(f\"email = '{email}'\")))
+                row = r.one_or_none()
                 pw = hash_password('admin123')
-                await s.execute(text(\"UPDATE users SET password_hash = :pw, org_role = 'admin' WHERE email = 'admin'\"), {'pw': pw})
-                print('admin user updated with known password + admin role')
-            else:
-                print('admin user not found — skipping')
+                if row:
+                    await s.execute(text(f\"UPDATE users SET password_hash = :pw, org_role = :role WHERE email = :email\"), {'pw': pw, 'role': role, 'email': email})
+                    print(f'{email} updated with known password + admin role')
+                else:
+                    org_r = await s.execute(select(text('id')).select_from(text('organisations')).order_by(text('created_at')).limit(1))
+                    org_row = org_r.one_or_none()
+                    if org_row:
+                        await s.execute(text(f\"INSERT INTO users (organisation_id, email, display_name, password_hash, org_role, auth_provider) VALUES (:oid, :email, :disp, :pw, :role, 'local')\"), {'oid': org_row[0], 'email': email, 'disp': email.split('@')[0], 'pw': pw, 'role': role})
+                        print(f'{email} created with admin role')
+                    else:
+                        print(f'No org found — skipping {email}')
 asyncio.run(fix())
 " 2>&1 || echo "WARNING: Admin password fix failed — continuing anyway"
-  echo "=== Seeding demo data (idempotent) ==="
-  cd /app
-  .venv/bin/python3 /app/scripts/seed.py || echo "WARNING: Seed script failed — continuing anyway"
-  echo "=== Seed complete ==="
-fi
 
 echo "=== Starting uvicorn ==="
 exec .venv/bin/uvicorn modulo.api.main:app --host 0.0.0.0 --port 8000 --proxy-headers
