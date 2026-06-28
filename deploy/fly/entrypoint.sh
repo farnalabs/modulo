@@ -7,10 +7,13 @@ NGINX_PID=$!
 
 # Fly attaches Postgres with DATABASE_URL=postgres://...?sslmode=disable
 # SQLAlchemy async drivers need "postgresql+asyncpg://" scheme.
-# Keep sslmode=disable — it's the correct value. Only change the scheme.
+# Also convert sslmode=disable to ssl=disable — asyncpg accepts `ssl`
+# as a connect parameter but rejects `sslmode` in some code paths.
 RAW_URL="$DATABASE_URL"
-export DATABASE_URL="$(echo "$RAW_URL" | sed 's|^postgres://|postgresql+asyncpg://|')"
-echo "DATABASE_URL scheme fixed for SQLAlchemy async driver"
+FIXED_URL="$(echo "$RAW_URL" | sed 's|^postgres://|postgresql+asyncpg://|')"
+FIXED_URL="$(echo "$FIXED_URL" | sed 's/?sslmode=disable/?ssl=disable/; s/&sslmode=disable//')"
+export DATABASE_URL="$FIXED_URL"
+echo "DATABASE_URL scheme + ssl fixed for SQLAlchemy async driver"
 
 echo "=== Pre-creating alembic_version with VARCHAR(255) ==="
 # Branch migration IDs exceed VARCHAR(32). Must create the table with
