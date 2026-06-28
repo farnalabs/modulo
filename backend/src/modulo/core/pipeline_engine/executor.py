@@ -49,6 +49,7 @@ from modulo.core.pipeline_engine.output_filter import OutputRejectedError
 from modulo.core.pipeline_engine.event_broker import RunEventBroker, get_registry
 from modulo.core.pipeline_engine.graph_cache import build_graph_from_json, get_or_compile
 from modulo.core.pipeline_engine.modulo_saver import ModuloPostgresSaver
+from modulo.core.pipeline_engine.runaway_protection import RunawayGuard, RunawayRunError
 from modulo.core.trigger_engine.agent_signal import fire_agent_signal
 from modulo.db.crud.run import (
     count_active_runs_for_pipeline,
@@ -407,6 +408,11 @@ class PipelineExecutor:
         pipeline_id = run.pipeline_id
         max_concurrent = pipeline.max_concurrent_runs
         lock_wait_seconds = pipeline.lock_wait_timeout_seconds
+        guard = RunawayGuard(
+            max_duration_seconds=pipeline.max_duration_seconds,
+            max_steps=pipeline.max_steps,
+            token_budget=pipeline.token_budget,
+        )
 
         snapshot_id = run.snapshot_id
         thread_id = run.langgraph_thread_id
@@ -489,11 +495,13 @@ class PipelineExecutor:
                     final_status, error_code, error_detail, node_token_usage = await self._stream_graph(
                         compiled, initial_state, config, node_ids, broker, run_id,
                         completed_node_outputs=completed_node_outputs,
+                        guard=guard,
                     )
             else:
                 final_status, error_code, error_detail, node_token_usage = await self._stream_graph(
                     compiled, initial_state, config, node_ids, broker, run_id,
                     completed_node_outputs=completed_node_outputs,
+                    guard=guard,
                 )
         except Exception as exc:
             _log.exception("pipeline.execution_error", extra={"run_id": str(run_id)})
@@ -687,11 +695,15 @@ class PipelineExecutor:
         broker: RunEventBroker,
         run_id: uuid.UUID,
         completed_node_outputs: dict[str, Any] | None = None,
+        guard: RunawayGuard | None = None,
     ) -> tuple[str, str | None, str | None, dict[str, Any] | None]:
         """Stream graph execution, mapping events to broker publishes.
 
         If *completed_node_outputs* is provided (a mutable dict), it will be
         populated with ``{node_id: output_data}`` for each completed node.
+
+        If *guard* is provided, runaway run protection checks are enforced
+        before each event and on node completion / token usage.
 
         Returns (final_status, error_code, error_detail, node_token_usage).
         """
@@ -699,6 +711,9 @@ class PipelineExecutor:
         lg_config = {**config, "callbacks": [self._otel_bridge]}
         try:
             async for lg_event in compiled.astream_events(initial_state, lg_config, version="v2"):
+                if guard is not None:
+                    guard.check_duration()
+
                 mapped = _map_lg_event(lg_event, run_id, node_ids)
                 if mapped is not None:
                     event_type, payload = mapped
@@ -708,11 +723,14 @@ class PipelineExecutor:
                 # Capture node output for agent_signal trigger firing.
                 if event_kind == "on_chain_end":
                     name = lg_event.get("name", "")
-                    if name in node_ids and completed_node_outputs is not None:
-                        data = lg_event.get("data", {})
-                        output = data.get("output") if isinstance(data, dict) else None
-                        if output is not None:
-                            completed_node_outputs[name] = output
+                    if name in node_ids:
+                        if guard is not None:
+                            guard.record_step()
+                        if completed_node_outputs is not None:
+                            data = lg_event.get("data", {})
+                            output = data.get("output") if isinstance(data, dict) else None
+                            if output is not None:
+                                completed_node_outputs[name] = output
 
                 if event_kind in ("on_chat_model_end", "on_llm_end"):
                     metadata = lg_event.get("metadata") or {}
@@ -732,6 +750,8 @@ class PipelineExecutor:
                             node_data["input_tokens"] += pt
                             node_data["output_tokens"] += ct
                             node_data["total_tokens"] += tt
+                            if guard is not None:
+                                guard.record_tokens(tt)
 
             broker.publish("run_completed", {})
             return "complete", None, None, node_token_usage or None
@@ -749,6 +769,11 @@ class PipelineExecutor:
         except RunCancelledError:
             broker.publish("run_cancelled", {})
             return "cancelled", None, None, None
+        except RunawayRunError as exc:
+            error_detail = str(exc)
+            broker.publish("run_failed", {"error": "runaway", "detail": error_detail})
+            _log.warning("runaway.terminated", extra={"run_id": str(run_id), "guard": exc.guard, "current": exc.current, "limit": exc.limit})
+            return "failed", "runaway", error_detail, node_token_usage or None
         except Exception as exc:
             broker.publish("run_failed", {"error": type(exc).__name__})
             return "failed", type(exc).__name__, None, None

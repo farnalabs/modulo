@@ -41,6 +41,9 @@ class Pipeline(OrgScoped):
     max_concurrent_runs: Mapped[int] = mapped_column(Integer, nullable=False, server_default="5")
     lock_wait_timeout_seconds: Mapped[int] = mapped_column(Integer, nullable=False, server_default="300")
     node_timeout_seconds: Mapped[int] = mapped_column(Integer, nullable=False, server_default="300")
+    max_duration_seconds: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    max_steps: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    token_budget: Mapped[int | None] = mapped_column(Integer, nullable=True)
     run_context_defaults: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False, default=dict)
     graph_nodes_json: Mapped[list[dict[str, Any]]] = mapped_column(
         JSON,

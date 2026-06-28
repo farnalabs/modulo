@@ -91,7 +91,7 @@ class PipelineResponse(BaseModel):
     lock_wait_timeout_seconds: int
     node_timeout_seconds: int
     run_context_defaults: dict[str, Any]
-    default_autonomy_level: str | None
+    default_autonomy_level: str | None = None
     snapshot_count: int = 0
     created_by: uuid.UUID
     created_at: datetime
