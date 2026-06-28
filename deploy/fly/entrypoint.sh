@@ -16,8 +16,8 @@ case "$DATABASE_URL" in
     echo "Fixed DATABASE_URL scheme for async driver"
     ;;
 esac
-# Strip sslmode query params — asyncpg doesn't accept sslmode
-export DATABASE_URL="$(echo "$DATABASE_URL" | sed 's/\?sslmode=disable//g; s/&sslmode=disable//g')"
+# asyncpg accepts ?ssl= but not ?sslmode= — convert
+export DATABASE_URL="$(echo "$DATABASE_URL" | sed 's/sslmode=disable/ssl=disable/g; s/sslmode=prefer/ssl=prefer/g; s/sslmode=require/ssl=true/g')"
 
 echo "=== Running DB migrations ==="
 .venv/bin/alembic upgrade head || echo "WARNING: Migration failed — continuing anyway"
