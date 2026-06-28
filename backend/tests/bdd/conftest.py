@@ -1,5 +1,6 @@
 """BDD/E2E test fixtures — pytest-bdd, Playwright, and TestClient setup."""
 
+import datetime
 import uuid
 from collections.abc import AsyncGenerator, Generator
 from typing import Any
@@ -82,9 +83,11 @@ def make_mock_pipeline(**kwargs: Any) -> MagicMock:
     p.lock_wait_timeout_seconds = kwargs.get("lock_wait_timeout_seconds", 300)
     p.node_timeout_seconds = kwargs.get("node_timeout_seconds", 300)
     p.run_context_defaults = kwargs.get("run_context_defaults", {})
+    p.default_autonomy_level = kwargs.get("default_autonomy_level", "fully_autonomous")
+    p.snapshot_count = kwargs.get("snapshot_count", 0)
     p.created_by = uuid.uuid4()
-    p.created_at = None
-    p.updated_at = None
+    p.created_at = kwargs.get("created_at", datetime.datetime(2025, 1, 1, tzinfo=datetime.UTC))
+    p.updated_at = kwargs.get("updated_at", datetime.datetime(2025, 1, 1, tzinfo=datetime.UTC))
     return p
 
 

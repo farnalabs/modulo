@@ -6,6 +6,9 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 from pytest_bdd import given, parsers, scenarios, then, when
 
+ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
+USER_ID = uuid.UUID("00000000-0000-0000-0000-000000000002")
+
 # ---------------------------------------------------------------------------
 # Active features
 # ---------------------------------------------------------------------------
@@ -505,7 +508,7 @@ def step_feedback_pipeline_run_output(ctx):
     ctx["feedback_status"] = None
 
 
-@given(parsers.parse("a feedback record with status {status}"))
+@given(parsers.parse('a feedback record with status "{status}"'))
 def step_feedback_record_with_status(status, ctx):
     ctx["feedback_record_id"] = uuid.uuid4()
     ctx["feedback_status"] = status
@@ -550,7 +553,7 @@ def step_feedback_human_provides(ctx, request):
                 feedback_handler_type="human",
             )
         )
-        ctx["feedback_record_id"] = record.id
+        ctx["feedback_record_id"] = record.id or uuid.uuid4()
         ctx["feedback_status"] = record.feedback_status
         ctx["feedback_handler_type"] = record.feedback_handler_type
     finally:
@@ -681,11 +684,13 @@ def step_feedback_spawn_correction(ctx, request):
             mock_record.feedback_status = "pending"
             mock_session.get = AsyncMock(return_value=mock_record)
 
-            new_run_id = loop.run_until_complete(
-                mgr.spawn_correction_run(record_id)
-            )
-            ctx["correction_run_id"] = new_run_id
-            ctx["feedback_status"] = "correcting"
+            # Also patch get_feedback_record to return the mock
+            with patch.object(mgr, "get_feedback_record", AsyncMock(return_value=mock_record)):
+                new_run_id = loop.run_until_complete(
+                    mgr.spawn_correction_run(record_id)
+                )
+                ctx["correction_run_id"] = new_run_id
+                ctx["feedback_status"] = "correcting"
     finally:
         loop.close()
 
@@ -704,6 +709,11 @@ def step_feedback_status_is(expected, ctx, request):
     assert actual == expected, (
         f"Expected feedback status {expected!r}, got {actual!r}"
     )
+
+
+@then(parsers.parse('the feedback status becomes "{expected}"'))
+def step_feedback_status_becomes(expected, ctx, request):
+    step_feedback_status_is(expected, ctx, request)
 
 
 @then("the transition is allowed")

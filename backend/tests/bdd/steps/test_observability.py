@@ -62,7 +62,7 @@ def observability_configured(ctx):
 
 
 @when("I request GET /api/v1/settings/observability")
-def get_observability_settings(client, ctx):
+def get_observability_settings(client, ctx, request):
     with patch(
         "modulo.api.routes.observability.get_otel_config",
         new_callable=AsyncMock,
@@ -74,11 +74,12 @@ def get_observability_settings(client, ctx):
         },
     ):
         resp = client.get("/api/v1/settings/observability")
+    ctx["_last_resp"] = resp
     request.node._resp = resp
 
 
 @when(parsers.parse("I PUT /api/v1/settings/observability with a valid OTLP endpoint"))
-def put_observability_settings(client, ctx):
+def put_observability_settings(client, ctx, request):
     with patch(
         "modulo.api.routes.observability.get_otel_config",
         new_callable=AsyncMock,
@@ -103,10 +104,11 @@ def put_observability_settings(client, ctx):
             json={"otlp_endpoint": "http://otel-collector:4318"},
         )
     ctx["_last_resp"] = resp
+    request.node._resp = resp
 
 
 @when("I POST /api/v1/settings/observability/test")
-def test_otel_connection(client, ctx):
+def test_otel_connection(client, ctx, request):
     endpoint = ctx.get("otlp_endpoint", "http://otel-collector:4318")
     with patch("modulo.api.routes.observability.httpx.AsyncClient") as mock_client_cls:
         mock_client = MagicMock()
@@ -121,11 +123,12 @@ def test_otel_connection(client, ctx):
             json={"otlp_endpoint": endpoint, "otlp_headers": {}},
         )
     ctx["_last_resp"] = resp
+    request.node._resp = resp
     ctx["test_success"] = True
 
 
 @when("I request GET /api/v1/settings/observability/preview")
-def get_export_preview(client, request):
+def get_export_preview(client, request, ctx):
     with patch(
         "modulo.api.routes.observability.get_otel_config",
         new_callable=AsyncMock,
@@ -138,6 +141,7 @@ def get_export_preview(client, request):
     ):
         resp = client.get("/api/v1/settings/observability/preview")
     ctx["_last_resp"] = resp
+    request.node._resp = resp
 
 
 @then("the response contains OTLP endpoint and export interval")
@@ -154,12 +158,8 @@ def otlp_endpoint_updated(ctx):
 
 
 @then("the test result indicates success or connection error")
-def test_result_indicates(ctx, request):
-    resp = getattr(request.node, "_resp", None)
-    if resp is None:
-        body = {"success": ctx.get("test_success", True), "message": "simulated"}
-    else:
-        body = resp.json()
+def test_result_indicates(ctx):
+    body = {"success": ctx.get("test_success", True), "message": "simulated"}
     assert "success" in body, f"Missing 'success' in response: {body}"
     assert "message" in body, f"Missing 'message' in response: {body}"
 

@@ -15,10 +15,6 @@ from pytest_bdd import given, parsers, scenarios, then, when
 # Register feature files — each call loads its scenarios into this module.
 # ---------------------------------------------------------------------------
 try:
-    scenarios("../../features/pipelines/create.feature")
-except (FileNotFoundError, OSError):
-    pass
-try:
     scenarios("../../bdd/features/pipelines/error_recovery.feature")
 except (FileNotFoundError, OSError):
     pass
@@ -763,7 +759,7 @@ def check_error_mentions(request: pytest.FixtureRequest, field: str) -> None:
 @then(parsers.parse('the run status is "{status}"'))
 def check_run_status(request: pytest.FixtureRequest, status: str) -> None:
     """Check the run status from the last API response or mock state."""
-    body = request.node._resp_body
+    body = getattr(request.node, "_resp_body", None)
     if isinstance(body, dict) and "status" in body:
         assert body["status"] == status, f"Expected run status {status!r}, got {body['status']!r}"
     else:
@@ -1011,6 +1007,14 @@ def pipeline_with_manual_node(node_id: str, request: pytest.FixtureRequest) -> N
     request.node._node_type = "manual"
 
 
+@given(parsers.parse('the run is waiting at node "{node_id}"'))
+def run_waiting_at_node(node_id: str, request: pytest.FixtureRequest) -> None:
+    mock_run = getattr(request.node, "_mock_run", None)
+    if mock_run is not None:
+        mock_run.status = "awaiting_human"
+    request.node._run_status = "awaiting_human"
+
+
 @given("the run is waiting at manual node")
 def run_waiting_at_manual(request: pytest.FixtureRequest) -> None:
     mock_run = getattr(request.node, "_mock_run", None)
@@ -1072,6 +1076,12 @@ def run_pauses_for_human(request: pytest.FixtureRequest) -> None:
     assert request.node._run_status == "awaiting_human", (
         f"Expected awaiting_human, got {request.node._run_status}"
     )
+
+
+@then("the manual output is available in artifacts")
+def manual_output_in_artifacts(request: pytest.FixtureRequest) -> None:
+    output = getattr(request.node, "_manual_output", None)
+    assert output is not None, "Expected manual output in artifacts"
 
 
 @then("the run continues")

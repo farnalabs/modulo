@@ -327,32 +327,90 @@ def set_weak_password(request, password) -> None:
 # ===========================================================================
 
 
+def _authenticated_test_client(
+    org_id: uuid.UUID = _ORG_ID,
+    org_role: str = "admin",
+) -> "TestClient":
+    """Build a TestClient with an authenticated principal and mocked dependencies.
+
+    Follows the conftest.py ``client`` fixture pattern but with a fresh app
+    to avoid middleware state leakage.
+    """
+    from fastapi.testclient import TestClient
+    from modulo.api.dependencies import _get_engine, get_db_session
+    from modulo.api.main import app
+    from modulo.auth.dependencies import get_current_user
+    from modulo.auth.jwt import AuthenticatedPrincipal
+    from modulo.settings import get_settings
+    from tests.bdd.conftest import make_settings, make_mock_session
+
+    async def override_session():
+        yield make_mock_session()
+
+    app.dependency_overrides[get_settings] = make_settings
+    app.dependency_overrides[get_db_session] = override_session
+    app.dependency_overrides[_get_engine] = lambda: MagicMock()
+    app.dependency_overrides[get_current_user] = lambda: AuthenticatedPrincipal(
+        username=org_role,
+        organisation_id=org_id,
+        user_id=uuid.uuid4(),
+        org_role=org_role,
+    )
+    return TestClient(app)
+
+
 @when(parsers.parse("the service accesses pipelines as user in org {org_ref}"))
-def get_pipelines_as_org(client, alt_org_client, viewer_client, request, org_ref) -> None:
-    """Dispatch to the correct TestClient based on org_ref."""
-    _clients = {
-        "acme": client,
-        "other-org": alt_org_client,
-        "viewer": viewer_client,
-    }
-    selected = _clients.get(org_ref, client)
-    resp = selected.get("/api/v1/pipelines")
-    _store_response(request, resp)
+def get_pipelines_as_org(request, org_ref, patches) -> None:
+    """List pipelines — patches list_pipelines to avoid async mock issues."""
+    from modulo.db.crud.base import PageResult
+    from tests.bdd.conftest import make_mock_pipeline
+
+    org_id = {
+        "acme": _ORG_ID,
+        "other-org": uuid.UUID("00000000-0000-0000-0000-000000000003"),
+    }.get(org_ref, _ORG_ID)
+    role = "viewer" if org_ref == "viewer" else "admin"
+
+    _patch_set_rls(patches, "modulo.api.routes.pipelines.set_rls_org")
+    patcher = patch(
+        "modulo.api.routes.pipelines.list_pipelines",
+        new_callable=AsyncMock,
+        return_value=PageResult(items=[make_mock_pipeline(name="test")], total=1, page=1, page_size=20),
+    )
+    patcher.start()
+    patches.append(patcher)
+
+    client = _authenticated_test_client(org_id=org_id, org_role=role)
+    try:
+        resp = client.get("/api/v1/pipelines")
+        _store_response(request, resp)
+    finally:
+        client.app.dependency_overrides.clear()
 
 
 @when(parsers.parse("the service accesses pipeline {name} as user in org {org_ref}"))
-def get_pipeline_as_org(client, alt_org_client, request, name, org_ref, patches) -> None:
-    selected = alt_org_client if org_ref == "other-org" else client
+def get_pipeline_as_org(request, name, org_ref, patches) -> None:
+    """Access a single pipeline — 404 when the pipeline doesn't exist."""
+    org_id = {
+        "acme": _ORG_ID,
+        "other-org": uuid.UUID("00000000-0000-0000-0000-000000000003"),
+    }.get(org_ref, _ORG_ID)
+
     _patch_set_rls(patches, "modulo.api.routes.pipelines.set_rls_org")
     patcher = patch(
         "modulo.api.routes.pipelines.get_pipeline",
         new_callable=AsyncMock,
-        return_value=None,  # Pipeline not found in the other org
+        return_value=None,
     )
     patcher.start()
     patches.append(patcher)
-    resp = selected.get(f"/api/v1/pipelines/{name}")
-    _store_response(request, resp)
+
+    client = _authenticated_test_client(org_id=org_id)
+    try:
+        resp = client.get(f"/api/v1/pipelines/{name}")
+        _store_response(request, resp)
+    finally:
+        client.app.dependency_overrides.clear()
 
 
 @when("an unauthenticated request accesses pipelines")
@@ -370,18 +428,24 @@ def unauth_get_pipelines(request) -> None:
     app.dependency_overrides[get_db_session] = override_session
     app.dependency_overrides[_get_engine] = lambda: MagicMock()
 
-    unauth_client = TestClient(app)
-    resp = unauth_client.get("/api/v1/pipelines")
-    app.dependency_overrides.clear()
-    _store_response(request, resp)
+    client = TestClient(app)
+    try:
+        resp = client.get("/api/v1/pipelines")
+        _store_response(request, resp)
+    finally:
+        app.dependency_overrides.clear()
 
 
 @when(parsers.parse("a viewer tries to create a pipeline named {name}"))
-def viewer_create_pipeline(viewer_client, request, patches, name) -> None:
+def viewer_create_pipeline(request, name, patches) -> None:
     _patch_set_rls(patches, "modulo.api.routes.pipelines.set_rls_org")
-    from modulo.api.main import app as _app
-    resp = viewer_client.post("/api/v1/pipelines", json={"name": name})
-    _store_response(request, resp)
+
+    client = _authenticated_test_client(org_role="viewer")
+    try:
+        resp = client.post("/api/v1/pipelines", json={"name": name})
+        _store_response(request, resp)
+    finally:
+        client.app.dependency_overrides.clear()
 
 
 @when("RLS context is set outside a transaction")
@@ -410,11 +474,13 @@ def check_runtime_error(request) -> None:
 @then(parsers.parse('the error mentions "{text}"'))
 def check_error_mentions(request, text) -> None:
     body = request.node._resp_body
+    detail = ""
     if isinstance(body, dict):
-        detail = body.get("detail", "")
-        if detail is None:
-            err = body.get("error", {})
-            detail = err.get("detail", "") if isinstance(err, dict) else ""
+        err = body.get("error", {})
+        if isinstance(err, dict):
+            detail = err.get("detail")
+        if not detail:
+            detail = body.get("detail", "")
     else:
         detail = str(body)
     assert text.lower() in str(detail).lower(), (
@@ -427,3 +493,11 @@ def check_pipeline_count(request, count) -> None:
     body = request.node._resp_body
     items = body.get("items", []) if isinstance(body, dict) else []
     assert len(items) == count, f"Expected {count} pipelines, got {len(items)}"
+
+
+@then(parsers.parse("the response status is {status:d}"))
+def check_response_status_sec(request, status) -> None:
+    resp = request.node._resp
+    assert resp.status_code == status, (
+        f"Expected status {status}, got {resp.status_code}. Body: {resp.text[:500]}"
+    )

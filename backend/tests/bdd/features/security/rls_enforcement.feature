@@ -10,7 +10,7 @@ Feature: Row-Level Security Enforcement
 
   Scenario: Cross-org pipeline access returns 404
     Given I am authenticated in org "other-org"
-    When the service accesses pipeline deploy-service as user in org "other-org"
+    When the service accesses pipeline 00000000-0000-0000-0000-000000000999 as user in org "other-org"
     Then the response status is 404
 
   Scenario: Unauthenticated request returns 401
