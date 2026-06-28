@@ -167,7 +167,7 @@ class TestFeedbackFlowUnit:
         )
 
         assert record.feedback_handler_type == "ai_correction_with_human_review"
-        assert record.feedback_status == "pending"
+        assert record.feedback_status == "correcting"
 
     async def test_create_ai_correction_feedback(
         self, rls_session: AsyncSession, test_org: uuid.UUID, test_user: uuid.UUID
@@ -202,6 +202,7 @@ class TestFeedbackFlowUnit:
             run_id=run_id, gate_id="g2", rejected_by=test_user,
             rejection_reason="R2", rejected_output={}, producing_node_id="n2",
         )
+        await mgr.update_status(r1.id, "routing")
         await mgr.update_status(r1.id, "resolved")
 
         pending_result = await mgr.get_feedback_records(status="pending")
@@ -233,9 +234,11 @@ async def _create_seed_run(
     )
     await session.execute(
         text(
-            "INSERT INTO pipeline_snapshots (id, pipeline_id, organisation_id, graph_json, "
-            "  config_json, created_by) "
-            "VALUES (:id, :pipeline_id, :org_id, :graph, :config, :user_id)"
+            "INSERT INTO pipeline_snapshots (id, pipeline_id, organisation_id, snapshot_version, graph_json, "
+            "  config_json, created_by, connector_bindings_json, schema_pins_json, "
+            "  prompt_pins_json, model_backend_pins_json, run_context_defaults) "
+            "VALUES (:id, :pipeline_id, :org_id, 1, :graph, :config, :user_id, "
+            "'[]'::json, '[]'::json, '[]'::json, '[]'::json, '{}'::json)"
         ),
         {
             "id": str(snapshot_id),
