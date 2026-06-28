@@ -17,8 +17,13 @@ from sqlalchemy.ext.asyncio import (
     create_async_engine,
 )
 
-from modulo.core.feature_flags import PlanContext
+from modulo.core.feature_flags import PlanContext, resolve_plan_context
 from modulo.settings import Settings, get_settings
+
+
+async def get_plan_context(settings: Settings = Depends(get_settings)) -> PlanContext:
+    """FastAPI dependency — resolve the current plan context from stored license or env var."""
+    return resolve_plan_context(settings)
 
 
 def require_feature(feature_name: str):
@@ -33,8 +38,7 @@ def require_feature(feature_name: str):
        dependencies=[require_feature("team_rbac")]  # decorator
     """
 
-    async def _check(settings: Settings = Depends(get_settings)) -> None:
-        ctx = PlanContext(settings)
+    async def _check(ctx: PlanContext = Depends(get_plan_context)) -> None:
         if not ctx.feature_enabled(feature_name):
             raise HTTPException(
                 status_code=status.HTTP_402_PAYMENT_REQUIRED,

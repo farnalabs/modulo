@@ -13,7 +13,7 @@ from modulo.auth.api_key import create_api_key, list_api_keys, revoke_api_key, u
 from modulo.auth.dependencies import get_current_user
 from modulo.auth.jwt import AuthenticatedPrincipal
 from modulo.auth.team_rbac import ORG_ROLE_HIERARCHY
-from modulo.core.feature_flags import PlanContext
+from modulo.core.feature_flags import resolve_plan_context
 from modulo.db.rls import set_rls_org, set_rls_user_context
 from modulo.settings import Settings, get_settings
 
@@ -56,7 +56,7 @@ class McpConfigResponse(BaseModel):
 
 
 def _require_team_rbac(settings: Settings) -> None:
-    ctx = PlanContext(settings)
+    ctx = resolve_plan_context(settings)
     if not ctx.feature_enabled("team_rbac"):
         raise HTTPException(
             status_code=status.HTTP_402_PAYMENT_REQUIRED,
