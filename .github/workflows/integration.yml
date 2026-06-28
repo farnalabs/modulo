@@ -25,15 +25,7 @@ jobs:
         run: uv sync --frozen
       - name: Run integration tests
         working-directory: backend
-        shell: bash
-        run: |
-          uv run --no-sync pytest tests/integration/ \
-            -m integration \
-            -n 2 \
-            --cov=src/modulo \
-            --cov-report=xml \
-            --cov-fail-under=0 \
-            -q
+        run: uv run --no-sync pytest tests/integration/ -m integration -n 2 --cov=src/modulo --cov-report=xml --cov-fail-under=0 -q
         env:
           SECRET_KEY: "ci-secret-key-for-github-actions-testing-only"
           FERNET_KEY: "vK-xU7GqHLflg_GqzJ1FqWI7pHWoHSIyukf4wx-tMHI="

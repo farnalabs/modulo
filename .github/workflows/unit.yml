@@ -18,17 +18,11 @@ jobs:
           python-version: "3.12.4"
       - name: Install backend deps
         working-directory: backend
-        run: uv pip install -e ".[dev]"
+        run: uv sync --frozen
       - name: Run unit tests
         working-directory: backend
-        shell: bash
+        run: uv run --no-sync pytest tests/unit/ -n auto --cov=src/modulo --cov-report=xml -q
         continue-on-error: true
-        run: |
-          pytest tests/unit/ \
-            -n auto \
-            --cov=src/modulo \
-            --cov-report=xml \
-            -q
         env:
           DATABASE_URL: "postgresql+asyncpg://unused:unused@localhost/unused"
           SECRET_KEY: "ci-secret-key-for-github-actions-testing-only"
