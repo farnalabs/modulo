@@ -2,7 +2,6 @@
 id: feat-frontend-feedback-routing
 prd: 8.20
 delivery-tasks: [task-nv4-feedback-routing]
-bdd:
   - backend/tests/bdd/features/eval/feedback_system.feature
   - backend/tests/bdd/features/hitl/feedback_handler.feature
 code:

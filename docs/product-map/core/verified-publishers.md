@@ -2,7 +2,6 @@
 id: feat-core-verified-publishers
 prd: 8.14
 delivery-tasks: [task-nv8-verified-publishers]
-bdd:
 code:
   - backend/src/modulo/db/models/publisher.py
   - backend/src/modulo/db/crud/publisher.py

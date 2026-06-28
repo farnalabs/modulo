@@ -1,8 +1,7 @@
 ---
 id: feat-pipelines-run-trace-observability
-prd: 6.6, 14 V1 Core
+prd: 6.6
 delivery-tasks: [task-nv7-run-trace-observability]
-bdd:
   - backend/tests/bdd/features/observability/otel_traces.feature
   - backend/tests/bdd/features/observability/metrics.feature
   - backend/tests/bdd/features/observability/run_logs.feature

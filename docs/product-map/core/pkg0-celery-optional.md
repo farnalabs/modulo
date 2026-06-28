@@ -1,6 +1,6 @@
 ---
 id: feat-core-pkg0-celery-optional
-prd: 14.3
+prd: 14
 delivery-tasks: [task-pkg0-celery-optional]
 bdd: backend/tests/bdd/features/pipelines/scheduling.feature
 code:

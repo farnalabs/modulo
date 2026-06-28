@@ -2,7 +2,6 @@
 id: feat-variants-variant-groups
 prd: 8.19
 delivery-tasks: [task-nv3-variant-group]
-bdd:
   - backend/tests/bdd/features/pipelines/run_variants.feature
 code:
   - backend/src/modulo/api/routes/variants.py

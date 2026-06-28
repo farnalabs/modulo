@@ -2,7 +2,6 @@
 id: feat-evals-eval-packaging
 prd: 8.17
 delivery-tasks: [task-nv2-eval-packaging]
-bdd:
   - backend/tests/bdd/features/eval/eval_suite_crud.feature
   - backend/tests/bdd/features/eval/eval_run.feature
 code:
@@ -13,7 +12,7 @@ code:
   - backend/src/modulo/api/routes/evals.py
 unit-tests:
   - backend/tests/unit/core/test_eval_suite.py
-depends-on: [feat-evals-eval-definition]
+depends-on: [feat-evals-eval-definitions]
 status: partial
 ---
 # Eval Packaging Grouping eval definitions into suites with configurable pass thresholds, including post-run suite-level aggregation and threshold enforcement. ## Behaviours ### Eval Suite Grouping

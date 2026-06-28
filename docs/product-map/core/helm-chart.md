@@ -2,7 +2,6 @@
 id: feat-core-helm-chart
 prd: 11, 13
 delivery-tasks: [task-nv9-helm-chart]
-bdd:
 code: [helm/, docker-compose.yml, docker-compose.local.yml, docker-compose.test.yml, docker-compose.mariadb.yml, backend/Dockerfile]
 
 status: partial

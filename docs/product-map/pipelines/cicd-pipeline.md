@@ -2,7 +2,6 @@
 id: feat-pipelines-cicd-pipeline
 prd: 8.4
 delivery-tasks: [task-nv12-cicd-pipeline]
-bdd:
   - backend/tests/bdd/features/pipelines/run_lifecycle.feature
   - backend/tests/bdd/features/pipelines/crud.feature
   - backend/tests/bdd/features/pipelines/pipeline_config_validation.feature

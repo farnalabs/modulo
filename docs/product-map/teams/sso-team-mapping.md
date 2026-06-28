@@ -2,7 +2,6 @@
 id: feat-teams-sso-team-mapping
 prd: 9.4, 6.2, 9.2
 delivery-tasks: [task-nv6-sso-team-mapping]
-bdd:
 code:
   - backend/src/modulo/auth/sso.py
   - backend/src/modulo/api/routes/admin_sso.py

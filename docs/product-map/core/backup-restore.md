@@ -1,7 +1,7 @@
 ---
 id: feat-core-backup-restore
+prd: 6.2
 delivery-tasks: [task-nv12-backup-restore]
-bdd: [] (no feature file)
 code:
   - backend/src/modulo/cli/backup.py
 

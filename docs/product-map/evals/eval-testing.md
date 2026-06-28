@@ -2,7 +2,6 @@
 id: feat-evals-eval-testing
 prd: 8.17
 delivery-tasks: [task-nv2-eval-bdd-tests]
-bdd:
   - backend/tests/features/evals/eval_regex.feature
   - backend/tests/features/evals/eval_llm_judge.feature
   - backend/tests/features/evals/eval_block.feature

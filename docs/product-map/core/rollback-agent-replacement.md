@@ -2,7 +2,6 @@
 id: feat-core-rollback-agent-replacement
 prd: 8.4
 delivery-tasks: [task-nv11-rollback-agent-replacement]
-bdd:
   - backend/tests/bdd/features/pipelines/node_types.feature
   - backend/tests/bdd/features/hitl/manual_node.feature
   - backend/tests/features/personas/alice-devx-sme.feature
@@ -13,7 +12,7 @@ code:
 depends-on: [feat-core-replace-step-agent]
 status: partial
 ---
-# Rollback Agent Replacement Reverting an agent node back to a manual (placeholder) node, using a pipeline snapshot to restore the pre-replacement configuration. Complements `feat-core-replace-step-agent` (which covers manual → agent conversion) by providing the revert direction — the safety valve when an AI agent underperforms and the team needs to fall back to the manual process. ## Behaviours ### Revert API — Backend
+# Rollback Agent Replacement Reverting an agent node back to a manual  node, using a pipeline snapshot to restore the pre-replacement configuration. Complements `feat-core-replace-step-agent` (which covers manual → agent conversion) by providing the revert direction — the safety valve when an AI agent underperforms and the team needs to fall back to the manual process. ## Behaviours ### Revert API — Backend
 - [ ] POST /{pipeline_id}/nodes/{node_id}/revert-to-manual accepts snapshot_id query param
 - [ ] 404 when pipeline does not exist
 - [ ] 404 when node does not exist

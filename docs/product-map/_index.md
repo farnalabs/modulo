@@ -40,6 +40,7 @@ status: covered | partial | gap    # auto-updated by graph-validate
 - [feat-core-polling-trigger](core/polling-trigger.md) => PRD delivery-tasks: [task-nv10-polling-trigger]
 - [feat-core-pkg0-celery-optional](core/pkg0-celery-optional.md) => PRD delivery-tasks: [task-pkg0-celery-optional]
 - [feat-core-run-context](core/run-context.md) => PRD delivery-tasks: [task-nv0-complexity-reviewer, task-nv0-run-context-tests]
+- [feat-core-runtime-config](core/runtime-config.md) => PRD delivery-tasks: [task-nv18-runtime-config-backend, task-nv18-runtime-config-frontend]
 - [feat-core-soc2-evidence-export](core/soc2-evidence-export.md) => PRD delivery-tasks: [task-nv11-soc2-evidence-export]
 - [feat-core-secrets-backend](core/secrets-backend.md) => PRD delivery-tasks: [task-nv10-secrets-backend]
 - [feat-core-verified-publishers](core/verified-publishers.md) => PRD delivery-tasks: [task-nv8-verified-publishers]

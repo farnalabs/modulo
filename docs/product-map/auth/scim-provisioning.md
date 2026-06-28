@@ -2,13 +2,12 @@
 id: feat-auth-scim
 prd: 9.2, 9.4
 delivery-tasks: [task-nv1-team-api-keys]
-bdd:
 code:
   - backend/src/modulo/api/routes/scim.py
   - backend/src/modulo/db/crud/scim.py
   - backend/src/modulo/auth/scim_auth.py
 unit-tests:
-depends-on: [feat-auth-api-keys, feat-teams-entity]
+depends-on: [feat-auth-team-api-keys, feat-teams-team-crud]
 status: partial
 ---
 # SCIM Provisioning (SCIM 2.0) Maps SCIM Users → internal User, SCIM Groups → internal Team + TeamMembership.

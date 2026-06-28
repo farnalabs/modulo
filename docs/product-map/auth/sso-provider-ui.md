@@ -2,7 +2,6 @@
 id: feat-auth-sso-provider-ui
 prd: 9.4
 delivery-tasks: [task-nv6-sso-provider-ui]
-bdd:
 code:
   - frontend/src/views/SettingsSsoView.vue
   - frontend/src/components/SsoProviderForm.vue

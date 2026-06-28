@@ -2,7 +2,6 @@
 id: feat-auth-rate-limiting
 prd: 7.18
 delivery-tasks: [task-nv12-rate-limiting]
-bdd:
   - backend/tests/bdd/features/model_backends/rate_limiting.feature
 code:
   - backend/src/modulo/api/middleware/rate_limiter.py

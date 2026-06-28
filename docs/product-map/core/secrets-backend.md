@@ -2,7 +2,6 @@
 id: feat-core-secrets-backend
 prd: 7.13
 delivery-tasks: [task-nv10-secrets-backend]
-bdd:
   - backend/tests/bdd/features/security/credential_store.feature
 code:
   - backend/src/modulo/core/secrets_backend/__init__.py

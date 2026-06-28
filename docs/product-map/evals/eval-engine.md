@@ -2,7 +2,6 @@
 id: feat-evals-eval-engine
 prd: 8.17
 delivery-tasks: [task-nv2-eval-custom-function, task-nv2-eval-engine, task-nv2-eval-llm-judge, task-nv2-eval-regex-schema]
-bdd:
   - tests/features/evals/eval_regex.feature
   - tests/features/evals/eval_llm_judge.feature
   - tests/features/evals/eval_block.feature
@@ -15,7 +14,7 @@ code:
   - backend/tests/unit/core/test_eval_regressions.py
   - backend/tests/unit/api/test_evals_endpoint.py
   - backend/tests/bdd/steps/test_eval.py
-depends-on: [feat-evals-definition]
+depends-on: [feat-evals-eval-definitions]
 status: partial
 ---
 # Eval Engine Core eval engine that evaluates node outputs against eval definitions. Supports four eval types, suite-level aggregation with pass_threshold, and two failure behaviours (warn/block). Includes regression detection and OKR-aligned progress tracking. ## Behaviours ### Happy paths - [x] Regex eval matches output field — passed=true, score=1.0

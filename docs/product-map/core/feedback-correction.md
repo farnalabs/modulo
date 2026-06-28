@@ -2,7 +2,6 @@
 id: feat-core-feedback-correction
 prd: 8.20
 delivery-tasks: [task-nv4-ai-correction-agent, task-nv4-correction-run]
-bdd:
   - backend/tests/bdd/features/eval/feedback_system.feature
   - backend/tests/bdd/features/hitl/feedback_handler.feature
 code:

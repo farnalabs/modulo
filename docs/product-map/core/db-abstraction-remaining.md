@@ -2,7 +2,6 @@
 id: feat-core-db-abstraction-remaining
 prd: 8.17
 delivery-tasks: [task-nv12-db-abstraction-remaining]
-bdd:
   - backend/tests/bdd/features/security/rls_enforcement.feature
   - backend/tests/bdd/features/auth/tenant_isolation.feature
 code:

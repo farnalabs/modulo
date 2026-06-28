@@ -2,7 +2,6 @@
 id: feat-variants-variant-compare-ui
 prd: 8.19
 delivery-tasks: [task-nv3-variant-compare-ui]
-bdd:
   - backend/tests/bdd/features/pipelines/run_variants.feature
 code:
   - frontend/src/views/VariantCompareView.vue

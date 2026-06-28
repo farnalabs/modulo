@@ -1,9 +1,7 @@
 ---
 id: feat-core-migration-cli
 prd: 6.2
-
 delivery-tasks: [task-nv9-migration-cli]
-bdd:
 code:
   - backend/src/modulo/cli/migrate.py
   - backend/src/modulo/cli/migrate_org.py

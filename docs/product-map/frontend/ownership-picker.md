@@ -2,7 +2,6 @@
 id: feat-frontend-ownership-picker
 prd: 9.3
 delivery-tasks: [task-nv1-ownership-picker]
-bdd:
   - backend/tests/bdd/features/workflows/import.feature
   - backend/tests/bdd/features/workflows/export.feature
   - backend/tests/bdd/features/library/copy_to_adapt.feature

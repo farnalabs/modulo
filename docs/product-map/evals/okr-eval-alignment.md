@@ -2,7 +2,6 @@
 id: feat-evals-okr-eval-alignment
 prd: 8.17
 delivery-tasks: [task-nv7-okr-eval-alignment]
-bdd:
   - backend/tests/bdd/features/eval/eval_suite_crud.feature
 code:
   - backend/src/modulo/core/eval_engine/okr.py
@@ -10,7 +9,7 @@ code:
 unit-tests:
   - backend/tests/unit/core/test_okr_progress.py
   - backend/tests/unit/core/test_eval_suite.py
-depends-on: [feat-evals-eval-definition, feat-evals-eval-engine, feat-evals-eval-packaging]
+depends-on: [feat-evals-eval-definitions, feat-evals-eval-engine, feat-evals-eval-packaging]
 status: partial
 ---
 # OKR-Eval Alignment Mapping eval suites to organisational OKRs so teams can track quality targets over time. Provides pass-rate bucketing into configurable time windows, trend direction detection, breach alerts, and an admin progress endpoint. ## Behaviours ### Suite-to-OKR Mapping

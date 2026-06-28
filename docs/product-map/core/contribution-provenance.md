@@ -2,7 +2,6 @@
 id: feat-core-contribution-provenance
 prd: 8.14
 delivery-tasks: [task-nv8-contribution-provenance]
-bdd:
   - backend/tests/bdd/features/library/browse.feature
   - backend/tests/bdd/features/library/copy_to_adapt.feature
   - backend/tests/bdd/features/library/ratings.feature

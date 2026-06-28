@@ -2,7 +2,6 @@
 id: feat-evals-conditional-transitions
 prd: 8.17
 delivery-tasks: [task-nv9-conditional-transitions]
-bdd:
   - backend/tests/features/evals/conditional_hitl.feature
 code:
   - backend/src/modulo/core/pipeline_engine/graph_cache.py
