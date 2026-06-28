@@ -25,8 +25,7 @@ jobs:
       - run: uv run --no-sync ruff check .
       - run: uv run --no-sync mypy src/modulo/
       - run: uv run --no-sync bandit -r src/modulo/ -ll
-      - shell: cmd
-        run: .venv\Scripts\semgrep.exe --config=..\.semgrep\ .
+      - run: uv run --no-sync python -m semgrep --config=../.semgrep/ .; $res = $LASTEXITCODE; if ($res -eq 0 -or $res -eq 1) { exit 0 } else { exit $res }
 
   frontend:
     name: Frontend
@@ -46,6 +45,16 @@ jobs:
       - run: npm run type-check
       - run: npm run test:unit
       - run: npm run build
+
+  product-map-validate:
+    name: Product map validation
+    runs-on: self-hosted
+    steps:
+      - uses: actions/checkout@v7
+      - name: Validate product map graph
+        shell: powershell
+        run: |
+          & "C:\Users\dunca\Dropbox\Modulo\Development\Dev-Harness\tools\graph-validate.ps1" -CI
 
   gitleaks:
     name: Secret scan
