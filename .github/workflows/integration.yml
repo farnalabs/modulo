@@ -25,8 +25,9 @@ jobs:
         run: uv sync --frozen
       - name: Run integration tests
         working-directory: backend
+        shell: bash
         run: |
-          uv run pytest tests/integration/ \
+          uv run --no-sync pytest tests/integration/ \
             -m integration \
             -n 2 \
             --cov=src/modulo \
