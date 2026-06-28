@@ -18,6 +18,9 @@ class Settings(BaseSettings):
     secret_key: str = Field(...)
     # FERNET_KEY encrypts stored connector credentials — separate from JWT secret.
     fernet_key: str = Field(...)
+    # FERNET_KEY_OLD — optional previous key for no-downtime rotation period.
+    # When set, decrypt operations try fernet_key first, then fall back to this.
+    fernet_key_old: str = Field(default="")
     redis_url: str = Field("redis://localhost:6379/0")
     modulo_ws_token_ttl_seconds: int = Field(60)
     debug: bool = Field(False)
@@ -121,6 +124,13 @@ class Settings(BaseSettings):
     def _fernet_key_is_strong(cls, v: str) -> str:
         if len(v.encode()) < _MIN_KEY_LEN:
             raise ValueError(f"FERNET_KEY must be at least {_MIN_KEY_LEN} bytes; got {len(v.encode())}")
+        return v
+
+    @field_validator("fernet_key_old")
+    @classmethod
+    def _fernet_key_old_is_strong_if_set(cls, v: str) -> str:
+        if v and len(v.encode()) < _MIN_KEY_LEN:
+            raise ValueError(f"FERNET_KEY_OLD must be at least {_MIN_KEY_LEN} bytes; got {len(v.encode())}")
         return v
 
     @field_validator("cors_origins")

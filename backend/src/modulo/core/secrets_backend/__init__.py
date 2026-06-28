@@ -43,6 +43,7 @@ class SecretsBackend(ABC):
 def create_secrets_backend(
     *,
     fernet_key: str | None = None,
+    old_fernet_key: str | None = None,
     session: AsyncSession | None = None,
     backend_name: str | None = None,
 ) -> SecretsBackend:
@@ -73,7 +74,7 @@ def create_secrets_backend(
 
             if fernet_key is None:
                 raise ValueError("fernet_key is required when backend_name is 'fernet'")
-            return FernetSecretsBackend(fernet_key=fernet_key, session=session)
+            return FernetSecretsBackend(fernet_key=fernet_key, session=session, old_key=old_fernet_key)
         case "vault":
             from modulo.core.secrets_backend.vault import VaultSecretsBackend
 

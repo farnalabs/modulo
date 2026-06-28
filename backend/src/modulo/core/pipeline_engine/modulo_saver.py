@@ -15,7 +15,7 @@ from collections.abc import AsyncIterator, Sequence
 from contextlib import asynccontextmanager
 from typing import Any, cast
 
-from cryptography.fernet import Fernet
+from cryptography.fernet import Fernet, InvalidToken
 from langgraph.checkpoint.base import (
     Checkpoint,
     CheckpointMetadata,
@@ -182,11 +182,13 @@ class ModuloPostgresSaver(AsyncPostgresSaver):
         *,
         organisation_id: uuid.UUID,
         fernet_key: str | None = None,
+        fernet_key_old: str | None = None,
         **kwargs: Any,
     ) -> None:
         super().__init__(conn, **kwargs)
         self._org_id = organisation_id
         self._fernet = Fernet(fernet_key.encode()) if fernet_key else None
+        self._fernet_old = Fernet(fernet_key_old.encode()) if fernet_key_old else None
 
     # ------------------------------------------------------------------
     # Encryption helpers
@@ -202,15 +204,15 @@ class ModuloPostgresSaver(AsyncPostgresSaver):
     def _decrypt_checkpoint(self, raw: str | dict[str, Any]) -> Checkpoint:
         if isinstance(raw, dict):
             if raw.get("__encrypted__") and self._fernet is not None:
-                decrypted = self._fernet.decrypt(raw["data"].encode())
-                return _deserialize_checkpoint(decrypted.decode())
+                plain = self._decrypt_with_fallback(raw["data"].encode())
+                return _deserialize_checkpoint(plain.decode())
             return _deserialize_checkpoint(json.dumps(raw, default=str))
         if isinstance(raw, str) and raw.startswith('{"__encrypted__"'):
             try:
                 wrapper = json.loads(raw)
                 if wrapper.get("__encrypted__") and self._fernet is not None:
-                    decrypted = self._fernet.decrypt(wrapper["data"].encode())
-                    return _deserialize_checkpoint(decrypted.decode())
+                    plain = self._decrypt_with_fallback(wrapper["data"].encode())
+                    return _deserialize_checkpoint(plain.decode())
             except Exception:
                 _log.warning("checkpoint.decrypt_fallback", exc_info=True)
         return _deserialize_checkpoint(raw)
@@ -219,6 +221,15 @@ class ModuloPostgresSaver(AsyncPostgresSaver):
         if self._fernet is not None:
             return self._fernet.encrypt(blob)
         return blob
+
+    def _decrypt_with_fallback(self, ciphertext: bytes) -> bytes:
+        """Decrypt with primary key, falling back to old key on InvalidToken."""
+        try:
+            return self._fernet.decrypt(ciphertext)
+        except InvalidToken:
+            if self._fernet_old is not None:
+                return self._fernet_old.decrypt(ciphertext)
+            raise
 
     def _decrypt_blobs(self, blobs: Any) -> dict[str, Any] | None:
         if not blobs:
@@ -229,7 +240,7 @@ class ModuloPostgresSaver(AsyncPostgresSaver):
                 raw = blob[2] if blob[2] else None
                 if raw is not None and self._fernet is not None:
                     try:
-                        raw = self._fernet.decrypt(raw)
+                        raw = self._decrypt_with_fallback(raw)
                     except Exception:
                         _log.warning("blob.decrypt_fallback", exc_info=True)
                 result[blob[0].decode()] = raw
@@ -244,7 +255,7 @@ class ModuloPostgresSaver(AsyncPostgresSaver):
                 raw = w[3]
                 if self._fernet is not None:
                     try:
-                        raw = self._fernet.decrypt(raw)
+                        raw = self._decrypt_with_fallback(raw)
                     except Exception:
                         _log.warning("write.decrypt_fallback", exc_info=True)
                 result.append((w[1].decode(), w[2].decode(), raw))
@@ -469,6 +480,7 @@ class ModuloPostgresSaver(AsyncPostgresSaver):
         *,
         organisation_id: uuid.UUID,
         fernet_key: str | None = None,
+        fernet_key_old: str | None = None,
     ) -> AsyncIterator[ModuloPostgresSaver]:
         """Create a ModuloPostgresSaver from a connection string."""
         async with AsyncPostgresSaver.from_conn_string(conn_string) as base:
@@ -476,6 +488,7 @@ class ModuloPostgresSaver(AsyncPostgresSaver):
                 base.conn,
                 organisation_id=organisation_id,
                 fernet_key=fernet_key,
+                fernet_key_old=fernet_key_old,
             )
 
     # ------------------------------------------------------------------

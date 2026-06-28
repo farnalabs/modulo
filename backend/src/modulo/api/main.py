@@ -33,6 +33,7 @@ from modulo.api.routes.admin_feature_flags import router as admin_feature_flags_
 from modulo.api.routes.admin_license import router as admin_license_router
 from modulo.api.routes.admin_notifications import router as admin_notifications_router
 from modulo.api.routes.admin_rate_limits import router as admin_rate_limits_router
+from modulo.api.routes.admin_rotation import router as admin_rotation_router
 from modulo.api.routes.admin_runtime_config import router as admin_runtime_config_router
 from modulo.api.routes.admin_sso import router as admin_sso_router
 from modulo.api.routes.admin_triggers import router as admin_triggers_router
@@ -298,7 +299,7 @@ async def _seed_sso_providers(settings: Settings) -> None:
                 )
 
 
-async def _init_checkpointer(conn_string: str, fernet_key: str) -> None:
+async def _init_checkpointer(conn_string: str, fernet_key: str, fernet_key_old: str = "") -> None:
     """Ensure the langgraph.* checkpointer schema exists on startup."""
     import uuid
 
@@ -309,6 +310,7 @@ async def _init_checkpointer(conn_string: str, fernet_key: str) -> None:
             conn_string,
             organisation_id=uuid.UUID(int=0),
             fernet_key=fernet_key,
+            fernet_key_old=fernet_key_old or None,
         ) as saver:
             await saver.setup()
             logger.info("startup.checkpointer_initialised")
@@ -405,6 +407,7 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
     await _init_checkpointer(
         pg_connection_string(settings.database_url),
         settings.fernet_key,
+        fernet_key_old=settings.fernet_key_old,
     )
 
     # Initialise the runtime-config store so it captures env-var state at boot.
@@ -498,6 +501,7 @@ app.include_router(registry_router)
 app.include_router(determination_router)
 app.include_router(evals_router)
 app.include_router(admin_notifications_router)
+app.include_router(admin_rotation_router)
 app.include_router(admin_runtime_config_router)
 app.include_router(notifications_router)
 app.include_router(sensitive_router)
