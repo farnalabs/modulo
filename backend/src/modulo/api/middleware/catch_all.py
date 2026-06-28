@@ -29,7 +29,6 @@ class CatchAllMiddleware(BaseHTTPMiddleware):
                     code="INTERNAL_ERROR",
                     message=f"{type(exc).__name__}: {exc}",
                     detail=tb_str[-2000:],
-                    detail=None,
                     request_id=rid,
                 )
             )
