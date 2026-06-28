@@ -4,6 +4,7 @@ import uuid
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import pytest
 from cryptography.fernet import Fernet, InvalidToken
 from pytest_bdd import given, parsers, scenarios, then, when
 
@@ -143,7 +144,7 @@ def check_plaintext_received(decrypted_value: str) -> None:
 # -- Wrong FERNET_KEY cannot decrypt ---------------------------------------
 
 
-@given(
+@when(
     "the service restarts with key B",
     target_fixture="wrong_key",
 )
@@ -152,29 +153,17 @@ def restart_with_key_b() -> bytes:
     return Fernet.generate_key()
 
 
-@when("attempting to decrypt", target_fixture="decrypt_error")
-def attempt_decrypt(
+@then("attempting to decrypt raises InvalidToken")
+def check_attempt_decrypt(
     credential_key_a: dict[str, Any], wrong_key: bytes
-) -> Exception | None:
-    """Try to decrypt key-A-encrypted data with key B."""
+) -> None:
+    """Try to decrypt key-A-encrypted data with key B, expect InvalidToken."""
     try:
         f = Fernet(wrong_key)
         f.decrypt(credential_key_a["encrypted"])
-        return None  # No error — unexpected
-    except InvalidToken as exc:
-        return exc
-
-
-@then("attempting to decrypt raises InvalidToken")
-def check_invalid_token(decrypt_error: Exception | None) -> None:
-    assert decrypt_error is not None, (
-        "Expected InvalidToken when decrypting with wrong key, "
-        "but no exception was raised"
-    )
-    assert isinstance(decrypt_error, InvalidToken), (
-        f"Expected InvalidToken, got {type(decrypt_error).__name__}: "
-        f"{decrypt_error}"
-    )
+        pytest.fail("Expected InvalidToken when decrypting with wrong key, but no exception was raised")
+    except InvalidToken:
+        pass
 
 
 # ===========================================================================

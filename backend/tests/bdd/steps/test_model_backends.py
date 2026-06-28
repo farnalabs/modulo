@@ -17,14 +17,7 @@ try:
     scenarios("../../bdd/features/model_backends/rate_limiting.feature")
 except (FileNotFoundError, OSError):
     pass
-try:
-    scenarios("../../features/model_backends/configure.feature")
-except (FileNotFoundError, OSError):
-    pass
-try:
-    scenarios("../../features/model_backends/health_check.feature")
-except (FileNotFoundError, OSError):
-    pass
+
 
 # ---------------------------------------------------------------------------
 # Fixtures
