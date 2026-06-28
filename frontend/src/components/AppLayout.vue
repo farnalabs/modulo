@@ -53,9 +53,9 @@
     </aside>
 
     <!-- Content column: header + menu + pages -->
-    <div class="flex flex-1 flex-col min-h-screen overflow-hidden">
+    <div class="flex flex-1 flex-col min-h-0 overflow-hidden">
       <!-- Mobile header (hidden on desktop) -->
-      <div class="md:hidden bg-background border-b border-border px-4 py-3 flex items-center gap-3 shrink-0">
+      <div class="md:hidden sticky top-0 z-10 bg-background border-b border-border px-4 py-3 flex items-center gap-3 shrink-0">
         <button
           @click="mobileOpen = !mobileOpen"
           class="rounded-md bg-background border border-border p-2 text-muted-foreground hover:text-foreground shrink-0"
@@ -82,8 +82,7 @@
       <!-- Mobile menu panel -->
       <div
         v-if="mobileOpen"
-        class="md:hidden bg-background border-b border-border overflow-y-auto shrink-0"
-        style="max-height: calc(100vh - 56px);"
+        class="md:hidden bg-background border-b border-border"
       >
         <nav class="px-4 py-3 space-y-0.5">
           <template v-for="item in navItems" :key="item.label">
@@ -110,7 +109,7 @@
         </div>
       </div>
 
-      <main class="flex-1 overflow-auto">
+      <main class="flex-1 overflow-y-auto">
         <router-view v-slot="{ Component }">
           <transition name="page" mode="out-in">
             <component :is="Component" />
