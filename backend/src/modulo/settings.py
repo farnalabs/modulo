@@ -164,10 +164,17 @@ class Settings(BaseSettings):
         return self
 
     @model_validator(mode="after")
-    def _fix_datatabase_url_scheme(self) -> "Settings":
-        if self.database_url.startswith("postgres://"):
-            self.database_url = "postgresql+asyncpg://" + self.database_url[len("postgres://"):]
-            _log.info("settings.database_url_scheme_fixed")
+    def _fix_database_url_scheme(self) -> "Settings":
+        url = self.database_url
+        # Fly.io Postgres attaches with postgres:// (no asyncpg prefix)
+        if url.startswith("postgres://"):
+            url = "postgresql+asyncpg://" + url[len("postgres://"):]
+        # asyncpg doesn't support ?sslmode — strip it (SSL is handled
+        # by the Fly.io internal network; sslmode=disable is the default).
+        url = url.replace("?sslmode=disable", "")
+        if url != self.database_url:
+            self.database_url = url
+            _log.info("settings.database_url_fixed")
         return self
 
     @model_validator(mode="after")
