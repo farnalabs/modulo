@@ -154,7 +154,7 @@ interface UserItem {
   email: string
   display_name: string
   org_role: string
-  is_active: bool
+  is_active: boolean
   auth_provider: string
   created_at: string
   last_login: string | null
