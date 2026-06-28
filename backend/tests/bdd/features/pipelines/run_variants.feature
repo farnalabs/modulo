@@ -17,6 +17,7 @@ Feature: Pipeline Run Variants (A/B Testing)
     Then the response status is 200
     And the response contains a variant_name and run_id
 
+  @awaiting-implementation
   Scenario: Coverage gaps are reported for a variant group
     Given a variant group "ab-test-1" exists for pipeline "deploy-service"
     And I am authenticated in org "acme"

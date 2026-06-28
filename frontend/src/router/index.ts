@@ -1,5 +1,8 @@
 import { createRouter, createWebHistory } from 'vue-router'
+import { getAccessToken } from '../lib/api/client'
+
 import DashboardView from '../views/DashboardView.vue'
+import LoginView from '../views/LoginView.vue'
 import LibraryView from '../views/LibraryView.vue'
 import LibraryPipelineWizard from '../views/LibraryPipelineWizard.vue'
 import SettingsObservabilityView from '../views/SettingsObservabilityView.vue'
@@ -23,6 +26,11 @@ import PipelineEditorView from '../views/PipelineEditorView.vue'
 const router = createRouter({
   history: createWebHistory(),
   routes: [
+    {
+      path: '/login',
+      name: 'login',
+      component: LoginView,
+    },
     {
       path: '/',
       name: 'dashboard',
@@ -129,6 +137,12 @@ const router = createRouter({
       component: PipelineEditorView,
     },
   ],
+})
+
+router.beforeEach((to) => {
+  if (to.name !== 'login' && !getAccessToken()) {
+    return { name: 'login' }
+  }
 })
 
 export default router
