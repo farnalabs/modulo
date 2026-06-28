@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Protocol
+
+from modulo.core.license import LicenseData
 
 
 @dataclass
@@ -124,14 +126,22 @@ _KNOWN_FLAGS: list[FeatureFlag] = [
 ]
 
 
-class PlanContext:
-    """Resolved plan context — determines which features are available for the current deployment."""
+TIER_RANK: dict[str, int] = {"free": 0, "enterprise": 1, "v1": 2, "v2": 3}
 
-    def __init__(self, settings: Any = None, *, has_license_key: bool = False, tier: str = "free") -> None:
-        if settings is not None:
-            has_license_key = bool(settings.modulo_license_key)
-            tier = "enterprise" if has_license_key else "free"
-        self._registry = FeatureFlagRegistry(current_tier=tier, has_license_key=has_license_key)
+
+class PlanContext(Protocol):
+    """Interface for plan-based feature gating."""
+
+    def feature_enabled(self, name: str) -> bool: ...
+
+    def list_enabled_features(self) -> list[FeatureFlag]: ...
+
+
+class FreeTier:
+    """Default plan — free-tier features active without a license key."""
+
+    def __init__(self) -> None:
+        self._registry = FeatureFlagRegistry(current_tier="free", has_license_key=False)
 
     def feature_enabled(self, name: str) -> bool:
         flag = self._registry.get_flag(name)
@@ -139,9 +149,61 @@ class PlanContext:
             return False
         return flag.currently_active
 
+    def list_enabled_features(self) -> list[FeatureFlag]:
+        return [f for f in self._registry.list_flags() if f.currently_active]
+
+
+class LicenseKeyTier:
+    """Enterprise/licensed plan — activates features based on license tier and explicit feature list."""
+
+    def __init__(self, license_data: LicenseData) -> None:
+        self._tier = license_data.tier
+        self._features = set(license_data.features)
+        self._registry = FeatureFlagRegistry(current_tier=license_data.tier, has_license_key=True)
+
+    def feature_enabled(self, name: str) -> bool:
+        flag = self._registry.get_flag(name)
+        if flag is None:
+            return False
+        return flag.currently_active or name in self._features
+
+    def list_enabled_features(self) -> list[FeatureFlag]:
+        return [
+            f
+            for f in self._registry.list_flags()
+            if f.currently_active or f.name in self._features
+        ]
+
+
+def resolve_plan_context(settings: Any) -> PlanContext:
+    """Resolve a PlanContext from a stored license, env-var license key, or fall back to FreeTier."""
+    from modulo.core.license import get_license, parse_and_verify
+
+    lic = get_license()
+    if lic is not None:
+        return LicenseKeyTier(lic)
+
+    raw_key: str = getattr(settings, "modulo_license_key", "") or ""
+    if raw_key:
+        validation = parse_and_verify(raw_key)
+        if validation.valid and validation.license_data is not None:
+            return LicenseKeyTier(validation.license_data)
+        return LicenseKeyTier(
+            LicenseData(
+                tier="enterprise",
+                features=[],
+                expires_at="",
+                org_id="",
+                raw_payload={},
+                raw_key=raw_key,
+            )
+        )
+
+    return FreeTier()
+
 
 class FeatureFlagRegistry:
-    """Knows all feature flags and determines active status from license state."""
+    """Knows all feature flags and determines active status from the current tier."""
 
     def __init__(self, current_tier: str = "free", has_license_key: bool = False) -> None:
         self._current_tier = current_tier
@@ -150,12 +212,11 @@ class FeatureFlagRegistry:
         self._refresh()
 
     def _refresh(self) -> None:
-        tier_order = {"free": 0, "enterprise": 1, "v1": 2, "v2": 3}
-        current_rank = tier_order.get(self._current_tier, 0)
+        current_rank = TIER_RANK.get(self._current_tier, 0)
 
         for flag in self._flags:
-            flag_tier_rank = tier_order.get(flag.tier, 0)
-            flag.currently_active = self._has_license_key and flag_tier_rank <= current_rank
+            flag_tier_rank = TIER_RANK.get(flag.tier, 0)
+            flag.currently_active = flag_tier_rank <= current_rank
 
     def refresh(self, current_tier: str, has_license_key: bool) -> None:
         self._current_tier = current_tier
