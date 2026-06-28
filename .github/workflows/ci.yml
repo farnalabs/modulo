@@ -25,7 +25,7 @@ jobs:
       - run: uv run --no-sync ruff check .
       - run: uv run --no-sync mypy src/modulo/
       - run: uv run --no-sync bandit -r src/modulo/ -ll
-      - run: uv run --no-sync python -m semgrep --config=../.semgrep/ .
+      - run: uv run --no-sync -- semgrep --config=../.semgrep/ .
 
   frontend:
     name: Frontend
@@ -57,7 +57,7 @@ jobs:
         shell: powershell
         run: |
           $release = Invoke-RestMethod -Uri "https://api.github.com/repos/gitleaks/gitleaks/releases/latest"
-          $asset = $release.assets | Where-Object { $_.name -match "windows.*amd64" }
+          $asset = $release.assets | Where-Object { $_.name -match "windows.*x64" }
           if (-not $asset) { throw "No Windows amd64 asset found in latest release" }
           $zip = "$env:TEMP\gitleaks.zip"
           Invoke-WebRequest -Uri $asset.browser_download_url -OutFile $zip
