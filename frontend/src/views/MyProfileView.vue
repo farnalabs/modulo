@@ -7,7 +7,7 @@
 
     <div class="card p-6 space-y-6">
       <div class="flex items-center gap-4 pb-4 border-b border-border">
-        <div class="flex h-14 w-14 items-center justify-center rounded-full bg-gradient-to-br from-primary to-teal-600 text-xl font-bold text-primary-foreground">
+        <div class="flex h-14 w-14 items-center justify-center rounded-full bg-primary text-xl font-bold text-primary-foreground">
           {{ userInitial }}
         </div>
         <div>
@@ -58,7 +58,7 @@
         <p v-if="passSuccess" class="text-sm text-success">{{ passSuccess }}</p>
         <button
           type="submit"
-          class="px-4 py-2 bg-gradient-to-r from-primary to-teal-600 text-primary-foreground text-sm font-medium rounded-lg border border-primary/30 hover:brightness-110 transition-all"
+          class="px-4 py-2 bg-primary text-primary-foreground text-sm font-medium rounded-lg border border-primary/30 hover:brightness-110 transition-all"
         >
           Update Password
         </button>

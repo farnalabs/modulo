@@ -77,7 +77,7 @@
           <div class="flex items-center gap-2">
             <button
               v-if="prim.primitive_type === 'pipeline_template'"
-              class="flex-1 px-3 py-2 bg-gradient-to-r from-primary to-teal-600 text-primary-foreground text-sm font-medium rounded-lg border border-primary/30 hover:border-primary/60 hover:brightness-110 transition-all"
+              class="flex-1 px-3 py-2 bg-primary text-primary-foreground text-sm font-medium rounded-lg border border-primary/30 hover:border-primary/60 hover:brightness-110 transition-all"
               @click="createPipeline(prim)"
             >
               Create Pipeline

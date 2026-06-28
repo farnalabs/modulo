@@ -94,6 +94,8 @@ def run_migrations_online() -> None:
             sync_url = sync_url.replace("postgresql+asyncpg://", "postgresql+psycopg2://", 1)
         elif sync_url.startswith("mysql+asyncmy://"):
             sync_url = sync_url.replace("mysql+asyncmy://", "mysql+pymysql://", 1)
+    # Strip ssl=disable — psycopg2 uses sslmode=, not ssl=
+    sync_url = sync_url.replace("?ssl=disable", "").replace("&ssl=disable", "")
 
     engine = create_engine(sync_url, poolclass=NullPool)
     try:
