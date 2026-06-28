@@ -163,6 +163,17 @@ class Settings(BaseSettings):
         return self
 
     @model_validator(mode="after")
+    def _fix_database_url(self) -> "Settings":
+        url = self.database_url
+        if url.startswith("postgres://"):
+            url = "postgresql+asyncpg://" + url[len("postgres://"):]
+        url = url.replace("?sslmode=disable", "?ssl=disable")
+        if url != self.database_url:
+            self.database_url = url
+            _log.info("settings.database_url_fixed")
+        return self
+
+    @model_validator(mode="after")
     def _apply_sqlite_mode(self) -> "Settings":
         if self.modulo_db.lower() == "sqlite":
             _log.warning("settings.sqlite_mode")

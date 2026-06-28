@@ -14,5 +14,6 @@ module.exports = {
   rules: {
     'no-console': 'warn',
     'vue/component-api-style': ['error', ['script-setup']],
+    'vue/multi-word-component-names': ['error', { ignores: ['Badge', 'Button', 'Card', 'Dialog', 'Input', 'Select', 'Tabs', 'Tooltip', 'LogoMark', 'SidebarLink', 'OwnershipPicker', 'SsoProviderForm'] }],
   },
 }

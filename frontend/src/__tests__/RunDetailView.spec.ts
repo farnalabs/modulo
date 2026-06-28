@@ -6,8 +6,23 @@ import { nextTick } from 'vue'
 vi.mock('../lib/api/client', () => ({
   api: {
     GET: vi.fn().mockImplementation((url: string) => {
-      if (url === '/api/v1/runs/{run_id}') return Promise.resolve({ data: null, error: undefined })
-      if (url === '/api/v1/runs/{run_id}/io') return Promise.resolve({ data: null, error: undefined })
+      if (url === '/api/v1/runs/{run_id}') {
+        return Promise.resolve({
+          data: {
+            run_id: 'test-run-id',
+            pipeline_id: 'test-pipeline',
+            status: 'complete',
+            total_cost_usd: 1.23,
+            token_consumption: null,
+            node_token_usage: {},
+            trace_id: null,
+          },
+          error: undefined,
+        })
+      }
+      if (url === '/api/v1/runs/{run_id}/io') {
+        return Promise.resolve({ data: { outputs_json: {} }, error: undefined })
+      }
       return Promise.resolve({ data: null, error: undefined })
     }),
   },
@@ -35,6 +50,7 @@ describe('RunDetailView', () => {
       global: { plugins: [router] },
     })
     await nextTick()
+    await new Promise(r => setTimeout(r, 0))
     expect(wrapper.exists()).toBe(true)
     expect(wrapper.text()).toContain('Run Detail')
   })

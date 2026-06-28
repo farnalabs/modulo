@@ -4,7 +4,10 @@ import { nextTick } from 'vue'
 
 vi.mock('../lib/api/client', () => ({
   api: {
-    GET: vi.fn().mockResolvedValue({ data: [], error: undefined }),
+    GET: vi.fn().mockImplementation((url: string) => {
+      if (url === '/api/v1/variant-groups') return Promise.resolve({ data: [], error: undefined })
+      return Promise.resolve({ data: null, error: undefined })
+    }),
     POST: vi.fn().mockResolvedValue({ data: null, error: undefined }),
   },
   getAccessToken: vi.fn().mockReturnValue('mock-token'),
@@ -19,6 +22,7 @@ describe('VariantCompareView', () => {
 
   it('renders without crashing', async () => {
     const wrapper = mount(VariantCompareView)
+    await nextTick()
     await nextTick()
     expect(wrapper.exists()).toBe(true)
     expect(wrapper.text()).toContain('Variant Comparison')
