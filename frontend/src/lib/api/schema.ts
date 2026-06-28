@@ -241,6 +241,42 @@ export interface paths {
       }
     }
   }
+  '/api/v1/admin/runtime-config': {
+    get: {
+      responses: {
+        200: {
+          content: {
+            'application/json': components['schemas']['RuntimeConfigResponse']
+          }
+        }
+      }
+    }
+    put: {
+      requestBody: {
+        content: {
+          'application/json': components['schemas']['RuntimeConfigUpdateRequest']
+        }
+      }
+      responses: {
+        200: {
+          content: {
+            'application/json': components['schemas']['RuntimeConfigResponse']
+          }
+        }
+      }
+    }
+  }
+  '/api/v1/admin/runtime-config/reload': {
+    post: {
+      responses: {
+        200: {
+          content: {
+            'application/json': components['schemas']['RuntimeConfigResponse']
+          }
+        }
+      }
+    }
+  }
   '/api/v1/admin/audit/export': {
     get: {
       parameters: {
@@ -990,6 +1026,23 @@ export interface components {
     }
     RateLimitUpdateRequest: {
       rules: components['schemas']['RateLimitRuleUpdate'][]
+    }
+    RuntimeConfigEntry: {
+      key: string
+      current_value: string | null
+      default_value: string | null
+      env_value: string | null
+      override_value: string | null
+      provenance: string
+      hot_reloadable: boolean
+    }
+    RuntimeConfigResponse: {
+      items: components['schemas']['RuntimeConfigEntry'][]
+      has_drift: boolean
+    }
+    RuntimeConfigUpdateRequest: {
+      overrides?: { [key: string]: string }
+      clear?: string[]
     }
   }
 }

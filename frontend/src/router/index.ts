@@ -4,6 +4,7 @@ import LibraryView from '../views/LibraryView.vue'
 import LibraryPipelineWizard from '../views/LibraryPipelineWizard.vue'
 import SettingsObservabilityView from '../views/SettingsObservabilityView.vue'
 import SettingsRateLimitsView from '../views/SettingsRateLimitsView.vue'
+import SettingsRuntimeConfigView from '../views/SettingsRuntimeConfigView.vue'
 import SettingsSsoView from '../views/SettingsSsoView.vue'
 import SettingsTeamsView from '../views/SettingsTeamsView.vue'
 import SchemaInferenceView from '../views/SchemaInferenceView.vue'
@@ -61,6 +62,11 @@ const router = createRouter({
       path: '/settings/rate-limits',
       name: 'settings-rate-limits',
       component: SettingsRateLimitsView,
+    },
+    {
+      path: '/settings/runtime-config',
+      name: 'settings-runtime-config',
+      component: SettingsRuntimeConfigView,
     },
     {
       path: '/schemas/infer',
