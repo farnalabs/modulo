@@ -10,7 +10,6 @@ scenarios("../../features/agents/prompt_versioning.feature")
 scenarios("../../features/agents/schema_assignment.feature")
 
 
-
 @given(parsers.parse('I create an agent named "{name}" with system prompt "{prompt}"'))
 def create_agent(name: str, prompt: str, client, request):
     with (
@@ -24,10 +23,13 @@ def create_agent(name: str, prompt: str, client, request):
             ),
         ),
     ):
-        resp = client.post("/api/agents", json={
-            "name": name,
-            "system_prompt": prompt,
-        })
+        resp = client.post(
+            "/api/agents",
+            json={
+                "name": name,
+                "system_prompt": prompt,
+            },
+        )
     request.node._resp = resp
 
 

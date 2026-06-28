@@ -16,6 +16,7 @@ from modulo.db.models.audit_event import AuditChainHead
 ORG_ID = "00000000-0000-0000-0000-000000000001"
 EVENT_ID = "00000000-0000-0000-0000-000000000002"
 
+
 class TestEventHash:
     def test_same_inputs_produce_same_hash(self):
         h1 = _compute_event_hash("a", None, None, None, {}, None, None, EVENT_ID, ORG_ID, "t")
@@ -35,12 +36,16 @@ class TestEventHash:
 
     def test_org_id_changes_result(self):
         h1 = _compute_event_hash("e", None, None, None, {}, None, None, EVENT_ID, ORG_ID, "t")
-        h2 = _compute_event_hash("e", None, None, None, {}, None, None, EVENT_ID, "00000000-0000-0000-0000-000000000003", "t")  # noqa: E501
+        h2 = _compute_event_hash(
+            "e", None, None, None, {}, None, None, EVENT_ID, "00000000-0000-0000-0000-000000000003", "t"
+        )
         assert h1 != h2
 
     def test_event_id_changes_result(self):
         h1 = _compute_event_hash("e", None, None, None, {}, None, None, EVENT_ID, ORG_ID, "t")
-        h2 = _compute_event_hash("e", None, None, None, {}, None, None, "00000000-0000-0000-0000-000000000099", ORG_ID, "t")  # noqa: E501
+        h2 = _compute_event_hash(
+            "e", None, None, None, {}, None, None, "00000000-0000-0000-0000-000000000099", ORG_ID, "t"
+        )
         assert h1 != h2
 
 
@@ -58,10 +63,13 @@ class TestAppendAuditEvent:
             r = MagicMock()
             r.scalar_one_or_none = MagicMock(return_value=None)
             return r
+
         session.execute = _execute
 
         event = await append_audit_event(
-            session, org_id=uuid.uuid4(), event_type="test.event",
+            session,
+            org_id=uuid.uuid4(),
+            event_type="test.event",
         )
         assert event.previous_hash is None
         assert session.add.call_count >= 2
@@ -70,8 +78,7 @@ class TestAppendAuditEvent:
         org_id = uuid.uuid4()
         event_id = uuid.uuid4()
         h = _compute_event_hash("first", None, None, None, {}, None, None, str(event_id), str(org_id), "t")
-        head = AuditChainHead(organisation_id=org_id, last_event_hash=h,
-                              last_event_id=event_id, event_count=1)
+        head = AuditChainHead(organisation_id=org_id, last_event_hash=h, last_event_id=event_id, event_count=1)
 
         call_count = 0
 
@@ -81,10 +88,13 @@ class TestAppendAuditEvent:
             r = MagicMock()
             r.scalar_one_or_none = MagicMock(return_value=head if call_count == 1 else None)
             return r
+
         session.execute = _execute
 
         event = await append_audit_event(
-            session, org_id=org_id, event_type="second.event",
+            session,
+            org_id=org_id,
+            event_type="second.event",
         )
         assert event.previous_hash == h
 
@@ -103,6 +113,7 @@ class TestVerifyChain:
             r = MagicMock()
             r.scalars = MagicMock(return_value=[])
             return r
+
         session.execute = _execute
 
         result = await verify_chain(session, uuid.uuid4())
@@ -123,9 +134,20 @@ class TestVerifyChain:
         h1 = _compute_event_hash("e1", None, None, None, {}, None, None, str(event_id1), str(org_id), "t1")
         h2 = _compute_event_hash("e2", None, None, None, {}, None, h1, str(event_id2), str(org_id), "t2")
 
-        e1 = MagicMock(spec=["id", "organisation_id", "event_type", "actor_user_id",
-                             "resource_type", "resource_id", "payload_json",
-                             "request_id", "previous_hash", "created_at"])
+        e1 = MagicMock(
+            spec=[
+                "id",
+                "organisation_id",
+                "event_type",
+                "actor_user_id",
+                "resource_type",
+                "resource_id",
+                "payload_json",
+                "request_id",
+                "previous_hash",
+                "created_at",
+            ]
+        )
         e1.id = event_id1
         e1.organisation_id = org_id
         e1.event_type = "e1"
@@ -137,9 +159,20 @@ class TestVerifyChain:
         e1.previous_hash = None
         e1.created_at = created_at
 
-        e2 = MagicMock(spec=["id", "organisation_id", "event_type", "actor_user_id",
-                             "resource_type", "resource_id", "payload_json",
-                             "request_id", "previous_hash", "created_at"])
+        e2 = MagicMock(
+            spec=[
+                "id",
+                "organisation_id",
+                "event_type",
+                "actor_user_id",
+                "resource_type",
+                "resource_id",
+                "payload_json",
+                "request_id",
+                "previous_hash",
+                "created_at",
+            ]
+        )
         e2.id = event_id2
         e2.organisation_id = org_id
         e2.event_type = "e2"
@@ -166,6 +199,7 @@ class TestVerifyChain:
                 head.last_event_hash = h2
                 r.scalar_one_or_none = MagicMock(return_value=head)
             return r
+
         session.execute = _execute
 
         result = await verify_chain(session, org_id)
@@ -185,9 +219,20 @@ class TestVerifyChain:
 
         _compute_event_hash("e1", None, None, None, {}, None, None, str(event_id1), str(org_id), "t1")
 
-        e1 = MagicMock(spec=["id", "organisation_id", "event_type", "actor_user_id",
-                             "resource_type", "resource_id", "payload_json",
-                             "request_id", "previous_hash", "created_at"])
+        e1 = MagicMock(
+            spec=[
+                "id",
+                "organisation_id",
+                "event_type",
+                "actor_user_id",
+                "resource_type",
+                "resource_id",
+                "payload_json",
+                "request_id",
+                "previous_hash",
+                "created_at",
+            ]
+        )
         e1.id = event_id1
         e1.organisation_id = org_id
         e1.event_type = "e1"
@@ -199,9 +244,20 @@ class TestVerifyChain:
         e1.previous_hash = None
         e1.created_at = created_at
 
-        e2 = MagicMock(spec=["id", "organisation_id", "event_type", "actor_user_id",
-                             "resource_type", "resource_id", "payload_json",
-                             "request_id", "previous_hash", "created_at"])
+        e2 = MagicMock(
+            spec=[
+                "id",
+                "organisation_id",
+                "event_type",
+                "actor_user_id",
+                "resource_type",
+                "resource_id",
+                "payload_json",
+                "request_id",
+                "previous_hash",
+                "created_at",
+            ]
+        )
         e2.id = event_id2
         e2.organisation_id = org_id
         e2.event_type = "e2"
@@ -217,6 +273,7 @@ class TestVerifyChain:
             r = MagicMock()
             r.scalars = MagicMock(return_value=[e1, e2])
             return r
+
         session.execute = _execute
 
         result = await verify_chain(session, org_id)
@@ -246,6 +303,7 @@ class TestExportChain:
             else:
                 r.scalar = MagicMock(return_value=0)
             return r
+
         session.execute = _execute
 
         result = await export_chain(session, uuid.uuid4())

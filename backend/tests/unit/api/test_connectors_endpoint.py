@@ -97,8 +97,8 @@ def test_list_connectors_returns_200(client: TestClient) -> None:
     with (
         patch("modulo.api.routes.connectors.list_connector_instances", return_value=page_result),
         patch("modulo.api.routes.connectors.set_rls_org"),
-            patch("modulo.api.routes.connectors.set_rls_user_context"),
-        ):
+        patch("modulo.api.routes.connectors.set_rls_user_context"),
+    ):
         resp = client.get("/api/v1/connectors")
     assert resp.status_code == 200
     assert resp.json()["total"] == 1
@@ -110,8 +110,8 @@ def test_create_connector_does_not_expose_credentials(client: TestClient) -> Non
     with (
         patch("modulo.api.routes.connectors.create_connector_instance", return_value=connector),
         patch("modulo.api.routes.connectors.set_rls_org"),
-            patch("modulo.api.routes.connectors.set_rls_user_context"),
-        ):
+        patch("modulo.api.routes.connectors.set_rls_user_context"),
+    ):
         resp = client.post("/api/v1/connectors", json=_CREATE_BODY)
 
     assert resp.status_code == 201
@@ -131,8 +131,8 @@ def test_create_connector_encrypts_credentials(client: TestClient) -> None:
     with (
         patch("modulo.api.routes.connectors.create_connector_instance", new=fake_create),
         patch("modulo.api.routes.connectors.set_rls_org"),
-            patch("modulo.api.routes.connectors.set_rls_user_context"),
-        ):
+        patch("modulo.api.routes.connectors.set_rls_user_context"),
+    ):
         client.post("/api/v1/connectors", json=_CREATE_BODY)
 
     assert captured, "create_connector_instance was not called"
@@ -147,8 +147,8 @@ def test_get_connector_returns_200_without_credentials(client: TestClient) -> No
     with (
         patch("modulo.api.routes.connectors.get_connector_instance", return_value=connector),
         patch("modulo.api.routes.connectors.set_rls_org"),
-            patch("modulo.api.routes.connectors.set_rls_user_context"),
-        ):
+        patch("modulo.api.routes.connectors.set_rls_user_context"),
+    ):
         resp = client.get(f"/api/v1/connectors/{_CONNECTOR_ID}")
     assert resp.status_code == 200
     body = resp.json()
@@ -160,8 +160,8 @@ def test_get_connector_not_found_returns_404(client: TestClient) -> None:
     with (
         patch("modulo.api.routes.connectors.get_connector_instance", return_value=None),
         patch("modulo.api.routes.connectors.set_rls_org"),
-            patch("modulo.api.routes.connectors.set_rls_user_context"),
-        ):
+        patch("modulo.api.routes.connectors.set_rls_user_context"),
+    ):
         resp = client.get(f"/api/v1/connectors/{uuid.uuid4()}")
     assert resp.status_code == 404
 
@@ -172,8 +172,8 @@ def test_update_connector_returns_200(client: TestClient) -> None:
     with (
         patch("modulo.api.routes.connectors.update_connector_instance", return_value=connector),
         patch("modulo.api.routes.connectors.set_rls_org"),
-            patch("modulo.api.routes.connectors.set_rls_user_context"),
-        ):
+        patch("modulo.api.routes.connectors.set_rls_user_context"),
+    ):
         resp = client.patch(f"/api/v1/connectors/{_CONNECTOR_ID}", json={"name": "Updated"})
     assert resp.status_code == 200
     assert resp.json()["name"] == "Updated"
@@ -183,8 +183,8 @@ def test_update_connector_not_found_returns_404(client: TestClient) -> None:
     with (
         patch("modulo.api.routes.connectors.update_connector_instance", return_value=None),
         patch("modulo.api.routes.connectors.set_rls_org"),
-            patch("modulo.api.routes.connectors.set_rls_user_context"),
-        ):
+        patch("modulo.api.routes.connectors.set_rls_user_context"),
+    ):
         resp = client.patch(f"/api/v1/connectors/{uuid.uuid4()}", json={"name": "x"})
     assert resp.status_code == 404
 
@@ -193,8 +193,8 @@ def test_delete_connector_returns_204(client: TestClient) -> None:
     with (
         patch("modulo.api.routes.connectors.delete_connector_instance", return_value=True),
         patch("modulo.api.routes.connectors.set_rls_org"),
-            patch("modulo.api.routes.connectors.set_rls_user_context"),
-        ):
+        patch("modulo.api.routes.connectors.set_rls_user_context"),
+    ):
         resp = client.delete(f"/api/v1/connectors/{_CONNECTOR_ID}")
     assert resp.status_code == 204
 
@@ -203,8 +203,8 @@ def test_delete_connector_not_found_returns_404(client: TestClient) -> None:
     with (
         patch("modulo.api.routes.connectors.delete_connector_instance", return_value=False),
         patch("modulo.api.routes.connectors.set_rls_org"),
-            patch("modulo.api.routes.connectors.set_rls_user_context"),
-        ):
+        patch("modulo.api.routes.connectors.set_rls_user_context"),
+    ):
         resp = client.delete(f"/api/v1/connectors/{uuid.uuid4()}")
     assert resp.status_code == 404
 
@@ -214,8 +214,8 @@ def test_connector_no_credentials_shows_false(client: TestClient) -> None:
     with (
         patch("modulo.api.routes.connectors.get_connector_instance", return_value=connector),
         patch("modulo.api.routes.connectors.set_rls_org"),
-            patch("modulo.api.routes.connectors.set_rls_user_context"),
-        ):
+        patch("modulo.api.routes.connectors.set_rls_user_context"),
+    ):
         resp = client.get(f"/api/v1/connectors/{_CONNECTOR_ID}")
     assert resp.json()["has_credentials"] is False
 

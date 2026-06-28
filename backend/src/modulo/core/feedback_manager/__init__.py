@@ -293,10 +293,7 @@ class FeedbackManager:
         if record is None:
             raise ValueError(f"FeedbackRecord {record_id} not found")
         if record.feedback_status != "correcting":
-            raise ValueError(
-                f"FeedbackRecord {record_id} has status '{record.feedback_status}', "
-                f"expected 'correcting'"
-            )
+            raise ValueError(f"FeedbackRecord {record_id} has status '{record.feedback_status}', expected 'correcting'")
         if record.correction_run_id is None:
             raise ValueError(f"FeedbackRecord {record_id} has no correction run linked")
 
@@ -327,9 +324,7 @@ class FeedbackManager:
                 await self.update_status(record_id, "resolved")
                 outcome["needs_human_review"] = True
                 await self._session.execute(
-                    update(FeedbackRecord)
-                    .where(FeedbackRecord.id == record_id)
-                    .values(needs_human_review=True)
+                    update(FeedbackRecord).where(FeedbackRecord.id == record_id).values(needs_human_review=True)
                 )
 
         await self._session.flush()

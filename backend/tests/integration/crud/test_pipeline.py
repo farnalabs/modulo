@@ -22,9 +22,7 @@ from modulo.db.crud.pipeline import (
 pytestmark = pytest.mark.integration
 
 
-async def test_create_pipeline(
-    rls_session: AsyncSession, test_org: uuid.UUID, test_user: uuid.UUID
-) -> None:
+async def test_create_pipeline(rls_session: AsyncSession, test_org: uuid.UUID, test_user: uuid.UUID) -> None:
     p = await create_pipeline(
         rls_session,
         org_id=test_org,
@@ -51,13 +49,9 @@ async def test_get_pipeline_returns_none_for_unknown(
     assert await get_pipeline(rls_session, uuid.uuid4()) is None
 
 
-async def test_list_pipelines_pagination(
-    rls_session: AsyncSession, test_org: uuid.UUID, test_user: uuid.UUID
-) -> None:
+async def test_list_pipelines_pagination(rls_session: AsyncSession, test_org: uuid.UUID, test_user: uuid.UUID) -> None:
     for i in range(3):
-        await create_pipeline(
-            rls_session, org_id=test_org, name=f"Pipeline {i}", created_by=test_user
-        )
+        await create_pipeline(rls_session, org_id=test_org, name=f"Pipeline {i}", created_by=test_user)
 
     page1 = await list_pipelines(rls_session, page=1, page_size=2)
     assert page1.total >= 3
@@ -65,9 +59,7 @@ async def test_list_pipelines_pagination(
     assert page1.page == 1
 
 
-async def test_update_pipeline(
-    rls_session: AsyncSession, test_org: uuid.UUID, test_user: uuid.UUID
-) -> None:
+async def test_update_pipeline(rls_session: AsyncSession, test_org: uuid.UUID, test_user: uuid.UUID) -> None:
     p = await create_pipeline(rls_session, org_id=test_org, name="Old Name", created_by=test_user)
     updated = await update_pipeline(rls_session, p.id, {"name": "New Name"})
     assert updated is not None
@@ -80,9 +72,7 @@ async def test_update_pipeline_unknown_returns_none(
     assert await update_pipeline(rls_session, uuid.uuid4(), {"name": "x"}) is None
 
 
-async def test_delete_pipeline(
-    rls_session: AsyncSession, test_org: uuid.UUID, test_user: uuid.UUID
-) -> None:
+async def test_delete_pipeline(rls_session: AsyncSession, test_org: uuid.UUID, test_user: uuid.UUID) -> None:
     p = await create_pipeline(rls_session, org_id=test_org, name="Delete Me", created_by=test_user)
     assert await delete_pipeline(rls_session, p.id) is True
     assert await get_pipeline(rls_session, p.id) is None
@@ -167,13 +157,15 @@ async def test_clone_pipeline_returns_new_id_and_name_prefix(
         pipeline_id=source.id,
         org_id=test_org,
         nodes=nodes,
-        edges=[{
-            "id": edge_id,
-            "source_node_id": first_node,
-            "target_node_id": second_node,
-            "edge_type": "normal",
-            "hitl_gate_config": None,
-        }],
+        edges=[
+            {
+                "id": edge_id,
+                "source_node_id": first_node,
+                "target_node_id": second_node,
+                "edge_type": "normal",
+                "hitl_gate_config": None,
+            }
+        ],
     )
 
     cloned = await clone_pipeline(

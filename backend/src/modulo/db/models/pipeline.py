@@ -36,9 +36,7 @@ class Pipeline(OrgScoped):
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     description: Mapped[str | None] = mapped_column(String(2000))
     stage_id: Mapped[uuid.UUID | None] = mapped_column(Uuid(), ForeignKey("stages.id", ondelete="SET NULL"))
-    owner_team_id: Mapped[uuid.UUID | None] = mapped_column(
-        Uuid(), ForeignKey("teams.id", ondelete="RESTRICT")
-    )
+    owner_team_id: Mapped[uuid.UUID | None] = mapped_column(Uuid(), ForeignKey("teams.id", ondelete="RESTRICT"))
     visibility: Mapped[str] = mapped_column(String(10), nullable=False, server_default="org")
     max_concurrent_runs: Mapped[int] = mapped_column(Integer, nullable=False, server_default="5")
     lock_wait_timeout_seconds: Mapped[int] = mapped_column(Integer, nullable=False, server_default="300")
@@ -55,9 +53,6 @@ class Pipeline(OrgScoped):
         String(30),
         server_default="manual_approval",
     )
-    slug: Mapped[str | None] = mapped_column(String(255), nullable=True)
-    created_by: Mapped[uuid.UUID] = mapped_column(
-        Uuid(), ForeignKey("users.id", ondelete="RESTRICT"), nullable=False
-    )
+    created_by: Mapped[uuid.UUID] = mapped_column(Uuid(), ForeignKey("users.id", ondelete="RESTRICT"), nullable=False)
     organisation: Mapped[Organisation] = relationship()
     creator: Mapped[User] = relationship()

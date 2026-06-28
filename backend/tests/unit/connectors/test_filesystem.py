@@ -42,9 +42,7 @@ async def test_list_directory(connector, tmp_path):
 
 
 async def test_write_file(connector, tmp_path):
-    await connector.write(
-        ConnectorPayload(resource="file", data={"path": "out.txt", "content": "hello"})
-    )
+    await connector.write(ConnectorPayload(resource="file", data={"path": "out.txt", "content": "hello"}))
     assert (tmp_path / "out.txt").read_text() == "hello"
 
 
@@ -60,9 +58,7 @@ async def test_write_creates_parent_dirs(connector, tmp_path):
 
 async def test_path_traversal_blocked(connector):
     with pytest.raises(PathTraversalError):
-        await connector.query(
-            ConnectorQuery(resource="file", filters={"path": "../../../etc/passwd"})
-        )
+        await connector.query(ConnectorQuery(resource="file", filters={"path": "../../../etc/passwd"}))
 
 
 async def test_path_traversal_in_write_blocked(connector):
@@ -87,4 +83,5 @@ async def test_unsupported_write_resource(connector):
 
 def test_connector_type(connector):
     from modulo.connectors.base import ConnectorType
+
     assert connector.connector_type == ConnectorType.FILESYSTEM

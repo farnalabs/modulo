@@ -43,7 +43,7 @@ def _mock_profile(
 
 def _graph_json(*, agent_ids: list[uuid.UUID] | None = None) -> dict:
     nodes = []
-    for aid in (agent_ids or []):
+    for aid in agent_ids or []:
         nodes.append({"id": str(uuid.uuid4()), "agent_id": str(aid)})
     return {"nodes": nodes, "edges": []}
 
@@ -281,6 +281,8 @@ async def test_non_uuid_agent_id_skipped():
 
     validator = GraphValidator()
     result = await validator.validate_definition(
-        graph, session, environment_profile_id=pid,
+        graph,
+        session,
+        environment_profile_id=pid,
     )
     assert result.is_valid

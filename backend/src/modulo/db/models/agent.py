@@ -47,10 +47,9 @@ class Agent(OrgScoped):
     required_environment_capabilities: Mapped[list[str]] = mapped_column(JSON, nullable=False, default=list)
     evals: Mapped[list[dict[str, Any]] | None] = mapped_column(JSON, nullable=True, default=None)
     retry_policy: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False, default=dict)
+    max_input_length: Mapped[int | None] = mapped_column(Integer)
     token_budget: Mapped[int | None] = mapped_column(Integer)
     library_id: Mapped[uuid.UUID | None] = mapped_column(
         Uuid(), ForeignKey("library_primitives.id", ondelete="SET NULL")
     )
-    created_by: Mapped[uuid.UUID] = mapped_column(
-        Uuid(), ForeignKey("users.id", ondelete="RESTRICT"), nullable=False
-    )
+    created_by: Mapped[uuid.UUID] = mapped_column(Uuid(), ForeignKey("users.id", ondelete="RESTRICT"), nullable=False)

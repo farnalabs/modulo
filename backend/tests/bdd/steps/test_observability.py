@@ -40,6 +40,7 @@ def ctx():
 # ============================================================================
 
 
+
 @given("the observability module is active")
 def observability_active(ctx):
     ctx["observability_active"] = True
@@ -176,6 +177,7 @@ def response_has_sample_span(ctx):
 # ============================================================================
 
 
+
 @given("OpenTelemetry is configured")
 def otel_configured(ctx):
     ctx["otel_enabled"] = True
@@ -305,6 +307,7 @@ def no_otel_spans_exported(ctx):
 # ============================================================================
 # run_logs.feature — Run Log Streaming
 # ============================================================================
+
 
 
 @given("a pipeline run is in progress")

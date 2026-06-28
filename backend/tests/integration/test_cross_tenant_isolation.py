@@ -60,8 +60,9 @@ async def _seed_org(engine: AsyncEngine, name: str) -> uuid.UUID:
     async with engine.connect() as conn:
         async with conn.begin():
             await conn.execute(
-                text("INSERT INTO organisations (id, name, slug, settings_json) "
-                     "VALUES (:id, :name, :slug, '{}'::json)"),
+                text(
+                    "INSERT INTO organisations (id, name, slug, settings_json) VALUES (:id, :name, :slug, '{}'::json)"
+                ),
                 {"id": str(org_id), "name": name, "slug": f"{name}-{org_id.hex[:8]}"},
             )
     return org_id
@@ -72,11 +73,12 @@ async def _seed_user(engine: AsyncEngine, org_id: uuid.UUID, email: str) -> uuid
     async with engine.connect() as conn:
         async with conn.begin():
             await conn.execute(
-                text("INSERT INTO users (id, organisation_id, email, display_name, "
-                     "org_role, auth_provider, active, password_hash) "
-                     "VALUES (:id, :oid, :email, :name, 'admin', 'local', true, 'hash')"),
-                {"id": str(user_id), "oid": str(org_id), "email": email,
-                 "name": f"Admin {email}"},
+                text(
+                    "INSERT INTO users (id, organisation_id, email, display_name, "
+                    "org_role, auth_provider, active, password_hash) "
+                    "VALUES (:id, :oid, :email, :name, 'admin', 'local', true, 'hash')"
+                ),
+                {"id": str(user_id), "oid": str(org_id), "email": email, "name": f"Admin {email}"},
             )
     return user_id
 
@@ -121,7 +123,9 @@ async def user_b(db_engine: AsyncEngine, org_b: uuid.UUID) -> uuid.UUID:
 
 @pytest_asyncio.fixture(scope="module")
 async def org_a_data(
-    db_engine: AsyncEngine, org_a: uuid.UUID, user_a: uuid.UUID,
+    db_engine: AsyncEngine,
+    org_a: uuid.UUID,
+    user_a: uuid.UUID,
 ) -> dict[str, uuid.UUID]:
     """Seed OrgA with entities across all org-scoped types."""
     factory = async_sessionmaker(db_engine, expire_on_commit=False)
@@ -130,37 +134,56 @@ async def org_a_data(
         async with session.begin():
             await set_rls_org(session, org_a)
 
-            schema = await create_schema(
-                session, org_id=org_a, name="OrgA-Schema", created_by=user_a)
+            schema = await create_schema(session, org_id=org_a, name="OrgA-Schema", created_by=user_a)
             ids["schema"] = schema.id
             await create_schema_version(
-                session, org_id=org_a, schema_id=schema.id,
-                version="1.0.0", version_number=1,
-                definition_json={"type": "object"}, created_by=user_a)
+                session,
+                org_id=org_a,
+                schema_id=schema.id,
+                version="1.0.0",
+                version_number=1,
+                definition_json={"type": "object"},
+                created_by=user_a,
+            )
             ids["schema_version"] = schema.id  # simplified
 
             mb = await create_model_backend(
-                session, org_id=org_a, name="orga-stub",
-                display_name="OrgA Stub", provider="ollama",
-                model_id="stub-model", credentials_ciphertext=b"encrypted",
-                created_by=user_a)
+                session,
+                org_id=org_a,
+                name="orga-stub",
+                display_name="OrgA Stub",
+                provider="ollama",
+                model_id="stub-model",
+                credentials_ciphertext=b"encrypted",
+                created_by=user_a,
+            )
             ids["model_backend"] = mb.id
 
             agent = await create_agent(
-                session, org_id=org_a, name="OrgA-Agent", created_by=user_a,
-                input_schema_id=schema.id, input_schema_version="1.0.0",
-                output_schema_id=schema.id, output_schema_version="1.0.0",
-                prompt_template="You are a test agent.", model_backend_id=mb.id)
+                session,
+                org_id=org_a,
+                name="OrgA-Agent",
+                created_by=user_a,
+                input_schema_id=schema.id,
+                input_schema_version="1.0.0",
+                output_schema_id=schema.id,
+                output_schema_version="1.0.0",
+                prompt_template="You are a test agent.",
+                model_backend_id=mb.id,
+            )
             ids["agent"] = agent.id
 
-            pipeline = await create_pipeline(
-                session, org_id=org_a, name="OrgA-Pipeline", created_by=user_a)
+            pipeline = await create_pipeline(session, org_id=org_a, name="OrgA-Pipeline", created_by=user_a)
             ids["pipeline"] = pipeline.id
 
             ci = await create_connector_instance(
-                session, org_id=org_a, name="OrgA-Connector",
-                connector_type_id="stub", owner_id=user_a,
-                credentials_ciphertext=b"cipher")
+                session,
+                org_id=org_a,
+                name="OrgA-Connector",
+                connector_type_id="stub",
+                owner_id=user_a,
+                credentials_ciphertext=b"cipher",
+            )
             ids["connector_instance"] = ci.id
     return ids
 
@@ -172,9 +195,10 @@ async def org_a_data(
 
 @pytest.mark.usefixtures("org_a_data")
 class TestCrossTenantPipelines:
-
     async def test_list_pipelines_hides_org_a(
-        self, db_engine: AsyncEngine, org_b: uuid.UUID,
+        self,
+        db_engine: AsyncEngine,
+        org_b: uuid.UUID,
     ) -> None:
         factory = async_sessionmaker(db_engine, expire_on_commit=False)
         async with factory() as session:
@@ -184,7 +208,9 @@ class TestCrossTenantPipelines:
                 assert result.total == 0
 
     async def test_get_pipeline_returns_none_for_org_a_id(
-        self, db_engine: AsyncEngine, org_b: uuid.UUID,
+        self,
+        db_engine: AsyncEngine,
+        org_b: uuid.UUID,
         org_a_data: dict[str, uuid.UUID],
     ) -> None:
         factory = async_sessionmaker(db_engine, expire_on_commit=False)
@@ -195,7 +221,9 @@ class TestCrossTenantPipelines:
                 assert result is None
 
     async def test_update_pipeline_returns_none_for_org_a_id(
-        self, db_engine: AsyncEngine, org_b: uuid.UUID,
+        self,
+        db_engine: AsyncEngine,
+        org_b: uuid.UUID,
         org_a_data: dict[str, uuid.UUID],
     ) -> None:
         factory = async_sessionmaker(db_engine, expire_on_commit=False)
@@ -206,7 +234,9 @@ class TestCrossTenantPipelines:
                 assert result is None
 
     async def test_delete_pipeline_returns_false_for_org_a_id(
-        self, db_engine: AsyncEngine, org_b: uuid.UUID,
+        self,
+        db_engine: AsyncEngine,
+        org_b: uuid.UUID,
         org_a_data: dict[str, uuid.UUID],
     ) -> None:
         factory = async_sessionmaker(db_engine, expire_on_commit=False)
@@ -218,9 +248,10 @@ class TestCrossTenantPipelines:
 
 
 class TestCrossTenantAgents:
-
     async def test_list_agents_hides_org_a(
-        self, db_engine: AsyncEngine, org_b: uuid.UUID,
+        self,
+        db_engine: AsyncEngine,
+        org_b: uuid.UUID,
     ) -> None:
         factory = async_sessionmaker(db_engine, expire_on_commit=False)
         async with factory() as session:
@@ -230,7 +261,9 @@ class TestCrossTenantAgents:
                 assert result.total == 0
 
     async def test_get_agent_returns_none_for_org_a_id(
-        self, db_engine: AsyncEngine, org_b: uuid.UUID,
+        self,
+        db_engine: AsyncEngine,
+        org_b: uuid.UUID,
         org_a_data: dict[str, uuid.UUID],
     ) -> None:
         factory = async_sessionmaker(db_engine, expire_on_commit=False)
@@ -242,9 +275,10 @@ class TestCrossTenantAgents:
 
 
 class TestCrossTenantSchemas:
-
     async def test_list_schemas_hides_org_a(
-        self, db_engine: AsyncEngine, org_b: uuid.UUID,
+        self,
+        db_engine: AsyncEngine,
+        org_b: uuid.UUID,
     ) -> None:
         factory = async_sessionmaker(db_engine, expire_on_commit=False)
         async with factory() as session:
@@ -254,7 +288,9 @@ class TestCrossTenantSchemas:
                 assert result.total == 0
 
     async def test_get_schema_returns_none_for_org_a_id(
-        self, db_engine: AsyncEngine, org_b: uuid.UUID,
+        self,
+        db_engine: AsyncEngine,
+        org_b: uuid.UUID,
         org_a_data: dict[str, uuid.UUID],
     ) -> None:
         factory = async_sessionmaker(db_engine, expire_on_commit=False)
@@ -266,9 +302,10 @@ class TestCrossTenantSchemas:
 
 
 class TestCrossTenantConnectorInstances:
-
     async def test_list_connector_instances_hides_org_a(
-        self, db_engine: AsyncEngine, org_b: uuid.UUID,
+        self,
+        db_engine: AsyncEngine,
+        org_b: uuid.UUID,
     ) -> None:
         factory = async_sessionmaker(db_engine, expire_on_commit=False)
         async with factory() as session:
@@ -278,7 +315,9 @@ class TestCrossTenantConnectorInstances:
                 assert result.total == 0
 
     async def test_get_connector_instance_returns_none_for_org_a_id(
-        self, db_engine: AsyncEngine, org_b: uuid.UUID,
+        self,
+        db_engine: AsyncEngine,
+        org_b: uuid.UUID,
         org_a_data: dict[str, uuid.UUID],
     ) -> None:
         factory = async_sessionmaker(db_engine, expire_on_commit=False)
@@ -295,9 +334,10 @@ class TestCrossTenantConnectorInstances:
 
 
 class TestPositiveControl:
-
     async def test_orga_sees_own_pipeline(
-        self, db_engine: AsyncEngine, org_a: uuid.UUID,
+        self,
+        db_engine: AsyncEngine,
+        org_a: uuid.UUID,
         org_a_data: dict[str, uuid.UUID],
     ) -> None:
         factory = async_sessionmaker(db_engine, expire_on_commit=False)
@@ -309,7 +349,9 @@ class TestPositiveControl:
                 assert result.name == "OrgA-Pipeline"
 
     async def test_orga_sees_own_agent(
-        self, db_engine: AsyncEngine, org_a: uuid.UUID,
+        self,
+        db_engine: AsyncEngine,
+        org_a: uuid.UUID,
         org_a_data: dict[str, uuid.UUID],
     ) -> None:
         factory = async_sessionmaker(db_engine, expire_on_commit=False)
@@ -321,7 +363,9 @@ class TestPositiveControl:
                 assert result.name == "OrgA-Agent"
 
     async def test_orga_sees_own_schema(
-        self, db_engine: AsyncEngine, org_a: uuid.UUID,
+        self,
+        db_engine: AsyncEngine,
+        org_a: uuid.UUID,
         org_a_data: dict[str, uuid.UUID],
     ) -> None:
         factory = async_sessionmaker(db_engine, expire_on_commit=False)
@@ -333,7 +377,9 @@ class TestPositiveControl:
                 assert result.name == "OrgA-Schema"
 
     async def test_orga_sees_own_connector_instance(
-        self, db_engine: AsyncEngine, org_a: uuid.UUID,
+        self,
+        db_engine: AsyncEngine,
+        org_a: uuid.UUID,
         org_a_data: dict[str, uuid.UUID],
     ) -> None:
         factory = async_sessionmaker(db_engine, expire_on_commit=False)

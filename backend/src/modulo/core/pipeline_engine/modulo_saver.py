@@ -12,6 +12,7 @@ import json
 import logging
 import uuid
 from collections.abc import AsyncIterator, Sequence
+from contextlib import asynccontextmanager
 from typing import Any, cast
 
 from cryptography.fernet import Fernet
@@ -214,6 +215,41 @@ class ModuloPostgresSaver(AsyncPostgresSaver):
                 _log.warning("checkpoint.decrypt_fallback", exc_info=True)
         return _deserialize_checkpoint(raw)
 
+    def _encrypt_blob(self, blob: bytes) -> bytes:
+        if self._fernet is not None:
+            return self._fernet.encrypt(blob)
+        return blob
+
+    def _decrypt_blobs(self, blobs: Any) -> dict[str, Any] | None:
+        if not blobs:
+            return None
+        result: dict[str, Any] = {}
+        for blob in blobs:
+            if len(blob) >= 3:
+                raw = blob[2] if blob[2] else None
+                if raw is not None and self._fernet is not None:
+                    try:
+                        raw = self._fernet.decrypt(raw)
+                    except Exception:
+                        _log.warning("blob.decrypt_fallback", exc_info=True)
+                result[blob[0].decode()] = raw
+        return result
+
+    def _decrypt_writes(self, writes: Any) -> list[tuple[str, str, bytes]] | None:
+        if not writes:
+            return None
+        result: list[tuple[str, str, bytes]] = []
+        for w in writes:
+            if len(w) >= 4:
+                raw = w[3]
+                if self._fernet is not None:
+                    try:
+                        raw = self._fernet.decrypt(raw)
+                    except Exception:
+                        _log.warning("write.decrypt_fallback", exc_info=True)
+                result.append((w[1].decode(), w[2].decode(), raw))
+        return result
+
     # ------------------------------------------------------------------
     # Override: setup — run modified migrations
     # ------------------------------------------------------------------
@@ -403,7 +439,9 @@ class ModuloPostgresSaver(AsyncPostgresSaver):
         checkpoint_id = config["configurable"]["checkpoint_id"]
 
         async with self._cursor() as cur:
-            for idx, (channel, blob) in enumerate(writes):
+            for idx, (channel, value) in enumerate(writes):
+                type_str, blob_bytes = self.serde.dumps_typed(value)
+                encrypted = self._encrypt_blob(blob_bytes)
                 await cur.execute(
                     self.UPSERT_CHECKPOINT_WRITES_SQL,
                     (
@@ -414,9 +452,31 @@ class ModuloPostgresSaver(AsyncPostgresSaver):
                         task_id,
                         idx,
                         channel,
-                        self.serde.dumps(blob) if hasattr(self, "serde") else str(blob),  # type: ignore[attr-defined]
+                        type_str,
+                        encrypted,
                     ),
                 )
+
+    # ------------------------------------------------------------------
+    # Override: from_conn_string — passes org_id and fernet_key
+    # ------------------------------------------------------------------
+
+    @classmethod
+    @asynccontextmanager
+    async def from_conn_string(  # type: ignore[override]
+        cls,
+        conn_string: str,
+        *,
+        organisation_id: uuid.UUID,
+        fernet_key: str | None = None,
+    ) -> AsyncIterator[ModuloPostgresSaver]:
+        """Create a ModuloPostgresSaver from a connection string."""
+        async with AsyncPostgresSaver.from_conn_string(conn_string) as base:
+            yield cls(
+                base.conn,
+                organisation_id=organisation_id,
+                fernet_key=fernet_key,
+            )
 
     # ------------------------------------------------------------------
     # Sync overrides (delegate to async with org_id enforcement)
@@ -481,22 +541,8 @@ class ModuloPostgresSaver(AsyncPostgresSaver):
             "Use the async variants (aget_tuple, aput, etc.) instead."
         )
 
-    @staticmethod
-    def _load_blobs(blobs: Any) -> dict[str, Any] | None:  # type: ignore[override]
-        if not blobs:
-            return None
-        result: dict[str, Any] = {}
-        for blob in blobs:
-            if len(blob) >= 3:
-                result[blob[0].decode()] = blob[2] if blob[2] else None
-        return result
+    def _load_blobs(self, blobs: Any) -> dict[str, Any] | None:  # type: ignore[override]
+        return self._decrypt_blobs(blobs)
 
-    @staticmethod
-    def _load_writes(writes: Any) -> list[tuple[str, str, bytes]] | None:  # type: ignore[override, valid-type]
-        if not writes:
-            return None
-        result: list[tuple[str, str, bytes]] = []
-        for w in writes:
-            if len(w) >= 4:
-                result.append((w[1].decode(), w[2].decode(), w[3]))
-        return result
+    def _load_writes(self, writes: Any) -> list[tuple[str, str, bytes]] | None:  # type: ignore[override, valid-type]
+        return self._decrypt_writes(writes)

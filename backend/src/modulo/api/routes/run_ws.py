@@ -2,7 +2,8 @@
 
 URL: GET /api/v1/runs/{run_id}/ws?since_event_seq=N&token=<ws-token>
 
-Auth: Short-lived ws-token (15 min TTL) obtained from POST /api/v1/auth/ws-token.
+Auth: Opaque 60s single-use token (preferred) or legacy JWT fallback,
+obtained from POST /api/v1/auth/ws-token.
 Passed as ``token`` query parameter (WebSocket handshake does not support
 Authorization headers).
 
@@ -26,7 +27,8 @@ from jose import JWTError
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from modulo.api.dependencies import _get_engine
-from modulo.auth.jwt import decode_principal
+from modulo.auth.jwt import AuthenticatedPrincipal, decode_principal
+from modulo.auth.ws_token import consume_ws_token
 from modulo.core.pipeline_engine.event_broker import get_registry
 from modulo.db.crud.run import get_run
 from modulo.db.rls import set_rls_org
@@ -51,16 +53,36 @@ async def run_websocket(
     Sends JSON objects conforming to RunEvent.to_json() schema.
     Closes with code 4001 on auth failure, 4004 on unknown run.
     """
-    # --- Auth (purpose="ws" enforced) ---
+    # --- Auth ---
     if token is None:
         await ws.close(code=4001)
         return
-    try:
-        settings = get_settings()
-        principal = decode_principal(token, settings.secret_key, allowed_purposes=["ws"])
-    except JWTError:
-        await ws.close(code=4001)
-        return
+    settings = get_settings()
+
+    # Try opaque single-use token first, fall back to JWT for backward compat.
+    principal: AuthenticatedPrincipal | None = None
+    if settings.redis_url:
+        try:
+            from redis.asyncio import Redis
+
+            redis = Redis.from_url(settings.redis_url, decode_responses=False)
+            payload = await consume_ws_token(redis, token)
+            if payload is not None:
+                principal = AuthenticatedPrincipal(
+                    username=payload["sub"],
+                    organisation_id=uuid.UUID(payload["org_id"]),
+                    user_id=uuid.UUID(payload["user_id"]),
+                    org_role=payload["org_role"],
+                )
+        except Exception as exc:
+            _log.warning("ws_token.consume_failed", extra={"error": str(exc)})
+
+    if principal is None:
+        try:
+            principal = decode_principal(token, settings.secret_key, allowed_purposes=["ws"])
+        except JWTError:
+            await ws.close(code=4001)
+            return
 
     # Guard against absurd replay-range values.
     if since_event_seq < 0:

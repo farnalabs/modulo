@@ -9,6 +9,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.api.dependencies import get_db_session
+from modulo.api.middleware.sensitive_mask import SENSITIVE_VALUE_MASK
 from modulo.auth.dependencies import get_current_user
 from modulo.auth.jwt import AuthenticatedPrincipal
 from modulo.db.crud.observability import get_otel_config, update_otel_config
@@ -22,7 +23,7 @@ _SENSITIVE_HEADER_KEYS = frozenset({"authorization", "x-api-key", "api-key", "x-
 
 
 def _mask_headers(headers: dict[str, str]) -> dict[str, str]:
-    return {k: "••••••" if k.lower() in _SENSITIVE_HEADER_KEYS else v for k, v in headers.items()}
+    return {k: SENSITIVE_VALUE_MASK if k.lower() in _SENSITIVE_HEADER_KEYS else v for k, v in headers.items()}
 
 
 class OtelSettingsUpdate(BaseModel):

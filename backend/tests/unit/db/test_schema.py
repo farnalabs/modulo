@@ -105,13 +105,9 @@ def test_reviewed_security_and_provenance_contracts() -> None:
         "average_rating",
         "review_count",
     } <= set(tables["library_primitives"].c.keys())
-    assert {"received_at", "validation_result", "error_detail"} <= set(
-        tables["trigger_events"].c.keys()
-    )
+    assert {"received_at", "validation_result", "error_detail"} <= set(tables["trigger_events"].c.keys())
 
-    agent_foreign_keys = {
-        constraint.name for constraint in tables["agents"].foreign_key_constraints
-    }
+    agent_foreign_keys = {constraint.name for constraint in tables["agents"].foreign_key_constraints}
     assert "fk_agents_input_schema_version" in agent_foreign_keys
     assert "fk_agents_output_schema_version" in agent_foreign_keys
 
@@ -126,14 +122,10 @@ def test_visibility_and_trigger_outcome_constraints_are_complete() -> None:
         "stages",
     ):
         constraint_names = {constraint.name for constraint in tables[name].constraints}
-        assert any(
-            value is not None and value.endswith("_team_owner") for value in constraint_names
-        )
+        assert any(value is not None and value.endswith("_team_owner") for value in constraint_names)
 
     trigger_checks = " ".join(
-        str(constraint.sqltext)
-        for constraint in tables["trigger_events"].constraints
-        if hasattr(constraint, "sqltext")
+        str(constraint.sqltext) for constraint in tables["trigger_events"].constraints if hasattr(constraint, "sqltext")
     )
     for outcome in (
         "passed",

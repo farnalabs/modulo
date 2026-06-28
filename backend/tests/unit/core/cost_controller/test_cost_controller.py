@@ -47,13 +47,9 @@ def _make_daily_count_row(**kw: object) -> MagicMock:
 class TestGetOrCreateDailyCount:
     async def test_returns_existing_row(self, mock_session: AsyncMock) -> None:
         existing = _make_daily_count_row(run_count=5, total_spend_usd=Decimal("12.50"))
-        mock_session.execute = AsyncMock(
-            return_value=MagicMock(scalar_one_or_none=MagicMock(return_value=existing))
-        )
+        mock_session.execute = AsyncMock(return_value=MagicMock(scalar_one_or_none=MagicMock(return_value=existing)))
 
-        result = await get_or_create_daily_count(
-            mock_session, org_id=_ORG_ID, run_date=_TODAY, team_id=None
-        )
+        result = await get_or_create_daily_count(mock_session, org_id=_ORG_ID, run_date=_TODAY, team_id=None)
 
         assert result is existing
         assert result.run_count == 5
@@ -64,9 +60,7 @@ class TestGetOrCreateDailyCount:
         lock = MagicMock()
         mock_session.execute = AsyncMock(side_effect=[first, lock])
 
-        result = await get_or_create_daily_count(
-            mock_session, org_id=_ORG_ID, run_date=_TODAY, team_id=None
-        )
+        result = await get_or_create_daily_count(mock_session, org_id=_ORG_ID, run_date=_TODAY, team_id=None)
 
         assert result.run_count == 0
         assert result.total_spend_usd == Decimal("0")
@@ -78,22 +72,16 @@ class TestGetOrCreateDailyCount:
         lock = MagicMock()
         mock_session.execute = AsyncMock(side_effect=[first, lock])
 
-        result = await get_or_create_daily_count(
-            mock_session, org_id=_ORG_ID, run_date=_TODAY, team_id=_TEAM_ID
-        )
+        result = await get_or_create_daily_count(mock_session, org_id=_ORG_ID, run_date=_TODAY, team_id=_TEAM_ID)
 
         assert result.team_id == _TEAM_ID
         mock_session.add.assert_called_once()
 
     async def test_uses_select_for_update(self, mock_session: AsyncMock) -> None:
         existing = _make_daily_count_row()
-        mock_session.execute = AsyncMock(
-            return_value=MagicMock(scalar_one_or_none=MagicMock(return_value=existing))
-        )
+        mock_session.execute = AsyncMock(return_value=MagicMock(scalar_one_or_none=MagicMock(return_value=existing)))
 
-        await get_or_create_daily_count(
-            mock_session, org_id=_ORG_ID, run_date=_TODAY, team_id=None
-        )
+        await get_or_create_daily_count(mock_session, org_id=_ORG_ID, run_date=_TODAY, team_id=None)
 
         call = mock_session.execute.call_args[0][0]
         assert "FOR UPDATE" in str(call).upper()
@@ -121,10 +109,12 @@ class TestCheckAndRecordSpend:
         org_count = _make_daily_count_row(run_count=2, total_spend_usd=Decimal("10"))
         org_limit_result = MagicMock(scalar_one_or_none=MagicMock(return_value=None))
 
-        mock_session.execute = AsyncMock(side_effect=[
-            MagicMock(scalar_one_or_none=MagicMock(return_value=org_count)),
-            org_limit_result,
-        ])
+        mock_session.execute = AsyncMock(
+            side_effect=[
+                MagicMock(scalar_one_or_none=MagicMock(return_value=org_count)),
+                org_limit_result,
+            ]
+        )
 
         approved, reason = await check_and_record_spend(
             mock_session, org_id=_ORG_ID, cost_usd=Decimal("5.50"), team_id=None
@@ -136,16 +126,16 @@ class TestCheckAndRecordSpend:
         assert org_count.run_count == 3
         mock_session.flush.assert_awaited_once()
 
-    async def test_rejects_spend_over_org_limit(
-        self, mock_session: AsyncMock
-    ) -> None:
+    async def test_rejects_spend_over_org_limit(self, mock_session: AsyncMock) -> None:
         org_count = _make_daily_count_row(run_count=0, total_spend_usd=Decimal("90"))
         org_limit_result = MagicMock(scalar_one_or_none=MagicMock(return_value=Decimal("100")))
 
-        mock_session.execute = AsyncMock(side_effect=[
-            MagicMock(scalar_one_or_none=MagicMock(return_value=org_count)),
-            org_limit_result,
-        ])
+        mock_session.execute = AsyncMock(
+            side_effect=[
+                MagicMock(scalar_one_or_none=MagicMock(return_value=org_count)),
+                org_limit_result,
+            ]
+        )
 
         approved, reason = await check_and_record_spend(
             mock_session, org_id=_ORG_ID, cost_usd=Decimal("20"), team_id=None
@@ -159,10 +149,12 @@ class TestCheckAndRecordSpend:
         org_count = _make_daily_count_row(run_count=0, total_spend_usd=Decimal("90"))
         org_limit_result = MagicMock(scalar_one_or_none=MagicMock(return_value=Decimal("100")))
 
-        mock_session.execute = AsyncMock(side_effect=[
-            MagicMock(scalar_one_or_none=MagicMock(return_value=org_count)),
-            org_limit_result,
-        ])
+        mock_session.execute = AsyncMock(
+            side_effect=[
+                MagicMock(scalar_one_or_none=MagicMock(return_value=org_count)),
+                org_limit_result,
+            ]
+        )
 
         approved, reason = await check_and_record_spend(
             mock_session, org_id=_ORG_ID, cost_usd=Decimal("10"), team_id=None
@@ -172,22 +164,20 @@ class TestCheckAndRecordSpend:
         assert reason is None
         assert org_count.total_spend_usd == Decimal("100")
 
-    async def test_approves_with_team_under_both_limits(
-        self, mock_session: AsyncMock
-    ) -> None:
+    async def test_approves_with_team_under_both_limits(self, mock_session: AsyncMock) -> None:
         org_count = _make_daily_count_row(run_count=1, total_spend_usd=Decimal("30"))
         org_limit_result = MagicMock(scalar_one_or_none=MagicMock(return_value=Decimal("200")))
-        team_count = _make_daily_count_row(
-            team_id=_TEAM_ID, run_count=0, total_spend_usd=Decimal("10")
-        )
+        team_count = _make_daily_count_row(team_id=_TEAM_ID, run_count=0, total_spend_usd=Decimal("10"))
         team_limit_result = MagicMock(scalar_one_or_none=MagicMock(return_value=Decimal("50")))
 
-        mock_session.execute = AsyncMock(side_effect=[
-            MagicMock(scalar_one_or_none=MagicMock(return_value=org_count)),
-            org_limit_result,
-            MagicMock(scalar_one_or_none=MagicMock(return_value=team_count)),
-            team_limit_result,
-        ])
+        mock_session.execute = AsyncMock(
+            side_effect=[
+                MagicMock(scalar_one_or_none=MagicMock(return_value=org_count)),
+                org_limit_result,
+                MagicMock(scalar_one_or_none=MagicMock(return_value=team_count)),
+                team_limit_result,
+            ]
+        )
 
         approved, reason = await check_and_record_spend(
             mock_session, org_id=_ORG_ID, cost_usd=Decimal("5"), team_id=_TEAM_ID
@@ -200,22 +190,20 @@ class TestCheckAndRecordSpend:
         assert team_count.total_spend_usd == Decimal("15")
         assert team_count.run_count == 1
 
-    async def test_rejects_spend_over_team_limit(
-        self, mock_session: AsyncMock
-    ) -> None:
+    async def test_rejects_spend_over_team_limit(self, mock_session: AsyncMock) -> None:
         org_count = _make_daily_count_row(run_count=1, total_spend_usd=Decimal("5"))
         org_limit_result = MagicMock(scalar_one_or_none=MagicMock(return_value=Decimal("200")))
-        team_count = _make_daily_count_row(
-            team_id=_TEAM_ID, run_count=2, total_spend_usd=Decimal("45")
-        )
+        team_count = _make_daily_count_row(team_id=_TEAM_ID, run_count=2, total_spend_usd=Decimal("45"))
         team_limit_result = MagicMock(scalar_one_or_none=MagicMock(return_value=Decimal("50")))
 
-        mock_session.execute = AsyncMock(side_effect=[
-            MagicMock(scalar_one_or_none=MagicMock(return_value=org_count)),
-            org_limit_result,
-            MagicMock(scalar_one_or_none=MagicMock(return_value=team_count)),
-            team_limit_result,
-        ])
+        mock_session.execute = AsyncMock(
+            side_effect=[
+                MagicMock(scalar_one_or_none=MagicMock(return_value=org_count)),
+                org_limit_result,
+                MagicMock(scalar_one_or_none=MagicMock(return_value=team_count)),
+                team_limit_result,
+            ]
+        )
 
         approved, reason = await check_and_record_spend(
             mock_session, org_id=_ORG_ID, cost_usd=Decimal("10"), team_id=_TEAM_ID
@@ -227,22 +215,20 @@ class TestCheckAndRecordSpend:
         assert org_count.run_count == 1
         assert team_count.run_count == 2
 
-    async def test_approves_when_both_limits_none(
-        self, mock_session: AsyncMock
-    ) -> None:
+    async def test_approves_when_both_limits_none(self, mock_session: AsyncMock) -> None:
         org_count = _make_daily_count_row(run_count=0, total_spend_usd=Decimal("0"))
         org_limit_result = MagicMock(scalar_one_or_none=MagicMock(return_value=None))
-        team_count = _make_daily_count_row(
-            team_id=_TEAM_ID, run_count=0, total_spend_usd=Decimal("0")
-        )
+        team_count = _make_daily_count_row(team_id=_TEAM_ID, run_count=0, total_spend_usd=Decimal("0"))
         team_limit_result = MagicMock(scalar_one_or_none=MagicMock(return_value=None))
 
-        mock_session.execute = AsyncMock(side_effect=[
-            MagicMock(scalar_one_or_none=MagicMock(return_value=org_count)),
-            org_limit_result,
-            MagicMock(scalar_one_or_none=MagicMock(return_value=team_count)),
-            team_limit_result,
-        ])
+        mock_session.execute = AsyncMock(
+            side_effect=[
+                MagicMock(scalar_one_or_none=MagicMock(return_value=org_count)),
+                org_limit_result,
+                MagicMock(scalar_one_or_none=MagicMock(return_value=team_count)),
+                team_limit_result,
+            ]
+        )
 
         approved, reason = await check_and_record_spend(
             mock_session, org_id=_ORG_ID, cost_usd=Decimal("99999"), team_id=_TEAM_ID
@@ -284,14 +270,14 @@ class TestGetCostReport:
         row.total_spend_usd = Decimal("150")
         row.total_runs = 12
 
-        mock_session.execute = AsyncMock(side_effect=[
-            MagicMock(all=MagicMock(return_value=[row])),
-            self._make_team_result(team),
-        ])
-
-        report = await get_cost_report(
-            mock_session, org_id=_ORG_ID, group_by="team", period="month"
+        mock_session.execute = AsyncMock(
+            side_effect=[
+                MagicMock(all=MagicMock(return_value=[row])),
+                self._make_team_result(team),
+            ]
         )
+
+        report = await get_cost_report(mock_session, org_id=_ORG_ID, group_by="team", period="month")
 
         assert len(report) == 1
         assert report[0]["entity_id"] == str(_TEAM_ID)
@@ -299,23 +285,21 @@ class TestGetCostReport:
         assert report[0]["total_spend_usd"] == 150.0
         assert report[0]["total_runs"] == 12
 
-    async def test_group_by_team_unknown_team_name(
-        self, mock_session: AsyncMock
-    ) -> None:
+    async def test_group_by_team_unknown_team_name(self, mock_session: AsyncMock) -> None:
         row = MagicMock()
         row.team_id = _TEAM_ID
         row.total_spend_usd = Decimal("50")
         row.total_runs = 3
 
         empty_scalars = MagicMock(all=MagicMock(return_value=[]))
-        mock_session.execute = AsyncMock(side_effect=[
-            MagicMock(all=MagicMock(return_value=[row])),
-            MagicMock(scalars=MagicMock(return_value=empty_scalars)),
-        ])
-
-        report = await get_cost_report(
-            mock_session, org_id=_ORG_ID, group_by="team", period="month"
+        mock_session.execute = AsyncMock(
+            side_effect=[
+                MagicMock(all=MagicMock(return_value=[row])),
+                MagicMock(scalars=MagicMock(return_value=empty_scalars)),
+            ]
         )
+
+        report = await get_cost_report(mock_session, org_id=_ORG_ID, group_by="team", period="month")
 
         assert report[0]["entity_name"] == "Unknown"
 
@@ -326,14 +310,14 @@ class TestGetCostReport:
 
         org_result = MagicMock(scalar_one_or_none=MagicMock(return_value="My Org"))
 
-        mock_session.execute = AsyncMock(side_effect=[
-            MagicMock(one=MagicMock(return_value=row)),
-            org_result,
-        ])
-
-        report = await get_cost_report(
-            mock_session, org_id=_ORG_ID, group_by="org", period="month"
+        mock_session.execute = AsyncMock(
+            side_effect=[
+                MagicMock(one=MagicMock(return_value=row)),
+                org_result,
+            ]
         )
+
+        report = await get_cost_report(mock_session, org_id=_ORG_ID, group_by="org", period="month")
 
         assert len(report) == 1
         assert report[0]["entity_id"] == str(_ORG_ID)
@@ -348,23 +332,21 @@ class TestGetCostReport:
 
         org_result = MagicMock(scalar_one_or_none=MagicMock(return_value=None))
 
-        mock_session.execute = AsyncMock(side_effect=[
-            MagicMock(one=MagicMock(return_value=row)),
-            org_result,
-        ])
-
-        report = await get_cost_report(
-            mock_session, org_id=_ORG_ID, group_by="org", period="month"
+        mock_session.execute = AsyncMock(
+            side_effect=[
+                MagicMock(one=MagicMock(return_value=row)),
+                org_result,
+            ]
         )
+
+        report = await get_cost_report(mock_session, org_id=_ORG_ID, group_by="org", period="month")
 
         assert report[0]["total_spend_usd"] == 0.0
         assert report[0]["total_runs"] == 0
         assert report[0]["entity_name"] == "Unknown"
 
     @pytest.mark.parametrize("period", ["day", "week", "month", "year"])
-    async def test_all_periods(
-        self, mock_session: AsyncMock, period: str
-    ) -> None:
+    async def test_all_periods(self, mock_session: AsyncMock, period: str) -> None:
         row = MagicMock()
         row.team_id = _TEAM_ID
         row.total_spend_usd = Decimal("10")
@@ -374,12 +356,12 @@ class TestGetCostReport:
         team.id = _TEAM_ID
         team.name = "Test Team"
 
-        mock_session.execute = AsyncMock(side_effect=[
-            MagicMock(all=MagicMock(return_value=[row])),
-            self._make_team_result(team),
-        ])
-
-        report = await get_cost_report(
-            mock_session, org_id=_ORG_ID, group_by="team", period=period
+        mock_session.execute = AsyncMock(
+            side_effect=[
+                MagicMock(all=MagicMock(return_value=[row])),
+                self._make_team_result(team),
+            ]
         )
+
+        report = await get_cost_report(mock_session, org_id=_ORG_ID, group_by="team", period=period)
         assert len(report) == 1

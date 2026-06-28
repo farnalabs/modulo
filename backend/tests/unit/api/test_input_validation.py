@@ -39,6 +39,7 @@ def _make_settings() -> Settings:
         secret_key=_VALID_32,
         fernet_key=_VALID_32,
         modulo_admin_password="testpass",
+        modulo_license_key="test-license-key",
     )
 
 
@@ -185,32 +186,41 @@ def test_schema_create_valid(client: TestClient) -> None:
 
 def test_eval_create_invalid_eval_type(client: TestClient) -> None:
     with patch("modulo.api.routes.evals.set_rls_org"):
-        resp = client.post("/api/v1/evals", json={
-            "pipeline_id": str(uuid.uuid4()),
-            "name": "Test Eval",
-            "eval_type": "invalid_type",
-        })
+        resp = client.post(
+            "/api/v1/evals",
+            json={
+                "pipeline_id": str(uuid.uuid4()),
+                "name": "Test Eval",
+                "eval_type": "invalid_type",
+            },
+        )
     assert resp.status_code == 422
 
 
 def test_eval_create_empty_name(client: TestClient) -> None:
     with patch("modulo.api.routes.evals.set_rls_org"):
-        resp = client.post("/api/v1/evals", json={
-            "pipeline_id": str(uuid.uuid4()),
-            "name": "",
-            "eval_type": "llm_judge",
-        })
+        resp = client.post(
+            "/api/v1/evals",
+            json={
+                "pipeline_id": str(uuid.uuid4()),
+                "name": "",
+                "eval_type": "llm_judge",
+            },
+        )
     assert resp.status_code == 422
 
 
 def test_eval_create_valid_eval_types(client: TestClient) -> None:
     for eval_type in ("llm_judge", "regex", "json_schema", "custom_function"):
         with patch("modulo.api.routes.evals.set_rls_org"):
-            resp = client.post("/api/v1/evals", json={
-                "pipeline_id": str(uuid.uuid4()),
-                "name": "Test Eval",
-                "eval_type": eval_type,
-            })
+            resp = client.post(
+                "/api/v1/evals",
+                json={
+                    "pipeline_id": str(uuid.uuid4()),
+                    "name": "Test Eval",
+                    "eval_type": eval_type,
+                },
+            )
         # Should pass Pydantic validation (not 422). May fail handler
         # with 403 (admin check) but that's fine -- test is about validation.
         assert resp.status_code != 422, f"eval_type={eval_type} got 422: {resp.json()}"
@@ -290,25 +300,33 @@ def test_analyse_import_bundle_valid_shape(client: TestClient) -> None:
 
 
 def test_pipeline_graph_too_many_nodes(client: TestClient) -> None:
-    nodes = [{"id": str(uuid.uuid4()), "node_type": "agent", "agent_id": str(uuid.uuid4()),
-              "position": {"x": 0, "y": 0}} for _ in range(501)]
-    resp = client.patch(f"/api/v1/pipelines/{uuid.uuid4()}/graph", json={
-        "nodes": nodes, "edges": [],
-    })
+    nodes = [
+        {"id": str(uuid.uuid4()), "node_type": "agent", "agent_id": str(uuid.uuid4()), "position": {"x": 0, "y": 0}}
+        for _ in range(501)
+    ]
+    resp = client.patch(
+        f"/api/v1/pipelines/{uuid.uuid4()}/graph",
+        json={
+            "nodes": nodes,
+            "edges": [],
+        },
+    )
     assert resp.status_code == 422
 
 
 def test_pipeline_graph_duplicate_node_ids(client: TestClient) -> None:
     dup_id = str(uuid.uuid4())
     nodes = [
-        {"id": dup_id, "node_type": "agent", "agent_id": str(uuid.uuid4()),
-         "position": {"x": 0, "y": 0}},
-        {"id": dup_id, "node_type": "agent", "agent_id": str(uuid.uuid4()),
-         "position": {"x": 100, "y": 0}},
+        {"id": dup_id, "node_type": "agent", "agent_id": str(uuid.uuid4()), "position": {"x": 0, "y": 0}},
+        {"id": dup_id, "node_type": "agent", "agent_id": str(uuid.uuid4()), "position": {"x": 100, "y": 0}},
     ]
-    resp = client.patch(f"/api/v1/pipelines/{uuid.uuid4()}/graph", json={
-        "nodes": nodes, "edges": [],
-    })
+    resp = client.patch(
+        f"/api/v1/pipelines/{uuid.uuid4()}/graph",
+        json={
+            "nodes": nodes,
+            "edges": [],
+        },
+    )
     assert resp.status_code == 422
 
 
@@ -354,11 +372,14 @@ def test_create_connector_empty_name(client: TestClient) -> None:
         patch("modulo.api.routes.connectors.set_rls_org"),
         patch("modulo.api.routes.connectors.create_connector_instance"),
     ):
-        resp = client.post("/api/v1/connectors", json={
-            "name": "",
-            "connector_type_id": "github",
-            "credentials": "tok",
-        })
+        resp = client.post(
+            "/api/v1/connectors",
+            json={
+                "name": "",
+                "connector_type_id": "github",
+                "credentials": "tok",
+            },
+        )
     assert resp.status_code == 422
 
 
@@ -367,11 +388,14 @@ def test_create_connector_name_too_long(client: TestClient) -> None:
         patch("modulo.api.routes.connectors.set_rls_org"),
         patch("modulo.api.routes.connectors.create_connector_instance"),
     ):
-        resp = client.post("/api/v1/connectors", json={
-            "name": "x" * 256,
-            "connector_type_id": "github",
-            "credentials": "tok",
-        })
+        resp = client.post(
+            "/api/v1/connectors",
+            json={
+                "name": "x" * 256,
+                "connector_type_id": "github",
+                "credentials": "tok",
+            },
+        )
     assert resp.status_code == 422
 
 
@@ -380,11 +404,14 @@ def test_create_connector_type_id_too_long(client: TestClient) -> None:
         patch("modulo.api.routes.connectors.set_rls_org"),
         patch("modulo.api.routes.connectors.create_connector_instance"),
     ):
-        resp = client.post("/api/v1/connectors", json={
-            "name": "Test",
-            "connector_type_id": "x" * 200,
-            "credentials": "tok",
-        })
+        resp = client.post(
+            "/api/v1/connectors",
+            json={
+                "name": "Test",
+                "connector_type_id": "x" * 200,
+                "credentials": "tok",
+            },
+        )
     assert resp.status_code == 422
 
 
@@ -398,10 +425,16 @@ def test_create_model_backend_empty_name(client: TestClient) -> None:
         patch("modulo.api.routes.model_backends.set_rls_org"),
         patch("modulo.api.routes.model_backends.create_model_backend"),
     ):
-        resp = client.post("/api/v1/model-backends", json={
-            "name": "", "display_name": "D", "provider": "openai",
-            "model_id": "gpt-4", "api_key": "sk-test",
-        })
+        resp = client.post(
+            "/api/v1/model-backends",
+            json={
+                "name": "",
+                "display_name": "D",
+                "provider": "openai",
+                "model_id": "gpt-4",
+                "api_key": "sk-test",
+            },
+        )
     assert resp.status_code == 422
 
 
@@ -415,12 +448,15 @@ def test_create_library_primitive_invalid_type(client: TestClient) -> None:
         patch("modulo.api.routes.library.set_rls_org"),
         patch("modulo.api.routes.library.create_library_primitive"),
     ):
-        resp = client.post("/api/v1/libraries", json={
-            "primitive_type": "invalid",
-            "name": "Test",
-            "slug": "test",
-            "content_json": {},
-        })
+        resp = client.post(
+            "/api/v1/libraries",
+            json={
+                "primitive_type": "invalid",
+                "name": "Test",
+                "slug": "test",
+                "content_json": {},
+            },
+        )
     assert resp.status_code == 422
 
 
@@ -429,12 +465,15 @@ def test_create_library_primitive_empty_name(client: TestClient) -> None:
         patch("modulo.api.routes.library.set_rls_org"),
         patch("modulo.api.routes.library.create_library_primitive"),
     ):
-        resp = client.post("/api/v1/libraries", json={
-            "primitive_type": "schema",
-            "name": "",
-            "slug": "test",
-            "content_json": {},
-        })
+        resp = client.post(
+            "/api/v1/libraries",
+            json={
+                "primitive_type": "schema",
+                "name": "",
+                "slug": "test",
+                "content_json": {},
+            },
+        )
     assert resp.status_code == 422
 
 
@@ -448,9 +487,13 @@ def test_create_environment_profile_empty_name(client: TestClient) -> None:
         patch("modulo.api.routes.environments.set_rls_org"),
         patch("modulo.api.routes.environments.create_environment_profile"),
     ):
-        resp = client.post("/api/v1/environments", json={
-            "name": "", "image_ref": "img",
-        })
+        resp = client.post(
+            "/api/v1/environments",
+            json={
+                "name": "",
+                "image_ref": "img",
+            },
+        )
     assert resp.status_code == 422
 
 
@@ -459,9 +502,14 @@ def test_create_environment_profile_timeout_too_low(client: TestClient) -> None:
         patch("modulo.api.routes.environments.set_rls_org"),
         patch("modulo.api.routes.environments.create_environment_profile"),
     ):
-        resp = client.post("/api/v1/environments", json={
-            "name": "Test", "image_ref": "img", "timeout_seconds": 10,
-        })
+        resp = client.post(
+            "/api/v1/environments",
+            json={
+                "name": "Test",
+                "image_ref": "img",
+                "timeout_seconds": 10,
+            },
+        )
     assert resp.status_code == 422
 
 
@@ -470,9 +518,14 @@ def test_create_environment_profile_timeout_too_high(client: TestClient) -> None
         patch("modulo.api.routes.environments.set_rls_org"),
         patch("modulo.api.routes.environments.create_environment_profile"),
     ):
-        resp = client.post("/api/v1/environments", json={
-            "name": "Test", "image_ref": "img", "timeout_seconds": 90000,
-        })
+        resp = client.post(
+            "/api/v1/environments",
+            json={
+                "name": "Test",
+                "image_ref": "img",
+                "timeout_seconds": 90000,
+            },
+        )
     assert resp.status_code == 422
 
 
@@ -513,25 +566,42 @@ def test_hitl_claim_expiry_too_high(client: TestClient) -> None:
 
 
 def test_registry_publish_empty_author(client: TestClient) -> None:
-    resp = client.post("/api/v1/registry/primitives", json={
-        "author": "", "name": "test", "primitive_type": "schema",
-        "content_json": {}, "signing_key_hex": "x" * 64,
-    })
+    resp = client.post(
+        "/api/v1/registry/primitives",
+        json={
+            "author": "",
+            "name": "test",
+            "primitive_type": "schema",
+            "content_json": {},
+            "signing_key_hex": "x" * 64,
+        },
+    )
     assert resp.status_code == 422
 
 
 def test_registry_publish_invalid_primitive_type(client: TestClient) -> None:
-    resp = client.post("/api/v1/registry/primitives", json={
-        "author": "author", "name": "test", "primitive_type": "bad",
-        "content_json": {}, "signing_key_hex": "x" * 64,
-    })
+    resp = client.post(
+        "/api/v1/registry/primitives",
+        json={
+            "author": "author",
+            "name": "test",
+            "primitive_type": "bad",
+            "content_json": {},
+            "signing_key_hex": "x" * 64,
+        },
+    )
     assert resp.status_code == 422
 
 
 def test_registry_register_publisher_empty_author(client: TestClient) -> None:
-    resp = client.post("/api/v1/registry/publishers", json={
-        "fingerprint_hex": "x" * 32, "author": "", "name": "pub",
-    })
+    resp = client.post(
+        "/api/v1/registry/publishers",
+        json={
+            "fingerprint_hex": "x" * 32,
+            "author": "",
+            "name": "pub",
+        },
+    )
     assert resp.status_code == 422
 
 
@@ -545,15 +615,18 @@ def test_agent_create_empty_name(client: TestClient) -> None:
         patch("modulo.api.routes.agents.set_rls_org"),
         patch("modulo.api.routes.agents.create_agent"),
     ):
-        resp = client.post("/api/v1/agents", json={
-            "name": "",
-            "input_schema_id": str(uuid.uuid4()),
-            "input_schema_version": "1.0",
-            "output_schema_id": str(uuid.uuid4()),
-            "output_schema_version": "1.0",
-            "prompt_template": "You are an agent",
-            "model_backend_id": str(uuid.uuid4()),
-        })
+        resp = client.post(
+            "/api/v1/agents",
+            json={
+                "name": "",
+                "input_schema_id": str(uuid.uuid4()),
+                "input_schema_version": "1.0",
+                "output_schema_id": str(uuid.uuid4()),
+                "output_schema_version": "1.0",
+                "prompt_template": "You are an agent",
+                "model_backend_id": str(uuid.uuid4()),
+            },
+        )
     assert resp.status_code == 422
 
 
@@ -562,15 +635,18 @@ def test_agent_create_empty_prompt(client: TestClient) -> None:
         patch("modulo.api.routes.agents.set_rls_org"),
         patch("modulo.api.routes.agents.create_agent"),
     ):
-        resp = client.post("/api/v1/agents", json={
-            "name": "Agent",
-            "input_schema_id": str(uuid.uuid4()),
-            "input_schema_version": "1.0",
-            "output_schema_id": str(uuid.uuid4()),
-            "output_schema_version": "1.0",
-            "prompt_template": "",
-            "model_backend_id": str(uuid.uuid4()),
-        })
+        resp = client.post(
+            "/api/v1/agents",
+            json={
+                "name": "Agent",
+                "input_schema_id": str(uuid.uuid4()),
+                "input_schema_version": "1.0",
+                "output_schema_id": str(uuid.uuid4()),
+                "output_schema_version": "1.0",
+                "prompt_template": "",
+                "model_backend_id": str(uuid.uuid4()),
+            },
+        )
     assert resp.status_code == 422
 
 
@@ -584,7 +660,12 @@ def test_contribute_empty_name(client: TestClient) -> None:
         patch("modulo.api.routes.contributions.set_rls_org"),
         patch("modulo.api.routes.contributions.contribute_fixture"),
     ):
-        resp = client.post("/api/v1/library/contribute", json={
-            "name": "", "slug": "test", "fixture_map": {},
-        })
+        resp = client.post(
+            "/api/v1/library/contribute",
+            json={
+                "name": "",
+                "slug": "test",
+                "fixture_map": {},
+            },
+        )
     assert resp.status_code == 422

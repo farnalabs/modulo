@@ -98,12 +98,14 @@ def test_list_pipelines_returns_200(client: TestClient) -> None:
     page_result.total = 1
     page_result.page = 1
     page_result.page_size = 20
+    page_result.next_cursor = None
+    page_result.has_more = False
 
     with (
         patch("modulo.api.routes.pipelines.list_pipelines", return_value=page_result),
         patch("modulo.api.routes.pipelines.set_rls_org"),
-            patch("modulo.api.routes.pipelines.set_rls_user_context"),
-        ):
+        patch("modulo.api.routes.pipelines.set_rls_user_context"),
+    ):
         resp = client.get("/api/v1/pipelines")
 
     assert resp.status_code == 200
@@ -123,7 +125,7 @@ def test_create_pipeline_returns_201(client: TestClient) -> None:
     with (
         patch("modulo.api.routes.pipelines.create_pipeline", return_value=pipeline) as create,
         patch("modulo.api.routes.pipelines.set_rls_org") as set_org,
-            patch("modulo.api.routes.pipelines.set_rls_user_context") as set_user_ctx,
+        patch("modulo.api.routes.pipelines.set_rls_user_context") as set_user_ctx,
     ):
         resp = client.post("/api/v1/pipelines", json={"name": "Test Pipeline"})
 
@@ -142,8 +144,8 @@ def test_create_pipeline_default_autonomy_level(client: TestClient) -> None:
     with (
         patch("modulo.api.routes.pipelines.create_pipeline", return_value=pipeline) as create,
         patch("modulo.api.routes.pipelines.set_rls_org"),
-            patch("modulo.api.routes.pipelines.set_rls_user_context"),
-        ):
+        patch("modulo.api.routes.pipelines.set_rls_user_context"),
+    ):
         resp = client.post(
             "/api/v1/pipelines",
             json={"name": "Pipeline", "default_autonomy_level": "notify_on_complete"},
@@ -161,8 +163,8 @@ def test_create_pipeline_default_autonomy_default_value(client: TestClient) -> N
     with (
         patch("modulo.api.routes.pipelines.create_pipeline", return_value=pipeline) as create,
         patch("modulo.api.routes.pipelines.set_rls_org"),
-            patch("modulo.api.routes.pipelines.set_rls_user_context"),
-        ):
+        patch("modulo.api.routes.pipelines.set_rls_user_context"),
+    ):
         resp = client.post("/api/v1/pipelines", json={"name": "Pipeline"})
 
     assert resp.status_code == 201
@@ -180,8 +182,8 @@ def test_get_pipeline_returns_200(client: TestClient) -> None:
     with (
         patch("modulo.api.routes.pipelines.get_pipeline", return_value=pipeline),
         patch("modulo.api.routes.pipelines.set_rls_org"),
-            patch("modulo.api.routes.pipelines.set_rls_user_context"),
-        ):
+        patch("modulo.api.routes.pipelines.set_rls_user_context"),
+    ):
         resp = client.get(f"/api/v1/pipelines/{_PIPELINE_ID}")
 
     assert resp.status_code == 200
@@ -192,8 +194,8 @@ def test_get_pipeline_not_found_returns_404(client: TestClient) -> None:
     with (
         patch("modulo.api.routes.pipelines.get_pipeline", return_value=None),
         patch("modulo.api.routes.pipelines.set_rls_org"),
-            patch("modulo.api.routes.pipelines.set_rls_user_context"),
-        ):
+        patch("modulo.api.routes.pipelines.set_rls_user_context"),
+    ):
         resp = client.get(f"/api/v1/pipelines/{uuid.uuid4()}")
 
     assert resp.status_code == 404
@@ -226,8 +228,8 @@ def test_get_pipeline_graph_returns_authoritative_graph(client: TestClient) -> N
     with (
         patch("modulo.api.routes.pipelines.get_pipeline_graph", return_value=(nodes, [edge])),
         patch("modulo.api.routes.pipelines.set_rls_org"),
-            patch("modulo.api.routes.pipelines.set_rls_user_context"),
-        ):
+        patch("modulo.api.routes.pipelines.set_rls_user_context"),
+    ):
         resp = client.get(f"/api/v1/pipelines/{_PIPELINE_ID}/graph")
 
     assert resp.status_code == 200
@@ -272,8 +274,8 @@ def test_replace_pipeline_graph_returns_soft_validation_issues(client: TestClien
             return_value=(schema_pins, backend_pins),
         ),
         patch("modulo.api.routes.pipelines.set_rls_org"),
-            patch("modulo.api.routes.pipelines.set_rls_user_context"),
-        ):
+        patch("modulo.api.routes.pipelines.set_rls_user_context"),
+    ):
         resp = client.patch(
             f"/api/v1/pipelines/{_PIPELINE_ID}/graph",
             json={"nodes": nodes, "edges": []},
@@ -335,8 +337,8 @@ def test_replace_pipeline_graph_accepts_manual_node_contract(client: TestClient)
             return_value=([], []),
         ),
         patch("modulo.api.routes.pipelines.set_rls_org"),
-            patch("modulo.api.routes.pipelines.set_rls_user_context"),
-        ):
+        patch("modulo.api.routes.pipelines.set_rls_user_context"),
+    ):
         resp = client.patch(
             f"/api/v1/pipelines/{_PIPELINE_ID}/graph",
             json={"nodes": nodes, "edges": []},
@@ -348,8 +350,7 @@ def test_replace_pipeline_graph_accepts_manual_node_contract(client: TestClient)
 
 def test_replace_pipeline_graph_rejects_excessive_node_count(client: TestClient) -> None:
     nodes = [
-        {"id": str(uuid.uuid4()), "agent_id": str(uuid.uuid4()), "position": {"x": i * 10, "y": 0}}
-        for i in range(501)
+        {"id": str(uuid.uuid4()), "agent_id": str(uuid.uuid4()), "position": {"x": i * 10, "y": 0}} for i in range(501)
     ]
     resp = client.patch(
         f"/api/v1/pipelines/{_PIPELINE_ID}/graph",
@@ -362,10 +363,7 @@ def test_replace_pipeline_graph_rejects_excessive_node_count(client: TestClient)
 def test_replace_pipeline_graph_rejects_excessive_edge_count(client: TestClient) -> None:
     node_a = uuid.uuid4()
     node_b = uuid.uuid4()
-    edges = [
-        {"source_node_id": str(node_a), "target_node_id": str(node_b), "edge_type": "normal"}
-        for _ in range(1001)
-    ]
+    edges = [{"source_node_id": str(node_a), "target_node_id": str(node_b), "edge_type": "normal"} for _ in range(1001)]
     resp = client.patch(
         f"/api/v1/pipelines/{_PIPELINE_ID}/graph",
         json={
@@ -395,9 +393,7 @@ def test_replace_pipeline_graph_rejects_excessive_edge_count(client: TestClient)
         },
     ],
 )
-def test_replace_pipeline_graph_rejects_node_type_conflicts(
-    client: TestClient, node: dict[str, object]
-) -> None:
+def test_replace_pipeline_graph_rejects_node_type_conflicts(client: TestClient, node: dict[str, object]) -> None:
     body = {
         "id": str(uuid.uuid4()),
         "position": {"x": 10, "y": 20},
@@ -537,8 +533,8 @@ def test_update_pipeline_returns_200(client: TestClient) -> None:
     with (
         patch("modulo.api.routes.pipelines.update_pipeline", return_value=pipeline),
         patch("modulo.api.routes.pipelines.set_rls_org"),
-            patch("modulo.api.routes.pipelines.set_rls_user_context"),
-        ):
+        patch("modulo.api.routes.pipelines.set_rls_user_context"),
+    ):
         resp = client.patch(f"/api/v1/pipelines/{_PIPELINE_ID}", json={"name": "Updated"})
 
     assert resp.status_code == 200
@@ -590,8 +586,8 @@ def test_update_pipeline_not_found_returns_404(client: TestClient) -> None:
     with (
         patch("modulo.api.routes.pipelines.update_pipeline", return_value=None),
         patch("modulo.api.routes.pipelines.set_rls_org"),
-            patch("modulo.api.routes.pipelines.set_rls_user_context"),
-        ):
+        patch("modulo.api.routes.pipelines.set_rls_user_context"),
+    ):
         resp = client.patch(f"/api/v1/pipelines/{uuid.uuid4()}", json={"name": "x"})
 
     assert resp.status_code == 404
@@ -606,8 +602,8 @@ def test_delete_pipeline_returns_204(client: TestClient) -> None:
     with (
         patch("modulo.api.routes.pipelines.delete_pipeline", return_value=True),
         patch("modulo.api.routes.pipelines.set_rls_org"),
-            patch("modulo.api.routes.pipelines.set_rls_user_context"),
-        ):
+        patch("modulo.api.routes.pipelines.set_rls_user_context"),
+    ):
         resp = client.delete(f"/api/v1/pipelines/{_PIPELINE_ID}")
 
     assert resp.status_code == 204
@@ -617,8 +613,8 @@ def test_delete_pipeline_not_found_returns_404(client: TestClient) -> None:
     with (
         patch("modulo.api.routes.pipelines.delete_pipeline", return_value=False),
         patch("modulo.api.routes.pipelines.set_rls_org"),
-            patch("modulo.api.routes.pipelines.set_rls_user_context"),
-        ):
+        patch("modulo.api.routes.pipelines.set_rls_user_context"),
+    ):
         resp = client.delete(f"/api/v1/pipelines/{uuid.uuid4()}")
 
     assert resp.status_code == 404
@@ -637,8 +633,8 @@ def test_clone_pipeline_returns_201(client: TestClient) -> None:
     with (
         patch("modulo.api.routes.pipelines.clone_pipeline", return_value=cloned) as mock_clone,
         patch("modulo.api.routes.pipelines.set_rls_org"),
-            patch("modulo.api.routes.pipelines.set_rls_user_context"),
-        ):
+        patch("modulo.api.routes.pipelines.set_rls_user_context"),
+    ):
         resp = client.post(f"/api/v1/pipelines/{_PIPELINE_ID}/clone", json={})
 
     assert resp.status_code == 201
@@ -662,8 +658,8 @@ def test_clone_pipeline_with_custom_name(client: TestClient) -> None:
     with (
         patch("modulo.api.routes.pipelines.clone_pipeline", return_value=cloned) as mock_clone,
         patch("modulo.api.routes.pipelines.set_rls_org"),
-            patch("modulo.api.routes.pipelines.set_rls_user_context"),
-        ):
+        patch("modulo.api.routes.pipelines.set_rls_user_context"),
+    ):
         resp = client.post(
             f"/api/v1/pipelines/{_PIPELINE_ID}/clone",
             json={"name": "My Custom Clone"},
@@ -684,8 +680,8 @@ def test_clone_pipeline_not_found_returns_404(client: TestClient) -> None:
     with (
         patch("modulo.api.routes.pipelines.clone_pipeline", return_value=None),
         patch("modulo.api.routes.pipelines.set_rls_org"),
-            patch("modulo.api.routes.pipelines.set_rls_user_context"),
-        ):
+        patch("modulo.api.routes.pipelines.set_rls_user_context"),
+    ):
         resp = client.post(f"/api/v1/pipelines/{uuid.uuid4()}/clone", json={})
 
     assert resp.status_code == 404

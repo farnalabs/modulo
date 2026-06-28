@@ -28,8 +28,7 @@ async def _create_org(db_engine: AsyncEngine, slug: str) -> uuid.UUID:
         async with conn.begin():
             await conn.execute(
                 text(
-                    "INSERT INTO organisations (id, name, slug, settings_json) "
-                    "VALUES (:id, :name, :slug, '{}'::json)"
+                    "INSERT INTO organisations (id, name, slug, settings_json) VALUES (:id, :name, :slug, '{}'::json)"
                 ),
                 {
                     "id": str(org_id),
@@ -40,9 +39,7 @@ async def _create_org(db_engine: AsyncEngine, slug: str) -> uuid.UUID:
     return org_id
 
 
-async def _create_user_in_org(
-    db_engine: AsyncEngine, org_id: uuid.UUID, email: str, role: str = "runner"
-) -> uuid.UUID:
+async def _create_user_in_org(db_engine: AsyncEngine, org_id: uuid.UUID, email: str, role: str = "runner") -> uuid.UUID:
     pw_hash = hash_password("CorrectHorseBattery99!")
     user_id = uuid.uuid4()
     async with db_engine.connect() as conn:
@@ -197,6 +194,7 @@ def test_hash_and_verify() -> None:
     assert h.startswith("$2b$")
 
     from modulo.auth.passwords import verify_password
+
     assert verify_password(pw, h) is True
     assert verify_password("wrong", h) is False
 
@@ -204,4 +202,5 @@ def test_hash_and_verify() -> None:
 def test_authenticate_db_user_none() -> None:
     """authenticate_db_user must return False for None user."""
     from modulo.auth.passwords import authenticate_db_user
+
     assert authenticate_db_user("any", None) is False

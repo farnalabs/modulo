@@ -9,7 +9,7 @@ if test isolation is needed.
 
 from collections.abc import AsyncGenerator
 
-from fastapi import Depends
+from fastapi import Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import (
     AsyncEngine,
     AsyncSession,
@@ -17,7 +17,31 @@ from sqlalchemy.ext.asyncio import (
     create_async_engine,
 )
 
+from modulo.core.feature_flags import PlanContext
 from modulo.settings import Settings, get_settings
+
+
+def require_feature(feature_name: str):
+    """FastAPI dependency factory — blocks access if the named feature is not enabled on the current plan.
+
+    Returns 402 Payment Required when the feature is unavailable.
+    Use as a default value in route parameters or in ``dependencies=[...]``:
+
+    .. code-block:: python
+
+       _: None = require_feature("sso")           # route parameter
+       dependencies=[require_feature("team_rbac")]  # decorator
+    """
+
+    async def _check(settings: Settings = Depends(get_settings)) -> None:
+        ctx = PlanContext(settings)
+        if not ctx.feature_enabled(feature_name):
+            raise HTTPException(
+                status_code=status.HTTP_402_PAYMENT_REQUIRED,
+                detail=f"{feature_name} is not available on your plan",
+            )
+
+    return Depends(_check)
 
 
 def pg_connection_string(database_url: str) -> str:

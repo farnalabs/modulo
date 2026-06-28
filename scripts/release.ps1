@@ -101,7 +101,18 @@ if (-not (Test-Path -LiteralPath $prdFile)) {
     Log "  PRD version header updated to $Version ($today)"
 }
 
-# --- 5. Git tag ---
+# --- 5. Generate SBOM ---
+$sbomScript = Join-Path $productRoot "backend\scripts\generate-sbom.py"
+$sbomOutput = Join-Path $productRoot "sbom.json"
+Log "Generating CycloneDX SBOM..."
+if (-not (Test-Path -LiteralPath $sbomScript)) {
+    Warn "generate-sbom.py not found at $sbomScript — skipping SBOM generation"
+} elseif (-not $DryRun) {
+    python $sbomScript --output $sbomOutput
+    Log "  SBOM written to $sbomOutput"
+}
+
+# --- 6. Git tag ---
 if (-not $DryRun) {
     Push-Location $productRoot
     try {
@@ -109,7 +120,7 @@ if (-not $DryRun) {
         if ($existing) {
             Warn "Tag $tag already exists — skipping tag creation"
         } else {
-            git add LICENSE backend/pyproject.toml frontend/package.json docs/prd.md
+            git add LICENSE backend/pyproject.toml frontend/package.json docs/prd.md sbom.json
             git commit -m "release: $tag"
             git tag -a "$tag" -m "Modulo $tag"
             Log "Committed and tagged $tag"
@@ -119,19 +130,19 @@ if (-not $DryRun) {
     }
 }
 
-# --- 6. Placeholder: Docker Hub publish ---
+# --- 7. Placeholder: Docker Hub publish ---
 # TODO: docker buildx build --platform linux/amd64,linux/arm64 -t farnalabs/modulo:$tag -t farnalabs/modulo:latest .
 # TODO: docker push farnalabs/modulo:$tag && docker push farnalabs/modulo:latest
 Log "[PLACEHOLDER] Docker Hub publish — not yet implemented"
 
-# --- 7. Placeholder: GitHub release ---
+# --- 8. Placeholder: GitHub release ---
 # TODO: gh release create $tag --title "Modulo $tag" --notes "See changelog in docs/prd.md"
 Log "[PLACEHOLDER] GitHub release — not yet implemented"
 
-# --- 8. Placeholder: npm publish (frontend lib if applicable) ---
+# --- 9. Placeholder: npm publish (frontend lib if applicable) ---
 Log "[PLACEHOLDER] npm publish — not yet implemented"
 
-# --- 9. Push ---
+# --- 10. Push ---
 Log "Run 'git push origin main --tags' to push the release"
 
 if ($DryRun) {

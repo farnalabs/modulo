@@ -20,9 +20,7 @@ from tests.factories import (
 
 async def test_initial_migration_creates_domain_tables(db_engine: AsyncEngine) -> None:
     async with db_engine.connect() as connection:
-        table_names = await connection.run_sync(
-            lambda sync_connection: inspect(sync_connection).get_table_names()
-        )
+        table_names = await connection.run_sync(lambda sync_connection: inspect(sync_connection).get_table_names())
 
     assert {
         "agents",
@@ -40,9 +38,7 @@ async def test_migrated_schema_matches_orm_metadata(db_engine: AsyncEngine) -> N
     """Migration-only PostgreSQL triggers are intentionally outside ORM metadata."""
     async with db_engine.connect() as connection:
         differences = await connection.run_sync(
-            lambda sync_connection: compare_metadata(
-                MigrationContext.configure(sync_connection), Base.metadata
-            )
+            lambda sync_connection: compare_metadata(MigrationContext.configure(sync_connection), Base.metadata)
         )
 
     assert differences == []
@@ -167,7 +163,5 @@ async def test_library_fork_provenance_is_registry_only_and_immutable(
     with pytest.raises(DBAPIError):
         async with db_engine.begin() as connection:
             await connection.execute(
-                update(LibraryPrimitive)
-                .where(LibraryPrimitive.id == fork_id)
-                .values(forked_from=None)
+                update(LibraryPrimitive).where(LibraryPrimitive.id == fork_id).values(forked_from=None)
             )

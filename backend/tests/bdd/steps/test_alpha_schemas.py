@@ -10,7 +10,6 @@ scenarios("../../features/schemas/version.feature")
 scenarios("../../features/schemas/deletion_protection.feature")
 
 
-
 @when(parsers.parse('I POST /api/schemas with name "{name}" and valid JSON Schema'))
 def create_schema(name: str, client, request):
     with (
@@ -25,10 +24,13 @@ def create_schema(name: str, client, request):
             ),
         ),
     ):
-        resp = client.post("/api/schemas", json={
-            "name": name,
-            "schema": {"type": "object", "properties": {"title": {"type": "string"}}},
-        })
+        resp = client.post(
+            "/api/schemas",
+            json={
+                "name": name,
+                "schema": {"type": "object", "properties": {"title": {"type": "string"}}},
+            },
+        )
     request.node._resp = resp
 
 
@@ -54,18 +56,21 @@ def create_nested_schema(name: str, client, request):
             ),
         ),
     ):
-        resp = client.post("/api/schemas", json={
-            "name": name,
-            "schema": {
-                "type": "object",
-                "properties": {
-                    "nested": {
-                        "type": "object",
-                        "properties": {"inner": {"type": "string"}},
-                    }
+        resp = client.post(
+            "/api/schemas",
+            json={
+                "name": name,
+                "schema": {
+                    "type": "object",
+                    "properties": {
+                        "nested": {
+                            "type": "object",
+                            "properties": {"inner": {"type": "string"}},
+                        }
+                    },
                 },
             },
-        })
+        )
     request.node._resp = resp
 
 
@@ -76,10 +81,13 @@ def create_schema_simple(name: str, client, request):
 
 @when(parsers.parse('I POST /api/schemas with name "{name}" and invalid JSON Schema'))
 def create_invalid_schema(name: str, client, request):
-    resp = client.post("/api/schemas", json={
-        "name": name,
-        "schema": {"type": "invalid_type_that_does_not_exist"},
-    })
+    resp = client.post(
+        "/api/schemas",
+        json={
+            "name": name,
+            "schema": {"type": "invalid_type_that_does_not_exist"},
+        },
+    )
     request.node._resp = resp
 
 
@@ -100,9 +108,7 @@ def check_nested_properties(request):
 @then(parsers.parse("the response status is {status:d}"))
 def check_status(status: int, request):
     resp = request.node._resp
-    assert resp.status_code == status, (
-        f"Expected status {status}, got {resp.status_code}: {resp.text[:200]}"
-    )
+    assert resp.status_code == status, f"Expected status {status}, got {resp.status_code}: {resp.text[:200]}"
 
 
 @then("the error describes the schema validation failure")
@@ -239,9 +245,7 @@ def delete_schema(name: str, client, request):
         patch("modulo.core.pipeline_engine.run_crud.set_rls_org"),
         patch(
             "modulo.core.pipeline_engine.run_crud.delete_schema",
-            side_effect=lambda n: (
-                True if getattr(request.node, "_schema_unused", False) else (_raise_conflict())
-            ),
+            side_effect=lambda n: True if getattr(request.node, "_schema_unused", False) else (_raise_conflict()),
         ),
     ):
         resp = client.delete(f"/api/schemas/{name}")
@@ -262,7 +266,7 @@ def pipeline_uses_schema(name: str, request):
     request.node._schema_unused = False
 
 
-@when(parsers.parse('I DELETE /api/schemas/{name} with force=true'))
+@when(parsers.parse("I DELETE /api/schemas/{name} with force=true"))
 def force_delete_schema(name: str, client, request):
     with (
         patch("modulo.core.pipeline_engine.run_crud.set_rls_org"),

@@ -29,6 +29,7 @@ def _make_settings() -> Settings:
         secret_key=_VALID_32,
         fernet_key=_VALID_32,
         modulo_admin_password="testpass",
+        modulo_license_key="test-license-key",
     )
 
 
@@ -435,9 +436,7 @@ class TestAdminTeamDelete:
         begin_cm.__aenter__ = AsyncMock(return_value=None)
         begin_cm.__aexit__ = AsyncMock(return_value=False)
         session_mock.begin = MagicMock(return_value=begin_cm)
-        session_mock.execute = AsyncMock(
-            return_value=MagicMock(scalar=MagicMock(return_value=3))
-        )
+        session_mock.execute = AsyncMock(return_value=MagicMock(scalar=MagicMock(return_value=3)))
 
         async def override_session() -> AsyncGenerator[AsyncMock, None]:
             yield session_mock

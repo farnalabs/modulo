@@ -18,6 +18,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.api.dependencies import get_db_session
+from modulo.api.middleware.sensitive_mask import mask_config_json
 from modulo.auth.dependencies import get_current_user
 from modulo.auth.jwt import AuthenticatedPrincipal
 from modulo.core.cron_scheduler import compute_next_fire, validate_cron_expression
@@ -61,7 +62,7 @@ async def list_triggers(
                 "trigger_type": r.trigger_type,
                 "active": r.active,
                 "max_concurrent_runs": r.max_concurrent_runs,
-                "config_json": r.config_json,
+                "config_json": mask_config_json(r.config_json),
                 "cron_expression": r.cron_expression,
                 "cron_timezone": r.cron_timezone,
                 "last_fired_at": r.last_fired_at.isoformat() if r.last_fired_at else None,
@@ -83,6 +84,7 @@ class CronConfigUpdate(BaseModel):
     cron_timezone: str | None = None
     active: bool | None = None
     snapshot_id: str | None = None
+    input_template: dict[str, Any] | None = None
 
 
 @router.patch("/triggers/{trigger_id}/cron", status_code=status.HTTP_200_OK)
@@ -144,6 +146,9 @@ async def update_cron_config(
         if body.snapshot_id is not None:
             trigger.config_json = {**(trigger.config_json or {}), "snapshot_id": body.snapshot_id}
 
+        if body.input_template is not None:
+            trigger.config_json = {**(trigger.config_json or {}), "input_template": body.input_template}
+
         await session.flush()
 
     return {
@@ -152,6 +157,7 @@ async def update_cron_config(
         "cron_timezone": trigger.cron_timezone,
         "active": trigger.active,
         "next_fire_at": trigger.next_fire_at.isoformat() if trigger.next_fire_at else None,
+        "input_template": trigger.config_json.get("input_template") if trigger.config_json else None,
     }
 
 
@@ -278,7 +284,7 @@ async def update_polling_config(
     return {
         "id": str(trigger.id),
         "active": trigger.active,
-        "config_json": trigger.config_json,
+        "config_json": mask_config_json(trigger.config_json),
         "next_fire_at": trigger.next_fire_at.isoformat() if trigger.next_fire_at else None,
     }
 
@@ -387,11 +393,12 @@ async def create_trigger(
         "trigger_type": trigger.trigger_type,
         "active": trigger.active,
         "max_concurrent_runs": trigger.max_concurrent_runs,
-        "config_json": trigger.config_json,
+        "config_json": mask_config_json(trigger.config_json),
         "cron_expression": trigger.cron_expression,
         "cron_timezone": trigger.cron_timezone,
         "last_fired_at": trigger.last_fired_at.isoformat() if trigger.last_fired_at else None,
         "next_fire_at": trigger.next_fire_at.isoformat() if trigger.next_fire_at else None,
+        "input_template": trigger.config_json.get("input_template") if trigger.config_json else None,
     }
 
 
@@ -460,7 +467,7 @@ async def update_trigger(
         "trigger_type": trigger.trigger_type,
         "active": trigger.active,
         "max_concurrent_runs": trigger.max_concurrent_runs,
-        "config_json": trigger.config_json,
+        "config_json": mask_config_json(trigger.config_json),
         "cron_expression": trigger.cron_expression,
         "cron_timezone": trigger.cron_timezone,
         "last_fired_at": trigger.last_fired_at.isoformat() if trigger.last_fired_at else None,
@@ -704,7 +711,7 @@ async def list_pipeline_triggers(
                 "trigger_type": r.trigger_type,
                 "active": r.active,
                 "max_concurrent_runs": r.max_concurrent_runs,
-                "config_json": r.config_json,
+                "config_json": mask_config_json(r.config_json),
                 "cron_expression": r.cron_expression,
                 "cron_timezone": r.cron_timezone,
                 "last_fired_at": r.last_fired_at.isoformat() if r.last_fired_at else None,

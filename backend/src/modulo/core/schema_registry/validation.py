@@ -41,14 +41,10 @@ def validate_union_schema(schema: dict[str, Any], path: str = "#") -> SchemaVali
             continue
         current = f"{path}/{kw}"
         if not isinstance(variants, list):
-            result.errors.append(
-                SchemaValidationError(path=current, message=f"'{kw}' must be a non-empty array")
-            )
+            result.errors.append(SchemaValidationError(path=current, message=f"'{kw}' must be a non-empty array"))
             continue
         if len(variants) == 0:
-            result.errors.append(
-                SchemaValidationError(path=current, message=f"'{kw}' must not be empty")
-            )
+            result.errors.append(SchemaValidationError(path=current, message=f"'{kw}' must not be empty"))
             continue
         if schema.get("type") is not None:
             result.errors.append(
@@ -119,8 +115,7 @@ def validate_array_schema(schema: dict[str, Any], path: str = "#") -> SchemaVali
         result.errors.append(
             SchemaValidationError(
                 path=current,
-                message="'items' is recommended for array schemas — "
-                "add an items schema or use contains/prefixItems",
+                message="'items' is recommended for array schemas — add an items schema or use contains/prefixItems",
             )
         )
         result.valid = False

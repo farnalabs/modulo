@@ -26,6 +26,7 @@ def _set_org_id(session: MagicMock) -> None:
         else:
             return await real_execute(stmt, *args, **kwargs)
         return result
+
     session.execute = AsyncMock(side_effect=mock_execute)
 
 
@@ -50,6 +51,7 @@ class TestGetSecret:
             result = MagicMock()
             result.scalar_one_or_none.return_value = row
             return result
+
         mock_session.execute = AsyncMock(side_effect=mock_execute)
 
         value = await backend.get_secret("some-key")
@@ -62,6 +64,7 @@ class TestGetSecret:
             result = MagicMock()
             result.scalar_one_or_none.return_value = None
             return result
+
         mock_session.execute = AsyncMock(side_effect=mock_execute)
 
         with pytest.raises(KeyError, match="unknown-key"):
@@ -82,6 +85,7 @@ class TestGetSecret:
             result = MagicMock()
             result.scalar_one_or_none.return_value = row
             return result
+
         mock_session.execute = AsyncMock(side_effect=mock_execute)
 
         with pytest.raises(ValueError, match="Failed to decrypt secret"):
@@ -122,6 +126,7 @@ class TestSetSecret:
             else:
                 result.scalar_one_or_none.return_value = None
             return result
+
         mock_session.execute = AsyncMock(side_effect=mock_execute)
 
         backend = FernetSecretsBackend(fernet_key=_KEY, session=mock_session)

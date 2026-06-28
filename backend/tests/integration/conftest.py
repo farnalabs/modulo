@@ -18,9 +18,7 @@ BACKEND_ROOT = Path(__file__).parents[2]
 async def _domain_table_names(database_url: str) -> set[str]:
     engine = create_async_engine(database_url)
     async with engine.connect() as connection:
-        names = await connection.run_sync(
-            lambda sync_connection: set(inspect(sync_connection).get_table_names())
-        )
+        names = await connection.run_sync(lambda sync_connection: set(inspect(sync_connection).get_table_names()))
     await engine.dispose()
     return names - {"alembic_version"}
 
@@ -48,25 +46,29 @@ def migrated_db_url(db_url: str) -> str:
         eng = create_async_engine(db_url)
         async with eng.connect() as conn:
             await conn.execute(
-                text(
-                    "CREATE TABLE IF NOT EXISTS alembic_version "
-                    "(version_num VARCHAR(255) NOT NULL PRIMARY KEY)"
-                )
+                text("CREATE TABLE IF NOT EXISTS alembic_version (version_num VARCHAR(255) NOT NULL PRIMARY KEY)")
             )
             await conn.commit()
         await eng.dispose()
 
     asyncio.run(_ensure_alembic_table())
-    # Override DATABASE_URL so alembic env.py and application code (e.g.
-    # TriggerEngine._get_engine) both use the testcontainers Postgres, not any
-    # CI env var pointing at the service container.
+    # Override DATABASE_URL so alembic env.py uses the testcontainer, not any
+    # CI env var pointing at the service postgres.
+    _prev = os.environ.get("DATABASE_URL")
     os.environ["DATABASE_URL"] = db_url
-    command.upgrade(config, "head")
+    try:
+        command.upgrade(config, "head")
+    finally:
+        if _prev is None:
+            os.environ.pop("DATABASE_URL", None)
+        else:
+            os.environ["DATABASE_URL"] = _prev
 
     async def _existing_cols(conn, table: str) -> set[str]:
         result = await conn.execute(
-            text("SELECT column_name FROM information_schema.columns "
-                 "WHERE table_name = :tbl AND table_schema = 'public'"),
+            text(
+                "SELECT column_name FROM information_schema.columns WHERE table_name = :tbl AND table_schema = 'public'"
+            ),
             {"tbl": table},
         )
         return {row[0] for row in result.fetchall()}
@@ -75,133 +77,50 @@ def migrated_db_url(db_url: str) -> str:
         """Add ORM columns missing from migrations to make CRUD functions work."""
         eng = create_async_engine(db_url)
         async with eng.connect() as conn:
-            # pipelines: missing default_autonomy_level, slug
+            # pipelines: missing default_autonomy_level
             cols = await _existing_cols(conn, "pipelines")
             if "default_autonomy_level" not in cols:
                 await conn.execute(
-                    text("ALTER TABLE pipelines ADD COLUMN default_autonomy_level "
-                         "VARCHAR(30) DEFAULT 'manual_approval'")
-                )
-            if "slug" not in cols:
-                await conn.execute(
-                    text("ALTER TABLE pipelines ADD COLUMN slug VARCHAR(255)")
-                )
-
-            # pipeline_snapshots: missing config_json
-            cols = await _existing_cols(conn, "pipeline_snapshots")
-            if "config_json" not in cols:
-                await conn.execute(
-                    text("ALTER TABLE pipeline_snapshots ADD COLUMN config_json JSON "
-                         "NOT NULL DEFAULT '{}'::json")
-                )
-
-            # feedback_records: missing needs_human_review
-            cols = await _existing_cols(conn, "feedback_records")
-            if "needs_human_review" not in cols:
-                await conn.execute(
-                    text("ALTER TABLE feedback_records ADD COLUMN needs_human_review "
-                         "BOOLEAN DEFAULT false")
-                )
-
-            # pipelines: missing slug column
-            if "slug" not in cols:
-                await conn.execute(
-                    text("ALTER TABLE pipelines ADD COLUMN slug VARCHAR(255)")
-                )
-            # pipelines: missing state_graph_json column
-            if "state_graph_json" not in cols:
-                await conn.execute(
-                    text("ALTER TABLE pipelines ADD COLUMN state_graph_json JSON DEFAULT '{}'::json")
-                )
-            # pipelines: missing deleted_at column (used by org_deletion)
-            if "deleted_at" not in cols:
-                await conn.execute(
-                    text("ALTER TABLE pipelines ADD COLUMN deleted_at TIMESTAMP WITH TIME ZONE")
-                )
-
-            # pipeline_snapshots: missing config_json column
-            snap_cols = await _existing_cols(conn, "pipeline_snapshots")
-            if "config_json" not in snap_cols:
-                await conn.execute(
-                    text("ALTER TABLE pipeline_snapshots ADD COLUMN config_json JSON DEFAULT '{}'::json")
-                )
-            if "snapshot_version" not in snap_cols:
-                await conn.execute(
-                    text("ALTER TABLE pipeline_snapshots ADD COLUMN snapshot_version INTEGER DEFAULT 1")
-                )
-
-            # feedback_records: missing needs_human_review column
-            cols = await _existing_cols(conn, "feedback_records")
-            if "needs_human_review" not in cols:
-                await conn.execute(
-                    text("ALTER TABLE feedback_records ADD COLUMN needs_human_review BOOLEAN DEFAULT false")
-                )
-
-            # connector_instances: allowed_operations is JSON but ORM uses text[]
-            ci_cols = await _existing_cols(conn, "connector_instances")
-            if "allowed_operations" in ci_cols:
-                await conn.execute(
-                    text("ALTER TABLE connector_instances ALTER COLUMN allowed_operations TYPE JSON "
-                         "USING allowed_operations::JSON")
+                    text(
+                        "ALTER TABLE pipelines ADD COLUMN default_autonomy_level VARCHAR(30) DEFAULT 'manual_approval'"
+                    )
                 )
 
             # webhook_payloads: ORM expects raw_body + raw_payload (migration has payload_ciphertext)
             cols = await _existing_cols(conn, "webhook_payloads")
             if "raw_body" not in cols:
-                await conn.execute(
-                    text("ALTER TABLE webhook_payloads ADD COLUMN raw_body BYTEA")
-                )
+                await conn.execute(text("ALTER TABLE webhook_payloads ADD COLUMN raw_body BYTEA"))
             if "raw_payload" not in cols:
-                await conn.execute(
-                    text("ALTER TABLE webhook_payloads ADD COLUMN raw_payload JSON")
-                )
+                await conn.execute(text("ALTER TABLE webhook_payloads ADD COLUMN raw_payload JSON"))
             if "payload_ciphertext" in cols:
-                await conn.execute(
-                    text("ALTER TABLE webhook_payloads ALTER COLUMN payload_ciphertext DROP NOT NULL")
-                )
-
-            # Create RLS policies for tables added after migration 0002
-            # which don't have the rls_org_isolation policy yet.
-            tables_with_policy = {
-                row[0]
-                for row in (
-                    await conn.execute(
-                        text("SELECT tablename FROM pg_policies WHERE policyname = 'rls_org_isolation'")
-                    )
-                ).fetchall()
-            }
-            for _tbl in (
-                "environment_profiles", "feedback_records", "team_memberships",
-                "variant_groups", "eval_definitions", "eval_results",
-                "notification_endpoints", "workspace_leases",
-                "audit_chain_heads", "scheduled_reports", "spend_anomalies",
-                "publishers", "primitive_ratings", "oauth_clients",
-                "oauth_authorization_codes", "oauth_token_families", "token_families",
-            ):
-                if _tbl not in tables_with_policy:
-                    await conn.execute(
-                        text(
-                            f"CREATE POLICY rls_org_isolation ON {_tbl} "
-                            "USING (organisation_id = current_setting('app.organisation_id')::uuid)"
-                        )
-                    )
+                await conn.execute(text("ALTER TABLE webhook_payloads ALTER COLUMN payload_ciphertext DROP NOT NULL"))
 
             # Force RLS on all org-scoped tables so it applies to the testcontainers
             # superuser too. Without FORCE, PostgreSQL superusers bypass ENABLE RLS,
             # which breaks cross-tenant isolation tests that rely on SET LOCAL ROLE.
             for _tbl in (
-                "org_daily_run_counts", "users", "audit_events", "schemas", "teams",
-                "connector_instances", "library_primitives", "model_backends",
-                "org_api_keys", "schema_versions", "stages", "agents", "pipelines",
-                "pipeline_edges", "pipeline_snapshots", "triggers", "runs",
-                "webhook_dedup_hashes", "hitl_claims", "notification_delivery_log",
-                "trigger_events", "webhook_payloads", "environment_profiles",
-                "feedback_records", "team_memberships", "variant_groups",
-                "eval_definitions", "eval_results", "notification_endpoints",
-                "workspace_leases", "audit_chain_heads", "scheduled_reports",
-                "spend_anomalies", "publishers", "primitive_ratings",
-                "oauth_clients", "oauth_authorization_codes", "oauth_token_families",
-                "token_families",
+                "org_daily_run_counts",
+                "users",
+                "audit_events",
+                "schemas",
+                "teams",
+                "connector_instances",
+                "library_primitives",
+                "model_backends",
+                "org_api_keys",
+                "schema_versions",
+                "stages",
+                "agents",
+                "pipelines",
+                "pipeline_edges",
+                "pipeline_snapshots",
+                "triggers",
+                "runs",
+                "webhook_dedup_hashes",
+                "hitl_claims",
+                "notification_delivery_log",
+                "trigger_events",
+                "webhook_payloads",
             ):
                 await conn.execute(text(f"ALTER TABLE {_tbl} FORCE ROW LEVEL SECURITY"))
 

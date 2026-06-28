@@ -23,9 +23,14 @@ class _StubProvider(RuntimeProvider):
         return f"{self.name}-{spec.environment_profile_id}"
 
     async def exec_command(
-        self, provider_ref: str, command: list[str], *, timeout: int | None = None,  # noqa: ASYNC109
+        self,
+        provider_ref: str,
+        command: list[str],
+        *,
+        timeout: int | None = None,  # noqa: ASYNC109
     ) -> ExecResult:
         from modulo.core.runtime_provider import ExecResult
+
         return ExecResult(exit_code=0, stdout="", stderr="")
 
     async def destroy_workspace(self, provider_ref: str) -> None:

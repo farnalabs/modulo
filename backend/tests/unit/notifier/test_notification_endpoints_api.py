@@ -56,6 +56,7 @@ def client() -> Generator[TestClient, None, None]:
     # Simulate session.get() returning None by default (not found)
     async def _get(model: Any, pk: Any) -> Any:
         return None
+
     session.get = _get
 
     async def override_session() -> AsyncGenerator[AsyncMock, None]:

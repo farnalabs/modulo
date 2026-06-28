@@ -8,7 +8,7 @@ from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from modulo.api.dependencies import get_db_session
+from modulo.api.dependencies import get_db_session, require_feature
 from modulo.auth.dependencies import get_current_user
 from modulo.auth.jwt import AuthenticatedPrincipal
 from modulo.core.audit_logger import (
@@ -19,7 +19,7 @@ from modulo.core.audit_logger import (
 )
 from modulo.db.rls import set_rls_org
 
-router = APIRouter(prefix="/api/v1/admin/audit", tags=["audit"])
+router = APIRouter(prefix="/api/v1/admin/audit", tags=["audit"], dependencies=[require_feature("audit_viewer")])
 
 
 class BatchDetailRequest(BaseModel):

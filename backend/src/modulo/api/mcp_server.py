@@ -14,6 +14,7 @@ Org context validated per-event for streaming (SSE) connections.
 """
 
 import contextvars
+import json
 import logging
 import uuid
 from collections.abc import AsyncGenerator
@@ -21,6 +22,11 @@ from contextlib import asynccontextmanager
 from typing import Any
 
 from jose import JWTError
+
+# Alpha limitation: _PLACEHOLDER_ORG_ID is hardcoded for single-org mode.
+# In v1, the API key record will carry org context and the McpAuthMiddleware
+# will resolve org_id dynamically from the key's organisation_id column.
+# See https://linear.app/modulo/issue/MOD-XXX for the multi-tenant epic.
 from mcp.server.fastmcp import FastMCP
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from starlette.applications import Starlette
@@ -48,34 +54,31 @@ from modulo.core.hitl_manager import (
 )
 from modulo.core.library_service import (
     CommunityPrimitiveReadOnlyError,
+    get_primitive_by_slug,
+    list_primitives,
 )
 from modulo.core.library_service import (
     copy_to_adapt as library_copy_to_adapt,
 )
-from modulo.core.rate_limiter import TokenBucket
-from modulo.db.crud.pipeline import list_pipelines
+from modulo.core.mcp.scope_validator import MCPAuthorizationError, check_tool_scope
+from modulo.db.crud.pipeline import get_pipeline, list_pipelines
 from modulo.db.crud.run import get_run
 from modulo.db.models.hitl_claim import HitlClaim
 from modulo.db.models.pipeline_edge import PipelineEdge
-from modulo.db.rls import set_rls_org, set_rls_user_context
+from modulo.db.rls import set_rls_org
 from modulo.settings import get_settings
 
 _log = logging.getLogger(__name__)
-
-# Alpha limitation: single-org placeholder until the API key record carries
-# org context (see multi-tenant epic MOD-XXX).
-_PLACEHOLDER_ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
 
 # ContextVars populated by McpAuthMiddleware before each request.
 _ctx_org_id: contextvars.ContextVar[uuid.UUID] = contextvars.ContextVar("mcp_org_id")
 _ctx_role: contextvars.ContextVar[str] = contextvars.ContextVar("mcp_role")
 _ctx_key_id: contextvars.ContextVar[uuid.UUID] = contextvars.ContextVar("mcp_key_id")
-_ctx_user_id: contextvars.ContextVar[uuid.UUID] = contextvars.ContextVar("mcp_user_id")
+_ctx_auth_token: contextvars.ContextVar[str] = contextvars.ContextVar("mcp_auth_token")
+_ctx_auth_type: contextvars.ContextVar[str] = contextvars.ContextVar("mcp_auth_type")
 
-# Per-client-ID rate limiter for trigger_pipeline (PRD §7.18: 60/min).
-# Separate from the path-level RateLimitMiddleware because all MCP tools share
-# the same HTTP path (/mcp) and can't be differentiated at the URL level.
-_trigger_pipeline_limiters: dict[str, TokenBucket] = {}
+# Placeholder org for alpha (single-org). Replaced by multi-tenant auth in v1.
+_PLACEHOLDER_ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
 
 
 def _get_session_factory() -> async_sessionmaker[AsyncSession]:
@@ -90,13 +93,51 @@ async def _session(org_id: uuid.UUID) -> AsyncGenerator[AsyncSession, None]:
     async with factory() as s:
         async with s.begin():
             await set_rls_org(s, org_id)
-            try:
-                user_id = _ctx_user_id.get()
-                role = _ctx_role.get()
-                await set_rls_user_context(s, user_id, role)
-            except LookupError:
-                pass
             yield s
+
+
+# ---------------------------------------------------------------------------
+# Per-event auth validation
+# ---------------------------------------------------------------------------
+
+
+async def validate_current_auth() -> bool:
+    """Re-validate the current auth credential for per-event SSE enforcement.
+
+    Checks the stored credential against the DB/issuer to detect mid-session
+    revocation, expiry, or OAuth token family blacklisting.
+    Returns True if the credential is still valid, False otherwise.
+    """
+    auth_type = _ctx_auth_type.get(None)
+    token = _ctx_auth_token.get(None)
+    org_id = _ctx_org_id.get(None)
+
+    if auth_type is None or token is None or org_id is None:
+        return False
+
+    try:
+        if auth_type == "api_key":
+            async with _session(org_id) as s:
+                await validate_api_key(s, token, org_id)
+            return True
+
+        if auth_type == "oauth":
+            settings = get_settings()
+            claims = decode_oauth_access_token(token, settings.secret_key)
+            async with _session(claims.organisation_id) as s:
+                return await check_oauth_token_family_valid(
+                    s,
+                    family_id=claims.token_family,
+                    client_id=claims.client_id,
+                    org_id=claims.organisation_id,
+                )
+
+        return False
+    except (ApiKeyInvalidError, JWTError):
+        return False
+    except Exception:
+        _log.exception("validate_current_auth failed")
+        return False
 
 
 # ---------------------------------------------------------------------------
@@ -136,15 +177,20 @@ class McpAuthMiddleware(BaseHTTPMiddleware):
 
         # Try API key first (backwards compatible).
         if token.startswith("mk_"):
+            org_id = _PLACEHOLDER_ORG_ID
             try:
-                session_factory = _get_session_factory()
-                async with session_factory() as s:
-                    async with s.begin():
-                        key = await validate_api_key(s, token)
-                _ctx_org_id.set(key.organisation_id)
+                async with _session(org_id) as s:
+                    key = await validate_api_key(s, token, org_id)
+                _ctx_org_id.set(org_id)
                 _ctx_role.set(key.role)
                 _ctx_key_id.set(key.id)
-                _ctx_user_id.set(key.created_by)
+                _ctx_auth_token.set(token)
+                _ctx_auth_type.set("api_key")
+                request.scope["auth_principal"] = {
+                    "type": "api_key",
+                    "org_id": str(org_id),
+                    "prefix": token[3:11],
+                }
             except ApiKeyInvalidError:
                 return Response(
                     '{"error":"unauthorized","detail":"Invalid or revoked API key"}',
@@ -200,6 +246,13 @@ class McpAuthMiddleware(BaseHTTPMiddleware):
         _ctx_org_id.set(claims.organisation_id)
         _ctx_role.set(role)
         _ctx_key_id.set(uuid.UUID(int=0))  # sentinel for OAuth clients
+        _ctx_auth_token.set(token)
+        _ctx_auth_type.set("oauth")
+        request.scope["auth_principal"] = {
+            "type": "user",
+            "org_id": str(claims.organisation_id),
+            "user_id": str(claims.client_id),
+        }
 
         resp = await call_next(request)
         return resp
@@ -214,6 +267,7 @@ mcp = FastMCP(
     instructions=(
         "Modulo is a self-hosted agentic SDLC platform. "
         "Use trigger_pipeline to fire runs, get_run_status to track them, "
+        "get_run_output to inspect node outputs, "
         "and review_hitl to handle human-in-the-loop gates."
     ),
     stateless_http=True,
@@ -233,7 +287,9 @@ def _tool_error(msg: str) -> dict[str, Any]:
 @mcp.tool(description="List pipelines in the organisation. Returns summaries.")
 async def list_pipelines_tool(page: int = 1, page_size: int = 20) -> dict[str, Any]:
     try:
-        org_id = _ctx_org_id.get(uuid.UUID(int=0))
+        if not await validate_current_auth():
+            return _tool_error("Token revoked or expired — re-authenticate")
+        org_id = _ctx_org_id.get(_PLACEHOLDER_ORG_ID)
         async with _session(org_id) as s:
             result = await list_pipelines(s, page=page, page_size=page_size)
         return {
@@ -252,19 +308,10 @@ async def trigger_pipeline(
     pipeline_id: str,
     input_payload: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    # Secondary rate limit: 60/min per MCP client ID (PRD §7.18).
-    # The path-level RateLimitMiddleware caps all MCP calls at 200/min, but
-    # trigger_pipeline gets a tighter per-client limit here.
-    client_key = str(_ctx_key_id.get(uuid.UUID(int=0)))
-    bucket = _trigger_pipeline_limiters.setdefault(
-        client_key,
-        TokenBucket(rate=1.0, burst=60),
-    )
-    if not await bucket.consume():
-        _log.warning("trigger_pipeline.rate_limited", extra={"client_key": client_key})
-        return {"error": "rate_limited", "detail": "trigger_pipeline rate limit exceeded (60/min)"}
-
     try:
+        if not await validate_current_auth():
+            return _tool_error("Token revoked or expired — re-authenticate")
+        check_tool_scope(_ctx_role.get(None), "trigger_pipeline")
         from modulo.db.crud.pipeline import get_pipeline
         from modulo.db.crud.pipeline_snapshot import create_snapshot_from_live_graph
         from modulo.db.crud.run import create_run
@@ -296,6 +343,8 @@ async def trigger_pipeline(
             "status": "pending",
             "langgraph_thread_id": thread_id,
         }
+    except MCPAuthorizationError as exc:
+        return {"error": "insufficient_scope", "detail": exc.message}
     except Exception:
         _log.exception("trigger_pipeline failed")
         return _tool_error("Failed to trigger pipeline")
@@ -304,7 +353,9 @@ async def trigger_pipeline(
 @mcp.tool(description="Get current run status. Pass detail=true for per-node breakdown.")
 async def get_run_status(run_id: str, detail: bool = False) -> dict[str, Any]:
     try:
-        org_id = _ctx_org_id.get(uuid.UUID(int=0))
+        if not await validate_current_auth():
+            return _tool_error("Token revoked or expired — re-authenticate")
+        org_id = _ctx_org_id.get(_PLACEHOLDER_ORG_ID)
         rid = uuid.UUID(run_id)
         async with _session(org_id) as s:
             run = await get_run(s, rid)
@@ -329,18 +380,68 @@ async def get_run_status(run_id: str, detail: bool = False) -> dict[str, Any]:
         return _tool_error("Failed to get run status")
 
 
+@mcp.tool(
+    description=(
+        "Get a specific node's output from a completed pipeline run. "
+        "Sensitive fields (tokens, secrets, API keys, passwords, credentials) "
+        "are masked in the response."
+    ),
+)
+async def get_run_output(run_id: str, node_id: str) -> dict[str, Any]:
+    try:
+        if not await validate_current_auth():
+            return _tool_error("Token revoked or expired — re-authenticate")
+        check_tool_scope(_ctx_role.get(None), "get_run_output")
+        from modulo.api.routes.runs import _mask_output_value
+
+        org_id = _ctx_org_id.get(_PLACEHOLDER_ORG_ID)
+        rid = uuid.UUID(run_id)
+        async with _session(org_id) as s:
+            run = await get_run(s, rid)
+        if run is None:
+            return {"error": "run_not_found", "run_id": run_id}
+        outputs = run.outputs_json or {}
+        node_output = outputs.get(node_id)
+        if node_output is None:
+            return {"error": "node_output_not_found", "run_id": run_id, "node_id": node_id}
+        masked = _mask_output_value(node_output)
+
+        # Detect masked fields by scanning for the bullet mask character.
+        masked_fields: list[str] = []
+        if isinstance(masked, dict):
+            for k, v in masked.items():
+                if isinstance(v, str) and "\u2022" in v:
+                    masked_fields.append(k)
+
+        return {
+            "node_id": node_id,
+            "output": masked,
+            "masked_fields": masked_fields,
+        }
+    except MCPAuthorizationError as exc:
+        return {"error": "insufficient_scope", "detail": exc.message}
+    except Exception:
+        _log.exception("get_run_output failed")
+        return _tool_error("Failed to get node output")
+
+
 @mcp.tool(description="Cancel a running pipeline run.")
 async def cancel_run(run_id: str) -> dict[str, Any]:
     try:
+        if not await validate_current_auth():
+            return _tool_error("Token revoked or expired — re-authenticate")
+        check_tool_scope(_ctx_role.get(None), "cancel_run")
         from modulo.db.crud.run import request_cancellation
 
-        org_id = _ctx_org_id.get(uuid.UUID(int=0))
+        org_id = _ctx_org_id.get(_PLACEHOLDER_ORG_ID)
         rid = uuid.UUID(run_id)
         async with _session(org_id) as s:
             run = await request_cancellation(s, rid)
         if run is None:
             return {"error": "run_not_found", "run_id": run_id}
         return {"run_id": run_id, "cancellation_requested": True}
+    except MCPAuthorizationError as exc:
+        return {"error": "insufficient_scope", "detail": exc.message}
     except Exception:
         _log.exception("cancel_run failed")
         return _tool_error("Failed to cancel run")
@@ -349,9 +450,12 @@ async def cancel_run(run_id: str) -> dict[str, Any]:
 @mcp.tool(description="List all pending (undecided) HITL gates across all runs.")
 async def list_pending_hitl(page: int = 1, page_size: int = 20) -> dict[str, Any]:
     try:
+        if not await validate_current_auth():
+            return _tool_error("Token revoked or expired — re-authenticate")
+        check_tool_scope(_ctx_role.get(None), "list_pending_hitl")
         from sqlalchemy import select
 
-        org_id = _ctx_org_id.get(uuid.UUID(int=0))
+        org_id = _ctx_org_id.get(_PLACEHOLDER_ORG_ID)
         async with _session(org_id) as s:
             offset = (page - 1) * page_size
             result = await s.execute(
@@ -377,6 +481,8 @@ async def list_pending_hitl(page: int = 1, page_size: int = 20) -> dict[str, Any
                 for g in gates
             ]
         }
+    except MCPAuthorizationError as exc:
+        return {"error": "insufficient_scope", "detail": exc.message}
     except Exception:
         _log.exception("list_pending_hitl failed")
         return _tool_error("Failed to list pending HITL gates")
@@ -397,15 +503,23 @@ async def review_hitl(
     claim_token: str | None = None,
     reason: str | None = None,
 ) -> dict[str, Any]:
+    if not await validate_current_auth():
+        return _tool_error("Token revoked or expired — re-authenticate")
+
     from sqlalchemy import select
 
-    org_id = _ctx_org_id.get(uuid.UUID(int=0))
+    org_id = _ctx_org_id.get(_PLACEHOLDER_ORG_ID)
     key_id = _ctx_key_id.get(uuid.UUID("00000000-0000-0000-0000-000000000002"))
     rid = uuid.UUID(run_id)
     mgr = HITLManager()
 
     if action not in ("claim", "approve", "reject"):
         return {"error": "invalid_action", "detail": "action must be claim, approve, or reject"}
+
+    try:
+        check_tool_scope(_ctx_role.get(None), "review_hitl", action=action)
+    except MCPAuthorizationError as exc:
+        return {"error": "insufficient_scope", "detail": exc.message}
 
     if action == "approve" and claim_token is None:
         return {"error": "claim_token_required", "detail": "approve requires claim_token"}
@@ -505,7 +619,14 @@ async def review_hitl(
 async def copy_library_primitive(
     primitive_id: str,
 ) -> dict[str, Any]:
-    org_id = _ctx_org_id.get(uuid.UUID(int=0))
+    if not await validate_current_auth():
+        return _tool_error("Token revoked or expired — re-authenticate")
+    try:
+        check_tool_scope(_ctx_role.get(None), "copy_library_primitive")
+    except MCPAuthorizationError as exc:
+        return {"error": "insufficient_scope", "detail": exc.message}
+
+    org_id = _ctx_org_id.get(_PLACEHOLDER_ORG_ID)
     pid = uuid.UUID(primitive_id)
 
     async with _session(org_id) as s:
@@ -539,6 +660,120 @@ async def copy_library_primitive(
     }
 
 
+@mcp.tool(
+    description=(
+        "Browse the library of primitives (schemas, agents, workflows, "
+        "pipeline templates, test fixtures). Supports filtering by type, "
+        "text search, and cursor-based pagination."
+    ),
+)
+async def browse_library(
+    primitive_type: str | None = None,
+    search: str | None = None,
+    cursor: str | None = None,
+    limit: int = 20,
+) -> dict[str, Any]:
+    try:
+        if not await validate_current_auth():
+            return _tool_error("Token revoked or expired — re-authenticate")
+        org_id = _ctx_org_id.get(_PLACEHOLDER_ORG_ID)
+        async with _session(org_id) as s:
+            result = await list_primitives(
+                s,
+                org_id,
+                primitive_type=primitive_type,
+                search=search,
+                page=1,
+                page_size=limit,
+                include_community=True,
+                cursor=cursor,
+            )
+        return {
+            "items": [
+                {
+                    "id": str(p.id),
+                    "name": p.name,
+                    "description": p.description,
+                    "type": p.primitive_type,
+                    "version": p.version,
+                    "average_rating": p.average_rating,
+                    "tags": list(p.tags) if p.tags else [],
+                }
+                for p in result.items
+            ],
+            "total": result.total,
+            "next_cursor": result.next_cursor,
+            "has_more": result.has_more,
+        }
+    except Exception:
+        _log.exception("browse_library failed")
+        return _tool_error("Failed to browse library")
+
+
+@mcp.tool(
+    description=(
+        "Get recent trigger events for a given trigger or pipeline. "
+        "Filter by trigger_id and/or pipeline_id. Returns events ordered "
+        "by most recent first."
+    ),
+)
+async def get_trigger_events(
+    trigger_id: str | None = None,
+    pipeline_id: str | None = None,
+    limit: int = 20,
+) -> dict[str, Any]:
+    try:
+        if not await validate_current_auth():
+            return _tool_error("Token revoked or expired — re-authenticate")
+        check_tool_scope(_ctx_role.get(None), "get_trigger_events")
+        from sqlalchemy import select
+
+        from modulo.db.models.trigger import Trigger
+        from modulo.db.models.trigger_event import TriggerEvent
+
+        org_id = _ctx_org_id.get(_PLACEHOLDER_ORG_ID)
+        async with _session(org_id) as s:
+            q = (
+                select(TriggerEvent)
+                .where(TriggerEvent.organisation_id == org_id)
+                .order_by(TriggerEvent.created_at.desc(), TriggerEvent.id.desc())
+                .limit(limit)
+            )
+
+            if trigger_id is not None:
+                tid = uuid.UUID(trigger_id)
+                q = q.where(TriggerEvent.trigger_id == tid)
+
+            if pipeline_id is not None:
+                pid = uuid.UUID(pipeline_id)
+                q = q.join(Trigger, TriggerEvent.trigger_id == Trigger.id).where(
+                    Trigger.pipeline_id == pid,
+                )
+
+            rows = (await s.execute(q)).scalars().all()
+
+        return {
+            "events": [
+                {
+                    "id": str(e.id),
+                    "trigger_id": str(e.trigger_id),
+                    "trigger_type": e.trigger_type,
+                    "validation_result": e.validation_result,
+                    "created_at": e.created_at.isoformat() if e.created_at else None,
+                    "run_id": str(e.run_id) if e.run_id else None,
+                }
+                for e in rows
+            ],
+            "count": len(rows),
+            "limit": limit,
+        }
+    except MCPAuthorizationError as exc:
+        return {"error": "insufficient_scope", "detail": exc.message}
+    except Exception:
+        _log.exception("get_trigger_events failed")
+        return _tool_error("Failed to get trigger events")
+
+
 # ---------------------------------------------------------------------------
 # Resources
 # ---------------------------------------------------------------------------
@@ -546,16 +781,93 @@ async def copy_library_primitive(
 
 @mcp.resource("modulo://pipelines")
 async def resource_pipelines() -> str:
-    org_id = _ctx_org_id.get(uuid.UUID(int=0))
+    if not await validate_current_auth():
+        return "error: Token revoked or expired — re-authenticate"
+    org_id = _ctx_org_id.get(_PLACEHOLDER_ORG_ID)
     async with _session(org_id) as s:
         result = await list_pipelines(s, page=1, page_size=50)
     lines = [f"- {p.name} (id={p.id}, visibility={p.visibility})" for p in result.items]
     return f"Pipelines ({result.total} total):\n" + "\n".join(lines)
 
 
+@mcp.resource("modulo://pipelines/{pipeline_id}/runs")
+async def resource_pipeline_runs(pipeline_id: str) -> str:
+    if not await validate_current_auth():
+        return "error: Token revoked or expired — re-authenticate"
+    from modulo.db.crud.run import list_runs
+
+    org_id = _ctx_org_id.get(_PLACEHOLDER_ORG_ID)
+    pid = uuid.UUID(pipeline_id)
+    async with _session(org_id) as s:
+        pipeline = await get_pipeline(s, pid)
+        if pipeline is None:
+            return f"Pipeline {pipeline_id} not found."
+        result = await list_runs(s, pipeline_id=pid, page=1, page_size=50)
+
+    if not result.items:
+        return f"Pipeline '{pipeline.name}' has no runs."
+
+    lines = [
+        f"- Run {r.id} | status={r.status} | trigger={r.trigger_type} | "
+        f"created={r.created_at.isoformat()} | "
+        f"tokens={r.total_tokens or 0} | cost=${r.total_cost_usd or 0}"
+        for r in result.items
+    ]
+    return f"Runs for pipeline {pipeline.name} ({result.total} total):\n" + "\n".join(lines)
+
+
+@mcp.resource("modulo://pipelines/{pipeline_id}")
+async def resource_pipeline_detail(pipeline_id: str) -> str:
+    if not await validate_current_auth():
+        return "error: Token revoked or expired — re-authenticate"
+    from sqlalchemy import func, select
+
+    from modulo.db.models.pipeline_snapshot import PipelineSnapshot
+    from modulo.db.models.run import Run
+
+    org_id = _ctx_org_id.get(_PLACEHOLDER_ORG_ID)
+    pid = uuid.UUID(pipeline_id)
+    async with _session(org_id) as s:
+        pipeline = await get_pipeline(s, pid)
+        if pipeline is None:
+            return f"Pipeline {pipeline_id} not found."
+
+        edge_result = await s.execute(
+            select(func.count()).select_from(PipelineEdge).where(PipelineEdge.pipeline_id == pid)
+        )
+        edge_count = edge_result.scalar_one()
+
+        snap_result = await s.execute(
+            select(func.count()).select_from(PipelineSnapshot).where(PipelineSnapshot.pipeline_id == pid)
+        )
+        snapshot_count = snap_result.scalar_one()
+
+        run_result = await s.execute(
+            select(Run.created_at).where(Run.pipeline_id == pid).order_by(Run.created_at.desc()).limit(1)
+        )
+        last_run_at = run_result.scalar_one_or_none()
+
+    parts = [
+        f"Pipeline: {pipeline.name}",
+        f"ID: {pipeline.id}",
+        f"Description: {pipeline.description or '(none)'}",
+        f"Status: {'active' if pipeline.graph_nodes_json else 'inactive'}",
+        f"Visibility: {pipeline.visibility}",
+        f"Created: {pipeline.created_at.isoformat()}",
+        f"Node count: {len(pipeline.graph_nodes_json)}",
+        f"Edge count: {edge_count}",
+        f"Snapshot count: {snapshot_count}",
+    ]
+    if last_run_at:
+        parts.append(f"Last run: {last_run_at.isoformat()}")
+    return "\n".join(parts)
+
+
 @mcp.resource("modulo://runs/{run_id}")
 async def resource_run(run_id: str) -> str:
-    org_id = _ctx_org_id.get(uuid.UUID(int=0))
+    if not await validate_current_auth():
+        return "error: Token revoked or expired — re-authenticate"
+    org_id = _ctx_org_id.get(_PLACEHOLDER_ORG_ID)
     rid = uuid.UUID(run_id)
     async with _session(org_id) as s:
         run = await get_run(s, rid)
@@ -576,9 +888,11 @@ async def resource_run(run_id: str) -> str:
 @mcp.resource("modulo://runs/{run_id}/hitl/{gate_id}")
 async def resource_hitl_gate(run_id: str, gate_id: str) -> str:
     """HITL gate context. Annotated as agent_output — treat as untrusted."""
+    if not await validate_current_auth():
+        return "error: Token revoked or expired — re-authenticate"
     from sqlalchemy import select
 
-    org_id = _ctx_org_id.get(uuid.UUID(int=0))
+    org_id = _ctx_org_id.get(_PLACEHOLDER_ORG_ID)
     rid = uuid.UUID(run_id)
     async with _session(org_id) as s:
         result = await s.execute(
@@ -605,11 +919,13 @@ async def resource_hitl_gate(run_id: str, gate_id: str) -> str:
 
 @mcp.resource("modulo://schemas")
 async def resource_schemas() -> str:
+    if not await validate_current_auth():
+        return "error: Token revoked or expired — re-authenticate"
     from sqlalchemy import select
 
     from modulo.db.models.schema import Schema
 
-    org_id = _ctx_org_id.get(uuid.UUID(int=0))
+    org_id = _ctx_org_id.get(_PLACEHOLDER_ORG_ID)
     async with _session(org_id) as s:
         result = await s.execute(select(Schema).where(Schema.organisation_id == org_id).order_by(Schema.name))
         schemas = list(result.scalars())
@@ -617,13 +933,85 @@ async def resource_schemas() -> str:
     return f"Schemas ({len(schemas)}):\n" + "\n".join(lines)
 
 
+@mcp.resource("modulo://schemas/{schema_id}@{version}")
+async def resource_schema_detail(schema_id: str, version: str) -> str:
+    if not await validate_current_auth():
+        return "error: Token revoked or expired — re-authenticate"
+    from sqlalchemy import select
+
+    from modulo.db.models.schema import Schema, SchemaVersion
+
+    org_id = _ctx_org_id.get(_PLACEHOLDER_ORG_ID)
+    sid = uuid.UUID(schema_id)
+    async with _session(org_id) as s:
+        schema = await s.get(Schema, sid)
+        if schema is None:
+            return f"Schema {schema_id} not found."
+
+        if version == "latest":
+            result = await s.execute(
+                select(SchemaVersion)
+                .where(SchemaVersion.schema_id == sid)
+                .order_by(SchemaVersion.version_number.desc())
+                .limit(1)
+            )
+            sv = result.scalar_one_or_none()
+        else:
+            result = await s.execute(
+                select(SchemaVersion).where(
+                    SchemaVersion.schema_id == sid,
+                    SchemaVersion.version == version,
+                )
+            )
+            sv = result.scalar_one_or_none()
+
+        if sv is None:
+            return f"Schema version '{version}' not found for schema {schema_id}."
+
+    defn = sv.definition_json or {}
+    schema_type = defn.get("type", "object")
+
+    fields: list[dict[str, Any]] = []
+    if "properties" in defn:
+        required_set = set(defn.get("required", []))
+        for name, prop in defn["properties"].items():
+            fields.append({
+                "name": name,
+                "type": prop.get("type", "unknown"),
+                "required": name in required_set,
+            })
+    elif "fields" in defn:
+        for f in defn["fields"]:
+            fields.append({
+                "name": f.get("name", "?"),
+                "type": f.get("type", "unknown"),
+                "required": f.get("required", False),
+            })
+
+    lines = [
+        f"Schema: {schema.name}",
+        f"ID: {schema.id}",
+        f"Type: {schema_type}",
+        f"Version: {sv.version}",
+        f"Created: {sv.created_at.isoformat()}",
+        f"Fields ({len(fields)}):",
+    ]
+    for f in fields:
+        req = "required" if f["required"] else "optional"
+        lines.append(f"  - {f['name']}: {f['type']} ({req})")
+
+    return "\n".join(lines)
+
+
 @mcp.resource("modulo://connectors")
 async def resource_connectors() -> str:
+    if not await validate_current_auth():
+        return "error: Token revoked or expired — re-authenticate"
     from sqlalchemy import select
 
     from modulo.db.models.connector_instance import ConnectorInstance
 
-    org_id = _ctx_org_id.get(uuid.UUID(int=0))
+    org_id = _ctx_org_id.get(_PLACEHOLDER_ORG_ID)
     async with _session(org_id) as s:
         result = await s.execute(
             select(ConnectorInstance)
@@ -637,11 +1025,13 @@ async def resource_connectors() -> str:
 
 @mcp.resource("modulo://model-backends")
 async def resource_model_backends() -> str:
+    if not await validate_current_auth():
+        return "error: Token revoked or expired — re-authenticate"
     from sqlalchemy import select
 
     from modulo.db.models.model_backend import ModelBackend
 
-    org_id = _ctx_org_id.get(uuid.UUID(int=0))
+    org_id = _ctx_org_id.get(_PLACEHOLDER_ORG_ID)
     async with _session(org_id) as s:
         result = await s.execute(
             select(ModelBackend).where(ModelBackend.organisation_id == org_id).order_by(ModelBackend.name)
@@ -649,6 +1039,78 @@ async def resource_model_backends() -> str:
         backends = list(result.scalars())
     lines = [f"- {b.name} ({b.provider}/{b.model_id})" for b in backends]
     return f"Model Backends ({len(backends)}):\n" + "\n".join(lines)
+
+
+@mcp.resource("modulo://library")
+async def resource_library() -> str:
+    """List library primitives — schemas, agents, workflows, pipeline templates, test fixtures.
+
+    For filtered browsing, use the ``browse_library`` tool instead.
+    """
+    if not await validate_current_auth():
+        return "error: Token revoked or expired — re-authenticate"
+    try:
+        org_id = _ctx_org_id.get(_PLACEHOLDER_ORG_ID)
+        async with _session(org_id) as s:
+            result = await list_primitives(
+                s,
+                org_id,
+                page=1,
+                page_size=50,
+                include_community=True,
+            )
+        if not result.items:
+            return "Library is empty."
+        lines: list[str] = []
+        for p in result.items:
+            tags_str = ", ".join(p.tags) if p.tags else ""
+            rating_str = f"{p.average_rating:.1f}" if p.average_rating is not None else "N/A"
+            desc = f" — {p.description}" if p.description else ""
+            lines.append(
+                f"- {p.name} (id={p.id}, type={p.primitive_type}, "
+                f"v{p.version}, tags=[{tags_str}], rating={rating_str}){desc}"
+            )
+        header = f"Library ({result.total} primitives):"
+        return header + "\n" + "\n".join(lines)
+    except Exception:
+        _log.exception("resource_library failed")
+        return "error: Failed to browse library"
+
+
+@mcp.resource("modulo://library/{primitive_type}/{slug}")
+async def resource_library_detail(primitive_type: str, slug: str) -> str:
+    """Get details of a single library primitive by type and slug."""
+    if not await validate_current_auth():
+        return "error: Token revoked or expired — re-authenticate"
+    try:
+        org_id = _ctx_org_id.get(_PLACEHOLDER_ORG_ID)
+        async with _session(org_id) as s:
+            p = await get_primitive_by_slug(s, org_id, primitive_type, slug)
+        if p is None:
+            return f"Library primitive '{slug}' of type '{primitive_type}' not found."
+
+        tags_str = ", ".join(p.tags) if p.tags else ""
+        rating_str = f"{p.average_rating:.2f}" if p.average_rating is not None else "N/A"
+        downloads_str = str(p.download_count) if p.download_count is not None else "0"
+        desc = p.description or "(no description)"
+        content_summary_str = json.dumps(p.content_json, indent=2)
+
+        parts = [
+            f"Name: {p.name}",
+            f"ID: {p.id}",
+            f"Type: {p.primitive_type}",
+            f"Version: {p.version}",
+            f"Author: {p.author}",
+            f"Tags: [{tags_str}]",
+            f"Average Rating: {rating_str}",
+            f"Download Count: {downloads_str}",
+            f"Description: {desc}",
+            f"\nContent Summary:\n{content_summary_str}",
+        ]
+        return "\n".join(parts)
+    except Exception:
+        _log.exception("resource_library_detail failed")
+        return "error: Failed to get library primitive detail"
 
 
 # ---------------------------------------------------------------------------
@@ -856,8 +1318,8 @@ def build_mcp_asgi_app() -> Starlette:
     app = Starlette(
         routes=all_routes,
         middleware=[
-            Middleware(RateLimiterMiddleware),  # type: ignore[arg-type]
             Middleware(McpAuthMiddleware),
+            Middleware(RateLimiterMiddleware),  # type: ignore[arg-type]
         ],
     )
     return app

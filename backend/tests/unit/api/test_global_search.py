@@ -92,9 +92,7 @@ def _mock_scalar_result(value: int) -> MagicMock:
     return m
 
 
-def _make_result(
-    *, all_rows: list[MagicMock] | None = None, scalar_value: int | None = None
-) -> MagicMock:
+def _make_result(*, all_rows: list[MagicMock] | None = None, scalar_value: int | None = None) -> MagicMock:
     m = MagicMock()
     if all_rows is not None:
         m.all.return_value = all_rows
@@ -164,7 +162,10 @@ class TestGlobalSearchEndpoint:
         body = resp.json()
         assert body["results"] == []
         assert body["total_by_type"] == {
-            "pipeline": 0, "run": 0, "audit": 0, "library": 0,
+            "pipeline": 0,
+            "run": 0,
+            "audit": 0,
+            "library": 0,
         }
 
     def test_min_query_length(self, client: TestClient) -> None:
@@ -260,7 +261,10 @@ class TestGlobalSearchEndpoint:
         body = resp.json()
         assert len(body["results"]) >= 1
         assert body["total_by_type"] == {
-            "pipeline": 1, "run": 1, "audit": 1, "library": 1,
+            "pipeline": 1,
+            "run": 1,
+            "audit": 1,
+            "library": 1,
         }
 
     def test_limit_and_offset(self, client: TestClient, mock_db: AsyncMock) -> None:

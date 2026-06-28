@@ -36,6 +36,7 @@ from modulo.connectors.gitlab import GitLabConnector
 from modulo.connectors.jira import JiraConnector
 from modulo.connectors.linear import LinearConnector
 from modulo.connectors.slack import SlackConnector
+from modulo.core.pipeline_engine.output_filter import filter_payload_for_injection
 from modulo.core.plugin_registry import get_plugin_registry
 from modulo.core.secrets_backend import SecretsBackend
 from modulo.db.models.connector_instance import ConnectorInstance
@@ -193,32 +194,42 @@ class _TracedConnector(ConnectorBase):
                 raise
 
     async def health_check(self) -> HealthResult:
-        return cast(HealthResult, await self._run_with_tracing(
-            f"connector.{self._inner.connector_type}.health_check",
-            "health_check",
-            self._inner.health_check,
-            post_span=lambda span, result: span.set_attribute("connector.healthy", result.ok),
-        ))
+        return cast(
+            HealthResult,
+            await self._run_with_tracing(
+                f"connector.{self._inner.connector_type}.health_check",
+                "health_check",
+                self._inner.health_check,
+                post_span=lambda span, result: span.set_attribute("connector.healthy", result.ok),
+            ),
+        )
 
     async def query(self, q: ConnectorQuery) -> ConnectorResult:
-        return cast(ConnectorResult, await self._run_with_tracing(
-            f"connector.{self._inner.connector_type}.query",
-            "query",
-            self._inner.query,
-            q,
-            extra_attrs={"connector.limit": q.limit},
-            post_span=lambda span, result: (
-                span.set_attribute("connector.result_total", result.total) if result.total is not None else None
+        return cast(
+            ConnectorResult,
+            await self._run_with_tracing(
+                f"connector.{self._inner.connector_type}.query",
+                "query",
+                self._inner.query,
+                q,
+                extra_attrs={"connector.limit": q.limit},
+                post_span=lambda span, result: (
+                    span.set_attribute("connector.result_total", result.total) if result.total is not None else None
+                ),
             ),
-        ))
+        )
 
     async def write(self, payload: ConnectorPayload) -> dict[str, Any]:
-        return cast(dict[str, Any], await self._run_with_tracing(
-            f"connector.{self._inner.connector_type}.write",
-            "write",
-            self._inner.write,
-            payload,
-        ))
+        filter_payload_for_injection(payload)
+        return cast(
+            dict[str, Any],
+            await self._run_with_tracing(
+                f"connector.{self._inner.connector_type}.write",
+                "write",
+                self._inner.write,
+                payload,
+            ),
+        )
 
 
 def _get_cred(creds: dict[str, Any], key: str, type_id: str) -> Any:
@@ -247,6 +258,7 @@ def _build_connector(type_id: str, config: dict[str, Any], creds: dict[str, Any]
         case "shell":
             allowed = config.get("allowed_commands")
             from modulo.connectors.shell import ShellConnector
+
             return ShellConnector(runtime_provider=None, allowed_commands=allowed)
         case "linear":
             return LinearConnector(api_key=_get_cred(creds, "api_key", type_id))

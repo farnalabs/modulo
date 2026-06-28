@@ -21,9 +21,7 @@ def upgrade() -> None:
         "pipeline_edges",
         sa.Column("condition_expression", sa.String(500), nullable=True),
     )
-    op.execute(
-        "ALTER TABLE pipeline_edges DROP CONSTRAINT IF EXISTS ck_pipeline_edges_type"
-    )
+    op.execute("ALTER TABLE pipeline_edges DROP CONSTRAINT IF EXISTS ck_pipeline_edges_type")
     op.execute(
         "ALTER TABLE pipeline_edges ADD CONSTRAINT ck_pipeline_edges_type "
         "CHECK (edge_type IN ('normal', 'reject', 'conditional'))"
@@ -39,12 +37,9 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
+    op.execute("ALTER TABLE pipeline_edges DROP CONSTRAINT IF EXISTS ck_pipeline_edges_type")
     op.execute(
-        "ALTER TABLE pipeline_edges DROP CONSTRAINT IF EXISTS ck_pipeline_edges_type"
-    )
-    op.execute(
-        "ALTER TABLE pipeline_edges ADD CONSTRAINT ck_pipeline_edges_type "
-        "CHECK (edge_type IN ('normal', 'reject'))"
+        "ALTER TABLE pipeline_edges ADD CONSTRAINT ck_pipeline_edges_type CHECK (edge_type IN ('normal', 'reject'))"
     )
     op.alter_column(
         "pipeline_edges",

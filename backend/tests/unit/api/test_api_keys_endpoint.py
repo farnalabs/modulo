@@ -29,6 +29,7 @@ def _make_settings() -> Settings:
         fernet_key=_VALID_32,
         modulo_admin_password="testpass",
         modulo_public_url="http://localhost:8000",
+        modulo_license_key="test-license-key",
     )
 
 

@@ -18,6 +18,7 @@ class _AsyncIter:
         except StopIteration:
             raise StopAsyncIteration
 
+
 import pytest  # noqa: E402
 from cryptography.fernet import Fernet  # noqa: E402
 
@@ -210,3 +211,116 @@ class TestSQLConstants:
         for migration in ModuloPostgresSaver.MIGRATIONS:
             if "PRIMARY KEY" in migration and "checkpoint_migrations" not in migration:
                 assert "organisation_id" in migration
+
+
+class TestBlobEncryption:
+    """Tests for blob-level encryption (_encrypt_blob, _decrypt_blobs, _decrypt_writes)."""
+
+    async def test_blob_encryption_roundtrip(self, mock_conn):
+        saver = ModuloPostgresSaver(mock_conn, organisation_id=_ORG_ID, fernet_key=_FERNET_KEY)
+        original = b"hello world sensitive data"
+        encrypted = saver._encrypt_blob(original)
+        assert isinstance(encrypted, bytes)
+        blobs = [[b"ch1", b"bytes", encrypted]]
+        result = saver._decrypt_blobs(blobs)
+        assert result == {"ch1": original}
+
+    async def test_encrypted_blob_starts_with_fernet_prefix(self, mock_conn):
+        saver = ModuloPostgresSaver(mock_conn, organisation_id=_ORG_ID, fernet_key=_FERNET_KEY)
+        encrypted = saver._encrypt_blob(b"anything")
+        assert encrypted.startswith(b"gAAAAA")
+
+    async def test_decrypt_blobs_returns_original_channel_values(self, mock_conn):
+        saver = ModuloPostgresSaver(mock_conn, organisation_id=_ORG_ID, fernet_key=_FERNET_KEY)
+        original = b'{"key": "value"}'
+        encrypted = saver._encrypt_blob(original)
+        blobs = [[b"channel1", b"json", encrypted]]
+        result = saver._decrypt_blobs(blobs)
+        assert result == {"channel1": original}
+
+    async def test_decrypt_writes_returns_original_writes(self, mock_conn):
+        saver = ModuloPostgresSaver(mock_conn, organisation_id=_ORG_ID, fernet_key=_FERNET_KEY)
+        original = b"write_data"
+        encrypted = saver._encrypt_blob(original)
+        writes = [[b"task1", b"channel1", b"type1", encrypted]]
+        result = saver._decrypt_writes(writes)
+        assert result == [("channel1", "type1", original)]
+
+    async def test_aput_writes_encrypts_blob(self, mock_conn):
+        saver = ModuloPostgresSaver(mock_conn, organisation_id=_ORG_ID, fernet_key=_FERNET_KEY)
+        cursor = AsyncMock()
+        cursor.__aenter__ = AsyncMock(return_value=cursor)
+        cursor.__aexit__ = AsyncMock(return_value=False)
+        saver._cursor = MagicMock(return_value=cursor)
+        saver.serde = MagicMock()
+        saver.serde.dumps_typed = MagicMock(return_value=("json", b"sensitive-data"))
+
+        config = {"configurable": {"thread_id": "t1", "checkpoint_ns": "", "checkpoint_id": "ckp-1"}}
+        writes = [("channel1", {"data": "secret"})]
+        task_id = "task-1"
+
+        await saver.aput_writes(config, writes, task_id)
+
+        executed_args = cursor.execute.call_args[0][1]
+        blob_arg = executed_args[8]
+        assert blob_arg.startswith(b"gAAAAA")
+
+    async def test_no_encryption_when_fernet_key_none(self, mock_conn):
+        saver = ModuloPostgresSaver(mock_conn, organisation_id=_ORG_ID, fernet_key=None)
+        original = b"plaintext data"
+        result = saver._encrypt_blob(original)
+        assert result is original
+
+    async def test_decrypt_blobs_plaintext_fallback(self, mock_conn):
+        saver = ModuloPostgresSaver(mock_conn, organisation_id=_ORG_ID, fernet_key=_FERNET_KEY)
+        plaintext = b'{"key": "value"}'
+        blobs = [[b"ch1", b"json", plaintext]]
+        result = saver._decrypt_blobs(blobs)
+        assert result == {"ch1": plaintext}
+
+    async def test_decrypt_writes_plaintext_fallback(self, mock_conn):
+        saver = ModuloPostgresSaver(mock_conn, organisation_id=_ORG_ID, fernet_key=_FERNET_KEY)
+        plaintext = b"plain_write_data"
+        writes = [[b"task1", b"ch1", b"type1", plaintext]]
+        result = saver._decrypt_writes(writes)
+        assert result == [("ch1", "type1", plaintext)]
+
+    async def test_decrypt_blobs_none(self, mock_conn):
+        saver = ModuloPostgresSaver(mock_conn, organisation_id=_ORG_ID, fernet_key=_FERNET_KEY)
+        assert saver._decrypt_blobs(None) is None
+        assert saver._decrypt_blobs([]) is None
+
+    async def test_no_decryption_when_saver_has_no_key(self, mock_conn):
+        saver = ModuloPostgresSaver(mock_conn, organisation_id=_ORG_ID, fernet_key=None)
+        encrypted = Fernet(_FERNET_KEY.encode()).encrypt(b"secret-data")
+        blobs = [[b"ch1", b"bytes", encrypted]]
+        result = saver._decrypt_blobs(blobs)
+        assert result == {"ch1": encrypted}
+
+
+class TestIsEncrypted:
+    """Tests for _is_encrypted function from scripts/migrate-checkpoint-blobs.py."""
+
+    @staticmethod
+    def _is_encrypted(blob: bytes | None) -> bool:
+        if blob is None:
+            return True
+        try:
+            return blob[:6] == b"gAAAAA"
+        except Exception:
+            return False
+
+    def test_encrypted_blob_detected(self):
+        assert self._is_encrypted(b"gAAAAAabc123")
+
+    def test_plaintext_blob_detected(self):
+        assert not self._is_encrypted(b"plaintext data")
+
+    def test_none_blob_returns_true(self):
+        assert self._is_encrypted(None)
+
+    def test_empty_blob_returns_false(self):
+        assert not self._is_encrypted(b"")
+
+    def test_short_blob_less_than_6_bytes(self):
+        assert not self._is_encrypted(b"short")

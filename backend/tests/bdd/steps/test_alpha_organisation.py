@@ -9,7 +9,6 @@ scenarios("../../features/organisation/org_scoping.feature")
 scenarios("../../features/organisation/rls_isolation.feature")
 
 
-
 @given(parsers.parse('org "{org}" has pipeline "{name}"'))
 def mock_org_pipeline(org: str, name: str, request):
     request.node._pipeline_name = name
@@ -76,11 +75,7 @@ def check_pipeline_org(org: str, request):
     pass
 
 
-@when(
-    parsers.parse(
-        'I POST /api/pipelines/{pipeline_name}/runs with empty run_context'
-    )
-)
+@when(parsers.parse("I POST /api/pipelines/{pipeline_name}/runs with empty run_context"))
 def trigger_cross_org_run(pipeline_name: str, client, request):
     with (
         patch("modulo.core.pipeline_engine.run_crud.set_rls_org"),
@@ -90,9 +85,10 @@ def trigger_cross_org_run(pipeline_name: str, client, request):
     request.node._resp = resp
 
 
-@when(parsers.parse('a raw query runs with SET app.organisation_id = \'{org}\''))
+@when(parsers.parse("a raw query runs with SET app.organisation_id = '{org}'"))
 def raw_query_with_set(org: str, mock_session, request):
     from modulo.db.rls import set_rls_org
+
     try:
         set_rls_org(mock_session, uuid.UUID("00000000-0000-0000-0000-000000000001"))
         request.node._rls_ok = True
@@ -103,6 +99,7 @@ def raw_query_with_set(org: str, mock_session, request):
 @when("a raw query runs without setting app.current_org_id")
 def raw_query_without_set(request):
     from modulo.db.rls import set_rls_org
+
     mock_session = MagicMock()
     try:
         set_rls_org(mock_session, None)

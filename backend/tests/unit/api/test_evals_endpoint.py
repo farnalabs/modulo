@@ -127,15 +127,18 @@ class TestCreateEvalDefinition:
             yield mock_session
 
         app.dependency_overrides[get_db_session] = override_session
-        resp = admin_client.post(self.URL, json={
-            "pipeline_id": str(_PIPELINE_ID),
-            "name": "Test Eval",
-            "eval_type": "regex",
-            "config_json": {"pattern": r"\d+"},
-            "failure_behaviour": "block",
-            "pass_threshold": 0.8,
-            "suite_id": "suite-1",
-        })
+        resp = admin_client.post(
+            self.URL,
+            json={
+                "pipeline_id": str(_PIPELINE_ID),
+                "name": "Test Eval",
+                "eval_type": "regex",
+                "config_json": {"pattern": r"\d+"},
+                "failure_behaviour": "block",
+                "pass_threshold": 0.8,
+                "suite_id": "suite-1",
+            },
+        )
         assert resp.status_code == 201
         data = resp.json()
         assert data["name"] == "Test Eval"
@@ -158,38 +161,50 @@ class TestCreateEvalDefinition:
             yield mock_session
 
         app.dependency_overrides[get_db_session] = override_session
-        resp = admin_client.post(self.URL, json={
-            "pipeline_id": str(_PIPELINE_ID),
-            "name": "Minimal Eval",
-            "eval_type": "regex",
-        })
+        resp = admin_client.post(
+            self.URL,
+            json={
+                "pipeline_id": str(_PIPELINE_ID),
+                "name": "Minimal Eval",
+                "eval_type": "regex",
+            },
+        )
         assert resp.status_code == 201
         data = resp.json()
         assert data["pass_threshold"] is None
         assert data["suite_id"] is None
 
     def test_create_admin_required(self, runner_client: TestClient) -> None:
-        resp = runner_client.post(self.URL, json={
-            "pipeline_id": str(_PIPELINE_ID),
-            "name": "Test Eval",
-            "eval_type": "regex",
-        })
+        resp = runner_client.post(
+            self.URL,
+            json={
+                "pipeline_id": str(_PIPELINE_ID),
+                "name": "Test Eval",
+                "eval_type": "regex",
+            },
+        )
         assert resp.status_code == 403
 
     def test_create_unauthorized(self, unauth_client: TestClient) -> None:
-        resp = unauth_client.post(self.URL, json={
-            "pipeline_id": str(_PIPELINE_ID),
-            "name": "Test Eval",
-            "eval_type": "regex",
-        })
+        resp = unauth_client.post(
+            self.URL,
+            json={
+                "pipeline_id": str(_PIPELINE_ID),
+                "name": "Test Eval",
+                "eval_type": "regex",
+            },
+        )
         assert resp.status_code in (401, 403)
 
     def test_create_invalid_eval_type(self, admin_client: TestClient) -> None:
-        resp = admin_client.post(self.URL, json={
-            "pipeline_id": str(_PIPELINE_ID),
-            "name": "Bad Eval",
-            "eval_type": "invalid_type",
-        })
+        resp = admin_client.post(
+            self.URL,
+            json={
+                "pipeline_id": str(_PIPELINE_ID),
+                "name": "Bad Eval",
+                "eval_type": "invalid_type",
+            },
+        )
         assert resp.status_code == 422
 
 
@@ -206,10 +221,12 @@ class TestListEvalDefinitions:
             _make_result(scalar_value=None),  # set_rls_user_context (user_id)
             _make_result(scalar_value=None),  # set_rls_user_context (org_role)
             _make_result(scalar_value=2),
-            _make_result(all_value=[
-                _make_eval_def(id=uuid.uuid4(), name="Eval 1"),
-                _make_eval_def(id=uuid.uuid4(), name="Eval 2"),
-            ]),
+            _make_result(
+                all_value=[
+                    _make_eval_def(id=uuid.uuid4(), name="Eval 1"),
+                    _make_eval_def(id=uuid.uuid4(), name="Eval 2"),
+                ]
+            ),
         ]
 
         async def override_session() -> AsyncGenerator[AsyncMock, None]:
@@ -252,9 +269,11 @@ class TestListEvalDefinitions:
             _make_result(scalar_value=None),  # set_rls_user_context (user_id)
             _make_result(scalar_value=None),  # set_rls_user_context (org_role)
             _make_result(scalar_value=1),
-            _make_result(all_value=[
-                _make_eval_def(name="Filtered Eval"),
-            ]),
+            _make_result(
+                all_value=[
+                    _make_eval_def(name="Filtered Eval"),
+                ]
+            ),
         ]
 
         async def override_session() -> AsyncGenerator[AsyncMock, None]:
@@ -334,11 +353,14 @@ class TestUpdateEvalDefinition:
             yield mock_session
 
         app.dependency_overrides[get_db_session] = override_session
-        resp = admin_client.put(f"{self.URL}/{_EVAL_DEF_ID}", json={
-            "name": "Updated Eval",
-            "pass_threshold": 0.9,
-            "suite_id": "suite-2",
-        })
+        resp = admin_client.put(
+            f"{self.URL}/{_EVAL_DEF_ID}",
+            json={
+                "name": "Updated Eval",
+                "pass_threshold": 0.9,
+                "suite_id": "suite-2",
+            },
+        )
         assert resp.status_code == 200
         data = resp.json()
         assert data["name"] == "Updated Eval"

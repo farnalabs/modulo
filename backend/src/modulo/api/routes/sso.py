@@ -8,7 +8,7 @@ from fastapi.responses import PlainTextResponse, RedirectResponse
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from modulo.api.dependencies import get_db_session
+from modulo.api.dependencies import get_db_session, require_feature
 from modulo.auth.sso import (
     oidc_get_authorize_url,
     oidc_process_callback,
@@ -47,6 +47,7 @@ class SsoProvidersResponse(BaseModel):
 
 @router.get("/sso/providers", response_model=SsoProvidersResponse)
 async def sso_providers(
+    _: None = require_feature("sso"),
     settings: Settings = Depends(get_settings),
 ) -> SsoProvidersResponse:
     """List configured SSO providers (OIDC) and whether SAML is enabled."""
@@ -71,6 +72,7 @@ async def sso_providers(
 async def oidc_login(
     provider: str,
     request: Request,
+    _: None = require_feature("sso"),
     settings: Settings = Depends(get_settings),
 ) -> Any:
     """Redirect the user to the OIDC provider's authorization page."""
@@ -89,6 +91,7 @@ async def oidc_login(
 async def oidc_callback(
     provider: str,
     request: Request,
+    _: None = require_feature("sso"),
     settings: Settings = Depends(get_settings),
     session: AsyncSession = Depends(get_db_session),
 ) -> RedirectResponse:
@@ -129,14 +132,10 @@ async def oidc_callback(
 @router.get("/saml/login")
 async def saml_login(
     request: Request,
+    _: None = require_feature("sso"),
     settings: Settings = Depends(get_settings),
 ) -> Any:
     """Redirect the user to the SAML IdP for authentication."""
-    if not settings.modulo_license_key:
-        raise HTTPException(
-            status_code=status.HTTP_402_PAYMENT_REQUIRED,
-            detail="SAML requires an enterprise license",
-        )
 
     public_url = settings.modulo_public_url.rstrip("/")
     acs_url = f"{public_url}/api/v1/auth/saml/acs"
@@ -152,6 +151,7 @@ async def saml_login(
 @router.post("/saml/acs")
 async def saml_acs(
     request: Request,
+    _: None = require_feature("sso"),
     settings: Settings = Depends(get_settings),
     session: AsyncSession = Depends(get_db_session),
 ) -> RedirectResponse:
@@ -160,11 +160,6 @@ async def saml_acs(
     On success, redirects the browser to the frontend callback URL with
     access and refresh tokens as query parameters.
     """
-    if not settings.modulo_license_key:
-        raise HTTPException(
-            status_code=status.HTTP_402_PAYMENT_REQUIRED,
-            detail="SAML requires an enterprise license",
-        )
 
     form = await request.form()
     raw_saml: object = form.get("SAMLResponse", "")
@@ -190,14 +185,10 @@ async def saml_acs(
 @router.get("/saml/metadata", response_class=PlainTextResponse)
 async def saml_metadata(
     request: Request,
+    _: None = require_feature("sso"),
     settings: Settings = Depends(get_settings),
 ) -> str:
     """Return SP metadata XML for SAML IdP configuration."""
-    if not settings.modulo_license_key:
-        raise HTTPException(
-            status_code=status.HTTP_402_PAYMENT_REQUIRED,
-            detail="SAML requires an enterprise license",
-        )
 
     public_url = settings.modulo_public_url.rstrip("/")
     acs_url = f"{public_url}/api/v1/auth/saml/acs"

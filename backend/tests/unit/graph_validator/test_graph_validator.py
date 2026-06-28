@@ -260,9 +260,7 @@ async def test_connector_not_found_is_error():
     cid = uuid.uuid4()
     snap = _snapshot(
         graph_json=_SINGLE_NODE,
-        connector_bindings=[
-            {"node_id": "a", "connector_instance_id": str(cid), "required_operations": []}
-        ],
+        connector_bindings=[{"node_id": "a", "connector_instance_id": str(cid), "required_operations": []}],
     )
     session = _session_returning([])  # no rows returned
     result = await GraphValidator().validate(snap, session)
@@ -275,9 +273,7 @@ async def test_connector_inactive_is_error():
     instance = _connector_instance(cid, status="disabled")
     snap = _snapshot(
         graph_json=_SINGLE_NODE,
-        connector_bindings=[
-            {"node_id": "a", "connector_instance_id": str(cid), "required_operations": []}
-        ],
+        connector_bindings=[{"node_id": "a", "connector_instance_id": str(cid), "required_operations": []}],
     )
     session = _session_returning([instance])
     result = await GraphValidator().validate(snap, session)
@@ -753,8 +749,12 @@ async def test_conditional_edge_valid_expression():
         graph_json={
             "nodes": [{"id": "a"}, {"id": "b"}, {"id": "c"}],
             "edges": [
-                {"source": "a", "target": "b", "type": "conditional",
-                 "condition_expression": "artifacts[-1].status == 'passed'"},
+                {
+                    "source": "a",
+                    "target": "b",
+                    "type": "conditional",
+                    "condition_expression": "artifacts[-1].status == 'passed'",
+                },
                 {"source": "a", "target": "c", "type": "normal"},
             ],
         }
@@ -787,8 +787,7 @@ async def test_conditional_edge_empty_expression_is_error():
         graph_json={
             "nodes": [{"id": "a"}, {"id": "b"}],
             "edges": [
-                {"source": "a", "target": "b", "type": "conditional",
-                 "condition_expression": ""},
+                {"source": "a", "target": "b", "type": "conditional", "condition_expression": ""},
             ],
         }
     )
@@ -804,8 +803,7 @@ async def test_conditional_edge_invalid_jmespath_is_error():
         graph_json={
             "nodes": [{"id": "a"}, {"id": "b"}],
             "edges": [
-                {"source": "a", "target": "b", "type": "conditional",
-                 "condition_expression": "artifacts[[].broken"},
+                {"source": "a", "target": "b", "type": "conditional", "condition_expression": "artifacts[[].broken"},
             ],
         }
     )
@@ -821,8 +819,7 @@ async def test_conditional_edge_does_not_create_cycle():
         graph_json={
             "nodes": [{"id": "a"}, {"id": "b"}],
             "edges": [
-                {"source": "a", "target": "b", "type": "conditional",
-                 "condition_expression": "true"},
+                {"source": "a", "target": "b", "type": "conditional", "condition_expression": "true"},
             ],
         }
     )
@@ -837,8 +834,7 @@ async def test_conditional_edge_whitespace_only_expression_is_error():
         graph_json={
             "nodes": [{"id": "a"}, {"id": "b"}],
             "edges": [
-                {"source": "a", "target": "b", "type": "conditional",
-                 "condition_expression": "   "},
+                {"source": "a", "target": "b", "type": "conditional", "condition_expression": "   "},
             ],
         }
     )
@@ -854,10 +850,8 @@ async def test_conditional_edge_mixed_valid_and_invalid():
         graph_json={
             "nodes": [{"id": "a"}, {"id": "b"}, {"id": "c"}],
             "edges": [
-                {"source": "a", "target": "b", "type": "conditional",
-                 "condition_expression": "true"},
-                {"source": "a", "target": "c", "type": "conditional",
-                 "condition_expression": "artifacts[[].broken"},
+                {"source": "a", "target": "b", "type": "conditional", "condition_expression": "true"},
+                {"source": "a", "target": "c", "type": "conditional", "condition_expression": "artifacts[[].broken"},
             ],
         }
     )
@@ -873,8 +867,7 @@ async def test_conditional_edge_normal_edges_still_checked():
         graph_json={
             "nodes": [{"id": "a"}, {"id": "b"}, {"id": "c"}],
             "edges": [
-                {"source": "a", "target": "b", "type": "conditional",
-                 "condition_expression": "true"},
+                {"source": "a", "target": "b", "type": "conditional", "condition_expression": "true"},
                 {"source": "a", "target": "c", "type": "normal"},
             ],
         }

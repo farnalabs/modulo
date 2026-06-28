@@ -179,9 +179,7 @@ async def test_update_api_key_updates_name_and_role() -> None:
     session.execute = AsyncMock(return_value=result)
     session.flush = AsyncMock()
 
-    updated = await update_api_key(
-        session, key_id, org_id, name="Updated", role="runner"
-    )
+    updated = await update_api_key(session, key_id, org_id, name="Updated", role="runner")
     assert updated is not None
     assert updated.name == "Updated"
     assert updated.role == "runner"
@@ -197,7 +195,5 @@ async def test_update_api_key_not_found_returns_none() -> None:
     session = AsyncMock()
     session.execute = AsyncMock(return_value=result)
 
-    updated = await update_api_key(
-        session, uuid.uuid4(), uuid.uuid4(), name="Nope"
-    )
+    updated = await update_api_key(session, uuid.uuid4(), uuid.uuid4(), name="Nope")
     assert updated is None

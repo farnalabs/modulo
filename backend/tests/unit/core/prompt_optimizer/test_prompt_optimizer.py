@@ -148,11 +148,13 @@ class TestPromptOptimizer:
     @pytest.fixture
     def mock_llm(self) -> AsyncMock:
         llm = AsyncMock()
-        llm.return_value = json.dumps({
-            "analysis": "Failures show brevity issue",
-            "suggested_prompt": "You are helpful. Provide full answers. Query: {{query}}",
-            "rationale": "Added detail requirement to fix brevity failures",
-        })
+        llm.return_value = json.dumps(
+            {
+                "analysis": "Failures show brevity issue",
+                "suggested_prompt": "You are helpful. Provide full answers. Query: {{query}}",
+                "rationale": "Added detail requirement to fix brevity failures",
+            }
+        )
         return llm
 
     @pytest.fixture
@@ -176,9 +178,7 @@ class TestPromptOptimizer:
         assert isinstance(args[1], HumanMessage)
         assert "Hello {{name}}" in args[1].content
 
-    async def test_optimize_returns_optimization_result(
-        self, optimizer: PromptOptimizer
-    ) -> None:
+    async def test_optimize_returns_optimization_result(self, optimizer: PromptOptimizer) -> None:
         result = await optimizer.optimize(
             "Hello {{name}}",
             _sample_eval_results(),
@@ -198,11 +198,13 @@ class TestPromptOptimizer:
 
     async def test_optimize_handles_empty_eval_results(self) -> None:
         mock = AsyncMock()
-        mock.return_value = json.dumps({
-            "analysis": "No data",
-            "suggested_prompt": "Hello {{name}}",
-            "rationale": "No failures to analyse",
-        })
+        mock.return_value = json.dumps(
+            {
+                "analysis": "No data",
+                "suggested_prompt": "Hello {{name}}",
+                "rationale": "No failures to analyse",
+            }
+        )
         optimizer = PromptOptimizer(mock)
 
         result = await optimizer.optimize("Hello {{name}}", [], {})

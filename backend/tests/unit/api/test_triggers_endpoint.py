@@ -273,6 +273,7 @@ def test_create_trigger_invalid_cron_returns_422(client: TestClient) -> None:
         patch("modulo.api.routes.triggers.validate_cron_expression", return_value="bad cron"),
     ):
         session = _make_mock_session()
+
         async def override_session() -> AsyncGenerator[AsyncMock, None]:
             yield session
 
@@ -460,4 +461,69 @@ def test_list_pipeline_triggers_returns_200(client: TestClient) -> None:
     body = resp.json()
     assert len(body["items"]) == 1
     assert body["items"][0]["trigger_type"] == "cron"
+    client.app.dependency_overrides[get_db_session] = app.dependency_overrides[get_db_session]
+
+
+def test_update_cron_config_sets_input_template(client: TestClient) -> None:
+    trigger = _make_mock_trigger()
+    with (
+        patch("modulo.api.routes.triggers.set_rls_org"),
+        patch("modulo.api.routes.triggers.validate_cron_expression", return_value=None),
+        patch("modulo.api.routes.triggers.compute_next_fire", return_value=_NOW),
+    ):
+        session = _make_mock_session()
+        session.execute = AsyncMock(return_value=_make_trigger_result([trigger]))
+
+        async def override_session() -> AsyncGenerator[AsyncMock, None]:
+            yield session
+
+        client.app.dependency_overrides[get_db_session] = override_session
+        resp = client.patch(
+            f"/api/v1/triggers/{_TRIGGER_ID}/cron",
+            json={"input_template": {"topic": "security", "severity": "high"}},
+        )
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["input_template"] == {"topic": "security", "severity": "high"}
+    client.app.dependency_overrides[get_db_session] = app.dependency_overrides[get_db_session]
+
+
+def test_preview_cron_schedule_returns_fire_times(client: TestClient) -> None:
+    trigger = _make_mock_trigger(cron_expression="0 * * * *")
+    with (
+        patch("modulo.api.routes.triggers.set_rls_org"),
+    ):
+        session = _make_mock_session()
+        session.execute = AsyncMock(return_value=_make_trigger_result([trigger]))
+
+        async def override_session() -> AsyncGenerator[AsyncMock, None]:
+            yield session
+
+        client.app.dependency_overrides[get_db_session] = override_session
+        resp = client.get(f"/api/v1/triggers/{_TRIGGER_ID}/cron/preview?count=5")
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert len(body["next_fire_times"]) == 5
+    assert body["cron_expression"] == "0 * * * *"
+    client.app.dependency_overrides[get_db_session] = app.dependency_overrides[get_db_session]
+
+
+def test_preview_cron_schedule_no_expression_returns_400(client: TestClient) -> None:
+    trigger = _make_mock_trigger(cron_expression=None)
+    with (
+        patch("modulo.api.routes.triggers.set_rls_org"),
+    ):
+        session = _make_mock_session()
+        session.execute = AsyncMock(return_value=_make_trigger_result([trigger]))
+
+        async def override_session() -> AsyncGenerator[AsyncMock, None]:
+            yield session
+
+        client.app.dependency_overrides[get_db_session] = override_session
+        resp = client.get(f"/api/v1/triggers/{_TRIGGER_ID}/cron/preview")
+
+    assert resp.status_code == 400
+    assert "no cron expression" in resp.json()["detail"].lower()
     client.app.dependency_overrides[get_db_session] = app.dependency_overrides[get_db_session]

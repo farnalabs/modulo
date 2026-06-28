@@ -182,3 +182,40 @@ def test_delete_agent_not_found_returns_404(client: TestClient) -> None:
 def test_list_agents_unauthenticated_returns_4xx(unauth_client: TestClient) -> None:
     resp = unauth_client.get("/api/v1/agents")
     assert resp.status_code in (401, 403)
+
+
+def test_create_agent_with_max_input_length(client: TestClient) -> None:
+    body = {**_AGENT_BODY, "max_input_length": 5000}
+    agent = _make_agent()
+    agent.max_input_length = 5000
+    with (
+        patch("modulo.api.routes.agents.create_agent", return_value=agent),
+        patch("modulo.api.routes.agents.set_rls_org"),
+    ):
+        resp = client.post("/api/v1/agents", json=body)
+    assert resp.status_code == 201
+    assert resp.json()["max_input_length"] == 5000
+
+
+def test_create_agent_without_max_input_length_defaults_to_null(client: TestClient) -> None:
+    agent = _make_agent()
+    agent.max_input_length = None
+    with (
+        patch("modulo.api.routes.agents.create_agent", return_value=agent),
+        patch("modulo.api.routes.agents.set_rls_org"),
+    ):
+        resp = client.post("/api/v1/agents", json=_AGENT_BODY)
+    assert resp.status_code == 201
+    assert resp.json()["max_input_length"] is None
+
+
+def test_update_agent_max_input_length(client: TestClient) -> None:
+    agent = _make_agent()
+    agent.max_input_length = 10000
+    with (
+        patch("modulo.api.routes.agents.update_agent", return_value=agent),
+        patch("modulo.api.routes.agents.set_rls_org"),
+    ):
+        resp = client.patch(f"/api/v1/agents/{_AGENT_ID}", json={"max_input_length": 10000})
+    assert resp.status_code == 200
+    assert resp.json()["max_input_length"] == 10000

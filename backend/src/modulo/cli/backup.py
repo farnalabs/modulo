@@ -129,8 +129,7 @@ def _export_checkpoint_blobs_sync(raw_url: str) -> list[dict[str, Any]]:
     with psycopg.connect(raw_url, row_factory=dict_row) as conn:
         with conn.cursor() as cur:
             cur.execute(
-                "SELECT * FROM checkpoint_blobs "
-                "ORDER BY organisation_id, thread_id, checkpoint_ns, channel, version"
+                "SELECT * FROM checkpoint_blobs ORDER BY organisation_id, thread_id, checkpoint_ns, channel, version"
             )
             for row in cur:
                 row["organisation_id"] = str(row["organisation_id"])
@@ -373,8 +372,7 @@ def restore(backup_dir: Path, db_url: str | None, yes: bool, previous_fernet_key
         if creds_json.exists() and current_key_hash != backup_key_hash:
             if not previous_fernet_key:
                 raise click.ClickException(
-                    "FERNET_KEY has changed since backup. "
-                    "Provide --previous-fernet-key to re-encrypt credentials."
+                    "FERNET_KEY has changed since backup. Provide --previous-fernet-key to re-encrypt credentials."
                 )
             click.echo("Re-encrypting credentials with current FERNET_KEY...")
             creds_data: dict[str, list[dict[str, Any]]] = json.loads(creds_json.read_text(encoding="utf-8"))

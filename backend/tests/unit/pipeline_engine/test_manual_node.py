@@ -192,10 +192,12 @@ async def test_manual_node_accepts_human_output_on_resume():
     node_def = {"id": "manual-unit-3", "node_type": "manual"}
     node_fn = make_manual_node_fn(node_def)
 
-    result = await node_fn({
-        "artifacts": [],
-        "_hitl_decision": {"output": {"review": "approved", "comments": "LGTM"}},
-    })
+    result = await node_fn(
+        {
+            "artifacts": [],
+            "_hitl_decision": {"output": {"review": "approved", "comments": "LGTM"}},
+        }
+    )
 
     assert "manual_output" in result
     assert result["manual_output"] == {"review": "approved", "comments": "LGTM"}
@@ -217,10 +219,12 @@ async def test_manual_node_validates_required_fields():
     node_fn = make_manual_node_fn(node_def)
 
     with pytest.raises(ValueError, match="missing required field"):
-        await node_fn({
-            "artifacts": [],
-            "_hitl_decision": {"output": {"decision": "approve"}},  # missing "reason"
-        })
+        await node_fn(
+            {
+                "artifacts": [],
+                "_hitl_decision": {"output": {"decision": "approve"}},  # missing "reason"
+            }
+        )
 
 
 async def test_manual_node_valid_output_passes_validation():
@@ -234,10 +238,12 @@ async def test_manual_node_valid_output_passes_validation():
     }
     node_fn = make_manual_node_fn(node_def)
 
-    result = await node_fn({
-        "artifacts": [],
-        "_hitl_decision": {"output": {"decision": "approve", "notes": "ok"}},
-    })
+    result = await node_fn(
+        {
+            "artifacts": [],
+            "_hitl_decision": {"output": {"decision": "approve", "notes": "ok"}},
+        }
+    )
 
     assert result["manual_output"]["decision"] == "approve"
 
@@ -247,10 +253,12 @@ async def test_manual_node_no_schema_passes_any_output():
     node_def = {"id": "manual-unit-6", "node_type": "manual"}
     node_fn = make_manual_node_fn(node_def)
 
-    result = await node_fn({
-        "artifacts": [],
-        "_hitl_decision": {"output": {"anything": 42, "nested": {"key": True}}},
-    })
+    result = await node_fn(
+        {
+            "artifacts": [],
+            "_hitl_decision": {"output": {"anything": 42, "nested": {"key": True}}},
+        }
+    )
 
     assert result["manual_output"] == {"anything": 42, "nested": {"key": True}}
 
@@ -261,10 +269,12 @@ async def test_manual_node_preserves_prior_artifacts():
     node_fn = make_manual_node_fn(node_def)
     prior = {"node_id": "prior-node", "status": "executed"}
 
-    result = await node_fn({
-        "artifacts": [prior],
-        "_hitl_decision": {"output": {"data": "ok"}},
-    })
+    result = await node_fn(
+        {
+            "artifacts": [prior],
+            "_hitl_decision": {"output": {"data": "ok"}},
+        }
+    )
 
     assert len(result["artifacts"]) == 2
     assert result["artifacts"][0] == prior
@@ -275,10 +285,12 @@ async def test_manual_node_handles_non_dict_decision():
     node_def = {"id": "manual-unit-8", "node_type": "manual"}
     node_fn = make_manual_node_fn(node_def)
 
-    result = await node_fn({
-        "artifacts": [],
-        "_hitl_decision": {"output": "plain string"},
-    })
+    result = await node_fn(
+        {
+            "artifacts": [],
+            "_hitl_decision": {"output": "plain string"},
+        }
+    )
 
     assert result.get("manual_output") is None
     assert result["artifacts"][0]["human_output"] is None
