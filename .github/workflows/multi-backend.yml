@@ -37,7 +37,7 @@ jobs:
         working-directory: backend
     steps:
       - name: Start MariaDB
-        shell: pwsh
+        shell: powershell
         run: |
           docker rm -f modulo-mariadb 2>$null
           docker run -d --name modulo-mariadb `
@@ -55,7 +55,7 @@ jobs:
           }
       - name: Stop MariaDB
         if: always()
-        shell: pwsh
+        shell: powershell
         run: docker rm -f modulo-mariadb 2>$null
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v7

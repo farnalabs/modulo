@@ -20,6 +20,22 @@ jobs:
       - uses: astral-sh/setup-uv@v7
         with:
           python-version: "3.12.4"
+      - name: Start Postgres
+        shell: powershell
+        run: |
+          docker rm -f modulo-test-pg 2>$null
+          docker run -d --name modulo-test-pg `
+            -e POSTGRES_USER=modulo_test `
+            -e POSTGRES_PASSWORD=modulo_test `
+            -e POSTGRES_DB=modulo_test `
+            -p 5433:5432 `
+            postgres:16-alpine
+          Write-Host "Waiting for Postgres..."
+          for ($i=0; $i -lt 60; $i++) {
+            $ok = docker exec modulo-test-pg pg_isready -U modulo_test 2>$null
+            if ($?) { Write-Host "Postgres ready"; break }
+            Start-Sleep -Seconds 2
+          }
       - name: Install backend deps
         working-directory: backend
         run: uv sync --frozen
@@ -31,3 +47,7 @@ jobs:
           FERNET_KEY: "vK-xU7GqHLflg_GqzJ1FqWI7pHWoHSIyukf4wx-tMHI="
           DATABASE_URL: "postgresql+asyncpg://modulo_test:modulo_test@localhost:5433/modulo_test"
           TESTCONTAINERS_RYUK_DISABLED: "true"
+      - name: Stop Postgres
+        if: always()
+        shell: powershell
+        run: docker rm -f modulo-test-pg 2>$null
