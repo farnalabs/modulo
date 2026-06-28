@@ -252,22 +252,35 @@ async def list_library_primitives_endpoint(
     session: AsyncSession = Depends(get_db_session),
     principal: AuthenticatedPrincipal = Depends(get_current_user),
 ) -> LibraryPrimitiveListResponse:
+    import logging
+    _log = logging.getLogger(__name__)
     async with session.begin():
         await set_rls_org(session, principal.organisation_id)
         await set_rls_user_context(session, principal.user_id, principal.org_role)
         include_community = source != "local"
-        result = await list_primitives(
-            session,
-            principal.organisation_id,
-            primitive_type=primitive_type,
-            search=search,
-            page=page,
-            page_size=page_size,
-            include_community=include_community,
-            cursor=cursor,
-        )
+        try:
+            result = await list_primitives(
+                session,
+                principal.organisation_id,
+                primitive_type=primitive_type,
+                search=search,
+                page=page,
+                page_size=page_size,
+                include_community=include_community,
+                cursor=cursor,
+            )
+        except Exception:
+            _log.exception("list_primitives failed")
+            raise
+    try:
+        items = [LibraryPrimitiveResponse.model_validate(p) for p in result.items]
+    except Exception:
+        _log.exception("LibraryPrimitiveResponse.model_validate failed on %d items", len(result.items))
+        if result.items:
+            _log.error("first item type=%s id=%s", type(result.items[0]).__name__, getattr(result.items[0], "id", "?"))
+        raise
     return LibraryPrimitiveListResponse(
-        items=[LibraryPrimitiveResponse.model_validate(p) for p in result.items],
+        items=items,
         total=result.total,
         page=result.page,
         page_size=result.page_size,

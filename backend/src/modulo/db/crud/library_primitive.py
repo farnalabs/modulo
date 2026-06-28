@@ -80,6 +80,8 @@ async def list_library_primitives(
     search: str | None = None,
     cursor: str | None = None,
 ) -> PageResult[LibraryPrimitive]:
+    import logging
+    _log = logging.getLogger(__name__)
     conditions = []
 
     if org_id is not None:
@@ -114,21 +116,29 @@ async def list_library_primitives(
             has_more=cp.has_more,
         )
 
-    count_stmt = select(func.count()).select_from(LibraryPrimitive)
-    if conditions:
-        count_stmt = count_stmt.where(*conditions)
-    total = (await session.execute(count_stmt)).scalar_one()
+    try:
+        count_stmt = select(func.count()).select_from(LibraryPrimitive)
+        if conditions:
+            count_stmt = count_stmt.where(*conditions)
+        total = (await session.execute(count_stmt)).scalar_one()
+    except Exception:
+        _log.exception("count query failed")
+        raise
 
-    items_stmt = (
-        select(LibraryPrimitive)
-        .order_by(LibraryPrimitive.created_at.desc())
-        .offset((page - 1) * page_size)
-        .limit(page_size)
-    )
-    if conditions:
-        items_stmt = items_stmt.where(*conditions)
+    try:
+        items_stmt = (
+            select(LibraryPrimitive)
+            .order_by(LibraryPrimitive.created_at.desc())
+            .offset((page - 1) * page_size)
+            .limit(page_size)
+        )
+        if conditions:
+            items_stmt = items_stmt.where(*conditions)
 
-    items = list((await session.execute(items_stmt)).scalars())
+        items = list((await session.execute(items_stmt)).scalars())
+    except Exception:
+        _log.exception("items query failed")
+        raise
 
     return PageResult(items=items, total=total, page=page, page_size=page_size)
 
