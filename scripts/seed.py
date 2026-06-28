@@ -68,19 +68,24 @@ async def seed() -> None:
     print(f"[seed] Starting — org='{SEED_ORG_NAME}'")
     async with AsyncSessionLocal() as session:
         try:
-            slug = SEED_ORG_NAME.lower().replace(" ", "-")
+            # Use existing first org (where MODULO_USERS users live) rather than creating a new one
             existing = (await session.execute(
-                select(Organisation).where(Organisation.slug == slug)
+                select(Organisation).order_by(Organisation.created_at).limit(1)
             )).scalar_one_or_none()
-            if existing is not None:
-                print(f"[seed] '{SEED_ORG_NAME}' exists — skipping")
+            if existing is None:
+                print("[seed] No org found — creating")
+                existing = Organisation(name=SEED_ORG_NAME, slug=SEED_ORG_NAME.lower().replace(" ", "-"), status="active", settings_json={}, otel_config_json={})
+                session.add(existing)
+                await session.flush()
+
+            org = existing
+            # Check if seed data already exists in this org (idempotency)
+            count = (await session.execute(select(Pipeline).where(Pipeline.organisation_id == org.id).limit(1))).first()
+            if count is not None:
+                print(f"[seed] Org '{org.name}' already has data — skipping")
                 await session.commit()
                 return
-
-            org = Organisation(name=SEED_ORG_NAME, slug=slug, status="active", settings_json={}, otel_config_json={})
-            session.add(org)
-            await session.flush()
-            print(f"[seed] Organisation '{org.name}' ({org.id})")
+            print(f"[seed] Using org '{org.name}' ({org.id})")
 
             # ── Users (12) ────────────────────────────────────────────────
             pw_hash = bcrypt.hashpw(SEED_PASSWORD.encode(), bcrypt.gensalt()).decode()
