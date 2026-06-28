@@ -38,6 +38,27 @@ asyncio.run(fix())
 .venv/bin/alembic upgrade head || echo "WARNING: Migration failed — continuing anyway"
 
 if [ "$MODULO_DEMO_MODE" = "true" ]; then
+  echo "=== Ensuring admin user has known password ==="
+  .venv/bin/python3 -c "
+import os
+os.environ['DATABASE_URL'] = os.environ.get('DATABASE_URL', '')
+from modulo.db.session import AsyncSessionLocal
+from modulo.auth.passwords import hash_password
+from sqlalchemy import select, text
+import asyncio
+async def fix():
+    async with AsyncSessionLocal() as s:
+        async with s.begin():
+            r = await s.execute(select(text('id')).select_from(text('users')).where(text(\"email = 'admin'\")))
+            row = r.one_or_none()
+            if row:
+                pw = hash_password('admin123')
+                await s.execute(text(\"UPDATE users SET password_hash = :pw, org_role = 'admin' WHERE email = 'admin'\"), {'pw': pw})
+                print('admin user updated with known password + admin role')
+            else:
+                print('admin user not found — skipping')
+asyncio.run(fix())
+" 2>&1 || echo "WARNING: Admin password fix failed — continuing anyway"
   echo "=== Seeding demo data (idempotent) ==="
   cd /app
   .venv/bin/python3 /app/scripts/seed.py || echo "WARNING: Seed script failed — continuing anyway"
