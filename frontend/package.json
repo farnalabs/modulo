@@ -4,7 +4,7 @@
   "private": true,
   "scripts": {
     "generate:api": "powershell -ExecutionPolicy Bypass -File scripts/generate-api-types.ps1",
-    "dev": "npm run generate:api && vite",
+    "dev": "vite",
     "build": "vue-tsc && vite build",
     "test:e2e": "playwright test",
     "test:unit": "vitest run src",

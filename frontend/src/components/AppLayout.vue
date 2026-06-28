@@ -104,7 +104,7 @@
 </template>
 
 <script lang="ts">
-import { defineComponent, computed, h, resolveComponent } from 'vue'
+import { defineComponent, computed as vueComputed, h, resolveComponent } from 'vue'
 import { useRoute } from 'vue-router'
 
 const icons: Record<string, string> = {
@@ -127,7 +127,7 @@ export const SidebarLink = defineComponent({
   props: { to: { type: String, required: true }, icon: { type: String, required: true }, label: { type: String, required: true } },
   setup(props) {
     const route = useRoute()
-    const isActive = computed(() => route.path === props.to || (props.to !== '/' && route.path.startsWith(props.to + '/')))
+    const isActive = vueComputed(() => route.path === props.to || (props.to !== '/' && route.path.startsWith(props.to + '/')))
     const RouterLink = resolveComponent('router-link') as any
     return () => h(RouterLink, { to: props.to, class: `flex items-center gap-3 rounded-md px-3 py-2 text-sm font-medium transition-colors ${isActive.value ? 'bg-accent text-accent-foreground' : 'text-muted-foreground hover:bg-accent/50 hover:text-foreground'}` }, [
       h('span', { class: 'h-4 w-4', innerHTML: icons[props.icon] }),
@@ -138,7 +138,7 @@ export const SidebarLink = defineComponent({
 </script>
 
 <script setup lang="ts">
-import { ref, computed } from 'vue'
+import { ref } from 'vue'
 import { getAccessToken, clearAccessToken } from '../lib/api/client'
 
 const mobileOpen = ref(false)
