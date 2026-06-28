@@ -1,7 +1,4 @@
-# fly.toml app configuration for app.modulo.run
-# See https://fly.io/docs/reference/configuration/
-
-app = 'app-modulo'
+app = 'demo-modulo'
 primary_region = 'lhr'
 
 [build]
@@ -17,8 +14,8 @@ primary_region = 'lhr'
 
 [env]
   MODULO_DB = "postgres"
-  MODULO_PUBLIC_URL = "https://app.modulo.run"
-  MODULO_DEMO_MODE = "false"
+  MODULO_PUBLIC_URL = "https://demo.modulo.run"
+  MODULO_DEMO_MODE = "true"
   MODULO_PLUGIN_DISCOVERY = "false"
   MODULO_MAX_LOCAL_CONCURRENCY = "4"
   REDIS_URL = ""

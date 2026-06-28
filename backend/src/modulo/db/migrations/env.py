@@ -1,10 +1,9 @@
-import asyncio
 import logging
 import os
 from logging.config import fileConfig
 
 from alembic import context
-from sqlalchemy.ext.asyncio import async_engine_from_config
+from sqlalchemy import create_engine
 from sqlalchemy.pool import NullPool
 
 from modulo.db.models import Base
@@ -23,26 +22,25 @@ if config is not None:
     # Allow DATABASE_URL env var to override the alembic.ini connection string.
     _db_url = os.environ.get("DATABASE_URL")
     if _db_url:
-        # SQLAlchemy async drivers need postgresql+asyncpg:// (not postgres://
-        # or postgresql://). Handle all three input forms:
-        #   postgres://...            -> postgresql+asyncpg://...
-        #   postgresql://...          -> postgresql+asyncpg://...
-        #   postgresql+asyncpg://...  -> already correct (no-op)
+        # Convert any async driver prefix to a sync driver prefix.
+        # Alembic env.py runs in a sync context (thread pool or CLI),
+        # so a sync engine avoids all event-loop conflicts.
         if _db_url.startswith("postgresql+asyncpg://"):
-            pass
+            _db_url = _db_url.replace("postgresql+asyncpg://", "postgresql+psycopg2://", 1)
+        elif _db_url.startswith("mysql+asyncmy://"):
+            _db_url = _db_url.replace("mysql+asyncmy://", "mysql+pymysql://", 1)
         elif _db_url.startswith("postgresql://"):
-            _db_url = _db_url.replace("postgresql://", "postgresql+asyncpg://", 1)
+            _db_url = _db_url.replace("postgresql://", "postgresql+psycopg2://", 1)
         elif _db_url.startswith("postgres://"):
-            _db_url = _db_url.replace("postgres://", "postgresql+asyncpg://", 1)
-        # Strip sslmode query params — asyncpg defaults to 'prefer' mode,
-        # so sslmode is unnecessary and causes KeywordArgument errors.
-    _db_url = _db_url.replace("?sslmode=disable", "?ssl=disable")
-    _db_url = _db_url.replace("&sslmode=disable", "")
-    config.set_main_option("sqlalchemy.url", _db_url)
+            _db_url = _db_url.replace("postgres://", "postgresql+psycopg2://", 1)
+        elif _db_url.startswith("mysql://"):
+            _db_url = _db_url.replace("mysql://", "mysql+pymysql://", 1)
+        _db_url = _db_url.replace("?sslmode=disable", "")
+        _db_url = _db_url.replace("&sslmode=disable", "")
+        config.set_main_option("sqlalchemy.url", _db_url)
 
 
 def _detect_backend(url: str) -> str:
-    """Return backend name from URL scheme."""
     if url.startswith("postgresql"):
         return "postgresql"
     if url.startswith("mysql"):
@@ -68,7 +66,7 @@ def run_migrations_offline() -> None:
         context.run_migrations()
 
 
-def do_run_migrations(connection):  # type: ignore[no-untyped-def]
+def do_run_migrations(connection):
     backend = _detect_backend(str(connection.engine.url))
     _log.info("Running migrations for %s backend", backend)
 
@@ -81,43 +79,30 @@ def do_run_migrations(connection):  # type: ignore[no-untyped-def]
         context.run_migrations()
 
 
-async def run_async_migrations() -> None:
-    connectable = async_engine_from_config(
-        config.get_section(config.config_ini_section, {}),
-        prefix="sqlalchemy.",
-        poolclass=NullPool,
-    )
-    try:
-        async with connectable.connect() as connection:
-            await connection.run_sync(do_run_migrations)
-    finally:
-        await connectable.dispose()
-
-
 def run_migrations_online() -> None:
-    """Create a dedicated event loop and run async migrations.
+    """Run migrations via a sync engine — no event loop needed.
 
-    env.py is called from asyncio.to_thread (thread pool), NOT the main
-    async context, so there is no running event loop to conflict with.
+    env.py runs in a thread pool (asyncio.to_thread), so a sync engine
+    avoids all event-loop conflicts with the main async context.
     """
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
+    url = config.get_main_option("sqlalchemy.url")
+    backend = _detect_backend(url)
+
+    sync_url = url
+    if "+async" in sync_url:
+        if sync_url.startswith("postgresql+asyncpg://"):
+            sync_url = sync_url.replace("postgresql+asyncpg://", "postgresql+psycopg2://", 1)
+        elif sync_url.startswith("mysql+asyncmy://"):
+            sync_url = sync_url.replace("mysql+asyncmy://", "mysql+pymysql://", 1)
+
+    engine = create_engine(sync_url, poolclass=NullPool)
     try:
-        loop.run_until_complete(run_async_migrations())
+        with engine.connect() as connection:
+            do_run_migrations(connection)
     finally:
-        try:
-            loop.run_until_complete(loop.shutdown_asyncgens())
-        except RuntimeError:
-            pass
-        loop.close()
-        try:
-            asyncio.set_event_loop(None)
-        except RuntimeError:
-            pass
+        engine.dispose()
 
 
-# Only auto-run when env.py is invoked by Alembic CLI / command.upgrade.
-# When imported as a module (e.g. by main.py), the caller manages the lifecycle.
 if config is not None:
     if context.is_offline_mode():
         run_migrations_offline()
