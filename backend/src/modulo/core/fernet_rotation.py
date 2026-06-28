@@ -252,7 +252,7 @@ async def rotate_all_encrypted_data(
 ) -> RotationResult:
     """Re-encrypt all Fernet-encrypted data across all stores.
 
-    Iterates all 7 data stores and re-encrypts each row with *new_key*,
+    Iterates all 8 data stores and re-encrypts each row with *new_key*,
     falling back to *old_key* for decryption of existing data.
 
     Args:

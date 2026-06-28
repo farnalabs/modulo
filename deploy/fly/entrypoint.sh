@@ -25,17 +25,28 @@ import asyncio
 async def fix():
     async with AsyncSessionLocal() as s:
         async with s.begin():
-            # Remove stale 0037 entry if present (branch migration, file missing on main)
             await s.execute(text(\"DELETE FROM alembic_version WHERE version_num = '0037_agent_columns'\"))
-            # Add default_autonomy_level to pipelines if missing
+asyncio.run(fix())
+" 2>&1 || echo "WARNING: Alembic fix step failed — continuing anyway"
+.venv/bin/alembic upgrade head || echo "WARNING: Migration failed — continuing anyway"
+
+echo "=== Applying schema patches (columns missing from base migrations) ==="
+.venv/bin/python3 -c "
+import os
+os.environ['DATABASE_URL'] = os.environ.get('DATABASE_URL', '')
+from modulo.db.session import AsyncSessionLocal
+from sqlalchemy import text
+import asyncio
+async def fix():
+    async with AsyncSessionLocal() as s:
+        async with s.begin():
             await s.execute(text(\"ALTER TABLE pipelines ADD COLUMN IF NOT EXISTS default_autonomy_level VARCHAR(30) DEFAULT 'manual_approval'\"))
-            # Add agent columns if still missing
             await s.execute(text(\"ALTER TABLE agents ADD COLUMN IF NOT EXISTS max_input_length INTEGER\"))
             await s.execute(text(\"ALTER TABLE agents ADD COLUMN IF NOT EXISTS token_budget INTEGER\"))
             await s.execute(text(\"ALTER TABLE agents ADD COLUMN IF NOT EXISTS library_id UUID\"))
+            print('Schema patches applied')
 asyncio.run(fix())
-" 2>&1 || echo "WARNING: Schema fix step failed — continuing anyway"
-.venv/bin/alembic upgrade head || echo "WARNING: Migration failed — continuing anyway"
+" 2>&1 || echo "WARNING: Schema patch step failed — continuing anyway"
 
 echo "=== Ensuring app.modulo.run admin user exists ==="
 .venv/bin/python3 -c "
