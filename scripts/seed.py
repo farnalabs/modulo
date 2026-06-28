@@ -394,6 +394,7 @@ async def seed() -> None:
                 {"action": "release", "version": "2.3.0", "channel": "stable", "event": "release_published"},
                 {"action": "review", "pr_number": 103, "repo": "farnalabs/modulo", "automated": True},
             ]
+            runs_list = []
             for i in range(15):
                 pi = i % len(pipelines_list)
                 pipeline = pipelines_list[pi]
@@ -416,6 +417,7 @@ async def seed() -> None:
                     owner_team_id=teams[i % 3].id if teams else None,
                 )
                 session.add(run)
+                runs_list.append(run)
                 await session.flush()
 
                 # Stages for each run
