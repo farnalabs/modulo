@@ -151,3 +151,127 @@ class TestPublishPullVerifyFlow(_PreserveRegistry):
         public_key_obj = Ed25519PublicKey.from_public_bytes(bytes.fromhex(kp["public_key"]))
         verified = verify_primitive_signature(pulled, public_key=public_key_obj)
         assert verified is True
+
+
+class TestPEMCryptoV2:
+    """Tests for the PEM/base64 Ed25519 crypto module."""
+
+    def test_generate_keypair_returns_pem_strings(self):
+        from modulo.registry.crypto import generate_keypair
+
+        priv_pem, pub_pem = generate_keypair()
+        assert priv_pem.startswith("-----BEGIN PRIVATE KEY-----")
+        assert pub_pem.startswith("-----BEGIN PUBLIC KEY-----")
+
+    def test_generate_keypair_different_each_call(self):
+        from modulo.registry.crypto import generate_keypair
+
+        kp1 = generate_keypair()
+        kp2 = generate_keypair()
+        assert kp1 != kp2
+
+    def test_sign_and_verify_roundtrip(self):
+        from modulo.registry.crypto import generate_keypair, sign, verify
+
+        priv_pem, pub_pem = generate_keypair()
+        data = b"hello world"
+        sig = sign(priv_pem, data)
+        assert isinstance(sig, str) and len(sig) > 0
+        assert verify(pub_pem, data, sig) is True
+
+    def test_verify_rejects_tampered_data(self):
+        from modulo.registry.crypto import generate_keypair, sign, verify
+
+        priv_pem, pub_pem = generate_keypair()
+        data = b"original data"
+        sig = sign(priv_pem, data)
+        assert verify(pub_pem, b"tampered data", sig) is False
+
+    def test_verify_rejects_wrong_key(self):
+        from modulo.registry.crypto import generate_keypair, sign, verify
+
+        priv1, _ = generate_keypair()
+        _, pub2 = generate_keypair()
+        data = b"shared secret"
+        sig = sign(priv1, data)
+        assert verify(pub2, data, sig) is False
+
+    def test_verify_rejects_wrong_signature(self):
+        from modulo.registry.crypto import generate_keypair, sign, verify
+
+        priv_pem, pub_pem = generate_keypair()
+        data = b"test"
+        sign(priv_pem, data)
+        import base64
+
+        mangled = base64.b64encode(b"\x00" * 64).decode()
+        assert verify(pub_pem, data, mangled) is False
+
+    def test_sign_and_verify_json_payload(self):
+        import json
+
+        from modulo.registry.crypto import generate_keypair, sign, verify
+
+        priv_pem, pub_pem = generate_keypair()
+        payload = json.dumps({"author": "test", "version": "1.0"}, separators=(",", ":"), sort_keys=True).encode()
+        sig = sign(priv_pem, payload)
+        assert verify(pub_pem, payload, sig) is True
+
+
+class TestTrustAnchor:
+    """Tests for trust anchor verification."""
+
+    def test_trust_anchor_public_key_is_pem(self):
+        from modulo.registry.crypto import get_trust_anchor_public_key_pem
+
+        pub_pem = get_trust_anchor_public_key_pem()
+        assert pub_pem.startswith("-----BEGIN PUBLIC KEY-----")
+
+    def test_sign_public_key_and_verify_roundtrip(self):
+        from modulo.registry.crypto import (
+            generate_keypair,
+            sign_with_trust_anchor,
+            verify_trust_anchor,
+        )
+
+        _, pub_pem = generate_keypair()
+        ta_sig = sign_with_trust_anchor(pub_pem)
+        assert isinstance(ta_sig, str) and len(ta_sig) > 0
+        assert verify_trust_anchor(pub_pem, ta_sig) is True
+
+    def test_verify_trust_anchor_rejects_unsigned_key(self):
+        from modulo.registry.crypto import (
+            generate_keypair,
+            sign_with_trust_anchor,
+            verify_trust_anchor,
+        )
+
+        _, pub1 = generate_keypair()
+        _, pub2 = generate_keypair()
+        sig = sign_with_trust_anchor(pub1)
+        assert verify_trust_anchor(pub2, sig) is False
+
+    def test_verify_trust_anchor_with_explicit_key(self):
+        from modulo.registry.crypto import (
+            generate_keypair,
+            get_trust_anchor_public_key_pem,
+            sign_with_trust_anchor,
+            verify_trust_anchor,
+        )
+
+        _, pub_pem = generate_keypair()
+        ta_sig = sign_with_trust_anchor(pub_pem)
+        ta_pub = get_trust_anchor_public_key_pem()
+        assert verify_trust_anchor(pub_pem, ta_sig, ta_pub) is True
+
+    def test_verify_trust_anchor_rejects_tampered_sig(self):
+        import base64
+
+        from modulo.registry.crypto import (
+            generate_keypair,
+            verify_trust_anchor,
+        )
+
+        _, pub_pem = generate_keypair()
+        ta_sig = base64.b64encode(b"\x00" * 64).decode()
+        assert verify_trust_anchor(pub_pem, ta_sig) is False
