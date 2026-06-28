@@ -1,7 +1,7 @@
-"""Sync all tables with ORM model columns that were added without migration.
+"""Add all remaining missing ORM columns across all tables.
 
-Revision ID: 0038_sync_missing_columns
-Revises: 0036_conditional_edges
+Revision ID: 0039_sync_remaining_columns
+Revises: 0038_agent_missing_columns
 Create Date: 2026-06-28
 """
 
@@ -9,8 +9,8 @@ from collections.abc import Sequence
 
 from alembic import op
 
-revision: str = "0038_sync_missing_columns"
-down_revision: str | Sequence[str] | None = "0036_conditional_edges"
+revision: str = "0039_sync_remaining_columns"
+down_revision: str | Sequence[str] | None = "0038_agent_missing_columns"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
@@ -33,12 +33,6 @@ def _add_fk_if_not_exists(table: str, constraint: str, col: str, ref_table: str,
 
 
 def upgrade() -> None:
-    # agents
-    _add_col("agents", "max_input_length", "INTEGER")
-    _add_col("agents", "token_budget", "INTEGER")
-    _add_col("agents", "library_id", "UUID")
-    _add_fk_if_not_exists("agents", "fk_agents_library_id", "library_id", "library_primitives", "id", "SET NULL")
-
     # pipeline_snapshots
     _add_col("pipeline_snapshots", "environment_profile_id", "UUID")
     _add_col("pipeline_snapshots", "default_autonomy_level", "VARCHAR(30)")
