@@ -75,19 +75,19 @@ async def change_password(
 ) -> dict[str, str]:
     from modulo.auth.passwords import verify_password
 
-    user = await get_user_by_id(session, current_user.user_id)
-    if user is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
+    async with session.begin():
+        user = await get_user_by_id(session, current_user.user_id)
+        if user is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
 
-    if not user.password_hash or not verify_password(body.current_password, user.password_hash):
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Current password is incorrect")
+        if not user.password_hash or not verify_password(body.current_password, user.password_hash):
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Current password is incorrect")
 
-    try:
-        validate_password_strength(body.new_password)
-    except ValueError as exc:
-        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
+        try:
+            validate_password_strength(body.new_password)
+        except ValueError as exc:
+            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
 
-    user.password_hash = hash_password(body.new_password)
-    session.add(user)
-    await session.commit()
+        user.password_hash = hash_password(body.new_password)
+        session.add(user)
     return {"detail": "Password changed successfully"}
