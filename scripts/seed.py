@@ -379,6 +379,7 @@ async def seed() -> None:
                 eval_defs_list.append(ed)
 
             # ── Eval Results (12) ─────────────────────────────────────────
+            runs_list = []
             now = datetime.now(UTC)
             for i in range(12):
                 er = EvalResult(
@@ -425,7 +426,6 @@ async def seed() -> None:
                 {"action": "release", "version": "2.3.0", "channel": "stable", "event": "release_published"},
                 {"action": "review", "pr_number": 103, "repo": "farnalabs/modulo", "automated": True},
             ]
-            runs_list = []
             for i in range(15):
                 pi = i % len(pipelines_list)
                 pipeline = pipelines_list[pi]
