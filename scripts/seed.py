@@ -378,19 +378,7 @@ async def seed() -> None:
                 await session.flush()
                 eval_defs_list.append(ed)
 
-            # ── Eval Results (12) ─────────────────────────────────────────
-            runs_list = []
-            now = datetime.now(UTC)
-            for i in range(12):
-                er = EvalResult(
-                    organisation_id=org.id, eval_id=eval_defs_list[i % 4].id,
-                    run_id=runs_list[i % len(runs_list)].id, passed=i % 3 != 0,
-                    score=0.75 + (i % 3) * 0.1, detail=f"eval-result-{i}: {'pass' if i % 3 != 0 else 'fail'}",
-                    evaluated_at=now - timedelta(hours=i * 6),
-                )
-                session.add(er)
-            await session.flush()
-            print(f"[seed] 4 eval definitions + 12 eval results")
+            print(f"[seed] 4 eval definitions")
 
             # ── Connectors (3) ───────────────────────────────────────────
             for cname, ctype, cfg in [
@@ -407,6 +395,8 @@ async def seed() -> None:
             print(f"[seed] 3 connectors")
 
             # ── Runs (15) with stages ─────────────────────────────────────
+            runs_list = []
+            now = datetime.now(UTC)
             statuses = ["complete", "complete", "complete", "complete", "complete", "complete", "failed", "failed", "awaiting_human", "awaiting_human", "running", "cancelled", "complete", "complete", "complete"]
             trigger_types = ["manual", "manual", "webhook", "manual", "webhook", "cron", "manual", "manual", "webhook", "manual", "cron", "manual", "manual", "webhook", "manual"]
             run_inputs = [
@@ -489,6 +479,18 @@ async def seed() -> None:
             ))
             await session.flush()
             print(f"[seed] 2 API keys")
+
+            # ── Eval Results (12) ─────────────────────────────────────────
+            for i in range(12):
+                er = EvalResult(
+                    organisation_id=org.id, eval_id=eval_defs_list[i % 4].id,
+                    run_id=runs_list[i % len(runs_list)].id, passed=i % 3 != 0,
+                    score=0.75 + (i % 3) * 0.1, detail=f"eval-result-{i}: {'pass' if i % 3 != 0 else 'fail'}",
+                    evaluated_at=now - timedelta(hours=i * 6),
+                )
+                session.add(er)
+            await session.flush()
+            print(f"[seed] 12 eval results")
 
             # ── Audit Events (25) ─────────────────────────────────────────
             audit_defs = [
