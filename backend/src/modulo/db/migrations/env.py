@@ -36,8 +36,9 @@ if config is not None:
             _db_url = _db_url.replace("postgres://", "postgresql+asyncpg://", 1)
         # Strip sslmode query params — asyncpg defaults to 'prefer' mode,
         # so sslmode is unnecessary and causes KeywordArgument errors.
-        _db_url = _db_url.replace("?sslmode=disable", "")
-        config.set_main_option("sqlalchemy.url", _db_url)
+    _db_url = _db_url.replace("?sslmode=disable", "?ssl=disable")
+    _db_url = _db_url.replace("&sslmode=disable", "")
+    config.set_main_option("sqlalchemy.url", _db_url)
 
 
 def _detect_backend(url: str) -> str:

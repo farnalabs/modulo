@@ -9,7 +9,7 @@ import sys
 url = os.environ.get("DATABASE_URL", "")
 original = url
 url = url.replace("postgres://", "postgresql+asyncpg://", 1)
-url = url.replace("?sslmode=disable", "")
+url = url.replace("?sslmode=disable", "?ssl=disable")
 url = url.replace("&sslmode=disable", "")
 os.environ["DATABASE_URL"] = url
 if url != original:

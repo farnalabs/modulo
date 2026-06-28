@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { mount } from '@vue/test-utils'
+import { createPinia } from 'pinia'
 import { nextTick } from 'vue'
 
 vi.mock('../lib/api/client', () => ({
@@ -24,7 +25,10 @@ describe('AdminFeatureFlagsView', () => {
   })
 
   it('renders without crashing', async () => {
-    const wrapper = mount(AdminFeatureFlagsView)
+    const wrapper = mount(AdminFeatureFlagsView, {
+      global: { plugins: [createPinia()] },
+    })
+    await nextTick()
     await nextTick()
     expect(wrapper.exists()).toBe(true)
     expect(wrapper.text()).toContain('Feature Flags')

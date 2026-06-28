@@ -130,7 +130,7 @@ class CronFireTask(Task):  # type: ignore[misc]
         import asyncio
 
         return asyncio.run(
-            _fire_cron_trigger(
+            fire_cron_trigger(
                 trigger_id=uuid.UUID(trigger_id),
                 org_id=uuid.UUID(org_id),
                 pipeline_id=uuid.UUID(pipeline_id),
@@ -140,7 +140,7 @@ class CronFireTask(Task):  # type: ignore[misc]
         )
 
 
-async def _fire_cron_trigger(
+async def fire_cron_trigger(
     *,
     trigger_id: uuid.UUID,
     org_id: uuid.UUID,
