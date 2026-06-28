@@ -80,24 +80,25 @@
   }
 
   .sidebar-section-header {
-    font-size: 0.7rem;
+    font-size: 0.75rem;
     font-weight: 600;
     text-transform: uppercase;
-    letter-spacing: 0.08em;
+    letter-spacing: 0.06em;
     color: hsl(var(--muted-foreground));
-    padding: 0 0.75rem;
+    padding: 0 0.75rem 0 0.5rem;
     margin-top: 1.5rem;
     margin-bottom: 0.5rem;
     display: flex;
     align-items: center;
     gap: 0.5rem;
+    border-left: 2px solid hsla(var(--primary) / 0.25);
   }
 
   .sidebar-section-header::after {
     content: '';
     flex: 1;
     height: 1px;
-    background: linear-gradient(90deg, hsl(var(--border)), transparent);
+    background: linear-gradient(90deg, hsla(var(--primary) / 0.15), hsl(var(--border)), transparent);
   }
 
   .stat-card-number {
