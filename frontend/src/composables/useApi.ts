@@ -1,7 +1,14 @@
 const BASE = ''
 
+const TOKEN_KEY = 'modulo_access_token'
+
 interface ApiOptions {
   headers?: Record<string, string>
+}
+
+function authHeader(): Record<string, string> {
+  const token = localStorage.getItem(TOKEN_KEY)
+  return token ? { Authorization: `Bearer ${token}` } : {}
 }
 
 async function request<T>(method: string, path: string, body?: unknown, options?: ApiOptions): Promise<T> {
@@ -9,6 +16,7 @@ async function request<T>(method: string, path: string, body?: unknown, options?
     method,
     headers: {
       'Content-Type': 'application/json',
+      ...authHeader(),
       ...options?.headers,
     },
     body: body != null ? JSON.stringify(body) : undefined,

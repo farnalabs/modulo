@@ -1,7 +1,7 @@
 <template>
   <div class="flex min-h-screen">
-    <!-- Desktop sidebar -->
-    <aside class="hidden md:flex w-64 border-r bg-background p-4 flex-col">
+    <!-- Sidebar -->
+    <aside class="flex w-64 border-r bg-background p-4 flex-col">
       <div class="mb-6">
         <h2 class="text-lg font-bold">Modulo</h2>
       </div>
