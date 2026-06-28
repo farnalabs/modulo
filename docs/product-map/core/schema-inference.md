@@ -30,12 +30,12 @@ status: partial
 - [x] Propagate LLM invocation errors as `SchemaInferenceError("LLM call failed")`
 - [x] Reject non-string `response.content` from backend → `SchemaInferenceError`
 - [x] Reject invalid JSON from LLM → `SchemaInferenceError("Failed to parse")`
-- [ ] Accept configurable `max_sample_records` (constructor arg) — currently hard-coded at 50 in prompt builder
-- [ ] Accept empty samples list gracefully — LLM sees "0 records", service allows it
-- [ ] Raise `ValueError` when samples contains non-dict items
-- [ ] Accept nested object structures in samples
-- [ ] Accept fields with mixed presence across records (not required)
-- [ ] Handle all-null records (fields omitted from schema) ### API Endpoint — `POST /api/v1/schemas/infer` - [x] Accept `connector_instance_id` and `sample_query` (resource, filters, limit)
+- [ ] Accept configurable `max_sample_records` (constructor arg) — constructor stores it but prompt builder ignores it, still hard-coded at 50
+- [x] Accept empty samples list gracefully — LLM sees "0 records", service allows it
+- [x] Raise `ValueError` when samples contains non-dict items
+- [x] Accept nested object structures in samples
+- [x] Accept fields with mixed presence across records (not required)
+- [x] Handle all-null records (fields omitted from schema) ### API Endpoint — `POST /api/v1/schemas/infer` - [x] Accept `connector_instance_id` and `sample_query` (resource, filters, limit)
 - [x] Default `filters` to `{}` and `limit` to 10 when omitted
 - [x] Validate `resource` is non-empty (422 on empty string)
 - [x] Reject `limit` < 1 or > 100 (422)

@@ -6,7 +6,7 @@ delivery-tasks: [task-nv10-polling-trigger]
 code:
   - backend/src/modulo/core/trigger_engine/__init__.py
   - backend/src/modulo/core/trigger_engine/polling.py
-depends-on: - feat-core-connector-hub - feat-core-trigger-entity
+depends-on: [feat-connectors-hub]
 status: partial
 ---
 # Polling Trigger Discovered from 1 completed delivery tasks. Also specified in PRD 8.5 (Trigger System) as a v1 polling type using connector-based condition evaluation. ## Behaviours ### Schedule & Firing

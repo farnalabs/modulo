@@ -33,33 +33,33 @@ status: partial
 - [x] In-memory token bucket fallback when Redis unavailable
 - [x] Startup warning logged when running in-memory mode
 - [x] Rate limiting disabled entirely in SQLite mode (in-memory only, no Redis connection)
-- [ ] Rate limit rules configurable at runtime via `PUT /api/v1/admin/rate-limits`
-- [ ] Only admin users can read/update rate limit rules
+- [x] Rate limit rules configurable at runtime via `PUT /api/v1/admin/rate-limits`
+- [x] Only admin users can read/update rate limit rules
 - [x] Bypass token (`MODULO_RATELIMIT_BYPASS_TOKEN`) skips rate limiting
 - [x] Client keyed by `X-Forwarded-For` IP + request path
 - [x] Only POST/PUT/PATCH methods are rate limited
 - [x] `Retry-After` header set to the window duration in seconds ### Concurrency & multi-worker
-- [ ] Redis coordinates rate limit state across multiple worker processes
+- [x] Redis coordinates rate limit state across multiple worker processes
 - [ ] In-memory fallback is per-process — effectively doubles limit on N replicas
 - [ ] `Retry-After` response returned before the request handler runs (middleware order) ### Unit test coverage
-- [ ] TokenBucket: consume when tokens available
-- [ ] TokenBucket: blocks when empty, refills over time
-- [ ] TokenBucket: burst ceiling enforced
-- [ ] RedisSlidingWindowRateLimiter: allows within limit
-- [ ] RedisSlidingWindowRateLimiter: blocks over limit
-- [ ] RedisSlidingWindowRateLimiter: exact boundary at limit
-- [ ] RedisSlidingWindowRateLimiter: custom key prefix
-- [ ] RedisSlidingWindowRateLimiter: custom window duration
-- [ ] RateLimiterRegistry: in-memory fallback by default
-- [ ] RateLimiterRegistry: uses Redis when available
-- [ ] RateLimiterRegistry: Redis blocks over limit
-- [ ] Middleware: accepts explicit settings injection
-- [ ] Middleware: accepts explicit registry injection
-- [ ] Middleware: valid bypass token skips rate limiting
-- [ ] Middleware: invalid bypass token does not skip
-- [ ] Middleware: returns 429 with `rate_limit_exceeded` error code
-- [ ] Middleware: GET requests not rate limited
-- [ ] Middleware: MCP paths rate limited
+- [x] TokenBucket: consume when tokens available
+- [x] TokenBucket: blocks when empty, refills over time
+- [x] TokenBucket: burst ceiling enforced
+- [x] RedisSlidingWindowRateLimiter: allows within limit
+- [x] RedisSlidingWindowRateLimiter: blocks over limit
+- [x] RedisSlidingWindowRateLimiter: exact boundary at limit
+- [x] RedisSlidingWindowRateLimiter: custom key prefix
+- [x] RedisSlidingWindowRateLimiter: custom window duration
+- [x] RateLimiterRegistry: in-memory fallback by default
+- [x] RateLimiterRegistry: uses Redis when available
+- [x] RateLimiterRegistry: Redis blocks over limit
+- [x] Middleware: accepts explicit settings injection
+- [x] Middleware: accepts explicit registry injection
+- [x] Middleware: valid bypass token skips rate limiting
+- [x] Middleware: invalid bypass token does not skip
+- [x] Middleware: returns 429 with `rate_limit_exceeded` error code
+- [x] Middleware: GET requests not rate limited
+- [x] Middleware: MCP paths rate limited
 - [ ] Admin API: GET returns rules and mode
 - [ ] Admin API: PUT updates rules dynamically
 - [ ] Admin API: non-admin gets 403 ### Edge cases

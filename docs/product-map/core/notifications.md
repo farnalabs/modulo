@@ -16,23 +16,23 @@ depends-on: [feat-teams-team-crud]
 status: partial
 ---
 # Core Notifications Outbound webhook notifications for pipeline lifecycle events, with HMAC signing, retry, dead-letter tracking, and auto-disable. ## Behaviours ### Event dispatch
-- [ ] `hitl_awaiting` event dispatches when a run reaches a HITL gate
-- [ ] `run_failed` event dispatches when a pipeline node raises an unhandled exception
-- [ ] `claim_expired` event dispatches when a HITL claim expires (via ClaimExpiryJob)
-- [ ] `hitl_overdue` event dispatches when a HITL gate passes its configurable threshold
-- [ ] `budget_exceeded` event type is defined in PRD but not yet dispatched
-- [ ] `circuit_breaker_tripped` event type is defined in PRD but not yet dispatched
-- [ ] Webhook POST body includes event type, ISO timestamp, and event-specific payload
-- [ ] Payload includes `run_id` and `gate_id` for HITL-related events
-- [ ] Payload includes `pipeline_name` and `node_name` for gate events
-- [ ] Payload includes `error_code` and `error_message` for failure events ### HMAC signing
-- [ ] Outbound webhook includes `X-Modulo-Signature: sha256=<hmac>` header
-- [ ] Signature is HMAC-SHA256 over the JSON payload body
-- [ ] Signature uses per-endpoint secret, not a global secret
-- [ ] Endpoint with no secret configured returns empty signature (no header)
-- [ ] Endpoint with corrupted secret ciphertext returns empty signature (logged, not crashed)
-- [ ] Secrets stored as Fernet ciphertext in database (never plaintext)
-- [ ] Secrets never exposed in API responses (only `has_secret: bool`) ### Retry and dead-letter
+- [x] `hitl_awaiting` event dispatches when a run reaches a HITL gate
+- [x] `run_failed` event dispatches when a pipeline node raises an unhandled exception
+- [ ] `claim_expired` event dispatches when a HITL claim expires (via ClaimExpiryJob) — code resets claims but does not dispatch the event
+- [ ] `hitl_overdue` event dispatches when a HITL gate passes its configurable threshold — event type exists but no monitoring job dispatches it
+- [ ] `budget_exceeded` event type is defined in PRD but not yet dispatched — event type constant does not exist in code
+- [ ] `circuit_breaker_tripped` event type is defined in PRD but not yet dispatched — event type constant does not exist in code
+- [x] Webhook POST body includes event type, ISO timestamp, and event-specific payload
+- [x] Payload includes `run_id` and `gate_id` for HITL-related events
+- [x] Payload includes `pipeline_name` and `node_name` for gate events
+- [x] Payload includes `error_code` and `error_message` for failure events ### HMAC signing
+- [x] Outbound webhook includes `X-Modulo-Signature: sha256=<hmac>` header
+- [x] Signature is HMAC-SHA256 over the JSON payload body
+- [x] Signature uses per-endpoint secret, not a global secret
+- [x] Endpoint with no secret configured returns empty signature (no header)
+- [x] Endpoint with corrupted secret ciphertext returns empty signature (logged, not crashed)
+- [x] Secrets stored as Fernet ciphertext in database (never plaintext)
+- [x] Secrets never exposed in API responses (only `has_secret: bool`) ### Retry and dead-letter
 - [ ] 4xx (non-429) or network error triggers retry with exponential backoff
 - [ ] 5xx response triggers retry with same backoff as 4xx
 - [ ] 429 response uses `Retry-After` header (capped at 60s)

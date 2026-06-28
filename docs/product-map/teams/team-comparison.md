@@ -1,10 +1,9 @@
 ---
 id: feat-teams-team-comparison
 prd: 14
-prd: 14
-
 delivery-tasks: [task-nv7-team-comparison]
-  - backend/tests/features/personas/elena-engineering-director.feature (@goal-elena-team-comparison)
+bdd:
+  - backend/tests/features/personas/elena-engineering-director.feature # @goal-elena-team-comparison
 code:
   - frontend/src/views/TeamComparisonView.vue
   - frontend/src/router/index.ts

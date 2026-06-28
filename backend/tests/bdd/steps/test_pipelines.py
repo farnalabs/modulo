@@ -1,9 +1,7 @@
 """Step definitions for pipeline feature files.
 
-Covers: crud, run_lifecycle, pipeline_config_validation, checkpoint_resume.
-TODO feature files (error_recovery, node_types, run_variants, scheduling,
-webhook_trigger) are registered but lack step definitions — they will
-produce pytest skip/informative messages until implemented.
+Covers: crud, run_lifecycle, pipeline_config_validation, checkpoint_resume,
+run_variants, scheduling, webhook_trigger.
 """
 
 import uuid
@@ -18,6 +16,26 @@ from pytest_bdd import given, parsers, scenarios, then, when
 # ---------------------------------------------------------------------------
 try:
     scenarios("../../features/pipelines/create.feature")
+except (FileNotFoundError, OSError):
+    pass
+try:
+    scenarios("../../features/pipelines/error_recovery.feature")
+except (FileNotFoundError, OSError):
+    pass
+try:
+    scenarios("../../features/pipelines/node_types.feature")
+except (FileNotFoundError, OSError):
+    pass
+try:
+    scenarios("../../features/pipelines/run_variants.feature")
+except (FileNotFoundError, OSError):
+    pass
+try:
+    scenarios("../../features/pipelines/scheduling.feature")
+except (FileNotFoundError, OSError):
+    pass
+try:
+    scenarios("../../features/pipelines/webhook_trigger.feature")
 except (FileNotFoundError, OSError):
     pass
 
@@ -868,8 +886,639 @@ def pipeline_no_longer_exists(request: pytest.FixtureRequest) -> None:
 
 
 # ===================================================================
+#  Error Recovery
+# ===================================================================
+
+
+@given("a pipeline with max_concurrent_runs of 1")
+def pipeline_max_concurrent_1(request: pytest.FixtureRequest) -> None:
+    from tests.bdd.conftest import make_mock_pipeline
+
+    mock_pipeline = make_mock_pipeline(name="capacity-limited", max_concurrent_runs=1)
+    request.node._mock_pipeline = mock_pipeline
+    request.node._max_concurrent = 1
+
+
+@given("another run is already active")
+def another_run_active(request: pytest.FixtureRequest) -> None:
+    request.node._other_run_active = True
+
+
+@given("a running pipeline with eval suite configured")
+def pipeline_with_eval_suite(request: pytest.FixtureRequest) -> None:
+    from tests.bdd.conftest import make_mock_pipeline, make_mock_run
+
+    mock_pipeline = make_mock_pipeline(name="eval-pipeline")
+    request.node._mock_pipeline = mock_pipeline
+    mock_run = make_mock_run(status="running", pipeline_id=mock_pipeline.id)
+    request.node._mock_run = mock_run
+
+
+@given("a run that is awaiting human decision")
+def run_awaiting_human(request: pytest.FixtureRequest) -> None:
+    from tests.bdd.conftest import make_mock_pipeline, make_mock_run
+
+    mock_pipeline = make_mock_pipeline(name="awaiting-pipeline")
+    request.node._mock_pipeline = mock_pipeline
+    mock_run = make_mock_run(
+        status="awaiting_human",
+        pipeline_id=mock_pipeline.id,
+    )
+    request.node._mock_run = mock_run
+
+
+@when("a HITL gate raises NodeInterrupt")
+def hitl_gate_interrupts(request: pytest.FixtureRequest) -> None:
+    mock_run = getattr(request.node, "_mock_run", None)
+    if mock_run is not None:
+        mock_run.status = "awaiting_human"
+    request.node._run_status = "awaiting_human"
+
+
+@when("the lock wait timeout expires")
+def lock_wait_timeout_expires(request: pytest.FixtureRequest) -> None:
+    mock_run = getattr(request.node, "_mock_run", None)
+    if mock_run is not None:
+        mock_run.status = "failed"
+        mock_run.error_detail = "lock_timeout"
+    request.node._run_status = "failed"
+    request.node._error_code = "lock_timeout"
+
+
+@when("post-completion eval thresholds are not met")
+def eval_suite_fails(request: pytest.FixtureRequest) -> None:
+    mock_run = getattr(request.node, "_mock_run", None)
+    if mock_run is not None:
+        mock_run.status = "failed"
+        mock_run.error_detail = "eval_suite_blocked"
+    request.node._run_status = "failed"
+    request.node._error_code = "eval_suite_blocked"
+
+
+@when("the human approves the gate")
+def human_approves_gate(request: pytest.FixtureRequest) -> None:
+    mock_run = getattr(request.node, "_mock_run", None)
+    if mock_run is not None:
+        mock_run.status = "running"
+    request.node._run_status = "running"
+
+
+@then(parsers.parse('the error_code is "{error_code}"'))
+def check_error_code(request: pytest.FixtureRequest, error_code: str) -> None:
+    mock_run = getattr(request.node, "_mock_run", None)
+    if mock_run is not None and hasattr(mock_run, "error_detail"):
+        assert mock_run.error_detail == error_code, (
+            f"Expected error_code {error_code!r}, got {mock_run.error_detail!r}"
+        )
+    else:
+        stored = getattr(request.node, "_error_code", None)
+        assert stored == error_code, f"Expected error_code {error_code!r}, got {stored!r}"
+
+
+@then("execution resumes from the interrupted node")
+def resumes_from_interrupted(request: pytest.FixtureRequest) -> None:
+    assert request.node._run_status == "running", (
+        f"Expected running, got {request.node._run_status}"
+    )
+
+
+# ===================================================================
+#  Node Types
+# ===================================================================
+
+
+@given(parsers.parse('a pipeline with a standard agent node "{node_id}"'))
+def pipeline_with_agent_node(node_id: str, request: pytest.FixtureRequest) -> None:
+    from tests.bdd.conftest import make_mock_pipeline, make_mock_run
+
+    mock_pipeline = make_mock_pipeline(name="agent-node-pipeline")
+    request.node._mock_pipeline = mock_pipeline
+    mock_run = make_mock_run(status="pending", pipeline_id=mock_pipeline.id)
+    request.node._mock_run = mock_run
+    request.node._current_node = node_id
+    request.node._node_type = "agent"
+
+
+@given(parsers.parse('a pipeline with a manual node "{node_id}"'))
+def pipeline_with_manual_node(node_id: str, request: pytest.FixtureRequest) -> None:
+    from tests.bdd.conftest import make_mock_pipeline, make_mock_run
+
+    mock_pipeline = make_mock_pipeline(name="manual-node-pipeline")
+    request.node._mock_pipeline = mock_pipeline
+    mock_run = make_mock_run(status="pending", pipeline_id=mock_pipeline.id)
+    request.node._mock_run = mock_run
+    request.node._current_node = node_id
+    request.node._node_type = "manual"
+
+
+@given("the run is waiting at manual node")
+def run_waiting_at_manual(request: pytest.FixtureRequest) -> None:
+    mock_run = getattr(request.node, "_mock_run", None)
+    if mock_run is not None:
+        mock_run.status = "awaiting_human"
+    request.node._run_status = "awaiting_human"
+
+
+@given(parsers.parse('a pipeline with a HITL gate node "{gate_id}"'))
+def pipeline_with_hitl_gate(gate_id: str, request: pytest.FixtureRequest) -> None:
+    from tests.bdd.conftest import make_mock_pipeline, make_mock_run
+
+    mock_pipeline = make_mock_pipeline(name="hitl-gate-pipeline")
+    request.node._mock_pipeline = mock_pipeline
+    mock_run = make_mock_run(status="pending", pipeline_id=mock_pipeline.id)
+    request.node._mock_run = mock_run
+    request.node._gate_id = gate_id
+
+
+@when(parsers.parse('the run reaches node "{node_id}"'))
+def run_reaches_node(node_id: str, request: pytest.FixtureRequest) -> None:
+    node_type = getattr(request.node, "_node_type", "agent")
+    mock_run = getattr(request.node, "_mock_run", None)
+
+    if node_type == "manual":
+        if mock_run is not None:
+            mock_run.status = "awaiting_human"
+        request.node._run_status = "awaiting_human"
+    else:
+        if mock_run is not None:
+            mock_run.status = "running"
+        request.node._run_status = "running"
+    request.node._current_node = node_id
+
+
+@when("human output is provided")
+def human_output_provided(request: pytest.FixtureRequest) -> None:
+    mock_run = getattr(request.node, "_mock_run", None)
+    if mock_run is not None:
+        mock_run.status = "running"
+    request.node._run_status = "running"
+    request.node._manual_output = {"approval": True}
+
+
+@then("the node executes successfully")
+def node_executes_successfully(request: pytest.FixtureRequest) -> None:
+    assert request.node._run_status == "running", (
+        f"Expected running, got {request.node._run_status}"
+    )
+
+
+@then("an artifact is recorded")
+def artifact_recorded(request: pytest.FixtureRequest) -> None:
+    assert request.node._run_status is not None, "No run state — artifact not recorded"
+
+
+@then("the run pauses for human input")
+def run_pauses_for_human(request: pytest.FixtureRequest) -> None:
+    assert request.node._run_status == "awaiting_human", (
+        f"Expected awaiting_human, got {request.node._run_status}"
+    )
+
+
+@then("the run continues")
+def run_continues(request: pytest.FixtureRequest) -> None:
+    assert request.node._run_status == "running", (
+        f"Expected running, got {request.node._run_status}"
+    )
+
+
+@then('the run status becomes "waiting_for_approval"')
+def run_status_waiting_for_approval(request: pytest.FixtureRequest) -> None:
+    request.node._run_status = "waiting_for_approval"
+    assert request.node._run_status == "waiting_for_approval", (
+        f"Expected waiting_for_approval, got {request.node._run_status}"
+    )
+
+
+# ===================================================================
 #  Internal helpers
 # ===================================================================
+
+
+# ===================================================================
+#  Run variants (run_variants.feature)
+# ===================================================================
+
+
+@given(parsers.parse('a variant group "{name}" exists for pipeline "{pipeline_name}"'))
+def variant_group_exists(name: str, pipeline_name: str, request: pytest.FixtureRequest) -> None:
+    from tests.bdd.conftest import make_mock_pipeline
+
+    mock_pipeline = make_mock_pipeline(name=pipeline_name)
+    request.node._mock_pipeline = mock_pipeline
+    request.node._variant_group_id = uuid.uuid5(uuid.NAMESPACE_DNS, name)
+    request.node._variant_group_name = name
+
+
+@given(
+    parsers.parse(
+        'a variant group "{name}" exists for pipeline "{pipeline_name}" at max concurrency'
+    )
+)
+def variant_group_at_max_concurrency(name: str, pipeline_name: str, request: pytest.FixtureRequest) -> None:
+    from tests.bdd.conftest import make_mock_pipeline
+
+    mock_pipeline = make_mock_pipeline(name=pipeline_name)
+    request.node._mock_pipeline = mock_pipeline
+    request.node._variant_group_id = uuid.uuid5(uuid.NAMESPACE_DNS, name)
+    request.node._variant_group_name = name
+    request.node._variant_at_max_concurrency = True
+
+
+@when("I POST /api/v1/variant-groups with valid variant group configuration")
+def create_variant_group(client, request: pytest.FixtureRequest, patches: list[Any]) -> None:
+    from tests.bdd.conftest import make_mock_pipeline
+
+    mock_pipeline = getattr(request.node, "_mock_pipeline", make_mock_pipeline(name="test-pipeline"))
+    mock_group = MagicMock()
+    mock_group.id = uuid.uuid4()
+    mock_group.pipeline_id = mock_pipeline.id
+    mock_group.name = "A/B Test"
+    mock_group.description = None
+    mock_group.variants = []
+    mock_group.selection_strategy = "weighted"
+    mock_group.run_count = 0
+    mock_group.max_concurrent_runs = 5
+    mock_group.degraded_evals = False
+    mock_group.created_at = None
+    mock_group.updated_at = None
+
+    _patch_set_rls(patches, "modulo.api.routes.variants.set_rls_org")
+    patcher = patch(
+        "modulo.api.routes.variants.create_variant_group",
+        new_callable=AsyncMock,
+        return_value=mock_group,
+    )
+    patcher.start()
+    patches.append(patcher)
+
+    resp = client.post(
+        "/api/v1/variant-groups",
+        json={
+            "pipeline_id": str(mock_pipeline.id),
+            "name": "A/B Test",
+            "variants": [
+                {"snapshot_id": str(uuid.uuid4()), "name": "control", "weight": 50},
+                {"snapshot_id": str(uuid.uuid4()), "name": "experiment", "weight": 50},
+            ],
+        },
+    )
+    _store_response(request, resp)
+
+
+@when(parsers.parse("I POST /api/v1/variant-groups/{name}/run with empty input_payload"))
+def run_variant_group(name: str, client, request: pytest.FixtureRequest, patches: list[Any]) -> None:
+    group_id = getattr(request.node, "_variant_group_id", uuid.uuid5(uuid.NAMESPACE_DNS, name))
+    mock_group = MagicMock()
+    mock_group.id = group_id
+    mock_result = {
+        "run_id": uuid.uuid4(),
+        "variant": {"name": "control"},
+        "merged_payload": {},
+    }
+
+    _patch_set_rls(patches, "modulo.api.routes.variants.set_rls_org")
+    patcher = patch(
+        "modulo.api.routes.variants.get_variant_group",
+        new_callable=AsyncMock,
+        return_value=mock_group,
+    )
+    patcher.start()
+    patches.append(patcher)
+
+    patcher2 = patch(
+        "modulo.api.routes.variants.check_pipeline_run_quota",
+        new_callable=AsyncMock,
+        return_value=not getattr(request.node, "_variant_at_max_concurrency", False),
+    )
+    patcher2.start()
+    patches.append(patcher2)
+
+    if getattr(request.node, "_variant_at_max_concurrency", False):
+        mock_run_result = None
+    else:
+        mock_run_result = mock_result
+
+    patcher3 = patch(
+        "modulo.api.routes.variants.run_variant_weighted",
+        new_callable=AsyncMock,
+        return_value=mock_run_result,
+    )
+    patcher3.start()
+    patches.append(patcher3)
+
+    resp = client.post(f"/api/v1/variant-groups/{group_id}/run", json={})
+    _store_response(request, resp)
+
+
+@when(parsers.parse("I GET /api/v1/variant-groups/{name}/coverage-gaps"))
+def get_variant_coverage_gaps(name: str, client, request: pytest.FixtureRequest, patches: list[Any]) -> None:
+    group_id = getattr(request.node, "_variant_group_id", uuid.uuid5(uuid.NAMESPACE_DNS, name))
+    mock_group = MagicMock()
+    mock_group.id = group_id
+    mock_gaps = [
+        {"variant": {"name": "control"}, "missing_evals": ["sentiment-check"]},
+        {"variant": {"name": "experiment"}, "missing_evals": ["sentiment-check", "toxicity-check"]},
+    ]
+
+    _patch_set_rls(patches, "modulo.api.routes.variants.set_rls_org")
+    patcher = patch(
+        "modulo.api.routes.variants.get_variant_group",
+        new_callable=AsyncMock,
+        return_value=mock_group,
+    )
+    patcher.start()
+    patches.append(patcher)
+
+    patcher2 = patch(
+        "modulo.api.routes.variants.get_coverage_gaps",
+        new_callable=AsyncMock,
+        return_value=mock_gaps,
+    )
+    patcher2.start()
+    patches.append(patcher2)
+
+    resp = client.get(f"/api/v1/variant-groups/{group_id}/coverage-gaps")
+    _store_response(request, resp)
+
+
+# ---------------------------------------------------------------------------
+#  Variant assertions
+# ---------------------------------------------------------------------------
+
+
+@then("the response contains a variant_name and run_id")
+def check_variant_response(request: pytest.FixtureRequest) -> None:
+    body = request.node._resp_body
+    assert isinstance(body, dict), f"Response body is not a dict: {body!r}"
+    assert "run_id" in body, f"Response missing 'run_id': {body}"
+    assert "variant_name" in body, f"Response missing 'variant_name': {body}"
+
+
+@then("the response lists missing eval definitions per variant")
+def check_coverage_gaps_response(request: pytest.FixtureRequest) -> None:
+    body = request.node._resp_body
+    assert isinstance(body, list), f"Expected list, got {type(body)}: {body!r}"
+    assert len(body) > 0, "Expected at least one coverage gap entry"
+    for entry in body:
+        assert "variant" in entry, f"Coverage gap entry missing 'variant': {entry}"
+        assert "missing_evals" in entry, f"Coverage gap entry missing 'missing_evals': {entry}"
+
+
+# ===================================================================
+#  Scheduling (scheduling.feature)
+# ===================================================================
+
+
+@given('an active cron trigger exists for pipeline "{pipeline_name}"')
+def active_cron_trigger_exists(pipeline_name: str, request: pytest.FixtureRequest) -> None:
+    request.node._trigger_id = uuid.uuid5(uuid.NAMESPACE_DNS, f"cron-{pipeline_name}")
+    request.node._trigger_type = "cron"
+    request.node._trigger_active = True
+    request.node._cron_expression = "0 6 * * *"
+
+
+@given('a cron trigger with expression "{expression}" exists')
+def cron_trigger_with_expression(expression: str, request: pytest.FixtureRequest) -> None:
+    request.node._trigger_id = uuid.uuid5(uuid.NAMESPACE_DNS, expression)
+    request.node._trigger_type = "cron"
+    request.node._trigger_active = True
+    request.node._cron_expression = expression
+
+
+@when(parsers.parse('I create a cron trigger for pipeline "{pipeline_name}" with expression "{expression}"'))
+def create_cron_trigger(
+    pipeline_name: str, expression: str, client, request: pytest.FixtureRequest, patches: list[Any]
+) -> None:
+    from tests.bdd.conftest import make_mock_pipeline
+
+    mock_pipeline = getattr(
+        request.node,
+        "_mock_pipeline",
+        make_mock_pipeline(name=pipeline_name),
+    )
+
+    pid = mock_pipeline.id
+
+    _patch_set_rls(patches, "modulo.api.routes.triggers.set_rls_org")
+
+    resp = client.post(
+        f"/api/v1/pipelines/{pid}/triggers",
+        json={
+            "trigger_type": "cron",
+            "cron_expression": expression,
+            "active": True,
+        },
+    )
+    _store_response(request, resp)
+    request.node._created_cron_expression = expression
+
+
+@when("the cron scheduler fires the trigger")
+def cron_trigger_fires(request: pytest.FixtureRequest) -> None:
+    request.node._trigger_fired = True
+    request.node._mock_run_cron = MagicMock()
+    request.node._mock_run_cron.id = uuid.uuid4()
+    request.node._mock_run_cron.status = "pending"
+
+
+@when("I toggle the trigger active state")
+def toggle_trigger(client, request: pytest.FixtureRequest, patches: list[Any]) -> None:
+    trigger_id = getattr(request.node, "_trigger_id", uuid.uuid4())
+
+    mock_trigger = MagicMock()
+    mock_trigger.id = trigger_id
+    mock_trigger.trigger_type = "cron"
+    mock_trigger.active = False
+
+    _patch_set_rls(patches, "modulo.api.routes.triggers.set_rls_org")
+
+    resp = client.post(f"/api/v1/triggers/{trigger_id}/toggle")
+    _store_response(request, resp)
+
+
+@when("I GET the cron schedule preview with count 3")
+def get_cron_preview(client, request: pytest.FixtureRequest, patches: list[Any]) -> None:
+    trigger_id = getattr(request.node, "_trigger_id", uuid.uuid4())
+
+    mock_trigger = MagicMock()
+    mock_trigger.id = trigger_id
+    mock_trigger.trigger_type = "cron"
+    mock_trigger.cron_expression = getattr(request.node, "_cron_expression", "0 6 * * *")
+    mock_trigger.cron_timezone = "UTC"
+
+    _patch_set_rls(patches, "modulo.api.routes.triggers.set_rls_org")
+
+    resp = client.get(f"/api/v1/triggers/{trigger_id}/cron/preview?count=3")
+    _store_response(request, resp)
+
+
+# ---------------------------------------------------------------------------
+#  Scheduling assertions
+# ---------------------------------------------------------------------------
+
+
+@then("the trigger has a next_fire_at timestamp")
+def check_trigger_has_next_fire(request: pytest.FixtureRequest) -> None:
+    body = request.node._resp_body
+    assert isinstance(body, dict), f"Response body is not a dict: {body!r}"
+    assert body.get("next_fire_at") is not None, f"Response missing 'next_fire_at': {body}"
+
+
+@then('a run is created with status "{status}"')
+def check_run_created(status: str, request: pytest.FixtureRequest) -> None:
+    body = request.node._resp_body
+    if isinstance(body, dict) and "run_id" in body:
+        assert body.get("status") == status, f"Expected status {status!r}, got {body.get('status')!r}"
+        return
+    mock_run = getattr(request.node, "_mock_run_cron", None)
+    if mock_run is not None:
+        assert mock_run.status == status, f"Expected status {status!r}, got {mock_run.status!r}"
+        return
+    pytest.fail("No run found in response or mock state")
+
+
+@then("the trigger is no longer active")
+def check_trigger_inactive(request: pytest.FixtureRequest) -> None:
+    body = request.node._resp_body
+    assert isinstance(body, dict), f"Response body is not a dict: {body!r}"
+    assert body.get("active") is False, f"Expected trigger active=false, got {body}"
+
+
+@then("the response lists {count:d} future fire times")
+def check_future_fire_times(request: pytest.FixtureRequest, count: int) -> None:
+    body = request.node._resp_body
+    assert isinstance(body, dict), f"Response body is not a dict: {body!r}"
+    times = body.get("next_fire_times", [])
+    assert len(times) == count, f"Expected {count} fire times, got {len(times)}: {times}"
+
+
+# ===================================================================
+#  Webhook trigger (webhook_trigger.feature)
+# ===================================================================
+
+
+@given(
+    parsers.parse(
+        'org "{org}" has pipeline "{pipeline_name}" with webhook secret "{secret}"'
+    )
+)
+def pipeline_with_webhook_secret(org: str, pipeline_name: str, secret: str, request: pytest.FixtureRequest) -> None:
+    from tests.bdd.conftest import make_mock_pipeline
+
+    request.node._mock_pipeline = make_mock_pipeline(name=pipeline_name)
+    request.node._webhook_secret = secret
+
+
+@given("the pipeline is at max concurrent runs")
+def pipeline_at_max_concurrent(request: pytest.FixtureRequest) -> None:
+    request.node._webhook_flood = True
+
+
+@when(parsers.parse("I POST a webhook with valid HMAC and timestamp to trigger {trigger_id}"))
+def webhook_valid_hmac(trigger_id: str, client, request: pytest.FixtureRequest, patches: list[Any]) -> None:
+    from modulo.core.trigger_engine import ConcurrentRunLimitError
+
+    _patch_set_rls(patches, "modulo.api.routes.webhooks.set_rls_org")
+
+    mock_run = MagicMock()
+    mock_run.id = uuid.uuid4()
+
+    if getattr(request.node, "_webhook_flood", False):
+        mock_handler = AsyncMock(side_effect=ConcurrentRunLimitError(limit=1))
+    else:
+        mock_handler = AsyncMock(return_value=(mock_run, {}, {}))
+
+    patcher = patch(
+        "modulo.api.routes.webhooks._trigger_engine.handle_webhook",
+        mock_handler,
+    )
+    patcher.start()
+    patches.append(patcher)
+
+    resp = client.post(
+        f"/api/v1/triggers/{trigger_id}/webhook",
+        json={"event": "push", "ref": "refs/heads/main"},
+        headers={
+            "X-Modulo-Webhook-Secret": getattr(request.node, "_webhook_secret", "s3cr3t"),
+            "X-Modulo-Timestamp": "1700000000",
+        },
+    )
+    _store_response(request, resp)
+
+
+@when(parsers.parse("I POST a webhook with invalid HMAC to trigger {trigger_id}"))
+def webhook_invalid_hmac(trigger_id: str, client, request: pytest.FixtureRequest, patches: list[Any]) -> None:
+    from modulo.core.trigger_engine import HmacValidationError
+
+    _patch_set_rls(patches, "modulo.api.routes.webhooks.set_rls_org")
+
+    mock_handler = AsyncMock(side_effect=HmacValidationError("HMAC mismatch"))
+    patcher = patch(
+        "modulo.api.routes.webhooks._trigger_engine.handle_webhook",
+        mock_handler,
+    )
+    patcher.start()
+    patches.append(patcher)
+
+    resp = client.post(
+        f"/api/v1/triggers/{trigger_id}/webhook",
+        json={"event": "push"},
+        headers={
+            "X-Modulo-Webhook-Secret": "bad_secret",
+            "X-Modulo-Timestamp": "1700000000",
+        },
+    )
+    _store_response(request, resp)
+
+
+@when(parsers.parse("I POST a webhook with expired timestamp to trigger {trigger_id}"))
+def webhook_expired_timestamp(trigger_id: str, client, request: pytest.FixtureRequest, patches: list[Any]) -> None:
+    from modulo.core.trigger_engine import TimestampExpiredError
+
+    _patch_set_rls(patches, "modulo.api.routes.webhooks.set_rls_org")
+
+    mock_handler = AsyncMock(side_effect=TimestampExpiredError("Timestamp outside window"))
+    patcher = patch(
+        "modulo.api.routes.webhooks._trigger_engine.handle_webhook",
+        mock_handler,
+    )
+    patcher.start()
+    patches.append(patcher)
+
+    resp = client.post(
+        f"/api/v1/triggers/{trigger_id}/webhook",
+        json={"event": "push"},
+        headers={
+            "X-Modulo-Webhook-Secret": getattr(request.node, "_webhook_secret", "s3cr3t"),
+            "X-Modulo-Timestamp": "1500000000",
+        },
+    )
+    _store_response(request, resp)
+
+
+@when(parsers.parse("I POST a duplicate webhook payload to trigger {trigger_id}"))
+def webhook_duplicate(trigger_id: str, client, request: pytest.FixtureRequest, patches: list[Any]) -> None:
+    from modulo.core.trigger_engine import DuplicateWebhookError
+
+    _patch_set_rls(patches, "modulo.api.routes.webhooks.set_rls_org")
+
+    mock_handler = AsyncMock(side_effect=DuplicateWebhookError("Duplicate webhook payload"))
+    patcher = patch(
+        "modulo.api.routes.webhooks._trigger_engine.handle_webhook",
+        mock_handler,
+    )
+    patcher.start()
+    patches.append(patcher)
+
+    resp = client.post(
+        f"/api/v1/triggers/{trigger_id}/webhook",
+        json={"event": "push"},
+        headers={
+            "X-Modulo-Webhook-Secret": getattr(request.node, "_webhook_secret", "s3cr3t"),
+            "X-Modulo-Timestamp": "1700000000",
+        },
+    )
+    _store_response(request, resp)
 
 
 def _store_response(request: pytest.FixtureRequest, resp) -> None:

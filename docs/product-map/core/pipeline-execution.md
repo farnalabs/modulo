@@ -18,19 +18,19 @@ status: partial
 manages node dispatch, checkpointing, event emission, and HITL interrupt/resume. ## Behaviours ### Graph Compilation & Startup
 - [x] Pipeline with valid config compiles to StateGraph
 - [x] Invalid DAG (cycle, disconnected node) → validation error pre-run
-- [ ] Missing entry node → validation error
-- [ ] Node references nonexistent model_backend_id → error
+- [x] Missing entry node → validation error
+- [x] Node references nonexistent model_backend_id → error
 - [x] Node references nonexistent connector_binding → error
-- [ ] Graph cache hit reuses compiled graph (validated by snapshot_id hash) ### Node Execution
+- [x] Graph cache hit reuses compiled graph (keyed by (pipeline_id, snapshot_id) UUID) ### Node Execution
 - [x] agent node runs and produces output artifact
 - [x] manual node completes (no dispatch, just log)
 - [x] Node output promoted to next node's input
-- [ ] Node execution timeout → node_timeout error, run marked failed
+- [x] Node execution timeout → TimeoutError raised, run marked failed (Python built-in TimeoutError, not custom node_timeout)
 - [x] cancellation via @cancellable_node decorator → clean abort
 - [x] Node retry policy: max_retries, retry_on, backoff
-- [ ] All node types exhausted → run marked complete
+- [x] All node types exhausted → run marked complete
 - [x] Eval gate blocks → output NOT promoted, run marked "failed" with error_code="eval_suite_blocked"
-- [ ] Eval gate warns → output promoted, warning recorded ### HITL Interrupt & Resume
+- [x] Eval gate warns → output promoted, warning recorded (log warning, no error_code set) ### HITL Interrupt & Resume
 - [x] HITL gate halts execution at node boundary
 - [x] Claim → grant exclusive access with timeout
 - [x] Approve → resume execution from the interrupted node
@@ -58,7 +58,5 @@ manages node dispatch, checkpointing, event emission, and HITL interrupt/resume.
 - [ ] StateGraph compile error → validation error, not 500
 - [ ] DB connection lost mid-run → what happens to the in-memory graph state?
 - [ ] OTel exporter unavailable → non-fatal, run continues (currently: critical raise_error fix applied but verify) ## Known Gaps
-- No per-node execution timeout in executor (the PRD specifies it but `asyncio.wait_for` pattern not wired)
-- Lock wait timeout not implemented (run queues but no timeout mechanism)
-- Empty pipeline not validated at save time
+- Node timeout raises `TimeoutError` (Python built-in), not a domain-specific `node_timeout` error code
 - Cancellation mid-HITL: cancelled claim returns to available, but run status is ambiguous

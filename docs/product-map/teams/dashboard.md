@@ -1,9 +1,8 @@
 ---
 id: feat-teams-dashboard
 prd: 14
-prd: 14
-
 delivery-tasks: [task-nv0-org-dashboard-basic]
+bdd:
   - backend/tests/bdd/features/ui/eval_dashboard.feature
 code:
   - backend/src/modulo/api/routes/dashboard.py

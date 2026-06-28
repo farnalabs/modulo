@@ -1,10 +1,9 @@
 ---
 id: feat-teams-org-dashboard-full
 prd: 14
-prd: 14
-
 delivery-tasks: [task-nv7-org-dashboard-full]
-  - backend/tests/bdd/features/ui/dashboard.feature (does not exist — needs creation)
+bdd:
+  - backend/tests/bdd/features/ui/dashboard.feature # (does not exist — needs creation)
 code:
   - backend/src/modulo/api/routes/dashboard.py
   - frontend/src/views/DashboardView.vue
@@ -14,7 +13,11 @@ code:
   - backend/tests/unit/api/test_dashboard.py
   - frontend/src/__tests__/DashboardView.spec.ts
   - frontend/src/views/TeamComparisonView.vue
-depends-on: - feat-teams-dashboard - feat-teams-team-entity - feat-eval-engine - feat-cost-breakdown
+depends-on:
+  - feat-teams-dashboard
+  - feat-teams-team-crud
+  - feat-evals-eval-engine
+  - feat-core-cost-breakdown
 status: partial
 ---
 # Org Dashboard (Full) Org-level dashboard with run overview, team breakdown, eval quality metrics, trend data, HITL analytics, and feedback volume. Built on top of the basic dashboard with per-team drill-down. Discovered from 1 completed delivery tasks. ## Behaviours ### API — Dashboard Summary (`GET /api/v1/dashboard/summary`) - [x] Returns `total_runs` (org-wide run count)

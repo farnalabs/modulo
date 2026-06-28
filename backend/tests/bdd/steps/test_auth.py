@@ -191,43 +191,256 @@ def expired_auth_request(
 
 
 # ===========================================================================
-# auth/rbac.feature  —  TODO stub (no scenarios yet)
+# auth/rbac.feature  —  5 scenarios
 # ===========================================================================
 
 
-@given("I am an admin user")
-def step_admin_user() -> bool:
-    """Placeholder: admin role boundary scenario."""
-    return True
+@given(parsers.parse('I am an admin user with org role "{role}"'))
+def step_rbac_org_role(request: Any, role: str) -> None:
+    """Record the org role in request state."""
+    if not hasattr(request.node, "rbac_state"):
+        request.node.rbac_state = {}
+    request.node.rbac_state["org_role"] = role
 
 
-@given("I am an editor user")
-def step_editor_user() -> bool:
-    """Placeholder: editor role boundary scenario."""
-    return True
+@given(parsers.parse('I have team role "{role}"'))
+def step_rbac_team_role(request: Any, role: str) -> None:
+    request.node.rbac_state["team_role"] = role
 
 
-@given("I am a viewer user")
-def step_viewer_user() -> bool:
-    """Placeholder: viewer role boundary scenario."""
-    return True
+@when("I compute the effective team role")
+def step_compute_effective_team_role(request: Any) -> None:
+    from modulo.auth.team_rbac import get_effective_team_role
+
+    state = getattr(request.node, "rbac_state", {})
+    org_role = state.get("org_role", "")
+    team_role = state.get("team_role", "")
+    request.node.effective_role = get_effective_team_role(org_role, team_role)
+
+
+@then(parsers.parse('the effective role is "{expected}"'))
+def step_effective_role_is(expected: str, request: Any) -> None:
+    actual = getattr(request.node, "effective_role", None)
+    assert actual == expected, (
+        f"Expected effective role {expected!r}, got {actual!r}"
+    )
+
+
+@given(parsers.parse('the role hierarchy for "{role}" is {level:d}'))
+def step_role_hierarchy(role: str, level: int, request: Any) -> None:
+    from modulo.auth.team_rbac import ORG_ROLE_HIERARCHY
+
+    actual = ORG_ROLE_HIERARCHY.get(role, -1)
+    assert actual == level, (
+        f"Expected {role!r} level {level}, got {actual}"
+    )
+
+
+@then("each level is strictly higher than the previous")
+def step_hierarchy_strictly_increasing() -> None:
+    from modulo.auth.team_rbac import ORG_ROLE_HIERARCHY
+
+    levels = list(ORG_ROLE_HIERARCHY.values())
+    for i in range(1, len(levels)):
+        assert levels[i] > levels[i - 1], (
+            f"Level {levels[i]} is not > {levels[i - 1]}"
+        )
 
 
 # ===========================================================================
-# auth/api_keys.feature  —  TODO stub (no scenarios yet)
+# auth/api_keys.feature  —  5 scenarios
 # ===========================================================================
 
 
 @given("I have a valid API key")
-def step_valid_api_key() -> bool:
-    """Placeholder: API key auth scenario."""
-    return True
+def step_valid_api_key() -> None:
+    """Valid API key for scenario context — the mock controls validation."""
 
 
 @given("I have a revoked API key")
-def step_revoked_api_key() -> bool:
-    """Placeholder: revoked API key scenario."""
-    return True
+def step_revoked_api_key() -> None:
+    """Revoked API key — the mock will reject it."""
+
+
+@given(parsers.parse('an API key "{name}" exists'))
+def step_api_key_exists(name: str, request: Any, ctx: dict[str, Any]) -> None:
+    """Mock that an API key exists for the org."""
+    key_id = uuid.uuid5(ORG_ID, name)
+    ctx["api_key_name"] = name
+    ctx["api_key_id"] = key_id
+    ctx["api_key_role"] = "operator"
+
+
+@when(
+    parsers.parse(
+        'I POST /api/api-keys with name "{name}" and role "{role}"'
+    ),
+    target_fixture="create_key_response",
+)
+def step_create_api_key(
+    name: str,
+    role: str,
+    request: Any,
+    client: Any,
+    ctx: dict[str, Any],
+) -> Any:
+    """POST /api/v1/api-keys with name and role."""
+    from modulo.auth.api_key import create_api_key as create_key_fn
+    from modulo.auth.jwt import AuthenticatedPrincipal
+
+    principal = AuthenticatedPrincipal(
+        username="testuser",
+        organisation_id=ORG_ID,
+        user_id=USER_ID,
+        org_role="admin",
+    )
+
+    with (
+        patch("modulo.api.routes.api_keys.get_current_user") as mock_user,
+        patch("modulo.db.rls.set_rls_org"),
+        patch("modulo.db.rls.set_rls_user_context"),
+        patch("modulo.api.routes.api_keys.create_api_key", wraps=create_key_fn) as mock_create,
+    ):
+        mock_user.return_value = principal
+
+        async def fake_create(session, **kw):
+            from unittest.mock import MagicMock
+
+            key = MagicMock()
+            key.id = uuid.uuid4()
+            key.name = name
+            key.role = role
+            key.lookup_prefix = name[:8]
+            key.created_at = None
+            key.team_id = None
+            return key, f"mk_{name[:8]}_testfullkey12345"
+
+        mock_create.side_effect = fake_create
+
+        resp = client.post(
+            "/api/v1/api-keys",
+            json={"name": name, "role": role},
+        )
+        _store_response(request, ctx, resp)
+        return resp
+
+
+@when(
+    parsers.parse('I DELETE /api/api-keys/{"{"}key_id{"}"}'),
+    target_fixture="delete_key_response",
+)
+def step_revoke_api_key(
+    request: Any, client: Any, ctx: dict[str, Any]
+) -> Any:
+    """DELETE /api/v1/api-keys/{key_id} to revoke."""
+    key_id = ctx.get("api_key_id", uuid.uuid4())
+    from modulo.auth.jwt import AuthenticatedPrincipal
+
+    principal = AuthenticatedPrincipal(
+        username="testuser",
+        organisation_id=ORG_ID,
+        user_id=USER_ID,
+        org_role="admin",
+    )
+
+    with (
+        patch("modulo.api.routes.api_keys.get_current_user") as mock_user,
+        patch("modulo.db.rls.set_rls_org"),
+        patch("modulo.db.rls.set_rls_user_context"),
+        patch("modulo.api.routes.api_keys.revoke_api_key") as mock_revoke,
+    ):
+        mock_user.return_value = principal
+        mock_revoke.return_value = True
+
+        resp = client.delete(f"/api/v1/api-keys/{key_id}")
+        _store_response(request, ctx, resp)
+        return resp
+
+
+@when("I GET /api/api-keys", target_fixture="list_keys_response")
+def step_list_api_keys(
+    request: Any, client: Any, ctx: dict[str, Any]
+) -> Any:
+    """GET /api/v1/api-keys to list keys."""
+    from modulo.auth.jwt import AuthenticatedPrincipal
+
+    principal = AuthenticatedPrincipal(
+        username="testuser",
+        organisation_id=ORG_ID,
+        user_id=USER_ID,
+        org_role="admin",
+    )
+
+    with (
+        patch("modulo.api.routes.api_keys.get_current_user") as mock_user,
+        patch("modulo.db.rls.set_rls_org"),
+        patch("modulo.db.rls.set_rls_user_context"),
+        patch("modulo.api.routes.api_keys.list_api_keys") as mock_list,
+    ):
+        mock_user.return_value = principal
+        mock_list.return_value = [
+            {
+                "id": str(ctx.get("api_key_id", uuid.uuid4())),
+                "name": ctx.get("api_key_name", "my-key"),
+                "role": ctx.get("api_key_role", "operator"),
+                "team_id": None,
+                "lookup_prefix": "mk_abc****",
+                "last_used_at": None,
+                "created_at": "2025-01-01T00:00:00",
+                "expires_at": None,
+                "is_active": True,
+            }
+        ]
+
+        resp = client.get("/api/v1/api-keys")
+        _store_response(request, ctx, resp)
+        return resp
+
+
+@then("the response contains a full_key starting with \"mk_\"")
+def step_response_has_full_key(request: Any) -> None:
+    body = request.node.response.json()
+    assert "full_key" in body, f"Response missing full_key: {body}"
+    assert body["full_key"].startswith("mk_"), (
+        f"full_key does not start with 'mk_': {body['full_key']}"
+    )
+
+
+@then(parsers.parse('the response has name "{expected}"'))
+def step_response_has_name(expected: str, request: Any) -> None:
+    body = request.node.response.json()
+    actual = body.get("name")
+    assert actual == expected, (
+        f"Expected name {expected!r}, got {actual!r}"
+    )
+
+
+@then("the response indicates the key is revoked")
+def step_response_key_revoked(request: Any) -> None:
+    body = request.node.response.json()
+    assert body.get("revoked") is True, f"Key not marked as revoked: {body}"
+
+
+@then(parsers.parse('the response contains key "{name}"'))
+def step_response_contains_key(name: str, request: Any) -> None:
+    body = request.node.response.json()
+    items = body if isinstance(body, list) else body.get("items", [])
+    names = [item.get("name") for item in items]
+    assert name in names, (
+        f"Expected key {name!r} in response, got names: {names}"
+    )
+
+
+@when("I make an authenticated request with the wrong API key")
+def step_wrong_api_key_request(
+    request: Any, unauth_client: Any, ctx: dict[str, Any]
+) -> None:
+    """Make a request with an invalid API key (not a valid JWT)."""
+    resp = unauth_client.get(
+        "/api/v1/pipelines",
+        headers={"Authorization": "Bearer mk_badkey_invalid"},
+    )
+    _store_response(request, ctx, resp)
 
 
 # ===========================================================================

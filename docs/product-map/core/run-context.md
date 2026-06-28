@@ -28,7 +28,7 @@ code:
 unit-tests:
   - backend/tests/unit/core/run_context/test_autonomy.py
   - backend/tests/unit/pipeline_engine/test_decorator.py
-depends-on: [feat-core-run-context]
+depends-on: []
 status: partial
 ---
 # Run Context ## Behaviours ### Seeding

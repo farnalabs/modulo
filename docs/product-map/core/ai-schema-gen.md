@@ -74,4 +74,4 @@ status: partial
 - **No `abstract_name` inference:** Required for community library compatibility browsing (8.16 step 4)
 - **No SandboxedEnvironment:** LLM prompt doesn't isolate untrusted record values per 8.16 security requirement
 - **No data lifecycle enforcement:** No mechanism to ensure sampled data is not persisted after inference
-- **`depends-on` uses task ID pattern** (`task-nv5-*`) instead of feature ID pattern (`feat-*`) 
+- **`depends-on` uses correct feature ID** (`feat-core-schema-inference`, resolved). Stale note removed — refs now use `feat-*` pattern. 

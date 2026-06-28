@@ -37,7 +37,7 @@ status: partial
 - [ ] Scheduled quality report includes OKR breach summary
 - [ ] Multiple breaches in a single check produce one notification per breached suite ### Auth & Access Control
 - [x] Unauthenticated requests return 401 on OKR progress endpoint
-- [ ] Non-admin users receive 403 on OKR progress endpoint
+- [x] Non-admin users receive 403 on OKR progress endpoint
 - [x] RLS scopes OKR progress queries by organisation_id
 - [ ] OKR progress endpoint scoped to admin-only in alpha ### Edge Cases
 - [x] Suite not found in DB raises ValueError (returned as 404)

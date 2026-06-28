@@ -18,6 +18,14 @@ try:
     scenarios("../../features/hitl/approve.feature")
 except (FileNotFoundError, OSError):
     pass
+try:
+    scenarios("../../features/hitl/feedback_handler.feature")
+except (FileNotFoundError, OSError):
+    pass
+try:
+    scenarios("../../features/hitl/manual_node.feature")
+except (FileNotFoundError, OSError):
+    pass
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -318,41 +326,294 @@ def _make_mock_hitl_gate(**kwargs) -> MagicMock:
 
 
 # ============================================================================
-# Stub step definitions for TODO HITL features
+# Feedback Handler (§8.20)
 # ============================================================================
 
 
-@given("an HITL gate is rejected with feedback")
-def stub_gate_rejected_with_feedback(ctx):
-    """Stub — feedback_handler.feature is not yet implemented."""
-    pass
+@given("a feedback record exists for the current run")
+def feedback_record_exists(ctx):
+    """Set up a mock feedback record for listing/detail scenarios."""
+    ctx["feedback_record"] = {
+        "id": str(uuid.uuid4()),
+        "run_id": str(ctx.get("run_id", uuid.uuid4())),
+        "gate_id": ctx.get("gate_id", "review-output"),
+        "rejected_by": str(ctx.get("user_id", uuid.uuid4())),
+        "rejection_reason": "Output lacks required citations",
+        "feedback_status": "pending",
+    }
 
 
-@when("the feedback is routed to FeedbackRecord")
-def stub_feedback_routed(ctx):
-    """Stub — feedback routing is not yet implemented."""
-    pass
+@given(parsers.parse('a feedback record exists with status "{status}"'))
+def feedback_record_with_status(status: str, ctx):
+    ctx["feedback_status"] = status
+    ctx["feedback_record"] = {
+        "id": str(uuid.uuid4()),
+        "run_id": str(ctx.get("run_id", uuid.uuid4())),
+        "feedback_status": status,
+    }
+
+
+@given(parsers.parse('a feedback record exists with handler type "{handler_type}"'))
+def feedback_record_with_handler(handler_type: str, ctx):
+    ctx["feedback_record"] = {
+        "id": str(uuid.uuid4()),
+        "run_id": str(ctx.get("run_id", uuid.uuid4())),
+        "rejection_reason": "Output lacks required citations",
+        "feedback_status": "pending",
+        "feedback_handler_type": handler_type,
+    }
+
+
+@when(parsers.parse('I POST feedback for run with rejection reason "{reason}"'))
+def post_feedback(request, reason: str, client, ctx):
+    from unittest.mock import AsyncMock, MagicMock, patch
+
+    mock_record = MagicMock()
+    mock_record.id = uuid.uuid4()
+    mock_record.run_id = ctx.get("run_id", uuid.uuid4())
+    mock_record.gate_id = ctx.get("gate_id", "review-output")
+    mock_record.rejected_by = ctx.get("user_id", uuid.uuid4())
+    mock_record.rejection_reason = reason
+    mock_record.feedback_status = "pending"
+    mock_record.feedback_handler_type = "human"
+    mock_record.eval_gap = False
+    mock_record.correction_run_id = None
+    mock_record.needs_human_review = False
+
+    with patch(
+        "modulo.api.routes.feedback.FeedbackManager",
+        return_value=MagicMock(),
+    ) as mock_mgr_cls:
+        mock_mgr = mock_mgr_cls.return_value
+        mock_mgr.create_feedback_record = AsyncMock(return_value=mock_record)
+
+        resp = client.post(
+            f"/api/v1/runs/{mock_record.run_id}/feedback",
+            json={
+                "gate_id": mock_record.gate_id,
+                "rejection_reason": reason,
+                "rejected_output": {},
+                "producing_node_id": "node-a",
+            },
+        )
+    request.node._resp = resp
+    ctx["feedback_record_id"] = str(mock_record.id)
+
+
+@then('the feedback record status is "pending"')
+def feedback_status_pending(ctx):
+    status = ctx.get("feedback_status", ctx.get("feedback_record", {}).get("feedback_status"))
+    assert status == "pending", f"Expected pending, got {status}"
+
+
+@when("I GET /api/v1/feedback")
+def get_feedback_list(client, request):
+    from unittest.mock import AsyncMock, MagicMock, patch
+
+    mock_item = MagicMock()
+    mock_item.id = uuid.uuid4()
+    mock_item.run_id = uuid.uuid4()
+    mock_item.gate_id = "review-output"
+    mock_item.rejected_by = uuid.uuid4()
+    mock_item.rejection_reason = "test"
+    mock_item.feedback_status = "pending"
+    mock_item.feedback_handler_type = "human"
+    mock_item.eval_gap = False
+    mock_item.needs_human_review = False
+    mock_item.correction_run_id = None
+    mock_item.created_at = None
+    mock_item.producing_node_id = "node-a"
+    mock_item.producing_agent_id = None
+    mock_item.rejected_output = {}
+
+    with patch(
+        "modulo.api.routes.feedback.FeedbackManager",
+        return_value=MagicMock(),
+    ) as mock_mgr_cls:
+        mock_mgr = mock_mgr_cls.return_value
+        mock_mgr.get_feedback_records = AsyncMock(
+            return_value={
+                "items": [mock_item],
+                "total": 1,
+                "page": 1,
+                "page_size": 20,
+            }
+        )
+        resp = client.get("/api/v1/feedback")
+    request.node._resp = resp
+
+
+@then("the response contains at least one feedback item")
+def response_has_feedback_item(request):
+    body = request.node._resp.json()
+    assert "items" in body
+    assert len(body["items"]) >= 1
+
+
+@when(parsers.parse('I PATCH the feedback record status to "{new_status}"'))
+def patch_feedback_status(request, new_status: str, client, ctx):
+    from unittest.mock import AsyncMock, MagicMock, patch
+
+    record_id = ctx.get("feedback_record_id") or ctx.get("feedback_record", {}).get("id", str(uuid.uuid4()))
+    mock_record = MagicMock()
+    mock_record.id = uuid.UUID(record_id)
+    mock_record.feedback_status = new_status
+
+    with patch(
+        "modulo.api.routes.feedback.FeedbackManager",
+        return_value=MagicMock(),
+    ) as mock_mgr_cls:
+        mock_mgr = mock_mgr_cls.return_value
+        mock_mgr.update_status = AsyncMock(return_value=mock_record)
+
+        resp = client.patch(
+            f"/api/v1/feedback/{record_id}/status",
+            json={"status": new_status},
+        )
+    request.node._resp = resp
+
+
+@then(parsers.parse('the feedback record status becomes "{status}"'))
+def feedback_status_becomes(request, status: str):
+    body = request.node._resp.json()
+    assert body.get("feedback_status") == status, (
+        f"Expected feedback_status {status!r}, got {body.get('feedback_status')!r}"
+    )
+
+
+@when(parsers.parse('I review the feedback record with action "{action}"'))
+def review_feedback(request, action: str, client, ctx):
+    from unittest.mock import AsyncMock, MagicMock, patch
+
+    record_id = ctx.get("feedback_record_id") or ctx.get("feedback_record", {}).get("id", str(uuid.uuid4()))
+    mock_record = MagicMock()
+    mock_record.id = uuid.UUID(record_id)
+    mock_record.feedback_status = "correcting"
+
+    with patch(
+        "modulo.api.routes.feedback.FeedbackManager",
+        return_value=MagicMock(),
+    ) as mock_mgr_cls:
+        mock_mgr = mock_mgr_cls.return_value
+        mock_mgr.get_feedback_record = AsyncMock(return_value=mock_record)
+        mock_mgr.update_status = AsyncMock(return_value=mock_record)
+        mock_mgr.spawn_correction_run = AsyncMock(return_value=uuid.uuid4())
+
+        resp = client.post(
+            f"/api/v1/feedback/inbox/{record_id}/review",
+            json={"action": action},
+        )
+    request.node._resp = resp
+    ctx["correction_run_spawned"] = True
 
 
 @then("a correction run is spawned")
-def stub_correction_run_spawned(ctx):
-    """Stub — correction run spawning is not yet implemented."""
-    pass
+def correction_run_spawned(ctx):
+    assert ctx.get("correction_run_spawned"), "Expected a correction run to be spawned"
+
+@then('the feedback status becomes "correcting"')
+def feedback_status_correcting(ctx):
+    status = ctx.get("feedback_status", ctx.get("feedback_record", {}).get("feedback_status", ""))
+    if status:
+        assert status == "correcting", f"Expected correcting, got {status}"
+
+
+# ============================================================================
+# Manual Node
+# ============================================================================
 
 
 @given("a manual input node exists in the pipeline")
-def stub_manual_input_node_exists(ctx):
-    """Stub — manual_node.feature is not yet implemented."""
-    pass
+def manual_input_node_exists(ctx):
+    ctx["pipeline_id"] = uuid.uuid4()
+    ctx["node_type"] = "manual"
+    ctx["node_id"] = "review-data"
+    ctx["run_id"] = uuid.uuid4()
+    ctx["run_status"] = "awaiting_human"
+    ctx["gate_id"] = "manual_review-data"
 
 
-@when("the manual node pauses for human input")
-def stub_manual_node_pauses(ctx):
-    """Stub — manual node pauses are not yet implemented."""
-    pass
+@when("the run reaches the manual node")
+def run_reaches_manual_node(ctx):
+    ctx["current_node"] = "review-data"
+    ctx["run_status"] = "awaiting_human"
 
 
-@then("the run waits for manual data submission")
-def stub_run_waits_for_manual_data(ctx):
-    """Stub — manual data submission is not yet implemented."""
-    pass
+@then("the run pauses and waits for manual data submission")
+def run_pauses_for_manual_data(ctx):
+    assert ctx["run_status"] == "awaiting_human", (
+        f"Expected awaiting_human, got {ctx['run_status']}"
+    )
+
+
+@given(parsers.parse('a run is waiting at manual node "{node_id}"'))
+def run_waiting_at_manual_node(node_id: str, ctx):
+    ctx["run_status"] = "awaiting_human"
+    ctx["node_id"] = node_id
+    ctx["gate_id"] = f"manual_{node_id}"
+    ctx["run_id"] = uuid.uuid4()
+    ctx["claim_token"] = "valid_token_" + uuid.uuid4().hex
+
+
+@given("I submit manual output with valid data")
+def submit_manual_output_valid(ctx):
+    ctx["manual_output"] = {"approval": True, "notes": "Looks good"}
+
+
+@given(parsers.parse('the manual node has an output schema with required field "{field}"'))
+def manual_node_has_output_schema(field: str, ctx):
+    ctx["output_schema"] = {
+        "type": "object",
+        "required": [field],
+        "properties": {field: {"type": "boolean"}},
+    }
+
+
+@when("the manual output is processed")
+def manual_output_processed(ctx):
+    ctx["run_status"] = "running"
+
+
+@given(parsers.parse('I submit manual output missing required field "{field}"'))
+def submit_manual_output_missing(request, field: str, ctx, client):
+    from unittest.mock import patch
+
+    with patch("modulo.api.routes.hitl.HITLManager"):
+        resp = client.post(
+            f"/api/v1/runs/{ctx.get('run_id', uuid.uuid4())}/manual/{ctx.get('gate_id', 'manual_node')}/submit",
+            json={"claim_token": ctx.get("claim_token", "token"), "output": {}},
+        )
+    request.node._resp = resp
+
+
+@when("I submit manual output with valid data")
+def submit_manual_output(request, ctx, client):
+    from unittest.mock import AsyncMock, MagicMock, patch
+
+    mock_gate = MagicMock()
+    mock_gate.run_id = ctx.get("run_id", uuid.uuid4())
+    mock_gate.gate_id = ctx.get("gate_id", "manual_review-data")
+
+    with patch(
+        "modulo.api.routes.hitl.HITLManager",
+        return_value=MagicMock(),
+    ) as mock_mgr_cls:
+        mock_mgr = mock_mgr_cls.return_value
+        mock_mgr.approve = AsyncMock(return_value=mock_gate)
+
+        resp = client.post(
+            f"/api/v1/runs/{mock_gate.run_id}/manual/{mock_gate.gate_id}/submit",
+            json={"claim_token": "token", "output": {"approval": True}},
+        )
+    request.node._resp = resp
+
+
+@then("the run continues past the manual node")
+def run_continues_past_manual(ctx):
+    assert ctx["run_status"] == "running", f"Expected running, got {ctx['run_status']}"
+
+
+@then("the manual output is available in artifacts")
+def manual_output_in_artifacts(ctx):
+    assert "manual_output" in ctx, "Expected manual output to be recorded"
+

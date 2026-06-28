@@ -18,6 +18,10 @@ if config.config_file_name is not None:
 # Allow DATABASE_URL env var to override the alembic.ini connection string.
 _db_url = os.environ.get("DATABASE_URL")
 if _db_url:
+    # Fly.io Postgres attaches with postgres://...?sslmode=disable.
+    # SQLAlchemy async drivers need postgresql+asyncpg:// and ssl=disable.
+    _db_url = _db_url.replace("postgres://", "postgresql+asyncpg://", 1)
+    _db_url = _db_url.replace("?sslmode=disable", "?ssl=disable")
     config.set_main_option("sqlalchemy.url", _db_url)
 
 target_metadata = Base.metadata

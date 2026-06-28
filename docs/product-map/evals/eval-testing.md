@@ -19,7 +19,7 @@ unit-tests:
   - backend/tests/unit/core/test_eval_suite.py
   - backend/tests/unit/core/test_eval_regressions.py
   - backend/tests/bdd/steps/test_eval.py
-depends-on: [feat-evals-eval-engine, feat-evals-eval-gates, feat-evals-eval-engine, feat-evals-eval-engine]
+depends-on: [feat-evals-eval-engine, feat-evals-eval-gates]
 status: partial
 ---
 # Eval Testing Discovered from 1 completed delivery task (task-nv2-eval-bdd-tests). Tests validate the Eval System ($8.17) across BDD acceptance and unit levels, covering eval definitions, run lifecycle, regex/LLM-judge/block eval types, suite aggregation, dashboard, comparison, coverage, regression alerts, and gate enforcement. ## Behaviours ### Eval definition CRUD

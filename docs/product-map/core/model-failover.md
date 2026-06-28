@@ -52,7 +52,7 @@ audit event. API creates/updates/reads `fallback_backend_ids` on the entity. ## 
 - [x] Rotates to configured fallback when primary unhealthy
 - [x] Scans all registered backends when no fallback list configured
 - [ ] Raises `BackendUnavailableError` for unregistered ID (same exception as unhealthy, not `BackendNotFoundError`)
-- [ ] Does not emit audit events (no audit_logger parameter) ### API — CRUD
+- [x] Does not emit audit events (no audit_logger parameter) ### API — CRUD
 - [x] Create endpoint accepts `fallback_backend_ids` as list of UUIDs
 - [x] Update endpoint accepts `fallback_backend_ids`
 - [x] Response includes `fallback_backend_ids` field
