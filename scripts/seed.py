@@ -251,7 +251,7 @@ async def seed() -> None:
                     edge = PipelineEdge(
                         organisation_id=org.id, pipeline_id=uuid.uuid4(),
                         source_node_id=uuid.UUID(node_ids[i]), target_node_id=uuid.UUID(node_ids[i + 1]),
-                        edge_type="hitl" if is_hitl else "normal",
+                        edge_type="conditional" if is_hitl else "normal",
                         hitl_gate_config={"timeout_seconds": 900} if is_hitl else None,
                     )
                     edges_obj.append(edge)
