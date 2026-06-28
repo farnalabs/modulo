@@ -70,7 +70,6 @@
 <script setup lang="ts">
 import { ref, computed, onMounted } from 'vue'
 import { useApi } from '../composables/useApi'
-import { getAccessToken } from '../lib/api/client'
 
 interface Profile {
   id: string
