@@ -193,6 +193,7 @@ def build_graph_from_json(
         timeout: float | None = node_def.get("timeout_seconds")
         node_type: str = node_def.get("node_type", "agent")
         max_input_length: int | None = node_def.get("max_input_length")
+        token_budget: int | None = node_def.get("token_budget")
 
         if node_type == "manual":
             graph.add_node(
@@ -202,7 +203,13 @@ def build_graph_from_json(
         else:
             graph.add_node(
                 node_id,
-                make_node_fn(node_def, role=role, timeout=timeout, max_input_length=max_input_length),
+                make_node_fn(
+                    node_def,
+                    role=role,
+                    timeout=timeout,
+                    max_input_length=max_input_length,
+                    token_budget=token_budget,
+                ),
             )
 
     # Build reject-edge lookup for kick-back routing.

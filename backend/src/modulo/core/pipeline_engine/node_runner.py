@@ -80,6 +80,7 @@ def make_node_fn(
     role: str | None = None,
     timeout: float | None = None,
     max_input_length: int | None = None,
+    token_budget: int | None = None,
 ) -> Any:
     """Return a decorated async node function for use in a StateGraph.
 
@@ -89,6 +90,9 @@ def make_node_fn(
 
     When *max_input_length* is set, input text from ``run_context["input"]`` is
     truncated before being passed to the LLM.
+
+    When *token_budget* is set, per-node token budget is enforced at the
+    executor level via ``node_token_budgets`` during ``_stream_graph()``.
     """
     node_id: str = str(node_def["id"])
 
