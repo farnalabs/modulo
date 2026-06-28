@@ -17,7 +17,7 @@
             v-model="email"
             type="text"
             class="w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-            placeholder="demo"
+            placeholder="admin@example.com"
             required
           />
         </div>
@@ -27,7 +27,7 @@
             v-model="password"
             type="password"
             class="w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-            placeholder="demo"
+            placeholder="Enter your password"
             required
           />
         </div>
@@ -49,8 +49,8 @@ import { useRouter } from 'vue-router'
 import { setAccessToken } from '../lib/api/client'
 
 const router = useRouter()
-const email = ref('demo')
-const password = ref('demo')
+const email = ref('')
+const password = ref('')
 const loading = ref(false)
 const error = ref<string | null>(null)
 
