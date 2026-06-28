@@ -36,7 +36,7 @@ const _origPut = api.PUT.bind(api)
 const _origPatch = api.PATCH.bind(api)
 const _origDelete = api.DELETE.bind(api)
 
-function withAuth<T>(fn: (...args: any[]) => any) {
+function withAuth(fn: (...args: any[]) => any) {
   return (...args: any[]) => {
     const [url, options] = args
     const headers = { ...getAuthHeaders(), ...options?.headers }
