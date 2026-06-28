@@ -68,7 +68,7 @@ const error = ref<string | null>(null)
 
 onMounted(async () => {
   try {
-    const { data: result, error: err } = await api.GET('/api/v1/dashboard/summary')
+    const { data: result, error: err } = await api.GET('/dashboard/summary')
     if (err) {
       error.value = `Failed to load dashboard: ${err}`
     } else {
