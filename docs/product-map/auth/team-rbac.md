@@ -1,24 +1,202 @@
 ﻿---
 id: feat-auth-team-rbac
-prd: 
+prd: §9.2, §9.3
 delivery-tasks: [task-nv1-team-rbac]
 bdd:
-
+  - backend/tests/bdd/features/auth/rbac.feature
 code:
+  - backend/src/modulo/auth/team_rbac.py
+  - backend/src/modulo/db/models/team.py
+  - backend/src/modulo/db/models/team_membership.py
+  - backend/src/modulo/db/crud/team.py
+  - backend/src/modulo/db/crud/team_membership.py
+  - backend/src/modulo/api/routes/teams.py
+  - backend/src/modulo/api/routes/api_keys.py
+  - backend/src/modulo/api/routes/pipelines.py
+  - backend/src/modulo/api/routes/library.py
+  - backend/src/modulo/api/routes/contributions.py
+  - backend/src/modulo/api/routes/dashboard.py
+  - backend/src/modulo/api/routes/admin.py
+  - backend/src/modulo/api/routes/admin_sso.py
+  - backend/src/modulo/api/routes/viewmodel.py
+  - backend/src/modulo/api/mcp_server.py
+  - backend/src/modulo/auth/sso.py
+  - backend/src/modulo/core/feature_flags.py
+  - backend/src/modulo/db/migrations/versions/0026_team_rbac_cap.py
+unit-tests:
+  - backend/tests/unit/auth/test_team_rbac.py
+  - backend/tests/unit/db/test_migration_0026.py
 depends-on: [task-nv1-team-entity]
-status: gap
+status: partial
 ---
 
-#  team rbac.Value.ToUpper() eam  team rbac.Value.ToUpper() bac
+# Team RBAC (Role-Based Access Control)
 
-Discovered from 1 completed delivery tasks.
+Org-level and team-level role hierarchy with privilege cap, team membership management, and team-scoped resource visibility.
 
 ## Behaviours
-<!-- TODO: populate expected behaviours and edge cases -->
 
-- [ ] Happy path works
-- [ ] Error states handled
+### Role model
+- [ ] Four org roles exist: viewer, runner, operator, admin
+- [ ] Four team roles exist: viewer, runner, operator, admin
+- [ ] `admin` is assignable at org scope only — cannot be a team role
+- [ ] Org role baseline applies to all org-visibility resources
+- [ ] Team role applies only to resources owned by that specific team
+- [ ] Same role names are used at both scopes but enforce different access boundaries
+- [ ] Unknown role values are rejected with a validation error
+- [ ] Role hierarchy levels are monotonically increasing: viewer < runner < operator < admin
+
+### Privilege cap
+- [ ] A team member's effective role is the lower of their org role and team role
+- [ ] A viewer org member cannot exceed viewer team role regardless of assigned team role
+- [ ] A runner org member is capped at runner in any team
+- [ ] An operator org member is capped at operator in any team
+- [ ] An admin org member can hold any team role including admin-equivalent
+- [ ] The privilege cap is enforced at the database level via a BEFORE INSERT OR UPDATE trigger
+- [ ] The trigger raises a named exception when the team role exceeds the org role
+- [ ] The privilege cap is also enforced in application code (REST layer) before the DB trigger fires
+- [ ] Unknown roles in the trigger or application code default to a restrictive fallback
+- [ ] The privilege cap trigger is applied to every INSERT or UPDATE on team_memberships
+
+### Team CRUD
+- [ ] Admin can create a team with name, description, and organisation
+- [ ] Team creation assigns a UUID and tracks the creating user
+- [ ] Team name is unique within an organisation
+- [ ] Team name is limited to 255 characters
+- [ ] Team description is limited to 2000 characters
+- [ ] Non-admin users cannot create a team
+- [ ] Admin can update team name and description
+- [ ] Admin can list all teams in an organisation with pagination
+- [ ] Admin can get a single team by ID
+- [ ] Admin can delete a team with no owned resources
+- [ ] Team deletion is blocked if any resource has owner_team_id pointing to the team
+- [ ] Team deletion returns a `team_has_resources` error when blocked
+- [ ] Admin can bulk-reassign all team-owned resources to org-wide before deletion
+- [ ] Team deletion writes a `team_deleted` audit event
+- [ ] Admin can rename a team without affecting its resource ownership
+- [ ] Pagination defaults to page 1, page size 20, max 100
+
+### Team membership management
+- [ ] Admin can add any org user to any team with a role
+- [ ] Admin can remove any user from any team
+- [ ] Admin can change a user's team role
+- [ ] A team operator can add members to their own team only
+- [ ] A team operator can only grant roles up to their own team role (no self-escalation)
+- [ ] A user cannot be added to a team if they are not a member of the organisation
+- [ ] Adding a user whose org role is below the requested team role is rejected
+- [ ] A user can be a member of multiple teams with different roles in each
+- [ ] A user can be removed from one team without affecting their other team memberships
+- [ ] Membership has a unique constraint per (team_id, user_id) — no duplicates
+- [ ] Deleting a team cascades to delete all its memberships
+- [ ] Deleting a user cascades to delete all their team memberships
+- [ ] Membership tracks who added the user and when
+- [ ] Listing team members supports pagination
+
+### Resource ownership and visibility
+- [ ] Pipeline, Stage, ConnectorInstance, and ModelBackend carry owner_team_id (nullable)
+- [ ] Each resource has exactly one owner_team_id (multi-team ACLs not supported)
+- [ ] Resources with visibility `org` are accessible to all org members at their org role
+- [ ] Resources with visibility `team` are visible only to members of the owning team plus org admins
+- [ ] A resource with owner_team_id=NULL and visibility `org` is accessible to all org members (legacy)
+- [ ] An org operator cannot see or act on team-visibility resources unless they are a team member or admin
+- [ ] Team visibility is a privacy boundary — non-members cannot enumerate team-private resources
+- [ ] Admin sees all resources regardless of team visibility
+- [ ] Admin can use `view_as_team` to inspect what a specific team sees
+- [ ] `view_as_team` from a non-admin returns 403 at the ViewModel layer
+- [ ] A team-private connector can only be bound to pipelines owned by the same team
+- [ ] Cross-team connector binding returns `connector_team_mismatch` error
+- [ ] Library primitives carry owner_team_id and visibility fields
+
+### Team-scoped HITL gates
+- [ ] A HITL gate may specify required_team_id
+- [ ] required_team_id enforcement uses a DB-live membership check (not JWT claims)
+- [ ] Only members of the specified team with runner or operator team role can claim the gate
+- [ ] The MCP `review_hitl` tool enforces team scope returns 403 when token is not scoped to a team member
+- [ ] The gate context resource exposes required_team_id and required_team_name
+- [ ] A HITL gate without required_team_id does not restrict by team
+- [ ] Gate claim fails atomically for users outside the required team
+
+### Team-scoped API keys
+- [ ] API keys carry an optional team_id
+- [ ] A team-scoped API key is restricted to resources accessible to that team
+- [ ] An org-wide API key (no team_id) respects org-level role only
+- [ ] Team-scoped API keys cannot access resources outside their team boundary
+
+### SSO and JIT provisioning
+- [ ] SSO group-to-team mapping: idP group -> modulo team_id + team_role
+- [ ] On JIT provisioning, group membership maps to Modulo team membership
+- [ ] If a user already belongs to the mapped team and the role differs, their role is updated
+- [ ] If a user already belongs to the mapped team with the same role, no duplicate membership is created
+- [ ] Group mappings are configured by admin at the SSO provider level
+- [ ] The default team_role for SSO mapping is viewer
+
+### JWT and session behaviour
+- [ ] JWT payload carries org_role and team_memberships list
+- [ ] ViewModel resolves effective access from JWT claims without DB round-trip on every request
+- [ ] Team membership changes take effect at the user's next token refresh (up to 15-min lag)
+- [ ] Session revocation immediately invalidates all active tokens for a user
+- [ ] The admin UI documents the 15-min stale membership window alongside the "Remove from team" action
+- [ ] required_team_id HITL enforcement bypasses JWT claims and always performs a DB-live check
+
+### Enterprise gating
+- [ ] team_rbac is behind an enterprise feature flag
+- [ ] The feature flag disables team RBAC endpoints for non-enterprise tiers
+- [ ] Free tier sees the feature as locked/locked-badge in the UI
+
+### Stage board and UI
+- [ ] The Stage board only surfaces pipelines and stages the user has access to
+- [ ] Team-private resources do not reveal "(N hidden)" — total absence for non-members
+- [ ] Admin has a "View as: All / Team: X" toggle in the Stage board
+- [ ] Team badge appears on pipeline and stage cards (tooltip with team name)
+- [ ] User profile panel shows "My Teams" with role in each
+- [ ] Team management UI is at `/settings/teams` and is accessible to admins and team operators
+- [ ] Team management UI shows member count and owned resource count per team
+- [ ] Bulk "Reassign all resources to org-wide" action is admin-only
+
+### Edge cases and error states
+- [ ] Adding a user to a team that does not exist returns 404
+- [ ] Adding a non-existent user to a team returns 404
+- [ ] Requesting a team role that does not exist in the hierarchy is rejected
+- [ ] Removing the last operator from a team is not blocked (no operator self-protection)
+- [ ] Creating a team with a duplicate name within the same org returns 409
+- [ ] Creating a team with an empty name is rejected
+- [ ] Creating a team with whitespace-only name is rejected
+- [ ] Updating a team to an already-taken name returns 409
+- [ ] Fetching a non-existent team returns 404
+- [ ] Deleting a non-existent team returns 404
+- [ ] Team with resources cannot be deleted
+- [ ] Bulk reassign followed by delete is idempotent (reassigning already-org resources)
+- [ ] A user assigned the same team role via SSO on repeated JIT provision is not re-added
+- [ ] Orphaned team_memberships on user deletion are cleaned up via FK CASCADE
+- [ ] Null role in membership creation is rejected
+
+### Concurrency and data integrity
+- [ ] Team name uniqueness is enforced at the database level (unique constraint)
+- [ ] Team membership uniqueness is enforced at the database level (unique constraint)
+- [ ] Privilege cap is enforced at the database level (trigger) — protects against application-level bypass
+- [ ] Role CHECK constraint prevents invalid role values at the column level
+- [ ] Foreign key on team_id cascades on delete (team deletion removes memberships)
+- [ ] Foreign key on user_id cascades on delete (user deletion removes memberships)
+- [ ] RLS policies scope team and membership queries to the user's organisation
+- [ ] Concurrent team creation with the same name results in exactly one success
+- [ ] Concurrent membership addition for the same (team, user) pair results in exactly one success
+
+### Backward compatibility
+- [ ] Legacy `member` role values in team_memberships are migrated to `viewer` on upgrade
+- [ ] Existing pipelines without owner_team_id continue to work (NULL = legacy / org-wide)
+- [ ] The migration from `member` to `viewer` is reversible via downgrade
+- [ ] Org-wide API keys (no team_id) continue to function unchanged
+- [ ] Pipelines with visibility: org are unaffected by team RBAC changes
+- [ ] The privilege cap trigger only fires for new/updated rows — existing data is unchanged
+- [ ] Export bundle strips owner_team_id to prevent leakage across organisations
+- [ ] Import with owner_team_id set validates the team exists and user has access
 
 ## Known Gaps
-<!-- auto-generated entry â€” needs human review -->
-
+- BDD feature file at `backend/tests/bdd/features/auth/rbac.feature` is a placeholder — no real scenarios exist yet
+- Stage board team filtering (`/settings/teams` UI) is v1, not yet implemented
+- V1 team membership requires email-based invitation acceptance — not yet implemented
+- No operator self-protection: removing the last operator from a team is not blocked
+- Team cost attribution moved to v1
+- No tests for cross-team connector binding enforcement
+- No integration tests for the privilege cap trigger with concurrent inserts
+- No test for DB-live membership check on required_team_id with stale JWT claims

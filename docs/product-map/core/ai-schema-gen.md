@@ -1,24 +1,100 @@
 ﻿---
 id: feat-core-ai-schema-gen
-prd: 
+prd: §8.16
 delivery-tasks: [task-nv9-ai-schema-gen]
-bdd:
-
+bdd: backend/tests/bdd/features/connectors/schema_inference.feature
 code:
+  - backend/src/modulo/core/schema_registry/inference.py
+  - backend/src/modulo/core/schema_registry/generation.py
+  - backend/src/modulo/api/routes/schemas.py
 depends-on: [task-nv5-schema-inference-service]
-status: gap
+status: partial
 ---
 
-#  ai schema gen.Value.ToUpper() i  ai schema gen.Value.ToUpper() chema  ai schema gen.Value.ToUpper() en
+# AI Schema Inference & Generation
 
-Discovered from 1 completed delivery tasks.
+Schema Inference (§8.16) samples records from a connected tool and uses an LLM to produce a draft JSON Schema. Schema Generation takes a natural-language description plus optional examples and produces a draft schema. Both are read-only, LLM-assisted drafting tools — output always goes through human review before publishing.
 
-## Behaviours
-<!-- TODO: populate expected behaviours and edge cases -->
+### Behaviours
 
-- [ ] Happy path works
-- [ ] Error states handled
+#### Schema Inference — service (`inference.py`, `SchemaInferenceService.infer`)
+- [x] LLM infers draft JSON Schema (draft-07/2020-12) from sample data records
+- [x] Samples capped at configurable max (default 50, `_MAX_SAMPLE_RECORDS`)
+- [x] Handles LLM responses wrapped in markdown code fences (with or without lang hint)
+- [x] Handles plain JSON responses (no fences)
+- [x] Adds default `type: "object"` and `properties: {}` if missing from LLM output
+- [x] Raises `SchemaInferenceError` on LLM call failure (backend exception)
+- [x] Raises `SchemaInferenceError` on LLM timeout (configurable, default 60s)
+- [x] Raises `SchemaInferenceError` on unparseable LLM response (invalid JSON, non-dict)
+- [x] Raises `SchemaInferenceError` on non-string `AIMessage.content`
+- [x] Raises `ValueError` on non-dict samples input
+- [x] Handles empty sample list (returns backend response)
+- [x] Supports custom system prompt injection via constructor
+- [x] Nested object/array structures in samples inferred correctly
+- [x] Mixed field presence across records handled (required vs optional based on appearance)
+- [x] All-null-value fields omitted from draft schema
+- [x] Prompt truncates sample set to `_MAX_SAMPLE_RECORDS` (50)
+
+#### Schema Generation — service (`generation.py`, `SchemaGenerationService.generate`)
+- [x] LLM generates JSON Schema from natural-language description
+- [x] Optional example records shape the generated schema
+- [x] Handles markdown-fenced and plain-JSON LLM responses
+- [x] Raises `SchemaGenerationError` on LLM call failure
+- [x] Raises `SchemaGenerationError` on timeout (configurable, default 60s)
+- [x] Raises `SchemaGenerationError` on unparseable response
+- [x] Raises `SchemaGenerationError` on non-string `AIMessage.content`
+- [x] Raises `SchemaGenerationError` on backend returning object without `.content`
+- [x] Raises `ValueError` on empty/whitespace-only description
+- [x] Omits examples section when none provided (or empty list)
+- [x] Supports custom system prompt via constructor
+- [x] Rejects non-fenced surrounding explanatory text from LLM (no greedy extraction)
+
+#### API endpoints (`routes/schemas.py`)
+- [x] `POST /api/v1/schemas/infer` — samples connector data, LLM infers, returns draft
+- [x] `POST /api/v1/schemas/generate` — description + examples, LLM generates, returns draft
+- [x] Both endpoints require authentication + RLS org scoping
+- [x] `POST /infer` returns 404 when connector instance not found
+- [x] Both return 400 when no model backends configured
+- [x] `POST /infer` returns 502 when connector sampling fails
+- [x] Both return 502 when LLM step fails
+- [x] `POST /infer` returns `definition_json`, `sample_count`, `suggestion_name`, `suggestion_description`
+
+#### Unit test coverage (`test_schema_inference.py`, `test_schema_generation.py`)
+- [x] Prompt-building: system + human message structure, truncation, empty samples
+- [x] Response parsing: plain JSON, markdown fences, fences without lang hint, whitespace, missing fields
+- [x] Error parsing: invalid JSON, non-dict JSON, empty string
+- [x] Inference service: happy path, markdown-wrapped, LLM failure, unparseable, empty samples, nested structures, mixed field presence, all-null values, non-string content
+- [x] Generation service: happy path, with examples, markdown-wrapped, LLM failure, unparseable, empty/blank description, non-string content, empty examples list, non-fenced surrounding text, complex nested schema, backend without `.content`, timeout
+
+#### Integration test coverage (`test_schema_inference_integration.py`)
+- [x] Full end-to-end: realistic records, stub LLM, parsed schema
+- [x] Schema includes all fields from samples
+- [x] Empty records list
+- [x] Markdown-wrapped LLM response
+- [x] Backend failure wrapped in `SchemaInferenceError`
+- [x] Unparseable response wrapped in `SchemaInferenceError`
+- [x] Deeply nested object/array structures
+- [x] Non-string `AIMessage` content
+
+#### PRD scope gaps (§8.16) — not yet implemented
+- [ ] Configurable sample count (default 200 per PRD, not 50 as today)
+- [ ] Enum detection for `issue_type`, `status`, `priority` fields
+- [ ] Fields appearing in <10% of records flagged as rarely-used, excluded from default draft
+- [ ] Inferred `abstract_name` suggestion surfaced in response
+- [ ] Draft opens in schema editor for operator review before publishing
+- [ ] Sandboxed LLM prompt (`SandboxedEnvironment`) for untrusted record data
+- [ ] Sampled data not stored after inference completes (data lifecycle statement)
+- [ ] SDLC onboarding path: connect, infer, review, publish, browse library, wire agents
+
+#### BDD coverage
+- [ ] Gherkin scenarios in `schema_inference.feature` — file is a TODO placeholder, no scenarios
 
 ## Known Gaps
-<!-- auto-generated entry â€” needs human review -->
 
+- **BDD placeholder:** `backend/tests/bdd/features/connectors/schema_inference.feature` has zero scenarios
+- **Sample cap mismatch:** Code hardcodes 50 max samples; PRD specifies default 200
+- **No enum/rare-field logic:** Inference prompt doesn't instruct for enum detection or rare-field flagging (§8.16)
+- **No `abstract_name` inference:** Required for community library compatibility browsing (§8.16 step 4)
+- **No SandboxedEnvironment:** LLM prompt doesn't isolate untrusted record values per §8.16 security requirement
+- **No data lifecycle enforcement:** No mechanism to ensure sampled data is not persisted after inference
+- **`depends-on` uses task ID pattern** (`task-nv5-*`) instead of feature ID pattern (`feat-*`)

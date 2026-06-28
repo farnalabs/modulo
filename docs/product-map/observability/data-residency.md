@@ -1,24 +1,90 @@
 ﻿---
 id: feat-observability-data-residency
-prd: 
+prd: §10.5, §6.6, §6.2
 delivery-tasks: [task-nv0-data-residency]
 bdd:
-
+  - backend/tests/features/personas/marcus-ciso.feature
+  - backend/tests/bdd/features/observability/otel_traces.feature
+  - backend/tests/bdd/features/observability/metrics.feature
+  - backend/tests/bdd/steps/test_observability.py
 code:
+  - backend/src/modulo/settings.py
+  - backend/src/modulo/otel_bridge/export.py
+  - backend/src/modulo/otel_bridge/handler.py
+  - backend/src/modulo/api/main.py
+  - backend/src/modulo/core/runtime_provider/__init__.py
+  - backend/src/modulo/db/models/environment_profile.py
+  - backend/src/modulo/db/crud/environment_profile.py
+  - backend/src/modulo/api/routes/environments.py
+  - backend/src/modulo/core/library_service/__init__.py
 depends-on: []
-status: gap
+status: partial
 ---
 
-#  data residency.Value.ToUpper() ata  data residency.Value.ToUpper() esidency
+# Data Residency
 
-Discovered from 1 completed delivery tasks.
+Self-hosted Modulo deployments keep all data within the organisation's infrastructure. Telemetry is opt-in and disabled by default. Network egress requires explicit operator configuration at every layer.
 
 ## Behaviours
-<!-- TODO: populate expected behaviours and edge cases -->
 
-- [ ] Happy path works
-- [ ] Error states handled
+### Telemetry & Observability
+- [ ] `MODULO_TELEMETRY_ENABLED` defaults to `false` at startup
+- [ ] When telemetry is disabled, a no-op OTel provider is registered (no exporters)
+- [ ] When telemetry is enabled, stdout (ConsoleSpanExporter) is configured
+- [ ] When telemetry is enabled and `OTEL_EXPORTER_OTLP_ENDPOINT` is set, OTLP exporter is also configured
+- [ ] Invalid `OTEL_EXPORTER_OTLP_ENDPOINT` is logged and does not crash startup
+- [ ] `setup_otel()` is idempotent — safe to call multiple times
+- [ ] `shutdown_otel()` flushes and shuts down the global provider — safe to call multiple times
+- [ ] No credential fields, API keys, or user content appear in OTel span attributes
+- [ ] No telemetry data leaves the process without explicit operator configuration
+- [ ] `LangGraphOtelBridge` maps LangGraph node events to OTel spans
+- [ ] Pipeline runs emit OTel spans for LLM calls, connector operations, and trigger events
+- [ ] Span attributes include `organisation_id` and `pipeline_id`
+- [ ] Decrypted credentials never enter OTel span attributes (credential-in-state rule)
+
+### Network Egress Control
+- [ ] Default configuration makes zero external network calls
+- [ ] No hardcoded DNS resolutions, phone-home mechanisms, or cloud API calls in base runtime
+- [ ] `EnvironmentProfile.egress_policy` defaults to `null` (unrestricted)
+- [ ] Egress policy can be set to `deny_all`, `allow_all`, or `allow_listed` (validated via regex)
+- [ ] Invalid egress_policy value is rejected at the API layer with 422
+- [ ] Library primitives declare `required_environment_capabilities` (e.g. `egress:github.com`)
+- [ ] Runtime provider enforces egress_policy on workspace creation
+- [ ] VPC deployment checklist verifies all egress is to known internal services only
+
+### Self-Hosted Data Residency
+- [ ] Self-hosted deployment keeps all data within the organisation's infrastructure
+- [ ] No agent output, source code, or credentials leave the VPC
+- [ ] Modulo can be deployed with zero internet access (air-gapped)
+- [ ] Connectors require explicit operator configuration before making outbound calls
+- [ ] Webhooks are fully user-configured — no hardcoded endpoints
+- [ ] Notifications are sent only to operator-configured webhook URLs
+- [ ] SSO/OIDC requires operator-configured IdP URL
+- [ ] License validation is local-only — no phone-home
+- [ ] Frontend loads no third-party CDNs, analytics scripts, or tracking pixels
+- [ ] Network egress audit (`docs/operations/network-egress.md`) is the single source of truth for SOC 2 evidence
+
+### Multi-Region (V3 / SaaS — deferred)
+- [ ] Region encoded in org metadata for multi-region routing
+- [ ] Separate Postgres clusters per region
+- [ ] modulo-cloud routing layer routes tenants to their regional cluster
+
+### BDD & Test Coverage
+- [ ] `backend/tests/features/personas/marcus-ciso.feature` — `@goal-marcus-data-residency` delivered (no data leaves infrastructure)
+- [ ] `backend/tests/bdd/features/observability/otel_traces.feature` — TODO placeholder (not yet implemented)
+- [ ] `backend/tests/bdd/features/observability/metrics.feature` — TODO placeholder (not yet implemented)
+- [ ] `backend/tests/bdd/features/observability/run_logs.feature` — TODO placeholder (not yet implemented)
+- [ ] `backend/tests/unit/otel_bridge/test_telemetry_toggle.py` — telemetry disabled by default; enabled configures exporters
+- [ ] `backend/tests/unit/otel_bridge/test_export.py` — exporter configuration
+- [ ] `backend/tests/unit/otel_bridge/test_handler.py` — OTel span creation
+- [ ] `backend/tests/unit/connector_hub/test_traced_connector.py` — connector OTel tracing
+- [ ] `backend/tests/unit/api/test_environments.py` — egress_policy API validation (invalid values return 422)
+- [ ] `backend/tests/integration/crud/test_environment_profiles.py` — egress_policy CRUD roundtrip
 
 ## Known Gaps
-<!-- auto-generated entry â€” needs human review -->
-
+- OTel trace BDD feature files are all TODO placeholders — no scenario steps defined
+- Metrics BDD feature files are TODO placeholders
+- Run logs BDD feature files are TODO placeholders
+- Multi-region data residency (V3 SaaS) is documented but not implemented
+- No automated test enforces that telemetry is opt-in at the integration level
+- No air-gapped deployment integration test exists
