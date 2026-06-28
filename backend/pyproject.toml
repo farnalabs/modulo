@@ -68,6 +68,7 @@ dependencies = [
     # Fixes CVE-2025-64439 (RCE via jsonplus) and CVE-2026-27794 (RCE via pickle)
     "langgraph-checkpoint-postgres>=3.0.0",
     "psycopg-binary>=3.3.4",
+    "psycopg2-binary>=2.9.0",
     "types-jmespath>=1.1.0.20260508",
     # Runtime environments
     "e2b>=0.15.0",
