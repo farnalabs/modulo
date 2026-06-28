@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import uuid
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -151,8 +152,8 @@ async def _run_rotation_background(
     factory: async_sessionmaker[AsyncSession],
     new_key: str,
     old_key: str,
-    org_id: str,
-    actor_user_id: str,
+    org_id: uuid.UUID,
+    actor_user_id: uuid.UUID,
 ) -> None:
     """Run the full rotation in the background and store the result."""
     global _rotation_in_progress, _last_rotation_result
