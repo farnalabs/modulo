@@ -26,6 +26,7 @@ jobs:
       - run: uv run --no-sync mypy src/modulo/
       - run: uv run --no-sync bandit -r src/modulo/ -ll
       - run: uv run --no-sync semgrep --config=../.semgrep/ .
+      - run: uv run --no-sync pip-audit
 
   frontend:
     name: Frontend
@@ -45,6 +46,7 @@ jobs:
       - run: npm run type-check
       - run: npm run test:unit
       - run: npm run build
+      - run: npm audit
 
   product-map-validate:
     name: Product map validation
