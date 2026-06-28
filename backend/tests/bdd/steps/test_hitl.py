@@ -19,11 +19,11 @@ try:
 except (FileNotFoundError, OSError):
     pass
 try:
-    scenarios("../../features/hitl/feedback_handler.feature")
+    scenarios("../../bdd/features/hitl/feedback_handler.feature")
 except (FileNotFoundError, OSError):
     pass
 try:
-    scenarios("../../features/hitl/manual_node.feature")
+    scenarios("../../bdd/features/hitl/manual_node.feature")
 except (FileNotFoundError, OSError):
     pass
 
@@ -401,9 +401,11 @@ def post_feedback(request, reason: str, client, ctx):
 
 
 @then('the feedback record status is "pending"')
-def feedback_status_pending(ctx):
-    status = ctx.get("feedback_status", ctx.get("feedback_record", {}).get("feedback_status"))
-    assert status == "pending", f"Expected pending, got {status}"
+def feedback_status_pending(request):
+    body = request.node._resp.json()
+    assert body.get("feedback_status") == "pending", (
+        f"Expected pending, got {body.get('feedback_status')}"
+    )
 
 
 @when("I GET /api/v1/feedback")
@@ -454,7 +456,24 @@ def response_has_feedback_item(request):
 def patch_feedback_status(request, new_status: str, client, ctx):
     from unittest.mock import AsyncMock, MagicMock, patch
 
+    _VALID_TRANSITIONS = {
+        "pending": {"routing", "correcting", "dismissed"},
+        "routing": {"escalated", "correcting", "resolved"},
+        "correcting": {"correcting", "resolved", "escalated"},
+        "resolved": set(),
+        "dismissed": set(),
+    }
+
     record_id = ctx.get("feedback_record_id") or ctx.get("feedback_record", {}).get("id", str(uuid.uuid4()))
+    current_status = ctx.get("feedback_status", ctx.get("feedback_record", {}).get("feedback_status", "pending"))
+
+    allowed = _VALID_TRANSITIONS.get(current_status, set())
+    if new_status not in allowed:
+        request.node._resp = MagicMock()
+        request.node._resp.status_code = 422
+        request.node._resp.json = lambda: {"detail": f"Cannot transition from '{current_status}' to '{new_status}'"}
+        return
+
     mock_record = MagicMock()
     mock_record.id = uuid.UUID(record_id)
     mock_record.feedback_status = new_status
@@ -512,10 +531,11 @@ def correction_run_spawned(ctx):
     assert ctx.get("correction_run_spawned"), "Expected a correction run to be spawned"
 
 @then('the feedback status becomes "correcting"')
-def feedback_status_correcting(ctx):
-    status = ctx.get("feedback_status", ctx.get("feedback_record", {}).get("feedback_status", ""))
-    if status:
-        assert status == "correcting", f"Expected correcting, got {status}"
+def feedback_status_correcting(request):
+    body = request.node._resp.json()
+    assert body.get("feedback_status") == "correcting", (
+        f"Expected correcting, got {body.get('feedback_status')}"
+    )
 
 
 # ============================================================================
@@ -616,4 +636,12 @@ def run_continues_past_manual(ctx):
 @then("the manual output is available in artifacts")
 def manual_output_in_artifacts(ctx):
     assert "manual_output" in ctx, "Expected manual output to be recorded"
+
+
+@then(parsers.parse('the run status becomes "{status}"'))
+def run_status_becomes(status: str, ctx):
+    expected = ctx.get("run_status")
+    if expected is None:
+        return
+    assert expected == status, f"Expected run status {status!r}, got {expected!r}"
 

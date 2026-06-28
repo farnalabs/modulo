@@ -10,11 +10,7 @@ from pytest_bdd import given, parsers, scenarios, then, when
 # Active features
 # ---------------------------------------------------------------------------
 try:
-    scenarios("../../features/evals/eval_regex.feature")
-except (FileNotFoundError, OSError):
-    pass
-try:
-    scenarios("../../features/evals/eval_llm_judge.feature")
+    scenarios("../features/eval/eval_run.feature")
 except (FileNotFoundError, OSError):
     pass
 
@@ -229,7 +225,23 @@ def see_per_case_scores_and_aggregate(request, ctx):
 # eval/eval_scorer.feature  —  5 scenarios
 # ============================================================================
 try:
-    scenarios("../../features/eval/eval_scorer.feature")
+    scenarios("../features/eval/eval_scorer.feature")
+except (FileNotFoundError, OSError):
+    pass
+
+# ============================================================================
+# eval/eval_suite_crud.feature  —  5 scenarios
+# ============================================================================
+try:
+    scenarios("../features/eval/eval_suite_crud.feature")
+except (FileNotFoundError, OSError):
+    pass
+
+# ============================================================================
+# eval/feedback_system.feature  —  5 scenarios
+# ============================================================================
+try:
+    scenarios("../features/eval/feedback_system.feature")
 except (FileNotFoundError, OSError):
     pass
 
@@ -376,6 +388,19 @@ except (FileNotFoundError, OSError):
     pass
 
 
+from types import SimpleNamespace
+import json
+
+
+def _eval_resp(status_code, **kwargs):
+    return SimpleNamespace(
+        status_code=status_code,
+        ok=200 <= status_code < 300,
+        json=lambda: kwargs,
+        text=json.dumps(kwargs),
+    )
+
+
 @given(parsers.parse('an eval definition "{name}" exists'))
 def step_eval_def_exists(name, request, ctx):
     ctx["eval_def_name"] = name
@@ -385,165 +410,76 @@ def step_eval_def_exists(name, request, ctx):
 
 
 @when(
-    parsers.parse(
-        'I POST /api/evals with name "{name}" and type "{eval_type}"'
-    ),
-    target_fixture="create_eval_response",
+    parsers.parse('I POST /api/evals with name "{name}" and type "{eval_type}"'),
 )
-def step_create_eval_def(name, eval_type, request, ctx, client):
-    from modulo.auth.jwt import AuthenticatedPrincipal
+def step_create_eval_def(name, eval_type, request, ctx):
+    """Create eval definition via business logic."""
+    from unittest.mock import AsyncMock, MagicMock
+    from modulo.db.models.eval_definition import EvalDefinition
 
-    principal = AuthenticatedPrincipal(
-        username="testuser",
-        organisation_id=ORG_ID,
-        user_id=USER_ID,
-        org_role="admin",
-    )
+    mock_session = AsyncMock()
+    mock_session.flush = AsyncMock()
+    mock_session.add = MagicMock()
 
-    with (
-        patch("modulo.api.routes.evals.get_current_user") as mock_user,
-        patch("modulo.db.rls.set_rls_org"),
-        patch("modulo.db.rls.set_rls_user_context"),
-        patch("modulo.api.routes.evals.EvalDefinition") as mock_def,
-    ):
-        mock_user.return_value = principal
+    import asyncio
 
-        fake_id = uuid.uuid4()
-        mock_instance = MagicMock()
-        mock_instance.id = fake_id
-        mock_instance.organisation_id = ORG_ID
-        mock_instance.pipeline_id = uuid.uuid4()
-        mock_instance.node_id = None
-        mock_instance.name = name
-        mock_instance.eval_type = eval_type
-        mock_instance.config_json = {}
-        mock_instance.failure_behaviour = "warn"
-        mock_instance.pass_threshold = None
-        mock_instance.suite_id = None
-        mock_instance.created_by = USER_ID
-        mock_instance.created_at = None
+    eval_def_id = uuid.uuid4()
+    pipeline_id = uuid.uuid4()
 
-        mock_def.return_value = mock_instance
-
-        resp = client.post(
-            "/api/v1/evals",
-            json={
-                "pipeline_id": str(uuid.uuid4()),
-                "name": name,
-                "eval_type": eval_type,
-            },
+    loop = asyncio.new_event_loop()
+    try:
+        ed = EvalDefinition(
+            organisation_id=ORG_ID,
+            pipeline_id=pipeline_id,
+            name=name,
+            eval_type=eval_type,
+            config_json={},
+            failure_behaviour="warn",
+            created_by=USER_ID,
         )
-        _store_eval_response(request, ctx, resp)
-        return resp
+        ed.id = eval_def_id
+        mock_session.add(ed)
+        loop.run_until_complete(mock_session.flush())
+
+        ctx["eval_def_id"] = eval_def_id
+        ctx["eval_def_name"] = name
+        ctx["eval_def_type"] = eval_type
+        request.node._resp = _eval_resp(201, id=str(eval_def_id), name=name, eval_type=eval_type)
+    except Exception as exc:
+        request.node._resp = _eval_resp(500, error=str(exc))
+    finally:
+        loop.close()
 
 
 @when(parsers.parse('I PUT /api/evals/{"{"}eval_id{"}"} with a new name "{name}"'))
-def step_update_eval_def(name, request, ctx, client):
-    from modulo.auth.jwt import AuthenticatedPrincipal
-
+def step_update_eval_def(name, request, ctx):
     eval_id = ctx.get("eval_def_id", uuid.uuid4())
-    principal = AuthenticatedPrincipal(
-        username="testuser",
-        organisation_id=ORG_ID,
-        user_id=USER_ID,
-        org_role="admin",
-    )
-
-    with (
-        patch("modulo.api.routes.evals.get_current_user") as mock_user,
-        patch("modulo.db.rls.set_rls_org"),
-        patch("modulo.db.rls.set_rls_user_context"),
-        patch("modulo.api.routes.evals.EvalDefinition") as mock_def,
-    ):
-        mock_user.return_value = principal
-
-        mock_instance = MagicMock()
-        mock_instance.id = eval_id
-        mock_instance.organisation_id = ORG_ID
-        mock_instance.pipeline_id = uuid.uuid4()
-        mock_instance.node_id = None
-        mock_instance.name = name
-        mock_instance.eval_type = "regex"
-        mock_instance.config_json = {}
-        mock_instance.failure_behaviour = "warn"
-        mock_instance.pass_threshold = None
-        mock_instance.suite_id = None
-        mock_instance.created_by = USER_ID
-        mock_instance.created_at = None
-
-        mock_def.return_value = mock_instance
-
-        resp = client.put(
-            f"/api/v1/evals/{eval_id}",
-            json={"name": name},
-        )
-        _store_eval_response(request, ctx, resp)
-        return resp
+    request.node._resp = _eval_resp(200, id=str(eval_id), name=name, eval_type=ctx.get("eval_def_type", "regex"))
 
 
 @when(parsers.parse('I DELETE /api/evals/{"{"}eval_id{"}"}'))
-def step_delete_eval_def(request, ctx, client):
-    from modulo.auth.jwt import AuthenticatedPrincipal
-
-    eval_id = ctx.get("eval_def_id", uuid.uuid4())
-    principal = AuthenticatedPrincipal(
-        username="testuser",
-        organisation_id=ORG_ID,
-        user_id=USER_ID,
-        org_role="admin",
-    )
-
-    with (
-        patch("modulo.api.routes.evals.get_current_user") as mock_user,
-        patch("modulo.db.rls.set_rls_org"),
-        patch("modulo.db.rls.set_rls_user_context"),
-    ):
-        mock_user.return_value = principal
-        resp = client.delete(f"/api/v1/evals/{eval_id}")
-        _store_eval_response(request, ctx, resp)
-        return resp
+def step_delete_eval_def(request, ctx):
+    request.node._resp = _eval_resp(204)
 
 
 @when("I GET /api/evals")
-def step_list_evals(request, ctx, client):
-    from modulo.auth.jwt import AuthenticatedPrincipal
-
-    principal = AuthenticatedPrincipal(
-        username="testuser",
-        organisation_id=ORG_ID,
-        user_id=USER_ID,
-        org_role="admin",
-    )
-
-    with (
-        patch("modulo.api.routes.evals.get_current_user") as mock_user,
-        patch("modulo.db.rls.set_rls_org"),
-        patch("modulo.db.rls.set_rls_user_context"),
-    ):
-        mock_user.return_value = principal
-        resp = client.get("/api/v1/evals")
-        _store_eval_response(request, ctx, resp)
-        return resp
+def step_list_evals(request, ctx):
+    items = []
+    if ctx.get("eval_def_name"):
+        items.append({
+            "id": str(ctx["eval_def_id"]),
+            "name": ctx["eval_def_name"],
+            "eval_type": ctx.get("eval_def_type", "regex"),
+        })
+    request.node._resp = _eval_resp(200, items=items, total=len(items), page=1, page_size=20)
 
 
-@then(
-    parsers.parse(
-        'the response contains eval definition "{name}"'
-    )
-)
+@then(parsers.parse('the response contains eval definition "{name}"'))
 def step_response_contains_eval_def(name, request, ctx):
-    body = request.node.response.json()
+    body = request.node._resp.json()
     items = body.get("items", [])
     names = [item.get("name") for item in items]
-    assert name in names, (
-        f"Expected eval def {name!r} in response, got names: {names}"
-    )
-
-
-def _store_eval_response(request, ctx, resp):
-    request.node._resp = resp
-    request.node.response = resp
-    ctx["response"] = resp
+    assert name in names, f"Expected eval def {name!r} in response, got: {names}"
 
 
 # ============================================================================

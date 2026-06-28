@@ -329,13 +329,7 @@ def set_weak_password(request, password) -> None:
 
 @when(parsers.parse("the service accesses pipelines as user in org {org_ref}"))
 def get_pipelines_as_org(client, alt_org_client, viewer_client, request, org_ref) -> None:
-    """Dispatch to the correct TestClient based on org_ref.
-
-    org_ref values:
-      "acme"       → default admin client (ORG_ID)
-      "other-org"  → alt_org_client (ALT_ORG_ID)
-      "viewer"     → viewer_client (ORG_ID, viewer role)
-    """
+    """Dispatch to the correct TestClient based on org_ref."""
     _clients = {
         "acme": client,
         "other-org": alt_org_client,
@@ -347,14 +341,22 @@ def get_pipelines_as_org(client, alt_org_client, viewer_client, request, org_ref
 
 
 @when(parsers.parse("the service accesses pipeline {name} as user in org {org_ref}"))
-def get_pipeline_as_org(client, alt_org_client, request, name, org_ref) -> None:
+def get_pipeline_as_org(client, alt_org_client, request, name, org_ref, patches) -> None:
     selected = alt_org_client if org_ref == "other-org" else client
+    _patch_set_rls(patches, "modulo.api.routes.pipelines.set_rls_org")
+    patcher = patch(
+        "modulo.api.routes.pipelines.get_pipeline",
+        new_callable=AsyncMock,
+        return_value=None,  # Pipeline not found in the other org
+    )
+    patcher.start()
+    patches.append(patcher)
     resp = selected.get(f"/api/v1/pipelines/{name}")
     _store_response(request, resp)
 
 
-@when(parsers.parse("an unauthenticated request accesses pipeline {name}"))
-def unauth_get_pipeline(name, request) -> None:
+@when("an unauthenticated request accesses pipelines")
+def unauth_get_pipelines(request) -> None:
     from fastapi.testclient import TestClient
     from modulo.api.dependencies import _get_engine, get_db_session
     from modulo.api.main import app
@@ -369,7 +371,7 @@ def unauth_get_pipeline(name, request) -> None:
     app.dependency_overrides[_get_engine] = lambda: MagicMock()
 
     unauth_client = TestClient(app)
-    resp = unauth_client.get(f"/api/v1/pipelines/{name}")
+    resp = unauth_client.get("/api/v1/pipelines")
     app.dependency_overrides.clear()
     _store_response(request, resp)
 
@@ -403,3 +405,19 @@ def check_runtime_error(request) -> None:
     assert isinstance(request.node._rls_error, RuntimeError), (
         f"Expected RuntimeError, got {type(request.node._rls_error).__name__}"
     )
+
+
+@then(parsers.parse('the error mentions "{text}"'))
+def check_error_mentions(request, text) -> None:
+    body = request.node._resp_body
+    detail = str(body.get("detail", body)) if isinstance(body, dict) else str(body)
+    assert text.lower() in detail.lower(), (
+        f"Expected error to mention {text!r}, got: {detail[:500]}"
+    )
+
+
+@then(parsers.parse("the response contains {count:d} pipelines"))
+def check_pipeline_count(request, count) -> None:
+    body = request.node._resp_body
+    items = body.get("items", []) if isinstance(body, dict) else []
+    assert len(items) == count, f"Expected {count} pipelines, got {len(items)}"

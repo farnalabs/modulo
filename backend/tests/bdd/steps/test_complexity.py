@@ -15,7 +15,7 @@ from modulo.determination.scanner import ScanSample
 # Register feature file
 # ---------------------------------------------------------------------------
 try:
-    scenarios("../../features/complexity/complexity_reviewer.feature")
+    scenarios("../features/complexity/complexity_reviewer.feature")
 except (FileNotFoundError, OSError):
     pass
 

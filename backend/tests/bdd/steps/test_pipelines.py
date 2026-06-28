@@ -19,11 +19,11 @@ try:
 except (FileNotFoundError, OSError):
     pass
 try:
-    scenarios("../../features/pipelines/error_recovery.feature")
+    scenarios("../../bdd/features/pipelines/error_recovery.feature")
 except (FileNotFoundError, OSError):
     pass
 try:
-    scenarios("../../features/pipelines/node_types.feature")
+    scenarios("../../bdd/features/pipelines/node_types.feature")
 except (FileNotFoundError, OSError):
     pass
 try:

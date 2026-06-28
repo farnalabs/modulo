@@ -12,11 +12,11 @@ from pytest_bdd import given, parsers, scenarios, then, when
 # Register feature files
 # ---------------------------------------------------------------------------
 try:
-    scenarios("../../features/orgs/member_management.feature")
+    scenarios("../../bdd/features/orgs/member_management.feature")
 except (FileNotFoundError, OSError):
     pass
 try:
-    scenarios("../../features/orgs/org_onboarding.feature")
+    scenarios("../../bdd/features/orgs/org_onboarding.feature")
 except (FileNotFoundError, OSError):
     pass
 try:

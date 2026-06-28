@@ -158,7 +158,7 @@ def unauth_client() -> Generator[TestClient, None, None]:
 # Common step definitions (shared across all step files)
 # ---------------------------------------------------------------------------
 
-from pytest_bdd import given, parsers  # noqa: E402
+from pytest_bdd import given, parsers, then  # noqa: E402
 
 
 @given(parsers.parse('I am authenticated as an admin in org "{org}"'))
@@ -177,6 +177,7 @@ def _bdd_auth_viewer_in_org(org: str) -> None:
 
 
 @given(parsers.parse('the response status is {status:d}'))
+@then(parsers.parse('the response status is {status:d}'))
 def _bdd_check_response_status(status: int, request) -> None:
     """Check response status code."""
     resp = request.node._resp
