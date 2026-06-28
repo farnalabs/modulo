@@ -10,7 +10,7 @@
     <div class="relative w-full space-y-6">
       <div class="text-center">
         <div class="mb-4 flex justify-center">
-          <div class="flex h-14 w-14 items-center justify-center rounded-xl bg-gradient-to-br from-primary/20 to-primary/5 border border-primary/10">
+          <div class="flex h-14 w-14 items-center justify-center rounded-xl bg-primary/10 border border-primary/20">
             <svg width="32" height="32" viewBox="0 0 100 100" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Modulo logo">
               <g stroke="#00FFD1" stroke-width="7" fill="none" stroke-linejoin="round" stroke-linecap="round">
                 <line x1="30" y1="84.64" x2="70" y2="15.36" />
@@ -52,7 +52,7 @@
         <button
           type="submit"
           :disabled="loading"
-          class="btn-glow w-full rounded-md bg-gradient-to-r from-primary to-teal-600 px-4 py-2.5 text-sm font-semibold text-primary-foreground border border-primary/30 hover:border-primary/60 hover:brightness-110 disabled:opacity-50 transition-all duration-150"
+          class="btn-glow w-full rounded-md bg-primary px-4 py-2.5 text-sm font-semibold text-primary-foreground border border-primary/30 hover:border-primary/60 hover:brightness-110 disabled:opacity-50 transition-all duration-150"
         >
           {{ loading ? 'Signing in...' : 'Sign in' }}
         </button>

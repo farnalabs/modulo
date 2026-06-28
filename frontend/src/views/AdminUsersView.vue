@@ -7,7 +7,7 @@
       </div>
       <button
         @click="showCreate = true"
-        class="px-4 py-2 bg-gradient-to-r from-primary to-teal-600 text-primary-foreground text-sm font-medium rounded-lg border border-primary/30 hover:brightness-110 transition-all"
+        class="px-4 py-2 bg-primary text-primary-foreground text-sm font-medium rounded-lg border border-primary/30 hover:brightness-110 transition-all"
       >
         + Add User
       </button>
@@ -34,7 +34,7 @@
             <td class="px-4 py-3">
               <div class="flex items-center gap-2">
                 <div class="avatar-ring">
-                  <div class="flex h-7 w-7 items-center justify-center rounded-full bg-gradient-to-br from-primary to-teal-600 text-xs font-bold text-primary-foreground">
+                  <div class="flex h-7 w-7 items-center justify-center rounded-full bg-primary text-xs font-bold text-primary-foreground">
                     {{ initialOf(u.display_name || u.email) }}
                   </div>
                 </div>
@@ -138,7 +138,7 @@
         <p v-if="createError" class="text-sm text-destructive">{{ createError }}</p>
         <div class="flex justify-end gap-2 pt-2">
           <button @click="showCreate = false" class="px-4 py-2 border border-input bg-background rounded-lg text-sm">Cancel</button>
-          <button @click="createUser" class="px-4 py-2 bg-gradient-to-r from-primary to-teal-600 text-primary-foreground text-sm font-medium rounded-lg">Create</button>
+          <button @click="createUser" class="px-4 py-2 bg-primary text-primary-foreground text-sm font-medium rounded-lg">Create</button>
         </div>
       </div>
     </div>

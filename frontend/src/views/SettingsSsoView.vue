@@ -6,7 +6,7 @@
         <p class="mt-1 text-muted-foreground">Manage OIDC and SAML single sign-on providers</p>
       </div>
       <button
-        class="btn-glow rounded-lg bg-gradient-to-r from-primary to-teal-600 px-4 py-2 text-sm font-semibold text-primary-foreground border border-primary/30 hover:border-primary/60 hover:brightness-110 transition-all duration-150"
+        class="btn-glow rounded-lg bg-primary px-4 py-2 text-sm font-semibold text-primary-foreground border border-primary/30 hover:border-primary/60 hover:brightness-110 transition-all duration-150"
         @click="openAddForm"
       >
         Add Provider
