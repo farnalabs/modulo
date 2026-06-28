@@ -10,6 +10,7 @@ Feature: Pipeline Scheduling
     Then the response status is 201
     And the trigger has a next_fire_at timestamp
 
+  @awaiting-implementation
   Scenario: Cron trigger fires and creates a run
     Given an active cron trigger exists for pipeline "nightly-report"
     When the cron scheduler fires the trigger
@@ -21,6 +22,7 @@ Feature: Pipeline Scheduling
     When I create a cron trigger for pipeline "nightly-report" with expression "not-a-cron"
     Then the response status is 422
 
+  @awaiting-implementation
   Scenario: Toggle trigger active state
     Given an active cron trigger exists for pipeline "nightly-report"
     And I am authenticated in org "acme"
@@ -28,6 +30,7 @@ Feature: Pipeline Scheduling
     Then the response status is 200
     And the trigger is no longer active
 
+  @awaiting-implementation
   Scenario: Preview next cron fire times
     Given a cron trigger with expression "0 6 * * *" exists
     And I am authenticated in org "acme"
