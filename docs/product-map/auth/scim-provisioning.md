@@ -11,35 +11,22 @@ unit-tests:
 depends-on: [feat-auth-api-keys, feat-teams-entity]
 status: partial
 ---
-
-# SCIM Provisioning (SCIM 2.0)
-
-Maps SCIM Users → internal User, SCIM Groups → internal Team + TeamMembership.
+# SCIM Provisioning (SCIM 2.0) Maps SCIM Users → internal User, SCIM Groups → internal Team + TeamMembership.
 Authenticated via `MODULO_SCIM_TOKEN` (shared Bearer token), gated by `MODULO_LICENSE_KEY`.
 SCIM-provisioned users get `org_role="runner"` and `auth_provider="scim"` by default.
-SCIM-provisioned groups map to Team entities; memberships map to TeamMembership.
-
-## Behaviours
-
-### Service Provider Config
+SCIM-provisioned groups map to Team entities; memberships map to TeamMembership. ## Behaviours ### Service Provider Config
 - [ ] `GET /ServiceProviderConfig` → 200, valid SCIM config schema with patch supported, bulk not supported, filter supported (maxResults 100), sort not supported
 - [ ] `GET /ServiceProviderConfig` without valid license → 402
-- [ ] `GET /ServiceProviderConfig` without valid SCIM token → 401
-
-### Auth — SCIM Token
+- [ ] `GET /ServiceProviderConfig` without valid SCIM token → 401 ### Auth — SCIM Token
 - [ ] Request without Bearer token → 403 (HTTPBearer rejects)
 - [ ] `MODULO_SCIM_TOKEN` not set → 501 Not Implemented
 - [ ] Invalid Bearer token → 401 Unauthorized (HMAC compare)
 - [ ] Valid token, `MODULO_SCIM_DEFAULT_ORG_ID` is invalid UUID → 500 Internal Server Error
 - [ ] Valid token, no `MODULO_SCIM_DEFAULT_ORG_ID`, no organisations in DB → 500 Internal Server Error
 - [ ] Valid token, `MODULO_SCIM_DEFAULT_ORG_ID` set → principal resolves to that org
-- [ ] Valid token, no `MODULO_SCIM_DEFAULT_ORG_ID` → principal resolves to first org by creation date
-
-### License Gate
+- [ ] Valid token, no `MODULO_SCIM_DEFAULT_ORG_ID` → principal resolves to first org by creation date ### License Gate
 - [ ] All endpoints without `MODULO_LICENSE_KEY` → 402 Payment Required
-- [ ] All endpoints with valid `MODULO_LICENSE_KEY` → request proceeds
-
-### Users — Happy Path
+- [ ] All endpoints with valid `MODULO_LICENSE_KEY` → request proceeds ### Users — Happy Path
 - [ ] Create user → 201, valid SCIM User schema with id, meta, userName, name, emails, active
 - [ ] Create user with name (formatted, givenName, familyName) → parsed correctly
 - [ ] Create user with emails array → stored; primary flagged
@@ -54,9 +41,7 @@ SCIM-provisioned groups map to Team entities; memberships map to TeamMembership.
 - [ ] PATCH `replace` name → 200, display_name updated
 - [ ] PATCH `remove` active → 200, active set to false
 - [ ] PATCH nil (no matching ops) → 200, no changes
-- [ ] Delete user → 204, user hard-deleted from DB (currently hard delete, not soft deactivate)
-
-### Users — Edge Cases
+- [ ] Delete user → 204, user hard-deleted from DB (currently hard delete, not soft deactivate) ### Users — Edge Cases
 - [ ] Duplicate `userName` → 409 Conflict with SCIM Error schema
 - [ ] Create with empty `userName` → 422 validation error (Pydantic)
 - [ ] `externalId` in create request → accepted in model but not persisted to User table (gap)
@@ -83,9 +68,7 @@ SCIM-provisioned groups map to Team entities; memberships map to TeamMembership.
 - [ ] Request body has `active: false` on create → user created as inactive
 - [ ] No `name` in create request → display_name defaults to userName
 - [ ] No `emails` in create request → display_name derived from userName parts (no email stored)
-- [ ] SCIM-provisioned user has `org_role="runner"`, `auth_provider="scim"`, `password_hash=None`
-
-### Groups — Happy Path
+- [ ] SCIM-provisioned user has `org_role="runner"`, `auth_provider="scim"`, `password_hash=None` ### Groups — Happy Path
 - [ ] Create group → 201, valid SCIM Group schema with id, meta, displayName, members
 - [ ] Create group with members by valid user UUID → members returned in response
 - [ ] Get group by id → 200, members resolved with $ref links
@@ -100,9 +83,7 @@ SCIM-provisioned groups map to Team entities; memberships map to TeamMembership.
 - [ ] PATCH `remove` member by value dict → member removed
 - [ ] PATCH `remove` members by value array → all specified members removed
 - [ ] Delete group → 204, group and all TeamMembership records removed (cascade)
-- [ ] Delete nonexistent group → 404
-
-### Groups — Edge Cases
+- [ ] Delete nonexistent group → 404 ### Groups — Edge Cases
 - [ ] Duplicate `displayName` → 409 Conflict
 - [ ] Group `externalId` in request → accepted in model but not persisted (gap)
 - [ ] PUT with empty members array → all existing members removed, group kept
@@ -120,9 +101,7 @@ SCIM-provisioned groups map to Team entities; memberships map to TeamMembership.
 - [ ] Filter: `displayName Eq "Engineering"` → matched via ILIKE on Team.name
 - [ ] Filter: complex expression beyond LIKE → silently returns empty
 - [ ] Group `created_by` set to first org user; if no org users → uuid zero placeholder
-- [ ] Concurrent create of same displayName → exactly one 201, rest 409
-
-### Cross-Cutting
+- [ ] Concurrent create of same displayName → exactly one 201, rest 409 ### Cross-Cutting
 - [ ] RLS isolation: SCIM operations set `SET LOCAL app.organisation_id` from principal org
 - [ ] RLS isolation: SCIM provisioned user in org A cannot be returned by org B queries
 - [ ] RLS isolation: SCIM provisioned group in org A not visible to org B
@@ -136,9 +115,7 @@ SCIM-provisioned groups map to Team entities; memberships map to TeamMembership.
 - [ ] Re-provisioning after offboarding: user was hard-deleted, IdP re-sends → new user created (current impl: hard delete, no reactivation)
 - [ ] `externalId` in request not mapped to internal User schema → not available for matching on re-provisioning
 - [ ] Bulk provisioning: 100 users in rapid succession → no rate limiting, no queuing, all processed concurrently
-- [ ] Org mismatch: SCIM token valid but principal org_id differs from targeted data → RLS enforces isolation (no cross-org leak)
-
-## Not implemented (known gaps)
+- [ ] Org mismatch: SCIM token valid but principal org_id differs from targeted data → RLS enforces isolation (no cross-org leak) ## Not implemented (known gaps)
 - `/Bulk` endpoint — SCIM 2.0 Bulk operations (Azure AD uses this)
 - `/ResourceTypes` endpoint
 - `/Schemas` endpoint

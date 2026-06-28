@@ -5,6 +5,7 @@ replace_pipeline_graph. No advisory lock is deployed; the row lock on the
 pipeline row serialises concurrent graph writes within a serialisable transaction.
 """
 
+import json
 import uuid
 from datetime import datetime
 from typing import Any, Literal
@@ -19,6 +20,10 @@ from modulo.auth.dependencies import get_current_user
 from modulo.auth.jwt import AuthenticatedPrincipal
 from modulo.core.audit_logger import append_audit_event
 from modulo.core.graph_validator import GraphValidator
+from modulo.core.reports.quality_report import (
+    deliver_quality_report,
+    generate_quality_report,
+)
 from modulo.core.run_context.autonomy import (
     autonomy_change_payload,
 )
@@ -43,6 +48,7 @@ from modulo.db.crud.pipeline_snapshot_versioning import (
 from modulo.db.models.agent import Agent
 from modulo.db.models.connector_instance import ConnectorInstance
 from modulo.db.models.model_backend import ModelBackend
+from modulo.db.models.notification_endpoint import NotificationEndpoint
 from modulo.db.models.schema import Schema
 from modulo.db.rls import set_rls_org, set_rls_user_context
 
@@ -544,6 +550,70 @@ async def clone_pipeline_endpoint(
     if cloned is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Pipeline not found")
     return PipelineResponse.model_validate(cloned)
+
+
+# ---------------------------------------------------------------------------
+# Quality Report
+# ---------------------------------------------------------------------------
+
+
+class QualityReportResponse(BaseModel):
+    period: dict[str, str]
+    summary: dict[str, Any]
+    week_over_week: dict[str, Any]
+    trend: list[dict[str, Any]]
+    eval_breakdown: dict[str, Any]
+    deliveries: list[dict[str, Any]]
+
+
+@router.post(
+    "/{pipeline_id}/quality-report",
+    response_model=QualityReportResponse,
+)
+async def trigger_quality_report(
+    pipeline_id: uuid.UUID,
+    session: AsyncSession = Depends(get_db_session),
+    principal: AuthenticatedPrincipal = Depends(get_current_user),
+) -> QualityReportResponse:
+    async with session.begin():
+        await set_rls_org(session, principal.organisation_id)
+        await set_rls_user_context(session, principal.user_id, principal.org_role)
+
+        pipeline = await get_pipeline(session, pipeline_id)
+        if pipeline is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Pipeline not found")
+
+        report = await generate_quality_report(session, principal.organisation_id)
+
+        endpoints = (
+            await session.execute(
+                select(NotificationEndpoint).where(
+                    NotificationEndpoint.organisation_id == principal.organisation_id,
+                )
+            )
+        ).scalars()
+
+        recipient_urls: list[str] = []
+        for ep in endpoints:
+            try:
+                events = json.loads(ep.events) if ep.events else []
+            except (json.JSONDecodeError, TypeError):
+                events = []
+            if "quality_report" in events:
+                recipient_urls.append(ep.url)
+
+        deliveries: list[dict[str, Any]] = []
+        if recipient_urls:
+            deliveries = await deliver_quality_report(report, recipient_urls)
+
+    return QualityReportResponse(
+        period=report["period"],
+        summary=report["summary"],
+        week_over_week=report["week_over_week"],
+        trend=report["trend"],
+        eval_breakdown=report["eval_breakdown"],
+        deliveries=deliveries,
+    )
 
 
 # ---------------------------------------------------------------------------

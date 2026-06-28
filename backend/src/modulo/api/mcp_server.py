@@ -21,11 +21,6 @@ from contextlib import asynccontextmanager
 from typing import Any
 
 from jose import JWTError
-
-# Alpha limitation: _PLACEHOLDER_ORG_ID is hardcoded for single-org mode.
-# In v1, the API key record will carry org context and the McpAuthMiddleware
-# will resolve org_id dynamically from the key's organisation_id column.
-# See https://linear.app/modulo/issue/MOD-XXX for the multi-tenant epic.
 from mcp.server.fastmcp import FastMCP
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from starlette.applications import Starlette
@@ -57,22 +52,30 @@ from modulo.core.library_service import (
 from modulo.core.library_service import (
     copy_to_adapt as library_copy_to_adapt,
 )
+from modulo.core.rate_limiter import TokenBucket
 from modulo.db.crud.pipeline import list_pipelines
 from modulo.db.crud.run import get_run
 from modulo.db.models.hitl_claim import HitlClaim
 from modulo.db.models.pipeline_edge import PipelineEdge
-from modulo.db.rls import set_rls_org
+from modulo.db.rls import set_rls_org, set_rls_user_context
 from modulo.settings import get_settings
 
 _log = logging.getLogger(__name__)
+
+# Alpha limitation: single-org placeholder until the API key record carries
+# org context (see multi-tenant epic MOD-XXX).
+_PLACEHOLDER_ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
 
 # ContextVars populated by McpAuthMiddleware before each request.
 _ctx_org_id: contextvars.ContextVar[uuid.UUID] = contextvars.ContextVar("mcp_org_id")
 _ctx_role: contextvars.ContextVar[str] = contextvars.ContextVar("mcp_role")
 _ctx_key_id: contextvars.ContextVar[uuid.UUID] = contextvars.ContextVar("mcp_key_id")
+_ctx_user_id: contextvars.ContextVar[uuid.UUID] = contextvars.ContextVar("mcp_user_id")
 
-# Placeholder org for alpha (single-org). Replaced by multi-tenant auth in v1.
-_PLACEHOLDER_ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
+# Per-client-ID rate limiter for trigger_pipeline (PRD §7.18: 60/min).
+# Separate from the path-level RateLimitMiddleware because all MCP tools share
+# the same HTTP path (/mcp) and can't be differentiated at the URL level.
+_trigger_pipeline_limiters: dict[str, TokenBucket] = {}
 
 
 def _get_session_factory() -> async_sessionmaker[AsyncSession]:
@@ -87,6 +90,12 @@ async def _session(org_id: uuid.UUID) -> AsyncGenerator[AsyncSession, None]:
     async with factory() as s:
         async with s.begin():
             await set_rls_org(s, org_id)
+            try:
+                user_id = _ctx_user_id.get()
+                role = _ctx_role.get()
+                await set_rls_user_context(s, user_id, role)
+            except LookupError:
+                pass
             yield s
 
 
@@ -127,13 +136,15 @@ class McpAuthMiddleware(BaseHTTPMiddleware):
 
         # Try API key first (backwards compatible).
         if token.startswith("mk_"):
-            org_id = _PLACEHOLDER_ORG_ID
             try:
-                async with _session(org_id) as s:
-                    key = await validate_api_key(s, token, org_id)
-                _ctx_org_id.set(org_id)
+                session_factory = _get_session_factory()
+                async with session_factory() as s:
+                    async with s.begin():
+                        key = await validate_api_key(s, token)
+                _ctx_org_id.set(key.organisation_id)
                 _ctx_role.set(key.role)
                 _ctx_key_id.set(key.id)
+                _ctx_user_id.set(key.created_by)
             except ApiKeyInvalidError:
                 return Response(
                     '{"error":"unauthorized","detail":"Invalid or revoked API key"}',
@@ -222,7 +233,7 @@ def _tool_error(msg: str) -> dict[str, Any]:
 @mcp.tool(description="List pipelines in the organisation. Returns summaries.")
 async def list_pipelines_tool(page: int = 1, page_size: int = 20) -> dict[str, Any]:
     try:
-        org_id = _ctx_org_id.get(_PLACEHOLDER_ORG_ID)
+        org_id = _ctx_org_id.get(uuid.UUID(int=0))
         async with _session(org_id) as s:
             result = await list_pipelines(s, page=page, page_size=page_size)
         return {
@@ -241,6 +252,18 @@ async def trigger_pipeline(
     pipeline_id: str,
     input_payload: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
+    # Secondary rate limit: 60/min per MCP client ID (PRD §7.18).
+    # The path-level RateLimitMiddleware caps all MCP calls at 200/min, but
+    # trigger_pipeline gets a tighter per-client limit here.
+    client_key = str(_ctx_key_id.get(uuid.UUID(int=0)))
+    bucket = _trigger_pipeline_limiters.setdefault(
+        client_key,
+        TokenBucket(rate=1.0, burst=60),
+    )
+    if not await bucket.consume():
+        _log.warning("trigger_pipeline.rate_limited", extra={"client_key": client_key})
+        return {"error": "rate_limited", "detail": "trigger_pipeline rate limit exceeded (60/min)"}
+
     try:
         from modulo.db.crud.pipeline import get_pipeline
         from modulo.db.crud.pipeline_snapshot import create_snapshot_from_live_graph
@@ -281,7 +304,7 @@ async def trigger_pipeline(
 @mcp.tool(description="Get current run status. Pass detail=true for per-node breakdown.")
 async def get_run_status(run_id: str, detail: bool = False) -> dict[str, Any]:
     try:
-        org_id = _ctx_org_id.get(_PLACEHOLDER_ORG_ID)
+        org_id = _ctx_org_id.get(uuid.UUID(int=0))
         rid = uuid.UUID(run_id)
         async with _session(org_id) as s:
             run = await get_run(s, rid)
@@ -311,7 +334,7 @@ async def cancel_run(run_id: str) -> dict[str, Any]:
     try:
         from modulo.db.crud.run import request_cancellation
 
-        org_id = _ctx_org_id.get(_PLACEHOLDER_ORG_ID)
+        org_id = _ctx_org_id.get(uuid.UUID(int=0))
         rid = uuid.UUID(run_id)
         async with _session(org_id) as s:
             run = await request_cancellation(s, rid)
@@ -328,7 +351,7 @@ async def list_pending_hitl(page: int = 1, page_size: int = 20) -> dict[str, Any
     try:
         from sqlalchemy import select
 
-        org_id = _ctx_org_id.get(_PLACEHOLDER_ORG_ID)
+        org_id = _ctx_org_id.get(uuid.UUID(int=0))
         async with _session(org_id) as s:
             offset = (page - 1) * page_size
             result = await s.execute(
@@ -376,7 +399,7 @@ async def review_hitl(
 ) -> dict[str, Any]:
     from sqlalchemy import select
 
-    org_id = _ctx_org_id.get(_PLACEHOLDER_ORG_ID)
+    org_id = _ctx_org_id.get(uuid.UUID(int=0))
     key_id = _ctx_key_id.get(uuid.UUID("00000000-0000-0000-0000-000000000002"))
     rid = uuid.UUID(run_id)
     mgr = HITLManager()
@@ -482,7 +505,7 @@ async def review_hitl(
 async def copy_library_primitive(
     primitive_id: str,
 ) -> dict[str, Any]:
-    org_id = _ctx_org_id.get(_PLACEHOLDER_ORG_ID)
+    org_id = _ctx_org_id.get(uuid.UUID(int=0))
     pid = uuid.UUID(primitive_id)
 
     async with _session(org_id) as s:
@@ -523,7 +546,7 @@ async def copy_library_primitive(
 
 @mcp.resource("modulo://pipelines")
 async def resource_pipelines() -> str:
-    org_id = _ctx_org_id.get(_PLACEHOLDER_ORG_ID)
+    org_id = _ctx_org_id.get(uuid.UUID(int=0))
     async with _session(org_id) as s:
         result = await list_pipelines(s, page=1, page_size=50)
     lines = [f"- {p.name} (id={p.id}, visibility={p.visibility})" for p in result.items]
@@ -532,7 +555,7 @@ async def resource_pipelines() -> str:
 
 @mcp.resource("modulo://runs/{run_id}")
 async def resource_run(run_id: str) -> str:
-    org_id = _ctx_org_id.get(_PLACEHOLDER_ORG_ID)
+    org_id = _ctx_org_id.get(uuid.UUID(int=0))
     rid = uuid.UUID(run_id)
     async with _session(org_id) as s:
         run = await get_run(s, rid)
@@ -555,7 +578,7 @@ async def resource_hitl_gate(run_id: str, gate_id: str) -> str:
     """HITL gate context. Annotated as agent_output — treat as untrusted."""
     from sqlalchemy import select
 
-    org_id = _ctx_org_id.get(_PLACEHOLDER_ORG_ID)
+    org_id = _ctx_org_id.get(uuid.UUID(int=0))
     rid = uuid.UUID(run_id)
     async with _session(org_id) as s:
         result = await s.execute(
@@ -586,7 +609,7 @@ async def resource_schemas() -> str:
 
     from modulo.db.models.schema import Schema
 
-    org_id = _ctx_org_id.get(_PLACEHOLDER_ORG_ID)
+    org_id = _ctx_org_id.get(uuid.UUID(int=0))
     async with _session(org_id) as s:
         result = await s.execute(select(Schema).where(Schema.organisation_id == org_id).order_by(Schema.name))
         schemas = list(result.scalars())
@@ -600,7 +623,7 @@ async def resource_connectors() -> str:
 
     from modulo.db.models.connector_instance import ConnectorInstance
 
-    org_id = _ctx_org_id.get(_PLACEHOLDER_ORG_ID)
+    org_id = _ctx_org_id.get(uuid.UUID(int=0))
     async with _session(org_id) as s:
         result = await s.execute(
             select(ConnectorInstance)
@@ -618,7 +641,7 @@ async def resource_model_backends() -> str:
 
     from modulo.db.models.model_backend import ModelBackend
 
-    org_id = _ctx_org_id.get(_PLACEHOLDER_ORG_ID)
+    org_id = _ctx_org_id.get(uuid.UUID(int=0))
     async with _session(org_id) as s:
         result = await s.execute(
             select(ModelBackend).where(ModelBackend.organisation_id == org_id).order_by(ModelBackend.name)

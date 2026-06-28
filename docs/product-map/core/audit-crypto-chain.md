@@ -1,4 +1,4 @@
-﻿---
+---
 id: feat-core-audit-crypto-chain
 prd: 8.12
 delivery-tasks: [task-nv10-audit-crypto-chain]
@@ -11,33 +11,20 @@ code:
 depends-on: [feat-core-audit-trail]
 status: partial
 ---
-
-# Audit — Cryptographic Hash Chain
-
-SHA-256 cryptographic chaining of audit events per organisation, providing
+# Audit — Cryptographic Hash Chain SHA-256 cryptographic chaining of audit events per organisation, providing
 tamper-evident integrity. Each event records the hash of the prior event in
 the org's sequence, forming a linked chain. Verification recomputes every
-hash and validates against the stored chain head.
-
-Builds on the base audit trail (feat-core-audit-trail). The cryptographic
-linking is the V2 addition described in PRD §8.12.
-
-## Behaviours
-
-### Hash Computation
+hash and validates against the stored chain head. Builds on the base audit trail (feat-core-audit-trail). The cryptographic
+linking is the V2 addition described in PRD 8.12. ## Behaviours ### Hash Computation
 - [ ] SHA-256 hash computed from canonical JSON of all identity fields: event_type, actor_user_id, resource_type, resource_id, payload_json, request_id, previous_hash, event_id, organisation_id, created_at
 - [ ] Canonical JSON uses sort_keys=True and separators=(",", ":") — no whitespace, sorted keys
 - [ ] Hash is deterministic — same inputs always produce the same output
-- [ ] Hash computed by `_compute_event_hash()` after event is flushed to DB with assigned id and created_at
-
-### Chain Construction
+- [ ] Hash computed by `_compute_event_hash()` after event is flushed to DB with assigned id and created_at ### Chain Construction
 - [ ] First event in an org: previous_hash is None
 - [ ] Subsequent events: previous_hash = SHA-256 hash of the immediately prior event in the same org
 - [ ] Chain head (AuditChainHead) tracks last_event_hash, last_event_id, and event_count per org
 - [ ] Chain head upserted on every append — created if first event, updated otherwise
-- [ ] event_count incremented on each append
-
-### Chain Verification (`verify_chain`)
+- [ ] event_count incremented on each append ### Chain Verification (`verify_chain`)
 - [ ] Recomputes hash for every event in org order (created_at ASC, id ASC)
 - [ ] Each event's stored previous_hash must match the recomputed hash of the prior event
 - [ ] Returns valid: True when all links intact
@@ -46,34 +33,22 @@ linking is the V2 addition described in PRD §8.12.
 - [ ] Empty chain returns valid: True, total_events=0, checked_events=0
 - [ ] Validates last recomputed hash against AuditChainHead.last_event_hash
 - [ ] chain_head_match is None when no chain head exists
-- [ ] Respects max_events limit (default 10,000) — only checks first N events
-
-### Export & Listing
+- [ ] Respects max_events limit (default 10,000) — only checks first N events ### Export & Listing
 - [ ] Paginated export (offset-based) includes previous_hash per event
 - [ ] Cursor-based listing includes previous_hash per event
-- [ ] Batch detail includes previous_hash per event
-
-### BDD Scenarios
+- [ ] Batch detail includes previous_hash per event ### BDD Scenarios
 - [ ] Given 3 audit events exist: When I verify the audit chain, then each event has a previous_hash linking to the prior event and the chain is valid
-- [ ] Given a sequence of 100 audit events: When I verify the hash chain, then each event's hash is derived from the previous event's hash and tampering with any event breaks the chain for all subsequent events
-
-### Edge Cases
+- [ ] Given a sequence of 100 audit events: When I verify the hash chain, then each event's hash is derived from the previous event's hash and tampering with any event breaks the chain for all subsequent events ### Edge Cases
 - [ ] Concurrent event creation under same org — serialized by DB transaction, chain head consistency maintained
 - [ ] verify_chain with >max_events — only checks first N, reports total_events correctly, may miss breaks beyond limit
 - [ ] Chain head deleted (ON DELETE SET NULL FK) — AuditChainHead.last_event_id is null, chain still verifiable via recomputation
 - [ ] Actor user deleted — actor_user_id is None in canonical hash, event still verifiable
-- [ ] Org with zero events — verification returns valid: True, total_events=0
-
-### Error Handling
+- [ ] Org with zero events — verification returns valid: True, total_events=0 ### Error Handling
 - [ ] verify_chain with DB failure — exception propagates (no silent fallback)
-- [ ] Missing previous_hash on non-first event — detected as chain break, returns first_gap_index=0
-
-### Security
+- [ ] Missing previous_hash on non-first event — detected as chain break, returns first_gap_index=0 ### Security
 - [ ] SHA-256 linking makes single-event tampering detectable — altering any field changes its hash, breaking the link to the next event
 - [ ] Chain head stored separately — tampering would also need to update AuditChainHead to avoid detection
-- [ ] Verification is read-only — no mutation performed during integrity check
-
-## Known Gaps
+- [ ] Verification is read-only — no mutation performed during integrity check ## Known Gaps
 - verify_chain limited to 10,000 events by default — large orgs may need batched or incremental verification
 - No event-level retention policy — chain grows unbounded
 - No alerting when verify_chain detects tampering — caller must poll or integrate manually

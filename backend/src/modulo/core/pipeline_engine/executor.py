@@ -31,6 +31,7 @@ from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker
 
 from modulo.core.eval_engine import (
     EvalBlockedError,
+    EvalSuiteBlockedError,
     SuiteEvalResult,
     evaluate_suite,
 )
@@ -58,6 +59,7 @@ from modulo.db.models.pipeline import Pipeline
 from modulo.db.models.pipeline_snapshot import PipelineSnapshot
 from modulo.db.models.run import Run
 from modulo.db.rls import set_rls_org
+from modulo.otel_bridge import LangGraphOtelBridge
 
 _log = logging.getLogger(__name__)
 
@@ -169,6 +171,7 @@ class PipelineExecutor:
         self._engine = db_engine
         self._session_factory = async_sessionmaker(db_engine, expire_on_commit=False)
         self._checkpointer_conn_string = checkpointer_conn_string
+        self._otel_bridge = LangGraphOtelBridge()
 
     # Override in tests to avoid real delays.
     _capacity_poll_interval: float = 15.0
@@ -481,20 +484,33 @@ class PipelineExecutor:
             async with self._session_factory() as session:
                 async with session.begin():
                     await set_rls_org(session, org_id)
-                    suite_results = await self._check_eval_suites(session, run_id, pipeline_id)
-                    for sr in suite_results:
-                        if not sr.passed:
-                            final_status = "failed"
-                            error_code = "eval_suite_blocked"
-                            _log.warning(
-                                "eval.suite_blocked",
-                                extra={
-                                    "run_id": str(run_id),
-                                    "suite_id": sr.suite_id,
-                                    "score": sr.aggregate_score,
-                                },
-                            )
-                            break
+                    try:
+                        suite_results = await self._check_eval_suites(session, run_id, pipeline_id)
+                        for sr in suite_results:
+                            if not sr.passed:
+                                final_status = "failed"
+                                error_code = "eval_suite_blocked"
+                                _log.warning(
+                                    "eval.suite_blocked",
+                                    extra={
+                                        "run_id": str(run_id),
+                                        "suite_id": sr.suite_id,
+                                        "score": sr.aggregate_score,
+                                    },
+                                )
+                                break
+                    except EvalSuiteBlockedError as exc:
+                        final_status = "failed"
+                        error_code = "eval_suite_blocked"
+                        error_detail = str(exc)
+                        _log.warning(
+                            "eval.suite_blocked",
+                            extra={
+                                "run_id": str(run_id),
+                                "suite_id": exc.suite_id,
+                                "score": exc.score,
+                            },
+                        )
 
         # Compute aggregate token/cost data from per-node usage.
         total_tokens: int | None = None
@@ -609,6 +625,8 @@ class PipelineExecutor:
                 passed=suite_result.passed,
                 blocking_failures=suite_result.blocking_failures,
             )
+            if threshold is not None and not suite_result.passed:
+                raise EvalSuiteBlockedError(suite_id, suite_result.aggregate_score, threshold)
             results.append(suite_result)
 
         return results
@@ -627,8 +645,9 @@ class PipelineExecutor:
         Returns (final_status, error_code, error_detail, node_token_usage).
         """
         node_token_usage: dict[str, dict[str, int]] = {}
+        lg_config = {**config, "callbacks": [self._otel_bridge]}
         try:
-            async for lg_event in compiled.astream_events(initial_state, config, version="v2"):
+            async for lg_event in compiled.astream_events(initial_state, lg_config, version="v2"):
                 mapped = _map_lg_event(lg_event, run_id, node_ids)
                 if mapped is not None:
                     event_type, payload = mapped

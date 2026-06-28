@@ -1,24 +1,20 @@
-﻿---
+---
 id: feat-auth-team-api-keys
-prd: 
+prd: 5.2, 9.3
 delivery-tasks: [task-nv1-team-api-keys]
 bdd:
-
+  - backend/tests/bdd/features/auth/api_keys.feature
 code:
-depends-on: [task-nv1-team-entity]
-status: gap
+  - backend/src/modulo/db/models/api_key.py
+  - backend/src/modulo/auth/api_key.py
+  - backend/src/modulo/api/routes/api_keys.py
+  - backend/src/modulo/db/migrations/versions/0001_initial_schema.py
+  - backend/src/modulo/api/mcp_server.py
+  - backend/src/modulo/db/rls.py
+unit-tests:
+  - backend/tests/unit/auth/test_api_key.py
+  - backend/tests/unit/api/test_api_keys_endpoint.py
+depends-on: [feat-teams-team-crud]
+status: partial
 ---
-
-#  team api keys.Value.ToUpper() eam  team api keys.Value.ToUpper() pi  team api keys.Value.ToUpper() eys
-
-Discovered from 1 completed delivery tasks.
-
-## Behaviours
-<!-- TODO: populate expected behaviours and edge cases -->
-
-- [ ] Happy path works
-- [ ] Error states handled
-
-## Known Gaps
-<!-- auto-generated entry â€” needs human review -->
-
+# Team API Keys Per-org, role-scoped API keys for CI/CD pipelines and external agents, with optional team boundary enforcement. ## Behaviours ### Key format and generation - [ ] Key format is `mk_<8-char-prefix>_<32-char-secret>` (5.2) - [ ] Full key returned exactly once at creation — never recoverable - [ ] Each call to generate produces a unique key - [ ] `lookup_prefix` (first 8 chars after `mk_`) enables fast DB index lookup - [ ] `lookup_prefix` has a UNIQUE constraint across the org - [ ] SHA-256 hash of the full key stored (`hashed_secret`) — not bcrypt - [ ] Constant-time comparison (`hmac.compare_digest`) used on validation ### Role enforcement - [ ] Valid roles: `operator` and `runner` only - [ ] `admin` role is rejected with 422 on create and update - [ ] `viewer` role is not valid for API keys - [ ] Runner-scoped key: trigger runs and read endpoints only — cannot approve HITL, access connector settings, or modify pipelines - [ ] Operator-scoped key: trigger runs, approve HITL gates (subject to `human_only` and `required_team_id`), and all read endpoints - [ ] Role enforced at the ViewModel command layer (same enforcement path as JWT roles) - [ ] DB CHECK constraint (`ck_org_api_keys_role`) enforces role values at the database level ### Team-scoped API keys - [ ] API key carries optional `team_id` FK to `teams.id` (nullable, CASCADE on team delete) - [ ] Team-scoped API key is restricted to resources accessible to that team under the key's embedded role - [ ] Org-wide API key (NULL `team_id`) respects org-level role only — no team boundary - [ ] Team-scoped API keys cannot have `admin` role — `_validate_team_key_role` helper defined (but currently unused — dead code) - [ ] Admin required to set or update `team_id` on create/PUT (403 for non-admin) - [ ] `team_id` is serialised in list/response payloads ### CRUD lifecycle - [ ] POST `/api/v1/api-keys` creates a key with name, role, optional team_id, optional expires_at - [ ] GET `/api/v1/api-keys` lists active keys (or all including revoked) for the org - [ ] PUT `/api/v1/api-keys/{key_id}` updates name, role, team_id, expires_at - [ ] DELETE `/api/v1/api-keys/{key_id}` sets `revoked_at` (soft-delete) - [ ] GET `/api/v1/api-keys/mcp-config` returns MCP URL and Claude Desktop / Cursor config snippet - [ ] All API key management endpoints set RLS org context (`set_rls_org`) and user context (`set_rls_user_context`) - [ ] API key not found returns 404 on update/revoke - [ ] Updates to `team_id` require admin privilege (403 otherwise) - [ ] Roles restricted to `operator`/`runner` on update — `admin` returns 422 - [ ] Key name minimum length 1 character ### Validation - [ ] Validation checks prefix (`mk_`), org_id match, not revoked, not expired, hash match - [ ] Expired key returns `ApiKeyInvalidError` - [ ] Revoked key returns `ApiKeyInvalidError` - [ ] Key from wrong org returns `ApiKeyInvalidError` - [ ] Hash mismatch returns `ApiKeyInvalidError` (constant-time compare) - [ ] `last_used_at` updated on every successful validation - [ ] `expires_at` and `revoked_at` are nullable — permanent keys if both are null ### MCP auth integration - [ ] MCP middleware (`McpAuthMiddleware`) accepts API key bearer tokens with `mk_` prefix - [ ] Validated key's `role` stored in `_ctx_role` ContextVar for tool handlers - [ ] Validated key's `key_id` stored in `_ctx_key_id` ContextVar - [ ] OAuth 2.0 access tokens are the fallback auth mechanism (checked after API key) - [ ] Health check endpoint (`/mcp/healthz`) is exempt from auth ### Enterprise gating - [ ] Team RBAC toggle controls whether team-scoped API keys are usable ## Known Gaps - **MCP middleware does not propagate `team_id` to request context.** The `_ctx_team_id` ContextVar does not exist — tool handlers have no way to know which team scope an API key was issued for. Team-scoped enforcement at the MCP layer is incomplete. - **`_validate_team_key_role` is dead code.** Defined in `modulo/auth/api_key.py:64` but never called. Team-scoped keys with admin role are only blocked by the REST route validation (422), not by this dedicated validation function. - **No BDD scenarios exist.** `backend/tests/bdd/features/auth/api_keys.feature` is a placeholder with a single trivially-passing scenario. - **No team-scoped enforcement unit tests.** `test_api_key.py` does not test validation of team-scoped keys — no tests verify that a team-scoped key cannot access resources outside its team boundary. - **No RLS policy on `org_api_keys` table for team isolation.** When querying API keys via MCP, a team-scoped key could theoretically enumerate org-wide keys via the list endpoint — the list endpoint filters by `organisation_id` only, not by the requesting key's `team_id`. - **MCP uses a placeholder org ID.** `_PLACEHOLDER_ORG_ID` is hardcoded (`00000000-0000-0000-0000-000000000001`) for single-org alpha. In v1, org_id must be resolved from the API key record. - **`set_rls_user_context` is called in REST routes but not in MCP middleware.** The MCP middleware calls `set_rls_org` via `_session()` but does not call `set_rls_user_context` — team-scoped RLS policies that depend on `app.user_id` and `app.org_role` will not fire for MCP requests. 

@@ -9,7 +9,7 @@ from modulo.db.models.base import OrgScoped
 class TeamMembership(OrgScoped):
     __tablename__ = "team_memberships"
     __table_args__ = (
-        CheckConstraint("role IN ('viewer', 'runner', 'operator', 'admin')", name="ck_team_memberships_role"),
+        CheckConstraint("role IN ('viewer', 'runner', 'operator')", name="ck_team_memberships_role"),
         UniqueConstraint("team_id", "user_id", name="uq_team_memberships_team_user"),
     )
 

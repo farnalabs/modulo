@@ -57,7 +57,7 @@ class TeamListResponse(BaseModel):
 
 class AddMemberRequest(BaseModel):
     user_id: str = Field(min_length=36, max_length=36)
-    role: str = Field(default="viewer", pattern=r"^(viewer|runner|operator|admin)$")
+    role: str = Field(default="viewer", pattern=r"^(viewer|runner|operator)$")
 
 
 class MembershipResponse(BaseModel):

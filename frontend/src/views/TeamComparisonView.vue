@@ -261,12 +261,18 @@ async function loadData() {
         total_runs: number
         active_pipelines: number
         run_counts_by_status: TeamRunStatus
+        eval_pass_rate?: {
+          total_evals: number
+          passed_evals: number
+          pass_rate: number
+        }
       }>
       eval_pass_rate: {
         overall_pass_rate: number | null
         total_evals: number
         passed_evals: number
         per_pipeline: Record<string, { total_evals: number; passed_evals: number; pass_rate: number }> | null
+        per_team_pipeline?: Record<string, Record<string, { total_evals: number; passed_evals: number; pass_rate: number }>>
       } | null
     }
 
@@ -282,7 +288,7 @@ async function loadData() {
       activePipelines: team.active_pipelines,
       runCounts: team.run_counts_by_status,
       memberCount: memberCountMap.get(team.id) ?? 0,
-      avgPassRate: s.eval_pass_rate?.overall_pass_rate ?? null,
+      avgPassRate: team.eval_pass_rate?.pass_rate ?? null,
     }))
 
     data.value = {
@@ -292,7 +298,7 @@ async function loadData() {
     }
 
     // Cache per-pipeline eval data for drill-down
-    pipelineEvalCache.value = s.eval_pass_rate?.per_pipeline ?? {}
+    pipelineEvalCache.value = s.eval_pass_rate?.per_team_pipeline ?? {}
   } catch (e: unknown) {
     error.value = `Failed to load data: ${e instanceof Error ? e.message : String(e)}`
   } finally {
@@ -301,7 +307,7 @@ async function loadData() {
 }
 
 // Cache for per-pipeline eval data and pipeline names
-const pipelineEvalCache = ref<Record<string, { total_evals: number; passed_evals: number; pass_rate: number }>>({})
+const pipelineEvalCache = ref<Record<string, Record<string, { total_evals: number; passed_evals: number; pass_rate: number }>>>({})
 const pipelineNames = ref<Map<string, string>>(new Map())
 
 async function toggleExpand(teamId: string) {
@@ -316,7 +322,8 @@ async function toggleExpand(teamId: string) {
   expandedTeam.value = data.value?.teams.find(t => t.id === teamId) ?? null
 
   // Build pipeline-level breakdown from cached eval data
-  pipelineEvals.value = buildPipelineEvals(pipelineEvalCache.value, pipelineNames.value)
+  const teamPipelineData = pipelineEvalCache.value[teamId] ?? {}
+  pipelineEvals.value = buildPipelineEvals(teamPipelineData, pipelineNames.value)
 
   // Lazy-fetch pipeline names if we have eval data but no names yet
   if (Object.keys(pipelineEvalCache.value).length > 0 && pipelineNames.value.size === 0) {
@@ -328,7 +335,8 @@ async function toggleExpand(teamId: string) {
       if (pr?.items) {
         const map = new Map(pr.items.map(p => [p.id, p.name]))
         pipelineNames.value = map
-        pipelineEvals.value = buildPipelineEvals(pipelineEvalCache.value, map)
+        const teamPipelineData = pipelineEvalCache.value[teamId] ?? {}
+        pipelineEvals.value = buildPipelineEvals(teamPipelineData, map)
       }
     } catch {
       // Silently fail — pipeline IDs shown as fallback

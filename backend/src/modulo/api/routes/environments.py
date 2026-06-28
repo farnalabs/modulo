@@ -6,6 +6,7 @@ import logging
 import uuid
 from collections.abc import AsyncIterator
 from datetime import UTC, datetime
+from functools import lru_cache
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
@@ -16,6 +17,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from modulo.api.dependencies import get_db_session
 from modulo.auth.dependencies import get_current_user
 from modulo.auth.jwt import AuthenticatedPrincipal
+from modulo.core.runtime_provider import RuntimeProvider, create_default_hub
+from modulo.core.runtime_provider.hub import RuntimeProviderHub
 from modulo.db.crud.environment_profile import (
     create_environment_profile,
     delete_environment_profile,
@@ -28,6 +31,22 @@ from modulo.db.rls import set_rls_org
 
 _log = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/v1/environments", tags=["environments"])
+
+
+@lru_cache
+def _get_hub() -> RuntimeProviderHub:
+    """Process-global RuntimeProviderHub singleton.
+
+    ``lru_cache`` ensures the hub is created once and reused across all
+    requests.  The E2B provider is auto-registered when
+    ``MODULO_E2B_API_KEY`` is set — adding the key post-deployment and
+    restarting the process is enough to switch from local to sandboxed
+    execution.
+    """
+    from modulo.settings import get_settings
+
+    settings = get_settings()
+    return create_default_hub(max_local_concurrency=settings.modulo_max_local_concurrency)
 
 # ---------------------------------------------------------------------------
 # Schemas
@@ -233,12 +252,15 @@ async def _sandbox_test_stream(profile: EnvironmentProfile) -> AsyncIterator[str
         yield _sse_event("provisioning", "Creating sandbox...")
         await asyncio.sleep(0.5)
 
-        from modulo.core.runtime_provider.e2b import E2BRuntimeProvider
+        hub = _get_hub()
+        provider: RuntimeProvider | None = hub.resolve(profile) or hub.get("local")
+        if provider is None:
+            yield _sse_event("failed", "No RuntimeProvider available — check server configuration")
+            return
 
-        provider = E2BRuntimeProvider()
         spec = _build_workspace_spec(profile)
         provider_ref = await provider.create_workspace(spec)
-        yield _sse_event("provisioned", f"Sandbox created: {provider_ref}")
+        yield _sse_event("provisioned", f"Workspace created via {type(provider).__name__}: {provider_ref}")
         await asyncio.sleep(0.3)
 
         # Run echo command
@@ -264,11 +286,9 @@ async def _sandbox_test_stream(profile: EnvironmentProfile) -> AsyncIterator[str
     except Exception:
         _log.exception("Sandbox test failed for profile %s", profile.id)
         yield _sse_event("failed", "Test failed — check server logs for details")
-        if provider_ref:
+        if provider_ref and provider is not None:
             try:
-                from modulo.core.runtime_provider.e2b import E2BRuntimeProvider
-
-                await E2BRuntimeProvider().destroy_workspace(provider_ref)
+                await provider.destroy_workspace(provider_ref)
             except Exception:
                 _log.warning("Failed to clean up sandbox %s after error", provider_ref)
 

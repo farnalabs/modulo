@@ -1,6 +1,6 @@
-﻿---
+---
 id: feat-teams-team-crud
-prd: §9.3
+prd: 9.3
 delivery-tasks: [task-nv1-team-entity]
 bdd:
 code:
@@ -18,14 +18,7 @@ unit-tests:
 depends-on: [feat-org-entity]
 status: partial
 ---
-
-# Team CRUD
-
-## Behaviours
-
-### Create team
-
-- [ ] Admin creates team with name → 201, team returned with id
+# Team CRUD ## Behaviours ### Create team - [ ] Admin creates team with name → 201, team returned with id
 - [ ] Admin creates team with name and description → 201, description persisted
 - [ ] Admin creates team with name exceeding 255 chars → 422
 - [ ] Admin creates team with empty name → 422
@@ -36,27 +29,15 @@ status: partial
 - [ ] Runner creates team → 403
 - [ ] Viewer creates team → 403
 - [ ] Unauthenticated request creates team → 401/403
-- [ ] created_by FK to users.id with RESTRICT — deleting a user who created teams is blocked
-
-### List teams
-
-- [ ] Authenticated user lists teams → 200, paginated results
+- [ ] created_by FK to users.id with RESTRICT — deleting a user who created teams is blocked ### List teams - [ ] Authenticated user lists teams → 200, paginated results
 - [ ] Org with no teams returns empty items array, total=0
 - [ ] Page parameter (default 1) respected
 - [ ] Page_size parameter (default 20, max 100) respected
 - [ ] Unauthenticated request lists teams → 401/403
-- [ ] Results ordered by created_at ascending
-
-### Get team
-
-- [ ] Authenticated user gets team by id → 200 with full response
+- [ ] Results ordered by created_at ascending ### Get team - [ ] Authenticated user gets team by id → 200 with full response
 - [ ] Non-existent team id → 404
 - [ ] Team from another org (RLS isolation) → 404 (not revealed)
-- [ ] Unauthenticated request gets team → 401/403
-
-### Update team
-
-- [ ] Admin updates team name → 200, new name persisted
+- [ ] Unauthenticated request gets team → 401/403 ### Update team - [ ] Admin updates team name → 200, new name persisted
 - [ ] Admin updates team description → 200, new description persisted
 - [ ] Admin updates both name and description → 200, both changes applied
 - [ ] Admin sends empty name → 422
@@ -67,49 +48,29 @@ status: partial
 - [ ] Admin updates non-existent team → 404
 - [ ] Operator updates team → 403
 - [ ] Unauthenticated request updates team → 401/403
-- [ ] Immutable fields (id, organisation_id, created_at, updated_at) silently ignored in update
-
-### Delete team
-
-- [ ] Admin deletes team with no owned resources → 204
-- [ ] Admin deletes team that owns resources → should return 409 with team_has_resources (not implemented)
+- [ ] Immutable fields (id, organisation_id, created_at, updated_at) silently ignored in update ### Delete team - [ ] Admin deletes team with no owned resources → 204
+- [x] Admin deletes team that owns resources → 409 with pipeline count (pipelines checked; stages, connectors, model backends not yet checked)
 - [ ] Admin deletes non-existent team → 404
 - [ ] Operator deletes team → 403
 - [ ] Unauthenticated request deletes team → 401/403
 - [ ] Team deletion with no owned resources → team record removed
-- [ ] Cross-org isolation: deleting team in org A does not affect org B
-
-### Membership — Add member
-
-- [ ] Admin adds user to team with valid role (viewer/runner/operator) → 201
+- [ ] Cross-org isolation: deleting team in org A does not affect org B ### Membership — Add member - [ ] Admin adds user to team with valid role (viewer/runner/operator) → 201
 - [ ] Admin adds user with role exceeding target user's org role → 422
-- [ ] Team admin role not allowed for team membership (admin is org-only per §9.2)
+- [ ] Team admin role not allowed for team membership (admin is org-only per 9.2)
 - [ ] Target user not found in org → 404
 - [ ] Team not found → 404
 - [ ] Duplicate membership (same team + same user) → DB constraint violation → 409
 - [ ] Invalid user_id format → 422
 - [ ] Invalid role string → 422
 - [ ] Operator adds member → 403
-- [ ] Unauthenticated request → 401/403
-
-### Membership — List members
-
-- [ ] Authenticated user lists team members → 200, paginated
+- [ ] Unauthenticated request → 401/403 ### Membership — List members - [ ] Authenticated user lists team members → 200, paginated
 - [ ] Team with no members returns empty items array
-- [ ] Pagination parameters respected
-
-### Membership — Remove member
-
-- [ ] Admin removes member → 204
+- [ ] Pagination parameters respected ### Membership — Remove member - [ ] Admin removes member → 204
 - [ ] membership_id does not belong to the specified team → 404
 - [ ] Non-existent membership_id → 404
 - [ ] Operator removes member → 403
 - [ ] Unauthenticated request → 401/403
-- [ ] Removing last admin from team — allowed (no admin-preservation guard)
-
-### Security & concurrency
-
-- [ ] RLS enforces org isolation on all team and membership queries
+- [ ] Removing last admin from team — allowed (no admin-preservation guard) ### Security & concurrency - [ ] RLS enforces org isolation on all team and membership queries
 - [ ] SET LOCAL app.organisation_id set before every query
 - [ ] Team name uniqueness enforced at DB level (UniqueConstraint)
 - [ ] Membership role constrained to valid values (CheckConstraint)
@@ -118,22 +79,14 @@ status: partial
 - [ ] RESTRICT on created_by FK: prevents deleting user who created teams
 - [ ] Concurrent duplicate name creation handled (DB constraint catches)
 - [ ] Concurrent duplicate membership insertion handled (DB constraint catches)
-- [ ] Pagination avoids full-table scans (LIMIT/OFFSET with index on org_id)
-
-### Backward compatibility / data migration
-
-- [ ] Team entity is alpha-stage (no existing data to migrate)
+- [ ] Pagination avoids full-table scans (LIMIT/OFFSET with index on org_id) ### Backward compatibility / data migration - [ ] Team entity is alpha-stage (no existing data to migrate)
 - [ ] OrgScoped base class consistent with all other entities
 - [ ] notification_endpoints JSON column defaults to empty list
-- [ ] daily_spend_limit nullable (default None)
-
-## Known Gaps
-
-- Team deletion does not check for owned resources (pipelines, stages, connectors, model backends) — raw cascade delete, violating PRD §9.3 deletion policy
+- [ ] daily_spend_limit nullable (default None) ## Known Gaps - Team deletion checks for pipelines (admin.py:824-832) but does NOT check for stages, connectors, model backends, or library primitives — partial implementation of PRD 9.3 deletion policy
 - Update team does not check for duplicate name when renaming (only create has the check)
-- Membership add does not enforce privilege cap (PRD §9.3: a team operator can only grant roles up to their own team role)
+- Membership add does not enforce privilege cap (PRD 9.3: a team operator can only grant roles up to their own team role)
 - Notification endpoints not exposed through REST API (field exists in model, no route)
 - Daily spend limit not exposed through REST API
 - No audit events written for any team CRUD mutation
 - No BDD feature files exist for team CRUD
-- No DB-live membership check for updates/deletes on membership (route uses get_membership without RLS org scoping validation)
+- No DB-live membership check for updates/deletes on membership (route uses get_membership without RLS org scoping validation) 

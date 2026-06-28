@@ -31,7 +31,7 @@ def upgrade() -> None:
     op.create_check_constraint(
         "ck_team_memberships_role",
         "team_memberships",
-        sa.text("role IN ('viewer', 'runner', 'operator', 'admin')"),
+        sa.text("role IN ('viewer', 'runner', 'operator')"),
     )
 
     # 4. Create trigger function for privilege cap
@@ -60,7 +60,6 @@ def upgrade() -> None:
                 WHEN 'viewer' THEN 0
                 WHEN 'runner' THEN 1
                 WHEN 'operator' THEN 2
-                WHEN 'admin' THEN 3
                 ELSE -1
             END;
 
