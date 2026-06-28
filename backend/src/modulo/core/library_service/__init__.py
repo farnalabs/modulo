@@ -477,6 +477,7 @@ async def list_primitives(
     await set_rls_org(session, org_id)
     org_page = await list_library_primitives(
         session,
+        org_id=org_id,
         page=page,
         page_size=page_size,
         primitive_type=primitive_type,

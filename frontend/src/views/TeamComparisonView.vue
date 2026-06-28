@@ -5,14 +5,9 @@
       <p class="mt-1 text-muted-foreground">Side-by-side eval pass rates and pipeline metrics across teams</p>
     </header>
 
-    <div v-if="loading" class="flex items-center justify-center py-16">
-      <div class="h-8 w-8 animate-spin rounded-full border-4 border-primary border-t-transparent" />
-    </div>
+    <LoadingSpinner v-if="loading" />
 
-    <div v-else-if="error" class="rounded-lg border border-destructive/50 bg-destructive/10 p-4 text-destructive">
-      {{ error }}
-      <button class="ml-2 underline" @click="loadData">Retry</button>
-    </div>
+    <ErrorAlert v-else-if="error" :message="error" :on-retry="loadData" />
 
     <template v-else-if="data">
       <!-- Org-wide summary cards -->
@@ -79,10 +74,10 @@
               </td>
               <td class="px-4 py-3">
                 <div class="flex gap-1.5 text-xs">
-                  <span class="rounded bg-blue-100 px-1.5 py-0.5 text-blue-700" title="Running">{{ team.runCounts.running }}</span>
-                  <span class="rounded bg-amber-100 px-1.5 py-0.5 text-amber-700" title="Awaiting">{{ team.runCounts.awaiting_human }}</span>
-                  <span class="rounded bg-red-100 px-1.5 py-0.5 text-red-700" title="Failed">{{ team.runCounts.failed }}</span>
-                  <span class="rounded bg-gray-100 px-1.5 py-0.5 text-gray-700" title="Idle">{{ team.runCounts.idle }}</span>
+                  <span class="badge badge-status-primary" title="Running">{{ team.runCounts.running }}</span>
+                  <span class="badge badge-status-warning" title="Awaiting">{{ team.runCounts.awaiting_human }}</span>
+                  <span class="badge badge-status-destructive" title="Failed">{{ team.runCounts.failed }}</span>
+                  <span class="badge badge-status-muted" title="Idle">{{ team.runCounts.idle }}</span>
                 </div>
               </td>
               <td class="px-4 py-3 text-xs text-muted-foreground">
@@ -160,6 +155,8 @@
 <script setup lang="ts">
 import { ref, onMounted } from 'vue'
 import { api } from '../lib/api/client'
+import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
+import ErrorAlert from '../components/shared/ErrorAlert.vue'
 
 interface TeamRunStatus {
   running: number

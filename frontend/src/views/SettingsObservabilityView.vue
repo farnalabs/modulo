@@ -5,22 +5,17 @@
       <p class="mt-1 text-muted-foreground">Configure OpenTelemetry export and LangSmith integration</p>
     </header>
 
-    <div v-if="envOverrideActive" class="rounded-lg border border-amber-500/50 bg-amber-50 p-4 text-sm text-amber-800">
+    <div v-if="envOverrideActive" class="rounded-lg border border-warning/50 bg-warning/10 p-4 text-sm text-warning">
       <p class="font-medium">Environment variable override active</p>
       <p class="mt-1">
-        The environment variable <code class="rounded bg-amber-100 px-1 py-0.5 text-xs">OTEL_EXPORTER_OTLP_ENDPOINT</code>
+        The environment variable <code class="rounded bg-warning/10 px-1 py-0.5 text-xs">OTEL_EXPORTER_OTLP_ENDPOINT</code>
         is set to <strong>{{ effectiveOtlpEndpoint }}</strong>. Changes made here will apply when the environment variable is unset.
       </p>
     </div>
 
-    <div v-if="loading" class="flex items-center justify-center py-16">
-      <div class="h-8 w-8 animate-spin rounded-full border-4 border-primary border-t-transparent" />
-    </div>
+    <LoadingSpinner v-if="loading" />
 
-    <div v-else-if="loadError" class="rounded-lg border border-destructive/50 bg-destructive/10 p-4 text-destructive">
-      {{ loadError }}
-      <button class="ml-2 underline" @click="loadSettings">Retry</button>
-    </div>
+    <ErrorAlert v-else-if="loadError" :message="loadError" :on-retry="loadSettings" />
 
     <form v-else @submit.prevent="saveSettings" class="space-y-6">
       <div class="rounded-lg border bg-card p-6 shadow-sm">
@@ -137,14 +132,14 @@
       <div v-if="formError" class="rounded-lg border border-destructive/50 bg-destructive/10 p-4 text-sm text-destructive">
         {{ formError }}
       </div>
-      <div v-if="formSuccess" class="rounded-lg border border-green-500/50 bg-green-50 p-4 text-sm text-green-800">
+      <div v-if="formSuccess" class="rounded-lg border border-success/50 bg-success/10 p-4 text-sm text-success">
         {{ formSuccess }}
       </div>
 
       <div
         v-if="testResult"
         class="rounded-lg border p-4 text-sm"
-        :class="testResult.success ? 'border-green-500/50 bg-green-50 text-green-800' : 'border-destructive/50 bg-destructive/10 text-destructive'"
+        :class="testResult.success ? 'border-success/50 bg-success/10 text-success' : 'border-destructive/50 bg-destructive/10 text-destructive'"
       >
         <p class="font-medium">{{ testResult.success ? 'Connection successful' : 'Connection failed' }}</p>
         <p class="mt-1">{{ testResult.message }}</p>
@@ -183,6 +178,8 @@
 import { ref, onMounted } from 'vue'
 import { api } from '../lib/api/client'
 import type { components } from '../lib/api/client'
+import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
+import ErrorAlert from '../components/shared/ErrorAlert.vue'
 
 type OtelSettingsResponse = components['schemas']['OtelSettingsResponse']
 type TestSpanResult = components['schemas']['TestSpanResult']

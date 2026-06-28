@@ -6,23 +6,19 @@
         <p class="mt-1 text-muted-foreground">Manage teams and team membership</p>
       </div>
       <button
-        class="rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90"
+        class="btn-glow rounded-lg bg-gradient-to-r from-primary to-teal-600 px-4 py-2 text-sm font-semibold text-primary-foreground border border-primary/30 hover:border-primary/60 hover:brightness-110 transition-all duration-150"
         @click="showCreateForm = true"
       >
         Create Team
       </button>
     </header>
 
-    <div v-if="loading" class="flex items-center justify-center py-16">
-      <div class="h-8 w-8 animate-spin rounded-full border-4 border-primary border-t-transparent" />
-    </div>
+    <LoadingSpinner v-if="loading" />
 
-    <div v-else-if="error" class="rounded-lg border border-destructive/50 bg-destructive/10 p-4 text-destructive">
-      {{ error }}
-    </div>
+    <ErrorAlert v-else-if="error" :message="error" />
 
     <template v-else>
-      <div v-if="showCreateForm" class="rounded-lg border bg-card p-6 shadow-sm">
+      <div v-if="showCreateForm" class="card p-6">
         <h2 class="mb-4 text-lg font-semibold">New Team</h2>
         <div class="space-y-4">
           <div>
@@ -63,7 +59,7 @@
         <div v-if="createSuccess" class="mt-3 text-sm text-success">{{ createSuccess }}</div>
       </div>
 
-      <div v-if="teams.length === 0" class="rounded-lg border bg-card p-8 text-center">
+      <div v-if="teams.length === 0" class="card p-8 text-center">
         <p class="text-lg font-medium">No teams yet</p>
         <p class="mt-1 text-sm text-muted-foreground">Create your first team to organize members and resources.</p>
       </div>
@@ -72,7 +68,7 @@
         <div
           v-for="team in teams"
           :key="team.id"
-          class="rounded-lg border bg-card shadow-sm"
+          class="card"
         >
           <div
             class="flex cursor-pointer items-center justify-between p-4"
@@ -283,6 +279,8 @@
 import { ref, onMounted } from 'vue'
 import { api } from '../lib/api/client'
 import type { components } from '../lib/api/client'
+import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
+import ErrorAlert from '../components/shared/ErrorAlert.vue'
 
 type AdminTeamItem = components['schemas']['AdminTeamItem']
 type MembershipResponse = components['schemas']['MembershipResponse']

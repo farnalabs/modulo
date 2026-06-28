@@ -14,7 +14,7 @@
       </button>
     </header>
 
-    <div class="rounded-lg border bg-card p-4 shadow-sm">
+    <div class="card p-4">
       <div class="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-5">
         <div>
           <label class="mb-1 block text-xs font-medium text-muted-foreground">Event Type</label>
@@ -140,16 +140,11 @@
       </div>
     </div>
 
-    <div v-if="loading" class="flex items-center justify-center py-16">
-      <div class="h-8 w-8 animate-spin rounded-full border-4 border-primary border-t-transparent" />
-    </div>
+    <LoadingSpinner v-if="loading" />
 
-    <div v-else-if="error" class="rounded-lg border border-destructive/50 bg-destructive/10 p-4 text-destructive">
-      {{ error }}
-      <button class="ml-2 underline" @click="() => loadEvents()">Retry</button>
-    </div>
+    <ErrorAlert v-else-if="error" :message="error" :on-retry="loadEvents" />
 
-    <div v-else-if="events.length === 0" class="rounded-lg border bg-card p-8 text-center">
+      <div v-else-if="events.length === 0" class="card p-8 text-center">
       <p class="text-lg font-medium">No audit events found</p>
       <p class="mt-1 text-sm text-muted-foreground">
         Try adjusting your filters or wait for activity to be recorded.
@@ -157,10 +152,10 @@
     </div>
 
     <template v-else>
-      <div class="overflow-hidden rounded-lg border bg-card shadow-sm">
+      <div class="card overflow-hidden">
         <table class="w-full">
           <thead>
-            <tr class="border-b bg-muted/50 text-left text-xs font-medium uppercase text-muted-foreground">
+            <tr class="border-b bg-muted/30 text-left text-xs font-medium uppercase text-muted-foreground">
               <th class="px-4 py-3">Timestamp</th>
               <th class="px-4 py-3">Event Type</th>
               <th class="px-4 py-3">Actor</th>
@@ -180,10 +175,7 @@
                 {{ formatTimestamp(event.created_at) }}
               </td>
               <td class="px-4 py-3">
-                <span
-                  class="inline-block rounded-full px-2.5 py-0.5 text-xs font-medium"
-                  :class="badgeClass(event.event_type)"
-                >
+                <span :class="badgeClass(event.event_type)">
                   {{ event.event_type }}
                 </span>
               </td>
@@ -271,6 +263,8 @@
 import { ref, onMounted } from 'vue'
 import { api } from '../lib/api/client'
 import type { components } from '../lib/api/client'
+import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
+import ErrorAlert from '../components/shared/ErrorAlert.vue'
 
 type AuditEvent = components['schemas']['AuditEventResponse']
 
@@ -314,20 +308,20 @@ function formatTimestamp(ts: string | null): string {
 }
 
 function badgeClass(eventType: string): string {
-  if (eventType.startsWith('pipeline.')) return 'bg-blue-100 text-blue-700'
-  if (eventType.startsWith('run.completed')) return 'bg-green-100 text-green-700'
-  if (eventType.startsWith('run.failed')) return 'bg-red-100 text-red-700'
-  if (eventType.startsWith('run.')) return 'bg-amber-100 text-amber-700'
-  if (eventType.startsWith('user.')) return 'bg-purple-100 text-purple-700'
-  if (eventType.startsWith('team.')) return 'bg-indigo-100 text-indigo-700'
-  if (eventType.startsWith('schema.')) return 'bg-cyan-100 text-cyan-700'
-  if (eventType.startsWith('connector.')) return 'bg-orange-100 text-orange-700'
-  if (eventType.startsWith('model_backend.')) return 'bg-pink-100 text-pink-700'
-  if (eventType.startsWith('sso_provider.')) return 'bg-slate-100 text-slate-700'
-  if (eventType.startsWith('settings.')) return 'bg-gray-100 text-gray-700'
-  if (eventType.startsWith('api_key.')) return 'bg-rose-100 text-rose-700'
-  if (eventType.startsWith('export.')) return 'bg-teal-100 text-teal-700'
-  return 'bg-gray-100 text-gray-700'
+  if (eventType.startsWith('pipeline.')) return 'badge badge-context-blue'
+  if (eventType.startsWith('run.completed')) return 'badge badge-status-success'
+  if (eventType.startsWith('run.failed')) return 'badge badge-status-destructive'
+  if (eventType.startsWith('run.')) return 'badge badge-status-warning'
+  if (eventType.startsWith('user.')) return 'badge badge-context-purple'
+  if (eventType.startsWith('team.')) return 'badge badge-context-indigo'
+  if (eventType.startsWith('schema.')) return 'badge badge-context-cyan'
+  if (eventType.startsWith('connector.')) return 'badge badge-context-orange'
+  if (eventType.startsWith('model_backend.')) return 'badge badge-context-pink'
+  if (eventType.startsWith('sso_provider.')) return 'badge badge-context-slate'
+  if (eventType.startsWith('settings.')) return 'badge badge-context-slate'
+  if (eventType.startsWith('api_key.')) return 'badge badge-context-rose'
+  if (eventType.startsWith('export.')) return 'badge badge-context-blue'
+  return 'badge badge-context-slate'
 }
 
 function summarize(event: AuditEvent): string {

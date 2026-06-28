@@ -8,7 +8,7 @@
     </header>
 
     <div class="flex items-center gap-3">
-      <div v-if="hasDrift" class="flex items-center gap-2 rounded-lg border border-amber-500/50 bg-amber-50 px-4 py-2 text-sm text-amber-800">
+      <div v-if="hasDrift" class="flex items-center gap-2 rounded-lg border border-warning/50 bg-warning/10 px-4 py-2 text-sm text-warning">
         <span>⚠</span>
         <span>Some values differ from environment — restart to sync.</span>
       </div>
@@ -22,14 +22,9 @@
       </button>
     </div>
 
-    <div v-if="loading" class="flex items-center justify-center py-16">
-      <div class="h-8 w-8 animate-spin rounded-full border-4 border-primary border-t-transparent" />
-    </div>
+    <LoadingSpinner v-if="loading" />
 
-    <div v-else-if="error" class="rounded-lg border border-destructive/50 bg-destructive/10 p-4 text-destructive">
-      {{ error }}
-      <button class="ml-2 underline" @click="loadConfig">Retry</button>
-    </div>
+    <ErrorAlert v-else-if="error" :message="error" :on-retry="loadConfig" />
 
     <div v-else class="rounded-lg border">
       <table class="w-full">
@@ -44,29 +39,29 @@
           </tr>
         </thead>
         <tbody>
-          <tr
-            v-for="entry in items"
-            :key="entry.key"
-            class="border-b last:border-0 hover:bg-muted/50 transition-colors"
-            :class="{ 'bg-amber-50/50': entryHasDrift(entry) }"
-          >
-            <td class="px-4 py-3">
-              <div class="flex items-center gap-2">
-                <span v-if="entryHasDrift(entry)" class="text-amber-500" title="Value differs from environment">⚠</span>
+            <tr
+              v-for="entry in items"
+              :key="entry.key"
+              class="border-b last:border-0 hover:bg-muted/50 transition-colors"
+              :class="{ 'bg-warning/5': entryHasDrift(entry) }"
+            >
+              <td class="px-4 py-3">
+                <div class="flex items-center gap-2">
+                  <span v-if="entryHasDrift(entry)" class="text-warning" title="Value differs from environment">⚠</span>
                 <code class="text-sm font-mono">{{ entry.key }}</code>
-                <span
-                  v-if="entry.hot_reloadable"
-                  class="rounded-full bg-green-100 px-2 py-0.5 text-xs text-green-700"
-                >
-                  hot
-                </span>
-                <span
-                  v-else
-                  class="rounded-full bg-gray-100 px-2 py-0.5 text-xs text-gray-500"
-                  title="Requires server restart"
-                >
-                  static
-                </span>
+                  <span
+                    v-if="entry.hot_reloadable"
+                    class="badge badge-status-success"
+                  >
+                    hot
+                  </span>
+                  <span
+                    v-else
+                    class="badge badge-status-muted"
+                    title="Requires server restart"
+                  >
+                    static
+                  </span>
               </div>
             </td>
 
@@ -126,7 +121,7 @@
     <div v-if="formError" class="rounded-lg border border-destructive/50 bg-destructive/10 p-4 text-sm text-destructive">
       {{ formError }}
     </div>
-    <div v-if="formSuccess" class="rounded-lg border border-green-500/50 bg-green-50 p-4 text-sm text-green-800">
+    <div v-if="formSuccess" class="rounded-lg border border-success/50 bg-success/10 p-4 text-sm text-success">
       {{ formSuccess }}
     </div>
   </div>
@@ -135,6 +130,8 @@
 <script setup lang="ts">
 import { ref, reactive, onMounted } from 'vue'
 import { api } from '../lib/api/client'
+import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
+import ErrorAlert from '../components/shared/ErrorAlert.vue'
 
 interface ConfigEntry {
   key: string
@@ -176,16 +173,16 @@ function isEdited(key: string): boolean {
 
 function inputClasses(entry: ConfigEntry): string {
   const base = 'w-full rounded-md border bg-background px-3 py-1.5 text-sm font-mono ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring'
-  const borderColor = isEdited(entry.key) ? 'border-amber-400' : 'border-input'
+  const borderColor = isEdited(entry.key) ? 'border-warning' : 'border-input'
   return `${base} ${borderColor}`
 }
 
 function provenanceBadgeClass(provenance: string): string {
   switch (provenance) {
-    case 'override': return 'inline-block rounded-full px-2.5 py-0.5 text-xs font-medium bg-blue-100 text-blue-700'
-    case 'environment': return 'inline-block rounded-full px-2.5 py-0.5 text-xs font-medium bg-purple-100 text-purple-700'
-    case 'default': return 'inline-block rounded-full px-2.5 py-0.5 text-xs font-medium bg-gray-100 text-gray-500'
-    default: return 'inline-block rounded-full px-2.5 py-0.5 text-xs font-medium bg-gray-100 text-gray-700'
+    case 'override': return 'badge badge-context-blue'
+    case 'environment': return 'badge badge-context-purple'
+    case 'default': return 'badge badge-context-slate'
+    default: return 'badge badge-context-slate'
   }
 }
 

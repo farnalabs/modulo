@@ -36,7 +36,7 @@ describe('shadcn-vue primitives', () => {
     const wrapper = mount(Card, {
       slots: {
         default: [
-          h(CardHeader, () => h(CardTitle, 'Card Title')),
+          h(CardHeader, () => h(CardTitle, {}, () => 'Card Title')),
           h(CardContent, () => 'Content body'),
         ],
       },

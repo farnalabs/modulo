@@ -1,19 +1,19 @@
 <template>
-  <div class="min-h-screen bg-gray-50">
-    <header class="bg-white border-b border-gray-200 px-6 py-4">
+  <div class="min-h-screen">
+    <header class="bg-card border-b border-border px-6 py-4">
       <div class="max-w-6xl mx-auto flex items-center justify-between">
-        <h1 class="text-xl font-semibold text-gray-900">Library</h1>
+        <h1 class="text-xl font-semibold text-foreground">Library</h1>
         <div class="flex items-center gap-3">
           <input
             v-model="search"
             type="text"
             placeholder="Search primitives..."
-            class="px-3 py-1.5 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+            class="input-teal px-3 py-1.5 border border-input bg-background rounded-lg text-sm"
             @input="loadPrimitives"
           />
           <select
             v-model="typeFilter"
-            class="px-3 py-1.5 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+            class="input-teal px-3 py-1.5 border border-input bg-background rounded-lg text-sm"
             @change="loadPrimitives"
           >
             <option value="">All Types</option>
@@ -28,14 +28,14 @@
       </div>
     </header>
 
-    <main class="max-w-6xl mx-auto px-6 py-8">
-      <div v-if="loading" class="text-center py-12 text-gray-500">Loading...</div>
+    <main class="max-w-6xl mx-auto px-6 py-8 space-y-6">
+      <div v-if="loading" class="text-center py-12 text-muted-foreground">Loading...</div>
 
-      <div v-else-if="error" class="bg-red-50 border border-red-200 text-red-700 rounded-lg p-4 mb-6">
+      <div v-else-if="error" class="rounded-lg border border-destructive/50 bg-destructive/10 p-4 text-destructive">
         {{ error }}
       </div>
 
-      <div v-else-if="primitives.length === 0" class="text-center py-12 text-gray-500">
+      <div v-else-if="primitives.length === 0" class="text-center py-12 text-muted-foreground">
         No primitives found.
       </div>
 
@@ -43,24 +43,21 @@
         <div
           v-for="prim in primitives"
           :key="prim.id"
-          class="bg-white border border-gray-200 rounded-lg p-5 hover:shadow-md transition-shadow"
+          class="card card-hover p-5"
         >
           <div class="flex items-start justify-between mb-3">
             <div>
-              <span
-                class="inline-block px-2 py-0.5 text-xs font-medium rounded-full"
-                :class="typeBadgeClass(prim.primitive_type)"
-              >
+              <span :class="typeBadgeClass(prim.primitive_type)">
                 {{ prim.primitive_type }}
               </span>
-              <h3 class="mt-2 text-base font-medium text-gray-900">{{ prim.name }}</h3>
+              <h3 class="mt-2 text-base font-medium text-foreground">{{ prim.name }}</h3>
             </div>
-            <div v-if="prim.visibility === 'community'" class="text-xs text-purple-600 font-medium bg-purple-50 px-2 py-0.5 rounded">
+            <div v-if="prim.visibility === 'community'" class="text-xs text-primary font-medium bg-primary/10 px-2 py-0.5 rounded">
               Community
             </div>
           </div>
 
-          <p v-if="prim.description" class="text-sm text-gray-600 mb-4 line-clamp-2">
+          <p v-if="prim.description" class="text-sm text-muted-foreground mb-4 line-clamp-2">
             {{ prim.description }}
           </p>
 
@@ -68,11 +65,11 @@
             <span
               v-for="tag in (prim.tags || []).slice(0, 3)"
               :key="tag"
-              class="text-xs bg-gray-100 text-gray-600 px-2 py-0.5 rounded"
+              class="text-xs bg-muted text-muted-foreground px-2 py-0.5 rounded"
             >
               {{ tag }}
             </span>
-            <span v-if="(prim.tags || []).length > 3" class="text-xs text-gray-400">
+            <span v-if="(prim.tags || []).length > 3" class="text-xs text-muted-foreground">
               +{{ prim.tags.length - 3 }}
             </span>
           </div>
@@ -80,13 +77,13 @@
           <div class="flex items-center gap-2">
             <button
               v-if="prim.primitive_type === 'pipeline_template'"
-              class="flex-1 px-3 py-2 bg-blue-600 text-white text-sm font-medium rounded-lg hover:bg-blue-700 transition-colors"
+              class="flex-1 px-3 py-2 bg-gradient-to-r from-primary to-teal-600 text-primary-foreground text-sm font-medium rounded-lg border border-primary/30 hover:border-primary/60 hover:brightness-110 transition-all"
               @click="createPipeline(prim)"
             >
               Create Pipeline
             </button>
             <button
-              class="flex-1 px-3 py-2 border border-gray-300 text-gray-700 text-sm font-medium rounded-lg hover:bg-gray-50 transition-colors"
+              class="flex-1 px-3 py-2 border border-border bg-background text-foreground text-sm font-medium rounded-lg hover:bg-accent transition-colors"
               @click="viewPrimitive(prim)"
             >
               View Details
@@ -95,20 +92,20 @@
         </div>
       </div>
 
-      <div v-if="total > pageSize" class="flex justify-center gap-2 mt-8">
+      <div v-if="total > pageSize" class="flex justify-center items-center gap-2 mt-8">
         <button
           :disabled="page <= 1"
-          class="px-4 py-2 text-sm border border-gray-300 rounded-lg disabled:opacity-50 hover:bg-gray-50"
+          class="px-4 py-2 text-sm border border-input bg-background rounded-lg disabled:opacity-30 hover:bg-accent transition-colors"
           @click="prevPage"
         >
           Previous
         </button>
-        <span class="px-4 py-2 text-sm text-gray-600">
+        <span class="px-4 py-2 text-sm text-muted-foreground">
           Page {{ page }} of {{ Math.ceil(total / pageSize) }}
         </span>
         <button
           :disabled="page >= Math.ceil(total / pageSize)"
-          class="px-4 py-2 text-sm border border-gray-300 rounded-lg disabled:opacity-50 hover:bg-gray-50"
+          class="px-4 py-2 text-sm border border-input bg-background rounded-lg disabled:opacity-30 hover:bg-accent transition-colors"
           @click="nextPage"
         >
           Next
@@ -195,14 +192,14 @@ function nextPage() {
 
 function typeBadgeClass(type: string): string {
   const map: Record<string, string> = {
-    pipeline_template: 'bg-blue-50 text-blue-700',
-    workflow: 'bg-green-50 text-green-700',
-    agent: 'bg-purple-50 text-purple-700',
-    schema: 'bg-amber-50 text-amber-700',
-    integration: 'bg-cyan-50 text-cyan-700',
-    test_fixture: 'bg-pink-50 text-pink-700',
+    pipeline_template: 'badge badge-context-blue',
+    workflow: 'badge badge-context-teal',
+    agent: 'badge badge-context-purple',
+    schema: 'badge badge-context-amber',
+    integration: 'badge badge-context-cyan',
+    test_fixture: 'badge badge-context-pink',
   }
-  return map[type] ?? 'bg-gray-50 text-gray-700'
+  return map[type] ?? 'badge badge-context-slate'
 }
 
 function createPipeline(prim: LibraryPrimitive) {

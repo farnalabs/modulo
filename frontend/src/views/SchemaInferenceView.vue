@@ -5,13 +5,9 @@
       <p class="mt-1 text-muted-foreground">Infer a schema from a connected data source</p>
     </header>
 
-    <div v-if="loadingConnectors" class="flex items-center justify-center py-16">
-      <div class="h-8 w-8 animate-spin rounded-full border-4 border-primary border-t-transparent" />
-    </div>
+    <LoadingSpinner v-if="loadingConnectors" />
 
-    <div v-else-if="connectorsError" class="rounded-lg border border-destructive/50 bg-destructive/10 p-4 text-destructive">
-      {{ connectorsError }}
-    </div>
+    <ErrorAlert v-else-if="connectorsError" :message="connectorsError" />
 
     <template v-else>
       <section class="rounded-lg border bg-card p-6 shadow-sm">
@@ -164,6 +160,8 @@ import { ref, computed, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { api } from '../lib/api/client'
 import type { components } from '../lib/api/client'
+import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
+import ErrorAlert from '../components/shared/ErrorAlert.vue'
 
 type ConnectorItem = components['schemas']['ConnectorItem']
 type SchemaInferResponse = components['schemas']['SchemaInferResponse']

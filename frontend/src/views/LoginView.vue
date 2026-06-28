@@ -21,7 +21,7 @@
           </div>
         </div>
         <h1 class="text-3xl font-bold tracking-tight">Modulo</h1>
-        <p class="mt-1 text-muted-foreground">Self-hosted agentic SDLC platform</p>
+        <p class="mt-1 text-muted-foreground">SDLC pipeline orchestration</p>
       </div>
 
       <div v-if="error" class="rounded-lg border border-destructive/50 bg-destructive/10 p-4 text-sm text-destructive">
@@ -52,7 +52,7 @@
         <button
           type="submit"
           :disabled="loading"
-          class="btn-glow w-full rounded-md bg-gradient-to-r from-primary to-teal-600 px-4 py-2.5 text-sm font-semibold text-primary-foreground hover:brightness-110 disabled:opacity-50 transition-all duration-150"
+          class="btn-glow w-full rounded-md bg-gradient-to-r from-primary to-teal-600 px-4 py-2.5 text-sm font-semibold text-primary-foreground border border-primary/30 hover:border-primary/60 hover:brightness-110 disabled:opacity-50 transition-all duration-150"
         >
           {{ loading ? 'Signing in...' : 'Sign in' }}
         </button>

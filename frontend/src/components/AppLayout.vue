@@ -3,34 +3,17 @@
     <!-- Sidebar -->
     <aside class="flex w-64 border-r bg-background p-4 flex-col">
       <div class="mb-6 flex items-center gap-2.5 pl-1">
-        <div class="flex items-center justify-center rounded-lg bg-gradient-to-br from-teal-500/20 to-transparent p-1.5">
+        <div class="flex items-center justify-center rounded-lg bg-gradient-to-br from-primary/20 to-transparent p-1.5">
           <LogoMark :size="24" transparent />
         </div>
         <h2 class="text-lg font-bold tracking-tight">Modulo</h2>
       </div>
 
       <nav class="flex-1 space-y-0.5">
-        <SidebarLink to="/" icon="LayoutDashboard" label="Dashboard" />
-        <SidebarLink to="/library" icon="BookOpen" label="Library" />
-        <SidebarLink to="/pipelines" icon="GitBranch" label="Pipelines" />
-        <SidebarLink to="/evals/editor" icon="CheckSquare" label="Evals" />
-        <SidebarLink to="/variants/compare" icon="GitFork" label="Variants" />
-
-        <div class="sidebar-section-header">Settings</div>
-        <SidebarLink to="/settings/observability" icon="Eye" label="Observability" />
-        <SidebarLink to="/settings/teams" icon="Users" label="Teams" />
-        <SidebarLink to="/settings/sso" icon="Shield" label="SSO" />
-        <SidebarLink to="/settings/rate-limits" icon="Gauge" label="Rate Limits" />
-        <SidebarLink to="/settings/runtime-config" icon="Settings" label="Runtime Config" />
-        <SidebarLink to="/schemas/infer" icon="Database" label="Schema Inference" />
-
-        <div class="sidebar-section-header">Admin</div>
-        <SidebarLink to="/admin/users" icon="UserCircle" label="Users" />
-        <SidebarLink to="/feedback/inbox" icon="MessageSquare" label="Feedback Inbox" />
-        <SidebarLink to="/admin/audit" icon="FileText" label="Audit Log" />
-        <SidebarLink to="/admin/feature-flags" icon="Flag" label="Feature Flags" />
-        <SidebarLink to="/admin/api-changelog" icon="History" label="Changelog" />
-        <SidebarLink to="/admin/teams/comparison" icon="BarChart" label="Team Comparison" />
+        <template v-for="item in navItems" :key="item.label">
+          <div v-if="item.type === 'section'" class="sidebar-section-header">{{ item.label }}</div>
+          <SidebarLink v-else :to="item.to!" :icon="item.icon!" :label="item.label!" />
+        </template>
       </nav>
 
       <div class="border-t pt-4 mt-4 space-y-3">
@@ -44,7 +27,7 @@
             </div>
           </div>
           <router-link
-            to="/admin/users"
+            to="/admin/my-profile"
             class="text-sm text-muted-foreground truncate hover:text-foreground transition-colors flex-1 min-w-0"
           >
             {{ userEmail }}
@@ -52,15 +35,15 @@
           <span class="badge-plan shrink-0">Free</span>
         </div>
 
-        <div class="flex items-center justify-between">
-          <label class="toggle-switch" :class="isLight ? 'light' : 'dark'">
+        <div class="flex items-center justify-between border-t border-border pt-3">
+          <label class="toggle-switch" :class="isLight ? 'light' : 'dark'" title="Ctrl+Shift+L to toggle">
             <span class="track">
               <span class="thumb" />
             </span>
             <span class="flex items-center gap-1">
               <svg v-if="isLight" xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="5"/><line x1="12" y1="1" x2="12" y2="3"/><line x1="12" y1="21" x2="12" y2="23"/><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/><line x1="1" y1="12" x2="3" y2="12"/><line x1="21" y1="12" x2="23" y2="12"/><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/></svg>
               <svg v-else xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>
-              <span>{{ isLight ? 'Light' : 'Dark' }}</span>
+              <span class="text-xs font-medium">{{ isLight ? 'Light' : 'Dark' }}</span>
             </span>
             <input type="checkbox" class="hidden" @change="toggleTheme" :checked="isLight" />
           </label>
@@ -96,7 +79,7 @@
     >
       <div class="mb-6 flex items-center justify-between">
         <div class="flex items-center gap-2.5 pl-1">
-          <div class="flex items-center justify-center rounded-lg bg-gradient-to-br from-teal-500/20 to-transparent p-1.5">
+          <div class="flex items-center justify-center rounded-lg bg-gradient-to-br from-primary/20 to-transparent p-1.5">
             <LogoMark :size="24" transparent />
           </div>
           <h2 class="text-lg font-bold tracking-tight">Modulo</h2>
@@ -110,27 +93,10 @@
       </div>
 
       <nav class="flex-1 space-y-0.5">
-        <SidebarLink to="/" icon="LayoutDashboard" label="Dashboard" @click="mobileOpen = false" />
-        <SidebarLink to="/library" icon="BookOpen" label="Library" @click="mobileOpen = false" />
-        <SidebarLink to="/pipelines" icon="GitBranch" label="Pipelines" @click="mobileOpen = false" />
-        <SidebarLink to="/evals/editor" icon="CheckSquare" label="Evals" @click="mobileOpen = false" />
-        <SidebarLink to="/variants/compare" icon="GitFork" label="Variants" @click="mobileOpen = false" />
-
-        <div class="sidebar-section-header">Settings</div>
-        <SidebarLink to="/settings/observability" icon="Eye" label="Observability" @click="mobileOpen = false" />
-        <SidebarLink to="/settings/teams" icon="Users" label="Teams" @click="mobileOpen = false" />
-        <SidebarLink to="/settings/sso" icon="Shield" label="SSO" @click="mobileOpen = false" />
-        <SidebarLink to="/settings/rate-limits" icon="Gauge" label="Rate Limits" @click="mobileOpen = false" />
-        <SidebarLink to="/settings/runtime-config" icon="Settings" label="Runtime Config" @click="mobileOpen = false" />
-        <SidebarLink to="/schemas/infer" icon="Database" label="Schema Inference" @click="mobileOpen = false" />
-
-        <div class="sidebar-section-header">Admin</div>
-        <SidebarLink to="/admin/users" icon="UserCircle" label="Users" @click="mobileOpen = false" />
-        <SidebarLink to="/feedback/inbox" icon="MessageSquare" label="Feedback Inbox" @click="mobileOpen = false" />
-        <SidebarLink to="/admin/audit" icon="FileText" label="Audit Log" @click="mobileOpen = false" />
-        <SidebarLink to="/admin/feature-flags" icon="Flag" label="Feature Flags" @click="mobileOpen = false" />
-        <SidebarLink to="/admin/api-changelog" icon="History" label="Changelog" @click="mobileOpen = false" />
-        <SidebarLink to="/admin/teams/comparison" icon="BarChart" label="Team Comparison" @click="mobileOpen = false" />
+        <template v-for="item in navItems" :key="item.label">
+          <div v-if="item.type === 'section'" class="sidebar-section-header">{{ item.label }}</div>
+          <SidebarLink v-else :to="item.to!" :icon="item.icon!" :label="item.label!" @click="mobileOpen = false" />
+        </template>
       </nav>
 
       <div class="border-t pt-4 mt-4 space-y-3">
@@ -144,7 +110,7 @@
             </div>
           </div>
           <router-link
-            to="/admin/users"
+            to="/admin/my-profile"
             class="text-sm text-muted-foreground truncate hover:text-foreground transition-colors flex-1 min-w-0"
           >
             {{ userEmail }}
@@ -152,15 +118,15 @@
           <span class="badge-plan shrink-0">Free</span>
         </div>
 
-        <div class="flex items-center justify-between">
-          <label class="toggle-switch" :class="isLight ? 'light' : 'dark'">
+        <div class="flex items-center justify-between border-t border-border pt-3">
+          <label class="toggle-switch" :class="isLight ? 'light' : 'dark'" title="Ctrl+Shift+L to toggle">
             <span class="track">
               <span class="thumb" />
             </span>
             <span class="flex items-center gap-1">
               <svg v-if="isLight" xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="5"/><line x1="12" y1="1" x2="12" y2="3"/><line x1="12" y1="21" x2="12" y2="23"/><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/><line x1="1" y1="12" x2="3" y2="12"/><line x1="21" y1="12" x2="23" y2="12"/><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/></svg>
               <svg v-else xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>
-              <span>{{ isLight ? 'Light' : 'Dark' }}</span>
+              <span class="text-xs font-medium">{{ isLight ? 'Light' : 'Dark' }}</span>
             </span>
             <input type="checkbox" class="hidden" @change="toggleTheme" :checked="isLight" />
           </label>
@@ -219,9 +185,46 @@ export const SidebarLink = defineComponent({
 </script>
 
 <script setup lang="ts">
-import { ref } from 'vue'
+import { ref, onMounted, onUnmounted } from 'vue'
 import { getAccessToken, clearAccessToken } from '../lib/api/client'
 import LogoMark from './LogoMark.vue'
+
+interface NavSection {
+  type: 'section'
+  label: string
+}
+
+interface NavLink {
+  type: 'link'
+  to: string
+  icon: string
+  label: string
+}
+
+type NavItem = NavSection | NavLink
+
+const navItems: NavItem[] = [
+  { type: 'link', to: '/', icon: 'LayoutDashboard', label: 'Dashboard' },
+  { type: 'link', to: '/library', icon: 'BookOpen', label: 'Library' },
+  { type: 'link', to: '/pipelines', icon: 'GitBranch', label: 'Pipelines' },
+  { type: 'link', to: '/evals/editor', icon: 'CheckSquare', label: 'Evals' },
+  { type: 'link', to: '/variants/compare', icon: 'GitFork', label: 'Variants' },
+  { type: 'section', label: 'Settings' },
+  { type: 'link', to: '/settings/observability', icon: 'Eye', label: 'Observability' },
+  { type: 'link', to: '/settings/teams', icon: 'Users', label: 'Teams' },
+  { type: 'link', to: '/settings/sso', icon: 'Shield', label: 'SSO' },
+  { type: 'link', to: '/settings/rate-limits', icon: 'Gauge', label: 'Rate Limits' },
+  { type: 'link', to: '/settings/runtime-config', icon: 'Settings', label: 'Runtime Config' },
+  { type: 'link', to: '/schemas/infer', icon: 'Database', label: 'Schema Inference' },
+  { type: 'section', label: 'Admin' },
+  { type: 'link', to: '/admin/my-profile', icon: 'UserCircle', label: 'My Profile' },
+  { type: 'link', to: '/admin/users', icon: 'Users', label: 'Users' },
+  { type: 'link', to: '/feedback/inbox', icon: 'MessageSquare', label: 'Feedback Inbox' },
+  { type: 'link', to: '/admin/audit', icon: 'FileText', label: 'Audit Log' },
+  { type: 'link', to: '/admin/feature-flags', icon: 'Flag', label: 'Feature Flags' },
+  { type: 'link', to: '/admin/api-changelog', icon: 'History', label: 'Changelog' },
+  { type: 'link', to: '/admin/teams/comparison', icon: 'BarChart', label: 'Team Comparison' },
+]
 
 const mobileOpen = ref(false)
 
@@ -231,13 +234,26 @@ function toggleTheme() {
   const root = document.documentElement
   if (root.classList.contains('light')) {
     root.classList.remove('light')
-    root.classList.add('dark')
   } else {
-    root.classList.remove('dark')
     root.classList.add('light')
   }
   isLight.value = root.classList.contains('light')
 }
+
+function handleKeydown(e: KeyboardEvent) {
+  if (e.ctrlKey && e.shiftKey && e.key === 'L') {
+    e.preventDefault()
+    toggleTheme()
+  }
+}
+
+onMounted(() => {
+  document.addEventListener('keydown', handleKeydown)
+})
+
+onUnmounted(() => {
+  document.removeEventListener('keydown', handleKeydown)
+})
 
 function logout() {
   clearAccessToken()

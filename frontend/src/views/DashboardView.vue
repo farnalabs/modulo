@@ -5,13 +5,9 @@
       <p class="mt-1 text-muted-foreground">Overview of your organisation's pipelines and runs</p>
     </header>
 
-    <div v-if="loading" class="flex items-center justify-center py-16">
-      <div class="h-8 w-8 animate-spin rounded-full border-4 border-primary border-t-transparent" />
-    </div>
+    <LoadingSpinner v-if="loading" />
 
-    <div v-else-if="error" class="rounded-lg border border-destructive/50 bg-destructive/10 p-4 text-destructive">
-      {{ error }}
-    </div>
+    <ErrorAlert v-else-if="error" :message="error" />
 
     <template v-else-if="data">
       <div class="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
@@ -28,7 +24,7 @@
         </div>
         <div class="card card-hover p-4">
           <div class="flex items-center gap-3">
-            <div class="flex h-9 w-9 items-center justify-center rounded-lg bg-teal-500/10 text-teal-500">
+            <div class="flex h-9 w-9 items-center justify-center rounded-lg bg-primary/10 text-primary">
               <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg>
             </div>
             <div class="min-w-0">
@@ -92,6 +88,8 @@
 <script setup lang="ts">
 import { ref, onMounted } from 'vue'
 import { api } from '../lib/api/client'
+import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
+import ErrorAlert from '../components/shared/ErrorAlert.vue'
 
 interface DashboardSummary {
   total_runs: number

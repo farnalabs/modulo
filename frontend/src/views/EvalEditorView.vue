@@ -5,14 +5,9 @@
       <p class="mt-1 text-muted-foreground">Create and manage evaluation definitions for your pipelines</p>
     </header>
 
-    <div v-if="loading" class="flex items-center justify-center py-16">
-      <div class="h-8 w-8 animate-spin rounded-full border-4 border-primary border-t-transparent" />
-    </div>
+    <LoadingSpinner v-if="loading" />
 
-    <div v-else-if="pageError" class="rounded-lg border border-destructive/50 bg-destructive/10 p-4 text-destructive">
-      {{ pageError }}
-      <button class="ml-2 underline" @click="loadAll">Retry</button>
-    </div>
+    <ErrorAlert v-else-if="pageError" :message="pageError" :on-retry="loadAll" />
 
     <template v-else>
       <div class="grid gap-6 lg:grid-cols-2">
@@ -239,6 +234,8 @@
 <script setup lang="ts">
 import { ref, reactive, computed, onMounted } from 'vue'
 import { useApi } from '../composables/useApi'
+import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
+import ErrorAlert from '../components/shared/ErrorAlert.vue'
 
 const { get, post, put, del } = useApi()
 

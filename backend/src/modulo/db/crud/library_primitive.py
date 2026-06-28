@@ -73,6 +73,7 @@ async def get_library_primitive(session: AsyncSession, primitive_id: uuid.UUID) 
 async def list_library_primitives(
     session: AsyncSession,
     *,
+    org_id: uuid.UUID | None = None,
     page: int = 1,
     page_size: int = 20,
     primitive_type: str | None = None,
@@ -80,6 +81,9 @@ async def list_library_primitives(
     cursor: str | None = None,
 ) -> PageResult[LibraryPrimitive]:
     conditions = []
+
+    if org_id is not None:
+        conditions.append(LibraryPrimitive.organisation_id == org_id)
 
     if primitive_type is not None:
         conditions.append(LibraryPrimitive.primitive_type == primitive_type)

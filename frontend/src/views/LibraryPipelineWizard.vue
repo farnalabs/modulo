@@ -1,28 +1,26 @@
 <template>
-  <div class="min-h-screen bg-gray-50">
-    <header class="bg-white border-b border-gray-200 px-6 py-4">
+  <div class="min-h-screen bg-background">
+    <header class="bg-card border-b border-border px-6 py-4">
       <div class="max-w-3xl mx-auto">
         <button
-          class="text-sm text-gray-600 hover:text-gray-900 mb-2 inline-flex items-center gap-1"
+          class="text-sm text-muted-foreground hover:text-foreground mb-2 inline-flex items-center gap-1"
           @click="$router.push({ name: 'library' })"
         >
           &larr; Back to Library
         </button>
-        <h1 class="text-xl font-semibold text-gray-900">Create Pipeline from Template</h1>
+        <h1 class="text-xl font-semibold text-foreground">Create Pipeline from Template</h1>
       </div>
     </header>
 
     <main class="max-w-3xl mx-auto px-6 py-8">
-      <div v-if="loading" class="text-center py-12 text-gray-500">Loading template...</div>
+      <LoadingSpinner v-if="loading" />
 
-      <div v-else-if="error" class="bg-red-50 border border-red-200 text-red-700 rounded-lg p-4 mb-6">
-        {{ error }}
-      </div>
+      <ErrorAlert v-else-if="error" :message="error" class="mb-6" />
 
       <div v-else>
-        <div class="bg-white border border-gray-200 rounded-lg p-6 mb-6">
-          <h2 class="text-lg font-medium text-gray-900 mb-1">{{ primitive?.name }}</h2>
-          <p v-if="primitive?.description" class="text-sm text-gray-600 mb-4">
+        <div class="card p-6 mb-6">
+          <h2 class="text-lg font-medium text-foreground mb-1">{{ primitive?.name }}</h2>
+          <p v-if="primitive?.description" class="text-sm text-muted-foreground mb-4">
             {{ primitive.description }}
           </p>
 
@@ -30,69 +28,69 @@
             <span
               v-for="tag in (primitive?.tags || []).slice(0, 5)"
               :key="tag"
-              class="text-xs bg-gray-100 text-gray-600 px-2 py-0.5 rounded"
+              class="badge badge-tag"
             >
               {{ tag }}
             </span>
           </div>
 
-          <div class="bg-gray-50 rounded-lg p-4 text-sm text-gray-700">
+          <div class="bg-muted rounded-lg p-4 text-sm text-foreground">
             <p><strong>Author:</strong> {{ primitive?.author }}</p>
             <p><strong>Version:</strong> {{ primitive?.version }}</p>
           </div>
         </div>
 
-        <div class="bg-white border border-gray-200 rounded-lg p-6 mb-6">
-          <h3 class="text-base font-medium text-gray-900 mb-4">Pipeline Configuration</h3>
+        <div class="card p-6 mb-6">
+          <h3 class="text-base font-medium text-foreground mb-4">Pipeline Configuration</h3>
 
           <div class="space-y-4">
             <div>
-              <label class="block text-sm font-medium text-gray-700 mb-1">Pipeline Name</label>
+              <label class="block text-sm font-medium text-foreground mb-1">Pipeline Name</label>
               <input
                 v-model="pipelineName"
                 type="text"
-                class="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                class="w-full px-3 py-2 border border-input bg-background rounded-lg text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                 :placeholder="`${primitive?.name ?? 'Pipeline'} (from template)`"
               />
             </div>
 
             <div>
-              <label class="block text-sm font-medium text-gray-700 mb-1">Description</label>
+              <label class="block text-sm font-medium text-foreground mb-1">Description</label>
               <textarea
                 v-model="pipelineDescription"
                 rows="3"
-                class="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                class="w-full px-3 py-2 border border-input bg-background rounded-lg text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                 :placeholder="primitive?.description ?? 'Pipeline created from library template'"
               />
             </div>
           </div>
         </div>
 
-        <div class="bg-white border border-gray-200 rounded-lg p-6 mb-6">
-          <h3 class="text-base font-medium text-gray-900 mb-4">Ownership</h3>
-          <p class="text-sm text-gray-600 mb-4">Choose who this pipeline belongs to. Org-wide pipelines are visible to everyone in the organisation; team pipelines are visible only to team members.</p>
+        <div class="card p-6 mb-6">
+          <h3 class="text-base font-medium text-foreground mb-4">Ownership</h3>
+          <p class="text-sm text-muted-foreground mb-4">Choose who this pipeline belongs to. Org-wide pipelines are visible to everyone in the organisation; team pipelines are visible only to team members.</p>
           <OwnershipPicker v-model="ownership" label="Owner" />
         </div>
 
-        <div v-if="templateAgents.length > 0" class="bg-white border border-gray-200 rounded-lg p-6 mb-6">
-          <h3 class="text-base font-medium text-gray-900 mb-4">Template Agents ({{ templateAgents.length }})</h3>
+        <div v-if="templateAgents.length > 0" class="card p-6 mb-6">
+          <h3 class="text-base font-medium text-foreground mb-4">Template Agents ({{ templateAgents.length }})</h3>
           <div class="space-y-3">
             <div
               v-for="(agent, i) in templateAgents"
               :key="i"
-              class="flex items-start gap-3 p-3 bg-gray-50 rounded-lg"
+              class="flex items-start gap-3 p-3 bg-muted rounded-lg"
             >
-              <div class="w-6 h-6 rounded-full bg-blue-100 text-blue-700 flex items-center justify-center text-xs font-medium shrink-0">
+              <div class="w-6 h-6 rounded-full badge badge-context-blue flex items-center justify-center shrink-0">
                 {{ i + 1 }}
               </div>
               <div>
-                <p class="text-sm font-medium text-gray-900">{{ agent.name }}</p>
-                <p v-if="agent.description" class="text-xs text-gray-600 mt-0.5">{{ agent.description }}</p>
+                <p class="text-sm font-medium text-foreground">{{ agent.name }}</p>
+                <p v-if="agent.description" class="text-xs text-muted-foreground mt-0.5">{{ agent.description }}</p>
                 <div class="flex gap-2 mt-1">
                   <span
                     v-for="ref in (agent.connector_type_refs || [])"
                     :key="ref.connector_type"
-                    class="text-xs bg-purple-50 text-purple-700 px-1.5 py-0.5 rounded"
+                    class="badge badge-context-purple"
                   >
                     {{ ref.connector_type }}
                   </span>
@@ -105,13 +103,13 @@
         <div class="flex items-center gap-3">
           <button
             :disabled="creating"
-            class="px-6 py-2.5 bg-blue-600 text-white text-sm font-medium rounded-lg hover:bg-blue-700 disabled:opacity-50 transition-colors"
+            class="px-6 py-2.5 bg-primary text-primary-foreground text-sm font-medium rounded-lg hover:brightness-110 disabled:opacity-50 transition-all"
             @click="createPipeline"
           >
             {{ creating ? 'Creating...' : 'Create Pipeline' }}
           </button>
           <button
-            class="px-6 py-2.5 border border-gray-300 text-gray-700 text-sm font-medium rounded-lg hover:bg-gray-50 transition-colors"
+            class="px-6 py-2.5 border border-input bg-background text-foreground text-sm font-medium rounded-lg hover:bg-accent transition-colors"
             @click="$router.push({ name: 'library' })"
           >
             Cancel
@@ -120,7 +118,7 @@
 
         <div
           v-if="result"
-          class="mt-6 bg-green-50 border border-green-200 text-green-700 rounded-lg p-4"
+          class="mt-6 rounded-lg border border-success/50 bg-success/10 p-4 text-success"
         >
           <p class="font-medium">Pipeline created!</p>
           <p class="text-sm mt-1">
@@ -131,7 +129,7 @@
 
         <div
           v-if="createError"
-          class="mt-6 bg-red-50 border border-red-200 text-red-700 rounded-lg p-4"
+          class="mt-6 rounded-lg border border-destructive/50 bg-destructive/10 p-4 text-destructive"
         >
           {{ createError }}
         </div>
@@ -144,6 +142,8 @@
 import { ref, onMounted } from 'vue'
 import { useRoute } from 'vue-router'
 import { useApi } from '../composables/useApi'
+import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
+import ErrorAlert from '../components/shared/ErrorAlert.vue'
 import OwnershipPicker from '../components/OwnershipPicker.vue'
 import type { OwnershipValue } from '../components/OwnershipPicker.vue'
 
