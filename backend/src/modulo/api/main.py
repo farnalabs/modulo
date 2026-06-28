@@ -28,6 +28,7 @@ from modulo.api.routes.admin import router as admin_router
 from modulo.api.routes.admin_feature_flags import router as admin_feature_flags_router
 from modulo.api.routes.admin_notifications import router as admin_notifications_router
 from modulo.api.routes.admin_rate_limits import router as admin_rate_limits_router
+from modulo.api.routes.admin_runtime_config import router as admin_runtime_config_router
 from modulo.api.routes.admin_sso import router as admin_sso_router
 from modulo.api.routes.agents import router as agents_router
 from modulo.api.routes.api_keys import router as api_keys_router
@@ -426,6 +427,10 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
     # Initialise the LangGraph checkpointer schema (langgraph.* tables).
     await _init_checkpointer(pg_connection_string(settings.database_url))
 
+    # Initialise the runtime-config store so it captures env-var state at boot.
+    from modulo.core.runtime_config.store import get_runtime_config_store
+    get_runtime_config_store()
+
     # Start the run retention background loop.
     retention_task = asyncio.create_task(_run_retention_loop())
     yield
@@ -477,6 +482,7 @@ app.add_middleware(CatchAllMiddleware)
 app.include_router(admin_router)
 app.include_router(admin_feature_flags_router)
 app.include_router(admin_rate_limits_router)
+app.include_router(admin_runtime_config_router)
 app.include_router(admin_sso_router)
 app.include_router(auth_router)
 app.include_router(changelog_router)
@@ -506,6 +512,7 @@ app.include_router(registry_router)
 app.include_router(determination_router)
 app.include_router(evals_router)
 app.include_router(admin_notifications_router)
+app.include_router(admin_runtime_config_router)
 app.include_router(notifications_router)
 app.include_router(observability_router)
 app.include_router(variants_router)
