@@ -21,7 +21,12 @@ from sqlalchemy import select
 
 _SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 _PROJECT_ROOT = os.path.abspath(os.path.join(_SCRIPT_DIR, ".."))
-_SRC = os.path.join(_PROJECT_ROOT, "backend", "src")
+# Try container layout (/app/src/) first, then local dev layout (backend/src/)
+_SRC = os.path.join(_PROJECT_ROOT, "src")
+if not os.path.isdir(_SRC):
+    _SRC = os.path.join(_PROJECT_ROOT, "backend", "src")
+if not os.path.isdir(_SRC):
+    _SRC = os.path.join(_PROJECT_ROOT, "..", "backend", "src")
 if _SRC not in sys.path:
     sys.path.insert(0, _SRC)
 

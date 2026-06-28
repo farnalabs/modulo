@@ -37,6 +37,9 @@ COPY --from=frontend-builder /build/dist/ /usr/share/nginx/html/
 # nginx config
 COPY deploy/fly/nginx.conf /etc/nginx/conf.d/default.conf
 
+# Scripts for seeding
+COPY scripts/ /app/scripts/
+
 # Entrypoint + bootstrap
 COPY deploy/fly/entrypoint.sh /entrypoint.sh
 COPY deploy/fly/bootstrap_db.py /app/deploy/fly/bootstrap_db.py

@@ -17,5 +17,12 @@ fi
 echo "=== Running DB migrations ==="
 .venv/bin/alembic upgrade head || echo "WARNING: Migration failed — continuing anyway"
 
+if [ "$MODULO_DEMO_MODE" = "true" ]; then
+  echo "=== Seeding demo data (idempotent) ==="
+  cd /app
+  .venv/bin/python3 /app/scripts/seed.py || echo "WARNING: Seed script failed — continuing anyway"
+  echo "=== Seed complete ==="
+fi
+
 echo "=== Starting uvicorn ==="
 exec .venv/bin/uvicorn modulo.api.main:app --host 0.0.0.0 --port 8000 --proxy-headers
