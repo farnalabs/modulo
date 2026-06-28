@@ -2,19 +2,21 @@
   <div class="flex min-h-screen">
     <!-- Sidebar -->
     <aside class="flex w-64 border-r bg-background p-4 flex-col">
-      <div class="mb-6 flex items-center gap-2">
-        <LogoMark :size="28" transparent />
-        <h2 class="text-lg font-bold">Modulo</h2>
+      <div class="mb-6 flex items-center gap-2.5 pl-1">
+        <div class="flex items-center justify-center rounded-lg bg-gradient-to-br from-teal-500/20 to-transparent p-1.5">
+          <LogoMark :size="24" transparent />
+        </div>
+        <h2 class="text-lg font-bold tracking-tight">Modulo</h2>
       </div>
 
-      <nav class="flex-1 space-y-1">
+      <nav class="flex-1 space-y-0.5">
         <SidebarLink to="/" icon="LayoutDashboard" label="Dashboard" />
         <SidebarLink to="/library" icon="BookOpen" label="Library" />
         <SidebarLink to="/pipelines" icon="GitBranch" label="Pipelines" />
         <SidebarLink to="/evals/editor" icon="CheckSquare" label="Evals" />
         <SidebarLink to="/variants/compare" icon="GitFork" label="Variants" />
 
-        <div class="mt-6 mb-2 text-xs font-medium text-muted-foreground uppercase tracking-wider">Settings</div>
+        <div class="sidebar-section-header">Settings</div>
         <SidebarLink to="/settings/observability" icon="Eye" label="Observability" />
         <SidebarLink to="/settings/teams" icon="Users" label="Teams" />
         <SidebarLink to="/settings/sso" icon="Shield" label="SSO" />
@@ -22,7 +24,7 @@
         <SidebarLink to="/settings/runtime-config" icon="Settings" label="Runtime Config" />
         <SidebarLink to="/schemas/infer" icon="Database" label="Schema Inference" />
 
-        <div class="mt-6 mb-2 text-xs font-medium text-muted-foreground uppercase tracking-wider">Admin</div>
+        <div class="sidebar-section-header">Admin</div>
         <SidebarLink to="/admin/users" icon="UserCircle" label="Users" />
         <SidebarLink to="/feedback/inbox" icon="MessageSquare" label="Feedback Inbox" />
         <SidebarLink to="/admin/audit" icon="FileText" label="Audit Log" />
@@ -33,28 +35,35 @@
 
       <div class="border-t pt-4 mt-4 space-y-3">
         <div class="flex items-center gap-2">
-          <div
-            class="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-primary text-xs font-bold text-primary-foreground"
-            :title="userEmail"
-          >
-            {{ userInitial }}
+          <div class="avatar-ring">
+            <div
+              class="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-gradient-to-br from-primary to-teal-600 text-xs font-bold text-primary-foreground"
+              :title="userEmail"
+            >
+              {{ userInitial }}
+            </div>
           </div>
           <router-link
             to="/admin/users"
-            class="text-sm text-muted-foreground truncate hover:text-foreground transition-colors"
+            class="text-sm text-muted-foreground truncate hover:text-foreground transition-colors flex-1 min-w-0"
           >
             {{ userEmail }}
           </router-link>
-          <span class="shrink-0 rounded-full bg-green-100 px-2 py-0.5 text-xs text-green-700">Free</span>
+          <span class="badge-plan shrink-0">Free</span>
         </div>
 
         <div class="flex items-center justify-between">
-          <button
-            @click="toggleTheme"
-            class="text-xs text-muted-foreground hover:text-foreground transition-colors"
-          >
-            {{ isLight ? 'Dark mode' : 'Light mode' }}
-          </button>
+          <label class="toggle-switch" :class="isLight ? 'light' : 'dark'">
+            <span class="track">
+              <span class="thumb" />
+            </span>
+            <span class="flex items-center gap-1">
+              <svg v-if="isLight" xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="5"/><line x1="12" y1="1" x2="12" y2="3"/><line x1="12" y1="21" x2="12" y2="23"/><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/><line x1="1" y1="12" x2="3" y2="12"/><line x1="21" y1="12" x2="23" y2="12"/><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/></svg>
+              <svg v-else xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>
+              <span>{{ isLight ? 'Light' : 'Dark' }}</span>
+            </span>
+            <input type="checkbox" class="hidden" @change="toggleTheme" :checked="isLight" />
+          </label>
           <button @click="logout" class="text-xs text-muted-foreground hover:text-foreground transition-colors">Sign out</button>
         </div>
       </div>
@@ -86,9 +95,11 @@
       :class="mobileOpen ? 'translate-x-0' : '-translate-x-full'"
     >
       <div class="mb-6 flex items-center justify-between">
-        <div class="flex items-center gap-2">
-          <LogoMark :size="28" transparent />
-          <h2 class="text-lg font-bold">Modulo</h2>
+        <div class="flex items-center gap-2.5 pl-1">
+          <div class="flex items-center justify-center rounded-lg bg-gradient-to-br from-teal-500/20 to-transparent p-1.5">
+            <LogoMark :size="24" transparent />
+          </div>
+          <h2 class="text-lg font-bold tracking-tight">Modulo</h2>
         </div>
         <button @click="mobileOpen = false" class="text-muted-foreground hover:text-foreground" aria-label="Close navigation">
           <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -98,14 +109,14 @@
         </button>
       </div>
 
-      <nav class="flex-1 space-y-1">
+      <nav class="flex-1 space-y-0.5">
         <SidebarLink to="/" icon="LayoutDashboard" label="Dashboard" @click="mobileOpen = false" />
         <SidebarLink to="/library" icon="BookOpen" label="Library" @click="mobileOpen = false" />
         <SidebarLink to="/pipelines" icon="GitBranch" label="Pipelines" @click="mobileOpen = false" />
         <SidebarLink to="/evals/editor" icon="CheckSquare" label="Evals" @click="mobileOpen = false" />
         <SidebarLink to="/variants/compare" icon="GitFork" label="Variants" @click="mobileOpen = false" />
 
-        <div class="mt-6 mb-2 text-xs font-medium text-muted-foreground uppercase tracking-wider">Settings</div>
+        <div class="sidebar-section-header">Settings</div>
         <SidebarLink to="/settings/observability" icon="Eye" label="Observability" @click="mobileOpen = false" />
         <SidebarLink to="/settings/teams" icon="Users" label="Teams" @click="mobileOpen = false" />
         <SidebarLink to="/settings/sso" icon="Shield" label="SSO" @click="mobileOpen = false" />
@@ -113,7 +124,7 @@
         <SidebarLink to="/settings/runtime-config" icon="Settings" label="Runtime Config" @click="mobileOpen = false" />
         <SidebarLink to="/schemas/infer" icon="Database" label="Schema Inference" @click="mobileOpen = false" />
 
-        <div class="mt-6 mb-2 text-xs font-medium text-muted-foreground uppercase tracking-wider">Admin</div>
+        <div class="sidebar-section-header">Admin</div>
         <SidebarLink to="/admin/users" icon="UserCircle" label="Users" @click="mobileOpen = false" />
         <SidebarLink to="/feedback/inbox" icon="MessageSquare" label="Feedback Inbox" @click="mobileOpen = false" />
         <SidebarLink to="/admin/audit" icon="FileText" label="Audit Log" @click="mobileOpen = false" />
@@ -124,35 +135,46 @@
 
       <div class="border-t pt-4 mt-4 space-y-3">
         <div class="flex items-center gap-2">
-          <div
-            class="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-primary text-xs font-bold text-primary-foreground"
-            :title="userEmail"
-          >
-            {{ userInitial }}
+          <div class="avatar-ring">
+            <div
+              class="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-gradient-to-br from-primary to-teal-600 text-xs font-bold text-primary-foreground"
+              :title="userEmail"
+            >
+              {{ userInitial }}
+            </div>
           </div>
           <router-link
             to="/admin/users"
-            class="text-sm text-muted-foreground truncate hover:text-foreground transition-colors"
+            class="text-sm text-muted-foreground truncate hover:text-foreground transition-colors flex-1 min-w-0"
           >
             {{ userEmail }}
           </router-link>
-          <span class="shrink-0 rounded-full bg-green-100 px-2 py-0.5 text-xs text-green-700">Free</span>
+          <span class="badge-plan shrink-0">Free</span>
         </div>
 
         <div class="flex items-center justify-between">
-          <button
-            @click="toggleTheme"
-            class="text-xs text-muted-foreground hover:text-foreground transition-colors"
-          >
-            {{ isLight ? 'Dark mode' : 'Light mode' }}
-          </button>
+          <label class="toggle-switch" :class="isLight ? 'light' : 'dark'">
+            <span class="track">
+              <span class="thumb" />
+            </span>
+            <span class="flex items-center gap-1">
+              <svg v-if="isLight" xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="5"/><line x1="12" y1="1" x2="12" y2="3"/><line x1="12" y1="21" x2="12" y2="23"/><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/><line x1="1" y1="12" x2="3" y2="12"/><line x1="21" y1="12" x2="23" y2="12"/><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/></svg>
+              <svg v-else xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>
+              <span>{{ isLight ? 'Light' : 'Dark' }}</span>
+            </span>
+            <input type="checkbox" class="hidden" @change="toggleTheme" :checked="isLight" />
+          </label>
           <button @click="logout" class="text-xs text-muted-foreground hover:text-foreground transition-colors">Sign out</button>
         </div>
       </div>
     </aside>
 
     <main class="flex-1 overflow-auto">
-      <router-view />
+      <router-view v-slot="{ Component }">
+        <transition name="page" mode="out-in">
+          <component :is="Component" />
+        </transition>
+      </router-view>
     </main>
   </div>
 </template>
@@ -188,9 +210,9 @@ export const SidebarLink = defineComponent({
     const route = useRoute()
     const isActive = computed(() => route.path === props.to || (props.to !== '/' && route.path.startsWith(props.to + '/')))
     const RouterLink = resolveComponent('router-link') as any
-    return () => h(RouterLink, { to: props.to, class: `flex items-center gap-3 rounded-md px-3 py-2 text-sm font-medium transition-colors ${isActive.value ? 'bg-accent text-accent-foreground' : 'text-muted-foreground hover:bg-accent/50 hover:text-foreground'}` }, [
-      h('span', { class: 'h-4 w-4', innerHTML: icons[props.icon] }),
-      props.label,
+    return () => h(RouterLink, { to: props.to, class: `sidebar-link ${isActive.value ? 'active' : ''}` }, [
+      h('span', { class: 'h-4 w-4 shrink-0', innerHTML: icons[props.icon] }),
+      h('span', { class: 'truncate' }, props.label),
     ])
   },
 })
