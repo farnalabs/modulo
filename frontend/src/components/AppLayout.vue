@@ -1,7 +1,7 @@
 <template>
   <div class="flex min-h-screen">
     <!-- Sidebar -->
-    <aside class="flex w-64 border-r bg-background p-4 flex-col">
+    <aside class="hidden md:flex w-64 border-r bg-background p-4 flex-col">
       <div class="mb-6 flex items-center gap-2.5 pl-1">
         <div class="flex items-center justify-center rounded-lg bg-gradient-to-br from-primary/20 to-transparent p-1.5">
           <LogoMark :size="24" transparent />
@@ -35,7 +35,7 @@
           <span class="badge-plan shrink-0">Free</span>
         </div>
 
-        <div class="flex items-center justify-between border-t border-border pt-3">
+        <div class="flex items-center justify-between border-t border-border pt-3 pb-2">
           <label class="toggle-switch" :class="isLight ? 'light' : 'dark'" title="Ctrl+Shift+L to toggle">
             <span class="track">
               <span class="thumb" />
@@ -118,7 +118,7 @@
           <span class="badge-plan shrink-0">Free</span>
         </div>
 
-        <div class="flex items-center justify-between border-t border-border pt-3">
+        <div class="flex items-center justify-between border-t border-border pt-3 pb-2">
           <label class="toggle-switch" :class="isLight ? 'light' : 'dark'" title="Ctrl+Shift+L to toggle">
             <span class="track">
               <span class="thumb" />
