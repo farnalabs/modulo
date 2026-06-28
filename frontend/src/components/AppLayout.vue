@@ -53,16 +53,10 @@
     </aside>
 
     <!-- Mobile header -->
-    <div class="md:hidden fixed top-0 left-0 right-0 z-50 bg-background border-b border-border px-4 py-3 flex items-center justify-between shadow-sm">
-      <div class="flex items-center gap-2">
-        <div class="flex items-center justify-center rounded-lg bg-primary/10 p-1.5">
-          <LogoMark :size="20" transparent />
-        </div>
-        <span class="text-sm font-bold tracking-tight">Modulo</span>
-      </div>
+    <div class="md:hidden fixed top-0 left-0 right-0 z-50 bg-background border-b border-border px-4 py-3 flex items-center gap-3 shadow-sm">
       <button
         @click="mobileOpen = !mobileOpen"
-        class="rounded-md bg-background border border-border p-2 text-muted-foreground hover:text-foreground"
+        class="rounded-md bg-background border border-border p-2 text-muted-foreground hover:text-foreground shrink-0"
         aria-label="Toggle navigation"
       >
         <svg v-if="!mobileOpen" xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -75,6 +69,12 @@
           <line x1="6" y1="6" x2="18" y2="18"/>
         </svg>
       </button>
+      <div class="flex items-center gap-2">
+        <div class="flex items-center justify-center rounded-lg bg-primary/10 p-1.5">
+          <LogoMark :size="20" transparent />
+        </div>
+        <span class="text-sm font-bold tracking-tight">Modulo</span>
+      </div>
     </div>
 
     <!-- Mobile menu panel (pushes content down) -->
