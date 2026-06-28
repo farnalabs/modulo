@@ -80,9 +80,14 @@ async def seed() -> None:
 
             org = existing
             # Check if seed data already exists in this org (idempotency)
-            count = (await session.execute(select(Pipeline).where(Pipeline.organisation_id == org.id).limit(1))).first()
-            if count is not None:
-                print(f"[seed] Org '{org.name}' already has data — skipping")
+            seed_check = (await session.execute(
+                select(User).where(User.organisation_id == org.id, User.email == "admin@demo.modulo")
+            )).first()
+            pipelines_exist = (await session.execute(
+                select(Pipeline).where(Pipeline.organisation_id == org.id).limit(1)
+            )).first()
+            if seed_check is not None and pipelines_exist is not None:
+                print(f"[seed] Org '{org.name}' already has seeded data — skipping")
                 await session.commit()
                 return
             print(f"[seed] Using org '{org.name}' ({org.id})")
@@ -105,35 +110,52 @@ async def seed() -> None:
             ]
             users = []
             for email, display_name, org_role in user_defs:
-                u = User(
-                    organisation_id=org.id, email=email, display_name=display_name,
-                    password_hash=pw_hash, org_role=org_role, auth_provider="local",
-                )
-                session.add(u)
-                await session.flush()
-                users.append(u)
+                existing = (await session.execute(
+                    select(User).where(User.organisation_id == org.id, User.email == email)
+                )).scalar_one_or_none()
+                if existing is not None:
+                    users.append(existing)
+                else:
+                    u = User(
+                        organisation_id=org.id, email=email, display_name=display_name,
+                        password_hash=pw_hash, org_role=org_role, auth_provider="local",
+                    )
+                    session.add(u)
+                    await session.flush()
+                    users.append(u)
+            # Ensure admin user (first in list) is marked as admin role
             admin = users[0]
-            print(f"[seed] 12 users (admin={admin.email})")
+            if admin.org_role != "admin":
+                admin.org_role = "admin"
+            print(f"[seed] {len(users)} users (admin={admin.email})")
 
             # ── Teams (3) + memberships ───────────────────────────────────
-            team_defs = [
+            team_defs_data = [
                 ("Engineering", "Core platform engineering team", [admin, users[2], users[4], users[6], users[9]]),
                 ("Product", "Product management and design", [users[1], users[3], users[5], users[8]]),
                 ("Operations", "DevOps and infrastructure", [users[7], users[10], users[11]]),
             ]
             teams = []
-            for name, desc, members in team_defs:
-                t = Team(organisation_id=org.id, name=name, description=desc, created_by=admin.id)
-                session.add(t)
-                await session.flush()
+            for name, desc, members in team_defs_data:
+                t = (await session.execute(
+                    select(Team).where(Team.organisation_id == org.id, Team.name == name)
+                )).scalar_one_or_none()
+                if t is None:
+                    t = Team(organisation_id=org.id, name=name, description=desc, created_by=admin.id)
+                    session.add(t)
+                    await session.flush()
                 for m in members:
-                    session.add(TeamMembership(organisation_id=org.id, team_id=t.id, user_id=m.id))
+                    existing_m = (await session.execute(
+                        select(TeamMembership).where(TeamMembership.team_id == t.id, TeamMembership.user_id == m.id)
+                    )).first()
+                    if not existing_m:
+                        session.add(TeamMembership(organisation_id=org.id, team_id=t.id, user_id=m.id))
                 await session.flush()
                 teams.append(t)
             print(f"[seed] 3 teams with memberships")
 
             # ── Schemas (6) + SchemaVersions ──────────────────────────────
-            schema_defs = [
+            schema_defs_data = [
                 ("PR Input", "pr-input", "Input data for a PR review", {"type": "object", "properties": {"title": {"type": "string"}, "description": {"type": "string"}, "files": {"type": "array", "items": {"type": "string"}}}}),
                 ("Code Review Output", "code-review-output", "Output of a code review", {"type": "object", "properties": {"comments": {"type": "array"}, "score": {"type": "integer"}, "approved": {"type": "boolean"}}}),
                 ("Release Manifest", "release-manifest", "Release metadata", {"type": "object", "properties": {"version": {"type": "string"}, "changelog": {"type": "string"}, "tag": {"type": "string"}}}),
@@ -142,12 +164,16 @@ async def seed() -> None:
                 ("Deployment Config", "deployment-config", "Deployment configuration", {"type": "object", "properties": {"env": {"type": "string"}, "region": {"type": "string"}, "replicas": {"type": "integer"}}}),
             ]
             schemas = []
-            for name, slug_name, desc, schema_json in schema_defs:
-                s = Schema(organisation_id=org.id, name=name, description=desc, created_by=admin.id)
-                session.add(s)
-                await session.flush()
-                sv = SchemaVersion(organisation_id=org.id, schema_id=s.id, version="1.0", version_number=1, definition_json=schema_json, created_by=admin.id)
-                session.add(sv)
+            for sname, slug_name, desc, schema_json in schema_defs_data:
+                s = (await session.execute(
+                    select(Schema).where(Schema.organisation_id == org.id, Schema.slug == slug_name)
+                )).scalar_one_or_none()
+                if s is None:
+                    s = Schema(organisation_id=org.id, name=sname, slug=slug_name, description=desc, created_by=admin.id)
+                    session.add(s)
+                    await session.flush()
+                    sv = SchemaVersion(organisation_id=org.id, schema_id=s.id, version="1.0", version_number=1, definition_json=schema_json, created_by=admin.id)
+                    session.add(sv)
                 await session.flush()
                 schemas.append((s, sv))
             print(f"[seed] 6 schemas + versions")
