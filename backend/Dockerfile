@@ -4,11 +4,9 @@ WORKDIR /app
 
 RUN pip install uv
 
-COPY pyproject.toml alembic.ini ./
+COPY pyproject.toml alembic.ini entrypoint.sh ./
 COPY src/ src/
-# Install the sync PostgreSQL driver for Alembic migrations.
-# env.py runs migrations synchronously (psycopg2) to avoid event-loop
-# conflicts with the main app's running async event loop.
-RUN uv pip install --system -e . psycopg2-binary
+RUN uv pip install --system -e .
+RUN chmod +x entrypoint.sh
 
-CMD ["uvicorn", "modulo.api.main:app", "--host", "0.0.0.0", "--port", "8000"]
+CMD ["./entrypoint.sh"]

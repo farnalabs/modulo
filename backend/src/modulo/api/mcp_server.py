@@ -22,11 +22,6 @@ from contextlib import asynccontextmanager
 from typing import Any
 
 from jose import JWTError
-
-# Alpha limitation: _PLACEHOLDER_ORG_ID is hardcoded for single-org mode.
-# In v1, the API key record will carry org context and the McpAuthMiddleware
-# will resolve org_id dynamically from the key's organisation_id column.
-# See https://linear.app/modulo/issue/MOD-XXX for the multi-tenant epic.
 from mcp.server.fastmcp import FastMCP
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from starlette.applications import Starlette
@@ -65,7 +60,7 @@ from modulo.db.crud.pipeline import get_pipeline, list_pipelines
 from modulo.db.crud.run import get_run
 from modulo.db.models.hitl_claim import HitlClaim
 from modulo.db.models.pipeline_edge import PipelineEdge
-from modulo.db.rls import set_rls_org
+from modulo.db.rls import set_rls_org, set_rls_user_context
 from modulo.settings import get_settings
 
 _log = logging.getLogger(__name__)
@@ -75,9 +70,10 @@ _ctx_org_id: contextvars.ContextVar[uuid.UUID] = contextvars.ContextVar("mcp_org
 _ctx_role: contextvars.ContextVar[str] = contextvars.ContextVar("mcp_role")
 _ctx_key_id: contextvars.ContextVar[uuid.UUID] = contextvars.ContextVar("mcp_key_id")
 _ctx_auth_token: contextvars.ContextVar[str] = contextvars.ContextVar("mcp_auth_token")
+_ctx_user_id: contextvars.ContextVar[uuid.UUID] = contextvars.ContextVar("mcp_user_id")
 _ctx_auth_type: contextvars.ContextVar[str] = contextvars.ContextVar("mcp_auth_type")
 
-# Placeholder org for alpha (single-org). Replaced by multi-tenant auth in v1.
+# Fallback sentinel — replaced by the real org_id from the API key record or OAuth claims.
 _PLACEHOLDER_ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
 
 
@@ -93,6 +89,12 @@ async def _session(org_id: uuid.UUID) -> AsyncGenerator[AsyncSession, None]:
     async with factory() as s:
         async with s.begin():
             await set_rls_org(s, org_id)
+            try:
+                uid = _ctx_user_id.get()
+                role = _ctx_role.get()
+                await set_rls_user_context(s, uid, role)
+            except (LookupError, ValueError):
+                pass
             yield s
 
 
@@ -177,13 +179,14 @@ class McpAuthMiddleware(BaseHTTPMiddleware):
 
         # Try API key first (backwards compatible).
         if token.startswith("mk_"):
-            org_id = _PLACEHOLDER_ORG_ID
             try:
-                async with _session(org_id) as s:
-                    key = await validate_api_key(s, token, org_id)
+                async with _session(_PLACEHOLDER_ORG_ID) as s:
+                    key = await validate_api_key(s, token, org_id=None)
+                org_id = key.organisation_id
                 _ctx_org_id.set(org_id)
                 _ctx_role.set(key.role)
                 _ctx_key_id.set(key.id)
+                _ctx_user_id.set(key.created_by)
                 _ctx_auth_token.set(token)
                 _ctx_auth_type.set("api_key")
                 request.scope["auth_principal"] = {
@@ -246,6 +249,7 @@ class McpAuthMiddleware(BaseHTTPMiddleware):
         _ctx_org_id.set(claims.organisation_id)
         _ctx_role.set(role)
         _ctx_key_id.set(uuid.UUID(int=0))  # sentinel for OAuth clients
+        _ctx_user_id.set(claims.client_id)
         _ctx_auth_token.set(token)
         _ctx_auth_type.set("oauth")
         request.scope["auth_principal"] = {
