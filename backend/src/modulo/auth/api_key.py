@@ -101,9 +101,14 @@ async def create_api_key(
 async def validate_api_key(
     session: AsyncSession,
     full_key: str,
-    org_id: uuid.UUID,
+    org_id: uuid.UUID | None = None,
 ) -> OrgApiKey:
-    """Validate a full API key.  Raises ApiKeyInvalidError on any failure."""
+    """Validate a full API key.  Raises ApiKeyInvalidError on any failure.
+
+    When *org_id* is ``None`` the lookup is scoped only by prefix (useful
+    when the caller needs to resolve the organisation from the key record
+    itself).
+    """
     if not full_key.startswith(_MK_PREFIX):
         raise ApiKeyInvalidError()
 
@@ -111,12 +116,14 @@ async def validate_api_key(
     prefix = inner[:_PREFIX_LEN]
 
     now = datetime.now(UTC)
+    filters = [
+        OrgApiKey.lookup_prefix == prefix,
+        OrgApiKey.revoked_at.is_(None),
+    ]
+    if org_id is not None:
+        filters.append(OrgApiKey.organisation_id == org_id)
     result = await session.execute(
-        select(OrgApiKey).where(
-            OrgApiKey.lookup_prefix == prefix,
-            OrgApiKey.organisation_id == org_id,
-            OrgApiKey.revoked_at.is_(None),
-        )
+        select(OrgApiKey).where(*filters)
     )
     key = result.scalar_one_or_none()
     if key is None:

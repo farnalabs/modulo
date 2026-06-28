@@ -115,6 +115,59 @@ async def dashboard_summary(
         )
         eval_passed = int(eval_passed_result.scalar_one())
 
+        per_team_eval_query = (
+            select(
+                Run.owner_team_id,
+                func.count().label("total"),
+                func.sum(case((EvalResult.passed == True, 1), else_=0)).label("passed"),  # noqa: E712
+            )
+            .select_from(EvalResult)
+            .join(Run, EvalResult.run_id == Run.id)
+            .where(
+                EvalResult.organisation_id == org_id,
+                Run.owner_team_id.is_not(None),
+            )
+            .group_by(Run.owner_team_id)
+        )
+        per_team_eval_rows = (await session.execute(per_team_eval_query)).all()
+        per_team_eval: dict[str, dict[str, Any]] = {}
+        for row in per_team_eval_rows:
+            total = int(row.total)
+            passed = int(row.passed)
+            per_team_eval[str(row.owner_team_id)] = {
+                "total_evals": total,
+                "passed_evals": passed,
+                "pass_rate": round(passed / total * 100, 1) if total > 0 else 0.0,
+            }
+
+        per_team_pipeline_query = (
+            select(
+                Run.owner_team_id,
+                Run.pipeline_id,
+                func.count().label("total"),
+                func.sum(case((EvalResult.passed == True, 1), else_=0)).label("passed"),  # noqa: E712
+            )
+            .select_from(EvalResult)
+            .join(Run, EvalResult.run_id == Run.id)
+            .where(
+                EvalResult.organisation_id == org_id,
+                Run.owner_team_id.is_not(None),
+            )
+            .group_by(Run.owner_team_id, Run.pipeline_id)
+        )
+        per_team_pipeline_rows = (await session.execute(per_team_pipeline_query)).all()
+        per_team_pipeline: dict[str, dict[str, dict[str, Any]]] = {}
+        for row in per_team_pipeline_rows:
+            team_id = str(row.owner_team_id)
+            pipeline_id = str(row.pipeline_id)
+            total = int(row.total)
+            passed = int(row.passed)
+            per_team_pipeline.setdefault(team_id, {})[pipeline_id] = {
+                "total_evals": total,
+                "passed_evals": passed,
+                "pass_rate": round(passed / total * 100, 1) if total > 0 else 0.0,
+            }
+
         eval_pass_rate: dict[str, Any] | None = None
         if eval_total > 0:
             per_pipeline_query = (
@@ -142,7 +195,12 @@ async def dashboard_summary(
                 "total_evals": eval_total,
                 "passed_evals": eval_passed,
                 "per_pipeline": per_pipeline,
+                "per_team_pipeline": per_team_pipeline,
             }
+
+        for team_entry in team_metrics:
+            if team_eval_data := per_team_eval.get(team_entry["id"]):
+                team_entry["eval_pass_rate"] = team_eval_data
 
         today = datetime.now(UTC).date()
         seven_days_ago = today - timedelta(days=6)

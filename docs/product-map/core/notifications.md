@@ -1,6 +1,6 @@
-﻿---
+---
 id: feat-core-notifications
-prd: §8.11
+prd: 8.11
 delivery-tasks: [task-nv1-team-notifications]
 bdd:
   - backend/tests/features/notifications/hitl_webhook.feature
@@ -13,17 +13,10 @@ code:
   - backend/src/modulo/db/models/notification_endpoint.py
   - backend/src/modulo/db/models/notification_delivery.py
   - backend/src/modulo/core/hitl_manager/expiry_job.py
-depends-on: [task-nv1-team-entity]
+depends-on: [feat-teams-team-crud]
 status: partial
 ---
-
-# Core Notifications
-
-Outbound webhook notifications for pipeline lifecycle events, with HMAC signing, retry, dead-letter tracking, and auto-disable.
-
-## Behaviours
-
-### Event dispatch
+# Core Notifications Outbound webhook notifications for pipeline lifecycle events, with HMAC signing, retry, dead-letter tracking, and auto-disable. ## Behaviours ### Event dispatch
 - [ ] `hitl_awaiting` event dispatches when a run reaches a HITL gate
 - [ ] `run_failed` event dispatches when a pipeline node raises an unhandled exception
 - [ ] `claim_expired` event dispatches when a HITL claim expires (via ClaimExpiryJob)
@@ -33,18 +26,14 @@ Outbound webhook notifications for pipeline lifecycle events, with HMAC signing,
 - [ ] Webhook POST body includes event type, ISO timestamp, and event-specific payload
 - [ ] Payload includes `run_id` and `gate_id` for HITL-related events
 - [ ] Payload includes `pipeline_name` and `node_name` for gate events
-- [ ] Payload includes `error_code` and `error_message` for failure events
-
-### HMAC signing
+- [ ] Payload includes `error_code` and `error_message` for failure events ### HMAC signing
 - [ ] Outbound webhook includes `X-Modulo-Signature: sha256=<hmac>` header
 - [ ] Signature is HMAC-SHA256 over the JSON payload body
 - [ ] Signature uses per-endpoint secret, not a global secret
 - [ ] Endpoint with no secret configured returns empty signature (no header)
 - [ ] Endpoint with corrupted secret ciphertext returns empty signature (logged, not crashed)
 - [ ] Secrets stored as Fernet ciphertext in database (never plaintext)
-- [ ] Secrets never exposed in API responses (only `has_secret: bool`)
-
-### Retry and dead-letter
+- [ ] Secrets never exposed in API responses (only `has_secret: bool`) ### Retry and dead-letter
 - [ ] 4xx (non-429) or network error triggers retry with exponential backoff
 - [ ] 5xx response triggers retry with same backoff as 4xx
 - [ ] 429 response uses `Retry-After` header (capped at 60s)
@@ -56,17 +45,13 @@ Outbound webhook notifications for pipeline lifecycle events, with HMAC signing,
 - [ ] Endpoint auto-disabled when consecutive_dead_letter_count >= MAX_DEAD_LETTERS (10)
 - [ ] Auto-disabled endpoint stores `disabled_at` timestamp
 - [ ] Auto-disabled endpoints are skipped in dispatch queries
-- [ ] PRD says 5 consecutive failures within 24h triggers disable; code uses 10 consecutive with no time window
-
-### Delivery log
+- [ ] PRD says 5 consecutive failures within 24h triggers disable; code uses 10 consecutive with no time window ### Delivery log
 - [ ] Every dispatch attempt recorded in `notification_delivery_log`
 - [ ] Delivery log stores event_type, endpoint_id, run_id, status, attempt_count, response_code, last_error
 - [ ] Failed deliveries for `hitl_awaiting` trigger in-app alert to org admins
 - [ ] Payload ciphertext stored in delivery log when `retain_payload=True`
 - [ ] Cursor-based pagination on delivery log endpoints
-- [ ] Filtering by status, endpoint_id, date range on delivery log
-
-### Admin API (CRUD)
+- [ ] Filtering by status, endpoint_id, date range on delivery log ### Admin API (CRUD)
 - [ ] Admin can create webhook endpoint with URL, optional secret, event subscription list, and description
 - [ ] Creating endpoint with non-http/https URL returns 422
 - [ ] Creating endpoint with unknown event type returns 422
@@ -79,48 +64,36 @@ Outbound webhook notifications for pipeline lifecycle events, with HMAC signing,
 - [ ] Admin can manually retry a failed delivery
 - [ ] Non-admin role gets 403 on all notification endpoints
 - [ ] RLS enforces org-scoped isolation on all queries
-- [ ] Endpoint not found returns 404 across all operations
-
-### Team-scoped dispatch
+- [ ] Endpoint not found returns 404 across all operations ### Team-scoped dispatch
 - [ ] When `team_id` is provided, dispatch routes to team-specific endpoints
 - [ ] When team has no endpoints, falls back to org-wide endpoints
 - [ ] When `team_id` is None, only org-wide endpoints are returned
 - [ ] Org-wide dispatch excludes endpoints with a team_id
-- [ ] Team notification endpoint config is v1 (PRD) but code already supports team_id
-
-### Claim expiry background job
+- [ ] Team notification endpoint config is v1 (PRD) but code already supports team_id ### Claim expiry background job
 - [ ] Expiry job polls every 60s for expired HITL claims
 - [ ] Expired claims reset: claimed_by=null, claim_token=null, expires_at=null, claimed_at=null
 - [ ] Affected runs transition from "claimed" to "awaiting_human"
 - [ ] `claim_expired` notification dispatched per expired claim
 - [ ] Job runs per-org with RLS scoping to avoid cross-org leakage
 - [ ] Job errors logged and caught (one org failure does not crash the loop)
-- [ ] Job cancels cleanly on application shutdown
-
-### Security
+- [ ] Job cancels cleanly on application shutdown ### Security
 - [ ] All admin notification routes require admin role
 - [ ] RLS applied per-transaction with `set_rls_org`
 - [ ] URL validated to be absolute http/https
 - [ ] Secrets encrypted at rest with Fernet
-- [ ] Payloads optionally encrypted in delivery log
-
-### Concurrency
+- [ ] Payloads optionally encrypted in delivery log ### Concurrency
 - [ ] Dispatch to each endpoint is sequential (no concurrent deliveries to same endpoint in one call)
 - [ ] Multiple endpoints in one dispatch_event are processed sequentially
 - [ ] Claim expiry job runs as asyncio task (not Celery) in alpha
-- [ ] Multi-worker advisory lock for expiry job specified in PRD but not yet implemented
-
-### Backward compatibility
+- [ ] Multi-worker advisory lock for expiry job specified in PRD but not yet implemented ### Backward compatibility
 - [ ] Empty events list on endpoint treated as no subscription (valid, no-op)
 - [ ] Malformed events JSON is skipped (not crashed)
 - [ ] Null secret_ciphertext produces empty signature
 - [ ] Null team_id produces org-wide dispatch behaviour
-- [ ] MAX_RETRIES, MAX_DEAD_LETTERS, RETRY_DELAYS are module-level constants (configurable)
-
-## Known Gaps
-- `budget_exceeded` and `circuit_breaker_tripped` event types from PRD §8.11 not yet dispatched
+- [ ] MAX_RETRIES, MAX_DEAD_LETTERS, RETRY_DELAYS are module-level constants (configurable) ## Known Gaps
+- `budget_exceeded` and `circuit_breaker_tripped` event types from PRD 8.11 not yet dispatched
 - Slack native integration listed in PRD as v1 — not implemented
 - PRD specifies 5 consecutive failures within 24h for auto-disable; code uses 10 consecutive with no time window
 - `X-Modulo-Timestamp` header referenced in signing.feature but not included in code
 - Celery-based dispatcher isolation (PRD v1) — dispatcher still runs in FastAPI process
-- Multi-worker advisory lock for expiry job not yet implemented
+- Multi-worker advisory lock for expiry job not yet implemented 

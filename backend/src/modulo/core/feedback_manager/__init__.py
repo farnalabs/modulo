@@ -193,7 +193,11 @@ class FeedbackManager:
             eval_engine = EvalEngine()
         if not eval_suite:
             return False
-        return False
+        for eval_def in eval_suite:
+            result = eval_engine.evaluate(record.rejected_output, eval_def)
+            if not result.passed:
+                return False
+        return True
 
     @_rls
     async def spawn_correction_run(

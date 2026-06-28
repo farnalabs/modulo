@@ -79,6 +79,10 @@ class Settings(BaseSettings):
     # Set to "false" to disable plugin discovery at startup.
     modulo_plugin_discovery: bool = Field(True)
 
+    # Max concurrent in-process agents when no E2B (or other external) provider
+    # is configured. Each agent consumes one host subprocess slot. Default 2.
+    modulo_max_local_concurrency: int = Field(2)
+
     # Secrets backend — determines how connector/backend credentials are stored.
     # Options: "fernet" (default), "vault", "aws". Env var: MODULO_SECRETS_BACKEND.
     modulo_secrets_backend: str = Field("fernet")
@@ -128,6 +132,13 @@ class Settings(BaseSettings):
         if v.lower() not in ("postgres", "sqlite", "mariadb", "mysql"):
             raise ValueError(f"MODULO_DB must be 'postgres', 'sqlite', 'mariadb', or 'mysql'; got '{v}'")
         return v.lower()
+
+    @field_validator("modulo_max_local_concurrency")
+    @classmethod
+    def _validate_local_concurrency(cls, v: int) -> int:
+        if v < 1:
+            raise ValueError("MODULO_MAX_LOCAL_CONCURRENCY must be at least 1")
+        return v
 
     @model_validator(mode="after")
     def _warn_if_no_auth(self) -> "Settings":

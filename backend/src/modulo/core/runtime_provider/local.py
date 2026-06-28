@@ -1,0 +1,156 @@
+"""LocalRuntimeProvider — in-process agent execution with a concurrency cap.
+
+This provider runs commands as subprocesses on the host machine. It is **not
+sandboxed** — agents have full access to the filesystem, network, and
+environment of the host process. Suitable for:
+  - Solo dev / demo deployments (Fly.io, Railway, single VPS)
+  - Proving out pipelines before investing in scaled infra
+  - Local development where Docker isn't available
+
+Concurrency is capped by a module-level ``asyncio.Semaphore`` (default 2)
+configurable via ``MODULO_MAX_LOCAL_CONCURRENCY``.
+
+**When you outgrow it:** add an E2B API key (or any other RuntimeProvider)
+and your pipelines continue to work unchanged — the RuntimeProvider ABC
+hides the backend.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import logging
+import os
+import shutil
+import tempfile
+import time
+import uuid
+from typing import Any
+
+from modulo.core.runtime_provider import ExecResult, RuntimeProvider, WorkspaceSpec
+
+_log = logging.getLogger(__name__)
+
+
+class LocalRuntimeProvider(RuntimeProvider):
+    """Run agent commands as subprocesses on the host, with a concurrency cap.
+
+    Workspaces are temp directories on the host filesystem. The concurrency
+    semaphore limits how many ``exec_command`` calls may run simultaneously
+    across all workspaces — agents waiting on the semaphore are queued.
+    """
+
+    def __init__(self, max_concurrency: int = 2) -> None:
+        self._max_concurrency = max_concurrency
+        self._semaphore = asyncio.Semaphore(max_concurrency)
+        self._workspaces: dict[str, str] = {}
+
+    def supports(self, profile: Any) -> bool:
+        """Return True for profiles with ``provider_hint=local`` or no E2B hint."""
+        hint = getattr(profile, "provider_hint", None) or ""
+        if hint.lower() == "local":
+            return True
+        if hint.lower() == "e2b":
+            return False
+        image_ref = getattr(profile, "image_ref", None) or ""
+        if "e2b" in image_ref.lower():
+            return False
+        return True
+
+    async def create_workspace(self, spec: WorkspaceSpec) -> str:
+        """Create a temp directory on the host as the workspace root.
+
+        If ``spec.labels`` contains ``repo_url``, clone the repo into the
+        workspace directory.
+        """
+        workspace_dir = tempfile.mkdtemp(prefix=f"modulo-workspace-{spec.environment_profile_id}-")
+        ref = str(uuid.uuid4())
+        self._workspaces[ref] = workspace_dir
+
+        repo_url = spec.labels.get("repo_url", "")
+        if repo_url:
+            await self._run_command(
+                ["git", "clone", repo_url, "."],
+                cwd=workspace_dir,
+                timeout=spec.timeout_seconds,
+            )
+
+        return ref
+
+    async def exec_command(
+        self,
+        provider_ref: str,
+        command: list[str],
+        *,
+        timeout: int | None = None,  # noqa: ASYNC109 — part of ABC interface
+    ) -> ExecResult:
+        cwd = self._workspaces.get(provider_ref)
+        if cwd is None:
+            raise ValueError(f"Unknown workspace: {provider_ref}")
+        return await self._run_command(command, cwd=cwd, timeout=timeout)
+
+    async def destroy_workspace(self, provider_ref: str) -> None:
+        """Remove the workspace temp directory."""
+        workspace_dir = self._workspaces.pop(provider_ref, None)
+        if workspace_dir is None:
+            return
+        try:
+            await asyncio.to_thread(shutil.rmtree, workspace_dir, ignore_errors=True)
+        except Exception:
+            _log.exception("Failed to remove workspace %s", provider_ref)
+
+    async def get_workspace_status(self, provider_ref: str) -> str:
+        if provider_ref in self._workspaces:
+            return "running"
+        return "terminated"
+
+    async def _run_command(
+        self,
+        command: list[str],
+        cwd: str,
+        timeout: int | None = None,  # noqa: ASYNC109 — ABC-compatible signature
+    ) -> ExecResult:
+        """Run a command, respecting the concurrency semaphore."""
+        start = time.monotonic()
+        async with self._semaphore:
+            proc = await asyncio.create_subprocess_exec(
+                *command,
+                cwd=cwd,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            try:
+                stdout, stderr = await asyncio.wait_for(
+                    proc.communicate(),
+                    timeout=timeout or 300,
+                )
+            except TimeoutError:
+                proc.kill()
+                await proc.wait()
+                duration = int((time.monotonic() - start) * 1000)
+                return ExecResult(
+                    exit_code=-1,
+                    stdout="",
+                    stderr="Command timed out",
+                    duration_ms=duration,
+                )
+
+        duration = int((time.monotonic() - start) * 1000)
+        return ExecResult(
+            exit_code=proc.returncode or 0,
+            stdout=stdout.decode("utf-8", errors="replace"),
+            stderr=stderr.decode("utf-8", errors="replace"),
+            duration_ms=duration,
+        )
+
+
+def create_local_provider_from_env() -> LocalRuntimeProvider:
+    """Build a LocalRuntimeProvider configured from environment variables.
+
+    Reads ``MODULO_MAX_LOCAL_CONCURRENCY`` (default 2) as the concurrency cap.
+    """
+    raw = os.environ.get("MODULO_MAX_LOCAL_CONCURRENCY", "2")
+    try:
+        max_concurrency = max(1, int(raw))
+    except (ValueError, TypeError):
+        max_concurrency = 2
+    return LocalRuntimeProvider(max_concurrency=max_concurrency)

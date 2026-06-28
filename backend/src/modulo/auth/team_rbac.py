@@ -9,7 +9,6 @@ TEAM_ROLE_HIERARCHY: dict[str, int] = {
     "viewer": 0,
     "runner": 1,
     "operator": 2,
-    "admin": 3,
 }
 
 ORG_ROLE_HIERARCHY: dict[str, int] = {
@@ -25,10 +24,10 @@ VALID_ORG_ROLES = frozenset(ORG_ROLE_HIERARCHY)
 # Pre-computed effective role for every (org_role, team_role) pair.
 # effective = min(org_role_level, team_role_level)
 EFFECTIVE_ACCESS_MODEL: dict[str, dict[str, str]] = {
-    "viewer": {"viewer": "viewer", "runner": "viewer", "operator": "viewer", "admin": "viewer"},
-    "runner": {"viewer": "viewer", "runner": "runner", "operator": "runner", "admin": "runner"},
-    "operator": {"viewer": "viewer", "runner": "runner", "operator": "operator", "admin": "operator"},
-    "admin": {"viewer": "viewer", "runner": "runner", "operator": "operator", "admin": "admin"},
+    "viewer": {"viewer": "viewer", "runner": "viewer", "operator": "viewer"},
+    "runner": {"viewer": "viewer", "runner": "runner", "operator": "runner"},
+    "operator": {"viewer": "viewer", "runner": "runner", "operator": "operator"},
+    "admin": {"viewer": "viewer", "runner": "runner", "operator": "operator"},
 }
 
 

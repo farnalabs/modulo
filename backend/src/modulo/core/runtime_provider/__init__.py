@@ -9,7 +9,10 @@ from __future__ import annotations
 import uuid
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
-from typing import Any, Protocol
+from typing import TYPE_CHECKING, Any, Protocol
+
+if TYPE_CHECKING:
+    from modulo.core.runtime_provider.hub import RuntimeProviderHub
 
 
 @dataclass
@@ -72,3 +75,29 @@ class RuntimeProviderFactory(Protocol):
     """Callable that produces a RuntimeProvider given a profile."""
 
     def __call__(self, profile: Any) -> RuntimeProvider: ...
+
+
+def create_default_hub(max_local_concurrency: int = 2) -> RuntimeProviderHub:
+    """Build a RuntimeProviderHub with the local provider always registered.
+
+    If ``MODULO_E2B_API_KEY`` is set, the E2B provider is also registered.
+    The local provider is registered first, so it becomes the fallback when
+    no profile hint or ``supports()`` match is found.
+    """
+    from modulo.core.runtime_provider.hub import RuntimeProviderHub
+    from modulo.core.runtime_provider.local import LocalRuntimeProvider
+
+    hub = RuntimeProviderHub()
+
+    local = LocalRuntimeProvider(max_concurrency=max_local_concurrency)
+    hub.register("local", local)
+
+    import os
+
+    if os.environ.get("MODULO_E2B_API_KEY"):
+        from modulo.core.runtime_provider.e2b import E2BRuntimeProvider
+
+        e2b = E2BRuntimeProvider()
+        hub.register("e2b", e2b)
+
+    return hub

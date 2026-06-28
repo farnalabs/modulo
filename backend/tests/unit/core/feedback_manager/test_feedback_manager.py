@@ -5,6 +5,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from modulo.core.eval_engine import EvalDefinition, EvalType
 from modulo.core.feedback_manager import FeedbackManager
 from modulo.db.models.feedback_record import FeedbackRecord
 
@@ -309,6 +310,77 @@ class TestDetectEvalGap:
 
         is_gap = await mgr.detect_eval_gap(sample_record, eval_suite=[])
         assert is_gap is False
+
+    async def test_returns_true_when_all_evals_pass(
+        self, mock_session: AsyncMock, mgr: FeedbackManager, sample_record: FeedbackRecord
+    ) -> None:
+        mock_session.execute = AsyncMock()
+        mock_engine = MagicMock()
+        mock_engine.evaluate.return_value.passed = True
+
+        eval_def = EvalDefinition(
+            id=uuid.uuid4(),
+            org_id=_ORG_ID,
+            name="check-result",
+            eval_type=EvalType.REGEX,
+            config={"pattern": "good", "field": "result"},
+        )
+        is_gap = await mgr.detect_eval_gap(sample_record, eval_engine=mock_engine, eval_suite=[eval_def])
+
+        assert is_gap is True
+        mock_engine.evaluate.assert_called_once_with(sample_record.rejected_output, eval_def)
+
+    async def test_returns_false_when_any_eval_fails(
+        self, mock_session: AsyncMock, mgr: FeedbackManager, sample_record: FeedbackRecord
+    ) -> None:
+        mock_session.execute = AsyncMock()
+        mock_engine = MagicMock()
+        mock_engine.evaluate.return_value.passed = False
+
+        eval_def = EvalDefinition(
+            id=uuid.uuid4(),
+            org_id=_ORG_ID,
+            name="check-result",
+            eval_type=EvalType.REGEX,
+            config={"pattern": "bad", "field": "result"},
+        )
+        is_gap = await mgr.detect_eval_gap(sample_record, eval_engine=mock_engine, eval_suite=[eval_def])
+
+        assert is_gap is False
+        mock_engine.evaluate.assert_called_once_with(sample_record.rejected_output, eval_def)
+
+    async def test_short_circuits_on_first_failure(
+        self, mock_session: AsyncMock, mgr: FeedbackManager, sample_record: FeedbackRecord
+    ) -> None:
+        mock_session.execute = AsyncMock()
+        mock_engine = MagicMock()
+        # First eval fails, second should not be called
+        evaluations = [
+            MagicMock(passed=False),
+            MagicMock(passed=True),
+        ]
+        mock_engine.evaluate.side_effect = evaluations
+
+        eval_defs = [
+            EvalDefinition(
+                id=uuid.uuid4(),
+                org_id=_ORG_ID,
+                name="first",
+                eval_type=EvalType.REGEX,
+                config={"pattern": "bad", "field": "result"},
+            ),
+            EvalDefinition(
+                id=uuid.uuid4(),
+                org_id=_ORG_ID,
+                name="second",
+                eval_type=EvalType.REGEX,
+                config={"pattern": "good", "field": "result"},
+            ),
+        ]
+        is_gap = await mgr.detect_eval_gap(sample_record, eval_engine=mock_engine, eval_suite=eval_defs)
+
+        assert is_gap is False
+        assert mock_engine.evaluate.call_count == 1
 
 class TestSpawnCorrectionRun:
     @pytest.fixture

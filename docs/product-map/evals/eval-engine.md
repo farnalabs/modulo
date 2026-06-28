@@ -1,6 +1,6 @@
-﻿---
+---
 id: feat-evals-eval-engine
-prd: §8.17
+prd: 8.17
 delivery-tasks: [task-nv2-eval-custom-function, task-nv2-eval-engine, task-nv2-eval-llm-judge, task-nv2-eval-regex-schema]
 bdd:
   - tests/features/evals/eval_regex.feature
@@ -18,16 +18,7 @@ code:
 depends-on: [feat-evals-definition]
 status: partial
 ---
-
-# Eval Engine
-
-Core eval engine that evaluates node outputs against eval definitions. Supports four eval types, suite-level aggregation with pass_threshold, and two failure behaviours (warn/block). Includes regression detection and OKR-aligned progress tracking.
-
-## Behaviours
-
-### Happy paths
-
-- [x] Regex eval matches output field — passed=true, score=1.0
+# Eval Engine Core eval engine that evaluates node outputs against eval definitions. Supports four eval types, suite-level aggregation with pass_threshold, and two failure behaviours (warn/block). Includes regression detection and OKR-aligned progress tracking. ## Behaviours ### Happy paths - [x] Regex eval matches output field — passed=true, score=1.0
 - [x] Regex eval on nested field via config.field
 - [x] Regex eval field is coerced to string (non-string output like numeric)
 - [x] Regex pattern matches anywhere in the field value (not just anchored)
@@ -50,11 +41,7 @@ Core eval engine that evaluates node outputs against eval definitions. Supports 
 - [x] Regression detection: identifies pass-rate decline between baseline and recent windows
 - [x] Regression detection: skips evals with no baseline or no recent data
 - [x] OKR progress tracking: pass rates per time window (7d, 14d, 30d, overall)
-- [x] OKR breach detection: flags when current pass rate falls below threshold
-
-### Error states
-
-- [x] Regex eval missing "pattern" in config — passed=false, detail describes issue
+- [x] OKR breach detection: flags when current pass rate falls below threshold ### Error states - [x] Regex eval missing "pattern" in config — passed=false, detail describes issue
 - [x] Regex eval missing "field" in config — passed=false, detail describes issue
 - [x] LLM judge callable not provided — passed=false, score=0.0
 - [x] LLM judge callable raises exception — caught gracefully, passed=false
@@ -64,11 +51,7 @@ Core eval engine that evaluates node outputs against eval definitions. Supports 
 - [x] Suite not found in DB — track_okr_progress raises ValueError
 - [x] EvalBlockedError includes eval name and detail message
 - [x] EvalSuiteBlockedError raised for suite-level threshold failure
-- [x] Block failure written to AuditEvent with type eval_blocked
-
-### Edge cases
-
-- [x] Suite with mixed pass/fail — correct counts and blocking_failures list
+- [x] Block failure written to AuditEvent with type eval_blocked ### Edge cases - [x] Suite with mixed pass/fail — correct counts and blocking_failures list
 - [x] Suite with pass_threshold exactly at aggregate boundary (equal passes)
 - [x] Regex eval with missing config — returns failed (graceful degradation)
 - [x] Non-string output field coerced to string in regex eval
@@ -78,37 +61,21 @@ Core eval engine that evaluates node outputs against eval definitions. Supports 
 - [x] Regression: drop below threshold classified as stable (not alerted)
 - [x] OKR: target_date parsing failure returns None days_to_target
 - [x] OKR: fewer than 2 periods with data → trend is stable
-- [x] Empty results for regression API return zero alerts
-
-### Concurrency
-
-- [x] EvalEngine is stateless — safe for concurrent use
+- [x] Empty results for regression API return zero alerts ### Concurrency - [x] EvalEngine is stateless — safe for concurrent use
 - [x] Each evaluate() call generates fresh run_id via uuid4()
-- [x] Suite aggregation is pure function — no mutable shared state
-
-### Security
-
-- [x] LLM judge prompt treats agent output as untrusted (structural separators)
+- [x] Suite aggregation is pure function — no mutable shared state ### Security - [x] LLM judge prompt treats agent output as untrusted (structural separators)
 - [x] LLM judge uses independently configured model_backend_id
 - [x] Custom functions looked up from explicit registry dict — no arbitrary imports
 - [x] Create/update/delete eval definitions requires admin role (403 for runner)
 - [x] Unauthenticated requests return 401 on all eval API endpoints
-- [x] RLS scopes eval definitions and results by organisation_id
-
-### Backward compatibility
-
-- [x] standalone_evaluate provides non-persisted path for Feedback System (§8.20)
+- [x] RLS scopes eval definitions and results by organisation_id ### Backward compatibility - [x] standalone_evaluate provides non-persisted path for Feedback System (8.20)
 - [x] SuiteEvalResult exposes all expected fields as public attributes
 - [x] Regression alert shape matches API contract (eval_id, eval_name, pass rates, drop_pct, trend, affected_run_ids)
-- [x] CRUD endpoints accept optional fields without requiring them
-
-## Known Gaps
-
-- [ ] Eval definition CRUD UI (eval_dashboard.feature is placeholder)
+- [x] CRUD endpoints accept optional fields without requiring them ## Known Gaps - [ ] Eval definition CRUD UI (eval_dashboard.feature is placeholder)
 - [ ] Eval suite CRUD feature (eval_suite_crud.feature is placeholder)
 - [ ] Eval scorer dispatch (eval_scorer.feature is placeholder)
 - [ ] Feedback System integration (feedback_system.feature is placeholder)
 - [ ] No eval run lifecycle persistence — standalone_evaluate creates ephemeral EvalDefinition per call
 - [ ] No eval results API endpoint for querying historical results (only regression alerts endpoint exists)
 - [ ] No eval run trigger via API (eval_run.feature scenarios not fully wired to real endpoints)
-- [ ] LLM judge untrusted-output prompt enforcement is documented in PRD (§6.2) but not validated at the engine layer
+- [ ] LLM judge untrusted-output prompt enforcement is documented in PRD (6.2) but not validated at the engine layer 

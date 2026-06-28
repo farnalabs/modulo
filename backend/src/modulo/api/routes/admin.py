@@ -9,6 +9,7 @@ from sqlalchemy import case, func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.api.dependencies import get_db_session
+from modulo.auth.api_key import revoke_api_key
 from modulo.auth.dependencies import get_current_user
 from modulo.auth.jwt import AuthenticatedPrincipal
 from modulo.auth.passwords import hash_password, validate_password_strength
@@ -33,6 +34,7 @@ from modulo.db.crud.team_membership import list_memberships_for_user, remove_tea
 from modulo.db.crud.token_family import blacklist_family, list_families_for_user
 from modulo.db.crud.user import create_user, get_user_by_email, list_users_paginated
 from modulo.db.crud.user import update_user as crud_update_user
+from modulo.db.models.api_key import OrgApiKey
 from modulo.db.models.eval_definition import EvalDefinition
 from modulo.db.models.eval_result import EvalResult
 from modulo.db.models.pipeline import Pipeline
@@ -636,6 +638,18 @@ async def admin_deactivate_user(
         families = await list_families_for_user(session, user_id)
         for family in families:
             await blacklist_family(session, family.family_id)
+
+        api_keys = (
+            await session.execute(
+                select(OrgApiKey).where(
+                    OrgApiKey.created_by == user_id,
+                    OrgApiKey.organisation_id == current_user.organisation_id,
+                    OrgApiKey.revoked_at.is_(None),
+                )
+            )
+        ).scalars().all()
+        for key in api_keys:
+            await revoke_api_key(session, key.id, current_user.organisation_id)
 
         memberships = await list_memberships_for_user(session, user_id)
         for membership in memberships:

@@ -1,6 +1,6 @@
-﻿---
+---
 id: feat-core-api-versioning
-prd: §6 (appendix — no dedicated versioning section)
+prd: 6
 delivery-tasks: [task-nv12-api-versioning]
 bdd: []
 code:
@@ -8,17 +8,10 @@ code:
   - backend/src/modulo/api/routes/changelog.py
   - frontend/src/views/ApiChangelogView.vue
   - backend/docs/operations/api-versioning.md
-depends-on: []
+
 status: partial
 ---
-
-# API Versioning
-
-URL-path versioning (`/api/v1/`, `/api/v2/`, etc.). Policy document at `backend/docs/operations/api-versioning.md`. Changelog endpoint at `GET /api/v1/changelog`. Deprecation headers via `DeprecationHeaderMiddleware`.
-
-## Behaviours
-
-- [ ] Every route uses a shared API version prefix (`/api/v1/`) — currently hardcoded per-router as `prefix="/api/v1"`
+# API Versioning URL-path versioning (`/api/v1/`, `/api/v2/`, etc.). Policy document at `backend/docs/operations/api-versioning.md`. Changelog endpoint at `GET /api/v1/changelog`. Deprecation headers via `DeprecationHeaderMiddleware`. ## Behaviours - [ ] Every route uses a shared API version prefix (`/api/v1/`) — currently hardcoded per-router as `prefix="/api/v1"`
 - [ ] Version prefix is configurable (single point of change for `/api/v1/` → `/api/v2/`)
 - [ ] New API major version can be added alongside previous version (parallel version routing)
 - [ ] `DeprecationHeaderMiddleware` adds `Deprecation: true`, `Sunset`, and `Link` headers to deprecated endpoints
@@ -39,11 +32,7 @@ URL-path versioning (`/api/v1/`, `/api/v2/`, etc.). Policy document at `backend/
 - [ ] Major version deprecation is announced in the changelog and via admin UI notification
 - [ ] `/api/v1/changelog` endpoint has unit tests
 - [ ] `DeprecationHeaderMiddleware` has unit tests
-- [ ] BDD feature files exist for versioning/deprecation behaviour
-
-## Known Gaps
-
-- No dedicated PRD section for API versioning — policy lives in `backend/docs/operations/api-versioning.md` only
+- [ ] BDD feature files exist for versioning/deprecation behaviour ## Known Gaps - No dedicated PRD section for API versioning — policy lives in `backend/docs/operations/api-versioning.md` only
 - `DeprecationHeaderMiddleware.deprecate()` is never called — no real endpoint is registered as deprecated
 - No version routing mechanism exists — `/api/v1/` is hardcoded in every router's `APIRouter(prefix="/api/v1/...")`, making parallel version support impossible without significant refactoring
 - No migration guides exist at `docs/operations/migrations/`
@@ -51,4 +40,4 @@ URL-path versioning (`/api/v1/`, `/api/v2/`, etc.). Policy document at `backend/
 - No unit tests for `DeprecationHeaderMiddleware` or the changelog endpoint
 - No BDD feature files for API versioning behaviour
 - `410 Gone` grace period behaviour is documented policy but not implemented
-- The "at most two major versions supported" policy cannot currently be enforced without a version routing mechanism
+- The "at most two major versions supported" policy cannot currently be enforced without a version routing mechanism 

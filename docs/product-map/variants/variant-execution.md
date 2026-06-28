@@ -1,24 +1,13 @@
-﻿---
+---
 id: feat-variants-variant-execution
-prd: 
+prd: 8.19
 delivery-tasks: [task-nv3-variant-run]
 bdd:
-
+  - backend/tests/bdd/features/pipelines/run_variants.feature
 code:
-depends-on: [task-nv3-variant-group]
-status: gap
+  - backend/src/modulo/api/routes/variants.py
+  - backend/src/modulo/db/crud/variant_group.py
+depends-on: [feat-variants-variant-groups, feat-core-run-context]
+status: partial
 ---
-
-#  variant execution.Value.ToUpper() ariant  variant execution.Value.ToUpper() xecution
-
-Discovered from 1 completed delivery tasks.
-
-## Behaviours
-<!-- TODO: populate expected behaviours and edge cases -->
-
-- [ ] Happy path works
-- [ ] Error states handled
-
-## Known Gaps
-<!-- auto-generated entry â€” needs human review -->
-
+# Variant Execution Weighted random variant selection, run_context_overrides merging, quota enforcement, and run creation for A/B test variant groups. ## Behaviours ### Weighted selection - [ ] `pick_variant_weighted` selects a variant proportionally to each variant's `weight` key - [ ] Single-variant group short-circuits — returns the only variant directly (no random call) - [ ] Empty variants list returns None - [ ] All-zero weights fall back to `random.choice` (uniform) - [ ] Missing `weight` key defaults to 1.0 ### Run creation - [ ] `POST /api/v1/variant-groups/{group_id}/run` selects a variant, merges `run_context_overrides` into `input_payload`, and creates a run with the variant's `snapshot_id` - [ ] `snapshot_id` accepted as both `str` and `uuid.UUID` - [ ] `degraded_evals=true` injects `_degraded_evals: True` into the merged payload - [ ] `trigger_type` defaults to `"manual"` for variant-triggered runs - [ ] Run count incremented on the variant group after each successful run - [ ] Response includes `run_id`, `variant_name`, and `merged_payload` - [ ] RLS org context set on the endpoint via `set_rls_org` ### Quota enforcement - [ ] `check_pipeline_run_quota` returns True when `active < max_concurrent_runs` - [ ] 429 returned when pipeline concurrent run quota exceeded - [ ] 429 returned when no variant selected or quota exceeded in `run_variant_weighted` ### Coverage gap detection - [ ] `GET /api/v1/variant-groups/{group_id}/coverage-gaps` returns variants whose `eval_definition_ids` don't cover all eval definitions for the pipeline - [ ] Eval definitions loaded from `EvalDefinition` table filtered by pipeline_id - [ ] Empty eval definitions list for pipeline yields no gaps - [ ] All evals present in variant yields no gap - [ ] 404 if variant group not found ### Prompt diff comparison - [ ] `GET /api/v1/variant-groups/{group_id}/prompt-diffs` compares `prompt_pins_json` across variant snapshots - [ ] Returns agent-level diffs `{agent_id, base_hash, variant_hash}` when hashes differ - [ ] Handles `base_snapshot_ids` to explicitly mark base vs comparison variants - [ ] Missing snapshots are skipped (not a hard error) - [ ] 404 if variant group not found ## Known Gaps - BDD feature file is a placeholder — no real Gherkin scenarios exist - PRD 8.19 specifies batch firing N variants (all-or-nothing pre-flight) but current code fires one per call - PRD 8.19 specifies partial completion with HITL but no HITL-aware execution handling exists - PRD 8.19 specifies cancel/abandon variant endpoint — not implemented 
