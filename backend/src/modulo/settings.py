@@ -169,9 +169,15 @@ class Settings(BaseSettings):
         # Fly.io Postgres attaches with postgres:// (no asyncpg prefix)
         if url.startswith("postgres://"):
             url = "postgresql+asyncpg://" + url[len("postgres://"):]
+        # Strip sslmode query params (causes keyword-arg issues in
+        # SQLAlchemy's sync-engine code paths) and add ssl=0 instead.
+        url = url.replace("?sslmode=disable", "?ssl=0")
+        url = url.replace("&sslmode=disable", "")
+        url = url.replace("?sslmode=prefer", "")
+        url = url.replace("&sslmode=prefer", "")
         if url != self.database_url:
             self.database_url = url
-            _log.info("settings.database_url_scheme_fixed")
+            _log.info("settings.database_url_fixed")
         return self
 
     @model_validator(mode="after")

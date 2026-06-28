@@ -12,7 +12,7 @@ from modulo.connectors.base import HealthResult
 # Connector Health feature (active — 3 scenarios)
 # ---------------------------------------------------------------------------
 try:
-    scenarios("../../features/connectors/health_check.feature")
+    scenarios("../features/connectors/connector_health.feature")
 except (FileNotFoundError, OSError):
     pass
 
@@ -205,7 +205,39 @@ def _cleanup_patches(ctx):
 # connectors/schema_inference.feature — 5 scenarios
 # ============================================================================
 try:
-    scenarios("../../features/connectors/schema_inference.feature")
+    scenarios("../features/connectors/schema_inference.feature")
+except (FileNotFoundError, OSError):
+    pass
+
+# ============================================================================
+# connectors/github_connector.feature — 5 scenarios
+# ============================================================================
+try:
+    scenarios("../features/connectors/github_connector.feature")
+except (FileNotFoundError, OSError):
+    pass
+
+# ============================================================================
+# connectors/jira_connector.feature — 5 scenarios
+# ============================================================================
+try:
+    scenarios("../features/connectors/jira_connector.feature")
+except (FileNotFoundError, OSError):
+    pass
+
+# ============================================================================
+# connectors/linear_connector.feature — 5 scenarios
+# ============================================================================
+try:
+    scenarios("../features/connectors/linear_connector.feature")
+except (FileNotFoundError, OSError):
+    pass
+
+# ============================================================================
+# connectors/slack_connector.feature — 5 scenarios
+# ============================================================================
+try:
+    scenarios("../features/connectors/slack_connector.feature")
 except (FileNotFoundError, OSError):
     pass
 
@@ -455,9 +487,6 @@ def step_github_query_resource_limit(resource, limit, ctx):
     except Exception as exc:
         ctx["query_result"] = None
         ctx["query_error"] = str(exc)
-
-
-_connector_filters: dict[str, Any] = {}
 
 
 @when(

@@ -10,11 +10,11 @@ from pytest_bdd import given, parsers, scenarios, then, when
 # Active features
 # ---------------------------------------------------------------------------
 try:
-    scenarios("../../features/model_backends/backend_selection.feature")
+    scenarios("../../bdd/features/model_backends/backend_selection.feature")
 except (FileNotFoundError, OSError):
     pass
 try:
-    scenarios("../../features/model_backends/rate_limiting.feature")
+    scenarios("../../bdd/features/model_backends/rate_limiting.feature")
 except (FileNotFoundError, OSError):
     pass
 try:
