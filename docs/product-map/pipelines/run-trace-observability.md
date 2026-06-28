@@ -1,24 +1,141 @@
 ﻿---
 id: feat-pipelines-run-trace-observability
-prd: 
+prd: §6.6 (Observability — OpenTelemetry First), §14 V1 Core (Run trace / observability UI)
 delivery-tasks: [task-nv7-run-trace-observability]
 bdd:
-
+  - backend/tests/bdd/features/observability/otel_traces.feature
+  - backend/tests/bdd/features/observability/metrics.feature
+  - backend/tests/bdd/features/observability/run_logs.feature
 code:
+  - backend/src/modulo/otel_bridge/handler.py
+  - backend/src/modulo/otel_bridge/export.py
+  - backend/src/modulo/api/routes/runs.py
+  - backend/src/modulo/api/routes/observability.py
+  - backend/src/modulo/core/pipeline_engine/executor.py
+  - backend/src/modulo/db/models/run.py
+  - backend/src/modulo/db/crud/run.py
+  - frontend/src/views/RunDetailView.vue
+  - frontend/src/lib/api/schema.ts
+unit-tests:
+  - backend/tests/unit/otel_bridge/test_handler.py
+  - backend/tests/unit/otel_bridge/test_export.py
+  - backend/tests/unit/otel_bridge/test_telemetry_toggle.py
 depends-on: []
-status: gap
+status: partial
 ---
 
-#  run trace observability.Value.ToUpper() un  run trace observability.Value.ToUpper() race  run trace observability.Value.ToUpper() bservability
+# Run Trace Observability
 
-Discovered from 1 completed delivery tasks.
+LangGraph→OpenTelemetry bridge, run-level trace ID for external correlation, per-node token consumption and cost in the run detail view, OTel exporter configuration API.
 
 ## Behaviours
-<!-- TODO: populate expected behaviours and edge cases -->
 
-- [ ] Happy path works
-- [ ] Error states handled
+### OTel Bridge — LangGraph Lifecycle Mapping
+
+- [ ] Chain start/end/error mapped to `langgraph.chain.<name>` spans with correct parent propagation
+- [ ] LLM start/end/error mapped to `langgraph.llm.<name>` spans with parent
+- [ ] Chat model start/end/error mapped to `langgraph.llm.<name>` spans (mirrors LLM callbacks)
+- [ ] Tool start/end/error mapped to `langgraph.tool.<name>` spans with parent
+- [ ] Parent span propagation via run_id / parent_run_id works across async contexts
+- [ ] Unknown parent_run_id handled gracefully (no crash, no parent)
+- [ ] End without start does not raise
+- [ ] Span dict stays bounded (entries removed on end/error)
+- [ ] Thread-safe span tracking via threading.Lock
+
+### OTel Bridge — Token Usage
+
+- [ ] LLM end records prompt_tokens, completion_tokens, total_tokens on span attributes
+- [ ] Chat model end records token usage with message_count attribute
+- [ ] LLM end without token usage does not raise
+- [ ] Chat model end without token usage does not raise
+- [ ] Error callbacks record ERROR status and exception event
+
+### OTel Bridge — Naming
+
+- [ ] Span name derived from serialized "name" field
+- [ ] Falls back to last element of serialized "id" path
+- [ ] Handles None serialized gracefully ("unknown")
+- [ ] Tags from LangGraph callbacks set as langgraph.tags attribute
+
+### OTel Export Configuration
+
+- [ ] Telemetry disabled by default (no egress) — no-op TracerProvider
+- [ ] Stdout exporter (ConsoleSpanExporter) active when MODULO_TELEMETRY_ENABLED=true
+- [ ] OTLP exporter active when OTEL_EXPORTER_OTLP_ENDPOINT set
+- [ ] OTLP exporter failure does not crash startup (logged, continues without it)
+- [ ] Shutdown flushes all buffered spans
+- [ ] Sensitive data never written to span attributes
+- [ ] OTel settings CRUD API (GET/PUT /api/v1/settings/observability)
+- [ ] Fernet-encrypted LangSmith API key persistence
+- [ ] Export interval configuration persisted per-org
+- [ ] Env var override detection (OTEL_EXPORTER_OTLP_ENDPOINT env > DB config)
+- [ ] OTel test connection API (POST /api/v1/settings/observability/test)
+- [ ] OTel export preview API (GET /api/v1/settings/observability/preview)
+
+### Run Trace ID
+
+- [ ] trace_id generated deterministically from langgraph_thread_id (UUID v5)
+- [ ] trace_id included in RunResponse for external trace correlation
+- [ ] Frontend displays OTel trace ID with copy button
+- [ ] Per-node trace ID column in execution trace table
+
+### Per-Node Token Consumption
+
+- [ ] node_token_usage tracked per-node from LangGraph event stream (on_chat_model_end / on_llm_end)
+- [ ] node_token_usage persisted to runs.node_token_usage JSON column
+- [ ] node_token_usage included in RunResponse
+- [ ] Frontend per-node table shows input_tokens, output_tokens, total_tokens
+- [ ] Frontend shows total tokens across all nodes
+
+### Run Cost Display
+
+- [ ] total_cost_usd in RunResponse
+- [ ] Cost calculated from per-node token usage × model rates
+- [ ] Frontend shows total run cost (formatted to 6 decimal places)
+- [ ] Frontend shows per-node cost in execution trace table
+
+### Run Detail View — Execution Trace
+
+- [ ] Frontend execution trace table: node name, status, duration, tokens, cost, trace ID, IO
+- [ ] Per-node status badges (running, complete, failed, etc.)
+- [ ] Expandable per-node IO (input/output rendered as formatted JSON)
+- [ ] Run header: pipeline ID, run ID, status badge, timestamps
+- [ ] Timestamps displayed (created, started, completed)
+
+### Credential Safety
+
+- [ ] No credential fields appear in span attributes
+- [ ] Sensitive OTLP header keys masked in API responses (authorization, x-api-key, etc.)
+
+### BDD — OTel Traces
+
+- [ ] BDD: OTel span exporter captures trace during pipeline run
+- [ ] BDD: trace contains a span for each node execution
+- [ ] BDD: trace contains attributes for organisation_id and pipeline_id
+- [ ] BDD: no credential fields appear in span attributes
+
+### BDD — Metrics
+
+- [ ] BDD: GET /metrics returns pipeline_run_count_total
+- [ ] BDD: GET /metrics returns active_runs_gauge
+- [ ] BDD: GET /metrics returns token_usage_total
+
+### BDD — Run Logs
+
+- [ ] BDD: per-node log streaming during active run
+- [ ] BDD: log level filtering (INFO and above only)
+- [ ] BDD: log entries grouped by node ID
 
 ## Known Gaps
-<!-- auto-generated entry â€” needs human review -->
 
+- LangGraphOtelBridge is never wired into PipelineExecutor — bridge class and tests exist but it is never instantiated or passed as a LangGraph callback. Pipeline-level spans rely solely on the event bus mapping in `_map_lg_event`, which produces broker events, not OTel spans.
+- No organisation_id or pipeline_id set on OTel span attributes.
+- Frontend runTimestamps return all dashes — not wired to real data from the API.
+- Frontend per-node duration is always '—' (no duration tracking per node).
+- Frontend per-node traceId falls back to run trace_id for all nodes.
+- No Prometheus /metrics endpoint — metrics BDD features are stubs.
+- No log streaming endpoint — run_logs BDD features are stubs.
+- BDD feature files (otel_traces, metrics, run_logs) all placeholders; step definitions all pass-through.
+- No integration test verifying spans are emitted during real pipeline execution.
+- `node_token_usage` has no model cost mapping — node cost_usd is always null in frontend output.
+- Frontend IO view fetches from /io endpoint but RunIOResponse may not map correctly for all node output shapes.

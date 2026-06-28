@@ -15,71 +15,141 @@ status: partial
 # SCIM Provisioning (SCIM 2.0)
 
 Maps SCIM Users → internal User, SCIM Groups → internal Team + TeamMembership.
-Authenticated via `MODULO_SCIM_TOKEN`, gated by `MODULO_LICENSE_KEY`.
+Authenticated via `MODULO_SCIM_TOKEN` (shared Bearer token), gated by `MODULO_LICENSE_KEY`.
+SCIM-provisioned users get `org_role="runner"` and `auth_provider="scim"` by default.
+SCIM-provisioned groups map to Team entities; memberships map to TeamMembership.
 
 ## Behaviours
 
+### Service Provider Config
+- [ ] `GET /ServiceProviderConfig` → 200, valid SCIM config schema with patch supported, bulk not supported, filter supported (maxResults 100), sort not supported
+- [ ] `GET /ServiceProviderConfig` without valid license → 402
+- [ ] `GET /ServiceProviderConfig` without valid SCIM token → 401
+
+### Auth — SCIM Token
+- [ ] Request without Bearer token → 403 (HTTPBearer rejects)
+- [ ] `MODULO_SCIM_TOKEN` not set → 501 Not Implemented
+- [ ] Invalid Bearer token → 401 Unauthorized (HMAC compare)
+- [ ] Valid token, `MODULO_SCIM_DEFAULT_ORG_ID` is invalid UUID → 500 Internal Server Error
+- [ ] Valid token, no `MODULO_SCIM_DEFAULT_ORG_ID`, no organisations in DB → 500 Internal Server Error
+- [ ] Valid token, `MODULO_SCIM_DEFAULT_ORG_ID` set → principal resolves to that org
+- [ ] Valid token, no `MODULO_SCIM_DEFAULT_ORG_ID` → principal resolves to first org by creation date
+
+### License Gate
+- [ ] All endpoints without `MODULO_LICENSE_KEY` → 402 Payment Required
+- [ ] All endpoints with valid `MODULO_LICENSE_KEY` → request proceeds
+
 ### Users — Happy Path
-- [ ] Create user → 201, valid SCIM User schema returned
-- [ ] Get user by id → 200
-- [ ] List users → 200, SCIM ListResponse with pagination
-- [ ] PUT (full replace) → 200, all attributes updated
-- [ ] PATCH (partial update) → 200, only specified fields changed
-- [ ] Delete → 204, user deactivated (set active=false)
+- [ ] Create user → 201, valid SCIM User schema with id, meta, userName, name, emails, active
+- [ ] Create user with name (formatted, givenName, familyName) → parsed correctly
+- [ ] Create user with emails array → stored; primary flagged
+- [ ] Get user by id → 200, full SCIM User schema
+- [ ] Get user by nonexistent id → 404 with SCIM Error schema
+- [ ] List users → 200, SCIM ListResponse with totalResults, itemsPerPage, startIndex, Resources
+- [ ] List users with pagination (startIndex, count) → correct offset and limit
+- [ ] PUT (full replace) → 200, all attributes updated to request values
+- [ ] PUT nonexistent user → 404
+- [ ] PATCH `replace` active → 200, active state flipped
+- [ ] PATCH `replace` userName → 200, email updated
+- [ ] PATCH `replace` name → 200, display_name updated
+- [ ] PATCH `remove` active → 200, active set to false
+- [ ] PATCH nil (no matching ops) → 200, no changes
+- [ ] Delete user → 204, user hard-deleted from DB (currently hard delete, not soft deactivate)
 
 ### Users — Edge Cases
-- [ ] Duplicate `userName` → 409 Conflict
-- [ ] Create with `externalId` → stored for re-provisioning matching
-- [ ] PUT after PATCH → full replace semantics respected
-- [ ] PATCH multi-op, one fails → atomic rollback (currently partial-persist bug: line 333-358 mutates in-memory then flushes; mid-list failure leaves dirty state)
-- [ ] PATCH `add` on existing field → overwritten (per RFC 7644)
-- [ ] PATCH `remove` on nonexistent field → no-op, not error
-- [ ] Filter: `userName Eq "foo"` → case-insensitive match working
-- [ ] Filter: `active eq true` → boolean filter parses correctly
-- [ ] Filter: unsupported attribute → 400 with SCIM Error schema
-- [ ] Concurrent create of same userName → exactly one 201, rest 409
+- [ ] Duplicate `userName` → 409 Conflict with SCIM Error schema
+- [ ] Create with empty `userName` → 422 validation error (Pydantic)
+- [ ] `externalId` in create request → accepted in model but not persisted to User table (gap)
+- [ ] `externalId` in PUT request → accepted in model but not persisted (gap)
+- [ ] PUT after PATCH → full replace semantics respected (PATCH changes overwritten by PUT)
+- [ ] PATCH multi-op, one fails → transaction rolls back, no partial persist (SQLAlchemy session.flush on whole block within transaction)
+- [ ] PATCH `add` on existing userName field → overwritten per RFC 7644
+- [ ] PATCH `add` on existing active field → overwritten
+- [ ] PATCH `remove` on nonexistent path (not "active") → no-op, not error
+- [ ] PATCH `add` with value dict containing unknown keys → ignored silently
+- [ ] PATCH unsupported op string → ignored silently (no validation)
+- [ ] Filter: `userName Eq "foo"` → matched via ILIKE (LIKE-based, not proper SCIM filter parser)
+- [ ] Filter: any expression beyond simple LIKE → silently returns empty (filter parser not implemented)
+- [ ] Filter: `active eq true` → treated as substring match on raw filter string, not boolean filter (gap)
+- [ ] Filter: unsupported filter syntax → 400 with SCIM Error schema (currently not validated — raw string passes through)
+- [ ] Concurrent create of same userName → exactly one 201, rest 409 (unique constraint)
+- [ ] `startIndex` = 1 → first page
 - [ ] `startIndex` > total results → empty Resources, totalResults accurate
-- [ ] `count` > 100 → capped at 100 (currently enforces 1-100 in Query param)
-- [ ] `count` = 0 → not valid per SCIM spec; current code allows it via Query(ge=1) — verify 400
-- [ ] email attribute not in SCIM request → defaults from userName
+- [ ] `count` = 0 → 422 validation error (FastAPI Query ge=1 rejects)
+- [ ] `count` > 100 → 422 validation error (FastAPI Query le=100 rejects)
+- [ ] `count` = 1 → single result returned
+- [ ] `count` omitted → defaults to 20
+- [ ] `startIndex` omitted → defaults to 1
+- [ ] Request body has `active: false` on create → user created as inactive
+- [ ] No `name` in create request → display_name defaults to userName
+- [ ] No `emails` in create request → display_name derived from userName parts (no email stored)
+- [ ] SCIM-provisioned user has `org_role="runner"`, `auth_provider="scim"`, `password_hash=None`
 
 ### Groups — Happy Path
-- [ ] Create group → 201, SCIM Group schema returned
-- [ ] Create group with members → members included
-- [ ] Get group → 200, members listed
-- [ ] List groups → 200
-- [ ] PUT replaces name AND members → old members removed, new added
-- [ ] PATCH add member → member added
-- [ ] PATCH remove member → member removed
-- [ ] Delete group → 204
+- [ ] Create group → 201, valid SCIM Group schema with id, meta, displayName, members
+- [ ] Create group with members by valid user UUID → members returned in response
+- [ ] Get group by id → 200, members resolved with $ref links
+- [ ] Get group by nonexistent id → 404 with SCIM Error schema
+- [ ] List groups → 200, SCIM ListResponse with totalResults
+- [ ] List groups with pagination → correct offset and limit
+- [ ] PUT replaces displayName AND members → old members removed, new added within single transaction
+- [ ] PUT with same displayName → group name updated
+- [ ] PATCH `add` member by valid user UUID → member added
+- [ ] PATCH `add` members as array → all members added
+- [ ] PATCH `remove` member by `members[value eq "uuid"]` path → member removed
+- [ ] PATCH `remove` member by value dict → member removed
+- [ ] PATCH `remove` members by value array → all specified members removed
+- [ ] Delete group → 204, group and all TeamMembership records removed (cascade)
+- [ ] Delete nonexistent group → 404
 
 ### Groups — Edge Cases
 - [ ] Duplicate `displayName` → 409 Conflict
-- [ ] PUT with empty members → all existing members removed
-- [ ] PATCH replace members → old members removed, new added atomically
-- [ ] PATCH add duplicate member → idempotent (no-op, not error)
-- [ ] Remove non-member → no-op, not error
-- [ ] Add member that doesn't exist as User → 404 or skip? (currently skips silently: line 464-471)
-- [ ] `members[value eq "invalid-uuid"]` remove → 400
-- [ ] Filter: `displayName Eq "Engineering"`
+- [ ] Group `externalId` in request → accepted in model but not persisted (gap)
+- [ ] PUT with empty members array → all existing members removed, group kept
+- [ ] PUT with nonexistent member user UUID → silently skipped (no 404, no error)
+- [ ] PUT with invalid member UUID string → silently skipped (ValueError caught)
+- [ ] PATCH `replace` members → all existing members removed, new members added within transaction
+- [ ] PATCH `add` duplicate member → idempotent (existing membership check returns existing record)
+- [ ] PATCH `remove` non-member → no-op, not error (membership not found returns False)
+- [ ] PATCH `add` member that doesn't exist as User → silently skipped (user lookup returns None)
+- [ ] PATCH `remove` with `path="members[value eq "invalid-uuid"]"` → ValueError caught, silently skipped
+- [ ] PATCH `remove` with value dict for non-existent `value` key → TypeError avoided by isinstance check
+- [ ] PATCH `replace` displayName → updates group name via scim_update_group
+- [ ] PATCH `replace` with empty body → no-op, group unchanged
+- [ ] PATCH with unsupported op string → ignored silently
+- [ ] Filter: `displayName Eq "Engineering"` → matched via ILIKE on Team.name
+- [ ] Filter: complex expression beyond LIKE → silently returns empty
+- [ ] Group `created_by` set to first org user; if no org users → uuid zero placeholder
+- [ ] Concurrent create of same displayName → exactly one 201, rest 409
 
 ### Cross-Cutting
-- [ ] RLS isolation: SCIM provisioned user in org A cannot access org B resources
-- [ ] Team-scoped resources: Group maps to Team, member mapping respects org
+- [ ] RLS isolation: SCIM operations set `SET LOCAL app.organisation_id` from principal org
+- [ ] RLS isolation: SCIM provisioned user in org A cannot be returned by org B queries
+- [ ] RLS isolation: SCIM provisioned group in org A not visible to org B
+- [ ] Team-scoped resources: Group maps to Team entity; TeamMembership records scoped to org
 - [ ] License key expired/missing → 402
-- [ ] SCIM token invalid/missing → 401
-- [ ] Token valid but org mismatch → 403
-- [ ] IdP sends duplicate PUT within same second → idempotency (no 409, no duplicate)
-- [ ] SCIM filter special characters: `userName Eq "user+tag@domain.com"`
-- [ ] Bulk provisioning: 100 users in rapid succession → rate limited or queued? (current impl: no rate limiting, no queuing)
-- [ ] Re-provisioning after offboarding: user was deactivated, IdP re-sends → reactivate
+- [ ] SCIM token not configured → 501 (separate from license gate)
+- [ ] SCIM token invalid → 401
+- [ ] All SCIM error responses use SCIM Error schema (`urn:ietf:params:scim:api:messages:2.0:Error`) with detail and status
+- [ ] IdP sends duplicate PUT within same second → updates applied, no conflict (PUT is idempotent, last-write-wins)
+- [ ] SCIM userName with special characters: `user+tag@domain.com` → matched via ILIKE (works with LIKE filter)
+- [ ] Re-provisioning after offboarding: user was hard-deleted, IdP re-sends → new user created (current impl: hard delete, no reactivation)
+- [ ] `externalId` in request not mapped to internal User schema → not available for matching on re-provisioning
+- [ ] Bulk provisioning: 100 users in rapid succession → no rate limiting, no queuing, all processed concurrently
+- [ ] Org mismatch: SCIM token valid but principal org_id differs from targeted data → RLS enforces isolation (no cross-org leak)
 
 ## Not implemented (known gaps)
 - `/Bulk` endpoint — SCIM 2.0 Bulk operations (Azure AD uses this)
 - `/ResourceTypes` endpoint
 - `/Schemas` endpoint
 - Enterprise User Schema extension (`urn:ietf:params:scim:schemas:extension:enterprise:2.0:User`)
-- `externalId` matching on re-provisioning (currently matches only by `userName`)
+- `externalId` stored on User model and used for re-provisioning matching (currently `externalId` in request body accepted but discarded)
 - PATCH `path` attribute grammar validation (free-form `path` string, no schema validation)
-- SCIM filter syntax parser (raw string passed to CRUD; will silently return empty on complex filters)
+- SCIM filter syntax parser (raw string passed to CRUD ILIKE match; silently returns empty on complex filters)
 - Rate limiting / IdP backpressure
+- Soft-delete deactivation on user DELETE (currently hard delete, not `active=false` as SCIM 2.0 specifies)
+- User `org_role` mapping from SCIM attributes (all SCIM users default to `runner`)
+- PATCH operation validation: unsupported `op` values silently ignored instead of returning 400
+- SCIM User `emails[]` from request not mapped to User model (display_name derived from userName parts only)
+- Group `created_by` fallback to uuid zero when no org users exist
+- `members[value eq "..."]` remove path regex extraction fragile — malformed paths silently no-op

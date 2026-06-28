@@ -1,24 +1,151 @@
 ﻿---
 id: feat-pipelines-library
-prd: 
+prd: §8.14
 delivery-tasks: [task-nv0-first-pipeline-library]
 bdd:
-
+  - backend/tests/bdd/features/library/browse.feature
+  - backend/tests/bdd/features/library/copy_to_adapt.feature
+  - backend/tests/bdd/features/library/ratings.feature
 code:
+  - backend/src/modulo/core/library_service/__init__.py
 depends-on: []
-status: gap
+status: partial
 ---
 
-#  library.Value.ToUpper() ibrary
+# Pipeline Library
 
-Discovered from 1 completed delivery tasks.
+Community and organisation-scoped library of reusable primitives (schemas, agents, workflows, pipeline templates, integrations, test fixtures) with copy-to-adapt, versioning, ratings, and contribution workflow.
 
 ## Behaviours
-<!-- TODO: populate expected behaviours and edge cases -->
 
-- [ ] Happy path works
-- [ ] Error states handled
+### Browsing & listing
+- [ ] List all primitives visible to the org (local + community) with pagination
+- [ ] Filter by primitive_type (schema, agent, workflow, pipeline_template, test_fixture, integration)
+- [ ] Search by name or description (case-insensitive substring match)
+- [ ] Exclude community primitives with include_community=false
+- [ ] Get single primitive by ID (org DB first, community fallback)
+- [ ] Return 404 for non-existent primitive ID
+- [ ] Pagination respects page and page_size parameters, returns total count
+- [ ] Community primitives from in-memory registry merge with DB results in a single page
+- [ ] Community-only org (no local primitives) returns only community results
+- [ ] Empty org returns empty list when community primitives excluded
+
+### Copy-to-adapt
+- [ ] Copy a community primitive into org workspace with source=local
+- [ ] Copied primitive has forked_from set to the source primitive ID
+- [ ] Version auto-increments (minor bump) on copy
+- [ ] Community primitive copy blocked via MCP with 403 CommunityPrimitiveReadOnlyError
+- [ ] Community primitive copy succeeds via browser API (POST /adapt)
+- [ ] Copy with target_team_id assigns owner_team_id on the new primitive
+- [ ] Copy without target_team_id defaults ownership to org-wide
+- [ ] Copy of non-existent primitive returns 404
+- [ ] Copy of org-local primitive creates independent local copy
+- [ ] Copy preserves tags, description, content_json from source
+- [ ] Copy increments download_count on registry/community source primitives
+- [ ] Copy of team-private primitive defaults ownership picker to source team
+
+### Ratings
+- [ ] Submit thumbs-up rating with optional comment
+- [ ] Submit thumbs-down rating without comment
+- [ ] View aggregate rating (average_rating, review_count)
+- [ ] List all ratings for a primitive with id, thumbs_up, comment, created_at
+- [ ] One rating per user per primitive (subsequent submission updates existing)
+- [ ] Self-rating blocked at application layer
+- [ ] Rating requires at least one prior copy-to-adapt of the primitive
+- [ ] 10-minute submission cooldown per user between ratings
+- [ ] Aggregate average_rating updates correctly after new rating
+- [ ] Review_count increments after new rating
+- [ ] Ratings only apply to community/registry primitives, not local entries
+- [ ] Abuse reports go to admin review queue
+
+### Contribution workflow (test fixtures)
+- [ ] Create draft fixture contribution with fixture_map
+- [ ] Draft fixtures have contribution_status=draft
+- [ ] Submit draft for review transitions to review_queue
+- [ ] Submit non-draft fixture for review raises ContributionInvalidTransitionError
+- [ ] Publish reviewed fixture changes visibility to community and status to published
+- [ ] Publish non-review_queue fixture raises ContributionInvalidTransitionError
+- [ ] List contributions scoped to org with optional status filter
+- [ ] List contributions paginated with page/page_size
+- [ ] Submit new version of published fixture auto-increments minor version
+- [ ] New version creates draft row with version_group_id linking to original
+- [ ] New version of non-published fixture raises ContributionInvalidTransitionError
+- [ ] List all versions for a contribution, newest first
+- [ ] notify_importers_of_update: forked copies get update_available_version_id set
+- [ ] notify_importers_of_update is a no-op for primitives without version_group_id
+- [ ] Non-existent contribution raises ContributionNotFoundError
+
+### Community primitives (built-in)
+- [ ] PRD Input Schema is seeded at startup
+- [ ] Requirements Output Schema is seeded at startup
+- [ ] PRD Ingestion Agent is seeded at startup
+- [ ] Requirements Writer Agent is seeded at startup
+- [ ] PRD to Requirements workflow is seeded at startup
+- [ ] Example Test Fixture is seeded at startup
+- [ ] GitHub Issue Input Schema is seeded at startup
+- [ ] Structured Requirements Schema is seeded at startup
+- [ ] Code Diff Output Schema is seeded at startup
+- [ ] Test Result Output Schema is seeded at startup
+- [ ] PR Output Schema is seeded at startup
+- [ ] Issue Reader Agent is seeded at startup
+- [ ] Code Generator Agent is seeded at startup
+- [ ] Code Applier Agent is seeded at startup
+- [ ] Test Runner Agent is seeded at startup
+- [ ] PR Creator Agent is seeded at startup
+- [ ] Modulo Dogfood Pipeline workflow is seeded at startup
+- [ ] PR Review Pipeline template is seeded at startup
+- [ ] Release Checklist Pipeline template is seeded at startup
+- [ ] Incident Response Pipeline template is seeded at startup
+- [ ] Community primitives are O(1) lookup by ID via _COMMUNITY_BY_ID dict
+- [ ] Community primitives have COMMUNITY_ORG_ID sentinel (00000000-0000-0000-0000-000000000001)
+
+### ConnectorType registration
+- [ ] ConnectorType implementations discovered via importlib entry_points at startup
+- [ ] In-memory ConnectorTypeRegistry, no DB table for types
+- [ ] Uninstalled connector package: DB instances still exist, pre-run health check fails with connector_type_unavailable
+- [ ] Admin UI surfaces connector_type_unavailable instances with warning badge
+- [ ] Runtime pip install explicitly disallowed — resolved only at server startup
+- [ ] Completed runs unaffected by connector package removal (immutable snapshots)
+
+### Security & access control
+- [ ] RLS scopes library queries to the requesting org (set_rls_org)
+- [ ] Community primitives are read-only via MCP (403 guard)
+- [ ] Team-private library entries visible only to team members and admins
+- [ ] Community registry entries are visibility=org (no per-org team scope)
+- [ ] API key role restricted: admin keys prohibited from operator/runner operations; library:read and library:write scopes enforced
+- [ ] Rating abuse reports require admin review
+
+### Concurrency
+- [ ] Paginated listing supports concurrent reads from multiple orgs
+- [ ] Copy-to-adapt with download_count increment uses serialised DB transaction
+- [ ] Contribution status transitions (draft→review_queue→published) are idempotent
+- [ ] Multiple concurrent publish calls on the same primitive have predictable outcome
+- [ ] notify_importers_of_update runs after successful publish without blocking the response
+- [ ] Rating submission with cooldown enforcement handles concurrent submissions
+
+### Error states
+- [ ] Non-existent primitive returns 404 on get/copy
+- [ ] Invalid status transition returns ContributionInvalidTransitionError
+- [ ] Community primitive via MCP returns 403 with community_primitive_read_only error code
+- [ ] Malformed content_json in fixture contribution raises validation error
+- [ ] Version parse failure (non-numeric version string) falls back to 1.0
+- [ ] Missing entry point group at startup logs warning but does not crash server
+- [ ] Connector type unavailable at runtime blocks new runs, does not affect completed runs
+
+### Backward compatibility
+- [ ] Primitives without version_group_id return themselves as sole version in list_contribution_versions
+- [ ] Existing primitives created before version_group_id feature get seeded on first version submission
+- [ ] fork_copies list uses subquery to find all versions in group, not just the current row
+- [ ] update_available_version_id field is nullable — existing copies have null until first publish
+- [ ] Library primitive table schema is backward-compatible with existing data (all new fields nullable or have defaults)
 
 ## Known Gaps
-<!-- auto-generated entry â€” needs human review -->
-
+- No BDD tests for contribution workflow, versioning, or community primitive seeding
+- No BDD tests for ConnectorType registration failure modes
+- No BDD tests for concurrency scenarios
+- No integration tests for notify_importers_of_update
+- Pipeline template category (code-review, release, incident-response) has no BDD coverage
+- Team-private visibility scenario not covered by existing BDD tests
+- No unit tests for _filter_community helper
+- No unit tests for version auto-increment logic
+- No tests for CommunityPrimitiveReadOnlyError MCP integration

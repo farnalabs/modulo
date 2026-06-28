@@ -130,7 +130,7 @@ status: covered | partial | gap    # auto-updated by graph-validate
 - [Run Context Propagation](core/run-context.md) — §8.18
 - [Run Variants & A/B Testing](core/run-variants.md) — §8.19
 - [Error Handling](core/error-handling.md) — §8.9
-- [Cost Controls](core/cost-controls.md) — §8.10
+- [Cost Controls / Cost Breakdown](core/cost-breakdown.md) — §8.10
 - [Notifications](core/notifications.md) — §8.11
 - [Audit Trail](core/audit-trail.md) — §8.12
 - [Pipeline Versioning](core/pipeline-versioning.md) — §8.13

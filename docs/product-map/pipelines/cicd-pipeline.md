@@ -1,24 +1,164 @@
 ﻿---
 id: feat-pipelines-cicd-pipeline
-prd: 
+prd: §8.4
 delivery-tasks: [task-nv12-cicd-pipeline]
 bdd:
-
+  - backend/tests/bdd/features/pipelines/run_lifecycle.feature
+  - backend/tests/bdd/features/pipelines/crud.feature
+  - backend/tests/bdd/features/pipelines/pipeline_config_validation.feature
+  - backend/tests/bdd/features/pipelines/checkpoint_resume.feature
+  - backend/tests/bdd/features/pipelines/node_types.feature
+  - backend/tests/bdd/features/pipelines/error_recovery.feature
+  - backend/tests/bdd/features/pipelines/scheduling.feature
+  - backend/tests/bdd/features/pipelines/webhook_trigger.feature
+  - backend/tests/bdd/features/pipelines/run_variants.feature
 code:
+  - backend/src/modulo/core/pipeline_engine/executor.py
+  - backend/src/modulo/core/pipeline_engine/node_runner.py
+  - backend/src/modulo/core/pipeline_engine/graph_cache.py
+  - backend/src/modulo/core/pipeline_engine/decorator.py
+  - backend/src/modulo/core/pipeline_engine/event_broker.py
+  - backend/src/modulo/core/pipeline_engine/modulo_saver.py
 depends-on: []
-status: gap
+status: partial
 ---
 
-#  cicd pipeline.Value.ToUpper() icd  cicd pipeline.Value.ToUpper() ipeline
+# CI/CD Pipeline
 
-Discovered from 1 completed delivery tasks.
+Executes a pipeline run end-to-end: seed state from snapshot, compile StateGraph, enforce concurrency limits, stream events, handle HITL interrupts, eval thresholds, and checkpoint resume.
 
 ## Behaviours
-<!-- TODO: populate expected behaviours and edge cases -->
 
-- [ ] Happy path works
-- [ ] Error states handled
+### Pipeline CRUD
+- [ ] Create a pipeline with name and valid config — 201 with id and slug
+- [ ] List all pipelines in org — returns full collection
+- [ ] Get pipeline by id — returns pipeline name and config
+- [ ] Update pipeline config via PATCH — 200 on success
+- [ ] Delete pipeline — 204, pipeline no longer exists
+
+### Pipeline Config Validation
+- [ ] Missing required field (e.g. `nodes`) rejected with 422 and field-level error
+- [ ] Unknown node type rejected with 422
+- [ ] Cycle in node graph rejected with 422 and "cycle" in error message
+- [ ] Valid minimal pipeline (single LLM node) accepted with 201
+- [ ] Deprecated schema version pinned — soft warning (run proceeds)
+- [ ] Schema reference missing at pinned version — hard block
+- [ ] ConnectorBinding missing required operation — hard block with `connector_capability_mismatch`
+- [ ] ModelBackend missing or stale (>5 min since health check) — hard block with `model_backend_unavailable`
+
+### Run Lifecycle
+- [ ] Trigger a run via POST /api/pipelines/{id}/runs — 202 with status "pending"
+- [ ] Run transitions "pending" → "running" when engine picks it up
+- [ ] All nodes complete without error — status "completed" with final_state
+- [ ] Node raises unhandled exception — status "failed" with error_detail
+- [ ] Run context merged correctly (defaults + per-run overrides)
+- [ ] Pre-run input validation against entry agent's input_schema — field-level errors returned immediately
+
+### Concurrent Run Capacity
+- [ ] Run waits when pipeline max_concurrent_runs is reached — polls until slot available
+- [ ] Slot wait exceeds lock_wait_seconds — status "failed" with error_code "lock_timeout"
+- [ ] Capacity check serialised via SELECT FOR UPDATE on pipeline row (TOCTOU prevention)
+
+### Cancellation
+- [ ] Run cancellation requested before node starts — status "cancelled", node not executed
+- [ ] DB-backed cancellation check via set_cancellation_check hook (authoritative source)
+- [ ] State-based fast-path cancellation check (run_context.cancelled)
+
+### Checkpoint and Resume
+- [ ] State checkpointed after each node via AsyncPostgresSaver
+- [ ] Resume from checkpoint after failure — restarts from failed node, prior nodes not re-executed
+- [ ] Checkpoints written to PostgreSQL checkpoints table
+- [ ] Resume after HITL interrupt — injects _hitl_decision via aupdate_state
+- [ ] Snapshot re-validated on resume before execution continues
+
+### HITL Gate
+- [ ] Edge with hitl_gate_config inserts intermediate gate node in compiled graph
+- [ ] Gate with autonomy "manual_approval" — interrupts for human review via NodeInterrupt
+- [ ] Gate with autonomy "notify_on_complete" — auto-approves, records artifact, no interrupt
+- [ ] Gate with autonomy "fully_autonomous" — silently skipped
+- [ ] Gate with human_only=true — overrides autonomy, always interrupts
+- [ ] Gate on resume — reads _hitl_decision, records approved/rejected result
+- [ ] Rejected HITL decision routed to reject_target via kick-back conditional edge
+- [ ] Conditional gate with JMESPath condition — skipped when condition falsy
+- [ ] Eval-before-interrupt — eval definitions evaluated before interrupt; block evals raise EvalBlockedError
+
+### Manual Node
+- [ ] Manual node pauses run and waits for human output via HITL UI
+- [ ] On resume, manual output validated against output_schema_id (required field check)
+- [ ] Manual output recorded as artifact in state
+- [ ] Manual node has no agent_id, connector_binding, or model_backend_id
+
+### Node Types
+- [ ] Standard (agent) node — runs agent/connector body
+- [ ] Manual node — placeholder for human SDLC steps, interrupts immediately
+- [ ] HITL gate node — intermediate node per edge with gate config
+
+### Per-Node Execution Controls
+- [ ] Per-node timeout via asyncio.wait_for — TimeoutError propagated to run state
+- [ ] Context-setter guard — only nodes with role="context_setter" may write run_context
+- [ ] Context-setter violation raises ContextSetterViolationError
+- [ ] Run-context write log with last-write-wins semantics (_run_context_write_log)
+
+### Graph Compilation and Caching
+- [ ] StateGraph compiled from snapshot graph_json via build_graph_from_json
+- [ ] In-memory LRU cache (256 entries) keyed by (pipeline_id, snapshot_id)
+- [ ] Per-key locking prevents double compilation for concurrent access
+- [ ] Conditional edge routing via JMESPath-based router
+- [ ] Reject edge routing: _hitl_decision.action == "rejected" routes to reject_target
+
+### Event Streaming
+- [ ] Real-time events consumed from astream_events() and published per-run via RunEventBroker
+- [ ] Events: node_started, node_completed, node_failed, hitl_awaiting, run_completed, run_failed, run_cancelled
+- [ ] WebSocket fan-out via subscriber queues (weak references, auto-cleanup on disconnect)
+- [ ] 100-event ring buffer for reconnection replay (replay_since)
+- [ ] Broker closed on run terminal state — None sentinel to all subscribers
+- [ ] BrokerRegistry singleton — one broker per active run
+
+### Token and Cost Tracking
+- [ ] Token usage collected per-node from on_chat_model_end / on_llm_end events
+- [ ] Total token count and cost computed on run completion
+- [ ] Cost based on input_rate ($0.00001/token) and output_rate ($0.00003/token)
+- [ ] Token/cost persisted to Run row via update_run_status
+
+### Eval Suite Thresholds
+- [ ] Completed run checks eval suites with pass_threshold
+- [ ] Suite below threshold — status downgraded to "failed" with error_code "eval_suite_blocked"
+- [ ] Multiple suites evaluated independently per completed run
+
+### Multi-Tenant Checkpoints (ModuloPostgresSaver)
+- [ ] All checkpoint tables include organisation_id column
+- [ ] Queries filtered by organisation_id — tenant isolation
+- [ ] Checkpoint JSON encrypted at rest via Fernet
+- [ ] Migration SQL creates org-scoped tables and indexes
+
+### WebSocket Patch Events
+- [ ] Events carry typed patch payloads for Pinia store patching
+- [ ] node_started payload: run_id, node_id, started_at
+- [ ] node_completed payload: run_id, node_id, output_summary, completed_at
+- [ ] node_failed payload: run_id, node_id, error_code, error_message, failed_at
+- [ ] hitl_awaiting payload: run_id, gate_id, node_id, human_only, required_team_id
+- [ ] hitl_claimed payload: run_id, gate_id, claimed_by_name, claimed_at
+- [ ] hitl_reviewed payload: run_id, gate_id, action
+- [ ] run_completed payload: run_id, terminal_status, completed_at
 
 ## Known Gaps
-<!-- auto-generated entry â€” needs human review -->
 
+### BDD features not yet implemented
+- node_types.feature — placeholder only
+- error_recovery.feature — placeholder only
+- scheduling.feature — placeholder only
+- webhook_trigger.feature — placeholder only
+- run_variants.feature — placeholder only
+
+### Agent Theming and Agent Theme ViewModel
+- GET /api/v1/viewmodel/current endpoint specified in PRD §8.4 but test coverage not confirmed
+- ?mode=agent theme mode not exercised by any BDD scenario
+
+### CopyToAdaptWizard
+- Multi-step modal component specified in PRD §8.4 but not yet covered by pipeline-related BDD tests
+
+### Canvas State Across Drill-Down
+- Viewport persistence per drill-down level via Vue Router state — no test coverage
+
+### Stage Board
+- Stage board kanban with search/filter/sort — not covered by pipeline feature tests

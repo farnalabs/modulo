@@ -1,24 +1,83 @@
 ﻿---
 id: feat-evals-eval-regression-alerts
-prd: 
+prd: §8.17
 delivery-tasks: [task-nv7-eval-regression-alerts]
 bdd:
-
+  - tests/features/evals/eval_regex.feature
+  - tests/features/evals/eval_llm_judge.feature
+  - tests/features/evals/eval_block.feature
 code:
-depends-on: [task-nv2-eval-engine]
-status: gap
+  - backend/src/modulo/core/eval_engine/regression.py
+  - backend/src/modulo/api/routes/admin.py
+  - backend/src/modulo/db/models/eval_result.py
+  - backend/tests/unit/core/test_eval_regressions.py
+  - backend/tests/unit/api/test_evals_endpoint.py
+depends-on: [feat-evals-eval-engine]
+status: partial
 ---
 
-#  eval regression alerts.Value.ToUpper() val  eval regression alerts.Value.ToUpper() egression  eval regression alerts.Value.ToUpper() lerts
+# Eval Regression Alerts
 
-Discovered from 1 completed delivery tasks.
+Detects significant pass-rate drops for eval definitions by comparing a recent window against a baseline window. Emits alerts via the `GET /api/v1/admin/evals/regressions` endpoint (admin-only).
 
 ## Behaviours
-<!-- TODO: populate expected behaviours and edge cases -->
 
-- [ ] Happy path works
-- [ ] Error states handled
+### Happy paths
+
+- [ ] Eval with declining pass rate (drop >= threshold) returns alert with trend="declining"
+- [ ] Eval with improving pass rate (drop <= -threshold) returns alert with trend="improving"
+- [ ] Eval with stable pass rate (drop within threshold) returns alert with trend="stable"
+- [ ] Alert includes eval_id, eval_name, prev_pass_rate, current_pass_rate, drop_pct, trend, affected_run_ids
+- [ ] Empty results (no eval_results in period) returns zero alerts
+- [ ] Eval with no baseline data (baseline_total=0) is skipped — no alert emitted
+- [ ] Eval with no recent data (recent_total=0) is skipped — no alert emitted
+- [ ] Affected_run_ids lists runs with failed results in the recent window
+- [ ] Pass rates are rounded to 4 decimal places
+- [ ] Lookback split: baseline uses entire period minus recent_window, recent_window = max(days // 4, 1)
+
+### Query parameters
+
+- [ ] `days` parameter controls total lookback (1–90, default 7)
+- [ ] `threshold` parameter controls minimum drop fraction (0.0–1.0, default 0.15)
+- [ ] Custom days (14) and threshold (0.10) produce expected alerts and response metadata
+
+### Response shape
+
+- [ ] Response includes `alerts` list, `total_regressions`, `threshold`, `lookback_days`
+- [ ] Each alert contains exactly 7 keys: eval_id, eval_name, prev_pass_rate, current_pass_rate, drop_pct, trend, affected_run_ids
+- [ ] eval_id and affected_run_ids are serialised as strings (not UUID objects)
+
+### Error states
+
+- [ ] Unauthenticated request returns 401
+- [ ] Non-admin authenticated user returns 403
+- [ ] Admin user from another org gets RLS-scoped results (no cross-org data leak)
+- [ ] Zero results in period returns 200 with empty alerts list (not 404)
+
+### Edge cases
+
+- [ ] Drop exactly at threshold boundary: classified as stable (not declining)
+- [ ] All runs pass in recent window — affected_run_ids is empty
+- [ ] Single eval with many affected runs — all run IDs collected in affected_run_ids
+- [ ] Multiple evals with mixed trends return in a single response
+
+### Security
+
+- [ ] Endpoint requires admin role — 403 returned for operator/runner
+- [ ] RLS scopes the SQL query by organisation_id
+- [ ] Unauthenticated requests return 401 (no dependency override leaks data)
+
+### Backward compatibility
+
+- [ ] RegressionAlert dataclass shape matches API response contract
+- [ ] `detect_regressions` accepts AsyncSession (not coupled to FastAPI)
+- [ ] Response envelope (alerts + metadata) unchanged across minor releases
 
 ## Known Gaps
-<!-- auto-generated entry â€” needs human review -->
 
+- [ ] No BDD feature file specific to regression alerts (covered by unit tests only)
+- [ ] No frontend UI to display regression alerts
+- [ ] No notification/webhook on regression detection
+- [ ] No per-pipeline scoping — query is org-wide only
+- [ ] No configurable recent window ratio (hardcoded at max(days // 4, 1))
+- [ ] No historical trend persistence — each call recomputes from raw eval_results
