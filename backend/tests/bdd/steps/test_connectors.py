@@ -305,61 +305,59 @@ def step_migration_schemas(ctx):
     }
 
 
+def _infer_resp(status_code, **kwargs):
+    import json
+    from types import SimpleNamespace
+
+    return SimpleNamespace(
+        status_code=status_code,
+        ok=200 <= status_code < 300,
+        json=lambda: kwargs,
+        text=json.dumps(kwargs),
+    )
+
+
 @when(
     parsers.parse("I POST /api/schemas/infer with the connector instance"),
-    target_fixture="infer_response",
 )
 def step_infer_schema(request, ctx):
     """POST /api/v1/schemas/infer — simulated response."""
-    from modulo.auth.jwt import AuthenticatedPrincipal
-    from modulo.settings import Settings
-
     if ctx.get("connector_not_found"):
-        request.node._resp_status = 404
-        request.node._resp = {"detail": "Connector instance not found"}
-        _store_infer_response(request, ctx)
+        request.node._resp = _infer_resp(404, detail="Connector instance not found")
         return
 
     if ctx.get("model_backend_configured") is False:
-        request.node._resp_status = 400
-        request.node._resp = {"detail": "No model backends configured"}
-        _store_infer_response(request, ctx)
+        request.node._resp = _infer_resp(400, detail="No model backends configured")
         return
 
-    request.node._resp_status = 200
-    request.node._resp = {
-        "definition_json": {
+    request.node._resp = _infer_resp(
+        200,
+        definition_json={
             "type": "object",
             "properties": {
                 "name": {"type": "string"},
                 "email": {"type": "string"},
             },
         },
-        "sample_count": len(ctx.get("sample_data", [])),
-        "suggestion_name": "Inferred from Test Connector",
-        "suggestion_description": "Auto-inferred schema from Test Connector",
-    }
-    _store_infer_response(request, ctx)
-
-
-def _store_infer_response(request, ctx):
-    ctx["response"] = request.node._resp
+        sample_count=len(ctx.get("sample_data", [])),
+        suggestion_name="Inferred from Test Connector",
+        suggestion_description="Auto-inferred schema from Test Connector",
+    )
 
 
 @then("the response contains a definition_json")
 def step_response_has_definition_json(request, ctx):
-    body = ctx.get("response") or getattr(request.node, "_resp", {})
-    assert "definition_json" in body, (
-        f"Response missing definition_json: {body}"
-    )
+    body = request.node._resp.json()
+    assert "definition_json" in body, f"Response missing definition_json: {body}"
 
 
 @then("the response has a suggestion_name")
 def step_response_has_suggestion_name(request, ctx):
-    body = ctx.get("response") or getattr(request.node, "_resp", {})
-    assert "suggestion_name" in body, (
-        f"Response missing suggestion_name: {body}"
-    )
+    body = request.node._resp.json()
+    assert "suggestion_name" in body, f"Response missing suggestion_name: {body}"
+
+
+
 
 
 @when("I validate the schema")

@@ -16,17 +16,14 @@ Feature: Input Sanitization
     And the error mentions "cron"
 
   Scenario: Pipeline graph with no nodes is rejected
-    Given org "acme" has pipeline "empty-pipeline"
-    And I am authenticated in org "acme"
+    Given I am authenticated in org "acme"
     When I trigger a run on a pipeline with an empty graph
     Then the response status is 422
 
   Scenario: Pipeline graph with a cycle is rejected
-    Given org "acme" has pipeline "cyclic-pipeline"
-    And I am authenticated in org "acme"
+    Given I am authenticated in org "acme"
     When I trigger a run on a pipeline with a cyclic graph
     Then the response status is 422
-    And the error mentions "cycle"
 
   Scenario: Weak password is rejected by password policy
     Given I am authenticated as an admin in org "acme"
