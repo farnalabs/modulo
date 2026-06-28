@@ -4,6 +4,10 @@ primary_region = 'lhr'
 [build]
   dockerfile = "backend/Dockerfile.fly"
 
+[build.args]
+  VITE_AUTO_LOGIN_USERNAME = "demo"
+  VITE_AUTO_LOGIN_PASSWORD = "demo"
+
 [http_service]
   internal_port = 8080
   force_https = true

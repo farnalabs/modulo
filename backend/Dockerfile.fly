@@ -2,6 +2,8 @@
 # Stage 1: Build frontend SPA
 # =============================================================================
 FROM node:20-alpine AS frontend-builder
+ARG VITE_AUTO_LOGIN_USERNAME
+ARG VITE_AUTO_LOGIN_PASSWORD
 
 WORKDIR /build
 
@@ -9,7 +11,7 @@ COPY frontend/package.json frontend/package-lock.json ./
 RUN npm ci
 
 COPY frontend/ ./
-RUN npm run build
+RUN VITE_AUTO_LOGIN_USERNAME=${VITE_AUTO_LOGIN_USERNAME} VITE_AUTO_LOGIN_PASSWORD=${VITE_AUTO_LOGIN_PASSWORD} npm run build
 
 # =============================================================================
 # Stage 2: Backend + nginx for static serving

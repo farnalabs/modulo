@@ -67,6 +67,17 @@ def run_migrations_offline() -> None:
 
 
 def do_run_migrations(connection):
+    # Ensure alembic_version.version_num can hold long revision IDs
+    # (e.g. 0005_library_community_visibility = 34 chars > default 32).
+    from sqlalchemy import text
+
+    try:
+        connection.execute(
+            text("ALTER TABLE alembic_version ALTER COLUMN version_num TYPE VARCHAR(64)")
+        )
+    except Exception:
+        pass  # Table doesn't exist yet (first run)
+
     backend = _detect_backend(str(connection.engine.url))
     _log.info("Running migrations for %s backend", backend)
 
