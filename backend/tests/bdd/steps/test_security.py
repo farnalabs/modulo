@@ -192,6 +192,17 @@ def _patch_set_rls(patches, module_path):
 # ===========================================================================
 
 
+@pytest.fixture
+def patches():
+    collectors: list[Any] = []
+    yield collectors
+    for p in reversed(collectors):
+        try:
+            p.stop()
+        except RuntimeError:
+            pass
+
+
 @when("I POST /api/pipelines with empty JSON body")
 def post_pipeline_empty(client, request, patches) -> None:
     _patch_set_rls(patches, "modulo.api.routes.pipelines.set_rls_org")
@@ -399,8 +410,14 @@ def check_runtime_error(request) -> None:
 @then(parsers.parse('the error mentions "{text}"'))
 def check_error_mentions(request, text) -> None:
     body = request.node._resp_body
-    detail = str(body.get("detail", body)) if isinstance(body, dict) else str(body)
-    assert text.lower() in detail.lower(), (
+    if isinstance(body, dict):
+        detail = body.get("detail", "")
+        if detail is None:
+            err = body.get("error", {})
+            detail = err.get("detail", "") if isinstance(err, dict) else ""
+    else:
+        detail = str(body)
+    assert text.lower() in str(detail).lower(), (
         f"Expected error to mention {text!r}, got: {detail[:500]}"
     )
 
