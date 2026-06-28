@@ -3,11 +3,6 @@
 Default implementation that preserves the current behaviour: secrets are
 encrypted with ``cryptography.fernet.Fernet`` and stored in the ``secrets``
 table.
-
-.. note::
-   Alpha limitation — the Fernet key is set once at construction and is never
-   rotated. A production deployment should implement key rotation via key
-   derivation or key-wrapping before v1.
 """
 
 from __future__ import annotations
@@ -36,14 +31,17 @@ class FernetSecretsBackend(SecretsBackend):
     Args:
         fernet_key: Base64-encoded 32-byte Fernet key.
         session: Optional SQLAlchemy async session for DB operations.
+        old_key: Optional previous Fernet key for no-downtime rotation.
     """
 
     def __init__(
         self,
         fernet_key: str,
         session: AsyncSession | None = None,
+        old_key: str | None = None,
     ) -> None:
         self._fernet = Fernet(fernet_key.encode())
+        self._fernet_old = Fernet(old_key.encode()) if old_key else None
         self._session = session
         self._org_id: uuid.UUID | None = None
 
@@ -69,8 +67,14 @@ class FernetSecretsBackend(SecretsBackend):
 
         try:
             plaintext = self._fernet.decrypt(row.encrypted_value)
-        except InvalidToken as exc:
-            raise ValueError("Failed to decrypt secret") from exc
+        except InvalidToken:
+            if self._fernet_old is not None:
+                try:
+                    plaintext = self._fernet_old.decrypt(row.encrypted_value)
+                except InvalidToken as exc:
+                    raise ValueError("Failed to decrypt secret") from exc
+            else:
+                raise ValueError("Failed to decrypt secret") from None
 
         return plaintext.decode()
 

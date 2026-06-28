@@ -4,9 +4,6 @@ set -e
 echo "=== Starting nginx ==="
 nginx -g "daemon off;" &
 
-echo "=== Resetting DB schema ==="
-.venv/bin/python3 -c "import asyncio,sys; sys.path.insert(0,'/app/src'); from modulo.db.session import AsyncSessionLocal; from sqlalchemy import text; async def c(): async with AsyncSessionLocal() as s: async with s.begin(): await s.execute(text('DROP SCHEMA public CASCADE')); await s.execute(text('CREATE SCHEMA public')); print('DB reset done'); asyncio.run(c())" || echo "WARNING: DB reset failed — continuing anyway"
-
 echo "=== Bootstrap: fix DATABASE_URL and create alembic_version ==="
 .venv/bin/python3 /app/deploy/fly/bootstrap_db.py
 
