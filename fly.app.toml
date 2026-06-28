@@ -1,6 +1,3 @@
-# fly.toml app configuration for app.modulo.run
-# See https://fly.io/docs/reference/configuration/
-
 app = 'app-modulo'
 primary_region = 'lhr'
 
