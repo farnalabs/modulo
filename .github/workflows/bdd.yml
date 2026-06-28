@@ -23,6 +23,7 @@ jobs:
       - name: Start Postgres
         shell: powershell
         run: |
+          $ErrorActionPreference = 'Continue'
           docker rm -f modulo-bdd-pg 2>$null
           docker run -d --name modulo-bdd-pg `
             -e POSTGRES_USER=modulo `
@@ -39,6 +40,7 @@ jobs:
       - name: Start Redis
         shell: powershell
         run: |
+          $ErrorActionPreference = 'Continue'
           docker rm -f modulo-bdd-redis 2>$null
           docker run -d --name modulo-bdd-redis `
             -p 6379:6379 `
@@ -123,5 +125,6 @@ jobs:
         if: always()
         shell: powershell
         run: |
+          $ErrorActionPreference = 'Continue'
           docker rm -f modulo-bdd-pg 2>$null
           docker rm -f modulo-bdd-redis 2>$null

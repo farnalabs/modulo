@@ -23,6 +23,7 @@ jobs:
       - name: Start Postgres
         shell: powershell
         run: |
+          $ErrorActionPreference = 'Continue'
           docker rm -f modulo-test-pg 2>$null
           docker run -d --name modulo-test-pg `
             -e POSTGRES_USER=modulo_test `
@@ -50,4 +51,6 @@ jobs:
       - name: Stop Postgres
         if: always()
         shell: powershell
-        run: docker rm -f modulo-test-pg 2>$null
+        run: |
+          $ErrorActionPreference = 'Continue'
+          docker rm -f modulo-test-pg 2>$null
