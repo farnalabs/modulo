@@ -277,6 +277,45 @@ export interface paths {
       }
     }
   }
+  '/api/v1/admin/notifications/deliveries': {
+    get: {
+      parameters: {
+        query?: {
+          cursor?: string
+          limit?: number
+          status?: string
+          from?: string
+          to?: string
+        }
+      }
+      responses: {
+        200: {
+          content: {
+            'application/json': components['schemas']['DeliveryLogResponse']
+          }
+        }
+      }
+    }
+  }
+  '/api/v1/admin/trigger-events': {
+    get: {
+      parameters: {
+        query: {
+          trigger_type?: string
+          validation_result?: string
+          cursor?: string
+          limit?: number
+        }
+      }
+      responses: {
+        200: {
+          content: {
+            'application/json': components['schemas']['TriggerEventListResponse']
+          }
+        }
+      }
+    }
+  }
   '/api/v1/admin/audit/export': {
     get: {
       parameters: {
@@ -1043,6 +1082,38 @@ export interface components {
     RuntimeConfigUpdateRequest: {
       overrides?: { [key: string]: string }
       clear?: string[]
+    }
+    DeliveryLogEntry: {
+      id: string
+      event_type: string
+      status: string
+      attempt_count: number
+      response_code: number | null
+      last_error: string | null
+      response_body: string | null
+      endpoint_url: string | null
+      created_at: string
+    }
+    DeliveryLogResponse: {
+      items: components['schemas']['DeliveryLogEntry'][]
+      next_cursor: string | null
+      total: number
+    }
+    TriggerEventItem: {
+      id: string
+      trigger_id: string
+      trigger_type: string
+      validation_result: string
+      received_at: string | null
+      created_at: string | null
+      run_id: string | null
+      error_detail: string | null
+    }
+    TriggerEventListResponse: {
+      items: components['schemas']['TriggerEventItem'][]
+      next_cursor: string | null
+      prev_cursor: string | null
+      total: number
     }
   }
 }

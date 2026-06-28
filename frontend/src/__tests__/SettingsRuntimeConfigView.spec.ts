@@ -5,25 +5,26 @@ import { nextTick } from 'vue'
 vi.mock('../lib/api/client', () => ({
   api: {
     GET: vi.fn().mockResolvedValue({
-      data: { mode: 'in_memory', rules: [] },
+      data: { items: [], has_drift: false },
       error: undefined,
     }),
+    POST: vi.fn().mockResolvedValue({ data: null, error: undefined }),
     PUT: vi.fn().mockResolvedValue({ data: null, error: undefined }),
   },
   getAccessToken: vi.fn().mockReturnValue('mock-token'),
 }))
 
-import SettingsRateLimitsView from '../views/SettingsRateLimitsView.vue'
+import SettingsRuntimeConfigView from '../views/SettingsRuntimeConfigView.vue'
 
-describe('SettingsRateLimitsView', () => {
+describe('SettingsRuntimeConfigView', () => {
   beforeEach(() => {
     vi.clearAllMocks()
   })
 
   it('renders without crashing', async () => {
-    const wrapper = mount(SettingsRateLimitsView)
+    const wrapper = mount(SettingsRuntimeConfigView)
     await nextTick()
     expect(wrapper.exists()).toBe(true)
-    expect(wrapper.text()).toContain('Rate Limits')
+    expect(wrapper.text()).toContain('Runtime Configuration')
   })
 })
