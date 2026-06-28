@@ -48,14 +48,15 @@ jobs:
         run: uv sync --frozen
       - name: Install Playwright browsers
         working-directory: backend
-        run: uv run playwright install --with-deps chromium
+        run: uv run --no-sync playwright install --with-deps chromium
       - name: Pre-create alembic_version table
+        shell: bash
         run: |
           PGPASSWORD=modulo psql -h localhost -U modulo -d modulo -c \
             "CREATE TABLE IF NOT EXISTS alembic_version (version_num VARCHAR(255) NOT NULL PRIMARY KEY);"
       - name: Run migrations
         working-directory: backend
-        run: uv run alembic upgrade heads
+        run: uv run --no-sync alembic upgrade heads
         env:
           DATABASE_URL: "postgresql+asyncpg://modulo:modulo@localhost:5432/modulo"
           SECRET_KEY: "ci-secret-key-for-github-actions-testing-only"
@@ -69,7 +70,7 @@ jobs:
       - name: Start backend
         working-directory: backend
         run: |
-          uv run uvicorn modulo.api.main:app --host 0.0.0.0 --port 8000 > /tmp/backend.log 2>&1 &
+          uv run --no-sync uvicorn modulo.api.main:app --host 0.0.0.0 --port 8000 > /tmp/backend.log 2>&1 &
           echo "Backend PID: $!"
           sleep 3
           head -20 /tmp/backend.log
@@ -85,8 +86,10 @@ jobs:
           REDIS_URL: "redis://redis:6379/0"
       - name: Serve frontend
         working-directory: frontend
+        shell: bash
         run: npm run preview -- --port 4173 &
       - name: Wait for healthz
+        shell: bash
         run: |
           for i in $(seq 1 60); do
             if curl -sf http://localhost:8000/healthz > /dev/null 2>&1; then
@@ -101,11 +104,13 @@ jobs:
           ps aux | grep uvicorn || echo "(no uvicorn process)"
           exit 1
       - name: Wait for frontend
+        shell: bash
         run: npx wait-on http://localhost:4173 --timeout 30000
       - name: Run BDD tests
         working-directory: backend
+        shell: bash
         run: |
-          uv run pytest tests/bdd/ \
+          uv run --no-sync pytest tests/bdd/ \
             -m e2e \
             --base-url http://localhost:4173 \
             -q
