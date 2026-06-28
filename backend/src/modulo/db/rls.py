@@ -9,7 +9,6 @@ On generic backends (MariaDB, SQLite), tenant scoping stores the org_id in
 into every SELECT/UPDATE/DELETE automatically.
 """
 
-import asyncio
 import logging
 import uuid
 
@@ -26,29 +25,6 @@ _TENANT_KEY = "org_id"
 _TENANT_COLUMN = "organisation_id"
 
 
-async def _ensure_active_transaction(session: AsyncSession) -> str:
-    """Verify an active transaction exists and return the dialect name.
-
-    Shared preamble for set_rls_org and set_rls_user_context to avoid
-    duplicating the in_transaction guard and get_bind call.
-
-    Works with both async (AsyncSession) and sync (Session) sessions.
-    For sync sessions, get_bind() returns a sync Engine directly;
-    for async sessions, it returns a coroutine that must be awaited.
-    """
-    if not session.in_transaction():
-        raise RuntimeError(
-            "set_rls_* requires an active transaction; "
-            "wrap the call in `async with session.begin():`"
-        )
-    bind = session.get_bind()
-    if asyncio.iscoroutine(bind):
-        # AsyncSession — get_bind() returns a coroutine
-        bind = await bind
-    # Sync Session — get_bind() returns Engine directly
-    return bind.dialect.name
-
-
 async def set_rls_org(session: AsyncSession, org_id: uuid.UUID) -> None:
     """Activate RLS / tenant scoping for *org_id* within the current transaction.
 
@@ -59,16 +35,19 @@ async def set_rls_org(session: AsyncSession, org_id: uuid.UUID) -> None:
     Generic backends (MariaDB, SQLite): stores *org_id* in ``session.info``
     for the ``do_orm_execute`` tenant-filter listener to pick up.
     """
-    dialect = await _ensure_active_transaction(session)
+    if not session.in_transaction():
+        raise RuntimeError(
+            "set_rls_* requires an active transaction; "
+            "wrap the call in `async with session.begin():`"
+        )
 
-    if dialect == "postgresql":
-        # set_config(name, value, is_local=true) is equivalent to SET LOCAL and
-        # supports parameterised queries; bare SET LOCAL does not accept $1 placeholders.
+    # Always try Postgres set_config; fall back to session.info for generic backends.
+    try:
         await session.execute(
             text("SELECT set_config('app.organisation_id', :oid, true)"),
             {"oid": str(org_id)},
         )
-    else:
+    except Exception:
         session.info[_TENANT_KEY] = org_id
 
 
@@ -80,9 +59,13 @@ async def set_rls_user_context(session: AsyncSession, user_id: uuid.UUID, org_ro
     Postgres: calls ``set_config`` for ``app.user_id`` and ``app.org_role``.
     Generic backends: stores values in ``session.info`` for future use.
     """
-    dialect = await _ensure_active_transaction(session)
+    if not session.in_transaction():
+        raise RuntimeError(
+            "set_rls_* requires an active transaction; "
+            "wrap the call in `async with session.begin():`"
+        )
 
-    if dialect == "postgresql":
+    try:
         await session.execute(
             text("SELECT set_config('app.user_id', :uid, true)"),
             {"uid": str(user_id)},
@@ -91,7 +74,7 @@ async def set_rls_user_context(session: AsyncSession, user_id: uuid.UUID, org_ro
             text("SELECT set_config('app.org_role', :role, true)"),
             {"role": org_role},
         )
-    else:
+    except Exception:
         session.info["user_id"] = user_id
         session.info["org_role"] = org_role
 
