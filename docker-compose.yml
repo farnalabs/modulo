@@ -55,6 +55,7 @@ services:
       # Auto-login with the admin user seeded by MODULO_USERS below.
       - VITE_AUTO_LOGIN_USERNAME=admin
       - VITE_AUTO_LOGIN_PASSWORD=admin
+      - VITE_API_URL=http://backend:8000
 
 volumes:
   pgdata:
