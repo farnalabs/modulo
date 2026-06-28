@@ -16,7 +16,7 @@ concurrency:
 
 jobs:
   audit:
-    continue-on-error: true
+    continue-on-error: ${{ github.event_name != 'pull_request' }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
