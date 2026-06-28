@@ -164,26 +164,26 @@ async def _run_rotation_background(
 
                 result = await rotate_all_encrypted_data(session, new_key, old_key)
 
+                # Log completion inside the transaction so it gets committed
+                await append_audit_event(
+                    session,
+                    org_id=org_id,
+                    event_type="fernet_key_rotation_completed",
+                    actor_user_id=actor_user_id,
+                    resource_type="encryption",
+                    resource_id=org_id,
+                    payload_json={
+                        "tables_processed": result.tables_processed,
+                        "total_rows_reencrypted": result.total_rows_reencrypted,
+                    },
+                )
+
                 _last_rotation_result = {
                     "status": "completed",
                     "tables_processed": result.tables_processed,
                     "total_rows_reencrypted": result.total_rows_reencrypted,
                     "details": result.details,
                 }
-
-            # Log completion
-            await append_audit_event(
-                session,
-                org_id=org_id,
-                event_type="fernet_key_rotation_completed",
-                actor_user_id=actor_user_id,
-                resource_type="encryption",
-                resource_id=org_id,
-                payload_json={
-                    "tables_processed": result.tables_processed,
-                    "total_rows_reencrypted": result.total_rows_reencrypted,
-                },
-            )
 
         _log.info(
             "rotation.completed",
