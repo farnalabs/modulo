@@ -5,29 +5,24 @@ echo "=== Starting nginx ==="
 nginx -g "daemon off;" &
 NGINX_PID=$!
 
-# Fly attaches Postgres with DATABASE_URL=postgres://...?sslmode=disable
-# SQLAlchemy async drivers need postgresql+asyncpg:// and ?ssl=disable.
-RAW="$DATABASE_URL"
-# Simple string replacement — works in any POSIX shell
-FIXED="${RAW%%"postgres://"*}postgresql+asyncpg://${RAW#*"postgres://"}"
-FIXED="${FIXED%%"?sslmode=disable"*}${FIXED#*"?sslmode=disable"}"
-export DATABASE_URL="$FIXED"
-echo "DATABASE_URL fixed: $(echo "$DATABASE_URL" | cut -c1-80)..."
+# Fix DATABASE_URL using Python — the shell (dash) doesn't support
+# advanced parameter expansion, but Python is always available.
+export DATABASE_URL=$(.venv/bin/python3 -c "
+import os
+url = os.environ.get('DATABASE_URL', '')
+url = url.replace('postgres://', 'postgresql+asyncpg://', 1)
+url = url.replace('?sslmode=disable', '')
+url = url.replace('&sslmode=disable', '')
+print(url)
+")
 
 echo "=== Pre-creating alembic_version with VARCHAR(255) ==="
-# Branch migration IDs exceed VARCHAR(32). Must create the table with
-# VARCHAR(255) before alembic does it automatically.
-PG_URL="$(echo "$DATABASE_URL" | sed 's|postgresql+asyncpg://|postgres://|')"
 .venv/bin/python3 -c "
-import asyncio, asyncpg, os, re
-url = '$PG_URL'
+import asyncio, asyncpg, os
+url = os.environ['DATABASE_URL'].replace('postgresql+asyncpg://', 'postgres://')
 async def main():
     conn = await asyncpg.connect(url)
-    await conn.execute('''
-        CREATE TABLE IF NOT EXISTS alembic_version (
-            version_num VARCHAR(255) NOT NULL PRIMARY KEY
-        )
-    ''')
+    await conn.execute('CREATE TABLE IF NOT EXISTS alembic_version (version_num VARCHAR(255) NOT NULL PRIMARY KEY)')
     await conn.close()
 asyncio.run(main())
 print('alembic_version table ready')

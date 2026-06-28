@@ -11,27 +11,27 @@ from playwright.sync_api import Page
 from pytest_bdd import given, parsers, scenarios, then, when
 
 try:
-    scenarios("../../features/ui/theme_switching.feature")
+    scenarios("../features/ui/theme_switching.feature")
 except (FileNotFoundError, OSError):
     pass
 try:
-    scenarios("../../features/ui/real_time_updates.feature")
+    scenarios("../features/ui/real_time_updates.feature")
 except (FileNotFoundError, OSError):
     pass
 try:
-    scenarios("../../features/ui/run_detail.feature")
+    scenarios("../features/ui/run_detail.feature")
 except (FileNotFoundError, OSError):
     pass
 try:
-    scenarios("../../features/ui/org_settings.feature")
+    scenarios("../features/ui/org_settings.feature")
 except (FileNotFoundError, OSError):
     pass
 try:
-    scenarios("../../features/ui/pipeline_builder.feature")
+    scenarios("../features/ui/pipeline_builder.feature")
 except (FileNotFoundError, OSError):
     pass
 try:
-    scenarios("../../features/ui/eval_dashboard.feature")
+    scenarios("../features/ui/eval_dashboard.feature")
 except (FileNotFoundError, OSError):
     pass
 

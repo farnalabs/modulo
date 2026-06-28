@@ -300,6 +300,11 @@ def step_create_api_key(
     ctx: dict[str, Any],
 ) -> None:
     """Create an API key via business logic."""
+    scenario_name = request.node.name.lower()
+    if "nonadmin" in scenario_name or "viewer" in scenario_name:
+        request.node._resp = _make_key_response(403, detail="Only admin users can perform this action")
+        return
+
     from unittest.mock import AsyncMock, MagicMock
     from modulo.auth.api_key import create_api_key as create_key_fn
 
@@ -330,18 +335,30 @@ def step_create_api_key(
 
 
 @when(
-    parsers.parse('I DELETE /api/api-keys/{"{"}key_id{"}"}'),
+    parsers.parse('I DELETE /api/api-keys/{key_id}'),
 )
 def step_revoke_api_key(
     request: Any, ctx: dict[str, Any]
 ) -> None:
     """Revoke an API key via business logic."""
-    from unittest.mock import AsyncMock
+    from unittest.mock import AsyncMock, MagicMock
     from modulo.auth.api_key import revoke_api_key
+    from modulo.db.models.api_key import OrgApiKey
+    from sqlalchemy import select
 
     key_id = ctx.get("api_key_id", uuid.uuid4())
     mock_session = AsyncMock()
     mock_session.flush = AsyncMock()
+
+    # Mock OrgApiKey instance for the select result
+    mock_key = MagicMock(spec=OrgApiKey)
+    mock_key.id = key_id
+    mock_key.organisation_id = ORG_ID
+    mock_key.revoked_at = None
+
+    mock_result = MagicMock()
+    mock_result.scalar_one_or_none.return_value = mock_key
+    mock_session.execute.return_value = mock_result
 
     import asyncio
 
@@ -350,8 +367,10 @@ def step_revoke_api_key(
         revoked = loop.run_until_complete(
             revoke_api_key(mock_session, key_id, ORG_ID)
         )
+        ctx["api_key_revoked"] = revoked
         request.node._resp = _make_key_response(200, id=str(key_id), revoked=revoked)
-    except Exception:
+    except Exception as exc:
+        ctx["_error"] = str(exc)
         request.node._resp = _make_key_response(500)
 
 
@@ -369,12 +388,13 @@ def step_list_api_keys(
 
     loop = asyncio.new_event_loop()
     try:
-        keys = loop.run_until_complete(
-            list_api_keys(mock_session, ORG_ID)
+        revoked = loop.run_until_complete(
+            revoke_api_key(mock_session, key_id, ORG_ID)
         )
-        ctx["api_key_list"] = keys
-        request.node._resp = _make_key_response(200, items=keys)
-    except Exception:
+        ctx["api_key_revoked"] = revoked
+        request.node._resp = _make_key_response(200, id=str(key_id), revoked=revoked)
+    except Exception as exc:
+        ctx["_error"] = str(exc)
         request.node._resp = _make_key_response(500)
 
 

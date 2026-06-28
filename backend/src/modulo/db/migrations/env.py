@@ -21,7 +21,7 @@ if _db_url:
     # Fly.io Postgres attaches with postgres://...?sslmode=disable.
     # SQLAlchemy async drivers need postgresql+asyncpg:// and ssl=disable.
     _db_url = _db_url.replace("postgres://", "postgresql+asyncpg://", 1)
-    _db_url = _db_url.replace("?sslmode=disable", "?ssl=0")
+    _db_url = _db_url.replace("?sslmode=disable", "")
     config.set_main_option("sqlalchemy.url", _db_url)
 
 target_metadata = Base.metadata
