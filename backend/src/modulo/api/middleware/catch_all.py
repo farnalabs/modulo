@@ -16,19 +16,17 @@ class CatchAllMiddleware(BaseHTTPMiddleware):
         try:
             response = await call_next(request)
             return response  # type: ignore[no-any-return]
-        except Exception as exc:
+        except Exception:
             rid = getattr(request.state, "request_id", None)
             logger.exception(
                 "middleware.unhandled_exception",
                 extra={"method": request.method, "path": str(request.url.path), "request_id": rid},
             )
-            import traceback
-            tb_str = "".join(traceback.format_exception(type(exc), exc, exc.__traceback__))
             body = ErrorResponse(
                 error=ErrorDetail(
                     code="INTERNAL_ERROR",
-                    message=f"{type(exc).__name__}: {exc}",
-                    detail=tb_str[-2000:],
+                    message="An unexpected error occurred",
+                    detail=None,
                     request_id=rid,
                 )
             )

@@ -156,7 +156,7 @@ async def seed() -> None:
             ]
             backends = []
             for name, provider, model, config in mb_defs:
-                mb = ModelBackend(organisation_id=org.id, name=name, provider=provider, model_name=model, config_json=config, created_by=admin.id, visibility="org")
+                mb = ModelBackend(organisation_id=org.id, name=name, display_name=name, provider=provider, model_id=model, default_params=config, credentials_ciphertext=b"", created_by=admin.id, visibility="org")
                 session.add(mb)
                 await session.flush()
                 backends.append(mb)
@@ -193,6 +193,7 @@ async def seed() -> None:
                     connector_type_refs=connector_refs,
                     required_environment_capabilities=[],
                     retry_policy={},
+                    created_by=admin.id,
                 )
                 session.add(a)
                 await session.flush()
@@ -332,15 +333,15 @@ async def seed() -> None:
             # ── Eval Definitions (4) ──────────────────────────────────────
             eval_defs_list = []
             for ed_name, ed_type, ed_desc in [
-                ("PR Review Quality", "llm_as_judge", "Evaluates PR review quality using LLM-as-judge"),
-                ("Release Correctness", "assertion", "Asserts release output matches expected format"),
-                ("Sentiment Accuracy", "classification", "Validates sentiment classification accuracy"),
-                ("Response Time SLA", "latency", "Ensures pipeline completes within SLA bounds"),
+                ("PR Review Quality", "llm_judge", "Evaluates PR review quality using LLM-as-judge"),
+                ("Release Correctness", "json_schema", "Asserts release output matches expected format"),
+                ("Sentiment Accuracy", "llm_judge", "Validates sentiment classification accuracy"),
+                ("Response Time SLA", "custom_function", "Ensures pipeline completes within SLA bounds"),
             ]:
                 ed = EvalDefinition(
-                    organisation_id=org.id, name=ed_name, eval_type=ed_type, description=ed_desc,
-                    eval_config_json={}, rubric_json={}, created_by=admin.id,
-                    pipeline_id=pipelines_list[0].id, node_id=node_ids[0],
+                    organisation_id=org.id, name=ed_name, eval_type=ed_type,
+                    config_json={}, created_by=admin.id,
+                    pipeline_id=pipelines_list[0].id,
                 )
                 session.add(ed)
                 await session.flush()
@@ -351,10 +352,9 @@ async def seed() -> None:
             for i in range(12):
                 er = EvalResult(
                     organisation_id=org.id, eval_id=eval_defs_list[i % 4].id,
-                    pipeline_id=pipelines_list[0].id, run_id=None, passed=i % 3 != 0,
+                    run_id=runs_list[i % len(runs_list)].id, passed=i % 3 != 0,
                     score=0.75 + (i % 3) * 0.1, detail=f"eval-result-{i}: {'pass' if i % 3 != 0 else 'fail'}",
-                    evaluated_at=now - timedelta(hours=i * 6), execution_time_ms=1200 + i * 100,
-                    input_payload={}, output_payload={},
+                    evaluated_at=now - timedelta(hours=i * 6),
                 )
                 session.add(er)
             await session.flush()
@@ -421,18 +421,9 @@ async def seed() -> None:
                 # Stages for each run
                 stage_labels = pipeline_defs[pi]["stages"]
                 for si, sl in enumerate(stage_labels):
-                    stage_status = "complete"
-                    if statuses[i] == "failed" and si == len(stage_labels) - 2:
-                        stage_status = "failed"
-                    elif statuses[i] == "awaiting_human" and si == len(stage_labels) - 2:
-                        stage_status = "awaiting_human"
-                    elif statuses[i] == "running" and si > 1:
-                        stage_status = "pending"
                     session.add(Stage(
-                        organisation_id=org.id, run_id=run.id, pipeline_id=pipeline.id,
-                        name=sl, status=stage_status, stage_order=si,
-                        started_at=now - timedelta(hours=i * 3) if stage_status != "pending" else None,
-                        completed_at=now - timedelta(hours=i * 3 - 0.1) if stage_status == "complete" else None,
+                        organisation_id=org.id, name=sl,
+                        position=si, created_by=admin.id,
                     ))
                 await session.flush()
             print(f"[seed] 15 runs + stage records")
@@ -448,31 +439,19 @@ async def seed() -> None:
             print(f"[seed] 5 primitive ratings")
 
             # ── Feedback Records (5) ──────────────────────────────────────
-            feedback_texts = [
-                "The PR review pipeline caught a bug I would have missed. Saved the release!",
-                "Would be great to have more template options for incident response.",
-                "Release pipeline is smooth — the HITL gate gives me confidence.",
-                "The schema inference tool is really intuitive, love the autocomplete.",
-                "Documentation could be clearer on the deployment planner config.",
-            ]
-            for fi in range(5):
-                session.add(FeedbackRecord(
-                    organisation_id=org.id, user_id=users[fi + 2].id,
-                    category=["praise", "feature_request", "praise", "praise", "improvement"][fi],
-                    message=feedback_texts[fi], source="in-app",
-                ))
-            await session.flush()
-            print(f"[seed] 5 feedback records")
+            # Note: FeedbackRecord model is now for HITL gate rejection tracking,
+            # not generic user feedback. Skipping for now.
+            print(f"[seed] 0 feedback records")
 
             # ── API Keys (2) ──────────────────────────────────────────────
             session.add(OrgApiKey(
                 organisation_id=org.id, name="CI/CD Deployment Key",
-                key_prefix="mod_cd_", key_hash="hash_placeholder_1",
+                lookup_prefix="mod_cd_", hashed_secret="hash_placeholder_1",
                 role="operator", created_by=admin.id,
             ))
             session.add(OrgApiKey(
                 organisation_id=org.id, name="Dev Testing Key",
-                key_prefix="mod_dev_", key_hash="hash_placeholder_2",
+                lookup_prefix="mod_dev_", hashed_secret="hash_placeholder_2",
                 role="runner", created_by=admin.id,
             ))
             await session.flush()
