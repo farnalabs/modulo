@@ -1,9 +1,9 @@
 <template>
   <div class="flex min-h-screen">
     <!-- Sidebar -->
-    <aside class="hidden md:flex w-64 border-r bg-background p-4 flex-col">
-      <div class="mb-6 flex items-center gap-2.5 pl-1">
-        <div class="flex items-center justify-center rounded-lg bg-gradient-to-br from-primary/20 to-transparent p-1.5">
+    <aside class="hidden md:flex w-64 border-r bg-background p-4 flex-col shadow-lg shadow-black/10">
+      <div class="flex items-center gap-2.5 pl-1 pb-4 border-b border-border">
+          <div class="flex items-center justify-center rounded-lg bg-primary/10 p-1.5">
           <LogoMark :size="24" transparent />
         </div>
         <h2 class="text-lg font-bold tracking-tight">Modulo</h2>
@@ -20,7 +20,7 @@
         <div class="flex items-center gap-2">
           <div class="avatar-ring">
             <div
-              class="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-gradient-to-br from-primary to-teal-600 text-xs font-bold text-primary-foreground"
+              class="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-primary text-xs font-bold text-primary-foreground"
               :title="userEmail"
             >
               {{ userInitial }}
@@ -74,12 +74,12 @@
 
     <!-- Mobile sidebar -->
     <aside
-      class="md:hidden fixed top-0 left-0 z-50 h-full w-64 border-r bg-background p-4 flex flex-col transition-transform"
+      class="md:hidden fixed top-0 left-0 z-50 h-full w-64 border-r bg-background p-4 flex flex-col transition-transform shadow-xl shadow-black/20"
       :class="mobileOpen ? 'translate-x-0' : '-translate-x-full'"
     >
-      <div class="mb-6 flex items-center justify-between">
+      <div class="flex items-center justify-between pb-4 border-b border-border mb-4">
         <div class="flex items-center gap-2.5 pl-1">
-          <div class="flex items-center justify-center rounded-lg bg-gradient-to-br from-primary/20 to-transparent p-1.5">
+          <div class="flex items-center justify-center rounded-lg bg-primary/10 p-1.5">
             <LogoMark :size="24" transparent />
           </div>
           <h2 class="text-lg font-bold tracking-tight">Modulo</h2>
@@ -103,7 +103,7 @@
         <div class="flex items-center gap-2">
           <div class="avatar-ring">
             <div
-              class="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-gradient-to-br from-primary to-teal-600 text-xs font-bold text-primary-foreground"
+              class="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-primary text-xs font-bold text-primary-foreground"
               :title="userEmail"
             >
               {{ userInitial }}
