@@ -52,70 +52,72 @@
       </div>
     </aside>
 
-    <!-- Mobile header -->
-    <div class="md:hidden fixed top-0 left-0 right-0 z-50 bg-background border-b border-border px-4 py-3 flex items-center gap-3 shadow-sm">
-      <button
-        @click="mobileOpen = !mobileOpen"
-        class="rounded-md bg-background border border-border p-2 text-muted-foreground hover:text-foreground shrink-0"
-        aria-label="Toggle navigation"
-      >
-        <svg v-if="!mobileOpen" xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-          <line x1="3" y1="6" x2="21" y2="6"/>
-          <line x1="3" y1="12" x2="21" y2="12"/>
-          <line x1="3" y1="18" x2="21" y2="18"/>
-        </svg>
-        <svg v-else xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-          <line x1="18" y1="6" x2="6" y2="18"/>
-          <line x1="6" y1="6" x2="18" y2="18"/>
-        </svg>
-      </button>
-      <div class="flex items-center gap-2">
-        <div class="flex items-center justify-center rounded-lg bg-primary/10 p-1.5">
-          <LogoMark :size="20" transparent />
-        </div>
-        <span class="text-sm font-bold tracking-tight">Modulo</span>
-      </div>
-    </div>
-
-    <!-- Mobile menu panel (pushes content down) -->
-    <div
-      v-if="mobileOpen"
-      class="md:hidden bg-background border-b border-border overflow-hidden transition-all"
-      style="max-height: 100vh;"
-    >
-      <nav class="px-4 py-3 space-y-0.5">
-        <template v-for="item in navItems" :key="item.label">
-          <div v-if="item.type === 'section'" class="text-xs font-semibold text-muted-foreground uppercase tracking-wider px-3 py-2 mt-2">{{ item.label }}</div>
-          <router-link
-            v-else
-            :to="item.to"
-            class="flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm text-foreground hover:bg-accent transition-colors"
-            @click="mobileOpen = false"
-          >
-            <span class="h-4 w-4 shrink-0 text-muted-foreground" v-html="icons[item.icon]" />
-            <span>{{ item.label }}</span>
-          </router-link>
-        </template>
-      </nav>
-      <div class="border-t border-border px-4 py-3 flex items-center justify-between">
+    <!-- Content column: header + menu + pages -->
+    <div class="flex flex-1 flex-col min-h-screen overflow-hidden">
+      <!-- Mobile header (hidden on desktop) -->
+      <div class="md:hidden bg-background border-b border-border px-4 py-3 flex items-center gap-3 shrink-0">
+        <button
+          @click="mobileOpen = !mobileOpen"
+          class="rounded-md bg-background border border-border p-2 text-muted-foreground hover:text-foreground shrink-0"
+          aria-label="Toggle navigation"
+        >
+          <svg v-if="!mobileOpen" xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <line x1="3" y1="6" x2="21" y2="6"/>
+            <line x1="3" y1="12" x2="21" y2="12"/>
+            <line x1="3" y1="18" x2="21" y2="18"/>
+          </svg>
+          <svg v-else xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <line x1="18" y1="6" x2="6" y2="18"/>
+            <line x1="6" y1="6" x2="18" y2="18"/>
+          </svg>
+        </button>
         <div class="flex items-center gap-2">
-          <div class="flex h-7 w-7 items-center justify-center rounded-full bg-primary text-xs font-bold text-primary-foreground">
-            {{ userInitial }}
+          <div class="flex items-center justify-center rounded-lg bg-primary/10 p-1.5">
+            <LogoMark :size="20" transparent />
           </div>
-          <span class="text-sm text-muted-foreground truncate max-w-[120px]">{{ userEmail }}</span>
+          <span class="text-sm font-bold tracking-tight">Modulo</span>
         </div>
-        <button @click="logout" class="text-xs text-muted-foreground hover:text-foreground">Sign out</button>
       </div>
-    </div>
 
-    <main class="flex-1 overflow-auto md:pt-0 pt-14">
-      <router-view v-slot="{ Component }">
-        <transition name="page" mode="out-in">
-          <component :is="Component" />
-        </transition>
-      </router-view>
-    </main>
-  </div>
+      <!-- Mobile menu panel -->
+      <div
+        v-if="mobileOpen"
+        class="md:hidden bg-background border-b border-border overflow-y-auto shrink-0"
+        style="max-height: calc(100vh - 56px);"
+      >
+        <nav class="px-4 py-3 space-y-0.5">
+          <template v-for="item in navItems" :key="item.label">
+            <div v-if="item.type === 'section'" class="text-xs font-semibold text-muted-foreground uppercase tracking-wider px-3 py-2 mt-2">{{ item.label }}</div>
+            <router-link
+              v-else
+              :to="item.to"
+              class="flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm text-foreground hover:bg-accent transition-colors"
+              @click="mobileOpen = false"
+            >
+              <span class="h-4 w-4 shrink-0 text-muted-foreground" v-html="icons[item.icon]" />
+              <span>{{ item.label }}</span>
+            </router-link>
+          </template>
+        </nav>
+        <div class="border-t border-border px-4 py-3 flex items-center justify-between">
+          <div class="flex items-center gap-2">
+            <div class="flex h-7 w-7 items-center justify-center rounded-full bg-primary text-xs font-bold text-primary-foreground">
+              {{ userInitial }}
+            </div>
+            <span class="text-sm text-muted-foreground truncate max-w-[120px]">{{ userEmail }}</span>
+          </div>
+          <button @click="logout" class="text-xs text-muted-foreground hover:text-foreground">Sign out</button>
+        </div>
+      </div>
+
+      <main class="flex-1 overflow-auto">
+        <router-view v-slot="{ Component }">
+          <transition name="page" mode="out-in">
+            <component :is="Component" />
+          </transition>
+        </router-view>
+      </main>
+    </div>
 </template>
 
 <script lang="ts">
