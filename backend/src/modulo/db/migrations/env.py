@@ -86,7 +86,6 @@ def run_migrations_online() -> None:
     avoids all event-loop conflicts with the main async context.
     """
     url = config.get_main_option("sqlalchemy.url")
-    backend = _detect_backend(url)
 
     sync_url = url
     if "+async" in sync_url:
