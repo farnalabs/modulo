@@ -61,13 +61,9 @@
       </div>
     </div>
 
-    <div v-if="loading" class="flex items-center justify-center py-16">
-      <div class="h-8 w-8 animate-spin rounded-full border-4 border-primary border-t-transparent" />
-    </div>
+    <LoadingSpinner v-if="loading" />
 
-    <div v-else-if="error" class="rounded-lg border border-destructive/50 bg-destructive/10 p-4 text-destructive">
-      {{ error }}
-    </div>
+    <ErrorAlert v-else-if="error" :message="error" />
 
     <template v-else>
       <div v-if="records.length === 0" class="rounded-lg border bg-card p-8 text-center">
@@ -108,10 +104,7 @@
               <path d="m9 18 6-6-6-6" />
             </svg>
 
-            <span
-              class="inline-flex flex-shrink-0 items-center rounded-full px-2.5 py-0.5 text-xs font-medium"
-              :class="statusBadgeClass(record.status)"
-            >
+            <span :class="statusBadgeClass(record.status)">
               {{ record.status }}
             </span>
 
@@ -163,7 +156,7 @@
 
                 <div v-if="detailMap[record.id].correction_proposal">
                   <h3 class="mb-2 text-sm font-semibold text-muted-foreground uppercase tracking-wider">Correction Proposal</h3>
-                  <pre class="max-h-48 overflow-auto rounded-lg border border-blue-200 bg-blue-50 p-4 text-xs"><code>{{ formatJson(detailMap[record.id].correction_proposal) }}</code></pre>
+                  <pre class="max-h-48 overflow-auto rounded-lg border border-primary/20 bg-primary/5 p-4 text-xs"><code>{{ formatJson(detailMap[record.id].correction_proposal) }}</code></pre>
                 </div>
 
                 <div v-if="detailMap[record.id].status === 'pending' || detailMap[record.id].status === 'routing'">
@@ -217,6 +210,8 @@
 import { ref, onMounted } from 'vue'
 import { api } from '../lib/api/client'
 import type { components } from '../lib/api/client'
+import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
+import ErrorAlert from '../components/shared/ErrorAlert.vue'
 
 type FeedbackRecordItem = components['schemas']['FeedbackRecordItem']
 type FeedbackRecordDetail = components['schemas']['FeedbackRecordDetail']
@@ -244,13 +239,13 @@ const triggering = ref<Record<string, boolean>>({})
 
 function statusBadgeClass(status: string): string {
   const classMap: Record<string, string> = {
-    pending: 'bg-blue-50 text-blue-700',
-    routing: 'bg-amber-50 text-amber-700',
-    correcting: 'bg-purple-50 text-purple-700',
-    resolved: 'bg-green-50 text-green-700',
-    escalated: 'bg-red-50 text-red-700',
+    pending: 'badge badge-status-pending',
+    routing: 'badge badge-status-warning',
+    correcting: 'badge badge-context-purple',
+    resolved: 'badge badge-status-success',
+    escalated: 'badge badge-status-destructive',
   }
-  return classMap[status] ?? 'bg-gray-50 text-gray-700'
+  return classMap[status] ?? 'badge badge-context-slate'
 }
 
 function formatDate(dateStr: string): string {

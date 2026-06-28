@@ -64,14 +64,9 @@
       </div>
     </div>
 
-    <div v-if="loading" class="flex items-center justify-center py-16">
-      <div class="h-8 w-8 animate-spin rounded-full border-4 border-primary border-t-transparent" />
-    </div>
+    <LoadingSpinner v-if="loading" />
 
-    <div v-else-if="error" class="rounded-lg border border-destructive/50 bg-destructive/10 p-4 text-destructive">
-      {{ error }}
-      <button class="ml-2 underline" @click="loadEvents()">Retry</button>
-    </div>
+    <ErrorAlert v-else-if="error" :message="error" :on-retry="loadEvents" />
 
     <div v-else-if="items.length === 0" class="rounded-lg border bg-card p-8 text-center">
       <p class="text-lg font-medium">No trigger events found</p>
@@ -100,18 +95,12 @@
               class="transition-colors hover:bg-muted/30"
             >
               <td class="px-4 py-3">
-                <span
-                  class="inline-block rounded-full px-2.5 py-0.5 text-xs font-medium"
-                  :class="typeBadge(event.trigger_type)"
-                >
+                <span :class="typeBadge(event.trigger_type)">
                   {{ event.trigger_type }}
                 </span>
               </td>
               <td class="px-4 py-3">
-                <span
-                  class="inline-block rounded-full px-2.5 py-0.5 text-xs font-medium"
-                  :class="resultBadge(event.validation_result)"
-                >
+                <span :class="resultBadge(event.validation_result)">
                   {{ event.validation_result }}
                 </span>
               </td>
@@ -162,6 +151,8 @@
 import { ref, onMounted } from 'vue'
 import { api } from '../lib/api/client'
 import type { components } from '../lib/api/client'
+import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
+import ErrorAlert from '../components/shared/ErrorAlert.vue'
 
 type TriggerEventItem = components['schemas']['TriggerEventItem']
 
@@ -191,22 +182,22 @@ function formatTimestamp(ts: string | null): string {
 }
 
 function typeBadge(type: string): string {
-  if (type === 'manual') return 'bg-blue-100 text-blue-700'
-  if (type === 'webhook') return 'bg-purple-100 text-purple-700'
-  if (type === 'cron') return 'bg-amber-100 text-amber-700'
-  if (type === 'polling') return 'bg-cyan-100 text-cyan-700'
-  if (type === 'agent_signal') return 'bg-indigo-100 text-indigo-700'
-  return 'bg-gray-100 text-gray-700'
+  if (type === 'manual') return 'badge badge-context-blue'
+  if (type === 'webhook') return 'badge badge-context-purple'
+  if (type === 'cron') return 'badge badge-context-amber'
+  if (type === 'polling') return 'badge badge-context-cyan'
+  if (type === 'agent_signal') return 'badge badge-context-indigo'
+  return 'badge badge-context-slate'
 }
 
 function resultBadge(result: string): string {
-  if (result === 'accepted' || result === 'passed' || result === 'condition_met' || result === 'signal_fired') return 'bg-green-100 text-green-700'
-  if (result === 'no_match') return 'bg-slate-100 text-slate-700'
-  if (result === 'hmac_failed' || result === 'schema_validation_failed' || result === 'validation_failed') return 'bg-red-100 text-red-700'
-  if (result === 'deduplicated' || result === 'concurrency_limit_reached' || result === 'flood_rejected' || result === 'rate_limited') return 'bg-orange-100 text-orange-700'
-  if (result === 'timestamp_expired') return 'bg-gray-100 text-gray-700'
-  if (result === 'poll_error') return 'bg-rose-100 text-rose-700'
-  return 'bg-gray-100 text-gray-700'
+  if (result === 'accepted' || result === 'passed' || result === 'condition_met' || result === 'signal_fired') return 'badge badge-status-success'
+  if (result === 'no_match') return 'badge badge-context-slate'
+  if (result === 'hmac_failed' || result === 'schema_validation_failed' || result === 'validation_failed') return 'badge badge-status-destructive'
+  if (result === 'deduplicated' || result === 'concurrency_limit_reached' || result === 'flood_rejected' || result === 'rate_limited') return 'badge badge-context-orange'
+  if (result === 'timestamp_expired') return 'badge badge-context-slate'
+  if (result === 'poll_error') return 'badge badge-context-rose'
+  return 'badge badge-context-slate'
 }
 
 async function loadEvents(cursor?: string | null) {

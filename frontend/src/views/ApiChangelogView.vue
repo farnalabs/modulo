@@ -5,14 +5,9 @@
       <p class="mt-1 text-muted-foreground">Version history and deprecation notices for the Modulo API</p>
     </header>
 
-    <div v-if="loading" class="flex items-center justify-center py-16">
-      <div class="h-8 w-8 animate-spin rounded-full border-4 border-primary border-t-transparent" />
-    </div>
+    <LoadingSpinner v-if="loading" />
 
-    <div v-else-if="error" class="rounded-lg border border-destructive/50 bg-destructive/10 p-4 text-destructive">
-      {{ error }}
-      <button class="ml-2 underline" @click="loadChangelog">Retry</button>
-    </div>
+    <ErrorAlert v-else-if="error" :message="error" :on-retry="loadChangelog" />
 
     <div v-else-if="entries.length === 0" class="rounded-lg border bg-card p-8 text-center">
       <p class="text-lg font-medium">No changelog entries</p>
@@ -28,9 +23,7 @@
         <div class="border-b bg-muted/30 px-6 py-4">
           <div class="flex items-center justify-between">
             <div class="flex items-center gap-3">
-              <span
-                class="inline-flex items-center rounded-full bg-blue-100 px-3 py-0.5 text-sm font-semibold text-blue-700"
-              >
+              <span class="badge badge-context-blue text-sm font-semibold">
                 v{{ entry.version }}
               </span>
               <time class="text-sm text-muted-foreground">{{ entry.date }}</time>
@@ -60,14 +53,14 @@
           </ul>
 
           <div v-if="entry.deprecations && entry.deprecations.length > 0" class="mt-4">
-            <h3 class="mb-2 text-sm font-semibold text-amber-700 uppercase tracking-wide">Deprecations</h3>
+            <h3 class="mb-2 text-sm font-semibold text-warning uppercase tracking-wide">Deprecations</h3>
             <ul class="space-y-1.5">
               <li
                 v-for="(dep, i) in entry.deprecations"
                 :key="i"
-                class="flex items-start gap-2 text-sm text-amber-800"
+                class="flex items-start gap-2 text-sm text-warning"
               >
-                <span class="mt-0.5 h-1.5 w-1.5 shrink-0 rounded-full bg-amber-500" />
+                <span class="mt-0.5 h-1.5 w-1.5 shrink-0 rounded-full bg-warning" />
                 <span>{{ dep }}</span>
               </li>
             </ul>
@@ -81,6 +74,8 @@
 <script setup lang="ts">
 import { ref, onMounted } from 'vue'
 import { api } from '../lib/api/client'
+import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
+import ErrorAlert from '../components/shared/ErrorAlert.vue'
 
 interface ChangelogEntry {
   version: string

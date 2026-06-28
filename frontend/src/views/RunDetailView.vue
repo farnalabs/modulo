@@ -1,21 +1,14 @@
 <template>
   <div class="mx-auto max-w-6xl space-y-8 p-6">
-    <div v-if="loading" class="flex items-center justify-center py-16">
-      <div class="h-8 w-8 animate-spin rounded-full border-4 border-primary border-t-transparent" />
-    </div>
-    <div v-else-if="error" class="rounded-lg border border-destructive/50 bg-destructive/10 p-4 text-destructive">
-      {{ error }}
-    </div>
+    <LoadingSpinner v-if="loading" />
+    <ErrorAlert v-else-if="error" :message="error" />
     <template v-else-if="run">
       <!-- Run Header -->
       <header class="flex flex-wrap items-center justify-between gap-4">
         <div>
           <div class="flex items-center gap-3">
             <h1 class="text-3xl font-bold tracking-tight">Run Detail</h1>
-            <span
-              class="inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium"
-              :class="statusBadgeClass"
-            >{{ run.status }}</span>
+            <span :class="statusBadgeClass">{{ run.status }}</span>
           </div>
           <p class="mt-1 text-sm text-muted-foreground">
             Pipeline: <span class="font-medium text-foreground">{{ run.pipeline_id }}</span>
@@ -79,10 +72,7 @@
             >
               <td class="py-3 pr-4 font-medium">{{ node.name }}</td>
               <td class="py-3 pr-4">
-                <span
-                  class="inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium"
-                  :class="nodeStatusBadgeClass(node)"
-                >{{ node.status }}</span>
+                <span :class="nodeStatusBadgeClass(node)">{{ node.status }}</span>
               </td>
               <td class="py-3 pr-4 tabular-nums text-muted-foreground">{{ node.duration }}</td>
               <td class="py-3 pr-4 tabular-nums">{{ node.inputTokens ?? '—' }}</td>
@@ -149,6 +139,8 @@ import { computed, onMounted, ref } from 'vue'
 import { useRoute } from 'vue-router'
 import { api } from '../lib/api/client'
 import type { components } from '../lib/api/client'
+import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
+import ErrorAlert from '../components/shared/ErrorAlert.vue'
 
 type RunResponse = components['schemas']['RunResponse']
 type RunIOResponse = components['schemas']['RunIOResponse']
@@ -207,23 +199,23 @@ function formatJson(value: unknown): string {
 const statusBadgeClass = computed(() => {
   const s = run.value?.status ?? ''
   const map: Record<string, string> = {
-    running: 'bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-200',
-    complete: 'bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200',
-    failed: 'bg-red-100 text-red-800 dark:bg-red-900 dark:text-red-200',
-    cancelled: 'bg-yellow-100 text-yellow-800 dark:bg-yellow-900 dark:text-yellow-200',
-    pending: 'bg-gray-100 text-gray-800 dark:bg-gray-800 dark:text-gray-200',
-    awaiting_human: 'bg-amber-100 text-amber-800 dark:bg-amber-900 dark:text-amber-200',
+    running: 'badge badge-status-primary',
+    complete: 'badge badge-status-success',
+    failed: 'badge badge-status-destructive',
+    cancelled: 'badge badge-status-warning',
+    pending: 'badge badge-status-muted',
+    awaiting_human: 'badge badge-status-pending',
   }
-  return map[s] ?? 'bg-gray-100 text-gray-800'
+  return map[s] ?? 'badge badge-context-slate'
 })
 
 function nodeStatusBadgeClass(node: NodeEntry): string {
   const map: Record<string, string> = {
-    running: 'bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-200',
-    complete: 'bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200',
-    failed: 'bg-red-100 text-red-800 dark:bg-red-900 dark:text-red-200',
+    running: 'badge badge-status-primary',
+    complete: 'badge badge-status-success',
+    failed: 'badge badge-status-destructive',
   }
-  return map[node.status] ?? 'bg-gray-100 text-gray-800'
+  return map[node.status] ?? 'badge badge-context-slate'
 }
 
 const runTimestamps = computed(() => {

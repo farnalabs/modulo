@@ -1,11 +1,7 @@
 <template>
   <div class="mx-auto max-w-6xl space-y-8 p-6">
-    <div v-if="loading" class="flex items-center justify-center py-16">
-      <div class="h-8 w-8 animate-spin rounded-full border-4 border-primary border-t-transparent" />
-    </div>
-    <div v-else-if="error" class="rounded-lg border border-destructive/50 bg-destructive/10 p-4 text-destructive">
-      {{ error }}
-    </div>
+    <LoadingSpinner v-if="loading" />
+    <ErrorAlert v-else-if="error" :message="error" />
     <template v-else>
       <header>
         <h1 class="text-3xl font-bold tracking-tight">Variant Comparison</h1>
@@ -74,27 +70,24 @@
                 >
                   <div class="flex flex-col gap-1.5">
                     <div>
-                      <span
-                        v-if="getCellStatus(node, v.name) === 'pass'"
-                        class="inline-flex items-center gap-1 rounded-full border border-green-200 bg-green-50 px-2 py-0.5 text-xs font-medium text-green-700"
-                      >
-                        <span class="h-1.5 w-1.5 rounded-full bg-green-500" />
-                        pass
-                      </span>
-                      <span
-                        v-else-if="getCellStatus(node, v.name) === 'fail'"
-                        class="inline-flex items-center gap-1 rounded-full border border-red-200 bg-red-50 px-2 py-0.5 text-xs font-medium text-red-700"
-                      >
-                        <span class="h-1.5 w-1.5 rounded-full bg-red-500" />
-                        fail
-                      </span>
-                      <span
-                        v-else-if="getCellStatus(node, v.name) === 'partial'"
-                        class="inline-flex items-center gap-1 rounded-full border border-amber-200 bg-amber-50 px-2 py-0.5 text-xs font-medium text-amber-700"
-                      >
-                        <span class="h-1.5 w-1.5 rounded-full bg-amber-500" />
-                        partial
-                      </span>
+                  <span
+                    v-if="getCellStatus(node, v.name) === 'pass'"
+                    class="badge badge-status-success"
+                  >
+                    pass
+                  </span>
+                  <span
+                    v-else-if="getCellStatus(node, v.name) === 'fail'"
+                    class="badge badge-status-destructive"
+                  >
+                    fail
+                  </span>
+                  <span
+                    v-else-if="getCellStatus(node, v.name) === 'partial'"
+                    class="badge badge-status-warning"
+                  >
+                    partial
+                  </span>
                       <span
                         v-else
                         class="text-xs text-muted-foreground"
@@ -151,9 +144,9 @@
                       {{ s.tokenTotal.toLocaleString() }} tokens
                     </div>
                     <div class="flex gap-2 text-muted-foreground">
-                      <span v-if="s.approved > 0" class="text-green-600">+{{ s.approved }}</span>
-                      <span v-if="s.rejected > 0" class="text-red-600">-{{ s.rejected }}</span>
-                      <span v-if="s.pending > 0" class="text-amber-600">~{{ s.pending }}</span>
+                      <span v-if="s.approved > 0" class="text-success">+{{ s.approved }}</span>
+                      <span v-if="s.rejected > 0" class="text-destructive">-{{ s.rejected }}</span>
+                      <span v-if="s.pending > 0" class="text-warning">~{{ s.pending }}</span>
                       <span v-if="s.approved === 0 && s.rejected === 0 && s.pending === 0" class="text-muted-foreground/60">no HITL</span>
                     </div>
                   </div>
@@ -225,6 +218,8 @@
 import { ref, computed, onMounted, watch } from 'vue'
 import { api } from '../lib/api/client'
 import type { components } from '../lib/api/client'
+import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
+import ErrorAlert from '../components/shared/ErrorAlert.vue'
 
 type VariantGroup = components['schemas']['VariantGroupResponse']
 type RunResponse = components['schemas']['RunResponse']
@@ -326,12 +321,10 @@ const summaryByVariant = computed(() => {
   return result
 })
 
-function passRateClass(rate: number): Record<string, boolean> {
-  return {
-    'border-green-200 bg-green-50 text-green-700': rate >= 80,
-    'border-amber-200 bg-amber-50 text-amber-700': rate >= 40 && rate < 80,
-    'border-red-200 bg-red-50 text-red-700': rate < 40,
-  }
+function passRateClass(rate: number): string {
+  if (rate >= 80) return 'badge badge-status-success'
+  if (rate >= 40) return 'badge badge-status-warning'
+  return 'badge badge-status-destructive'
 }
 
 function getNodeEvalResults(nodeName: string, variantName: string): RunEvalItem[] {

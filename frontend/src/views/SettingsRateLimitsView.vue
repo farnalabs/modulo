@@ -5,14 +5,9 @@
       <p class="mt-1 text-muted-foreground">View per-route rate limiting rules and current usage</p>
     </header>
 
-    <div v-if="loading" class="flex items-center justify-center py-16">
-      <div class="h-8 w-8 animate-spin rounded-full border-4 border-primary border-t-transparent" />
-    </div>
+    <LoadingSpinner v-if="loading" />
 
-    <div v-else-if="loadError" class="rounded-lg border border-destructive/50 bg-destructive/10 p-4 text-destructive">
-      {{ loadError }}
-      <button class="ml-2 underline" @click="loadRules">Retry</button>
-    </div>
+    <ErrorAlert v-else-if="loadError" :message="loadError" :on-retry="loadRules" />
 
     <div v-else class="space-y-6">
       <div class="rounded-lg border bg-card p-6 shadow-sm">
@@ -20,7 +15,7 @@
           <h2 class="text-lg font-semibold">Mode</h2>
           <span
             class="rounded-full px-3 py-1 text-xs font-medium"
-            :class="mode === 'redis' ? 'bg-green-100 text-green-800' : 'bg-amber-100 text-amber-800'"
+            :class="mode === 'redis' ? 'badge badge-status-success' : 'badge badge-status-warning'"
           >
             {{ mode === 'redis' ? 'Redis' : 'In-Memory' }}
           </span>
@@ -58,6 +53,8 @@
 import { ref, onMounted } from 'vue'
 import { api } from '../lib/api/client'
 import type { components } from '../lib/api/client'
+import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
+import ErrorAlert from '../components/shared/ErrorAlert.vue'
 
 type RateLimitRule = components['schemas']['RateLimitRuleResponse']
 

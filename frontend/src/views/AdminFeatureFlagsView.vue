@@ -17,11 +17,11 @@
           /
           <span>{{ planStore.features ? Object.keys(planStore.features).length : 0 }}</span>
         </span>
-        <span v-if="planStore.isEnterprise" class="font-medium text-purple-600">Enterprise tier</span>
+        <span v-if="planStore.isEnterprise" class="font-medium badge badge-context-purple">Enterprise tier</span>
       </div>
     </header>
 
-    <div class="rounded-lg border bg-card p-4 shadow-sm">
+    <div class="card p-4">
       <h2 class="mb-3 text-lg font-semibold">License Status</h2>
       <div v-if="loading" class="flex items-center justify-center py-8">
         <div class="h-6 w-6 animate-spin rounded-full border-4 border-primary border-t-transparent" />
@@ -34,11 +34,7 @@
         <div>
           <span class="text-xs font-medium text-muted-foreground">License Key</span>
           <p class="mt-0.5">
-            <span
-              class="inline-flex items-center gap-1.5 rounded-full px-2.5 py-0.5 text-xs font-medium"
-              :class="license.has_license_key ? 'bg-green-100 text-green-700' : 'bg-gray-100 text-gray-500'"
-            >
-              <span class="h-1.5 w-1.5 rounded-full" :class="license.has_license_key ? 'bg-green-500' : 'bg-gray-400'" />
+            <span :class="license.has_license_key ? 'badge badge-status-success' : 'badge badge-status-muted'">
               {{ license.has_license_key ? 'Active' : 'Not set' }}
             </span>
           </p>
@@ -46,11 +42,7 @@
         <div>
           <span class="text-xs font-medium text-muted-foreground">Status</span>
           <p class="mt-0.5">
-            <span
-              class="inline-flex items-center gap-1.5 rounded-full px-2.5 py-0.5 text-xs font-medium"
-              :class="license.is_valid ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'"
-            >
-              <span class="h-1.5 w-1.5 rounded-full" :class="license.is_valid ? 'bg-green-500' : 'bg-red-500'" />
+            <span :class="license.is_valid ? 'badge badge-status-success' : 'badge badge-status-destructive'">
               {{ license.is_valid ? 'Valid' : 'Invalid' }}
             </span>
           </p>
@@ -58,9 +50,9 @@
       </div>
     </div>
 
-    <div v-if="wouldActivate.length > 0" class="rounded-lg border border-amber-200 bg-amber-50 p-4 shadow-sm">
-      <h2 class="mb-2 text-sm font-semibold text-amber-800">Would activate with a license key</h2>
-      <p class="mb-3 text-sm text-amber-700">
+    <div v-if="wouldActivate.length > 0" class="card p-4 border-warning/30">
+      <h2 class="mb-2 text-sm font-semibold text-warning">Would activate with a license key</h2>
+      <p class="mb-3 text-sm text-warning/80">
         The following {{ wouldActivate.length }} feature{{ wouldActivate.length === 1 ? '' : 's' }} would become available
         if an enterprise license key were configured.
       </p>
@@ -68,39 +60,33 @@
         <span
           v-for="flag in wouldActivate"
           :key="flag.name"
-          class="inline-flex items-center gap-1.5 rounded-full border border-amber-300 bg-amber-100 px-2.5 py-0.5 text-xs font-medium text-amber-800"
+          class="badge badge-status-warning"
         >
-          {{ flag.name }}
-          <span class="text-amber-500">({{ flag.tier }})</span>
+          {{ flag.name }} <span class="opacity-70">({{ flag.tier }})</span>
         </span>
       </div>
     </div>
 
-    <div v-if="loading" class="flex items-center justify-center py-16">
-      <div class="h-8 w-8 animate-spin rounded-full border-4 border-primary border-t-transparent" />
-    </div>
+    <LoadingSpinner v-if="loading" />
 
-    <div v-else-if="error" class="rounded-lg border border-destructive/50 bg-destructive/10 p-4 text-destructive">
-      {{ error }}
-      <button class="ml-2 underline" @click="loadFlags">Retry</button>
-    </div>
+    <ErrorAlert v-else-if="error" :message="error" :on-retry="loadFlags" />
 
-    <div v-else class="overflow-hidden rounded-lg border bg-card shadow-sm">
+    <div v-else class="card overflow-hidden">
       <table class="w-full">
-        <thead>
-          <tr class="border-b bg-muted/50 text-left text-xs font-medium uppercase text-muted-foreground">
-            <th class="px-4 py-3">Flag</th>
-            <th class="px-4 py-3">Tier</th>
-            <th class="px-4 py-3">Status</th>
-            <th class="px-4 py-3">Description</th>
-          </tr>
-        </thead>
-        <tbody class="divide-y">
-          <tr
-            v-for="flag in flags"
-            :key="flag.name"
-            class="transition-colors hover:bg-muted/30"
-          >
+  <thead>
+    <tr class="border-b bg-muted/30 text-left text-xs font-medium uppercase text-muted-foreground">
+      <th class="px-4 py-3">Flag</th>
+      <th class="px-4 py-3">Tier</th>
+      <th class="px-4 py-3">Status</th>
+      <th class="px-4 py-3">Description</th>
+    </tr>
+  </thead>
+  <tbody class="divide-y divide-border">
+    <tr
+      v-for="flag in flags"
+      :key="flag.name"
+      class="transition-colors hover:bg-muted/20"
+    >
             <td class="px-4 py-3 font-mono text-sm font-medium">{{ flag.name }}</td>
             <td class="px-4 py-3">
               <span
@@ -111,11 +97,7 @@
               </span>
             </td>
             <td class="px-4 py-3">
-              <span
-                class="inline-flex items-center gap-1.5 rounded-full px-2.5 py-0.5 text-xs font-medium"
-                :class="flag.currently_active ? 'bg-green-100 text-green-700' : 'bg-gray-100 text-gray-500'"
-              >
-                <span class="h-1.5 w-1.5 rounded-full" :class="flag.currently_active ? 'bg-green-500' : 'bg-gray-400'" />
+              <span :class="flag.currently_active ? 'badge badge-status-success' : 'badge badge-status-muted'">
                 {{ flag.currently_active ? 'Active' : 'Inactive' }}
               </span>
             </td>
@@ -131,6 +113,8 @@
 import { ref, computed, onMounted } from 'vue'
 import { api } from '../lib/api/client'
 import { usePlanStore } from '../stores/planStore'
+import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
+import ErrorAlert from '../components/shared/ErrorAlert.vue'
 
 const planStore = usePlanStore()
 
@@ -166,11 +150,11 @@ const error = ref<string | null>(null)
 
 function tierBadgeClass(tier: string): string {
   switch (tier) {
-    case 'free': return 'bg-green-100 text-green-700'
-    case 'enterprise': return 'bg-purple-100 text-purple-700'
-    case 'v1': return 'bg-blue-100 text-blue-700'
-    case 'v2': return 'bg-indigo-100 text-indigo-700'
-    default: return 'bg-gray-100 text-gray-700'
+    case 'free': return 'badge badge-status-success'
+    case 'enterprise': return 'badge badge-context-purple'
+    case 'v1': return 'badge badge-context-teal'
+    case 'v2': return 'badge badge-context-blue'
+    default: return 'badge badge-context-slate'
   }
 }
 

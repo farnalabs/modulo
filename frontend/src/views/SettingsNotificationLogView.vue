@@ -55,14 +55,9 @@
       </div>
     </div>
 
-    <div v-if="loading" class="flex items-center justify-center py-16">
-      <div class="h-8 w-8 animate-spin rounded-full border-4 border-primary border-t-transparent" />
-    </div>
+    <LoadingSpinner v-if="loading" />
 
-    <div v-else-if="error" class="rounded-lg border border-destructive/50 bg-destructive/10 p-4 text-destructive">
-      {{ error }}
-      <button class="ml-2 underline" @click="loadDeliveries()">Retry</button>
-    </div>
+    <ErrorAlert v-else-if="error" :message="error" :on-retry="loadDeliveries" />
 
     <div v-else-if="items.length === 0" class="rounded-lg border bg-card p-8 text-center">
       <p class="text-lg font-medium">No delivery logs found</p>
@@ -95,10 +90,7 @@
                 {{ entry.endpoint_url || '—' }}
               </td>
               <td class="px-4 py-3">
-                <span
-                  class="inline-block rounded-full px-2.5 py-0.5 text-xs font-medium"
-                  :class="statusBadge(entry.status)"
-                >
+                <span :class="statusBadge(entry.status)">
                   {{ entry.status }}
                 </span>
               </td>
@@ -141,6 +133,8 @@
 import { ref, onMounted } from 'vue'
 import { api } from '../lib/api/client'
 import type { components } from '../lib/api/client'
+import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
+import ErrorAlert from '../components/shared/ErrorAlert.vue'
 
 type DeliveryLogEntry = components['schemas']['DeliveryLogEntry']
 
@@ -167,11 +161,11 @@ function formatTimestamp(ts: string | null): string {
 }
 
 function statusBadge(status: string): string {
-  if (status === 'delivered' || status === 'success') return 'bg-green-100 text-green-700'
-  if (status === 'failed') return 'bg-red-100 text-red-700'
-  if (status === 'dead_lettered') return 'bg-gray-100 text-gray-700'
-  if (status === 'pending') return 'bg-amber-100 text-amber-700'
-  return 'bg-gray-100 text-gray-700'
+  if (status === 'delivered' || status === 'success') return 'badge badge-status-success'
+  if (status === 'failed') return 'badge badge-status-destructive'
+  if (status === 'dead_lettered') return 'badge badge-context-slate'
+  if (status === 'pending') return 'badge badge-status-warning'
+  return 'badge badge-context-slate'
 }
 
 async function loadDeliveries(cursor?: string | null) {

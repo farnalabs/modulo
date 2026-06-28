@@ -1,11 +1,7 @@
 <template>
   <div class="mx-auto max-w-6xl space-y-8 p-6">
-    <div v-if="loading" class="flex items-center justify-center py-16">
-      <div class="h-8 w-8 animate-spin rounded-full border-4 border-primary border-t-transparent" />
-    </div>
-    <div v-else-if="error" class="rounded-lg border border-destructive/50 bg-destructive/10 p-4 text-destructive">
-      {{ error }}
-    </div>
+    <LoadingSpinner v-if="loading" />
+    <ErrorAlert v-else-if="error" :message="error" />
     <template v-else>
       <header>
         <h1 class="text-3xl font-bold tracking-tight">A/B Test Models</h1>
@@ -201,11 +197,7 @@
                     >
                       <span
                         class="h-1.5 w-1.5 rounded-full"
-                        :class="{
-                          'bg-green-500': s.passRate >= 80,
-                          'bg-amber-500': s.passRate >= 40 && s.passRate < 80,
-                          'bg-red-500': s.passRate < 40,
-                        }"
+                        :class="s.passRate >= 80 ? 'bg-success' : s.passRate >= 40 ? 'bg-warning' : 'bg-destructive'"
                       />
                       {{ s.passRate.toFixed(0) }}%
                       <span class="font-normal opacity-70">({{ s.passedCount }}/{{ s.totalEvals }})</span>
@@ -278,6 +270,8 @@
 import { ref, computed, onMounted, watch } from 'vue'
 import { api } from '../lib/api/client'
 import type { components } from '../lib/api/client'
+import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
+import ErrorAlert from '../components/shared/ErrorAlert.vue'
 
 type PipelineItem = components['schemas']['PipelineItem']
 type VariantGroup = components['schemas']['VariantGroupResponse']
@@ -386,12 +380,10 @@ const summaryByVariant = computed(() => {
   return result
 })
 
-function passRateClass(rate: number): Record<string, boolean> {
-  return {
-    'border-green-200 bg-green-50 text-green-700': rate >= 80,
-    'border-amber-200 bg-amber-50 text-amber-700': rate >= 40 && rate < 80,
-    'border-red-200 bg-red-50 text-red-700': rate < 40,
-  }
+function passRateClass(rate: number): string {
+  if (rate >= 80) return 'badge badge-status-success'
+  if (rate >= 40) return 'badge badge-status-warning'
+  return 'badge badge-status-destructive'
 }
 
 function addVariant() {

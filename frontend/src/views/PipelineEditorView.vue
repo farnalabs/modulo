@@ -20,14 +20,14 @@
           <Background :gap="20" :size="1" />
           <Controls :showInteractive="false" />
           <template #node-manual="nodeProps">
-            <div class="rounded-lg border-2 border-amber-400 bg-amber-50 px-4 py-2 shadow-sm dark:border-amber-600 dark:bg-amber-950">
-              <div class="text-xs font-medium text-amber-600 dark:text-amber-400">MANUAL</div>
+            <div class="rounded-lg border-2 border-warning/60 bg-warning/10 px-4 py-2 shadow-sm">
+              <div class="text-xs font-medium text-warning">MANUAL</div>
               <div class="text-sm font-semibold">{{ nodeProps.data.label }}</div>
             </div>
           </template>
           <template #node-agent="nodeProps">
-            <div class="rounded-lg border-2 border-sky-400 bg-sky-50 px-4 py-2 shadow-sm dark:border-sky-600 dark:bg-sky-950">
-              <div class="text-xs font-medium text-sky-600 dark:text-sky-400">AGENT</div>
+            <div class="rounded-lg border-2 border-primary/60 bg-primary/10 px-4 py-2 shadow-sm">
+              <div class="text-xs font-medium text-primary">AGENT</div>
               <div class="text-sm font-semibold">{{ nodeProps.data.label }}</div>
             </div>
           </template>
@@ -46,9 +46,8 @@
             <dd>
               <span
                 :class="selectedNodeData.node_type === 'manual'
-                  ? 'text-amber-600 dark:text-amber-400'
-                  : 'text-sky-600 dark:text-sky-400'"
-                class="font-medium"
+                  ? 'badge badge-status-warning'
+                  : 'badge badge-status-primary'"
               >
                 {{ selectedNodeData.node_type === 'manual' ? 'Manual' : 'Agent' }}
               </span>

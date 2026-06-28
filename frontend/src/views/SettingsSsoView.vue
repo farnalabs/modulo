@@ -6,24 +6,19 @@
         <p class="mt-1 text-muted-foreground">Manage OIDC and SAML single sign-on providers</p>
       </div>
       <button
-        class="rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90"
+        class="btn-glow rounded-lg bg-gradient-to-r from-primary to-teal-600 px-4 py-2 text-sm font-semibold text-primary-foreground border border-primary/30 hover:border-primary/60 hover:brightness-110 transition-all duration-150"
         @click="openAddForm"
       >
         Add Provider
       </button>
     </header>
 
-    <div v-if="loading" class="flex items-center justify-center py-16">
-      <div class="h-8 w-8 animate-spin rounded-full border-4 border-primary border-t-transparent" />
-    </div>
+    <LoadingSpinner v-if="loading" />
 
-    <div v-else-if="error" class="rounded-lg border border-destructive/50 bg-destructive/10 p-4 text-destructive">
-      {{ error }}
-      <button class="ml-2 underline" @click="loadProviders">Retry</button>
-    </div>
+    <ErrorAlert v-else-if="error" :message="error" :on-retry="loadProviders" />
 
     <template v-else>
-      <div v-if="formMode === 'add'" class="rounded-lg border bg-card p-6 shadow-sm">
+      <div v-if="formMode === 'add'" class="card p-6">
         <h2 class="mb-4 text-lg font-semibold">New SSO Provider</h2>
         <SsoProviderForm
           :data="formData"
@@ -37,7 +32,7 @@
         />
       </div>
 
-      <div v-if="providers.length === 0" class="rounded-lg border bg-card p-8 text-center">
+      <div v-if="providers.length === 0" class="card p-8 text-center">
         <p class="text-lg font-medium">No SSO providers configured</p>
         <p class="mt-1 text-sm text-muted-foreground">
           Add an OIDC or SAML provider to enable single sign-on for your organisation.
@@ -48,13 +43,13 @@
         <div
           v-for="provider in providers"
           :key="provider.id"
-          class="rounded-lg border bg-card shadow-sm"
+          class="card"
         >
           <div class="flex items-center justify-between p-4">
             <div class="flex items-center gap-3">
               <div
                 class="flex h-10 w-10 items-center justify-center rounded-lg text-sm font-bold"
-                :class="provider.provider_type === 'oidc' ? 'bg-blue-100 text-blue-700' : 'bg-amber-100 text-amber-700'"
+                :class="provider.provider_type === 'oidc' ? 'badge badge-context-blue' : 'badge badge-context-amber'"
               >
                 {{ provider.provider_type === 'oidc' ? 'O' : 'S' }}
               </div>
@@ -131,7 +126,7 @@
             <div class="mt-3 flex items-center gap-2">
               <button
                 :disabled="deleting"
-                class="rounded-lg bg-destructive px-4 py-2 text-sm font-medium text-destructive-foreground hover:bg-destructive/90 disabled:opacity-50"
+                class="rounded-lg bg-destructive px-4 py-2 text-sm font-medium text-destructive-foreground hover:brightness-110 disabled:opacity-50 transition-all"
                 @click="deleteProvider(provider.id)"
               >
                 {{ deleting ? 'Deleting...' : 'Delete' }}
@@ -147,10 +142,10 @@
           </div>
 
           <div v-if="testResultProviderId === provider.id" class="border-t p-4">
-            <div
-              class="rounded-lg p-3 text-sm"
-              :class="testResult?.success ? 'bg-green-50 text-green-800' : 'bg-destructive/10 text-destructive'"
-            >
+              <div
+                class="rounded-lg p-3 text-sm"
+                :class="testResult?.success ? 'bg-success/10 text-success' : 'bg-destructive/10 text-destructive'"
+              >
               <p class="font-medium">{{ testResult?.success ? 'Connection successful' : 'Connection failed' }}</p>
               <p class="mt-1">{{ testResult?.message }}</p>
               <pre
@@ -170,6 +165,8 @@ import { ref, reactive, onMounted } from 'vue'
 import { api } from '../lib/api/client'
 import type { components } from '../lib/api/client'
 import SsoProviderForm from '../components/SsoProviderForm.vue'
+import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
+import ErrorAlert from '../components/shared/ErrorAlert.vue'
 
 type SsoProviderResponse = components['schemas']['SsoProviderResponse']
 type SsoProviderCreate = components['schemas']['SsoProviderCreate']

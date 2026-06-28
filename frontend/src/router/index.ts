@@ -23,6 +23,7 @@ import ApiChangelogView from '../views/ApiChangelogView.vue'
 import TeamComparisonView from '../views/TeamComparisonView.vue'
 import PipelineEditorView from '../views/PipelineEditorView.vue'
 import AdminUsersView from '../views/AdminUsersView.vue'
+import MyProfileView from '../views/MyProfileView.vue'
 
 const router = createRouter({
   history: createWebHistory(),
@@ -111,6 +112,11 @@ const router = createRouter({
       path: '/runs/:id',
       name: 'run-detail',
       component: RunDetailView,
+    },
+    {
+      path: '/admin/my-profile',
+      name: 'my-profile',
+      component: MyProfileView,
     },
     {
       path: '/admin/users',
