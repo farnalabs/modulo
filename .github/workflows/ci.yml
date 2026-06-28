@@ -25,7 +25,7 @@ jobs:
       - run: uv run --no-sync ruff check .
       - run: uv run --no-sync mypy src/modulo/
       - run: uv run --no-sync bandit -r src/modulo/ -ll
-      - run: .venv\Scripts\semgrep.exe --config=../.semgrep/ .
+      - run: .\.venv\Scripts\semgrep.exe --config=../.semgrep/ .
 
   frontend:
     name: Frontend
