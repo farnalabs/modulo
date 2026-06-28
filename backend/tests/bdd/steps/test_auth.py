@@ -379,20 +379,38 @@ def step_list_api_keys(
     request: Any, ctx: dict[str, Any]
 ) -> None:
     """List API keys via business logic."""
-    from unittest.mock import AsyncMock
+    from unittest.mock import AsyncMock, MagicMock
     from modulo.auth.api_key import list_api_keys
 
     mock_session = AsyncMock()
+
+    # Mock OrgApiKey instances for the select result
+    from datetime import UTC, datetime
+
+    mock_key = MagicMock()
+    mock_key.id = ctx.get("api_key_id", uuid.uuid4())
+    mock_key.name = ctx.get("api_key_name", "my-key")
+    mock_key.role = "operator"
+    mock_key.team_id = None
+    mock_key.lookup_prefix = "abc"
+    mock_key.last_used_at = None
+    mock_key.created_at = datetime.now(UTC)
+    mock_key.expires_at = None
+    mock_key.revoked_at = None
+
+    mock_result = MagicMock()
+    mock_result.scalars.return_value = [mock_key]
+    mock_session.execute.return_value = mock_result
 
     import asyncio
 
     loop = asyncio.new_event_loop()
     try:
-        revoked = loop.run_until_complete(
-            revoke_api_key(mock_session, key_id, ORG_ID)
+        keys = loop.run_until_complete(
+            list_api_keys(mock_session, ORG_ID)
         )
-        ctx["api_key_revoked"] = revoked
-        request.node._resp = _make_key_response(200, id=str(key_id), revoked=revoked)
+        ctx["api_key_list"] = keys
+        request.node._resp = _make_key_response(200, items=keys)
     except Exception as exc:
         ctx["_error"] = str(exc)
         request.node._resp = _make_key_response(500)
@@ -447,9 +465,13 @@ def step_wrong_api_key_request(
         loop.run_until_complete(
             validate_api_key(mock_session, "mk_badkey_invalid")
         )
-        request.node._resp = _make_key_response(200)
+        resp = _make_key_response(200)
+        request.node._resp = resp
+        request.node.response = resp
     except Exception:
-        request.node._resp = _make_key_response(401)
+        resp = _make_key_response(401)
+        request.node._resp = resp
+        request.node.response = resp
 
 
 # ===========================================================================
