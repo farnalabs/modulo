@@ -74,15 +74,16 @@ async def login(
     settings: Settings = Depends(get_settings),
     session: AsyncSession = Depends(get_db_session),
 ) -> LoginResponse:
-    user = await get_user_by_email(session, body.email)
-    if not user or not authenticate_db_user(body.password, user):
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Incorrect email or password",
-        )
+    async with session.begin():
+        user = await get_user_by_email(session, body.email)
+        if not user or not authenticate_db_user(body.password, user):
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Incorrect email or password",
+            )
 
-    await update_last_login(session, user.id)
-    family = await create_family(session, user.id, user.organisation_id)
+        await update_last_login(session, user.id)
+        family = await create_family(session, user.id, user.organisation_id)
 
     access_token = create_access_token(
         user.email,
