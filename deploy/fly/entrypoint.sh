@@ -19,6 +19,24 @@ esac
 # asyncpg accepts ?ssl= but not ?sslmode= — convert
 export DATABASE_URL="$(echo "$DATABASE_URL" | sed 's/sslmode=disable/ssl=disable/g; s/sslmode=prefer/ssl=prefer/g; s/sslmode=require/ssl=true/g')"
 
+echo "=== Pre-creating alembic_version with VARCHAR(255) ==="
+# Branch migration IDs exceed VARCHAR(32). Must create the table with
+# VARCHAR(255) before alembic does it automatically.
+.venv/bin/python3 -c "
+import asyncio, asyncpg, os
+url = os.environ['DATABASE_URL'].replace('postgresql+asyncpg://', 'postgres://')
+async def main():
+    conn = await asyncpg.connect(url)
+    await conn.execute('''
+        CREATE TABLE IF NOT EXISTS alembic_version (
+            version_num VARCHAR(255) NOT NULL PRIMARY KEY
+        )
+    ''')
+    await conn.close()
+asyncio.run(main())
+print('alembic_version table ready')
+" || echo "WARNING: Could not pre-create alembic_version — may fail on long rev IDs"
+
 echo "=== Running DB migrations ==="
 .venv/bin/alembic upgrade head || echo "WARNING: Migration failed — continuing anyway"
 
