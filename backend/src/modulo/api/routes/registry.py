@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import base64
 import hashlib
 import json
 from datetime import datetime
@@ -29,14 +30,17 @@ from modulo.core.registry.crypto import (
     generate_keypair as crypto_generate_keypair,
 )
 from modulo.core.registry.crypto import (
-    sign_primitive as crypto_sign_primitive,
-)
-from modulo.core.registry.crypto import (
     verify_signature as crypto_verify_signature,
 )
 from modulo.db.crud.library_primitive import create_library_primitive
 from modulo.db.crud.publisher import get_publisher_by_key as db_get_publisher_by_key
 from modulo.db.rls import set_rls_org
+from modulo.registry.crypto import (
+    verify as crypto_pem_verify,
+)
+from modulo.registry.crypto import (
+    verify_trust_anchor,
+)
 
 router = APIRouter(prefix="/api/v1/registry", tags=["registry"])
 
@@ -307,6 +311,8 @@ class PublishRequestV2(BaseModel):
     description: str = ""
     tags: list[str] = Field(default_factory=list)
     content_json: dict[str, Any]
+    signature: str = Field(min_length=1, description="Base64 Ed25519 signature of the payload")
+    public_key_pem: str = Field(min_length=1, description="PEM-encoded Ed25519 public key")
 
 
 class PublishResponseV2(BaseModel):
@@ -315,6 +321,8 @@ class PublishResponseV2(BaseModel):
     checksum_sha256: str
     ed25519_signature_hex: str
     signing_key_fingerprint: str
+    public_key_pem: str = ""
+    trust_anchor_verified: bool = False
     verified: bool
 
 
@@ -341,6 +349,7 @@ class VerifyResponseV2(BaseModel):
     publisher_status: str
     trust_tier: str | None = None
     publisher_name: str | None = None
+    trust_anchor_verified: bool = False
 
 
 @router.post("/publish", response_model=PublishResponseV2, status_code=status.HTTP_201_CREATED)
@@ -350,25 +359,49 @@ async def publish_primitive_v2(
 ) -> PublishResponseV2:
     """Publish a primitive to the registry (v2 protocol).
 
-    Generates a temp keypair, signs the primitive data with Ed25519,
-    computes a SHA-256 checksum, and stores the entry in the registry.
+    Accepts a signed payload — the client signs the primitive data with
+    their Ed25519 private key and sends the signature + public key.
+    The server verifies the signature before accepting.
     """
-    keypair = crypto_generate_keypair()
+    payload_bytes = json.dumps(
+        {
+            "author": body.author,
+            "name": body.name,
+            "primitive_type": body.primitive_type,
+            "description": body.description,
+            "tags": body.tags,
+            "content_json": body.content_json,
+        },
+        separators=(",", ":"),
+        sort_keys=True,
+    ).encode()
 
-    payload = {
-        "author": body.author,
-        "name": body.name,
-        "version": "1.0",
-        "primitive_type": body.primitive_type,
-        "description": body.description,
-        "tags": body.tags,
-        "content_json": body.content_json,
-    }
-    checksum = hashlib.sha256(
-        json.dumps(payload, separators=(",", ":"), sort_keys=True).encode()
-    ).hexdigest()
-    signature = crypto_sign_primitive(payload, keypair["private_key"])
+    if not crypto_pem_verify(body.public_key_pem, payload_bytes, body.signature):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Signature verification failed — payload does not match the provided public key",
+        )
 
+    trust_anchor_ok = verify_trust_anchor(body.public_key_pem, body.signature)
+
+    from cryptography.hazmat.primitives import serialization as pem_serialization
+    from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
+
+    pub_key = pem_serialization.load_pem_public_key(body.public_key_pem.encode())
+    if not isinstance(pub_key, Ed25519PublicKey):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid Ed25519 public key PEM",
+        )
+    public_raw = pub_key.public_bytes(
+        encoding=pem_serialization.Encoding.Raw,
+        format=pem_serialization.PublicFormat.Raw,
+    )
+    fingerprint = hashlib.sha256(public_raw).hexdigest()[:16]
+
+    sig_hex = base64.b64decode(body.signature).hex()
+
+    temp_keypair = crypto_generate_keypair()
     entry = await publish_primitive(
         author=body.author,
         name=body.name,
@@ -376,15 +409,22 @@ async def publish_primitive_v2(
         description=body.description,
         tags=body.tags,
         content_json=body.content_json,
-        signing_key_hex=keypair["private_key"],
+        signing_key_hex=temp_keypair["private_key"],
     )
+
+    entry.ed25519_signature_hex = sig_hex
+    entry.signing_key_fingerprint = fingerprint
+
+    checksum = hashlib.sha256(payload_bytes).hexdigest()
 
     return PublishResponseV2(
         slug=entry.slug,
         version=entry.version,
         checksum_sha256=checksum,
-        ed25519_signature_hex=signature,
-        signing_key_fingerprint=keypair["fingerprint"],
+        ed25519_signature_hex=sig_hex,
+        signing_key_fingerprint=fingerprint,
+        public_key_pem=body.public_key_pem,
+        trust_anchor_verified=trust_anchor_ok,
         verified=True,
     )
 
@@ -429,17 +469,19 @@ async def pull_registry_primitive_v2(
 async def verify_registry_primitive_v2(
     slug: str,
     public_key_hex: str | None = None,
+    public_key_pem: str | None = None,
     session: AsyncSession = Depends(get_db_session),
     principal: AuthenticatedPrincipal = Depends(get_current_user),
 ) -> VerifyResponseV2:
     """Verify a published primitive's signature (v2 protocol).
 
-    Optionally accepts a ``public_key_hex`` query parameter to verify
-    against a specific public key.  Otherwise uses the built-in registry
-    key or the publisher's registered key.
+    Accepts an optional ``public_key_hex`` parameter for hex-encoded key
+    verification, or ``public_key_pem`` for PEM-encoded key verification
+    with trust anchor support.  When neither is provided, uses the
+    built-in registry key.
 
-    Returns the publisher's trust tier (green/amber/null) and name
-    when a matching publisher is found.
+    Returns trust anchor verification status, the publisher's trust tier
+    (green/amber/null) and name when a matching publisher is found.
     """
     entry = get_registry_primitive(slug)
     if entry is None:
@@ -452,8 +494,30 @@ async def verify_registry_primitive_v2(
     trust_tier: str | None = None
     publisher_name: str | None = None
     verified = False
+    trust_anchor_verified = False
 
-    if public_key_hex:
+    if public_key_pem:
+        payload_bytes = json.dumps(
+            {
+                "author": entry.author,
+                "name": entry.name,
+                "version": entry.version,
+                "primitive_type": entry.primitive_type,
+                "description": entry.description,
+                "tags": entry.tags,
+                "content_json": entry.content_json,
+            },
+            separators=(",", ":"),
+            sort_keys=True,
+        ).encode()
+
+        sig_b64 = base64.b64encode(
+            bytes.fromhex(entry.ed25519_signature_hex)
+        ).decode()
+
+        verified = crypto_pem_verify(public_key_pem, payload_bytes, sig_b64)
+        trust_anchor_verified = verify_trust_anchor(public_key_pem, sig_b64)
+    elif public_key_hex:
         payload = {
             "author": entry.author,
             "name": entry.name,
@@ -483,6 +547,7 @@ async def verify_registry_primitive_v2(
         publisher_status=publisher_status,
         trust_tier=trust_tier,
         publisher_name=publisher_name,
+        trust_anchor_verified=trust_anchor_verified,
     )
 
 
