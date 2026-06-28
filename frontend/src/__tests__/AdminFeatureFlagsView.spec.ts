@@ -5,25 +5,28 @@ import { nextTick } from 'vue'
 vi.mock('../lib/api/client', () => ({
   api: {
     GET: vi.fn().mockResolvedValue({
-      data: { mode: 'in_memory', rules: [] },
+      data: {
+        license: { tier: 'free', has_license_key: false, is_valid: true },
+        flags: [],
+        would_activate: [],
+      },
       error: undefined,
     }),
-    PUT: vi.fn().mockResolvedValue({ data: null, error: undefined }),
   },
   getAccessToken: vi.fn().mockReturnValue('mock-token'),
 }))
 
-import SettingsRateLimitsView from '../views/SettingsRateLimitsView.vue'
+import AdminFeatureFlagsView from '../views/AdminFeatureFlagsView.vue'
 
-describe('SettingsRateLimitsView', () => {
+describe('AdminFeatureFlagsView', () => {
   beforeEach(() => {
     vi.clearAllMocks()
   })
 
   it('renders without crashing', async () => {
-    const wrapper = mount(SettingsRateLimitsView)
+    const wrapper = mount(AdminFeatureFlagsView)
     await nextTick()
     expect(wrapper.exists()).toBe(true)
-    expect(wrapper.text()).toContain('Rate Limits')
+    expect(wrapper.text()).toContain('Feature Flags')
   })
 })

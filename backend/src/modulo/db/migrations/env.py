@@ -61,8 +61,6 @@ def run_migrations_offline() -> None:
         target_metadata=target_metadata,
         literal_binds=True,
         dialect_opts={"paramstyle": "named"},
-        # SQLite does not support ALTER with ALTER TABLE ADD COLUMN in the
-        # same way as Postgres; Alembic handles this with batch mode.
         render_as_batch=backend == "sqlite",
     )
     with context.begin_transaction():
@@ -96,11 +94,25 @@ async def run_async_migrations() -> None:
 
 
 def run_migrations_online() -> None:
-    # Create a dedicated event loop for this thread.
-    # This works in any context: main async thread, thread pool thread
-    # (asyncio.to_thread), or fully synchronous code.
-    with asyncio.Runner() as runner:
-        runner.run(run_async_migrations())
+    """Create a dedicated event loop and run async migrations.
+
+    env.py is called from asyncio.to_thread (thread pool), NOT the main
+    async context, so there is no running event loop to conflict with.
+    """
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    try:
+        loop.run_until_complete(run_async_migrations())
+    finally:
+        try:
+            loop.run_until_complete(loop.shutdown_asyncgens())
+        except RuntimeError:
+            pass
+        loop.close()
+        try:
+            asyncio.set_event_loop(None)
+        except RuntimeError:
+            pass
 
 
 # Only auto-run when env.py is invoked by Alembic CLI / command.upgrade.

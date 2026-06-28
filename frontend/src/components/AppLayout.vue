@@ -11,6 +11,8 @@
         <SidebarLink to="/" icon="LayoutDashboard" label="Dashboard" />
         <SidebarLink to="/library" icon="BookOpen" label="Library" />
         <SidebarLink to="/pipelines" icon="GitBranch" label="Pipelines" />
+        <SidebarLink to="/evals/editor" icon="CheckSquare" label="Evals" />
+        <SidebarLink to="/variants/compare" icon="GitFork" label="Variants" />
 
         <div class="mt-6 mb-2 text-xs font-medium text-muted-foreground uppercase tracking-wider">Settings</div>
         <SidebarLink to="/settings/observability" icon="Eye" label="Observability" />
@@ -18,9 +20,11 @@
         <SidebarLink to="/settings/sso" icon="Shield" label="SSO" />
         <SidebarLink to="/settings/rate-limits" icon="Gauge" label="Rate Limits" />
         <SidebarLink to="/settings/runtime-config" icon="Settings" label="Runtime Config" />
+        <SidebarLink to="/schemas/infer" icon="Database" label="Schema Inference" />
 
         <div class="mt-6 mb-2 text-xs font-medium text-muted-foreground uppercase tracking-wider">Admin</div>
         <SidebarLink to="/admin/users" icon="UserCircle" label="Users" />
+        <SidebarLink to="/feedback/inbox" icon="MessageSquare" label="Feedback Inbox" />
         <SidebarLink to="/admin/audit" icon="FileText" label="Audit Log" />
         <SidebarLink to="/admin/feature-flags" icon="Flag" label="Feature Flags" />
         <SidebarLink to="/admin/api-changelog" icon="History" label="Changelog" />
@@ -98,6 +102,8 @@
         <SidebarLink to="/" icon="LayoutDashboard" label="Dashboard" @click="mobileOpen = false" />
         <SidebarLink to="/library" icon="BookOpen" label="Library" @click="mobileOpen = false" />
         <SidebarLink to="/pipelines" icon="GitBranch" label="Pipelines" @click="mobileOpen = false" />
+        <SidebarLink to="/evals/editor" icon="CheckSquare" label="Evals" @click="mobileOpen = false" />
+        <SidebarLink to="/variants/compare" icon="GitFork" label="Variants" @click="mobileOpen = false" />
 
         <div class="mt-6 mb-2 text-xs font-medium text-muted-foreground uppercase tracking-wider">Settings</div>
         <SidebarLink to="/settings/observability" icon="Eye" label="Observability" @click="mobileOpen = false" />
@@ -105,9 +111,11 @@
         <SidebarLink to="/settings/sso" icon="Shield" label="SSO" @click="mobileOpen = false" />
         <SidebarLink to="/settings/rate-limits" icon="Gauge" label="Rate Limits" @click="mobileOpen = false" />
         <SidebarLink to="/settings/runtime-config" icon="Settings" label="Runtime Config" @click="mobileOpen = false" />
+        <SidebarLink to="/schemas/infer" icon="Database" label="Schema Inference" @click="mobileOpen = false" />
 
         <div class="mt-6 mb-2 text-xs font-medium text-muted-foreground uppercase tracking-wider">Admin</div>
         <SidebarLink to="/admin/users" icon="UserCircle" label="Users" @click="mobileOpen = false" />
+        <SidebarLink to="/feedback/inbox" icon="MessageSquare" label="Feedback Inbox" @click="mobileOpen = false" />
         <SidebarLink to="/admin/audit" icon="FileText" label="Audit Log" @click="mobileOpen = false" />
         <SidebarLink to="/admin/feature-flags" icon="Flag" label="Feature Flags" @click="mobileOpen = false" />
         <SidebarLink to="/admin/api-changelog" icon="History" label="Changelog" @click="mobileOpen = false" />
@@ -167,6 +175,10 @@ const icons: Record<string, string> = {
   BarChart: '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="20" x2="12" y2="10"/><line x1="18" y1="20" x2="18" y2="4"/><line x1="6" y1="20" x2="6" y2="16"/></svg>',
   History: '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>',
   UserCircle: '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="8" r="5"/><path d="M3 21v-2a7 7 0 0 1 7-7h4a7 7 0 0 1 7 7v2"/></svg>',
+  CheckSquare: '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 11 12 14 22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg>',
+  GitFork: '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="18" r="3"/><circle cx="6" cy="6" r="3"/><circle cx="18" cy="6" r="3"/><path d="M18 9v1a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2V9"/><path d="M12 12v3"/></svg>',
+  Database: '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3"/><path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"/></svg>',
+  MessageSquare: '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>',
 }
 
 export const SidebarLink = defineComponent({

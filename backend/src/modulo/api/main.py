@@ -144,14 +144,13 @@ async def _run_migrations(settings: Settings) -> None:
             extra={"heads": list(heads), "applied": list(applied)},
         )
 
-        # Run migrations via Alembic's command.upgrade in the main async context.
-        # env.py's run_migrations_online() uses asyncio.Runner() to create a
-        # dedicated event loop, which is safe to call within a running loop.
         def _upgrade() -> None:
             from alembic import command
             command.upgrade(alembic_cfg, "heads")
 
-        _upgrade()
+        # Run migrations in a thread pool so that env.py can create a
+        # dedicated event loop without conflicting with the main loop.
+        await asyncio.to_thread(_upgrade)
         logger.info("startup.migrations_complete")
     except BaseException:
         logger.exception("startup.migrations_failed")

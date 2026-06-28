@@ -22,8 +22,7 @@ import asyncpg
 
 async def _bootstrap():
     pg_url = url.replace("postgresql+asyncpg://", "postgres://")
-    # Don't pass ssl=False — the URL already has ?ssl=disable from settings fix
-    conn = await asyncpg.connect(pg_url)
+    conn = await asyncpg.connect(pg_url, ssl=False)
     try:
         await conn.execute(
             "CREATE TABLE IF NOT EXISTS alembic_version ("

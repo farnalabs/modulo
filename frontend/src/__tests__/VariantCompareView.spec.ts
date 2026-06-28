@@ -4,26 +4,23 @@ import { nextTick } from 'vue'
 
 vi.mock('../lib/api/client', () => ({
   api: {
-    GET: vi.fn().mockResolvedValue({
-      data: { mode: 'in_memory', rules: [] },
-      error: undefined,
-    }),
-    PUT: vi.fn().mockResolvedValue({ data: null, error: undefined }),
+    GET: vi.fn().mockResolvedValue({ data: [], error: undefined }),
+    POST: vi.fn().mockResolvedValue({ data: null, error: undefined }),
   },
   getAccessToken: vi.fn().mockReturnValue('mock-token'),
 }))
 
-import SettingsRateLimitsView from '../views/SettingsRateLimitsView.vue'
+import VariantCompareView from '../views/VariantCompareView.vue'
 
-describe('SettingsRateLimitsView', () => {
+describe('VariantCompareView', () => {
   beforeEach(() => {
     vi.clearAllMocks()
   })
 
   it('renders without crashing', async () => {
-    const wrapper = mount(SettingsRateLimitsView)
+    const wrapper = mount(VariantCompareView)
     await nextTick()
     expect(wrapper.exists()).toBe(true)
-    expect(wrapper.text()).toContain('Rate Limits')
+    expect(wrapper.text()).toContain('Variant Comparison')
   })
 })
