@@ -22,6 +22,7 @@ import AdminFeatureFlagsView from '../views/AdminFeatureFlagsView.vue'
 import ApiChangelogView from '../views/ApiChangelogView.vue'
 import TeamComparisonView from '../views/TeamComparisonView.vue'
 import PipelineEditorView from '../views/PipelineEditorView.vue'
+import AdminUsersView from '../views/AdminUsersView.vue'
 
 const router = createRouter({
   history: createWebHistory(),
@@ -112,6 +113,11 @@ const router = createRouter({
       component: RunDetailView,
     },
     {
+      path: '/admin/users',
+      name: 'admin-users',
+      component: AdminUsersView,
+    },
+    {
       path: '/admin/audit',
       name: 'admin-audit',
       component: AdminAuditView,
@@ -140,6 +146,9 @@ const router = createRouter({
 })
 
 router.beforeEach((to) => {
+  if (to.name === 'login' && getAccessToken()) {
+    return { name: 'dashboard' }
+  }
   if (to.name !== 'login' && !getAccessToken()) {
     return { name: 'login' }
   }

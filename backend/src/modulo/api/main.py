@@ -118,8 +118,11 @@ async def _run_migrations(settings: Settings) -> None:
 
         engine = get_or_create_engine(settings)
         async with engine.connect() as conn:
-            result = await conn.execute(text("SELECT version_num FROM alembic_version"))
-            applied = {row[0] for row in result.fetchall()}
+            try:
+                result = await conn.execute(text("SELECT version_num FROM alembic_version"))
+                applied = {row[0] for row in result.fetchall()}
+            except Exception:
+                applied = set()
 
         if applied == heads:
             logger.info("startup.migrations_current")
@@ -130,14 +133,16 @@ async def _run_migrations(settings: Settings) -> None:
             extra={"heads": list(heads), "applied": list(applied)},
         )
 
+        # Run migrations via Alembic's command.upgrade in the main async context.
+        # env.py's run_migrations_online() uses asyncio.Runner() to create a
+        # dedicated event loop, which is safe to call within a running loop.
         def _upgrade() -> None:
             from alembic import command
-
             command.upgrade(alembic_cfg, "heads")
 
-        await asyncio.to_thread(_upgrade)
+        _upgrade()
         logger.info("startup.migrations_complete")
-    except Exception:
+    except BaseException:
         logger.exception("startup.migrations_failed")
         raise
 
