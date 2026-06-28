@@ -7,7 +7,7 @@ Feature: Input Sanitization
     Given I am authenticated in org "acme"
     When I POST /api/pipelines with empty JSON body
     Then the response status is 422
-    And the error mentions "name"
+    And the error mentions "body.name"
 
   Scenario: Invalid cron expression is rejected
     Given I am authenticated in org "acme"
