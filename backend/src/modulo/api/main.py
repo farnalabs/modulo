@@ -109,52 +109,8 @@ async def _verify_db_connectivity(settings: Settings) -> None:
 
 
 async def _run_migrations(settings: Settings) -> None:
-    """Run Alembic migrations to bring the schema up to date.
-
-    Checks current revision state first to avoid hanging on
-    multi-head schemas that are already fully applied.
-    """
-    try:
-        from alembic.config import Config
-        from alembic.script import ScriptDirectory
-        from sqlalchemy import text
-
-        alembic_cfg = Config("alembic.ini")
-        alembic_cfg.set_main_option("sqlalchemy.url", settings.database_url)
-
-        script = ScriptDirectory.from_config(alembic_cfg)
-        heads = set(script.get_heads())
-
-        from modulo.api.dependencies import get_or_create_engine
-
-        engine = get_or_create_engine(settings)
-        async with engine.connect() as conn:
-            try:
-                result = await conn.execute(text("SELECT version_num FROM alembic_version"))
-                applied = {row[0] for row in result.fetchall()}
-            except Exception:
-                applied = set()
-
-        if applied == heads:
-            logger.info("startup.migrations_current")
-            return
-
-        logger.info(
-            "startup.migrations_needed",
-            extra={"heads": list(heads), "applied": list(applied)},
-        )
-
-        def _upgrade() -> None:
-            from alembic import command
-            command.upgrade(alembic_cfg, "heads")
-
-        # Run migrations in a thread pool so that env.py can create a
-        # dedicated event loop without conflicting with the main loop.
-        await asyncio.to_thread(_upgrade)
-        logger.info("startup.migrations_complete")
-    except BaseException:
-        logger.exception("startup.migrations_failed")
-        raise
+    """Migrations are run by entrypoint.sh before uvicorn starts."""
+    logger.info("startup.migrations_handled_by_entrypoint")
 
 
 async def _ensure_default_org(settings: Settings) -> None:

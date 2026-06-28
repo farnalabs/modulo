@@ -55,7 +55,7 @@ jobs:
       - name: Validate product map graph
         shell: powershell
         run: |
-          & "C:\Users\dunca\Dropbox\Modulo\Development\Dev-Harness\tools\graph-validate.ps1" -CI
+          & tools\graph-validate.ps1 -CI
 
   gitleaks:
     name: Secret scan

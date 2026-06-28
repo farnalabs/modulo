@@ -1,6 +1,7 @@
 ---
 id: feat-core-runtime-config
-prd: §15
+prd: 6
+
 delivery-tasks:
   - task-nv18-runtime-config-backend
   - task-nv18-runtime-config-frontend

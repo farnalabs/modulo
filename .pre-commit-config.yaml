@@ -27,7 +27,7 @@ repos:
     hooks:
       - id: graph-validate
         name: graph-validate
-        entry: powershell -NoProfile -File C:\Users\dunca\Dropbox\Modulo\Development\Dev-Harness\tools\graph-validate.ps1
+        entry: powershell -NoProfile -File tools\graph-validate.ps1
         language: system
         files: ^docs/product-map/
         pass_filenames: false
