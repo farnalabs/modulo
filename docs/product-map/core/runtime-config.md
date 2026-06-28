@@ -35,9 +35,9 @@ environment-variable values, and hot-reloadable vs static settings.
 - [x] Frontend displays hot/static badges with tooltip explaining restart requirement
 
 ### Edge Cases
-- [ ] Override set to empty string is stored (clearing = explicit unset via clear list)
-- [ ] Unknown key in overrides dict is stored but not returned in get_all (only KNOWN_KEYS are returned)
-- [ ] Reload called with no env var changes returns has_drift false
-- [ ] All overrides cleared returns provenance to environment or default
-- [ ] Frontend error state on API failure with retry
-- [ ] Frontend loading state during API calls
+- [x] Override set to empty string is stored (clearing = explicit unset via clear list)
+- [x] Unknown key in overrides dict is stored but not returned in get_all (only KNOWN_KEYS are returned)
+- [x] Reload called with no env var changes returns has_drift false
+- [x] All overrides cleared returns provenance to environment or default
+- [x] Frontend error state on API failure with retry
+- [x] Frontend loading state during API calls

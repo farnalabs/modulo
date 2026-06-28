@@ -47,7 +47,7 @@ Async GitHub REST API connector implementing `ConnectorBase`. Provides read/writ
 - [x] Filter PRs by state (default `"open"`)
 - [x] Limit results via `q.limit`
 - [x] Raise `ValueError` for unsupported resources in `query()`
-- [x] Post PR comment (BDD scenario exists in `github.feature`)
+- [ ] Post PR comment (BDD scenario exists in `github.feature` but no `write("pr_comment")` implementation)
 - [ ] **Create PR** — `Capability.CREATE_PR` declared in `base.py` but no `write("pr")` implementation in `GitHubConnector`
 - [ ] Merge PR — no implementation
 - [ ] List PR files/changed files — not implemented

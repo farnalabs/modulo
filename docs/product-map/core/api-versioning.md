@@ -15,11 +15,11 @@ status: partial
 # API Versioning URL-path versioning (`/api/v1/`, `/api/v2/`, etc.). Policy document at `backend/docs/operations/api-versioning.md`. Changelog endpoint at `GET /api/v1/changelog`. Deprecation headers via `DeprecationHeaderMiddleware`. ## Behaviours - [ ] Every route uses a shared API version prefix (`/api/v1/`) — currently hardcoded per-router as `prefix="/api/v1"`
 - [ ] Version prefix is configurable (single point of change for `/api/v1/` → `/api/v2/`)
 - [ ] New API major version can be added alongside previous version (parallel version routing)
-- [ ] `DeprecationHeaderMiddleware` adds `Deprecation: true`, `Sunset`, and `Link` headers to deprecated endpoints
+- [x] `DeprecationHeaderMiddleware` adds `Deprecation: true`, `Sunset`, and `Link` headers to deprecated endpoints
 - [ ] At least one real endpoint is registered as deprecated via `DeprecationHeaderMiddleware.deprecate()`
-- [ ] `GET /api/v1/changelog` returns all entries sorted by date descending
-- [ ] `GET /api/v1/changelog/latest` returns the most recent entry
-- [ ] Changelog entry includes `version`, `date`, `summary`, `changes`, `deprecations`, `migration_url`
+- [x] `GET /api/v1/changelog` returns all entries sorted by date descending
+- [x] `GET /api/v1/changelog/latest` returns the most recent entry
+- [x] Changelog entry includes `version`, `date`, `summary`, `changes`, `deprecations`, `migration_url`
 - [ ] Frontend `ApiChangelogView.vue` renders changelog entries with version badges and deprecation highlights
 - [ ] Frontend shows link to migration guide when `migration_url` is present
 - [ ] Migration guide exists at `docs/operations/migrations/v1-to-v2.md` (or similar)

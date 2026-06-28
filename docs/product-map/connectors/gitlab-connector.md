@@ -81,7 +81,7 @@ Async GitLab REST API v4 connector implementing `ConnectorBase`. Provides read/w
 
 - [x] `ConnectorType.GITLAB` defined in `base.py` enum
 - [x] `GitLabConnector.connector_type` returns `ConnectorType.GITLAB`
-- [ ] `ConnectorType.GITLAB.capabilities` defaults to `frozenset()` — no capabilities assigned in `base.py`
+- [x] `ConnectorType.GITLAB.capabilities` returns `{read, write, git_push, create_pr}` in `base.py`
 - [ ] `CREATE_PR` / `GIT_PUSH` capabilities should be declared but are not
 - [ ] Capability-based graph validation — agent requirements vs connector capabilities not yet wired in ConnectorHub
 
@@ -105,7 +105,6 @@ Async GitLab REST API v4 connector implementing `ConnectorBase`. Provides read/w
 ## Known Gaps
 
 - [ ] **No self-hosted GitLab support**: API base URL is hard-coded to `https://gitlab.com/api/v4`
-- [ ] **Capabilities not declared**: `ConnectorType.GITLAB.capabilities` returns an empty frozenset — no optional capabilities (GIT_PUSH, CREATE_PR) are declared, so graph validation cannot verify agent requirements
 - [ ] **File deletion unimplemented**: no `write("file_delete")` or equivalent
 - [ ] **MR operations limited**: only listing and creation work — no comments, merges, approvals, or labels
 - [ ] **Scope verification incomplete**: health check doesn't verify individual scopes

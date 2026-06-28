@@ -43,4 +43,3 @@ status: partial
 - [ ] SAML ACS parses `SAMLResponse`, validates assertion, issues JWT ## Known Gaps - **No BDD feature files** for SSO provider UI (`backend/tests/bdd/features/auth/` has `login.feature`, `api_keys.feature`, `rbac.feature`, `tenant_isolation.feature` — none for SSO)
 - **No Pinia store** — all state is component-local in `SettingsSsoView.vue` (acceptable but less maintainable as feature grows)
 - **Login page buttons** for configured OIDC/SAML providers may not exist yet — login flow is still Basic Auth (alpha); v1 SSO login UI is not implemented
-- **`depends-on` references task IDs** (`task-nv6-*`) rather than feature IDs — should reference `feat-nv6-oidc-integration` and `feat-nv6-saml-integration` once those feature map entries exist 

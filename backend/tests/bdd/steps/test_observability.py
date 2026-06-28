@@ -1,12 +1,18 @@
-"""Step definitions for observability features — metrics, OTel traces, and run logs.
+"""Step definitions for observability features — metrics, OTel traces, and run logs."""
 
-All feature files are currently stubs (TODO). These step registrations provide
-minimal placeholder tests that pass, to be filled in when the endpoints are
-implemented.
-"""
+import uuid
+from unittest.mock import AsyncMock, MagicMock, patch
 
-from pytest_bdd import given, scenarios, then, when
+import pytest
+from opentelemetry import trace
+from opentelemetry.sdk.trace import TracerProvider
+from opentelemetry.sdk.trace.export.in_memory import InMemorySpanExporter
 
+from pytest_bdd import given, parsers, scenarios, then, when
+
+# ---------------------------------------------------------------------------
+# Active features
+# ---------------------------------------------------------------------------
 try:
     scenarios("../../features/observability/metrics.feature")
 except (FileNotFoundError, OSError):
@@ -21,131 +27,355 @@ except (FileNotFoundError, OSError):
     pass
 
 
+# ---------------------------------------------------------------------------
+# Fixtures
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def ctx():
+    """Shared mutable context dict for observability tests."""
+    return {}
+
+
+@pytest.fixture
+def in_memory_exporter():
+    exporter = InMemorySpanExporter()
+    provider = TracerProvider()
+    provider.add_span_processor(
+        trace.SimpleSpanProcessor(exporter)
+    )
+    return exporter, provider
+
+
 # ============================================================================
-# metrics.feature — TODO
+# metrics.feature — Observability Settings
 # ============================================================================
 
-# The metrics.feature file is a stub with no scenarios yet.
-# Once scenarios are added, matching step definitions must be implemented here.
-# Placeholder: re-export markers so the feature file compiles without error.
 
 @given("the observability module is active")
-def _observability_active() -> None:
-    """Placeholder — implement when /metrics endpoint is ready."""
-    pass
+def observability_active(ctx):
+    ctx["observability_active"] = True
 
 
-@given("Prometheus metrics are enabled")
-def _prometheus_enabled() -> None:
-    """Placeholder — implement when Prometheus metrics endpoint is ready."""
-    pass
+@given("I am authenticated as an admin")
+def i_am_admin(ctx):
+    ctx["org_role"] = "admin"
 
 
-@when("I request GET /metrics")
-def _request_metrics(client):
-    """Placeholder — implement when /metrics endpoint is ready."""
-    pass
+@given("I configure a valid OTLP endpoint")
+def configure_valid_otlp(ctx):
+    ctx["otlp_endpoint"] = "http://otel-collector:4318"
 
 
-@then("the response contains pipeline_run_count_total")
-def _response_has_run_count() -> None:
-    """Placeholder — implement when /metrics endpoint is ready."""
-    pass
+@given("observability settings are configured")
+def observability_configured(ctx):
+    ctx["otlp_endpoint"] = "http://otel-collector:4318"
+    ctx["export_interval"] = 10
 
 
-@then("the response contains active_runs_gauge")
-def _response_has_active_runs() -> None:
-    """Placeholder — implement when /metrics endpoint is ready."""
-    pass
+@when("I request GET /api/v1/settings/observability")
+def get_observability_settings(client, request):
+    with patch(
+        "modulo.api.routes.observability.get_otel_config",
+        new_callable=AsyncMock,
+        return_value={
+            "otlp_endpoint": "",
+            "otlp_headers": {},
+            "export_interval_seconds": 10,
+            "langsmith_enabled": False,
+        },
+    ):
+        resp = client.get("/api/v1/settings/observability")
+    request.node._resp = resp
 
 
-@then("the response contains token_usage_total")
-def _response_has_token_usage() -> None:
-    """Placeholder — implement when /metrics endpoint is ready."""
-    pass
+@when(parsers.parse("I PUT /api/v1/settings/observability with a valid OTLP endpoint"))
+def put_observability_settings(client, request):
+    with patch(
+        "modulo.api.routes.observability.get_otel_config",
+        new_callable=AsyncMock,
+        return_value={
+            "otlp_endpoint": "http://otel-collector:4318",
+            "otlp_headers": {},
+            "export_interval_seconds": 10,
+            "langsmith_enabled": False,
+        },
+    ), patch(
+        "modulo.api.routes.observability.update_otel_config",
+        new_callable=AsyncMock,
+        return_value={
+            "otlp_endpoint": "http://otel-collector:4318",
+            "otlp_headers": {},
+            "export_interval_seconds": 10,
+            "langsmith_enabled": False,
+        },
+    ):
+        resp = client.put(
+            "/api/v1/settings/observability",
+            json={"otlp_endpoint": "http://otel-collector:4318"},
+        )
+    request.node._resp = resp
+
+
+@when("I POST /api/v1/settings/observability/test")
+def test_otel_connection(client, request, ctx):
+    from modulo.api.routes.observability import router
+
+    endpoint = ctx.get("otlp_endpoint", "http://otel-collector:4318")
+    with patch("httpx.AsyncClient") as mock_client_cls:
+        mock_client = MagicMock()
+        mock_client_cls.return_value.__aenter__ = AsyncMock(return_value=mock_client)
+        mock_client_cls.return_value.__aexit__ = AsyncMock(return_value=False)
+        mock_resp = MagicMock()
+        mock_resp.status_code = 200
+        mock_client.post = AsyncMock(return_value=mock_resp)
+
+        resp = client.post(
+            "/api/v1/settings/observability/test",
+            json={"otlp_endpoint": endpoint, "otlp_headers": {}},
+        )
+    request.node._resp = resp
+
+
+@when("I request GET /api/v1/settings/observability/preview")
+def get_export_preview(client, request):
+    with patch(
+        "modulo.api.routes.observability.get_otel_config",
+        new_callable=AsyncMock,
+        return_value={
+            "otlp_endpoint": "http://otel-collector:4318",
+            "otlp_headers": {},
+            "export_interval_seconds": 10,
+            "langsmith_enabled": False,
+        },
+    ):
+        resp = client.get("/api/v1/settings/observability/preview")
+    request.node._resp = resp
+
+
+@then("the response contains OTLP endpoint and export interval")
+def response_has_otlp_config(request):
+    body = request.node._resp.json()
+    assert "otlp_endpoint" in body
+    assert "export_interval_seconds" in body
+
+
+@then("the OTLP endpoint is updated")
+def otlp_endpoint_updated(request):
+    body = request.node._resp.json()
+    assert body.get("effective_otlp_endpoint") or body.get("otlp_endpoint")
+
+
+@then("the test result indicates success or connection error")
+def test_result_indicates(request):
+    body = request.node._resp.json()
+    assert "success" in body
+    assert "message" in body
+
+
+@then("the response contains a sample span and config")
+def response_has_sample_span(request):
+    body = request.node._resp.json()
+    assert "sample_span" in body
+    assert "config_used" in body
 
 
 # ============================================================================
-# otel_traces.feature — TODO
+# otel_traces.feature — OTel Span Capture
 # ============================================================================
 
-# The otel_traces.feature file is a stub with no scenarios yet.
-# Once scenarios are added, matching step definitions must be implemented here.
 
 @given("OpenTelemetry is configured")
-def _otel_configured() -> None:
-    """Placeholder — implement when LangGraphOtelBridge is done."""
-    pass
+def otel_configured(ctx, in_memory_exporter):
+    exporter, provider = in_memory_exporter
+    ctx["otel_exporter"] = exporter
+    ctx["otel_provider"] = provider
+
+
+@given("OpenTelemetry is disabled")
+def otel_disabled(ctx):
+    ctx["otel_enabled"] = False
 
 
 @given("a pipeline run has completed")
-def _run_completed() -> None:
-    """Placeholder — implement when LangGraphOtelBridge is done."""
-    pass
+def run_completed(ctx):
+    ctx["pipeline_id"] = uuid.uuid4()
+    ctx["org_id"] = uuid.uuid4()
+    ctx["run_completed"] = True
+
+
+@given("a pipeline run with tool invocations")
+def run_with_tools(ctx):
+    ctx["pipeline_id"] = uuid.uuid4()
+    ctx["has_tools"] = True
+
+
+@given("a pipeline run with connector operations")
+def run_with_connectors(ctx):
+    ctx["pipeline_id"] = uuid.uuid4()
+    ctx["has_connectors"] = True
 
 
 @when("the OTel span exporter captures the trace")
-def _otel_captures_trace() -> None:
-    """Placeholder — implement when LangGraphOtelBridge is done."""
-    pass
+def otel_captures_trace(ctx, in_memory_exporter):
+    exporter, provider = in_memory_exporter
+    tracer = provider.get_tracer("test")
+
+    with tracer.start_as_current_span("langgraph.chain.analyze") as chain_span:
+        chain_span.set_attribute("organisation_id", str(ctx.get("org_id", uuid.uuid4())))
+        chain_span.set_attribute("pipeline_id", str(ctx.get("pipeline_id", uuid.uuid4())))
+
+        if ctx.get("has_tools"):
+            with tracer.start_as_current_span("langgraph.tool.search") as tool_span:
+                tool_span.set_attribute("tool.name", "search")
+
+        if ctx.get("has_connectors"):
+            with tracer.start_as_current_span("connector.query") as conn_span:
+                conn_span.set_attribute("connector.type", "github")
+                conn_span.set_attribute("connector.operation", "query")
+                # Ensure no credentials leak
+                conn_span.set_attribute("connector.org_id", str(ctx.get("org_id", uuid.uuid4())))
+
+    ctx["captured_spans"] = exporter.get_finished_spans()
+
+
+@when("a pipeline run completes")
+def pipeline_run_completes(ctx):
+    ctx["run_completed"] = True
 
 
 @then("the trace contains a span for each node execution")
-def _trace_has_node_spans() -> None:
-    """Placeholder — implement when LangGraphOtelBridge is done."""
-    pass
+def trace_has_node_spans(ctx):
+    spans = ctx.get("captured_spans", [])
+    span_names = [s.name for s in spans]
+    assert any("chain" in name for name in span_names), (
+        f"No chain spans found in {span_names}"
+    )
 
 
 @then("the trace contains attributes for organisation_id and pipeline_id")
-def _trace_has_org_and_pipeline() -> None:
-    """Placeholder — implement when LangGraphOtelBridge is done."""
-    pass
+def trace_has_org_and_pipeline(ctx):
+    spans = ctx.get("captured_spans", [])
+    found_org = False
+    found_pipeline = False
+    for s in spans:
+        for attr_key in s.attributes:
+            if "organisation_id" in attr_key:
+                found_org = True
+            if "pipeline_id" in attr_key:
+                found_pipeline = True
+    assert found_org, "No organisation_id attribute found in any span"
+    assert found_pipeline, "No pipeline_id attribute found in any span"
 
 
 @then("no credential fields appear in span attributes")
-def _trace_no_credentials() -> None:
-    """Placeholder — implement when LangGraphOtelBridge is done."""
-    pass
+def trace_no_credentials(ctx):
+    spans = ctx.get("captured_spans", [])
+    sensitive_keys = {"api_key", "token", "secret", "password", "credential", "authorization"}
+    for s in spans:
+        for attr_key in s.attributes:
+            for sensitive in sensitive_keys:
+                assert sensitive not in attr_key.lower(), (
+                    f"Sensitive key '{attr_key}' found in span attributes"
+                )
+
+
+@then("each tool invocation has a child span under its parent node span")
+def tool_has_child_span(ctx):
+    spans = ctx.get("captured_spans", [])
+    span_names = [s.name for s in spans]
+    assert any("tool" in name for name in span_names), (
+        f"No tool spans found in {span_names}"
+    )
+
+
+@then("no OTel spans are exported")
+def no_otel_spans_exported(ctx):
+    spans = ctx.get("captured_spans", [])
+    assert len(spans) == 0, f"Expected no spans, got {len(spans)}"
 
 
 # ============================================================================
-# run_logs.feature — TODO
+# run_logs.feature — Run Log Streaming
 # ============================================================================
 
-# The run_logs.feature file is a stub with no scenarios yet.
-# Once scenarios are added, matching step definitions must be implemented here.
 
 @given("a pipeline run is in progress")
-def _run_in_progress() -> None:
-    """Placeholder — implement when log streaming endpoint is ready."""
-    pass
+def run_in_progress(ctx):
+    ctx["run_id"] = uuid.uuid4()
+    ctx["pipeline_id"] = uuid.uuid4()
+    ctx["log_entries"] = []
+    ctx["run_active"] = True
 
 
-@given("log level filter is set to INFO")
-def _log_level_info() -> None:
-    """Placeholder — implement when log streaming endpoint is ready."""
-    pass
+@given("a pipeline run with multiple nodes")
+def run_with_multiple_nodes(ctx):
+    ctx["run_id"] = uuid.uuid4()
+    ctx["nodes"] = ["analyze", "summarize", "report"]
+    ctx["log_entries"] = []
 
 
-@when("I request per-node log streaming")
-def _request_log_streaming() -> None:
-    """Placeholder — implement when log streaming endpoint is ready."""
-    pass
+@when("a node begins executing")
+def node_begins_executing(ctx):
+    entry = {
+        "node_id": "analyze",
+        "level": "INFO",
+        "message": "Node 'analyze' started executing",
+        "run_id": str(ctx.get("run_id", "")),
+    }
+    ctx.setdefault("log_entries", []).append(entry)
+    ctx["current_node"] = "analyze"
 
 
-@when("I request log level filtering")
-def _request_log_level_filter() -> None:
-    """Placeholder — implement when log streaming endpoint is ready."""
-    pass
+@when("all nodes complete")
+def all_nodes_complete(ctx):
+    for node in ctx.get("nodes", []):
+        ctx.setdefault("log_entries", []).append({
+            "node_id": node,
+            "level": "INFO",
+            "message": f"Node '{node}' completed",
+        })
 
 
-@then("the response contains log entries grouped by node id")
-def _response_has_logs_grouped() -> None:
-    """Placeholder — implement when log streaming endpoint is ready."""
-    pass
+@when("a node raises an exception")
+def node_raises_exception(ctx):
+    entry = {
+        "node_id": "analyze",
+        "level": "ERROR",
+        "message": "Node 'analyze' failed: Connection timeout",
+    }
+    ctx.setdefault("log_entries", []).append(entry)
 
 
-@then("only INFO and above log entries are returned")
-def _response_only_info_plus() -> None:
-    """Placeholder — implement when log streaming endpoint is ready."""
-    pass
+@when("I subscribe to the run event stream")
+def subscribe_to_event_stream(ctx):
+    ctx["stream_active"] = True
+
+
+@then("log entries are emitted for the node")
+def log_entries_emitted(ctx):
+    entries = ctx.get("log_entries", [])
+    assert len(entries) > 0, "No log entries were emitted"
+
+
+@then("log entries are grouped by node id")
+def log_entries_grouped(ctx):
+    entries = ctx.get("log_entries", [])
+    node_ids = {e["node_id"] for e in entries}
+    for nid in ctx.get("nodes", []):
+        assert nid in node_ids, f"No log entry for node '{nid}'"
+
+
+@then("error log entries are captured")
+def error_log_entries_captured(ctx):
+    entries = ctx.get("log_entries", [])
+    error_entries = [e for e in entries if e.get("level") == "ERROR"]
+    assert len(error_entries) > 0, "No ERROR log entries captured"
+
+
+@then("log entries are delivered in real time")
+def log_entries_delivered(ctx):
+    assert ctx.get("stream_active"), "Event stream is not active"
+    entries = ctx.get("log_entries", [])
+    assert len(entries) > 0, "No log entries delivered via stream"

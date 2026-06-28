@@ -55,7 +55,7 @@ status: partial
 - [ ] Team deletion with no owned resources → team record removed
 - [ ] Cross-org isolation: deleting team in org A does not affect org B ### Membership — Add member - [ ] Admin adds user to team with valid role (viewer/runner/operator) → 201
 - [ ] Admin adds user with role exceeding target user's org role → 422
-- [ ] Team admin role not allowed for team membership (admin is org-only per 9.2)
+- [x] Team admin role not allowed for team membership (admin is org-only per 9.2)
 - [ ] Target user not found in org → 404
 - [ ] Team not found → 404
 - [ ] Duplicate membership (same team + same user) → DB constraint violation → 409

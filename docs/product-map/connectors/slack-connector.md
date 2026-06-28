@@ -79,7 +79,7 @@ Async Slack Web API connector implementing `ConnectorBase`. Provides read/write 
 
 - [x] `ConnectorType.SLACK` defined in `base.py` enum
 - [x] `SlackConnector.connector_type` returns `ConnectorType.SLACK`
-- [ ] `ConnectorType.SLACK.capabilities` defaults to `frozenset()` — no capabilities assigned in `base.py`
+- [x] `ConnectorType.SLACK.capabilities` returns `{read, write}` in `base.py`
 - [ ] `ISSUE_READ`/`ISSUE_WRITE` irrelevant — Slack is not an issue-tracker; a new capability set should be defined (e.g. `CHANNEL_READ`, `MESSAGE_SEND`)
 - [ ] Capability-based graph validation — agent requirements vs connector capabilities not yet wired in ConnectorHub
 
@@ -101,7 +101,6 @@ Async Slack Web API connector implementing `ConnectorBase`. Provides read/write 
 
 ## Known Gaps
 
-- [ ] **Capabilities not declared**: `ConnectorType.SLACK.capabilities` returns an empty frozenset — no capability model exists for chat-type connectors
 - [ ] **No thread support**: cannot read thread replies or reply in threads
 - [ ] **No file uploads**: cannot upload files or share files in channels
 - [ ] **Text-only messages**: no Block Kit support for rich formatting, buttons, or interactive components
