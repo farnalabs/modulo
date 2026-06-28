@@ -69,16 +69,6 @@
     "compaction": {
         "auto": true
     },
-    "mcp": {
-        "playwright": {
-            "command": "playwright-mcp",
-            "args": [
-                "--allowed-hosts",
-                "localhost,127.0.0.1"
-            ],
-            "enabled": true
-        }
-    },
     "experimental": {
         "lsp": false
     }
