@@ -11,20 +11,33 @@ from modulo.db.models import Base
 
 _log = logging.getLogger(__name__)
 
-config = context.config
-if config.config_file_name is not None:
-    fileConfig(config.config_file_name)
-
-# Allow DATABASE_URL env var to override the alembic.ini connection string.
-_db_url = os.environ.get("DATABASE_URL")
-if _db_url:
-    # Fly.io Postgres attaches with postgres://...?sslmode=disable.
-    # SQLAlchemy async drivers need postgresql+asyncpg:// and ssl=disable.
-    _db_url = _db_url.replace("postgres://", "postgresql+asyncpg://", 1)
-    _db_url = _db_url.replace("?sslmode=disable", "")
-    config.set_main_option("sqlalchemy.url", _db_url)
-
 target_metadata = Base.metadata
+
+# Module-level Alembic setup — only safe when context is properly configured
+# (i.e. when env.py is executed via command.upgrade, not imported as a module).
+config = context.config  # type: ignore[has-type]
+if config is not None:
+    if config.config_file_name is not None:
+        fileConfig(config.config_file_name)
+
+    # Allow DATABASE_URL env var to override the alembic.ini connection string.
+    _db_url = os.environ.get("DATABASE_URL")
+    if _db_url:
+        # SQLAlchemy async drivers need postgresql+asyncpg:// (not postgres://
+        # or postgresql://). Handle all three input forms:
+        #   postgres://...            -> postgresql+asyncpg://...
+        #   postgresql://...          -> postgresql+asyncpg://...
+        #   postgresql+asyncpg://...  -> already correct (no-op)
+        if _db_url.startswith("postgresql+asyncpg://"):
+            pass
+        elif _db_url.startswith("postgresql://"):
+            _db_url = _db_url.replace("postgresql://", "postgresql+asyncpg://", 1)
+        elif _db_url.startswith("postgres://"):
+            _db_url = _db_url.replace("postgres://", "postgresql+asyncpg://", 1)
+        # Strip sslmode query params — asyncpg defaults to 'prefer' mode,
+        # so sslmode is unnecessary and causes KeywordArgument errors.
+        _db_url = _db_url.replace("?sslmode=disable", "")
+        config.set_main_option("sqlalchemy.url", _db_url)
 
 
 def _detect_backend(url: str) -> str:
@@ -83,14 +96,17 @@ async def run_async_migrations() -> None:
 
 
 def run_migrations_online() -> None:
-    try:
-        loop = asyncio.get_running_loop()
-        loop.run_until_complete(run_async_migrations())
-    except RuntimeError:
-        asyncio.run(run_async_migrations())
+    # Create a dedicated event loop for this thread.
+    # This works in any context: main async thread, thread pool thread
+    # (asyncio.to_thread), or fully synchronous code.
+    with asyncio.Runner() as runner:
+        runner.run(run_async_migrations())
 
 
-if context.is_offline_mode():
-    run_migrations_offline()
-else:
-    run_migrations_online()
+# Only auto-run when env.py is invoked by Alembic CLI / command.upgrade.
+# When imported as a module (e.g. by main.py), the caller manages the lifecycle.
+if config is not None:
+    if context.is_offline_mode():
+        run_migrations_offline()
+    else:
+        run_migrations_online()

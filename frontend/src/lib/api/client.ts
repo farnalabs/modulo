@@ -3,24 +3,46 @@ import type { paths } from './schema'
 
 const TOKEN_KEY = 'modulo_access_token'
 
-function getAuthHeaders(): Record<string, string> {
-  const token = localStorage.getItem(TOKEN_KEY)
-  if (token) {
-    return { Authorization: `Bearer ${token}` }
+let _authListeners: Array<(token: string | null) => void> = []
+let _cachedToken: string | null = null
+
+function notifyListeners(): void {
+  _cachedToken = localStorage.getItem(TOKEN_KEY)
+  for (const fn of _authListeners) {
+    fn(_cachedToken)
   }
-  return {}
+}
+
+export function onAuthChange(fn: (token: string | null) => void): () => void {
+  _authListeners.push(fn)
+  fn(_cachedToken ?? localStorage.getItem(TOKEN_KEY))
+  return () => {
+    _authListeners = _authListeners.filter((f) => f !== fn)
+  }
 }
 
 export function setAccessToken(token: string): void {
   localStorage.setItem(TOKEN_KEY, token)
+  notifyListeners()
 }
 
 export function clearAccessToken(): void {
   localStorage.removeItem(TOKEN_KEY)
+  notifyListeners()
 }
 
 export function getAccessToken(): string | null {
-  return localStorage.getItem(TOKEN_KEY)
+  if (_cachedToken !== null) return _cachedToken
+  _cachedToken = localStorage.getItem(TOKEN_KEY)
+  return _cachedToken
+}
+
+function getAuthHeaders(): Record<string, string> {
+  const token = getAccessToken()
+  if (token) {
+    return { Authorization: `Bearer ${token}` }
+  }
+  return {}
 }
 
 export const api = createClient<paths>({
@@ -37,10 +59,15 @@ const _origPatch = api.PATCH.bind(api)
 const _origDelete = api.DELETE.bind(api)
 
 function withAuth(fn: (...args: any[]) => any) {
-  return (...args: any[]) => {
+  return async (...args: any[]) => {
     const [url, options] = args
     const headers = { ...getAuthHeaders(), ...options?.headers }
-    return fn(url, { ...options, headers })
+    const resp = await fn(url, { ...options, headers })
+    if (resp.response?.status === 401) {
+      clearAccessToken()
+      window.location.href = '/login'
+    }
+    return resp
   }
 }
 

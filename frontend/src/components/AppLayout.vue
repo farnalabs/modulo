@@ -2,7 +2,8 @@
   <div class="flex min-h-screen">
     <!-- Sidebar -->
     <aside class="flex w-64 border-r bg-background p-4 flex-col">
-      <div class="mb-6">
+      <div class="mb-6 flex items-center gap-2">
+        <LogoMark :size="28" transparent />
         <h2 class="text-lg font-bold">Modulo</h2>
       </div>
 
@@ -19,18 +20,39 @@
         <SidebarLink to="/settings/runtime-config" icon="Settings" label="Runtime Config" />
 
         <div class="mt-6 mb-2 text-xs font-medium text-muted-foreground uppercase tracking-wider">Admin</div>
+        <SidebarLink to="/admin/users" icon="UserCircle" label="Users" />
         <SidebarLink to="/admin/audit" icon="FileText" label="Audit Log" />
         <SidebarLink to="/admin/feature-flags" icon="Flag" label="Feature Flags" />
         <SidebarLink to="/admin/api-changelog" icon="History" label="Changelog" />
         <SidebarLink to="/admin/teams/comparison" icon="BarChart" label="Team Comparison" />
       </nav>
 
-      <div class="border-t pt-4 mt-4">
-        <div class="flex items-center justify-between">
-          <span class="text-sm text-muted-foreground truncate">{{ userEmail }}</span>
+      <div class="border-t pt-4 mt-4 space-y-3">
+        <div class="flex items-center gap-2">
+          <div
+            class="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-primary text-xs font-bold text-primary-foreground"
+            :title="userEmail"
+          >
+            {{ userInitial }}
+          </div>
+          <router-link
+            to="/admin/users"
+            class="text-sm text-muted-foreground truncate hover:text-foreground transition-colors"
+          >
+            {{ userEmail }}
+          </router-link>
           <span class="shrink-0 rounded-full bg-green-100 px-2 py-0.5 text-xs text-green-700">Free</span>
         </div>
-        <button @click="logout" class="mt-2 text-xs text-muted-foreground hover:text-foreground">Sign out</button>
+
+        <div class="flex items-center justify-between">
+          <button
+            @click="toggleTheme"
+            class="text-xs text-muted-foreground hover:text-foreground transition-colors"
+          >
+            {{ isLight ? 'Dark mode' : 'Light mode' }}
+          </button>
+          <button @click="logout" class="text-xs text-muted-foreground hover:text-foreground transition-colors">Sign out</button>
+        </div>
       </div>
     </aside>
 
@@ -60,7 +82,10 @@
       :class="mobileOpen ? 'translate-x-0' : '-translate-x-full'"
     >
       <div class="mb-6 flex items-center justify-between">
-        <h2 class="text-lg font-bold">Modulo</h2>
+        <div class="flex items-center gap-2">
+          <LogoMark :size="28" transparent />
+          <h2 class="text-lg font-bold">Modulo</h2>
+        </div>
         <button @click="mobileOpen = false" class="text-muted-foreground hover:text-foreground" aria-label="Close navigation">
           <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
             <line x1="18" y1="6" x2="6" y2="18"/>
@@ -82,18 +107,39 @@
         <SidebarLink to="/settings/runtime-config" icon="Settings" label="Runtime Config" @click="mobileOpen = false" />
 
         <div class="mt-6 mb-2 text-xs font-medium text-muted-foreground uppercase tracking-wider">Admin</div>
+        <SidebarLink to="/admin/users" icon="UserCircle" label="Users" @click="mobileOpen = false" />
         <SidebarLink to="/admin/audit" icon="FileText" label="Audit Log" @click="mobileOpen = false" />
         <SidebarLink to="/admin/feature-flags" icon="Flag" label="Feature Flags" @click="mobileOpen = false" />
         <SidebarLink to="/admin/api-changelog" icon="History" label="Changelog" @click="mobileOpen = false" />
         <SidebarLink to="/admin/teams/comparison" icon="BarChart" label="Team Comparison" @click="mobileOpen = false" />
       </nav>
 
-      <div class="border-t pt-4 mt-4">
-        <div class="flex items-center justify-between">
-          <span class="text-sm text-muted-foreground truncate">{{ userEmail }}</span>
+      <div class="border-t pt-4 mt-4 space-y-3">
+        <div class="flex items-center gap-2">
+          <div
+            class="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-primary text-xs font-bold text-primary-foreground"
+            :title="userEmail"
+          >
+            {{ userInitial }}
+          </div>
+          <router-link
+            to="/admin/users"
+            class="text-sm text-muted-foreground truncate hover:text-foreground transition-colors"
+          >
+            {{ userEmail }}
+          </router-link>
           <span class="shrink-0 rounded-full bg-green-100 px-2 py-0.5 text-xs text-green-700">Free</span>
         </div>
-        <button @click="logout" class="mt-2 text-xs text-muted-foreground hover:text-foreground">Sign out</button>
+
+        <div class="flex items-center justify-between">
+          <button
+            @click="toggleTheme"
+            class="text-xs text-muted-foreground hover:text-foreground transition-colors"
+          >
+            {{ isLight ? 'Dark mode' : 'Light mode' }}
+          </button>
+          <button @click="logout" class="text-xs text-muted-foreground hover:text-foreground transition-colors">Sign out</button>
+        </div>
       </div>
     </aside>
 
@@ -120,6 +166,7 @@ const icons: Record<string, string> = {
   Flag: '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 15s1-1 4-1 5 2 8 2 4-1 4-1V3s-1 1-4 1-5-2-8-2-4 1-4 1z"/><line x1="4" y1="22" x2="4" y2="15"/></svg>',
   BarChart: '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="20" x2="12" y2="10"/><line x1="18" y1="20" x2="18" y2="4"/><line x1="6" y1="20" x2="6" y2="16"/></svg>',
   History: '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>',
+  UserCircle: '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="8" r="5"/><path d="M3 21v-2a7 7 0 0 1 7-7h4a7 7 0 0 1 7 7v2"/></svg>',
 }
 
 export const SidebarLink = defineComponent({
@@ -140,8 +187,23 @@ export const SidebarLink = defineComponent({
 <script setup lang="ts">
 import { ref } from 'vue'
 import { getAccessToken, clearAccessToken } from '../lib/api/client'
+import LogoMark from './LogoMark.vue'
 
 const mobileOpen = ref(false)
+
+const isLight = ref(document.documentElement.classList.contains('light'))
+
+function toggleTheme() {
+  const root = document.documentElement
+  if (root.classList.contains('light')) {
+    root.classList.remove('light')
+    root.classList.add('dark')
+  } else {
+    root.classList.remove('dark')
+    root.classList.add('light')
+  }
+  isLight.value = root.classList.contains('light')
+}
 
 function logout() {
   clearAccessToken()
@@ -157,5 +219,11 @@ const userEmail = computed(() => {
   } catch {
     return ''
   }
+})
+
+const userInitial = computed(() => {
+  const email = userEmail.value
+  if (!email) return '?'
+  return email.charAt(0).toUpperCase()
 })
 </script>

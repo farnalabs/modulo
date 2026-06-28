@@ -1,9 +1,7 @@
-# fly.toml app configuration file generated for demo-modulo on 2026-06-28T11:40:08+01:00
-#
-# See https://fly.io/docs/reference/configuration/ for information about how to use this file.
-#
+# fly.toml app configuration for app.modulo.run
+# See https://fly.io/docs/reference/configuration/
 
-app = 'demo-modulo'
+app = 'app-modulo'
 primary_region = 'lhr'
 
 [build]
@@ -19,7 +17,10 @@ primary_region = 'lhr'
 
 [env]
   MODULO_DB = "postgres"
+  MODULO_PUBLIC_URL = "https://app.modulo.run"
+  MODULO_DEMO_MODE = "false"
   MODULO_PLUGIN_DISCOVERY = "false"
+  MODULO_MAX_LOCAL_CONCURRENCY = "4"
 
 [[vm]]
   memory = '1gb'

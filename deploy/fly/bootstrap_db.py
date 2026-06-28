@@ -37,7 +37,7 @@ async def _bootstrap():
 try:
     asyncio.run(_bootstrap())
 except Exception as exc:
-    print(f"WARNING: Could not bootstrap alembic_version: {exc}", file=sys.stderr)
+    print(f"WARNING: Could not bootstrap alembic_version: [{type(exc).__name__}] {exc}", file=sys.stderr)
 
 # Step 3: Write the fixed URL to a file so the shell can read it
 with open("/tmp/database_url.env", "w") as f:
