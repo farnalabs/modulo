@@ -423,6 +423,12 @@ COMMIT;
 
 ### 4.4 Re-encrypt blobs after `FERNET_KEY` rotation
 
+> **⚠️ Production-impact warning**: This script scans every row in
+> `checkpoint_blobs` and `checkpoint_writes` sequentially within a single
+> transaction. On large deployments (>100K blobs), this can take minutes and
+> hold transaction locks. Run during a maintenance window or against a
+> replica. Test on a copy before running against production.
+
 If the automated `rotate-credentials` command cannot reach all rows (e.g.,
 after a partial migration), re-encrypt in bulk:
 
@@ -456,6 +462,8 @@ def reencrypt_blob(blob: bytes | None) -> bytes | None:
 
 
 def main():
+    re_blob_count = 0
+    re_write_count = 0
     with psycopg.connect(DATABASE_URL) as conn:
         # Re-encrypt checkpoint_blobs
         rows = conn.execute(
@@ -472,6 +480,7 @@ def main():
                     "AND checkpoint_ns = %s AND channel = %s AND version = %s",
                     (new_blob, org_id, thread_id, ns, channel, version),
                 )
+                re_blob_count += 1
 
         # Re-encrypt checkpoint_writes
         rows = conn.execute(
@@ -490,10 +499,12 @@ def main():
                     "AND task_id = %s AND idx = %s",
                     (new_blob, org_id, thread_id, ns, ckpt_id, task_id, idx),
                 )
+                re_write_count += 1
 
         conn.commit()
 
-    print(f"Re-encrypted {sum(1 for _ in ())} blobs")  # simplified
+    total = re_blob_count + re_write_count
+    print(f"Re-encrypted {total} blobs ({re_blob_count} checkpoint_blobs, {re_write_count} checkpoint_writes)")
 
 
 if __name__ == "__main__":
