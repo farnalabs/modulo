@@ -52,90 +52,63 @@
       </div>
     </aside>
 
-    <!-- Mobile menu button -->
-    <button
-      @click="mobileOpen = !mobileOpen"
-      class="md:hidden fixed top-4 left-4 z-50 rounded-md bg-background border p-2 text-muted-foreground hover:text-foreground"
-      aria-label="Toggle navigation"
-    >
-      <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-        <line x1="3" y1="6" x2="21" y2="6"/>
-        <line x1="3" y1="12" x2="21" y2="12"/>
-        <line x1="3" y1="18" x2="21" y2="18"/>
-      </svg>
-    </button>
+    <!-- Mobile header -->
+    <div class="md:hidden fixed top-0 left-0 right-0 z-50 bg-background border-b border-border px-4 py-3 flex items-center justify-between shadow-sm">
+      <div class="flex items-center gap-2">
+        <div class="flex items-center justify-center rounded-lg bg-primary/10 p-1.5">
+          <LogoMark :size="20" transparent />
+        </div>
+        <span class="text-sm font-bold tracking-tight">Modulo</span>
+      </div>
+      <button
+        @click="mobileOpen = !mobileOpen"
+        class="rounded-md bg-background border border-border p-2 text-muted-foreground hover:text-foreground"
+        aria-label="Toggle navigation"
+      >
+        <svg v-if="!mobileOpen" xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <line x1="3" y1="6" x2="21" y2="6"/>
+          <line x1="3" y1="12" x2="21" y2="12"/>
+          <line x1="3" y1="18" x2="21" y2="18"/>
+        </svg>
+        <svg v-else xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <line x1="18" y1="6" x2="6" y2="18"/>
+          <line x1="6" y1="6" x2="18" y2="18"/>
+        </svg>
+      </button>
+    </div>
 
-    <!-- Mobile overlay -->
+    <!-- Mobile menu panel (pushes content down) -->
     <div
       v-if="mobileOpen"
-      class="md:hidden fixed inset-0 z-40 bg-black/50"
-      @click="mobileOpen = false"
-    />
-
-    <!-- Mobile sidebar -->
-    <aside
-      class="md:hidden fixed top-0 left-0 z-50 h-full w-64 border-r bg-background p-4 flex flex-col transition-transform shadow-xl shadow-black/20"
-      :class="mobileOpen ? 'translate-x-0' : '-translate-x-full'"
+      class="md:hidden bg-background border-b border-border overflow-hidden transition-all"
+      style="max-height: 100vh;"
     >
-      <div class="flex items-center justify-between pb-4 border-b border-border mb-4">
-        <div class="flex items-center gap-2.5 pl-1">
-          <div class="flex items-center justify-center rounded-lg bg-primary/10 p-1.5">
-            <LogoMark :size="24" transparent />
-          </div>
-          <h2 class="text-lg font-bold tracking-tight">Modulo</h2>
-        </div>
-        <button @click="mobileOpen = false" class="text-muted-foreground hover:text-foreground" aria-label="Close navigation">
-          <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-            <line x1="18" y1="6" x2="6" y2="18"/>
-            <line x1="6" y1="6" x2="18" y2="18"/>
-          </svg>
-        </button>
-      </div>
-
-      <nav class="flex-1 space-y-0.5">
+      <nav class="px-4 py-3 space-y-0.5">
         <template v-for="item in navItems" :key="item.label">
-          <div v-if="item.type === 'section'" class="sidebar-section-header">{{ item.label }}</div>
-          <SidebarLink v-else :to="item.to!" :icon="item.icon!" :label="item.label!" @click="mobileOpen = false" />
+          <div v-if="item.type === 'section'" class="text-xs font-semibold text-muted-foreground uppercase tracking-wider px-3 py-2 mt-2">{{ item.label }}</div>
+          <router-link
+            v-else
+            :to="item.to"
+            class="flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm text-foreground hover:bg-accent transition-colors"
+            @click="mobileOpen = false"
+          >
+            <span class="h-4 w-4 shrink-0 text-muted-foreground" v-html="icons[item.icon]" />
+            <span>{{ item.label }}</span>
+          </router-link>
         </template>
       </nav>
-
-      <div class="border-t pt-4 mt-4 space-y-3">
+      <div class="border-t border-border px-4 py-3 flex items-center justify-between">
         <div class="flex items-center gap-2">
-          <div class="avatar-ring">
-            <div
-              class="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-primary text-xs font-bold text-primary-foreground"
-              :title="userEmail"
-            >
-              {{ userInitial }}
-            </div>
+          <div class="flex h-7 w-7 items-center justify-center rounded-full bg-primary text-xs font-bold text-primary-foreground">
+            {{ userInitial }}
           </div>
-          <router-link
-            to="/admin/my-profile"
-            class="text-sm text-muted-foreground truncate hover:text-foreground transition-colors flex-1 min-w-0"
-          >
-            {{ userEmail }}
-          </router-link>
-          <span class="badge-plan shrink-0">Free</span>
+          <span class="text-sm text-muted-foreground truncate max-w-[120px]">{{ userEmail }}</span>
         </div>
-
-        <div class="flex items-center justify-between border-t border-border pt-3 pb-2">
-          <label class="toggle-switch" :class="isLight ? 'light' : 'dark'" title="Ctrl+Shift+L to toggle">
-            <span class="track">
-              <span class="thumb" />
-            </span>
-            <span class="flex items-center gap-1">
-              <svg v-if="isLight" xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="5"/><line x1="12" y1="1" x2="12" y2="3"/><line x1="12" y1="21" x2="12" y2="23"/><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/><line x1="1" y1="12" x2="3" y2="12"/><line x1="21" y1="12" x2="23" y2="12"/><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/></svg>
-              <svg v-else xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>
-              <span class="text-xs font-medium">{{ isLight ? 'Light' : 'Dark' }}</span>
-            </span>
-            <input type="checkbox" class="hidden" @change="toggleTheme" :checked="isLight" />
-          </label>
-          <button @click="logout" class="text-xs text-muted-foreground hover:text-foreground transition-colors">Sign out</button>
-        </div>
+        <button @click="logout" class="text-xs text-muted-foreground hover:text-foreground">Sign out</button>
       </div>
-    </aside>
+    </div>
 
-    <main class="flex-1 overflow-auto">
+    <main class="flex-1 overflow-auto md:pt-0 pt-14">
       <router-view v-slot="{ Component }">
         <transition name="page" mode="out-in">
           <component :is="Component" />
