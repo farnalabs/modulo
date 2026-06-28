@@ -138,10 +138,10 @@ async def seed() -> None:
             ]
             schemas = []
             for name, slug_name, desc, schema_json in schema_defs:
-                s = Schema(organisation_id=org.id, name=name, slug=slug_name, description=desc, version_count=1, latest_version="1.0", created_by=admin.id)
+                s = Schema(organisation_id=org.id, name=name, description=desc, created_by=admin.id)
                 session.add(s)
                 await session.flush()
-                sv = SchemaVersion(organisation_id=org.id, schema_id=s.id, version="1.0", schema_json=schema_json, created_by=admin.id)
+                sv = SchemaVersion(organisation_id=org.id, schema_id=s.id, version="1.0", version_number=1, definition_json=schema_json, created_by=admin.id)
                 session.add(sv)
                 await session.flush()
                 schemas.append((s, sv))
