@@ -5,8 +5,10 @@ echo "=== Starting nginx ==="
 nginx -g "daemon off;" &
 NGINX_PID=$!
 
-# Fly attaches Postgres with DATABASE_URL=postgres://... but SQLAlchemy
-# async drivers need the "postgresql+asyncpg://" scheme prefix.
+# Fly attaches Postgres with DATABASE_URL=postgres://...?sslmode=disable
+# but SQLAlchemy async drivers need:
+#   1. "postgresql+asyncpg://" scheme prefix
+#   2. No ?sslmode=disable (asyncpg uses ?ssl= instead)
 export DATABASE_URL="${DATABASE_URL:-}"
 case "$DATABASE_URL" in
   postgres://*)
@@ -14,6 +16,8 @@ case "$DATABASE_URL" in
     echo "Fixed DATABASE_URL scheme for async driver"
     ;;
 esac
+# Strip sslmode query params — asyncpg doesn't accept sslmode
+export DATABASE_URL="$(echo "$DATABASE_URL" | sed 's/\?sslmode=disable//g; s/&sslmode=disable//g')"
 
 echo "=== Running DB migrations ==="
 .venv/bin/alembic upgrade head || echo "WARNING: Migration failed — continuing anyway"
