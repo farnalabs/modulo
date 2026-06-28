@@ -297,15 +297,14 @@ def step_eval_engine_scores(ctx):
     eval_type = ctx.get("eval_scorer_type", "")
     config = ctx.get("eval_config", {})
 
-    eval_def = EvalDefinition(
-        id=uuid.uuid4(),
-        org_id=uuid.UUID("00000000-0000-0000-0000-000000000001"),
-        name="scorer-test",
-        eval_type=eval_type,
-        config=config,
-    )
-
     try:
+        eval_def = EvalDefinition(
+            id=uuid.uuid4(),
+            org_id=uuid.UUID("00000000-0000-0000-0000-000000000001"),
+            name="scorer-test",
+            eval_type=eval_type,
+            config=config,
+        )
         result = engine.evaluate(output, eval_def)
         ctx["eval_passed"] = result.passed
         ctx["eval_result"] = result
@@ -318,9 +317,15 @@ def step_eval_engine_scores(ctx):
 @then("the correct scorer is applied per criterion")
 def step_correct_scorer_applied(ctx):
     """Confirm that no error was raised during scoring dispatch."""
-    assert ctx.get("eval_error") is None, (
-        f"Scorer dispatch failed: {ctx['eval_error']}"
-    )
+    error = ctx.get("eval_error")
+    assert error is None, f"Scorer dispatch failed: {error}"
+
+
+@then("an error is raised for unknown eval type")
+def step_unknown_eval_type_error(ctx):
+    error = ctx.get("eval_error")
+    assert error is not None, "Expected an error for unknown eval type"
+    # The actual error message will vary — we just check one was raised
 
 
 @then(parsers.parse('the output "{output}" passes the regex scorer'))
@@ -629,10 +634,22 @@ def step_feedback_detect_eval_gap(ctx, request):
 
     import asyncio
 
+    from modulo.core.eval_engine import EvalDefinition, EvalEngine
+
+    # Provide an eval suite that passes on the output text "This is incorrect"
+    # → no eval catches the rejection → this IS an eval gap
+    passing_def = EvalDefinition(
+        id=uuid.uuid4(),
+        org_id=ORG_ID,
+        name="passing-check",
+        eval_type="regex",
+        config={"pattern": "This is incorrect", "field": "text"},
+    )
+
     loop = asyncio.new_event_loop()
     try:
         is_gap = loop.run_until_complete(
-            mgr.detect_eval_gap(mock_record, eval_suite=[])
+            mgr.detect_eval_gap(mock_record, eval_suite=[passing_def])
         )
         ctx["eval_gap"] = is_gap
     finally:

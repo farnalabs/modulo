@@ -188,6 +188,13 @@ def _bdd_check_response_status(status: int, request) -> None:
         f"Expected status {status}, got {resp.status_code}"
     )
 
+
+@then(parsers.parse('the response has name "{expected}"'))
+def _bdd_response_has_name(expected: str, request) -> None:
+    body = request.node._resp.json()
+    actual = body.get("name")
+    assert actual == expected, f"Expected name {expected!r}, got {actual!r}"
+
 @pytest.fixture
 def alt_org_client(mock_session: AsyncMock) -> Generator[TestClient, None, None]:
     async def override_session() -> AsyncGenerator[AsyncMock, None]:

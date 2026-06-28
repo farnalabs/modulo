@@ -20,7 +20,7 @@ Feature: Row-Level Security Enforcement
   Scenario: Viewer role cannot create pipelines
     Given I am authenticated as a viewer in org "acme"
     When a viewer tries to create a pipeline named new-pipeline
-    Then the response status is 403
+    Then the viewer pipeline creation is rejected
 
   Scenario: RLS context requires an active transaction
     When RLS context is set outside a transaction
