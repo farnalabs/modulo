@@ -1,8 +1,9 @@
 ---
 id: feat-teams-org-dashboard-full
 prd: 14
+prd: 14
+
 delivery-tasks: [task-nv7-org-dashboard-full]
-bdd:
   - backend/tests/bdd/features/ui/dashboard.feature (does not exist — needs creation)
 code:
   - backend/src/modulo/api/routes/dashboard.py

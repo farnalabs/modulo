@@ -2,7 +2,6 @@
 id: feat-core-model-failover
 prd: 8.1
 delivery-tasks: [task-nv9-model-failover]
-bdd:
   - backend/tests/bdd/features/model_backends/backend_selection.feature
   - backend/tests/bdd/features/model_backends/rate_limiting.feature
 code:

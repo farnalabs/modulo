@@ -2,7 +2,6 @@
 id: feat-core-notifications
 prd: 8.11
 delivery-tasks: [task-nv1-team-notifications]
-bdd:
   - backend/tests/features/notifications/hitl_webhook.feature
   - backend/tests/features/notifications/failure_webhook.feature
   - backend/tests/features/notifications/signing.feature

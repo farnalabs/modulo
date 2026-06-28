@@ -2,7 +2,6 @@
 id: feat-pipelines-pipeline-versioning
 prd: 8.13
 delivery-tasks: [task-nv0-snapshot-expansion]
-bdd:
   - backend/tests/bdd/features/pipelines/crud.feature
 code:
   - backend/src/modulo/db/crud/pipeline_snapshot.py

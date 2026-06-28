@@ -2,7 +2,6 @@
 id: feat-core-prompt-optimization
 prd: 8.2
 delivery-tasks: [task-nv10-prompt-optimization]
-bdd:
   - backend/tests/features/agents/prompt_versioning.feature
   - backend/tests/bdd/features/pipelines/run_variants.feature
 code:

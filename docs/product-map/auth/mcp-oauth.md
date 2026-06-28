@@ -2,7 +2,6 @@
 id: feat-auth-mcp-oauth
 prd: 6.4
 delivery-tasks: [task-nv9-mcp-oauth]
-bdd:
   - backend/tests/bdd/features/auth/mcp_oauth.feature
 code:
   - backend/src/modulo/api/routes/mcp_oauth.py

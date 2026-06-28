@@ -2,7 +2,6 @@
 id: feat-evals-eval-definitions
 prd: 8.17
 delivery-tasks: [task-nv2-eval-definition]
-bdd:
   - backend/tests/bdd/features/eval/eval_run.feature
   - backend/tests/features/evals/eval_regex.feature
   - backend/tests/features/evals/eval_llm_judge.feature

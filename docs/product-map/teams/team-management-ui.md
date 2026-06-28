@@ -2,7 +2,6 @@
 id: feat-teams-team-management-ui
 prd: 9.3
 delivery-tasks: [task-nv1-team-ui]
-bdd:
 code:
   - frontend/src/views/SettingsTeamsView.vue
   - backend/src/modulo/api/routes/teams.py

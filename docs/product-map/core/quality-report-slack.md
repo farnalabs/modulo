@@ -2,7 +2,7 @@
 id: feat-core-quality-report-slack
 prd: 8.6, 8.11
 delivery-tasks: [task-nv7-quality-report-slack]
-bdd: [backend/tests/bdd/features/connectors/slack_connector.feature (placeholder)]
+bdd: [backend/tests/bdd/features/connectors/slack_connector.feature ]
 code:
   - backend/src/modulo/core/reports/quality_report.py
   - backend/src/modulo/core/reports/__init__.py

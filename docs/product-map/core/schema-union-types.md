@@ -2,7 +2,6 @@
 id: feat-core-schema-union-types
 prd: 8.3
 delivery-tasks: [task-nv9-schema-union-types]
-bdd:
   - backend/tests/bdd/features/connectors/schema_inference.feature
 code:
   - backend/src/modulo/core/schema_registry/validation.py

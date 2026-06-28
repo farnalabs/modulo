@@ -2,7 +2,6 @@
 id: feat-evals-eval-gates
 prd: 8.17
 delivery-tasks: [task-nv2-conditional-hitl, task-nv2-eval-gate-enforcement]
-bdd:
   - backend/tests/features/evals/conditional_hitl.feature
   - backend/tests/features/evals/eval_block.feature
   - backend/tests/bdd/features/hitl/approval_gate.feature

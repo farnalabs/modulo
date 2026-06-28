@@ -1,8 +1,7 @@
 ---
 id: feat-auth-team-api-keys
-prd: 5.2, 9.3
+prd: 9.3
 delivery-tasks: [task-nv1-team-api-keys]
-bdd:
   - backend/tests/bdd/features/auth/api_keys.feature
 code:
   - backend/src/modulo/db/models/api_key.py

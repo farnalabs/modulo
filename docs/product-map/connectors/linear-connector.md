@@ -1,0 +1,105 @@
+---
+id: feat-connectors-linear
+prd: 8.6
+delivery-tasks: []
+  - backend/tests/bdd/features/connectors/connector_health.feature
+  - backend/tests/bdd/features/connectors/linear_connector.feature
+unit-tests: []
+code:
+  - backend/src/modulo/connectors/linear/__init__.py
+  - backend/src/modulo/connectors/base.py
+
+status: partial
+---
+
+# Linear Connector
+
+Async Linear GraphQL API connector implementing `ConnectorBase`. Provides read/write access to Linear issues for agent pipelines. Authenticated via Linear API key. Belongs to the `issue-tracker` connector type family alongside `JiraConnector`.
+
+## Behaviours
+
+### Authentication — API key
+
+- [x] Authenticate all requests via `Authorization: {api_key}` header
+- [x] Set `Content-Type: application/json` header on all requests
+- [x] Use `httpx.AsyncClient` with base URL `https://api.linear.app`
+- [x] `health_check()` executes viewer query to validate API key
+- [x] Return authenticated user name on success
+- [x] Return `HealthResult(ok=False)` with error detail on GraphQL errors
+- [ ] Support API key rotation via ConnectorHub without disrupting in-flight runs
+- [ ] Rate-limit awareness — no 429 retry/backoff
+
+### GraphQL Operations — query and mutation execution
+
+- [x] Execute GraphQL queries via `_graphql(query, variables)` helper
+- [x] Raise on response containing `"errors"` key
+- [x] Return data dict on success
+- [x] Define shared issue field selection fragment (`_ISSUE_FIELDS`) for consistent responses
+- [x] All GraphQL operations use the same endpoint `https://api.linear.app/graphql`
+- [ ] Support GraphQL query complexity limits and cost-based rate limiting
+- [ ] Support request cancellation via `asyncio` timeout
+
+### Issue Operations — read, update, and search
+
+- [x] Get single issue by ID via `query("issue")` with `issue_id` filter
+- [x] Return issue fields: id, title, description, state, priority, assignee, labels, createdAt, updatedAt
+- [x] Search issues via `query("search")` with text `query` and optional `limit`
+- [x] Default search limit to 50
+- [x] Create issue via `write("issue")` with `team_id`, `title`, optional `description`, `priority`, `assignee_id`, `label_ids`
+- [x] Update issue fields via `write("issue_update")` with `issue_id` and fields
+- [x] Raise `ValueError` for unsupported resources in `query()` and `write()`
+- [ ] Comment on issue — not implemented
+- [ ] Add/remove issue labels — only available via full `issue_update`
+- [ ] Change issue state/status — only available via `issue_update` with `stateId`
+- [ ] Assign/unassign issue — only available via `issue_update`
+- [ ] Archive issue — not implemented
+- [ ] Delete issue — not implemented
+- [ ] Search does not support pagination cursor — `next_cursor` always `None`
+
+### Team and Project Operations
+
+- [ ] List teams — not implemented
+- [ ] List projects — not implemented
+- [ ] Get team metadata (states, workflows) — not implemented
+- [ ] List issue labels for a team — not implemented
+
+### Capability Declaration
+
+- [x] `ConnectorType.LINEAR` defined in `base.py` enum
+- [x] `ConnectorType.LINEAR.capabilities` returns `{ISSUE_READ, ISSUE_WRITE, ISSUE_SEARCH}` in `base.py`
+- [x] `LinearConnector.connector_type` returns `ConnectorType.LINEAR`
+- [ ] Capability-based graph validation — agent requirements vs connector capabilities not yet wired in ConnectorHub
+
+### Health Check — connectivity and credential validation
+
+- [x] Validate API key by executing viewer query — fail on GraphQL errors
+- [x] Return authenticated user name in `detail` on success
+- [x] Return error detail from GraphQL `"errors"` response on failure
+- [ ] Detect expired API keys vs network errors vs insufficient permissions
+- [ ] Per-operation permission check before mutation calls
+
+### Credential Lifetime — ConnectorHub integration
+
+- [ ] Credentials decrypted once at run-start by ConnectorHub — not yet wired
+- [ ] Decrypted connector instance held in run-scoped context, never enters LangGraph state
+- [ ] One Fernet decrypt call per connector per run — not per node invocation
+- [ ] Discard decrypted connector at run end
+
+### Prompt Portability — GraphQL query maintenance
+
+- [ ] GraphQL queries are hard-coded in source — no query discovery
+- [ ] Linear API schema changes (field deprecation, new fields) require source code update
+- [ ] Prompt templates may use Linear-specific terminology ("issue", "team", "cycle")
+
+## Known Gaps
+
+- [ ] **No comment operations**: cannot read or write issue comments
+- [ ] **No team/project enumeration**: agents cannot discover teams, projects, or available workflows at runtime
+- [ ] **State transitions require raw stateId**: no helper to map workflow state names to IDs
+- [ ] **No label management**: cannot create, rename, or delete labels
+- [ ] **No cycle/sprint awareness**: cannot read or set issue cycle assignment
+- [ ] **No pagination**: `query("search")` results are limited by default with no cursor-based continuation
+- [ ] **BDD placeholder**: `backend/tests/bdd/features/connectors/linear_connector.feature` is a 3-line placeholder with no real scenarios
+- [ ] **No unit tests**: `unit-tests` field is empty
+- [ ] **No rate-limit handling**: no GraphQL query cost measurement, no 429 handling
+- [ ] **ConnectorHub pre-run health check not wired**: credentials are not yet decrypted and validated at run-start via ConnectorHub

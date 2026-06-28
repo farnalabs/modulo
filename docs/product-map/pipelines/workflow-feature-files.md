@@ -2,7 +2,6 @@
 id: feat-pipelines-workflow-feature-files
 prd: 8.15
 delivery-tasks: [task-nv12-workflow-feature-files]
-bdd:
   - backend/tests/bdd/features/workflows/import.feature
   - backend/tests/bdd/features/workflows/export.feature
   - backend/tests/bdd/features/workflows/binding.feature

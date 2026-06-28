@@ -2,7 +2,6 @@
 id: feat-teams-user-offboarding
 prd: 9.4
 delivery-tasks: [task-nv1-user-offboarding]
-bdd:
   - backend/tests/bdd/features/orgs/member_management.feature
 code:
   - backend/src/modulo/api/routes/admin.py
@@ -12,7 +11,7 @@ code:
   - backend/src/modulo/db/crud/team_membership.py
 unit-tests:
   - backend/tests/bdd/features/orgs/member_management.feature
-depends-on: [feat-auth-jwt, feat-teams-team-crud]
+depends-on: [feat-auth-jwt-auth, feat-teams-team-crud]
 status: partial
 ---
 # User Offboarding Admin-initiated deactivation of an individual user — sets `active=false` invalidates all JWT token families, removes all team memberships, and prevents login. Reactivation restores `active=true` but does not restore memberships or token families. Deactivation is an immediate revocation action intended for departing employees and security incidents (PRD 9.4). Stale team membership claims in existing access tokens live for up to 15 minutes unless admin forces session revocation via this endpoint. ## Behaviours ### Authorization

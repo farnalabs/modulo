@@ -2,7 +2,6 @@
 id: feat-core-pipeline-execution
 prd: 8.4
 delivery-tasks: [task-nv0-manual-node, task-nv0-snapshot-expansion]
-bdd:
   - backend/tests/bdd/features/pipelines/run_lifecycle.feature
   - backend/tests/bdd/features/pipelines/node_types.feature
   - backend/tests/bdd/features/pipelines/checkpoint_resume.feature

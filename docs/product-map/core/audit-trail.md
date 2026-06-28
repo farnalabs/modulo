@@ -2,7 +2,6 @@
 id: feat-core-audit-trail
 prd: 8.12
 delivery-tasks: [task-nv0-immutable-audit]
-bdd:
   - backend/tests/bdd/features/audit/event_recording.feature
 code:
   - backend/src/modulo/core/audit_logger/__init__.py

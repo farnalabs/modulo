@@ -1,7 +1,8 @@
 ---
 id: feat-core-runtime-provider-core
+prd: 6.2
 bdd:
-  - backend/tests/bdd/features/workflows/binding.feature (partial — one scenario uses provider+model_id fallback)
+  - backend/tests/bdd/features/workflows/binding.feature
 code:
   - backend/src/modulo/core/runtime_provider/
   - backend/src/modulo/db/models/environment_profile.py

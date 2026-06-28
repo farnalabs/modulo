@@ -2,7 +2,6 @@
 id: feat-observability-data-residency
 prd: 10.5, 6.6, 6.2
 delivery-tasks: [task-nv0-data-residency]
-bdd:
   - backend/tests/features/personas/marcus-ciso.feature
   - backend/tests/bdd/features/observability/otel_traces.feature
   - backend/tests/bdd/features/observability/metrics.feature

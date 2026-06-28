@@ -2,7 +2,6 @@
 id: feat-core-run-context
 prd: 8.18
 delivery-tasks: [task-nv0-complexity-reviewer, task-nv0-run-context-tests]
-bdd:
   - backend/tests/features/triggers/manual.feature
   - backend/tests/features/pipelines/run_sequential.feature
   - backend/tests/features/evals/conditional_hitl.feature

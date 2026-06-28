@@ -2,7 +2,6 @@
 id: feat-teams-team-isolation
 prd: 9.3
 delivery-tasks: [task-nv1-team-isolation]
-bdd:
   - backend/tests/bdd/features/auth/tenant_isolation.feature
   - backend/tests/bdd/features/security/rls_enforcement.feature
   - backend/tests/features/organisation/rls_isolation.feature

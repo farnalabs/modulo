@@ -2,7 +2,6 @@
 id: feat-teams-team-crud
 prd: 9.3
 delivery-tasks: [task-nv1-team-entity]
-bdd:
 code:
   - backend/src/modulo/db/models/team.py
   - backend/src/modulo/db/models/team_membership.py
@@ -15,7 +14,7 @@ unit-tests:
   - backend/tests/unit/db/crud/test_team.py
   - backend/tests/unit/db/crud/test_team_membership.py
   - backend/tests/integration/crud/test_team_isolation.py
-depends-on: [feat-org-entity]
+depends-on: [feat-teams-org-entity]
 status: partial
 ---
 # Team CRUD ## Behaviours ### Create team - [ ] Admin creates team with name → 201, team returned with id

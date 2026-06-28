@@ -2,7 +2,6 @@
 id: feat-core-replace-step-agent
 prd: 8.4
 delivery-tasks: [task-nv11-replace-step-agent]
-bdd:
   - backend/tests/bdd/features/pipelines/node_types.feature
   - backend/tests/bdd/features/hitl/manual_node.feature
   - backend/tests/bdd/features/ui/pipeline_builder.feature

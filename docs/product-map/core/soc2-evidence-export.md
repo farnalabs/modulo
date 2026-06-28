@@ -2,7 +2,6 @@
 id: feat-core-soc2-evidence-export
 prd: 8.12
 delivery-tasks: [task-nv11-soc2-evidence-export]
-bdd:
 code:
   - backend/src/modulo/api/routes/audit.py
   - backend/src/modulo/core/audit_logger/__init__.py

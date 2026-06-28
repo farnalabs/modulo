@@ -1,8 +1,8 @@
 ---
 id: feat-core-hitl-effort-trend
-bdd:
-  - backend/tests/bdd/features/observability/metrics.feature (placeholder)
-  - backend/tests/bdd/features/ui/eval_dashboard.feature (placeholder)
+prd: 8.8
+  - backend/tests/bdd/features/observability/metrics.feature 
+  - backend/tests/bdd/features/ui/eval_dashboard.feature 
 code:
   - backend/src/modulo/api/routes/dashboard.py
   - backend/tests/unit/api/test_dashboard.py

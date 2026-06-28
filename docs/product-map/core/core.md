@@ -1,9 +1,7 @@
 ---
 id: feat-core-core
 prd: 8.16, 8.4
-
 delivery-tasks: [task-nv5-sdlc-onboarding-path]
-bdd:
   - backend/tests/bdd/features/orgs/org_onboarding.feature
   - backend/tests/unit/api/test_onboarding.py
 code:

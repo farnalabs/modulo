@@ -2,7 +2,6 @@
 id: feat-evals-system
 prd: 8.17
 delivery-tasks: - task-nv2-eval-definition - task-nv2-eval-engine - task-nv2-eval-llm-judge - task-nv2-eval-regex-schema - task-nv2-eval-custom-function - task-nv2-conditional-hitl - task-nv2-eval-gate-enforcement - task-nv2-eval-packaging
-bdd:
   - backend/tests/bdd/features/eval/eval_suite_crud.feature
   - backend/tests/bdd/features/eval/eval_scorer.feature
   - backend/tests/bdd/features/eval/eval_run.feature

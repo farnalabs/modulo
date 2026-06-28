@@ -1,0 +1,46 @@
+# =============================================================================
+# Stage 1: Build frontend SPA
+# =============================================================================
+FROM node:20-alpine AS frontend-builder
+
+WORKDIR /build
+
+COPY frontend/package.json frontend/package-lock.json ./
+RUN npm ci
+
+COPY frontend/ ./
+RUN npm run build
+
+# =============================================================================
+# Stage 2: Backend + nginx for static serving
+# =============================================================================
+FROM python:3.12-slim
+
+# Install nginx + uv
+RUN apt-get update && apt-get install -y --no-install-recommends nginx && \
+    rm -rf /var/lib/apt/lists/* && \
+    pip install --no-cache-dir uv
+
+WORKDIR /app
+
+# Backend dependencies
+COPY backend/pyproject.toml backend/uv.lock ./
+RUN uv sync --frozen --no-dev --no-cache
+
+# Backend source
+COPY backend/src/ src/
+COPY backend/alembic.ini .
+
+# Frontend build output
+COPY --from=frontend-builder /build/dist/ /usr/share/nginx/html/
+
+# nginx config
+COPY deploy/fly/nginx.conf /etc/nginx/conf.d/default.conf
+
+# Entrypoint: start nginx, run migrations, start uvicorn
+COPY deploy/fly/entrypoint.sh /entrypoint.sh
+RUN chmod +x /entrypoint.sh
+
+EXPOSE 8080
+
+CMD ["/entrypoint.sh"]

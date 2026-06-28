@@ -2,7 +2,6 @@
 id: feat-core-polling-trigger
 prd: 8.5
 delivery-tasks: [task-nv10-polling-trigger]
-bdd:
   - backend/tests/bdd/features/pipelines/scheduling.feature
 code:
   - backend/src/modulo/core/trigger_engine/__init__.py

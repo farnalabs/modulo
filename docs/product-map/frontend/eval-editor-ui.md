@@ -2,7 +2,6 @@
 id: feat-frontend-eval-editor-ui
 prd: 8.17
 delivery-tasks: [task-nv2-eval-ui-editor]
-bdd:
   - backend/tests/bdd/features/eval/eval_run.feature
 code:
   - frontend/src/views/EvalEditorView.vue

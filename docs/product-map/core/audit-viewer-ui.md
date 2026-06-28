@@ -2,7 +2,6 @@
 id: feat-core-audit-viewer-ui
 prd: 8.12
 delivery-tasks: [task-nv11-audit-viewer-ui]
-bdd:
   - backend/tests/bdd/features/audit/event_recording.feature
 code:
   - frontend/src/views/AdminAuditView.vue

@@ -2,7 +2,6 @@
 id: feat-core-cost-breakdown
 prd: 8.10
 delivery-tasks: [task-nv7-cost-breakdown]
-bdd:
 code:
   - backend/src/modulo/core/cost_controller/__init__.py
   - backend/src/modulo/api/routes/costs.py

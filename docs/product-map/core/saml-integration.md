@@ -2,7 +2,6 @@
 id: feat-core-saml-integration
 prd: 9.4, 6.2, 9.2
 delivery-tasks: [task-nv6-saml-integration]
-bdd:
 code:
   - backend/src/modulo/auth/sso.py
   - backend/src/modulo/api/routes/sso.py

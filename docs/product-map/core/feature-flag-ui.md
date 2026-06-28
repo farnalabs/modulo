@@ -1,8 +1,7 @@
 ---
 id: feat-core-feature-flag-ui
-prd: 8.17, Enterprise tier, License model
+prd: 8.17
 delivery-tasks: [task-nv12-feature-flag-ui]
-bdd:
 code:
   - backend/src/modulo/core/feature_flags.py
   - backend/src/modulo/api/routes/admin_feature_flags.py
