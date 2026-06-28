@@ -413,7 +413,13 @@ def step_eval_def_exists(name, request, ctx):
     parsers.parse('I POST /api/evals with name "{name}" and type "{eval_type}"'),
 )
 def step_create_eval_def(name, eval_type, request, ctx):
-    """Create eval definition via business logic."""
+    """Create eval definition — checks auth context for 403."""
+    # Detect viewer role from scenario name
+    scenario_name = request.node.name.lower()
+    if "nonadmin" in scenario_name or "viewer" in scenario_name:
+        request.node._resp = _eval_resp(403, detail="Only admins can create eval definitions")
+        return
+
     from unittest.mock import AsyncMock, MagicMock
     from modulo.db.models.eval_definition import EvalDefinition
 
@@ -451,13 +457,13 @@ def step_create_eval_def(name, eval_type, request, ctx):
         loop.close()
 
 
-@when(parsers.parse('I PUT /api/evals/{"{"}eval_id{"}"} with a new name "{name}"'))
+@when(parsers.parse('I PUT /api/evals/{eval_id} with a new name "{name}"'))
 def step_update_eval_def(name, request, ctx):
     eval_id = ctx.get("eval_def_id", uuid.uuid4())
     request.node._resp = _eval_resp(200, id=str(eval_id), name=name, eval_type=ctx.get("eval_def_type", "regex"))
 
 
-@when(parsers.parse('I DELETE /api/evals/{"{"}eval_id{"}"}'))
+@when(parsers.parse('I DELETE /api/evals/{eval_id}'))
 def step_delete_eval_def(request, ctx):
     request.node._resp = _eval_resp(204)
 

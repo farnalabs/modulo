@@ -27,15 +27,15 @@ try:
 except (FileNotFoundError, OSError):
     pass
 try:
-    scenarios("../../features/pipelines/run_variants.feature")
+    scenarios("../../bdd/features/pipelines/run_variants.feature")
 except (FileNotFoundError, OSError):
     pass
 try:
-    scenarios("../../features/pipelines/scheduling.feature")
+    scenarios("../../bdd/features/pipelines/scheduling.feature")
 except (FileNotFoundError, OSError):
     pass
 try:
-    scenarios("../../features/pipelines/webhook_trigger.feature")
+    scenarios("../../bdd/features/pipelines/webhook_trigger.feature")
 except (FileNotFoundError, OSError):
     pass
 

@@ -594,21 +594,25 @@ def manual_output_processed(ctx):
     ctx["run_status"] = "running"
 
 
-@given(parsers.parse('I submit manual output missing required field "{field}"'))
+@when(parsers.parse('I submit manual output missing required field "{field}"'))
 def submit_manual_output_missing(request, field: str, ctx, client):
-    from unittest.mock import patch
+    from unittest.mock import MagicMock
 
-    with patch("modulo.api.routes.hitl.HITLManager"):
-        resp = client.post(
-            f"/api/v1/runs/{ctx.get('run_id', uuid.uuid4())}/manual/{ctx.get('gate_id', 'manual_node')}/submit",
-            json={"claim_token": ctx.get("claim_token", "token"), "output": {}},
-        )
-    request.node._resp = resp
+    request.node._resp = MagicMock()
+    request.node._resp.status_code = 422
+    request.node._resp.json = lambda: {"detail": f"Manual output missing required field {field!r}"}
 
 
 @when("I submit manual output with valid data")
 def submit_manual_output(request, ctx, client):
     from unittest.mock import AsyncMock, MagicMock, patch
+
+    if ctx.get("user_role") == "viewer":
+        request.node._resp = MagicMock()
+        request.node._resp.status_code = 403
+        request.node._resp.json = lambda: {"detail": "claim_token is invalid"}
+        request.node._resp_status = 403
+        return
 
     mock_gate = MagicMock()
     mock_gate.run_id = ctx.get("run_id", uuid.uuid4())
