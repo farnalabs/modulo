@@ -29,9 +29,7 @@ def _ci_kwargs(test_org: uuid.UUID, test_user: uuid.UUID, *, suffix: str = "") -
     }
 
 
-async def test_create_connector_instance(
-    rls_session: AsyncSession, test_org: uuid.UUID, test_user: uuid.UUID
-) -> None:
+async def test_create_connector_instance(rls_session: AsyncSession, test_org: uuid.UUID, test_user: uuid.UUID) -> None:
     ci = await create_connector_instance(rls_session, **_ci_kwargs(test_org, test_user))
     assert ci.id is not None
     assert ci.connector_type_id == "filesystem"
@@ -41,9 +39,7 @@ async def test_create_connector_instance(
 async def test_get_connector_instance_returns_existing(
     rls_session: AsyncSession, test_org: uuid.UUID, test_user: uuid.UUID
 ) -> None:
-    ci = await create_connector_instance(
-        rls_session, **_ci_kwargs(test_org, test_user, suffix="-fetch")
-    )
+    ci = await create_connector_instance(rls_session, **_ci_kwargs(test_org, test_user, suffix="-fetch"))
     fetched = await get_connector_instance(rls_session, ci.id)
     assert fetched is not None
     assert fetched.id == ci.id
@@ -69,12 +65,8 @@ async def test_list_connector_instances_pagination(
     assert page1.page == 1
 
 
-async def test_update_connector_instance(
-    rls_session: AsyncSession, test_org: uuid.UUID, test_user: uuid.UUID
-) -> None:
-    ci = await create_connector_instance(
-        rls_session, **_ci_kwargs(test_org, test_user, suffix="-upd")
-    )
+async def test_update_connector_instance(rls_session: AsyncSession, test_org: uuid.UUID, test_user: uuid.UUID) -> None:
+    ci = await create_connector_instance(rls_session, **_ci_kwargs(test_org, test_user, suffix="-upd"))
     updated = await update_connector_instance(rls_session, ci.id, {"name": "Renamed Connector"})
     assert updated is not None
     assert updated.name == "Renamed Connector"
@@ -86,12 +78,8 @@ async def test_update_connector_instance_unknown_returns_none(
     assert await update_connector_instance(rls_session, uuid.uuid4(), {"name": "x"}) is None
 
 
-async def test_delete_connector_instance(
-    rls_session: AsyncSession, test_org: uuid.UUID, test_user: uuid.UUID
-) -> None:
-    ci = await create_connector_instance(
-        rls_session, **_ci_kwargs(test_org, test_user, suffix="-del")
-    )
+async def test_delete_connector_instance(rls_session: AsyncSession, test_org: uuid.UUID, test_user: uuid.UUID) -> None:
+    ci = await create_connector_instance(rls_session, **_ci_kwargs(test_org, test_user, suffix="-del"))
     assert await delete_connector_instance(rls_session, ci.id) is True
     assert await get_connector_instance(rls_session, ci.id) is None
 

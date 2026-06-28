@@ -14,7 +14,7 @@ class TriggerEvent(OrgScoped):
             "validation_result IN ('accepted', 'passed', 'hmac_failed', "
             "'schema_validation_failed', 'deduplicated', 'concurrency_limit_reached', "
             "'flood_rejected', 'timestamp_expired', 'validation_failed', 'rate_limited', "
-            "'no_match', 'condition_met', 'poll_error')",
+            "'no_match', 'condition_met', 'poll_error', 'signal_fired')",
             name="ck_trigger_events_validation_result",
         ),
     )

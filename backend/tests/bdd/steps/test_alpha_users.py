@@ -42,9 +42,7 @@ def create_pipeline(name: str, request):
 @then(parsers.parse("the response status is {status:d}"))
 def check_status(status: int, request):
     resp = request.node._resp
-    assert resp.status_code == status, (
-        f"Expected {status}, got {resp.status_code}: {resp.text[:200]}"
-    )
+    assert resp.status_code == status, f"Expected {status}, got {resp.status_code}: {resp.text[:200]}"
 
 
 @given(parsers.parse('org "{org}" has pipeline "{name}"'))
@@ -57,6 +55,7 @@ def get_pipelines(request):
     c = getattr(request.node, "_client", None)
     if c is None:
         from tests.bdd.conftest import client as default_client
+
         c = default_client
     with (
         patch("modulo.core.pipeline_engine.run_crud.set_rls_org"),
@@ -94,11 +93,12 @@ def delete_pipeline(name, request):
     request.node._resp = resp
 
 
-@when(parsers.parse('I PATCH /api/pipelines/{name} with new config'))
+@when(parsers.parse("I PATCH /api/pipelines/{name} with new config"))
 def patch_pipeline(name, request):
     c = getattr(request.node, "_client", None)
     if c is None:
         from tests.bdd.conftest import client as default_client
+
         c = default_client
     with (
         patch("modulo.core.pipeline_engine.run_crud.set_rls_org"),
@@ -111,11 +111,7 @@ def patch_pipeline(name, request):
     request.node._resp = resp
 
 
-@when(
-    parsers.parse(
-        'I POST /api/admin/users with email "{email}" and role "{role}"'
-    )
-)
+@when(parsers.parse('I POST /api/admin/users with email "{email}" and role "{role}"'))
 def create_user(email: str, role: str, client, request):
     with (
         patch("modulo.core.pipeline_engine.run_crud.set_rls_org"),

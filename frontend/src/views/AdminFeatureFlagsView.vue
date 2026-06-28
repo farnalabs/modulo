@@ -3,6 +3,22 @@
     <header>
       <h1 class="text-3xl font-bold tracking-tight">Feature Flags</h1>
       <p class="mt-1 text-muted-foreground">All known feature flags and their current activation status</p>
+      <div v-if="planStore.isLoading" class="mt-2 flex items-center gap-2 text-sm text-muted-foreground">
+        <div class="h-4 w-4 animate-spin rounded-full border-2 border-primary border-t-transparent" />
+        Loading plan info...
+      </div>
+      <div v-else class="mt-2 flex flex-wrap gap-4 text-sm text-muted-foreground">
+        <span>
+          Plan: <strong class="text-foreground">{{ planStore.currentTier }}</strong>
+        </span>
+        <span>
+          Features enabled:
+          <strong class="text-foreground">{{ enabledCount }}</strong>
+          /
+          <span>{{ planStore.features ? Object.keys(planStore.features).length : 0 }}</span>
+        </span>
+        <span v-if="planStore.isEnterprise" class="font-medium text-purple-600">Enterprise tier</span>
+      </div>
     </header>
 
     <div class="rounded-lg border bg-card p-4 shadow-sm">
@@ -112,8 +128,15 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted } from 'vue'
+import { ref, computed, onMounted } from 'vue'
 import { api } from '../lib/api/client'
+import { usePlanStore } from '../stores/planStore'
+
+const planStore = usePlanStore()
+
+const enabledCount = computed(() => {
+  return Object.values(planStore.features).filter(Boolean).length
+})
 
 interface FlagItem {
   name: string
@@ -171,5 +194,8 @@ async function loadFlags() {
   }
 }
 
-onMounted(() => loadFlags())
+onMounted(() => {
+  planStore.fetchPlan()
+  loadFlags()
+})
 </script>

@@ -178,8 +178,7 @@ def _response_matches_search(ctx: dict[str, Any], term: str) -> None:
     items = ctx["response"].json()["items"]
     term_lower = term.strip('"').lower()
     assert any(
-        term_lower in (p.get("name", "") or "").lower()
-        or term_lower in (p.get("description", "") or "").lower()
+        term_lower in (p.get("name", "") or "").lower() or term_lower in (p.get("description", "") or "").lower()
         for p in items
     ), f"No primitive matched search term '{term_lower}'"
 
@@ -204,11 +203,7 @@ def _specific_primitive_exists(ctx: dict[str, Any], primitive_id: str) -> None:
     ctx["community_primitive_id"] = pid
 
 
-@when(
-    parsers.parse(
-        "the user requests GET /api/v1/libraries/{primitive_id}"
-    )
-)
+@when(parsers.parse("the user requests GET /api/v1/libraries/{primitive_id}"))
 def _request_get_primitive(client, primitive_id: str, ctx: dict[str, Any]) -> None:
     ctx["response"] = client.get(f"/api/v1/libraries/{primitive_id}")
 
@@ -243,11 +238,7 @@ def _community_primitive_named_exists(ctx: dict[str, Any], name: str) -> None:
     ctx["community_primitive_id"] = PRIMITIVE_10
 
 
-@when(
-    parsers.parse(
-        "the user sends POST /api/v1/libraries/{community_primitive_id}/adapt"
-    )
-)
+@when(parsers.parse("the user sends POST /api/v1/libraries/{community_primitive_id}/adapt"))
 def _request_adapt(client, community_primitive_id: str, ctx: dict[str, Any]) -> None:
     ctx["response"] = client.post(f"/api/v1/libraries/{community_primitive_id}/adapt", json={})
 
@@ -291,25 +282,19 @@ def _mcp_copy_community_primitive(viewer_client, ctx: dict[str, Any]) -> None:
 def _response_contains_error(ctx: dict[str, Any]) -> None:
     data = ctx["response"].json()
     detail = data.get("detail", "")
-    assert "browser UI" in detail or "read only" in detail.lower() or "403" in str(
-        ctx["response"].status_code
-    ), f"Expected community_primitive_read_only error, got: {data}"
+    assert "browser UI" in detail or "read only" in detail.lower() or "403" in str(ctx["response"].status_code), (
+        f"Expected community_primitive_read_only error, got: {data}"
+    )
 
 
 @then("the response detail explains the browser UI must be used")
 def _response_detail_explains_browser(ctx: dict[str, Any]) -> None:
     data = ctx["response"].json()
     detail = data.get("detail", "")
-    assert "browser UI" in detail or "MCP" in detail, (
-        f"Expected explanation about browser UI, got: {detail}"
-    )
+    assert "browser UI" in detail or "MCP" in detail, f"Expected explanation about browser UI, got: {detail}"
 
 
-@when(
-    parsers.parse(
-        "the user sends POST /api/v1/libraries/{primitive_id}/adapt with target_team_id"
-    )
-)
+@when(parsers.parse("the user sends POST /api/v1/libraries/{primitive_id}/adapt with target_team_id"))
 def _request_adapt_with_team(client, primitive_id: str, ctx: dict[str, Any]) -> None:
     ctx["response"] = client.post(
         f"/api/v1/libraries/{primitive_id}",
@@ -330,11 +315,7 @@ def _new_primitive_has_team(ctx: dict[str, Any]) -> None:
     assert data.get("owner_team_id") is not None, "owner_team_id is None"
 
 
-@when(
-    parsers.parse(
-        "the user sends POST /api/v1/libraries/{primitive_id}/adapt"
-    )
-)
+@when(parsers.parse("the user sends POST /api/v1/libraries/{primitive_id}/adapt"))
 def _request_adapt_by_id(client, primitive_id: str, ctx: dict[str, Any]) -> None:
     ctx["response"] = client.post(f"/api/v1/libraries/{primitive_id}/adapt", json={})
 
@@ -375,11 +356,7 @@ def _three_users_rated(ctx: dict[str, Any]) -> None:
     ]
 
 
-@when(
-    parsers.parse(
-        "the user requests GET /api/v1/libraries/{primitive_id}/ratings/aggregate"
-    )
-)
+@when(parsers.parse("the user requests GET /api/v1/libraries/{primitive_id}/ratings/aggregate"))
 def _request_rating_aggregate(client, primitive_id: str, ctx: dict[str, Any]) -> None:
     ctx["response"] = client.get(f"/api/v1/libraries/{primitive_id}/ratings/aggregate")
 
@@ -393,16 +370,10 @@ def _response_has_average_rating(ctx: dict[str, Any]) -> None:
 @then(parsers.parse("the response contains review_count = {count:d}"))
 def _response_review_count(ctx: dict[str, Any], count: int) -> None:
     data = ctx["response"].json()
-    assert data["review_count"] == count, (
-        f"Expected review_count={count}, got {data['review_count']}"
-    )
+    assert data["review_count"] == count, f"Expected review_count={count}, got {data['review_count']}"
 
 
-@when(
-    parsers.parse(
-        "the user sends POST /api/v1/libraries/{primitive_id}/ratings"
-    )
-)
+@when(parsers.parse("the user sends POST /api/v1/libraries/{primitive_id}/ratings"))
 def _request_submit_rating(client, primitive_id: str, ctx: dict[str, Any]) -> None:
     body: dict[str, Any] = {}
     # If a table is attached, pytest-bdd passes it as additional arguments;
@@ -420,9 +391,7 @@ def _request_submit_rating(client, primitive_id: str, ctx: dict[str, Any]) -> No
         r"\n      | thumbs_up | {thumbs_up} |"
     )
 )
-def _request_submit_rating_inline(
-    client, primitive_id: str, thumbs_up: str, ctx: dict[str, Any]
-) -> None:
+def _request_submit_rating_inline(client, primitive_id: str, thumbs_up: str, ctx: dict[str, Any]) -> None:
     """Handle ratings submission with inline table."""
     body: dict[str, Any] = {"thumbs_up": thumbs_up.strip().lower() == "true"}
     ctx["response"] = client.post(
@@ -451,29 +420,21 @@ def _request_submit_rating_with_comment(
     )
 
 
-@then(parsers.parse('the rating has thumbs_up = {expected}'))
+@then(parsers.parse("the rating has thumbs_up = {expected}"))
 def _rating_has_thumbs_up(ctx: dict[str, Any], expected: str) -> None:
     data = ctx["response"].json()
     expected_bool = expected.strip().lower() == "true"
-    assert data["thumbs_up"] == expected_bool, (
-        f"Expected thumbs_up={expected_bool}, got {data['thumbs_up']}"
-    )
+    assert data["thumbs_up"] == expected_bool, f"Expected thumbs_up={expected_bool}, got {data['thumbs_up']}"
 
 
-@then(parsers.parse('the rating has comment = {expected}'))
+@then(parsers.parse("the rating has comment = {expected}"))
 def _rating_has_comment(ctx: dict[str, Any], expected: str) -> None:
     data = ctx["response"].json()
     expected_val = None if expected.strip().lower() == "null" else expected
-    assert data.get("comment") == expected_val, (
-        f"Expected comment={expected_val}, got {data.get('comment')}"
-    )
+    assert data.get("comment") == expected_val, f"Expected comment={expected_val}, got {data.get('comment')}"
 
 
-@when(
-    parsers.parse(
-        "the user requests GET /api/v1/libraries/{primitive_id}/ratings"
-    )
-)
+@when(parsers.parse("the user requests GET /api/v1/libraries/{primitive_id}/ratings"))
 def _request_list_ratings(client, primitive_id: str, ctx: dict[str, Any]) -> None:
     ctx["response"] = client.get(f"/api/v1/libraries/{primitive_id}/ratings")
 
@@ -526,6 +487,4 @@ def _aggregate_increases(client, ctx: dict[str, Any]) -> None:
 @then(parsers.parse("review_count becomes {count:d}"))
 def _review_count_becomes(client, count: int) -> None:
     agg = client.get(f"/api/v1/libraries/{PRIMITIVE_10}/ratings/aggregate").json()
-    assert agg["review_count"] == count, (
-        f"Expected review_count={count}, got {agg['review_count']}"
-    )
+    assert agg["review_count"] == count, f"Expected review_count={count}, got {agg['review_count']}"

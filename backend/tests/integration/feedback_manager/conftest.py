@@ -20,8 +20,7 @@ async def test_org(db_engine: AsyncEngine) -> uuid.UUID:
         async with conn.begin():
             await conn.execute(
                 text(
-                    "INSERT INTO organisations (id, name, slug, settings_json) "
-                    "VALUES (:id, :name, :slug, '{}'::json)"
+                    "INSERT INTO organisations (id, name, slug, settings_json) VALUES (:id, :name, :slug, '{}'::json)"
                 ),
                 {
                     "id": str(org_id),
@@ -39,8 +38,7 @@ async def test_user(db_engine: AsyncEngine, test_org: uuid.UUID) -> uuid.UUID:
         async with conn.begin():
             await conn.execute(
                 text(
-                    "INSERT INTO users (id, organisation_id, email, display_name) "
-                    "VALUES (:id, :org_id, :email, :name)"
+                    "INSERT INTO users (id, organisation_id, email, display_name) VALUES (:id, :org_id, :email, :name)"
                 ),
                 {
                     "id": str(user_id),
@@ -53,9 +51,7 @@ async def test_user(db_engine: AsyncEngine, test_org: uuid.UUID) -> uuid.UUID:
 
 
 @pytest_asyncio.fixture
-async def rls_session(
-    db_engine: AsyncEngine, test_org: uuid.UUID
-) -> AsyncGenerator[AsyncSession, None]:
+async def rls_session(db_engine: AsyncEngine, test_org: uuid.UUID) -> AsyncGenerator[AsyncSession, None]:
     factory = async_sessionmaker(db_engine, expire_on_commit=False)
     async with factory() as session:
         await session.execute(

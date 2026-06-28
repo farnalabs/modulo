@@ -175,7 +175,7 @@ def _data_theme_still_agent(page: Page) -> None:
 # ============================================================================
 
 
-@given(parsers.parse("I am viewing run details for run \"{run_id}\""))
+@given(parsers.parse('I am viewing run details for run "{run_id}"'))
 def _viewing_run(page: Page, base_url: str, run_id: str, ui_ctx: dict[str, Any]) -> None:
     _mock_websocket(page)
     ui_ctx["run_id"] = run_id
@@ -188,9 +188,7 @@ def _run_is_in_state(page: Page, status: str, ui_ctx: dict[str, Any]) -> None:
     """Expect the run detail page to show the current status badge."""
     badge = page.locator('[data-testid="run-status"]')
     if badge.is_visible():
-        assert status in badge.text_content().lower(), (
-            f"Expected status '{status}' on page"
-        )
+        assert status in badge.text_content().lower(), f"Expected status '{status}' on page"
 
 
 @when("the backend emits a node_complete event")
@@ -239,9 +237,7 @@ def _run_detail_shows_updated_node(page: Page) -> None:
     node = page.locator('[data-testid="node-status-agent-1"]')
     if node.is_visible():
         text = node.text_content().lower()
-        assert "completed" in text or "success" in text, (
-            f"Expected completed status, got '{text}'"
-        )
+        assert "completed" in text or "success" in text, f"Expected completed status, got '{text}'"
 
 
 @then("an approval banner appears without page refresh")

@@ -43,9 +43,7 @@ def ctx():
 # ============================================================================
 
 
-@given(
-    parsers.parse('pipeline "{pipeline_name}" has an approval gate at node "{node_id}"')
-)
+@given(parsers.parse('pipeline "{pipeline_name}" has an approval gate at node "{node_id}"'))
 def pipeline_has_approval_gate(pipeline_name: str, node_id: str, ctx):
     ctx["pipeline_name"] = pipeline_name
     ctx["pipeline_id"] = uuid.uuid4()
@@ -83,9 +81,7 @@ def run_reaches_approval_gate(node_id: str, ctx):
 
 @then('the run status becomes "waiting_for_approval"')
 def run_status_waiting_for_approval(ctx):
-    assert ctx["run_status"] == "waiting_for_approval", (
-        f"Expected waiting_for_approval, got {ctx['run_status']}"
-    )
+    assert ctx["run_status"] == "waiting_for_approval", f"Expected waiting_for_approval, got {ctx['run_status']}"
 
 
 @then("the approver is notified via WebSocket")
@@ -132,11 +128,7 @@ def i_am_approver(ctx):
     ctx["user_id"] = uuid.UUID("00000000-0000-0000-0000-000000000002")
 
 
-@when(
-    parsers.parse(
-        'I POST /api/runs/{run_id}/approve with decision "{decision}"'
-    )
-)
+@when(parsers.parse('I POST /api/runs/{run_id}/approve with decision "{decision}"'))
 def post_approve_decision(request, run_id, decision: str, ctx):
     """Handle approve/reject POST for both approvers and non-approvers.
 
@@ -155,9 +147,7 @@ def post_approve_decision(request, run_id, decision: str, ctx):
     if role == "viewer":
         # Non-approver: HITLManager raises ClaimTokenInvalidError -> 403
         mock_mgr = MagicMock()
-        mock_mgr.approve = AsyncMock(
-            side_effect=PermissionError("claim_token is invalid")
-        )
+        mock_mgr.approve = AsyncMock(side_effect=PermissionError("claim_token is invalid"))
         with patch(
             "modulo.api.routes.hitl.HITLManager",
             return_value=mock_mgr,
@@ -218,9 +208,7 @@ def execution_resumes_from(node_id: str, ctx):
 @then('the run status becomes "rejected"')
 def run_status_rejected(ctx):
     ctx["run_status"] = "rejected"
-    assert ctx["run_status"] == "rejected", (
-        f"Expected rejected, got {ctx['run_status']}"
-    )
+    assert ctx["run_status"] == "rejected", f"Expected rejected, got {ctx['run_status']}"
 
 
 # ============================================================================
@@ -252,9 +240,7 @@ def run_waiting_at_gate_with_timeout(gate_id: str, timeout: int, ctx):
 
     # Mock HITL manager with expire_stale to simulate timeout
     mock_mgr = MagicMock()
-    mock_mgr.expire_stale = AsyncMock(
-        return_value=[{"run_id": ctx["run_id"], "gate_id": gate_id}]
-    )
+    mock_mgr.expire_stale = AsyncMock(return_value=[{"run_id": ctx["run_id"], "gate_id": gate_id}])
     mock_mgr.get_gate = AsyncMock(return_value=mock_gate)
     ctx["_mock_hitl_mgr"] = mock_mgr
 
@@ -263,18 +249,14 @@ def run_waiting_at_gate_with_timeout(gate_id: str, timeout: int, ctx):
 async def one_second_passes(ctx):
     """Simulate the expiry check — not a real sleep, just a mock invocation."""
     mgr = ctx["_mock_hitl_mgr"]
-    expired = await mgr.expire_stale(
-        org_id=uuid.UUID("00000000-0000-0000-0000-000000000001")
-    )
+    expired = await mgr.expire_stale(org_id=uuid.UUID("00000000-0000-0000-0000-000000000001"))
     ctx["expired_gates"] = expired
     ctx["run_status"] = "timed_out"
 
 
 @then('the run status becomes "timed_out"')
 def run_status_timed_out(ctx):
-    assert ctx["run_status"] == "timed_out", (
-        f"Expected timed_out, got {ctx['run_status']}"
-    )
+    assert ctx["run_status"] == "timed_out", f"Expected timed_out, got {ctx['run_status']}"
 
 
 # ============================================================================
@@ -297,9 +279,9 @@ def response_status_403(request):
 @then("the run status remains unchanged")
 def run_status_unchanged(ctx):
     """Verify the run stayed in its previous state after a failed action."""
-    assert ctx.get("run_status") in (
-        "awaiting_human", "waiting_for_approval"
-    ), f"Status unexpectedly changed to {ctx.get('run_status')}"
+    assert ctx.get("run_status") in ("awaiting_human", "waiting_for_approval"), (
+        f"Status unexpectedly changed to {ctx.get('run_status')}"
+    )
 
 
 # ============================================================================
@@ -313,9 +295,7 @@ def _make_mock_hitl_gate(**kwargs) -> MagicMock:
     gate.run_id = kwargs.get("run_id", uuid.uuid4())
     gate.gate_id = kwargs.get("gate_id", "gate-1")
     gate.pipeline_id = kwargs.get("pipeline_id", uuid.uuid4())
-    gate.organisation_id = kwargs.get(
-        "org_id", uuid.UUID("00000000-0000-0000-0000-000000000001")
-    )
+    gate.organisation_id = kwargs.get("org_id", uuid.UUID("00000000-0000-0000-0000-000000000001"))
     gate.claimed_by = kwargs.get("claimed_by")
     gate.claimed_at = kwargs.get("claimed_at")
     gate.claim_token = kwargs.get("claim_token")

@@ -50,20 +50,14 @@ class Run(OrgScoped):
     snapshot_id: Mapped[uuid.UUID] = mapped_column(
         Uuid(), ForeignKey("pipeline_snapshots.id", ondelete="RESTRICT"), nullable=False
     )
-    trigger_id: Mapped[uuid.UUID | None] = mapped_column(
-        Uuid(), ForeignKey("triggers.id", ondelete="SET NULL")
-    )
+    trigger_id: Mapped[uuid.UUID | None] = mapped_column(Uuid(), ForeignKey("triggers.id", ondelete="SET NULL"))
     trigger_type: Mapped[str] = mapped_column(String(20), nullable=False)
     status: Mapped[str] = mapped_column(String(30), nullable=False, server_default="pending")
     parent_run_id: Mapped[uuid.UUID | None] = mapped_column(
         Uuid(), ForeignKey("runs.id", ondelete="SET NULL"), nullable=True, index=True
     )
-    owner_team_id: Mapped[uuid.UUID | None] = mapped_column(
-        Uuid(), ForeignKey("teams.id", ondelete="RESTRICT")
-    )
-    created_by: Mapped[uuid.UUID | None] = mapped_column(
-        Uuid(), ForeignKey("users.id", ondelete="SET NULL")
-    )
+    owner_team_id: Mapped[uuid.UUID | None] = mapped_column(Uuid(), ForeignKey("teams.id", ondelete="RESTRICT"))
+    created_by: Mapped[uuid.UUID | None] = mapped_column(Uuid(), ForeignKey("users.id", ondelete="SET NULL"))
     input_hash: Mapped[str] = mapped_column(String(64), nullable=False)
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))

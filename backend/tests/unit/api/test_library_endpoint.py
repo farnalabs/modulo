@@ -82,9 +82,7 @@ def _make_primitive(
                 "name": "Issue Reader",
                 "description": "Reads a GitHub issue and extracts structured spec",
                 "prompt_template": "Read the following issue:\n{{ input }}",
-                "connector_type_refs": [
-                    {"connector_type": "github", "capabilities": ["issue_read"]}
-                ],
+                "connector_type_refs": [{"connector_type": "github", "capabilities": ["issue_read"]}],
             },
             {
                 "name": "Code Analyzer",
@@ -95,16 +93,22 @@ def _make_primitive(
         ],
         "graph_nodes": [
             {
-                "id": "reader-node", "agent_index": 0,
-                "label": "Issue Reader", "position": {"x": 50, "y": 100},
+                "id": "reader-node",
+                "agent_index": 0,
+                "label": "Issue Reader",
+                "position": {"x": 50, "y": 100},
             },
             {
-                "id": "analyzer-node", "agent_index": 1,
-                "label": "Code Analyzer", "position": {"x": 350, "y": 100},
+                "id": "analyzer-node",
+                "agent_index": 1,
+                "label": "Code Analyzer",
+                "position": {"x": 350, "y": 100},
             },
             {
-                "id": "review-gate", "node_type": "manual",
-                "label": "Review Gate", "position": {"x": 650, "y": 100},
+                "id": "review-gate",
+                "node_type": "manual",
+                "label": "Review Gate",
+                "position": {"x": 650, "y": 100},
             },
         ],
         "edges": [
@@ -156,8 +160,8 @@ def test_create_pipeline_from_template_returns_201(client: TestClient) -> None:
         patch("modulo.api.routes.library.get_primitive", return_value=primitive),
         patch("modulo.api.routes.library.create_pipeline", return_value=pipeline) as create_mock,
         patch("modulo.api.routes.library.set_rls_org"),
-            patch("modulo.api.routes.library.set_rls_user_context"),
-        ):
+        patch("modulo.api.routes.library.set_rls_user_context"),
+    ):
         resp = client.post(
             f"/api/v1/libraries/{primitive_id}/create-pipeline",
             json={"name": "PR Review Pipeline", "description": "My custom PR pipeline"},
@@ -192,8 +196,8 @@ def test_create_pipeline_from_template_default_name(client: TestClient) -> None:
         patch("modulo.api.routes.library.get_primitive", return_value=primitive),
         patch("modulo.api.routes.library.create_pipeline", return_value=pipeline),
         patch("modulo.api.routes.library.set_rls_org"),
-            patch("modulo.api.routes.library.set_rls_user_context"),
-        ):
+        patch("modulo.api.routes.library.set_rls_user_context"),
+    ):
         resp = client.post(
             f"/api/v1/libraries/{primitive_id}/create-pipeline",
             json={},
@@ -207,8 +211,8 @@ def test_create_pipeline_from_primitive_not_found(client: TestClient) -> None:
     with (
         patch("modulo.api.routes.library.get_primitive", return_value=None),
         patch("modulo.api.routes.library.set_rls_org"),
-            patch("modulo.api.routes.library.set_rls_user_context"),
-        ):
+        patch("modulo.api.routes.library.set_rls_user_context"),
+    ):
         resp = client.post(
             f"/api/v1/libraries/{uuid.uuid4()}/create-pipeline",
             json={},
@@ -224,8 +228,8 @@ def test_create_pipeline_from_invalid_type(client: TestClient) -> None:
     with (
         patch("modulo.api.routes.library.get_primitive", return_value=primitive),
         patch("modulo.api.routes.library.set_rls_org"),
-            patch("modulo.api.routes.library.set_rls_user_context"),
-        ):
+        patch("modulo.api.routes.library.set_rls_user_context"),
+    ):
         resp = client.post(
             f"/api/v1/libraries/{primitive_id}/create-pipeline",
             json={},

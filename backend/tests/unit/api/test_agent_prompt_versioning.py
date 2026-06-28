@@ -52,10 +52,28 @@ def _make_agent(history: list | None = None) -> MagicMock:
     a.created_by = _USER_ID
     a.created_at = _NOW
     a.updated_at = _NOW
-    a.prompt_version_history = history if history is not None else [
-        {"version": "v1", "template": "original prompt v1", "created_at": _NOW.isoformat(), "notes": "Initial version", "optimized_from": None, "eval_result_ids": []},  # noqa: E501
-        {"version": "v2", "template": "improved prompt v2", "created_at": _NOW.isoformat(), "notes": "Optimized for clarity", "optimized_from": "v1", "eval_result_ids": ["eval-1"]},  # noqa: E501
-    ]
+    a.prompt_version_history = (
+        history
+        if history is not None
+        else [
+            {
+                "version": "v1",
+                "template": "original prompt v1",
+                "created_at": _NOW.isoformat(),
+                "notes": "Initial version",
+                "optimized_from": None,
+                "eval_result_ids": [],
+            },
+            {
+                "version": "v2",
+                "template": "improved prompt v2",
+                "created_at": _NOW.isoformat(),
+                "notes": "Optimized for clarity",
+                "optimized_from": "v1",
+                "eval_result_ids": ["eval-1"],
+            },
+        ]
+    )
     return a
 
 
@@ -171,9 +189,30 @@ class TestRollback:
         agent_after.created_at = _NOW
         agent_after.updated_at = _NOW
         agent_after.prompt_version_history = [
-            {"version": "v1", "template": "original prompt v1", "created_at": _NOW.isoformat(), "notes": "Initial version", "optimized_from": None, "eval_result_ids": []},  # noqa: E501
-            {"version": "v2", "template": "improved prompt v2", "created_at": _NOW.isoformat(), "notes": "Optimized for clarity", "optimized_from": "v1", "eval_result_ids": ["eval-1"]},  # noqa: E501
-            {"version": "v3", "template": "current prompt v3", "created_at": _NOW.isoformat(), "notes": "Rolled back from v3 to v1", "optimized_from": None, "eval_result_ids": []},  # noqa: E501
+            {
+                "version": "v1",
+                "template": "original prompt v1",
+                "created_at": _NOW.isoformat(),
+                "notes": "Initial version",
+                "optimized_from": None,
+                "eval_result_ids": [],
+            },
+            {
+                "version": "v2",
+                "template": "improved prompt v2",
+                "created_at": _NOW.isoformat(),
+                "notes": "Optimized for clarity",
+                "optimized_from": "v1",
+                "eval_result_ids": ["eval-1"],
+            },
+            {
+                "version": "v3",
+                "template": "current prompt v3",
+                "created_at": _NOW.isoformat(),
+                "notes": "Rolled back from v3 to v1",
+                "optimized_from": None,
+                "eval_result_ids": [],
+            },
         ]
 
         with (

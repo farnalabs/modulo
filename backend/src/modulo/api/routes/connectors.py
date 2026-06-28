@@ -10,12 +10,16 @@ from typing import Any
 
 from cryptography.fernet import Fernet
 from fastapi import APIRouter, Depends, HTTPException, Query, status
+from httpx import HTTPStatusError, RequestError
 from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.api.dependencies import get_db_session
+from modulo.api.middleware.sensitive_mask import mask_config_json
 from modulo.auth.dependencies import get_current_user
 from modulo.auth.jwt import AuthenticatedPrincipal
+from modulo.connectors.github import REQUIRED_SCOPES as GITHUB_REQUIRED_SCOPES
+from modulo.connectors.github import GitHubConnector
 from modulo.db.crud.connector_instance import (
     create_connector_instance,
     delete_connector_instance,
@@ -71,6 +75,8 @@ class ConnectorListResponse(BaseModel):
     total: int
     page: int
     page_size: int
+    next_cursor: str | None = None
+    has_more: bool = False
 
 
 def _to_response(ci: Any) -> ConnectorResponse:
@@ -80,7 +86,7 @@ def _to_response(ci: Any) -> ConnectorResponse:
         name=ci.name,
         connector_type_id=ci.connector_type_id,
         has_credentials=bool(ci.credentials_ciphertext),
-        config_json=ci.config_json,
+        config_json=mask_config_json(ci.config_json),
         allowed_operations=ci.allowed_operations,
         status=ci.status,
         visibility=ci.visibility,
@@ -93,18 +99,21 @@ def _to_response(ci: Any) -> ConnectorResponse:
 async def list_connectors_endpoint(
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
+    cursor: str | None = Query(default=None),
     session: AsyncSession = Depends(get_db_session),
     principal: AuthenticatedPrincipal = Depends(get_current_user),
 ) -> ConnectorListResponse:
     async with session.begin():
         await set_rls_org(session, principal.organisation_id)
         await set_rls_user_context(session, principal.user_id, principal.org_role)
-        result = await list_connector_instances(session, page=page, page_size=page_size)
+        result = await list_connector_instances(session, page=page, page_size=page_size, cursor=cursor)
     return ConnectorListResponse(
         items=[_to_response(ci) for ci in result.items],
         total=result.total,
         page=result.page,
         page_size=result.page_size,
+        next_cursor=result.next_cursor,
+        has_more=result.has_more,
     )
 
 
@@ -115,6 +124,25 @@ async def create_connector_endpoint(
     principal: AuthenticatedPrincipal = Depends(get_current_user),
     settings: Settings = Depends(get_settings),
 ) -> ConnectorResponse:
+    if body.connector_type_id == "github":
+        temp = GitHubConnector(token=body.credentials)
+        try:
+            missing = await temp.verify_scopes()
+        except (HTTPStatusError, RequestError, ValueError):
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="Cannot verify GitHub token — API call failed",
+            ) from None
+        if missing:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=(
+                    f"GitHub token is missing required OAuth scopes: "
+                    f"{', '.join(sorted(missing))}. "
+                    f"Required: {', '.join(sorted(GITHUB_REQUIRED_SCOPES))}"
+                ),
+            )
+
     ciphertext = _encrypt(body.credentials, settings.fernet_key)
     async with session.begin():
         await set_rls_org(session, principal.organisation_id)
@@ -158,7 +186,31 @@ async def update_connector_endpoint(
 ) -> ConnectorResponse:
     updates: dict[str, Any] = {k: v for k, v in body.model_dump().items() if v is not None}
     if "credentials" in updates:
-        _ct = _encrypt(updates.pop("credentials"), settings.fernet_key)
+        new_credentials = updates.pop("credentials")
+        # Fetch current connector to check type
+        async with session.begin():
+            await set_rls_org(session, principal.organisation_id)
+            await set_rls_user_context(session, principal.user_id, principal.org_role)
+            existing = await get_connector_instance(session, connector_id)
+        if existing is not None and existing.connector_type_id == "github":
+            temp = GitHubConnector(token=new_credentials)
+            try:
+                missing = await temp.verify_scopes()
+            except (HTTPStatusError, RequestError, ValueError):
+                raise HTTPException(
+                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                    detail="Cannot verify GitHub token — API call failed",
+                ) from None
+            if missing:
+                raise HTTPException(
+                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                    detail=(
+                        f"GitHub token is missing required OAuth scopes: "
+                        f"{', '.join(sorted(missing))}. "
+                        f"Required: {', '.join(sorted(GITHUB_REQUIRED_SCOPES))}"
+                    ),
+                )
+        _ct = _encrypt(new_credentials, settings.fernet_key)
         updates["credentials_ciphertext"] = _ct  # nosemgrep: credential-not-in-state
     async with session.begin():
         await set_rls_org(session, principal.organisation_id)

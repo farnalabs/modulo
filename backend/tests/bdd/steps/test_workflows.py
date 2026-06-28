@@ -113,6 +113,7 @@ def _make_sample_bundle() -> dict[str, Any]:
 def _make_zip_bytes(bundle: dict[str, Any] | None = None) -> bytes:
     buf = io.BytesIO()
     import zipfile
+
     with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
         content = json.dumps(bundle or _make_sample_bundle(), indent=2, default=str)
         zf.writestr("bundle.json", content)
@@ -176,11 +177,7 @@ def _agents_ref_schema_backend() -> None:
     pass
 
 
-@when(
-    parsers.parse(
-        "the user sends POST /api/v1/libraries/export/{pipeline_id}"
-    )
-)
+@when(parsers.parse("the user sends POST /api/v1/libraries/export/{pipeline_id}"))
 def _request_export(client, pipeline_id: str, ctx: dict[str, Any]) -> None:
     bundle = _make_sample_bundle()
     zip_bytes = _make_zip_bytes(bundle)
@@ -202,6 +199,7 @@ def _extract_exported_zip(ctx: dict[str, Any]) -> None:
     zip_bytes = ctx.get("exported_zip")
     assert zip_bytes is not None, "No exported ZIP to extract"
     import zipfile
+
     with zipfile.ZipFile(io.BytesIO(zip_bytes)) as zf:
         ctx["extracted_bundle"] = json.loads(zf.read("bundle.json"))
 
@@ -252,9 +250,7 @@ def _bundle_json_keys(ctx: dict[str, Any]) -> None:
 def _pipeline_no_owner_team_id(ctx: dict[str, Any]) -> None:
     b = ctx["extracted_bundle"]
     pipeline = b["pipeline"]
-    assert "owner_team_id" not in pipeline, (
-        "owner_team_id should be stripped from exported bundle"
-    )
+    assert "owner_team_id" not in pipeline, "owner_team_id should be stripped from exported bundle"
 
 
 @then("the pipeline section contains the pipeline name and graph nodes")
@@ -291,9 +287,7 @@ def _agents_no_credentials(ctx: dict[str, Any]) -> None:
 # ============================================================================
 
 
-@given(
-    'the organisation has schemas "PRD Input Schema" and "Requirements Output Schema"'
-)
+@given('the organisation has schemas "PRD Input Schema" and "Requirements Output Schema"')
 def _org_has_schemas() -> None:
     pass
 
@@ -373,7 +367,7 @@ def _pipeline_my_pipeline_exists() -> None:
     pass
 
 
-@when("the user imports a bundle containing \"My Pipeline\"")
+@when('the user imports a bundle containing "My Pipeline"')
 def _import_my_pipeline(client, ctx: dict[str, Any]) -> None:
     sample = _make_sample_bundle()
     with (
@@ -402,9 +396,7 @@ def _suggested_name_is(ctx: dict[str, Any]) -> None:
     data = ctx["response"].json()
     conflicts = data.get("name_conflicts", [])
     suggestion = conflicts[0].get("suggested", "") if conflicts else ""
-    assert "imported" in suggestion, (
-        f"Expected suggestion containing 'imported', got '{suggestion}'"
-    )
+    assert "imported" in suggestion, f"Expected suggestion containing 'imported', got '{suggestion}'"
 
 
 @when("the user sends POST /api/v1/libraries/import/confirm with bundle_json")
@@ -485,13 +477,13 @@ def _import_analysis_runs(client, ctx: dict[str, Any]) -> None:
         )
 
 
-@then("the schema is resolved to the existing local \"PRD Input Schema\"")
+@then('the schema is resolved to the existing local "PRD Input Schema"')
 def _schema_resolved_to_local(ctx: dict[str, Any]) -> None:
     data = ctx["response"].json()
     schemas = data.get("resolved_schemas", [])
-    assert any(
-        s.get("schema_id") == str(SCHEMA_A_ID) for s in schemas
-    ), "PRD Input Schema not resolved by abstract_name"
+    assert any(s.get("schema_id") == str(SCHEMA_A_ID) for s in schemas), (
+        "PRD Input Schema not resolved by abstract_name"
+    )
 
 
 @then("no schema creation warning is emitted")
@@ -534,9 +526,7 @@ def _import_confirmed(client, ctx: dict[str, Any]) -> None:
         ctx["response"] = client.post(
             "/api/v1/libraries/import/confirm",
             json={
-                "bundle_json": json.dumps(
-                    ctx.get("bundle_json") or _make_sample_bundle(), default=str
-                ),
+                "bundle_json": json.dumps(ctx.get("bundle_json") or _make_sample_bundle(), default=str),
             },
         )
 
@@ -553,11 +543,7 @@ def _bundle_refs_unknown_schema_abstract() -> None:
     pass
 
 
-@when(
-    parsers.parse(
-        "the user imports a bundle with owner_team_id set"
-    )
-)
+@when(parsers.parse("the user imports a bundle with owner_team_id set"))
 def _import_with_team(client, ctx: dict[str, Any]) -> None:
     with (
         patch("modulo.api.routes.library.materialize_import") as mock_materialize,
@@ -593,11 +579,7 @@ def _primitive_owner_team_matches(ctx: dict[str, Any]) -> None:
     assert "primitive_id" in data, "Primitive should have been created"
 
 
-@when(
-    parsers.parse(
-        "the user uploads a .txt file to POST /api/v1/libraries/import/upload-zip"
-    )
-)
+@when(parsers.parse("the user uploads a .txt file to POST /api/v1/libraries/import/upload-zip"))
 def _upload_txt_file(client, ctx: dict[str, Any]) -> None:
     ctx["response"] = client.post(
         "/api/v1/libraries/import/upload-zip",
@@ -686,10 +668,9 @@ def _analysis_resolves_connectors(client, ctx: dict[str, Any]) -> None:
 def _resolved_connectors_has_match(ctx: dict[str, Any]) -> None:
     data = ctx["response"].json()
     connectors = data.get("resolved_connectors", [])
-    assert any(
-        c.get("instance_id") is not None and c.get("instance_name") is not None
-        for c in connectors
-    ), "No resolved connector with instance_id and instance_name"
+    assert any(c.get("instance_id") is not None and c.get("instance_name") is not None for c in connectors), (
+        "No resolved connector with instance_id and instance_name"
+    )
 
 
 @then("no warning is emitted for this connector type")
@@ -709,18 +690,14 @@ def _matching_connector_exists() -> None:
 def _resolved_connectors_has_warning(ctx: dict[str, Any]) -> None:
     data = ctx["response"].json()
     connectors = data.get("resolved_connectors", [])
-    assert any(
-        c.get("warning") is not None for c in connectors
-    ), "Expected at least one connector warning"
+    assert any(c.get("warning") is not None for c in connectors), "Expected at least one connector warning"
 
 
 @then('the warning mentions "{text}"')
 def _warning_mentions(ctx: dict[str, Any], text: str) -> None:
     data = ctx["response"].json()
     warnings_text = " ".join(data.get("warnings", []))
-    assert text.lower() in warnings_text.lower(), (
-        f"Expected warning mentioning '{text}', got: {warnings_text}"
-    )
+    assert text.lower() in warnings_text.lower(), f"Expected warning mentioning '{text}', got: {warnings_text}"
 
 
 @given('the bundle references a schema with abstract_name "prd-input"')
@@ -728,9 +705,7 @@ def _bundle_refs_schema_by_abstract() -> None:
     pass
 
 
-@given(
-    'the bundle references a schema matching the structure of "Requirements Output Schema"'
-)
+@given('the bundle references a schema matching the structure of "Requirements Output Schema"')
 def _bundle_refs_schema_by_structure() -> None:
     pass
 
@@ -842,10 +817,7 @@ def _resolved_mbs_have_id(ctx: dict[str, Any]) -> None:
         assert mb.get("model_backend_id") is not None, f"MB missing model_backend_id: {mb}"
 
 
-@given(
-    'the bundle includes model_backend with provider'
-    ' "anthropic" and model_id "claude-sonnet-4-20241022"'
-)
+@given('the bundle includes model_backend with provider "anthropic" and model_id "claude-sonnet-4-20241022"')
 def _bundle_includes_mb_by_provider() -> None:
     pass
 
@@ -855,7 +827,7 @@ def _no_backend_with_name() -> None:
     pass
 
 
-@then('the model backend is matched by provider+model_id')
+@then("the model backend is matched by provider+model_id")
 def _mb_matched_by_provider_model(ctx: dict[str, Any]) -> None:
     data = ctx["response"].json()
     mbs = data.get("resolved_model_backends", [])

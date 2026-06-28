@@ -107,7 +107,9 @@ class TestAlertOnBreach:
 
     def test_alert_on_breach_for_suite(self) -> None:
         suite = OkrSuite(
-            id="s1", name="test", pass_threshold=0.8,
+            id="s1",
+            name="test",
+            pass_threshold=0.8,
             eval_definition_ids=[_EVAL_ID_1],
         )
         assert alert_on_breach_for_suite(suite, 0.6) is True
@@ -117,10 +119,12 @@ class TestAlertOnBreach:
 class TestDaysBetween:
     def test_none_target_returns_none(self) -> None:
         from datetime import UTC, datetime
+
         assert _days_between(datetime.now(UTC), None) is None
 
     def test_future_date_returns_positive(self) -> None:
         from datetime import UTC, datetime
+
         result = _days_between(
             datetime(2026, 1, 1, tzinfo=UTC),
             "2026-09-30",
@@ -129,6 +133,7 @@ class TestDaysBetween:
 
     def test_target_in_past_returns_zero(self) -> None:
         from datetime import UTC, datetime
+
         result = _days_between(
             datetime(2026, 6, 26, tzinfo=UTC),
             "2026-01-01",
@@ -137,10 +142,12 @@ class TestDaysBetween:
 
     def test_invalid_target_returns_none(self) -> None:
         from datetime import UTC, datetime
+
         assert _days_between(datetime.now(UTC), "not-a-date") is None
 
     def test_target_today_returns_zero(self) -> None:
         from datetime import UTC, datetime
+
         result = _days_between(
             datetime(2026, 6, 26, tzinfo=UTC),
             "2026-06-26",
@@ -194,18 +201,20 @@ _SUITE_THRESHOLD = 0.75
 def _setup_suite_results_mock(session: AsyncMock) -> None:
     """Configure the mock session to return typical suite query results."""
     session.execute.side_effect = [
-        _make_first_result(_make_row()),                     # exists check
+        _make_first_result(_make_row()),  # exists check
         _make_first_result(_make_row(pass_threshold=_SUITE_THRESHOLD)),  # threshold
-        _make_first_result(_make_row(                        # trend data
-            total_7d=20,
-            passed_7d=18,
-            total_14d=30,
-            passed_14d=24,
-            total_30d=40,
-            passed_30d=28,
-            total_all=100,
-            passed_all=80,
-        )),
+        _make_first_result(
+            _make_row(  # trend data
+                total_7d=20,
+                passed_7d=18,
+                total_14d=30,
+                passed_14d=24,
+                total_30d=40,
+                passed_30d=28,
+                total_all=100,
+                passed_all=80,
+            )
+        ),
     ]
 
 
@@ -255,12 +264,18 @@ class TestTrackOkrProgressDirect:
         session.execute.side_effect = [
             _make_first_result(_make_row()),
             _make_first_result(_make_row(pass_threshold=0.95)),
-            _make_first_result(_make_row(
-                total_7d=20, passed_7d=15,  # 0.75 < 0.95
-                total_14d=30, passed_14d=24,
-                total_30d=40, passed_30d=28,
-                total_all=100, passed_all=80,
-            )),
+            _make_first_result(
+                _make_row(
+                    total_7d=20,
+                    passed_7d=15,  # 0.75 < 0.95
+                    total_14d=30,
+                    passed_14d=24,
+                    total_30d=40,
+                    passed_30d=28,
+                    total_all=100,
+                    passed_all=80,
+                )
+            ),
         ]
 
         progress = await track_okr_progress(session, _ORG_ID, _SUITE_ID)
@@ -272,12 +287,18 @@ class TestTrackOkrProgressDirect:
         session.execute.side_effect = [
             _make_first_result(_make_row()),
             _make_first_result(None),  # no threshold
-            _make_first_result(_make_row(
-                total_7d=10, passed_7d=2,
-                total_14d=10, passed_14d=5,
-                total_30d=10, passed_30d=7,
-                total_all=30, passed_all=14,
-            )),
+            _make_first_result(
+                _make_row(
+                    total_7d=10,
+                    passed_7d=2,
+                    total_14d=10,
+                    passed_14d=5,
+                    total_30d=10,
+                    passed_30d=7,
+                    total_all=30,
+                    passed_all=14,
+                )
+            ),
         ]
 
         progress = await track_okr_progress(session, _ORG_ID, _SUITE_ID)
@@ -304,12 +325,18 @@ class TestTrackOkrProgressDirect:
         session.execute.side_effect = [
             _make_first_result(_make_row()),
             _make_first_result(_make_row(pass_threshold=0.5)),
-            _make_first_result(_make_row(
-                total_7d=20, passed_7d=5,     # 0.25
-                total_14d=20, passed_14d=16,  # 0.80
-                total_30d=20, passed_30d=18,
-                total_all=60, passed_all=39,
-            )),
+            _make_first_result(
+                _make_row(
+                    total_7d=20,
+                    passed_7d=5,  # 0.25
+                    total_14d=20,
+                    passed_14d=16,  # 0.80
+                    total_30d=20,
+                    passed_30d=18,
+                    total_all=60,
+                    passed_all=39,
+                )
+            ),
         ]
 
         progress = await track_okr_progress(session, _ORG_ID, _SUITE_ID)
@@ -320,12 +347,18 @@ class TestTrackOkrProgressDirect:
         session.execute.side_effect = [
             _make_first_result(_make_row()),
             _make_first_result(_make_row(pass_threshold=0.5)),
-            _make_first_result(_make_row(
-                total_7d=0, passed_7d=0,
-                total_14d=0, passed_14d=0,
-                total_30d=0, passed_30d=0,
-                total_all=0, passed_all=0,
-            )),
+            _make_first_result(
+                _make_row(
+                    total_7d=0,
+                    passed_7d=0,
+                    total_14d=0,
+                    passed_14d=0,
+                    total_30d=0,
+                    passed_30d=0,
+                    total_all=0,
+                    passed_all=0,
+                )
+            ),
         ]
 
         progress = await track_okr_progress(session, _ORG_ID, _SUITE_ID)
@@ -337,7 +370,9 @@ class TestTrackOkrProgressDirect:
 class TestOkrSuiteModel:
     def test_minimal_suite(self) -> None:
         suite = OkrSuite(
-            id="s1", name="test", pass_threshold=0.8,
+            id="s1",
+            name="test",
+            pass_threshold=0.8,
             eval_definition_ids=[_EVAL_ID_1],
         )
         assert suite.id == "s1"
@@ -349,7 +384,9 @@ class TestOkrSuiteModel:
 
     def test_full_suite(self) -> None:
         suite = OkrSuite(
-            id="s1", name="test", pass_threshold=0.8,
+            id="s1",
+            name="test",
+            pass_threshold=0.8,
             eval_definition_ids=[_EVAL_ID_1, _EVAL_ID_2],
             target_date="2026-09-30",
             owner="alice",
@@ -388,16 +425,23 @@ class TestOkrProgressEndpoint:
     def _configure_session(self):
         def _setup(mock_session: AsyncMock) -> None:
             mock_session.execute.side_effect = [
-                _make_result(scalar_value=None),                           # set_rls_org
-                _make_first_result(_make_row()),                          # exists check
-                _make_first_result(_make_row(pass_threshold=0.75)),        # threshold
-                _make_first_result(_make_row(                             # trend data
-                    total_7d=20, passed_7d=18,
-                    total_14d=30, passed_14d=24,
-                    total_30d=40, passed_30d=28,
-                    total_all=100, passed_all=80,
-                )),
+                _make_result(scalar_value=None),  # set_rls_org
+                _make_first_result(_make_row()),  # exists check
+                _make_first_result(_make_row(pass_threshold=0.75)),  # threshold
+                _make_first_result(
+                    _make_row(  # trend data
+                        total_7d=20,
+                        passed_7d=18,
+                        total_14d=30,
+                        passed_14d=24,
+                        total_30d=40,
+                        passed_30d=28,
+                        total_all=100,
+                        passed_all=80,
+                    )
+                ),
             ]
+
         return _setup
 
     @pytest.fixture()
@@ -439,8 +483,14 @@ class TestOkrProgressEndpoint:
         resp = client.get(self.URL)
         data = resp.json()
         assert set(data.keys()) == {
-            "suite_id", "suite_name", "current_score", "pass_threshold",
-            "trend", "trend_direction", "days_to_target", "breach",
+            "suite_id",
+            "suite_name",
+            "current_score",
+            "pass_threshold",
+            "trend",
+            "trend_direction",
+            "days_to_target",
+            "breach",
         }
 
     def test_trend_points_in_response(self, client: TestClient) -> None:
@@ -473,12 +523,18 @@ class TestOkrProgressEndpoint:
             _make_result(scalar_value=None),
             _make_first_result(_make_row()),
             _make_first_result(_make_row(pass_threshold=0.75)),
-            _make_first_result(_make_row(
-                total_7d=20, passed_7d=18,
-                total_14d=30, passed_14d=24,
-                total_30d=40, passed_30d=28,
-                total_all=100, passed_all=80,
-            )),
+            _make_first_result(
+                _make_row(
+                    total_7d=20,
+                    passed_7d=18,
+                    total_14d=30,
+                    passed_14d=24,
+                    total_30d=40,
+                    passed_30d=28,
+                    total_all=100,
+                    passed_all=80,
+                )
+            ),
         ]
 
         async def override_session() -> AsyncGenerator[AsyncMock, None]:
@@ -522,12 +578,18 @@ class TestOkrProgressEndpoint:
             _make_result(scalar_value=None),
             _make_first_result(_make_row()),
             _make_first_result(_make_row(pass_threshold=0.95)),
-            _make_first_result(_make_row(
-                total_7d=20, passed_7d=15,
-                total_14d=30, passed_14d=24,
-                total_30d=40, passed_30d=28,
-                total_all=100, passed_all=80,
-            )),
+            _make_first_result(
+                _make_row(
+                    total_7d=20,
+                    passed_7d=15,
+                    total_14d=30,
+                    passed_14d=24,
+                    total_30d=40,
+                    passed_30d=28,
+                    total_all=100,
+                    passed_all=80,
+                )
+            ),
         ]
 
         async def override_session() -> AsyncGenerator[AsyncMock, None]:

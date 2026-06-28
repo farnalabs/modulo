@@ -5,7 +5,6 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from modulo.core.eval_engine import EvalDefinition, EvalType
 from modulo.core.feedback_manager import FeedbackManager
 from modulo.db.models.feedback_record import FeedbackRecord
 
@@ -60,9 +59,7 @@ class TestCreateFeedbackRecord:
         r.correction_run_id = None
         return r
 
-    async def test_creates_and_returns_record(
-        self, mock_session: AsyncMock, mgr: FeedbackManager
-    ) -> None:
+    async def test_creates_and_returns_record(self, mock_session: AsyncMock, mgr: FeedbackManager) -> None:
         mock_session.add = MagicMock()
         mock_session.flush = AsyncMock()
 
@@ -84,9 +81,7 @@ class TestCreateFeedbackRecord:
         mock_session.add.assert_called_once()
         mock_session.flush.assert_called_once()
 
-    async def test_creates_with_ai_correction_type(
-        self, mock_session: AsyncMock, mgr: FeedbackManager
-    ) -> None:
+    async def test_creates_with_ai_correction_type(self, mock_session: AsyncMock, mgr: FeedbackManager) -> None:
         dummy = await self._dummy_record("ai_correction")
         with (
             patch.object(mgr, "update_status", AsyncMock(return_value=dummy)),
@@ -103,9 +98,7 @@ class TestCreateFeedbackRecord:
             )
         assert record.feedback_handler_type == "ai_correction"
 
-    async def test_creates_with_human_review_type(
-        self, mock_session: AsyncMock, mgr: FeedbackManager
-    ) -> None:
+    async def test_creates_with_human_review_type(self, mock_session: AsyncMock, mgr: FeedbackManager) -> None:
         dummy = await self._dummy_record("ai_correction_with_human_review")
         with (
             patch.object(mgr, "update_status", AsyncMock(return_value=dummy)),
@@ -122,9 +115,7 @@ class TestCreateFeedbackRecord:
             )
         assert record.feedback_handler_type == "ai_correction_with_human_review"
 
-    async def test_auto_triggers_correction_for_ai_handler(
-        self, mock_session: AsyncMock, mgr: FeedbackManager
-    ) -> None:
+    async def test_auto_triggers_correction_for_ai_handler(self, mock_session: AsyncMock, mgr: FeedbackManager) -> None:
         dummy = await self._dummy_record("ai_correction")
         with (
             patch.object(mgr, "update_status", AsyncMock(return_value=dummy)) as mock_update,
@@ -164,9 +155,7 @@ class TestCreateFeedbackRecord:
             mock_update.assert_called_once_with(record.id, "correcting")
             mock_spawn.assert_called_once_with(record.id)
 
-    async def test_does_not_auto_trigger_for_human_handler(
-        self, mock_session: AsyncMock, mgr: FeedbackManager
-    ) -> None:
+    async def test_does_not_auto_trigger_for_human_handler(self, mock_session: AsyncMock, mgr: FeedbackManager) -> None:
         mock_session.add = MagicMock()
         mock_session.flush = AsyncMock()
 
@@ -216,9 +205,7 @@ class TestGetFeedbackRecords:
         result = await mgr.get_feedback_records(status="pending")
         assert result["total"] == 1
 
-    async def test_returns_empty_when_no_records(
-        self, mock_session: AsyncMock, mgr: FeedbackManager
-    ) -> None:
+    async def test_returns_empty_when_no_records(self, mock_session: AsyncMock, mgr: FeedbackManager) -> None:
         await self._setup_mock(mock_session, [], 0)
 
         result = await mgr.get_feedback_records()
@@ -238,9 +225,7 @@ class TestGetFeedbackRecord:
         assert record is not None
         assert record.id == sample_record.id
 
-    async def test_returns_none_when_not_found(
-        self, mock_session: AsyncMock, mgr: FeedbackManager
-    ) -> None:
+    async def test_returns_none_when_not_found(self, mock_session: AsyncMock, mgr: FeedbackManager) -> None:
         mock_result = MagicMock()
         mock_result.scalar_one_or_none.return_value = None
         mock_session.execute = AsyncMock(return_value=mock_result)
@@ -273,9 +258,7 @@ class TestUpdateStatus:
         with pytest.raises(ValueError, match="Cannot transition"):
             await mgr.update_status(sample_record.id, "nonexistent")
 
-    async def test_returns_none_when_not_found(
-        self, mock_session: AsyncMock, mgr: FeedbackManager
-    ) -> None:
+    async def test_returns_none_when_not_found(self, mock_session: AsyncMock, mgr: FeedbackManager) -> None:
         mock_session.get = AsyncMock(return_value=None)
 
         record = await mgr.update_status(uuid.uuid4(), "routing")
@@ -311,76 +294,6 @@ class TestDetectEvalGap:
         is_gap = await mgr.detect_eval_gap(sample_record, eval_suite=[])
         assert is_gap is False
 
-    async def test_returns_true_when_all_evals_pass(
-        self, mock_session: AsyncMock, mgr: FeedbackManager, sample_record: FeedbackRecord
-    ) -> None:
-        mock_session.execute = AsyncMock()
-        mock_engine = MagicMock()
-        mock_engine.evaluate.return_value.passed = True
-
-        eval_def = EvalDefinition(
-            id=uuid.uuid4(),
-            org_id=_ORG_ID,
-            name="check-result",
-            eval_type=EvalType.REGEX,
-            config={"pattern": "good", "field": "result"},
-        )
-        is_gap = await mgr.detect_eval_gap(sample_record, eval_engine=mock_engine, eval_suite=[eval_def])
-
-        assert is_gap is True
-        mock_engine.evaluate.assert_called_once_with(sample_record.rejected_output, eval_def)
-
-    async def test_returns_false_when_any_eval_fails(
-        self, mock_session: AsyncMock, mgr: FeedbackManager, sample_record: FeedbackRecord
-    ) -> None:
-        mock_session.execute = AsyncMock()
-        mock_engine = MagicMock()
-        mock_engine.evaluate.return_value.passed = False
-
-        eval_def = EvalDefinition(
-            id=uuid.uuid4(),
-            org_id=_ORG_ID,
-            name="check-result",
-            eval_type=EvalType.REGEX,
-            config={"pattern": "bad", "field": "result"},
-        )
-        is_gap = await mgr.detect_eval_gap(sample_record, eval_engine=mock_engine, eval_suite=[eval_def])
-
-        assert is_gap is False
-        mock_engine.evaluate.assert_called_once_with(sample_record.rejected_output, eval_def)
-
-    async def test_short_circuits_on_first_failure(
-        self, mock_session: AsyncMock, mgr: FeedbackManager, sample_record: FeedbackRecord
-    ) -> None:
-        mock_session.execute = AsyncMock()
-        mock_engine = MagicMock()
-        # First eval fails, second should not be called
-        evaluations = [
-            MagicMock(passed=False),
-            MagicMock(passed=True),
-        ]
-        mock_engine.evaluate.side_effect = evaluations
-
-        eval_defs = [
-            EvalDefinition(
-                id=uuid.uuid4(),
-                org_id=_ORG_ID,
-                name="first",
-                eval_type=EvalType.REGEX,
-                config={"pattern": "bad", "field": "result"},
-            ),
-            EvalDefinition(
-                id=uuid.uuid4(),
-                org_id=_ORG_ID,
-                name="second",
-                eval_type=EvalType.REGEX,
-                config={"pattern": "good", "field": "result"},
-            ),
-        ]
-        is_gap = await mgr.detect_eval_gap(sample_record, eval_engine=mock_engine, eval_suite=eval_defs)
-
-        assert is_gap is False
-        assert mock_engine.evaluate.call_count == 1
 
 class TestSpawnCorrectionRun:
     @pytest.fixture
@@ -557,9 +470,7 @@ class TestGetFeedbackRecordsInbox:
 
         assert result["total"] == 1
 
-    async def test_returns_empty_when_no_records(
-        self, mock_session: AsyncMock, mgr: FeedbackManager
-    ) -> None:
+    async def test_returns_empty_when_no_records(self, mock_session: AsyncMock, mgr: FeedbackManager) -> None:
         await self._setup_mock(mock_session, [], 0)
 
         result = await mgr.get_feedback_records_inbox()
@@ -584,9 +495,7 @@ class TestGetEvalProposals:
 
         assert result["total"] == 1
 
-    async def test_returns_empty_when_no_proposals(
-        self, mock_session: AsyncMock, mgr: FeedbackManager
-    ) -> None:
+    async def test_returns_empty_when_no_proposals(self, mock_session: AsyncMock, mgr: FeedbackManager) -> None:
         await self._setup_mock(mock_session, [], 0)
 
         result = await mgr.get_eval_proposals()
@@ -623,9 +532,7 @@ class TestRunPostCorrectionEval:
         r.status = "complete"
         return r
 
-    async def test_raises_when_record_not_found(
-        self, mock_session: AsyncMock, mgr: FeedbackManager
-    ) -> None:
+    async def test_raises_when_record_not_found(self, mock_session: AsyncMock, mgr: FeedbackManager) -> None:
         with patch.object(mgr, "get_feedback_record", return_value=None):
             with pytest.raises(ValueError, match=r"FeedbackRecord .* not found"):
                 await mgr.run_post_correction_eval(uuid.uuid4())

@@ -85,15 +85,9 @@ class TestAddMember:
 
 
 class TestGetMembership:
-    async def test_returns_membership_when_found(
-        self, mock_session: AsyncMock
-    ) -> None:
+    async def test_returns_membership_when_found(self, mock_session: AsyncMock) -> None:
         membership = _make_membership()
-        mock_session.execute = AsyncMock(
-            return_value=MagicMock(
-                scalar_one_or_none=MagicMock(return_value=membership)
-            )
-        )
+        mock_session.execute = AsyncMock(return_value=MagicMock(scalar_one_or_none=MagicMock(return_value=membership)))
 
         from modulo.db.crud.team_membership import get_membership
 
@@ -101,14 +95,8 @@ class TestGetMembership:
         assert result is not None
         assert result.id == _MEMBERSHIP_ID
 
-    async def test_returns_none_when_not_found(
-        self, mock_session: AsyncMock
-    ) -> None:
-        mock_session.execute = AsyncMock(
-            return_value=MagicMock(
-                scalar_one_or_none=MagicMock(return_value=None)
-            )
-        )
+    async def test_returns_none_when_not_found(self, mock_session: AsyncMock) -> None:
+        mock_session.execute = AsyncMock(return_value=MagicMock(scalar_one_or_none=MagicMock(return_value=None)))
 
         from modulo.db.crud.team_membership import get_membership
 
@@ -129,16 +117,16 @@ class TestListTeamMembers:
         scalars = MagicMock()
         scalars.all = MagicMock(return_value=members)
 
-        mock_session.execute = AsyncMock(side_effect=[
-            count_result,
-            MagicMock(scalars=MagicMock(return_value=scalars)),
-        ])
+        mock_session.execute = AsyncMock(
+            side_effect=[
+                count_result,
+                MagicMock(scalars=MagicMock(return_value=scalars)),
+            ]
+        )
 
         from modulo.db.crud.team_membership import list_team_members
 
-        result = await list_team_members(
-            mock_session, team_id=_TEAM_ID, page=1, page_size=20
-        )
+        result = await list_team_members(mock_session, team_id=_TEAM_ID, page=1, page_size=20)
         assert isinstance(result, PageResult)
         assert len(result.items) == 2
         assert result.total == 5
@@ -147,49 +135,29 @@ class TestListTeamMembers:
 
 
 class TestUpdateMemberRole:
-    async def test_updates_and_returns_membership(
-        self, mock_session: AsyncMock
-    ) -> None:
+    async def test_updates_and_returns_membership(self, mock_session: AsyncMock) -> None:
         membership = _make_membership(role="admin")
-        mock_session.execute = AsyncMock(
-            return_value=MagicMock(
-                scalar_one_or_none=MagicMock(return_value=membership)
-            )
-        )
+        mock_session.execute = AsyncMock(return_value=MagicMock(scalar_one_or_none=MagicMock(return_value=membership)))
 
         from modulo.db.crud.team_membership import update_member_role
 
-        result = await update_member_role(
-            mock_session, _MEMBERSHIP_ID, "admin"
-        )
+        result = await update_member_role(mock_session, _MEMBERSHIP_ID, "admin")
         assert result is not None
         assert result.role == "admin"
 
-    async def test_returns_none_when_not_found(
-        self, mock_session: AsyncMock
-    ) -> None:
-        mock_session.execute = AsyncMock(
-            return_value=MagicMock(
-                scalar_one_or_none=MagicMock(return_value=None)
-            )
-        )
+    async def test_returns_none_when_not_found(self, mock_session: AsyncMock) -> None:
+        mock_session.execute = AsyncMock(return_value=MagicMock(scalar_one_or_none=MagicMock(return_value=None)))
 
         from modulo.db.crud.team_membership import update_member_role
 
-        result = await update_member_role(
-            mock_session, uuid.uuid4(), "admin"
-        )
+        result = await update_member_role(mock_session, uuid.uuid4(), "admin")
         assert result is None
 
 
 class TestRemoveMember:
     async def test_removes_and_returns_true(self, mock_session: AsyncMock) -> None:
         membership = _make_membership()
-        mock_session.execute = AsyncMock(
-            return_value=MagicMock(
-                scalar_one_or_none=MagicMock(return_value=membership)
-            )
-        )
+        mock_session.execute = AsyncMock(return_value=MagicMock(scalar_one_or_none=MagicMock(return_value=membership)))
 
         from modulo.db.crud.team_membership import remove_team_member
 
@@ -197,14 +165,8 @@ class TestRemoveMember:
         assert result is True
         mock_session.delete.assert_awaited_once_with(membership)
 
-    async def test_returns_false_when_not_found(
-        self, mock_session: AsyncMock
-    ) -> None:
-        mock_session.execute = AsyncMock(
-            return_value=MagicMock(
-                scalar_one_or_none=MagicMock(return_value=None)
-            )
-        )
+    async def test_returns_false_when_not_found(self, mock_session: AsyncMock) -> None:
+        mock_session.execute = AsyncMock(return_value=MagicMock(scalar_one_or_none=MagicMock(return_value=None)))
 
         from modulo.db.crud.team_membership import remove_team_member
 
@@ -213,37 +175,21 @@ class TestRemoveMember:
 
 
 class TestGetTeamMembershipByTeamAndUser:
-    async def test_returns_membership_when_found(
-        self, mock_session: AsyncMock
-    ) -> None:
+    async def test_returns_membership_when_found(self, mock_session: AsyncMock) -> None:
         membership = _make_membership()
-        mock_session.execute = AsyncMock(
-            return_value=MagicMock(
-                scalar_one_or_none=MagicMock(return_value=membership)
-            )
-        )
+        mock_session.execute = AsyncMock(return_value=MagicMock(scalar_one_or_none=MagicMock(return_value=membership)))
 
         from modulo.db.crud.team_membership import get_membership_by_team_and_user
 
-        result = await get_membership_by_team_and_user(
-            mock_session, _TEAM_ID, _USER_ID
-        )
+        result = await get_membership_by_team_and_user(mock_session, _TEAM_ID, _USER_ID)
         assert result is not None
         assert result.team_id == _TEAM_ID
         assert result.user_id == _USER_ID
 
-    async def test_returns_none_when_not_found(
-        self, mock_session: AsyncMock
-    ) -> None:
-        mock_session.execute = AsyncMock(
-            return_value=MagicMock(
-                scalar_one_or_none=MagicMock(return_value=None)
-            )
-        )
+    async def test_returns_none_when_not_found(self, mock_session: AsyncMock) -> None:
+        mock_session.execute = AsyncMock(return_value=MagicMock(scalar_one_or_none=MagicMock(return_value=None)))
 
         from modulo.db.crud.team_membership import get_membership_by_team_and_user
 
-        result = await get_membership_by_team_and_user(
-            mock_session, _TEAM_ID, uuid.uuid4()
-        )
+        result = await get_membership_by_team_and_user(mock_session, _TEAM_ID, uuid.uuid4())
         assert result is None

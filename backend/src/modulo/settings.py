@@ -18,7 +18,8 @@ class Settings(BaseSettings):
     secret_key: str = Field(...)
     # FERNET_KEY encrypts stored connector credentials — separate from JWT secret.
     fernet_key: str = Field(...)
-    redis_url: str = Field("")
+    redis_url: str = Field("redis://localhost:6379/0")
+    modulo_ws_token_ttl_seconds: int = Field(60)
     debug: bool = Field(False)
 
     # Alpha auth — at least one of these must be non-empty for login to work.
@@ -51,6 +52,11 @@ class Settings(BaseSettings):
 
     modulo_ratelimit_bypass_token: str = Field("")
 
+    # Auth-specific rate limiting
+    modulo_auth_rate_limit_enabled: bool = Field(True)
+    modulo_auth_max_attempts: int = Field(10)
+    modulo_auth_window_seconds: int = Field(60)
+
     # Inactivity timeout in minutes (default 480 = 8h). Set to 0 to disable.
     inactivity_timeout_minutes: int = Field(480)
 
@@ -74,14 +80,14 @@ class Settings(BaseSettings):
 
     modulo_otel_service_name: str = Field("modulo")
 
+    # CSRF protection
+    modulo_csrf_enabled: bool = Field(True)
+    modulo_csrf_exempt_paths: str = Field("/api/v1/health,/api/v1/triggers,/api/v1/auth")
+
     # Plugin discovery — when enabled, scans installed packages for entry points
     # registered in the ``modulo.connectors`` and ``modulo.model_backends`` groups.
     # Set to "false" to disable plugin discovery at startup.
     modulo_plugin_discovery: bool = Field(True)
-
-    # Max concurrent in-process agents when no E2B (or other external) provider
-    # is configured. Each agent consumes one host subprocess slot. Default 2.
-    modulo_max_local_concurrency: int = Field(2)
 
     # Secrets backend — determines how connector/backend credentials are stored.
     # Options: "fernet" (default), "vault", "aws". Env var: MODULO_SECRETS_BACKEND.
@@ -133,13 +139,6 @@ class Settings(BaseSettings):
             raise ValueError(f"MODULO_DB must be 'postgres', 'sqlite', 'mariadb', or 'mysql'; got '{v}'")
         return v.lower()
 
-    @field_validator("modulo_max_local_concurrency")
-    @classmethod
-    def _validate_local_concurrency(cls, v: int) -> int:
-        if v < 1:
-            raise ValueError("MODULO_MAX_LOCAL_CONCURRENCY must be at least 1")
-        return v
-
     @model_validator(mode="after")
     def _warn_if_no_auth(self) -> "Settings":
         if not self.modulo_admin_password and not self.modulo_users:
@@ -164,23 +163,6 @@ class Settings(BaseSettings):
         return self
 
     @model_validator(mode="after")
-    def _fix_database_url_scheme(self) -> "Settings":
-        url = self.database_url
-        # Fly.io Postgres attaches with postgres:// (no asyncpg prefix)
-        if url.startswith("postgres://"):
-            url = "postgresql+asyncpg://" + url[len("postgres://"):]
-        # Strip sslmode query params — asyncpg defaults to 'prefer' mode
-        # (try SSL, fall back to plain), which works on Fly.io's internal
-        # network. Retaining sslmode causes KeywordArgument errors in
-        # SQLAlchemy's sync-engine connection code path.
-        url = url.replace("?sslmode=disable", "")
-        url = url.replace("&sslmode=disable", "")
-        if url != self.database_url:
-            self.database_url = url
-            _log.info("settings.database_url_fixed")
-        return self
-
-    @model_validator(mode="after")
     def _apply_sqlite_mode(self) -> "Settings":
         if self.modulo_db.lower() == "sqlite":
             _log.warning("settings.sqlite_mode")
@@ -197,4 +179,4 @@ class Settings(BaseSettings):
 
 @lru_cache
 def get_settings() -> Settings:
-    return Settings()
+    return Settings()  # type: ignore[call-arg]

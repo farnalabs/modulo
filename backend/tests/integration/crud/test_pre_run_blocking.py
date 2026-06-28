@@ -45,13 +45,15 @@ async def test_pre_run_blocks_on_cycle(
     rls_session: AsyncSession,
 ) -> None:
     result = await GraphValidator().validate_for_run(
-        _FakeSnapshot({
-            "nodes": [{"id": "a"}, {"id": "b"}],
-            "edges": [
-                {"source": "a", "target": "b", "type": "normal"},
-                {"source": "b", "target": "a", "type": "normal"},
-            ],
-        }),
+        _FakeSnapshot(
+            {
+                "nodes": [{"id": "a"}, {"id": "b"}],
+                "edges": [
+                    {"source": "a", "target": "b", "type": "normal"},
+                    {"source": "b", "target": "a", "type": "normal"},
+                ],
+            }
+        ),
         {},
         rls_session,
     )
@@ -63,15 +65,17 @@ async def test_pre_run_blocks_on_nesting_exceeded(
     rls_session: AsyncSession,
 ) -> None:
     result = await GraphValidator().validate_for_run(
-        _FakeSnapshot({
-            "nodes": [{"id": "a"}, {"id": "b"}, {"id": "c"}, {"id": "d"}, {"id": "e"}],
-            "edges": [
-                {"source": "a", "target": "b", "type": "normal"},
-                {"source": "b", "target": "c", "type": "normal"},
-                {"source": "c", "target": "d", "type": "normal"},
-                {"source": "d", "target": "e", "type": "normal"},
-            ],
-        }),
+        _FakeSnapshot(
+            {
+                "nodes": [{"id": "a"}, {"id": "b"}, {"id": "c"}, {"id": "d"}, {"id": "e"}],
+                "edges": [
+                    {"source": "a", "target": "b", "type": "normal"},
+                    {"source": "b", "target": "c", "type": "normal"},
+                    {"source": "c", "target": "d", "type": "normal"},
+                    {"source": "d", "target": "e", "type": "normal"},
+                ],
+            }
+        ),
         {},
         rls_session,
     )
@@ -83,13 +87,15 @@ async def test_pre_run_passes_valid_graph(
     rls_session: AsyncSession,
 ) -> None:
     result = await GraphValidator().validate_for_run(
-        _FakeSnapshot({
-            "nodes": [{"id": "a"}, {"id": "b"}, {"id": "c"}],
-            "edges": [
-                {"source": "a", "target": "b", "type": "normal"},
-                {"source": "b", "target": "c", "type": "normal"},
-            ],
-        }),
+        _FakeSnapshot(
+            {
+                "nodes": [{"id": "a"}, {"id": "b"}, {"id": "c"}],
+                "edges": [
+                    {"source": "a", "target": "b", "type": "normal"},
+                    {"source": "b", "target": "c", "type": "normal"},
+                ],
+            }
+        ),
         {},
         rls_session,
     )

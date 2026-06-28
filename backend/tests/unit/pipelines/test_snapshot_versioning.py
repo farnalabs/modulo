@@ -178,11 +178,13 @@ class TestDiffSnapshots:
         sid_a = uuid.uuid4()
         sid_b = uuid.uuid4()
         snap_a = _mock_snapshot(
-            sid_a, 1,
+            sid_a,
+            1,
             edges=[{"source": "a", "target": "b"}],
         )
         snap_b = _mock_snapshot(
-            sid_b, 2,
+            sid_b,
+            2,
             edges=[{"source": "a", "target": "b"}, {"source": "b", "target": "c"}],
         )
 
@@ -243,11 +245,13 @@ class TestDiffSnapshots:
         sid_a = uuid.uuid4()
         sid_b = uuid.uuid4()
         snap_a = _mock_snapshot(
-            sid_a, 1,
+            sid_a,
+            1,
             nodes=[{"id": "a", "agent_id": "ag1", "label": "A", "output_schema_id": "sch1"}],
         )
         snap_b = _mock_snapshot(
-            sid_b, 2,
+            sid_b,
+            2,
             nodes=[{"id": "a", "agent_id": "ag1", "label": "A", "output_schema_id": "sch2"}],
         )
 

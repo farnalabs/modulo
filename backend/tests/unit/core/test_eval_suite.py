@@ -37,18 +37,14 @@ class TestEvaluateSuite:
 
     def test_passing_suite_at_threshold(self) -> None:
         """Suite with score exactly equal to threshold should pass."""
-        results = [_make_result(passed=True) for _ in range(3)] + [
-            _make_result(passed=False)
-        ]
+        results = [_make_result(passed=True) for _ in range(3)] + [_make_result(passed=False)]
         result = evaluate_suite(results, SUITE_ID, pass_threshold=0.75)
         assert result.passed is True
         assert result.aggregate_score == 0.75
 
     def test_failing_suite_below_threshold(self) -> None:
         """Suite with score below threshold should fail."""
-        results = [_make_result(passed=True) for _ in range(2)] + [
-            _make_result(passed=False) for _ in range(2)
-        ]
+        results = [_make_result(passed=True) for _ in range(2)] + [_make_result(passed=False) for _ in range(2)]
         result = evaluate_suite(results, SUITE_ID, pass_threshold=0.75)
         assert result.passed is False
         assert result.aggregate_score == 0.5

@@ -48,6 +48,7 @@ class AgentCreate(BaseModel):
     evals: list[dict[str, Any]] = []
     retry_policy: dict[str, Any] = {}
     token_budget: int | None = Field(default=None, ge=0)
+    max_input_length: int | None = Field(default=None, ge=0)
     library_id: uuid.UUID | None = None
 
 
@@ -60,6 +61,7 @@ class AgentUpdate(BaseModel):
     evals: list[dict[str, Any]] | None = None
     retry_policy: dict[str, Any] | None = None
     token_budget: int | None = Field(default=None, ge=0)
+    max_input_length: int | None = Field(default=None, ge=0)
 
 
 class AgentResponse(BaseModel):
@@ -78,6 +80,7 @@ class AgentResponse(BaseModel):
     evals: list[dict[str, Any]] | None
     retry_policy: dict[str, Any]
     token_budget: int | None
+    max_input_length: int | None
     library_id: uuid.UUID | None
     created_by: uuid.UUID
     created_at: datetime
@@ -194,6 +197,7 @@ async def create_agent_endpoint(
             evals=body.evals,
             retry_policy=body.retry_policy,
             token_budget=body.token_budget,
+            max_input_length=body.max_input_length,
             library_id=body.library_id,
         )
     return AgentResponse.model_validate(agent)

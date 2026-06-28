@@ -167,9 +167,23 @@ def test_encrypt_archive_round_trip(tmp_manifest_dir):
 
     dec = os.path.join(tmp_manifest_dir, "decrypted.tar.gz")
     result = subprocess.run(
-        ["openssl", "enc", "-d", "-aes-256-cbc", "-pbkdf2", "-iter", "600000",
-         "-in", enc, "-out", dec, "-pass", "pass:test-pass"],
-        capture_output=True, text=True,
+        [
+            "openssl",
+            "enc",
+            "-d",
+            "-aes-256-cbc",
+            "-pbkdf2",
+            "-iter",
+            "600000",
+            "-in",
+            enc,
+            "-out",
+            dec,
+            "-pass",
+            "pass:test-pass",
+        ],
+        capture_output=True,
+        text=True,
     )
     assert result.returncode == 0
     assert Path(dec).read_text() == "fake-tar-content"

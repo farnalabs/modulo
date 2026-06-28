@@ -54,9 +54,7 @@ def executing_run_completes(request):
 @then(parsers.parse("the response status is {status:d}"))
 def check_status(status: int, request):
     resp = request.node._resp
-    assert resp.status_code == status, (
-        f"Expected status {status}, got {resp.status_code}: {resp.text[:200]}"
-    )
+    assert resp.status_code == status, f"Expected status {status}, got {resp.status_code}: {resp.text[:200]}"
 
 
 @then("a run is created with status {status}")

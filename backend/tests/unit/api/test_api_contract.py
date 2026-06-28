@@ -116,11 +116,13 @@ def get_api_routes() -> list[dict]:
     routes = []
     for route in _get_all_apiroutes():
         if route.path.startswith("/api/"):
-            routes.append({
-                "path": route.path,
-                "methods": sorted(route.methods - {"HEAD", "OPTIONS"}),
-                "response_model": route.response_model,
-            })
+            routes.append(
+                {
+                    "path": route.path,
+                    "methods": sorted(route.methods - {"HEAD", "OPTIONS"}),
+                    "response_model": route.response_model,
+                }
+            )
     return routes
 
 

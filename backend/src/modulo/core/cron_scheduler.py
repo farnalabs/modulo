@@ -1,10 +1,21 @@
-"""Cron trigger scheduler — supports both Celery beat and in-process asyncio.
+"""Celery beat scheduler that reads cron trigger rows from the database.
 
 Architecture
 ------------
-Fire logic lives in ``fire_cron_trigger()`` — used by both Celery beat
-(``CronFireTask`` / ``DatabaseCronScheduler``) and the in-process scheduler
-(``InProcessCronScheduler`` in ``modulo.core.in_process_scheduler``).
+*DatabaseCronScheduler* is a custom Celery beat ``Scheduler`` that queries
+the ``triggers`` table for rows where ``trigger_type = 'cron'``,
+``active = true``, and ``next_fire_at <= now()``.
+
+On each tick it creates a Celery ``Huey``-like entry per matching trigger,
+firing a task that:
+  1. Re-reads the trigger row (with ``FOR UPDATE`` to serialise)
+  2. Checks concurrency limits (``max_concurrent_runs``)
+  3. Creates a ``Run`` via ``create_run()``
+  4. Logs a ``TriggerEvent``
+  5. Updates ``last_fired_at`` and ``next_fire_at``
+
+The scheduler runs inside the ``celery beat`` process and does **not** hold
+an open DB session between ticks — it opens a new connection per tick.
 """
 
 import datetime
@@ -12,9 +23,11 @@ import logging
 import uuid
 from typing import Any
 
+from celery import Celery, Task
+from celery.beat import ScheduleEntry, Scheduler
 from croniter import croniter
-from sqlalchemy import select, text, update
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+from sqlalchemy import func, select, text, update
+from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker, create_async_engine
 
 from modulo.db.crud.run import create_run
 from modulo.db.models.run import Run
@@ -22,18 +35,17 @@ from modulo.db.models.trigger import Trigger
 from modulo.db.models.trigger_event import TriggerEvent
 from modulo.settings import get_settings
 
-try:
-    from celery import Celery, Task
-    from celery.beat import ScheduleEntry, Scheduler
-except ImportError:
-    import typing
-
-    if typing.TYPE_CHECKING:
-        from celery import Celery, Task  # noqa: F401
-        from celery.beat import ScheduleEntry, Scheduler  # noqa: F401
-    Celery = Task = ScheduleEntry = Scheduler = object
-
 _log = logging.getLogger(__name__)
+
+_ENGINE: AsyncEngine | None = None
+
+
+def _get_engine() -> AsyncEngine:
+    global _ENGINE
+    if _ENGINE is None:
+        _ENGINE = create_async_engine(get_settings().database_url)
+    return _ENGINE
+
 
 _ACTIVE_STATUSES = ("pending", "running", "awaiting_human", "claimed", "waiting_for_lock")
 
@@ -69,7 +81,9 @@ def compute_next_fire(cron_expression: str, after: datetime.datetime | None = No
     base = after or datetime.datetime.now(datetime.UTC)
     cron = croniter(cron_expression, base)
     next_dt = cron.get_next(datetime.datetime)
-    assert isinstance(next_dt, datetime.datetime)
+    if not isinstance(next_dt, datetime.datetime):
+        msg = f"croniter returned unexpected type: {type(next_dt)}"
+        raise TypeError(msg)
     return next_dt
 
 
@@ -77,10 +91,16 @@ def compute_next_fire(cron_expression: str, after: datetime.datetime | None = No
 # Celery task — fire one cron trigger
 # ---------------------------------------------------------------------------
 
-def get_celery_app() -> Celery:
-    from modulo.celery_app import get_celery_app as _get_celery_app
+celery_app_global: Celery | None = None
 
-    return _get_celery_app()
+
+def get_celery_app() -> Celery:
+    global celery_app_global
+    if celery_app_global is None:
+        from modulo.celery_app import celery_app as _app
+
+        celery_app_global = _app
+    return celery_app_global
 
 
 class CronFireTask(Task):  # type: ignore[misc]
@@ -110,7 +130,7 @@ class CronFireTask(Task):  # type: ignore[misc]
         import asyncio
 
         return asyncio.run(
-            fire_cron_trigger(
+            _fire_cron_trigger(
                 trigger_id=uuid.UUID(trigger_id),
                 org_id=uuid.UUID(org_id),
                 pipeline_id=uuid.UUID(pipeline_id),
@@ -120,7 +140,7 @@ class CronFireTask(Task):  # type: ignore[misc]
         )
 
 
-async def fire_cron_trigger(
+async def _fire_cron_trigger(
     *,
     trigger_id: uuid.UUID,
     org_id: uuid.UUID,
@@ -128,14 +148,8 @@ async def fire_cron_trigger(
     snapshot_id: uuid.UUID,
     cron_expression: str,
 ) -> dict[str, Any]:
-    """Fire a cron trigger — creates a run in the database.
-
-    Shared between Celery beat tasks and the in-process asyncio scheduler.
-    Opens its own DB connection so it can be called from both sync (Celery)
-    and async contexts.
-    """
-    settings = get_settings()
-    engine = create_async_engine(settings.database_url)
+    """Core fire logic — runs inside asyncio.run() inside the Celery task."""
+    engine = _get_engine()
     factory = async_sessionmaker(engine, expire_on_commit=False)
 
     async with factory() as session:
@@ -166,6 +180,37 @@ async def fire_cron_trigger(
                     "active_runs": active_count,
                 }
 
+            # Daily spend limit check
+            spend_limit = trigger.daily_spend_limit
+            if spend_limit is not None:
+                today_start = datetime.datetime.now(datetime.UTC).replace(hour=0, minute=0, second=0, microsecond=0)
+                cost_result = await session.execute(
+                    select(func.coalesce(func.sum(Run.total_cost_usd), 0)).where(
+                        Run.trigger_id == trigger_id,
+                        Run.organisation_id == org_id,
+                        Run.created_at >= today_start,
+                    )
+                )
+                today_cost = cost_result.scalar_one()
+                if today_cost >= spend_limit:  # type: ignore[operator]
+                    await _log_event(
+                        session,
+                        trigger=trigger,
+                        org_id=org_id,
+                        result="spend_limit_reached",
+                        error_detail=(f"Daily spend limit {trigger.daily_spend_limit} reached (today: {today_cost})"),
+                    )
+                    return {
+                        "status": "skipped",
+                        "reason": "spend_limit",
+                        "daily_spend_limit": str(spend_limit),
+                        "today_cost": str(today_cost),
+                    }
+
+            # Build input payload from config
+            config = trigger.config_json or {}
+            input_payload = config.get("input_template", {})
+
             # Create the run
             run = await create_run(
                 session,
@@ -174,7 +219,7 @@ async def fire_cron_trigger(
                 snapshot_id=snapshot_id,
                 trigger_type="cron",
                 trigger_id=trigger_id,
-                input_payload={},
+                input_payload=input_payload,
             )
 
             # Log TriggerEvent
@@ -332,9 +377,7 @@ class DatabaseCronScheduler(Scheduler):  # type: ignore[misc]
     async def _fetch_due_triggers(self) -> list[dict[str, Any]]:
         """Async query for cron triggers due to fire."""
         try:
-            settings = get_settings()
-            engine = create_async_engine(settings.database_url)
-            factory = async_sessionmaker(engine, expire_on_commit=False)
+            factory = async_sessionmaker(_get_engine(), expire_on_commit=False)
 
             async with factory() as session:
                 now = datetime.datetime.now(datetime.UTC)

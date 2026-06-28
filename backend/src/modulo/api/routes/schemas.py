@@ -487,10 +487,7 @@ async def migrate_data_endpoint(
         plan={
             "field_additions": plan.field_additions,
             "field_removals": plan.field_removals,
-            "type_changes": {
-                k: {"old_type": v.old_type, "new_type": v.new_type}
-                for k, v in plan.type_changes.items()
-            },
+            "type_changes": {k: {"old_type": v.old_type, "new_type": v.new_type} for k, v in plan.type_changes.items()},
             "renames": plan.renames,
         },
     )
@@ -505,10 +502,7 @@ async def migration_plan_endpoint(
     return {
         "field_additions": plan.field_additions,
         "field_removals": plan.field_removals,
-        "type_changes": {
-            k: {"old_type": v.old_type, "new_type": v.new_type}
-            for k, v in plan.type_changes.items()
-        },
+        "type_changes": {k: {"old_type": v.old_type, "new_type": v.new_type} for k, v in plan.type_changes.items()},
         "renames": plan.renames,
     }
 

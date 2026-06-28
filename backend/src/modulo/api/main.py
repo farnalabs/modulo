@@ -3,6 +3,7 @@ import json
 import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from datetime import UTC, datetime
 
 from fastapi import FastAPI
 from fastapi.exceptions import RequestValidationError
@@ -22,14 +23,19 @@ from modulo.api.mcp_server import build_mcp_asgi_app
 from modulo.api.middleware.catch_all import CatchAllMiddleware
 from modulo.api.middleware.correlation_id import CorrelationIdMiddleware
 from modulo.api.middleware.cors_logging import CorsLoggingMiddleware
+from modulo.api.middleware.csrf import CsrfMiddleware
 from modulo.api.middleware.deprecation_headers import DeprecationHeaderMiddleware
-from modulo.api.middleware.rate_limiter import RateLimitMiddleware
+from modulo.api.middleware.rate_limiter import AuthRateLimitMiddleware, RateLimitMiddleware
+from modulo.api.middleware.security_headers import SecurityHeadersMiddleware
+from modulo.api.middleware.sensitive_mask import router as sensitive_router
 from modulo.api.routes.admin import router as admin_router
 from modulo.api.routes.admin_feature_flags import router as admin_feature_flags_router
+from modulo.api.routes.admin_license import router as admin_license_router
 from modulo.api.routes.admin_notifications import router as admin_notifications_router
 from modulo.api.routes.admin_rate_limits import router as admin_rate_limits_router
 from modulo.api.routes.admin_runtime_config import router as admin_runtime_config_router
 from modulo.api.routes.admin_sso import router as admin_sso_router
+from modulo.api.routes.admin_triggers import router as admin_triggers_router
 from modulo.api.routes.agents import router as agents_router
 from modulo.api.routes.api_keys import router as api_keys_router
 from modulo.api.routes.audit import router as audit_router
@@ -43,6 +49,7 @@ from modulo.api.routes.determination import router as determination_router
 from modulo.api.routes.environments import router as environments_router
 from modulo.api.routes.evals import router as evals_router
 from modulo.api.routes.feedback import router as feedback_router
+from modulo.api.routes.health import router as health_router
 from modulo.api.routes.hitl import router as hitl_router
 from modulo.api.routes.library import router as library_router
 from modulo.api.routes.mcp_oauth import router as mcp_oauth_router
@@ -59,6 +66,7 @@ from modulo.api.routes.runs import router as runs_router
 from modulo.api.routes.schemas import router as schemas_router
 from modulo.api.routes.scim import router as scim_router
 from modulo.api.routes.sso import router as sso_router
+from modulo.api.routes.stages import router as stages_router
 from modulo.api.routes.teams import router as teams_router
 from modulo.api.routes.templates import router as templates_router
 from modulo.api.routes.triggers import pipeline_triggers_router
@@ -72,6 +80,9 @@ from modulo.otel_bridge import setup_otel, shutdown_otel
 from modulo.settings import Settings, get_settings
 
 logger = logging.getLogger(__name__)
+
+# Uptime tracking — set at module import time, read by health endpoints.
+_START_TIME = datetime.now(UTC)
 
 
 async def _verify_db_connectivity(settings: Settings) -> None:
@@ -332,12 +343,18 @@ async def _seed_sso_providers(settings: Settings) -> None:
                 )
 
 
-async def _init_checkpointer(conn_string: str) -> None:
+async def _init_checkpointer(conn_string: str, fernet_key: str) -> None:
     """Ensure the langgraph.* checkpointer schema exists on startup."""
-    try:
-        from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
+    import uuid
 
-        async with AsyncPostgresSaver.from_conn_string(conn_string) as saver:
+    try:
+        from modulo.core.pipeline_engine.modulo_saver import ModuloPostgresSaver
+
+        async with ModuloPostgresSaver.from_conn_string(
+            conn_string,
+            organisation_id=uuid.UUID(int=0),
+            fernet_key=fernet_key,
+        ) as saver:
             await saver.setup()
             logger.info("startup.checkpointer_initialised")
     except Exception:
@@ -430,7 +447,10 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
     await _seed_sso_providers(settings)
 
     # Initialise the LangGraph checkpointer schema (langgraph.* tables).
-    await _init_checkpointer(pg_connection_string(settings.database_url))
+    await _init_checkpointer(
+        pg_connection_string(settings.database_url),
+        settings.fernet_key,
+    )
 
     # Initialise the runtime-config store so it captures env-var state at boot.
     from modulo.core.runtime_config.store import get_runtime_config_store
@@ -480,15 +500,21 @@ app.add_middleware(
     max_age=_settings.cors_max_age,
 )
 app.add_middleware(CorrelationIdMiddleware)
+app.add_middleware(CsrfMiddleware)
 app.add_middleware(RateLimitMiddleware)  # type: ignore[arg-type]
+app.add_middleware(AuthRateLimitMiddleware)  # type: ignore[arg-type]
 app.add_middleware(DeprecationHeaderMiddleware)  # type: ignore[arg-type]
+app.add_middleware(SecurityHeadersMiddleware)  # type: ignore[arg-type]
 app.add_middleware(CatchAllMiddleware)
 
+app.include_router(health_router)
 app.include_router(admin_router)
 app.include_router(admin_feature_flags_router)
+app.include_router(admin_license_router)
 app.include_router(admin_rate_limits_router)
 app.include_router(admin_runtime_config_router)
 app.include_router(admin_sso_router)
+app.include_router(admin_triggers_router)
 app.include_router(auth_router)
 app.include_router(changelog_router)
 app.include_router(sso_router)
@@ -519,11 +545,13 @@ app.include_router(evals_router)
 app.include_router(admin_notifications_router)
 app.include_router(admin_runtime_config_router)
 app.include_router(notifications_router)
+app.include_router(sensitive_router)
 app.include_router(observability_router)
 app.include_router(variants_router)
 app.include_router(feedback_router)
 app.include_router(plugins_router)
 app.include_router(scim_router)
+app.include_router(stages_router)
 app.include_router(templates_router)
 app.include_router(onboarding_router)
 app.include_router(environments_router)
@@ -534,8 +562,3 @@ app.mount("/mcp", build_mcp_asgi_app())
 
 app.add_exception_handler(StarletteHTTPException, http_exception_handler)  # type: ignore[arg-type]
 app.add_exception_handler(RequestValidationError, validation_exception_handler)  # type: ignore[arg-type]
-
-
-@app.get("/healthz")
-async def health() -> dict[str, str]:
-    return {"status": "ok"}

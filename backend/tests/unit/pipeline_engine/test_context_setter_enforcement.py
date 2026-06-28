@@ -31,6 +31,7 @@ class TestWriteLog:
 
     async def test_context_setter_creates_write_log(self):
         """A context_setter node should create a write-log entry."""
+
         @cancellable_node(role="context_setter")
         async def reviewer(state: dict[str, Any]) -> dict[str, Any]:
             return {"run_context": {"model_tier": "tier-2"}}
@@ -44,6 +45,7 @@ class TestWriteLog:
 
     async def test_write_log_has_timestamp(self):
         """Each write-log entry should have an ISO timestamp."""
+
         @cancellable_node(role="context_setter")
         async def writer(state: dict[str, Any]) -> dict[str, Any]:
             return {"run_context": {"key": "value"}}
@@ -55,6 +57,7 @@ class TestWriteLog:
 
     async def test_write_log_records_written_fields(self):
         """Write-log should record exactly the fields that were written."""
+
         @cancellable_node(role="context_setter")
         async def multi_writer(state: dict[str, Any]) -> dict[str, Any]:
             return {
@@ -73,14 +76,17 @@ class TestWriteLog:
 
     async def test_multiple_setters_append_to_write_log(self):
         """Multiple context_setter nodes should append to the same write-log."""
+
         @cancellable_node(role="context_setter")
         async def setter_a(state: dict[str, Any]) -> dict[str, Any]:
             write_log = list(state.get(_RUN_CONTEXT_WRITE_LOG_KEY) or [])
-            write_log.append({
-                "node_name": "setter_a",
-                "timestamp": "2026-01-01T00:00:00Z",
-                "written_fields": ["field_a"],
-            })
+            write_log.append(
+                {
+                    "node_name": "setter_a",
+                    "timestamp": "2026-01-01T00:00:00Z",
+                    "written_fields": ["field_a"],
+                }
+            )
             return {
                 "run_context": {"field_a": "value_a"},
                 _RUN_CONTEXT_WRITE_LOG_KEY: write_log,
@@ -89,11 +95,13 @@ class TestWriteLog:
         @cancellable_node(role="context_setter")
         async def setter_b(state: dict[str, Any]) -> dict[str, Any]:
             write_log = list(state.get(_RUN_CONTEXT_WRITE_LOG_KEY) or [])
-            write_log.append({
-                "node_name": "setter_b",
-                "timestamp": "2026-01-01T00:00:01Z",
-                "written_fields": ["field_b"],
-            })
+            write_log.append(
+                {
+                    "node_name": "setter_b",
+                    "timestamp": "2026-01-01T00:00:01Z",
+                    "written_fields": ["field_b"],
+                }
+            )
             return {
                 "run_context": {"field_b": "value_b"},
                 _RUN_CONTEXT_WRITE_LOG_KEY: write_log,
@@ -113,14 +121,15 @@ class TestWriteLog:
 
     async def test_last_write_wins_semantics(self):
         """Later context-setter writes should win (last-write-wins)."""
+
         @cancellable_node(role="context_setter")
         async def setter(state: dict[str, Any]) -> dict[str, Any]:
             return {"run_context": {"value": state.get("_new_value", "default")}}
 
-        result = await setter({** _LIVE_STATE, "_new_value": "first"})
+        result = await setter({**_LIVE_STATE, "_new_value": "first"})
         assert result["run_context"]["value"] == "first"
 
-        result = await setter({** _LIVE_STATE, "_new_value": "last"})
+        result = await setter({**_LIVE_STATE, "_new_value": "last"})
         assert result["run_context"]["value"] == "last"
 
 
@@ -134,6 +143,7 @@ class TestAuditWarning:
 
     async def test_violation_emits_warning(self, caplog):
         """A non-context-setter writing to run_context should log a warning."""
+
         @cancellable_node(role="agent")
         async def bad_node(state: dict[str, Any]) -> dict[str, Any]:
             return {"run_context": {"secret": "data"}}
@@ -148,6 +158,7 @@ class TestAuditWarning:
 
     async def test_standard_node_no_violation_no_warning(self, caplog):
         """A standard node not writing to run_context should not produce warnings."""
+
         @cancellable_node(role="agent")
         async def good_node(state: dict[str, Any]) -> dict[str, Any]:
             return {"artifact": {"result": "done"}}
@@ -161,6 +172,7 @@ class TestAuditWarning:
 
     async def test_violation_logs_attempted_fields(self, caplog):
         """The violation warning should include the attempted fields."""
+
         @cancellable_node(role="runner")
         async def runner_node(state: dict[str, Any]) -> dict[str, Any]:
             return {"run_context": {"confidential": True}}
@@ -169,14 +181,12 @@ class TestAuditWarning:
             with pytest.raises(ContextSetterViolationError):
                 await runner_node(_LIVE_STATE)
 
-        violation_records = [
-            r for r in caplog.records
-            if r.levelno == logging.WARNING and "violation" in r.message
-        ]
+        violation_records = [r for r in caplog.records if r.levelno == logging.WARNING and "violation" in r.message]
         assert len(violation_records) > 0  # At least one log entry
 
     async def test_context_setter_no_warning(self, caplog):
         """A context_setter writing to run_context should NOT produce warnings."""
+
         @cancellable_node(role="context_setter")
         async def setter(state: dict[str, Any]) -> dict[str, Any]:
             return {"run_context": {"setting": "value"}}
@@ -190,6 +200,7 @@ class TestAuditWarning:
 
     async def test_node_with_no_role_cannot_write_context(self):
         """A node with no explicit role should not be able to write to run_context."""
+
         @cancellable_node()
         async def no_role_node(state: dict[str, Any]) -> dict[str, Any]:
             return {"run_context": {"should_fail": True}}
@@ -209,10 +220,12 @@ class TestWriteLogKey:
     def test_write_log_key_is_defined(self):
         """The write-log key constant should be defined."""
         from modulo.core.pipeline_engine.decorator import _RUN_CONTEXT_WRITE_LOG_KEY
+
         assert _RUN_CONTEXT_WRITE_LOG_KEY == "_run_context_write_log"
 
     async def test_write_log_key_present_in_result(self):
         """The write-log key should be present in the result from a context_setter."""
+
         @cancellable_node(role="context_setter")
         async def setter(state: dict[str, Any]) -> dict[str, Any]:
             return {"run_context": {"x": 1}}

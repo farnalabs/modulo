@@ -579,13 +579,8 @@ async def test_handle_webhook_logs_trigger_event_on_concurrency_limit() -> None:
             snapshot_id=_SNAP,
         )
     session.add.assert_called()
-    trigger_event_call = [
-        a for a in session.add.call_args_list if hasattr(a[0][0], "validation_result")
-    ]
-    assert any(
-        getattr(c[0][0], "validation_result", None) == "concurrency_limit_reached"
-        for c in trigger_event_call
-    )
+    trigger_event_call = [a for a in session.add.call_args_list if hasattr(a[0][0], "validation_result")]
+    assert any(getattr(c[0][0], "validation_result", None) == "concurrency_limit_reached" for c in trigger_event_call)
 
 
 # ---------------------------------------------------------------------------

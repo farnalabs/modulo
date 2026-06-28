@@ -170,9 +170,7 @@ class TestRegisterOAuthClient:
             )
         assert resp.status_code == 400
 
-    def test_create_requires_public_url(
-        self, admin_client: TestClient
-    ) -> None:
+    def test_create_requires_public_url(self, admin_client: TestClient) -> None:
         def _settings_no_url() -> Settings:
             return Settings(
                 database_url="postgresql+asyncpg://localhost/test",

@@ -24,9 +24,7 @@ def _mock_response(body: dict) -> httpx.Response:
 @respx.mock
 async def test_health_check_ok(connector):
     respx.post(_GRAPHQL).mock(
-        return_value=_mock_response(
-            {"data": {"viewer": {"id": "u1", "name": "Alice", "email": "alice@example.com"}}}
-        )
+        return_value=_mock_response({"data": {"viewer": {"id": "u1", "name": "Alice", "email": "alice@example.com"}}})
     )
     result = await connector.health_check()
     assert result.ok is True
@@ -35,9 +33,7 @@ async def test_health_check_ok(connector):
 
 @respx.mock
 async def test_health_check_fail(connector):
-    respx.post(_GRAPHQL).mock(
-        return_value=httpx.Response(401, text="Unauthorized")
-    )
+    respx.post(_GRAPHQL).mock(return_value=httpx.Response(401, text="Unauthorized"))
     result = await connector.health_check()
     assert result.ok is False
     assert "401" in result.detail
@@ -45,9 +41,7 @@ async def test_health_check_fail(connector):
 
 @respx.mock
 async def test_health_check_no_viewer(connector):
-    respx.post(_GRAPHQL).mock(
-        return_value=_mock_response({"data": {"viewer": None}})
-    )
+    respx.post(_GRAPHQL).mock(return_value=_mock_response({"data": {"viewer": None}}))
     result = await connector.health_check()
     assert result.ok is False
 
@@ -72,9 +66,7 @@ async def test_query_issue(connector):
         }
     }
     respx.post(_GRAPHQL).mock(return_value=_mock_response(issue_data))
-    result = await connector.query(
-        ConnectorQuery(resource="issue", filters={"id": "issue-1"})
-    )
+    result = await connector.query(ConnectorQuery(resource="issue", filters={"id": "issue-1"}))
     assert len(result.records) == 1
     assert result.records[0]["identifier"] == "PROJ-123"
     assert result.records[0]["title"] == "Fix login bug"
@@ -82,12 +74,8 @@ async def test_query_issue(connector):
 
 @respx.mock
 async def test_query_issue_not_found(connector):
-    respx.post(_GRAPHQL).mock(
-        return_value=_mock_response({"data": {"issue": None}})
-    )
-    result = await connector.query(
-        ConnectorQuery(resource="issue", filters={"id": "nonexistent"})
-    )
+    respx.post(_GRAPHQL).mock(return_value=_mock_response({"data": {"issue": None}}))
+    result = await connector.query(ConnectorQuery(resource="issue", filters={"id": "nonexistent"}))
     assert len(result.records) == 0
 
 
@@ -115,9 +103,7 @@ async def test_query_search(connector):
         }
     }
     respx.post(_GRAPHQL).mock(return_value=_mock_response(search_data))
-    result = await connector.query(
-        ConnectorQuery(resource="search", filters={"query": "bug"})
-    )
+    result = await connector.query(ConnectorQuery(resource="search", filters={"query": "bug"}))
     assert len(result.records) == 1
     assert result.records[0]["identifier"] == "PROJ-456"
 
@@ -189,11 +175,7 @@ async def test_write_update_issue(connector):
 
 @respx.mock
 async def test_write_create_issue_failure(connector):
-    respx.post(_GRAPHQL).mock(
-        return_value=_mock_response(
-            {"data": {"issueCreate": {"success": False, "issue": None}}}
-        )
-    )
+    respx.post(_GRAPHQL).mock(return_value=_mock_response({"data": {"issueCreate": {"success": False, "issue": None}}}))
     with pytest.raises(ValueError, match="Failed to create Linear issue"):
         await connector.write(
             ConnectorPayload(
@@ -205,15 +187,9 @@ async def test_write_create_issue_failure(connector):
 
 @respx.mock
 async def test_graphql_error_response(connector):
-    respx.post(_GRAPHQL).mock(
-        return_value=_mock_response(
-            {"errors": [{"message": "Not authenticated"}]}
-        )
-    )
+    respx.post(_GRAPHQL).mock(return_value=_mock_response({"errors": [{"message": "Not authenticated"}]}))
     with pytest.raises(ValueError, match="Linear API error"):
-        await connector.query(
-            ConnectorQuery(resource="issue", filters={"id": "issue-1"})
-        )
+        await connector.query(ConnectorQuery(resource="issue", filters={"id": "issue-1"}))
 
 
 async def test_unsupported_query_resource(connector):

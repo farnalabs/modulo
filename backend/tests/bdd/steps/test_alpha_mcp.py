@@ -31,11 +31,7 @@ def org_has_pipeline(org: str, name: str, request):
     request.node._pipeline_name = name
 
 
-@when(
-    parsers.parse(
-        'the MCP client sends a tools/call request for "{tool}" with pipeline "{pipeline}"'
-    )
-)
+@when(parsers.parse('the MCP client sends a tools/call request for "{tool}" with pipeline "{pipeline}"'))
 def mcp_trigger_pipeline(tool: str, pipeline: str, client, request):
     with (
         patch("modulo.core.pipeline_engine.run_crud.set_rls_org"),
@@ -70,11 +66,7 @@ def run_created_with_status(status: str, request):
     pass
 
 
-@when(
-    parsers.parse(
-        'the MCP client sends a tools/call request for "{tool}" with run_context {ctx}'
-    )
-)
+@when(parsers.parse('the MCP client sends a tools/call request for "{tool}" with run_context {ctx}'))
 def mcp_trigger_with_context(tool: str, ctx, client, request):
     context = json.loads(ctx) if isinstance(ctx, str) else ctx
     with (
@@ -107,11 +99,7 @@ def check_run_context_branch(branch: str, request):
     pass
 
 
-@when(
-    parsers.parse(
-        'the MCP client sends a tools/call request for "{tool}" without API key'
-    )
-)
+@when(parsers.parse('the MCP client sends a tools/call request for "{tool}" without API key'))
 def mcp_no_auth(tool: str, client, request):
     resp = client.post("/mcp/tools/call", json={"tool": tool, "arguments": {}})
     request.node._resp = resp
@@ -120,16 +108,10 @@ def mcp_no_auth(tool: str, client, request):
 @then(parsers.parse("the response status is {status:d}"))
 def check_status(status: int, request):
     resp = request.node._resp
-    assert resp.status_code == status, (
-        f"Expected {status}, got {resp.status_code}: {resp.text[:200]}"
-    )
+    assert resp.status_code == status, f"Expected {status}, got {resp.status_code}: {resp.text[:200]}"
 
 
-@when(
-    parsers.parse(
-        'the MCP client sends a tools/call request for "{tool}" with pipeline "{pipeline}"'
-    )
-)
+@when(parsers.parse('the MCP client sends a tools/call request for "{tool}" with pipeline "{pipeline}"'))
 def mcp_trigger_nonexistent(tool: str, pipeline: str, client, request):
     with (
         patch("modulo.core.pipeline_engine.run_crud.get_pipeline_by_name", return_value=None),
@@ -142,7 +124,7 @@ def mcp_trigger_nonexistent(tool: str, pipeline: str, client, request):
     request.node._resp = resp
 
 
-@then(parsers.parse('the response contains isError true'))
+@then(parsers.parse("the response contains isError true"))
 def response_is_error(request):
     data = request.node._resp.json()
     assert data.get("isError") is True
@@ -160,11 +142,7 @@ def mcp_key_scope(scope: str, request):
     request.node._mcp_scope = scope
 
 
-@when(
-    parsers.parse(
-        'the MCP client sends a tools/call request for "{tool}"'
-    )
-)
+@when(parsers.parse('the MCP client sends a tools/call request for "{tool}"'))
 def mcp_tool_call_generic(tool: str, client, request):
     with (
         patch("modulo.core.pipeline_engine.run_crud.set_rls_org"),
@@ -194,11 +172,7 @@ def run_waiting_at_gate(gate: str, request):
     request.node._gate_id = gate
 
 
-@when(
-    parsers.parse(
-        'the MCP client sends a tools/call request for "review_hitl" with action "list"'
-    )
-)
+@when(parsers.parse('the MCP client sends a tools/call request for "review_hitl" with action "list"'))
 def mcp_review_hitl_list(client, request):
     resp = client.post(
         "/mcp/tools/call",
@@ -226,13 +200,10 @@ def claimed_gate(request):
     request.node._claim_token = "claim_token_123"
 
 
-@when(
-    parsers.parse(
-        'the MCP client sends a tools/call request for "review_hitl" with action "approve"'
-    )
-)
+@when(parsers.parse('the MCP client sends a tools/call request for "review_hitl" with action "approve"'))
 def mcp_review_hitl_approve(client, request):
     from modulo.hitl_manager import ApproveResult
+
     with (
         patch(
             "modulo.hitl_manager.HITLManager.approve_gate",
@@ -266,6 +237,7 @@ def check_run_status(status: str, request):
 )
 def mcp_review_hitl_reject(reason: str, client, request):
     from modulo.hitl_manager import ApproveResult
+
     with (
         patch(
             "modulo.hitl_manager.HITLManager.approve_gate",
@@ -327,11 +299,7 @@ def org_has_local_primitives(count: int, request):
     request.node._local_primitive_count = count
 
 
-@when(
-    parsers.parse(
-        'the MCP client sends a tools/call request for "library_browse"'
-    )
-)
+@when(parsers.parse('the MCP client sends a tools/call request for "library_browse"'))
 def mcp_library_browse(client, request):
     resp = client.post(
         "/mcp/tools/call",
@@ -359,11 +327,7 @@ def org_has_primitive_named(name: str, request):
     request.node._primitive_name = name
 
 
-@when(
-    parsers.parse(
-        'the MCP client sends a tools/call request for "library_browse" with search "{term}"'
-    )
-)
+@when(parsers.parse('the MCP client sends a tools/call request for "library_browse" with search "{term}"'))
 def mcp_library_search(term: str, client, request):
     resp = client.post(
         "/mcp/tools/call",
@@ -383,11 +347,7 @@ def response_contains_name(name: str, request):
     assert name in content
 
 
-@when(
-    parsers.parse(
-        'the MCP client sends a tools/call request for "library_browse" with intent to modify'
-    )
-)
+@when(parsers.parse('the MCP client sends a tools/call request for "library_browse" with intent to modify'))
 def mcp_library_modify(client, request):
     resp = client.post(
         "/mcp/tools/call",
@@ -425,11 +385,7 @@ def response_contains_tools(request):
     assert "tools" in data
 
 
-@then(
-    parsers.parse(
-        'the tools include "{t1}", "{t2}", "{t3}", "{t4}"'
-    )
-)
+@then(parsers.parse('the tools include "{t1}", "{t2}", "{t3}", "{t4}"'))
 def tools_include(t1: str, t2: str, t3: str, t4: str, request):
     data = request.node._resp.json()
     tool_names = [t.get("name") for t in data.get("tools", [])]
@@ -437,11 +393,7 @@ def tools_include(t1: str, t2: str, t3: str, t4: str, request):
         assert t in tool_names
 
 
-@then(
-    parsers.parse(
-        'the "{tool}" tool has description and inputSchema'
-    )
-)
+@then(parsers.parse('the "{tool}" tool has description and inputSchema'))
 def tool_has_description_and_schema(tool: str, request):
     data = request.node._resp.json()
     tools = data.get("tools", [])
@@ -467,11 +419,7 @@ def invoking_returns_401(request):
     pass
 
 
-@then(
-    parsers.parse(
-        'the "{tool}" tool description explains how to {action}'
-    )
-)
+@then(parsers.parse('the "{tool}" tool description explains how to {action}'))
 def tool_description_explains(tool: str, action: str, request):
     pass
 

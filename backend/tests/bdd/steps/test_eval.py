@@ -96,8 +96,7 @@ def eval_run_with_cases(ctx):
     ctx["num_cases"] = 3
     ctx["eval_run_id"] = uuid.uuid4()
     ctx["cases"] = [
-        {"id": str(uuid.uuid4()), "input": f"test input {i}", "expected": f"expected {i}"}
-        for i in range(3)
+        {"id": str(uuid.uuid4()), "input": f"test input {i}", "expected": f"expected {i}"} for i in range(3)
     ]
     ctx["scores"] = []
     ctx["aggregate_score"] = None
@@ -123,9 +122,7 @@ async def eval_engine_processes_all_cases(ctx):
 
 @then("each case has a score")
 def each_case_has_score(ctx):
-    assert len(ctx["scores"]) == ctx["num_cases"], (
-        f"Expected {ctx['num_cases']} scores, got {len(ctx['scores'])}"
-    )
+    assert len(ctx["scores"]) == ctx["num_cases"], f"Expected {ctx['num_cases']} scores, got {len(ctx['scores'])}"
     for i, s in enumerate(ctx["scores"]):
         assert "score" in s, f"Case {i} missing score"
         assert isinstance(s["score"], (int, float)), f"Case {i} score not numeric"
@@ -134,9 +131,7 @@ def each_case_has_score(ctx):
 @then("the eval run has an aggregate score")
 def eval_run_has_aggregate_score(ctx):
     assert ctx["aggregate_score"] is not None, "Aggregate score not computed"
-    assert 0 <= ctx["aggregate_score"] <= 1, (
-        f"Aggregate score {ctx['aggregate_score']} outside [0, 1]"
-    )
+    assert 0 <= ctx["aggregate_score"] <= 1, f"Aggregate score {ctx['aggregate_score']} outside [0, 1]"
 
 
 # ============================================================================
@@ -175,9 +170,7 @@ def eval_run_completes(request, ctx):
 @then(parsers.parse('the eval run status is "{expected_status}"'))
 def eval_run_status_is(expected_status: str, request, ctx):
     actual = ctx.get("run_status") or request.node._resp.get("status")
-    assert actual == expected_status, (
-        f"Expected eval run status {expected_status!r}, got {actual!r}"
-    )
+    assert actual == expected_status, f"Expected eval run status {expected_status!r}, got {actual!r}"
 
 
 # ============================================================================

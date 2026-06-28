@@ -29,9 +29,7 @@ class FeedbackRecord(OrgScoped):
         index=True,
     )
     gate_id: Mapped[str] = mapped_column(String(255), nullable=False)
-    rejected_by: Mapped[uuid.UUID] = mapped_column(
-        Uuid(), ForeignKey("users.id", ondelete="RESTRICT"), nullable=False
-    )
+    rejected_by: Mapped[uuid.UUID] = mapped_column(Uuid(), ForeignKey("users.id", ondelete="RESTRICT"), nullable=False)
     rejection_reason: Mapped[str] = mapped_column(Text, nullable=False)
     rejected_output: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False, default=dict)
     producing_node_id: Mapped[str] = mapped_column(String(255), nullable=False)

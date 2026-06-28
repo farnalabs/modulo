@@ -39,12 +39,10 @@ class BaseLockService(ABC):
         session: AsyncSession,
         key: str,
         timeout: float | None = None,
-    ) -> None:
-        ...
+    ) -> None: ...
 
     @abstractmethod
-    async def release_lock(self, session: AsyncSession, key: str) -> None:
-        ...
+    async def release_lock(self, session: AsyncSession, key: str) -> None: ...
 
 
 class PostgresLock(BaseLockService):

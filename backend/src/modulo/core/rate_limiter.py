@@ -102,3 +102,128 @@ class RateLimiterRegistry:
             return await self._sliding.check(key, max_requests, window_s)
         bucket = self._buckets[key]
         return await bucket.consume()
+
+
+class AuthRateLimiter:
+    """Tracks failed login attempts per IP with exponential backoff.
+
+    Uses Redis sorted sets when available; falls back to in-memory dicts.
+    Two key namespaces:
+      - auth_ratelimit:<ip>     — sorted set of failure timestamps
+      - auth_ratelimit:lockout:<ip> — TTL key holding lockout expiry
+
+    Backoff formula (only applies when failures >= max_attempts):
+      tier = floor(failures / max_attempts)
+      backoff = min(2^(tier - 1) * 60, 3600) seconds
+    """
+
+    def __init__(
+        self,
+        redis_client: Any | None = None,
+        prefix: str = "auth_ratelimit:",
+        max_attempts: int = 10,
+        window_s: int = 60,
+    ) -> None:
+        self._redis = redis_client
+        self._prefix = prefix
+        self._max_attempts = max_attempts
+        self._window_s = window_s
+        self._mem_failures: dict[str, list[float]] = defaultdict(list)
+        self._mem_lockouts: dict[str, float] = {}
+
+    async def check_login(self, ip: str) -> tuple[bool, int]:
+        """Check if login from *ip* is allowed.
+
+        Returns (allowed, retry_after_seconds).
+        """
+        if self._redis is not None:
+            return await self._check_login_redis(ip)
+        return self._check_login_memory(ip)
+
+    async def _check_login_redis(self, ip: str) -> tuple[bool, int]:
+        assert self._redis is not None  # nosec
+        now = time.time()
+        key = f"{self._prefix}{ip}"
+        lockout_key = f"{self._prefix}lockout:{ip}"
+        cutoff = now - self._window_s
+
+        ttl = await self._redis.ttl(lockout_key)
+        if ttl > 0:
+            return (False, int(ttl))
+
+        pipe = self._redis.pipeline(transaction=True)
+        pipe.zremrangebyscore(key, 0, cutoff)
+        pipe.zcard(key)
+        _, count = await pipe.execute()
+
+        if count >= self._max_attempts:
+            backoff = self._compute_backoff(count)
+            await self._redis.setex(lockout_key, backoff, "1")
+            return (False, backoff)
+
+        return (True, 0)
+
+    def _check_login_memory(self, ip: str) -> tuple[bool, int]:
+        now = time.time()
+        cutoff = now - self._window_s
+
+        lockout_until = self._mem_lockouts.get(ip, 0.0)
+        if lockout_until > now:
+            return (False, int(lockout_until - now))
+
+        failures = [t for t in self._mem_failures.get(ip, []) if t > cutoff]
+        self._mem_failures[ip] = failures
+        count = len(failures)
+
+        if count >= self._max_attempts:
+            backoff = self._compute_backoff(count)
+            self._mem_lockouts[ip] = now + backoff
+            return (False, backoff)
+
+        return (True, 0)
+
+    async def record_failure(self, ip: str) -> None:
+        """Record a failed login attempt for *ip*."""
+        if self._redis is not None:
+            await self._record_failure_redis(ip)
+        else:
+            self._record_failure_memory(ip)
+
+    async def _record_failure_redis(self, ip: str) -> None:
+        assert self._redis is not None  # nosec
+        now = time.time()
+        key = f"{self._prefix}{ip}"
+        await self._redis.zadd(key, {str(now): now})
+        await self._redis.expire(key, self._window_s * 2)
+
+    def _record_failure_memory(self, ip: str) -> None:
+        now = time.time()
+        cutoff = now - self._window_s
+        failures = self._mem_failures[ip]
+        failures.append(now)
+        self._mem_failures[ip] = [t for t in failures if t > cutoff]
+
+    async def record_success(self, ip: str) -> None:
+        """Reset all failure counters for *ip* on successful login."""
+        if self._redis is not None:
+            await self._record_success_redis(ip)
+        else:
+            self._record_success_memory(ip)
+
+    async def _record_success_redis(self, ip: str) -> None:
+        assert self._redis is not None  # nosec
+        key = f"{self._prefix}{ip}"
+        lockout_key = f"{self._prefix}lockout:{ip}"
+        pipe = self._redis.pipeline(transaction=True)
+        pipe.delete(key)
+        pipe.delete(lockout_key)
+        await pipe.execute()
+
+    def _record_success_memory(self, ip: str) -> None:
+        self._mem_failures.pop(ip, None)
+        self._mem_lockouts.pop(ip, None)
+
+    @staticmethod
+    def _compute_backoff(count: int) -> int:
+        tier = count // 10
+        return min(int(pow(2, tier - 1) * 60), 3600)

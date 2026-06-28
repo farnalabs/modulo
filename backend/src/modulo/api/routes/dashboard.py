@@ -353,9 +353,9 @@ async def dashboard_trends(
                 func.count().label("total_decisions"),
                 func.sum(case((HitlClaim.decision == "approved", 1), else_=0)).label("approved_count"),
                 func.sum(case((HitlClaim.decision == "rejected", 1), else_=0)).label("rejected_count"),
-                func.avg(
-                    func.extract("epoch", HitlClaim.decision_at - HitlClaim.created_at) * 1000
-                ).label("avg_time_to_approve_ms"),
+                func.avg(func.extract("epoch", HitlClaim.decision_at - HitlClaim.created_at) * 1000).label(
+                    "avg_time_to_approve_ms"
+                ),
             )
             .where(
                 HitlClaim.organisation_id == org_id,
@@ -380,9 +380,7 @@ async def dashboard_trends(
                 "rejected_count": rejected,
                 "rejection_rate": round(rejected / total * 100, 1) if total > 0 else 0.0,
                 "avg_time_to_approve_ms": (
-                    round(float(row.avg_time_to_approve_ms), 1)
-                    if row.avg_time_to_approve_ms
-                    else None
+                    round(float(row.avg_time_to_approve_ms), 1) if row.avg_time_to_approve_ms else None
                 ),
             }
 
@@ -390,13 +388,16 @@ async def dashboard_trends(
         hitl_volume: list[dict[str, Any]] = []
         for i in range(days):
             d = (start_date + timedelta(days=i)).isoformat()
-            entry = hitl_by_date.get(d, {
-                "total_decisions": 0,
-                "approved_count": 0,
-                "rejected_count": 0,
-                "rejection_rate": 0.0,
-                "avg_time_to_approve_ms": None,
-            })
+            entry = hitl_by_date.get(
+                d,
+                {
+                    "total_decisions": 0,
+                    "approved_count": 0,
+                    "rejected_count": 0,
+                    "rejection_rate": 0.0,
+                    "avg_time_to_approve_ms": None,
+                },
+            )
             entry["date"] = d
             hitl_volume.append(entry)
 
@@ -404,24 +405,28 @@ async def dashboard_trends(
         raw_rates = [h["rejection_rate"] for h in hitl_volume]
         rejection_trend: list[dict[str, Any]] = []
         for i, h in enumerate(hitl_volume):
-            window = raw_rates[max(0, i - 2):i + 1]
+            window = raw_rates[max(0, i - 2) : i + 1]
             smoothed = round(sum(window) / len(window), 1) if window else 0.0
-            rejection_trend.append({
-                "date": h["date"],
-                "rolling_rejection_rate": smoothed,
-                "raw_rejection_rate": h["rejection_rate"],
-            })
+            rejection_trend.append(
+                {
+                    "date": h["date"],
+                    "rolling_rejection_rate": smoothed,
+                    "raw_rejection_rate": h["rejection_rate"],
+                }
+            )
 
         # Correlation: eval pass rate vs rejection rate per day
         eval_rate_map: dict[str, float | None] = {r["date"]: r.get("pass_rate") for r in eval_rates}
         correlation: list[dict[str, Any]] = []
         for h in hitl_volume:
             eval_rate = eval_rate_map.get(h["date"])
-            correlation.append({
-                "date": h["date"],
-                "rejection_rate": h["rejection_rate"],
-                "eval_pass_rate": eval_rate,
-            })
+            correlation.append(
+                {
+                    "date": h["date"],
+                    "rejection_rate": h["rejection_rate"],
+                    "eval_pass_rate": eval_rate,
+                }
+            )
 
         # Feedback-record volume (by date created)
         feedback_volume_query = (
@@ -450,11 +455,14 @@ async def dashboard_trends(
         feedback_volume: list[dict[str, Any]] = []
         for i in range(days):
             d = (start_date + timedelta(days=i)).isoformat()
-            entry = feedback_by_date.get(d, {
-                "feedback_count": 0,
-                "resolved_count": 0,
-                "correcting_count": 0,
-            })
+            entry = feedback_by_date.get(
+                d,
+                {
+                    "feedback_count": 0,
+                    "resolved_count": 0,
+                    "correcting_count": 0,
+                },
+            )
             entry["date"] = d
             feedback_volume.append(entry)
 

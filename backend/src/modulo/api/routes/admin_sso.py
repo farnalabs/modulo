@@ -9,7 +9,8 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from modulo.api.dependencies import get_db_session
+from modulo.api.dependencies import get_db_session, require_feature
+from modulo.api.middleware.sensitive_mask import SensitiveValue
 from modulo.auth.dependencies import get_current_user
 from modulo.auth.jwt import AuthenticatedPrincipal
 from modulo.db.crud.sso_provider import (
@@ -62,6 +63,7 @@ class SsoProviderResponse(BaseModel):
     provider_type: str
     name: str
     client_id: str | None = None
+    client_secret: SensitiveValue | None = None
     discovery_url: str | None = None
     metadata_url: str | None = None
     metadata_xml: str | None = None
@@ -91,6 +93,7 @@ class SsoProviderResponse(BaseModel):
             provider_type=provider.provider_type,
             name=provider.name,
             client_id=provider.client_id,
+            client_secret=provider.client_secret,
             discovery_url=provider.discovery_url,
             metadata_url=provider.metadata_url,
             metadata_xml=provider.metadata_xml,
@@ -120,6 +123,7 @@ def _require_admin(principal: AuthenticatedPrincipal) -> None:
 
 @router.get("/providers", response_model=list[SsoProviderResponse])
 async def get_providers(
+    _: None = require_feature("sso"),
     current_user: AuthenticatedPrincipal = Depends(get_current_user),
     session: AsyncSession = Depends(get_db_session),
 ) -> list[SsoProviderResponse]:
@@ -131,6 +135,7 @@ async def get_providers(
 @router.post("/providers", response_model=SsoProviderResponse, status_code=status.HTTP_201_CREATED)
 async def create_provider_endpoint(
     body: SsoProviderCreate,
+    _: None = require_feature("sso"),
     current_user: AuthenticatedPrincipal = Depends(get_current_user),
     session: AsyncSession = Depends(get_db_session),
 ) -> SsoProviderResponse:
@@ -157,6 +162,7 @@ async def create_provider_endpoint(
 async def update_provider_endpoint(
     provider_id: uuid.UUID,
     body: SsoProviderUpdate,
+    _: None = require_feature("sso"),
     current_user: AuthenticatedPrincipal = Depends(get_current_user),
     session: AsyncSession = Depends(get_db_session),
 ) -> SsoProviderResponse:
@@ -177,6 +183,7 @@ async def update_provider_endpoint(
 @router.delete("/providers/{provider_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_provider_endpoint(
     provider_id: uuid.UUID,
+    _: None = require_feature("sso"),
     current_user: AuthenticatedPrincipal = Depends(get_current_user),
     session: AsyncSession = Depends(get_db_session),
 ) -> None:
@@ -192,6 +199,7 @@ async def delete_provider_endpoint(
 @router.post("/providers/{provider_id}/test", response_model=SsoProviderTestResult)
 async def test_provider_connection(
     provider_id: uuid.UUID,
+    _: None = require_feature("sso"),
     current_user: AuthenticatedPrincipal = Depends(get_current_user),
     session: AsyncSession = Depends(get_db_session),
     settings: Settings = Depends(get_settings),
@@ -342,6 +350,7 @@ async def _test_saml_connection(provider: Any) -> SsoProviderTestResult:
 @router.put("/providers/{provider_id}/toggle", response_model=SsoProviderResponse)
 async def toggle_provider_endpoint(
     provider_id: uuid.UUID,
+    _: None = require_feature("sso"),
     current_user: AuthenticatedPrincipal = Depends(get_current_user),
     session: AsyncSession = Depends(get_db_session),
 ) -> SsoProviderResponse:
@@ -373,6 +382,7 @@ class GroupMappingsResponse(BaseModel):
 async def set_group_mappings_endpoint(
     provider_id: uuid.UUID,
     body: GroupMappingsRequest,
+    _: None = require_feature("sso"),
     current_user: AuthenticatedPrincipal = Depends(get_current_user),
     session: AsyncSession = Depends(get_db_session),
 ) -> GroupMappingsResponse:
@@ -390,6 +400,7 @@ async def set_group_mappings_endpoint(
 @router.get("/providers/{provider_id}/group-mappings", response_model=GroupMappingsResponse)
 async def get_group_mappings_endpoint(
     provider_id: uuid.UUID,
+    _: None = require_feature("sso"),
     current_user: AuthenticatedPrincipal = Depends(get_current_user),
     session: AsyncSession = Depends(get_db_session),
 ) -> GroupMappingsResponse:

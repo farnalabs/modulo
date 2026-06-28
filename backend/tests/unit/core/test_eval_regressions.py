@@ -208,21 +208,30 @@ class TestDetectRegressionsDirect:
 
         rows = [
             _make_row(
-                eval_id=_EVAL_ID_1, eval_name="declining-eval",
-                recent_total=10, recent_passed=3,
-                baseline_total=10, baseline_passed=9,
+                eval_id=_EVAL_ID_1,
+                eval_name="declining-eval",
+                recent_total=10,
+                recent_passed=3,
+                baseline_total=10,
+                baseline_passed=9,
                 affected_run_ids=[_RUN_ID_1],
             ),
             _make_row(
-                eval_id=_EVAL_ID_2, eval_name="stable-eval",
-                recent_total=10, recent_passed=8,
-                baseline_total=10, baseline_passed=8,
+                eval_id=_EVAL_ID_2,
+                eval_name="stable-eval",
+                recent_total=10,
+                recent_passed=8,
+                baseline_total=10,
+                baseline_passed=8,
                 affected_run_ids=[],
             ),
             _make_row(
-                eval_id=_EVAL_ID_3, eval_name="improving-eval",
-                recent_total=10, recent_passed=9,
-                baseline_total=10, baseline_passed=3,
+                eval_id=_EVAL_ID_3,
+                eval_name="improving-eval",
+                recent_total=10,
+                recent_passed=9,
+                baseline_total=10,
+                baseline_passed=3,
                 affected_run_ids=[],
             ),
         ]
@@ -239,9 +248,12 @@ class TestDetectRegressionsDirect:
         session = _make_mock_session()
 
         row = _make_row(
-            eval_id=_EVAL_ID_1, eval_name="perfect-recent",
-            recent_total=10, recent_passed=10,
-            baseline_total=10, baseline_passed=5,
+            eval_id=_EVAL_ID_1,
+            eval_name="perfect-recent",
+            recent_total=10,
+            recent_passed=10,
+            baseline_total=10,
+            baseline_passed=5,
             affected_run_ids=[],
         )
         session.execute.return_value = _make_result(all_value=[row])
@@ -274,11 +286,13 @@ class TestRegressionAlertsEndpoint:
     @pytest.fixture()
     def _configure_session(self, _regression_rows):
         """Returns a function to set up a mock session for the endpoint."""
+
         def _setup(mock_session: AsyncMock) -> None:
             mock_session.execute.side_effect = [
-                _make_result(scalar_value=None),   # set_rls_org
+                _make_result(scalar_value=None),  # set_rls_org
                 _make_result(all_value=_regression_rows),
             ]
+
         return _setup
 
     @pytest.fixture()
@@ -331,8 +345,13 @@ class TestRegressionAlertsEndpoint:
         resp = client.get(self.URL)
         a = resp.json()["alerts"][0]
         assert set(a.keys()) == {
-            "eval_id", "eval_name", "prev_pass_rate", "current_pass_rate",
-            "drop_pct", "trend", "affected_run_ids",
+            "eval_id",
+            "eval_name",
+            "prev_pass_rate",
+            "current_pass_rate",
+            "drop_pct",
+            "trend",
+            "affected_run_ids",
         }
         assert a["eval_id"] == str(_EVAL_ID_1)
         assert a["eval_name"] == "accuracy-check"
@@ -348,9 +367,12 @@ class TestRegressionAlertsEndpoint:
         mock_session = _make_mock_session()
 
         row = _make_row(
-            eval_id=_EVAL_ID_1, eval_name="custom-eval",
-            recent_total=20, recent_passed=10,
-            baseline_total=20, baseline_passed=18,
+            eval_id=_EVAL_ID_1,
+            eval_name="custom-eval",
+            recent_total=20,
+            recent_passed=10,
+            baseline_total=20,
+            baseline_passed=18,
             affected_run_ids=[_RUN_ID_1, _RUN_ID_2],
         )
         mock_session.execute.side_effect = [
@@ -378,8 +400,8 @@ class TestRegressionAlertsEndpoint:
     def test_empty_no_alerts(self, _configure_session) -> None:
         mock_session = _make_mock_session()
         mock_session.execute.side_effect = [
-            _make_result(scalar_value=None),   # set_rls_org
-            _make_result(all_value=[]),         # no results
+            _make_result(scalar_value=None),  # set_rls_org
+            _make_result(all_value=[]),  # no results
         ]
 
         async def override_session() -> AsyncGenerator[AsyncMock, None]:

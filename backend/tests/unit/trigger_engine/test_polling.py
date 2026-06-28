@@ -340,10 +340,7 @@ async def test_fire_trigger_condition_met(
     connector.query.assert_awaited_once_with(ANY)
 
     session.add.assert_called()
-    assert any(
-        getattr(c.args[0], "validation_result", None) == "condition_met"
-        for c in session.add.call_args_list
-    )
+    assert any(getattr(c.args[0], "validation_result", None) == "condition_met" for c in session.add.call_args_list)
 
 
 async def test_fire_trigger_no_match(
@@ -661,5 +658,3 @@ class TestPollingFireTask:
         assert PollingFireTask.autoretry_for == (Exception,)
         assert PollingFireTask.max_retries == 2
         assert PollingFireTask.default_retry_delay == 30
-
-

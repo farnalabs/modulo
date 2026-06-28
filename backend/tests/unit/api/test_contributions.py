@@ -177,9 +177,7 @@ class TestCreateContribution:
         )
         assert resp.status_code == 422
 
-    def test_create_contribution_missing_fixture_map_returns_422(
-        self, client: TestClient
-    ):
+    def test_create_contribution_missing_fixture_map_returns_422(self, client: TestClient):
         resp = client.post(
             "/api/v1/library/contribute",
             json={
@@ -265,9 +263,7 @@ class TestSubmitForReview:
             patch(
                 "modulo.api.routes.contributions.submit_contribution_for_review",
                 new_callable=AsyncMock,
-                side_effect=ContributionInvalidTransitionError(
-                    "already published"
-                ),
+                side_effect=ContributionInvalidTransitionError("already published"),
             ),
             patch("modulo.api.routes.contributions.set_rls_org", new_callable=AsyncMock),
         ):
@@ -278,9 +274,7 @@ class TestSubmitForReview:
 
 class TestPublish:
     def test_publish_contribution_returns_200(self, client: TestClient):
-        prim = _make_mock_primitive(
-            contribution_status="published", visibility="community"
-        )
+        prim = _make_mock_primitive(contribution_status="published", visibility="community")
 
         with (
             patch(
@@ -297,12 +291,8 @@ class TestPublish:
         assert body["contribution_status"] == "published"
         assert body["visibility"] == "community"
 
-    def test_publish_contribution_forbidden_for_viewer(
-        self, viewer_client: TestClient
-    ):
-        resp = viewer_client.post(
-            f"/api/v1/library/contribute/{_PRIMITIVE_ID}/publish"
-        )
+    def test_publish_contribution_forbidden_for_viewer(self, viewer_client: TestClient):
+        resp = viewer_client.post(f"/api/v1/library/contribute/{_PRIMITIVE_ID}/publish")
         assert resp.status_code == 403
 
     def test_publish_contribution_404(self, client: TestClient):
@@ -323,15 +313,11 @@ class TestPublish:
             patch(
                 "modulo.api.routes.contributions.publish_contribution",
                 new_callable=AsyncMock,
-                side_effect=ContributionInvalidTransitionError(
-                    "not in review_queue"
-                ),
+                side_effect=ContributionInvalidTransitionError("not in review_queue"),
             ),
             patch("modulo.api.routes.contributions.set_rls_org", new_callable=AsyncMock),
         ):
-            resp = client.post(
-                f"/api/v1/library/contribute/{_PRIMITIVE_ID}/publish"
-            )
+            resp = client.post(f"/api/v1/library/contribute/{_PRIMITIVE_ID}/publish")
 
         assert resp.status_code == 409
 
@@ -398,9 +384,7 @@ class TestListContributions:
             ) as mock_list,
             patch("modulo.api.routes.contributions.set_rls_org", new_callable=AsyncMock),
         ):
-            resp = client.get(
-                "/api/v1/library/contribute?contribution_status=draft"
-            )
+            resp = client.get("/api/v1/library/contribute?contribution_status=draft")
 
         assert resp.status_code == 200
         mock_list.assert_awaited_once()
@@ -460,9 +444,7 @@ class TestSubmitVersion:
             patch(
                 "modulo.api.routes.contributions.submit_contribution_version",
                 new_callable=AsyncMock,
-                side_effect=ContributionInvalidTransitionError(
-                    "expected 'published', got 'draft'"
-                ),
+                side_effect=ContributionInvalidTransitionError("expected 'published', got 'draft'"),
             ),
             patch("modulo.api.routes.contributions.set_rls_org", new_callable=AsyncMock),
         ):

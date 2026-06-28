@@ -20,7 +20,7 @@ class TestCryptoV2:
         assert "public_key" in kp
         assert "fingerprint" in kp
         assert len(kp["private_key"]) == 64  # 32 bytes = 64 hex chars
-        assert len(kp["public_key"]) == 64   # 32 bytes = 64 hex chars
+        assert len(kp["public_key"]) == 64  # 32 bytes = 64 hex chars
         assert len(kp["fingerprint"]) == 16  # sha256[:16]
 
     def test_generate_keypair_different_each_call(self):
@@ -148,8 +148,6 @@ class TestPublishPullVerifyFlow(_PreserveRegistry):
         assert pulled is not None
         assert pulled.author == "e2e-author"
 
-        public_key_obj = Ed25519PublicKey.from_public_bytes(
-            bytes.fromhex(kp["public_key"])
-        )
+        public_key_obj = Ed25519PublicKey.from_public_bytes(bytes.fromhex(kp["public_key"]))
         verified = verify_primitive_signature(pulled, public_key=public_key_obj)
         assert verified is True

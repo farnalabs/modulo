@@ -26,6 +26,7 @@ def _make_settings() -> Settings:
         secret_key=_VALID_32,
         fernet_key=_VALID_32,
         modulo_admin_password="testpass",
+        modulo_license_key="test-license-key",
     )
 
 
@@ -95,26 +96,29 @@ class TestListAuditEvents:
     def test_list_returns_paginated_events(self, client: TestClient) -> None:
         events = [_make_event() for _ in range(3)]
         with (
-            patch("modulo.api.routes.audit.list_audit_events", return_value={
-                "items": [
-                    {
-                        "id": str(e.id),
-                        "event_type": e.event_type,
-                        "actor_user_id": str(e.actor_user_id) if e.actor_user_id else None,
-                        "resource_type": e.resource_type,
-                        "resource_id": str(e.resource_id) if e.resource_id else None,
-                        "payload_json": e.payload_json,
-                        "request_id": e.request_id,
-                        "previous_hash": e.previous_hash,
-                        "created_at": e.created_at.isoformat() if e.created_at else None,
-                    }
-                    for e in events
-                ],
-                "total": 3,
-                "next_cursor": None,
-                "prev_cursor": str(events[0].id),
-                "limit": 50,
-            }),
+            patch(
+                "modulo.api.routes.audit.list_audit_events",
+                return_value={
+                    "items": [
+                        {
+                            "id": str(e.id),
+                            "event_type": e.event_type,
+                            "actor_user_id": str(e.actor_user_id) if e.actor_user_id else None,
+                            "resource_type": e.resource_type,
+                            "resource_id": str(e.resource_id) if e.resource_id else None,
+                            "payload_json": e.payload_json,
+                            "request_id": e.request_id,
+                            "previous_hash": e.previous_hash,
+                            "created_at": e.created_at.isoformat() if e.created_at else None,
+                        }
+                        for e in events
+                    ],
+                    "total": 3,
+                    "next_cursor": None,
+                    "prev_cursor": str(events[0].id),
+                    "limit": 50,
+                },
+            ),
             patch("modulo.api.routes.audit.set_rls_org"),
         ):
             resp = client.get(self.URL)
@@ -205,9 +209,7 @@ class TestListAuditEvents:
                 "prev_cursor": None,
                 "limit": 50,
             }
-            resp = client.get(
-                f"{self.URL}?from_date=2025-01-01T00:00:00Z&to_date=2025-12-31T23:59:59Z"
-            )
+            resp = client.get(f"{self.URL}?from_date=2025-01-01T00:00:00Z&to_date=2025-12-31T23:59:59Z")
         assert resp.status_code == 200
         _, kwargs = mock_list.call_args
         assert kwargs.get("from_date") == "2025-01-01T00:00:00Z"
@@ -224,19 +226,22 @@ class TestBatchDetail:
     def test_batch_detail_returns_events(self, client: TestClient) -> None:
         event_id = str(uuid.uuid4())
         with (
-            patch("modulo.api.routes.audit.get_audit_events_batch", return_value=[
-                {
-                    "id": event_id,
-                    "event_type": "pipeline.run",
-                    "actor_user_id": str(_USER_ID),
-                    "resource_type": "pipeline",
-                    "resource_id": str(uuid.uuid4()),
-                    "payload_json": {"key": "value"},
-                    "request_id": "req-123",
-                    "previous_hash": "abc",
-                    "created_at": "2025-06-01T00:00:00+00:00",
-                }
-            ]),
+            patch(
+                "modulo.api.routes.audit.get_audit_events_batch",
+                return_value=[
+                    {
+                        "id": event_id,
+                        "event_type": "pipeline.run",
+                        "actor_user_id": str(_USER_ID),
+                        "resource_type": "pipeline",
+                        "resource_id": str(uuid.uuid4()),
+                        "payload_json": {"key": "value"},
+                        "request_id": "req-123",
+                        "previous_hash": "abc",
+                        "created_at": "2025-06-01T00:00:00+00:00",
+                    }
+                ],
+            ),
             patch("modulo.api.routes.audit.set_rls_org"),
         ):
             resp = client.post(self.URL, json={"event_ids": [event_id]})

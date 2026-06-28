@@ -14,8 +14,6 @@ class Team(OrgScoped):
 
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     description: Mapped[str | None] = mapped_column(String(2000))
-    created_by: Mapped[uuid.UUID] = mapped_column(
-        Uuid(), ForeignKey("users.id", ondelete="RESTRICT"), nullable=False
-    )
+    created_by: Mapped[uuid.UUID] = mapped_column(Uuid(), ForeignKey("users.id", ondelete="RESTRICT"), nullable=False)
     notification_endpoints: Mapped[list[dict[str, Any]]] = mapped_column(JSON, nullable=False, default=list)
     daily_spend_limit: Mapped[Decimal | None] = mapped_column(Numeric(14, 6))

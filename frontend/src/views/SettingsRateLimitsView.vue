@@ -2,7 +2,7 @@
   <div class="mx-auto max-w-4xl space-y-8 p-6">
     <header>
       <h1 class="text-3xl font-bold tracking-tight">Rate Limits</h1>
-      <p class="mt-1 text-muted-foreground">Configure per-route rate limiting thresholds</p>
+      <p class="mt-1 text-muted-foreground">View per-route rate limiting rules and current usage</p>
     </header>
 
     <div v-if="loading" class="flex items-center justify-center py-16">
@@ -41,54 +41,14 @@
             </tr>
           </thead>
           <tbody>
-             <tr v-for="rule in rules" :key="rule.path_prefix" class="border-b last:border-b-0">
+            <tr v-for="rule in rules" :key="rule.path_prefix" class="border-b last:border-b-0">
               <td class="py-3 font-mono text-xs">{{ rule.path_prefix }}</td>
-              <td class="py-3">
-                <input
-                  v-model.number="rule.max_requests"
-                  type="number"
-                  min="1"
-                  class="w-24 rounded-lg border border-input bg-background px-3 py-1.5 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                />
-              </td>
-              <td class="py-3">
-                <input
-                  v-model.number="rule.window_s"
-                  type="number"
-                  min="1"
-                  class="w-24 rounded-lg border border-input bg-background px-3 py-1.5 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                />
-              </td>
+              <td class="py-3">{{ rule.max_requests }}</td>
+              <td class="py-3">{{ rule.window_s }}</td>
             </tr>
           </tbody>
         </table>
         <div v-else class="text-sm text-muted-foreground">No rate limit rules configured.</div>
-      </div>
-
-      <div v-if="formError" class="rounded-lg border border-destructive/50 bg-destructive/10 p-4 text-sm text-destructive">
-        {{ formError }}
-      </div>
-      <div v-if="formSuccess" class="rounded-lg border border-green-500/50 bg-green-50 p-4 text-sm text-green-800">
-        {{ formSuccess }}
-      </div>
-
-      <div class="flex items-center gap-3 pt-2">
-        <div class="flex-1" />
-        <button
-          type="button"
-          class="rounded-lg border border-input bg-background px-4 py-2 text-sm font-medium hover:bg-accent"
-          @click="resetForm"
-        >
-          Reset
-        </button>
-        <button
-          type="button"
-          :disabled="saving"
-          class="rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
-          @click="saveRules"
-        >
-          {{ saving ? 'Saving...' : 'Save' }}
-        </button>
       </div>
     </div>
   </div>
@@ -97,27 +57,14 @@
 <script setup lang="ts">
 import { ref, onMounted } from 'vue'
 import { api } from '../lib/api/client'
+import type { components } from '../lib/api/client'
 
-interface RateLimitRule {
-  path_prefix: string
-  max_requests: number
-  window_s: number
-}
-
-interface RateLimitStatus {
-  mode: string
-  rules: RateLimitRule[]
-}
+type RateLimitRule = components['schemas']['RateLimitRuleResponse']
 
 const loading = ref(true)
 const loadError = ref<string | null>(null)
 const mode = ref('in_memory')
 const rules = ref<RateLimitRule[]>([])
-const saving = ref(false)
-const formError = ref<string | null>(null)
-const formSuccess = ref<string | null>(null)
-
-const savedRules = ref<RateLimitRule[]>([])
 
 async function loadRules() {
   loading.value = true
@@ -127,46 +74,13 @@ async function loadRules() {
     if (err) {
       loadError.value = `Failed to load rate limits: ${err}`
     } else if (data) {
-      const status = data as unknown as RateLimitStatus
-      mode.value = status.mode
-      rules.value = JSON.parse(JSON.stringify(status.rules))
-      savedRules.value = JSON.parse(JSON.stringify(status.rules))
+      mode.value = data.mode
+      rules.value = data.rules
     }
   } catch (e: unknown) {
     loadError.value = `Failed to load rate limits: ${e instanceof Error ? e.message : String(e)}`
   } finally {
     loading.value = false
-  }
-}
-
-function resetForm() {
-  formError.value = null
-  formSuccess.value = null
-  rules.value = JSON.parse(JSON.stringify(savedRules.value))
-}
-
-async function saveRules() {
-  saving.value = true
-  formError.value = null
-  formSuccess.value = null
-  try {
-    const { data, error: err } = await api.PUT('/api/v1/admin/rate-limits', {
-      body: { rules: rules.value },
-    })
-    if (err) {
-      formError.value = `Save failed: ${err}`
-    } else if (data) {
-      const status = data as unknown as RateLimitStatus
-      mode.value = status.mode
-      rules.value = JSON.parse(JSON.stringify(status.rules))
-      savedRules.value = JSON.parse(JSON.stringify(status.rules))
-      formSuccess.value = 'Rate limits updated successfully.'
-      setTimeout(() => { formSuccess.value = null }, 3000)
-    }
-  } catch (e: unknown) {
-    formError.value = `Save failed: ${e instanceof Error ? e.message : String(e)}`
-  } finally {
-    saving.value = false
   }
 }
 

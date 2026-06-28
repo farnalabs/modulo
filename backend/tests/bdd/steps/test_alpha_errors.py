@@ -12,7 +12,7 @@ scenarios("../../features/errors/recovery.feature")
 from tests.bdd.conftest import make_mock_run  # noqa: E402
 
 
-@given(parsers.parse('a run that failed at node {failed:d} of {total:d}'))
+@given(parsers.parse("a run that failed at node {failed:d} of {total:d}"))
 def run_failed_at_node(failed: int, total: int, request):
     run_id = uuid.uuid4()
     request.node._run_id = run_id
@@ -20,11 +20,7 @@ def run_failed_at_node(failed: int, total: int, request):
     request.node._total_nodes = total
 
 
-@when(
-    parsers.parse(
-        'I POST /api/runs/{run_id}/retry with from_node "{from_node}"'
-    )
-)
+@when(parsers.parse('I POST /api/runs/{run_id}/retry with from_node "{from_node}"'))
 def retry_from_node(run_id, from_node: str, client, request):
     new_run_id = uuid.uuid4()
     request.node._new_run_id = new_run_id
@@ -82,13 +78,10 @@ def nodes_reexecuted(a: int, b: int, request):
     pass
 
 
-@when(
-    parsers.parse(
-        'I POST /api/runs/{run_id}/retry with from_node "{from_node}" and run_context {ctx}'
-    )
-)
+@when(parsers.parse('I POST /api/runs/{run_id}/retry with from_node "{from_node}" and run_context {ctx}'))
 def retry_with_context(run_id, from_node: str, ctx, client, request):
     import json
+
     context = json.loads(ctx) if isinstance(ctx, str) else ctx
     new_run_id = uuid.uuid4()
     request.node._new_run_id = new_run_id
@@ -111,11 +104,7 @@ def retry_with_context(run_id, from_node: str, ctx, client, request):
     request.node._resp = resp
 
 
-@then(
-    parsers.parse(
-        'the new run has run_context with {key} {value}'
-    )
-)
+@then(parsers.parse("the new run has run_context with {key} {value}"))
 def check_new_run_context(key: str, value, request):
     pass
 
@@ -127,11 +116,7 @@ def completed_run(request):
     request.node._run_status = "completed"
 
 
-@when(
-    parsers.parse(
-        'I POST /api/runs/{run_id}/retry with from_node "{from_node}"'
-    )
-)
+@when(parsers.parse('I POST /api/runs/{run_id}/retry with from_node "{from_node}"'))
 def retry_completed(run_id, from_node: str, client, request):
     resp = client.post(
         f"/api/runs/{run_id}/retry",
@@ -143,9 +128,7 @@ def retry_completed(run_id, from_node: str, client, request):
 @then(parsers.parse("the response status is {status:d}"))
 def check_status(status: int, request):
     resp = request.node._resp
-    assert resp.status_code == status, (
-        f"Expected {status}, got {resp.status_code}: {resp.text[:200]}"
-    )
+    assert resp.status_code == status, f"Expected {status}, got {resp.status_code}: {resp.text[:200]}"
 
 
 @then(parsers.parse('the error mentions "{text}"'))
@@ -251,7 +234,7 @@ def resume_run(run_id, client, request):
     request.node._resp = resp
 
 
-@given(parsers.parse('a run that failed at node {node:d} with a configuration error'))
+@given(parsers.parse("a run that failed at node {node:d} with a configuration error"))
 def failed_with_config_error(node: int, request):
     request.node._run_id = uuid.uuid4()
     request.node._failed_node = node
@@ -272,9 +255,10 @@ def node_output_preserved(node: int, request):
     pass
 
 
-@when(parsers.parse('I POST /api/runs/{run_id}/resume with run_context {ctx}'))
+@when(parsers.parse("I POST /api/runs/{run_id}/resume with run_context {ctx}"))
 def resume_with_context(run_id, ctx, client, request):
     import json
+
     context = json.loads(ctx) if isinstance(ctx, str) else ctx
     with (
         patch("modulo.core.pipeline_engine.run_crud.set_rls_org"),

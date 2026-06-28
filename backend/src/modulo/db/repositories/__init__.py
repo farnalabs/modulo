@@ -46,6 +46,7 @@ class RepositoryHub:
     ) -> None:
         if db_type is None:
             from modulo.settings import get_settings
+
             db_type = get_settings().modulo_db.lower()
         self._repo: BaseRepository = _build_repository(db_type, session_factory)
         self._lock_service: BaseLockService = _build_lock_service(db_type)

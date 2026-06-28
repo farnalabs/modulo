@@ -8,8 +8,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy import case, func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from modulo.api.dependencies import get_db_session
-from modulo.auth.api_key import revoke_api_key
+from modulo.api.dependencies import get_db_session, require_feature
 from modulo.auth.dependencies import get_current_user
 from modulo.auth.jwt import AuthenticatedPrincipal
 from modulo.auth.passwords import hash_password, validate_password_strength
@@ -34,7 +33,6 @@ from modulo.db.crud.team_membership import list_memberships_for_user, remove_tea
 from modulo.db.crud.token_family import blacklist_family, list_families_for_user
 from modulo.db.crud.user import create_user, get_user_by_email, list_users_paginated
 from modulo.db.crud.user import update_user as crud_update_user
-from modulo.db.models.api_key import OrgApiKey
 from modulo.db.models.eval_definition import EvalDefinition
 from modulo.db.models.eval_result import EvalResult
 from modulo.db.models.pipeline import Pipeline
@@ -377,7 +375,12 @@ class AdminCreateTeamResponse(BaseModel):
     created_at: str
 
 
-@router.post("/teams", response_model=AdminCreateTeamResponse, status_code=status.HTTP_201_CREATED)
+@router.post(
+    "/teams",
+    response_model=AdminCreateTeamResponse,
+    status_code=status.HTTP_201_CREATED,
+    dependencies=[require_feature("team_rbac")],
+)
 async def admin_create_team(
     body: AdminCreateTeamRequest,
     current_user: AuthenticatedPrincipal = Depends(get_current_user),
@@ -639,18 +642,6 @@ async def admin_deactivate_user(
         for family in families:
             await blacklist_family(session, family.family_id)
 
-        api_keys = (
-            await session.execute(
-                select(OrgApiKey).where(
-                    OrgApiKey.created_by == user_id,
-                    OrgApiKey.organisation_id == current_user.organisation_id,
-                    OrgApiKey.revoked_at.is_(None),
-                )
-            )
-        ).scalars().all()
-        for key in api_keys:
-            await revoke_api_key(session, key.id, current_user.organisation_id)
-
         memberships = await list_memberships_for_user(session, user_id)
         for membership in memberships:
             await remove_team_member(session, membership.id)
@@ -717,7 +708,7 @@ class AdminTeamListResponse(BaseModel):
     page_size: int
 
 
-@router.get("/teams", response_model=AdminTeamListResponse)
+@router.get("/teams", response_model=AdminTeamListResponse, dependencies=[require_feature("team_rbac")])
 async def admin_list_teams(
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
@@ -771,7 +762,7 @@ async def admin_list_teams(
     )
 
 
-@router.put("/teams/{team_id}", response_model=AdminTeamItem)
+@router.put("/teams/{team_id}", response_model=AdminTeamItem, dependencies=[require_feature("team_rbac")])
 async def admin_update_team(
     team_id: uuid.UUID,
     body: AdminUpdateTeamRequest,
@@ -806,7 +797,7 @@ async def admin_update_team(
     )
 
 
-@router.delete("/teams/{team_id}", status_code=status.HTTP_204_NO_CONTENT)
+@router.delete("/teams/{team_id}", status_code=status.HTTP_204_NO_CONTENT, dependencies=[require_feature("team_rbac")])
 async def admin_delete_team(
     team_id: uuid.UUID,
     current_user: AuthenticatedPrincipal = Depends(get_current_user),
@@ -1351,9 +1342,7 @@ class RegressionAlertsResponse(BaseModel):
 @router.get("/evals/regressions", response_model=RegressionAlertsResponse)
 async def eval_regressions(
     days: int = Query(default=7, ge=1, le=90, description="Lookback period in days"),
-    threshold: float = Query(
-        default=0.15, ge=0.0, le=1.0, description="Minimum drop fraction to trigger an alert"
-    ),
+    threshold: float = Query(default=0.15, ge=0.0, le=1.0, description="Minimum drop fraction to trigger an alert"),
     current_user: AuthenticatedPrincipal = Depends(get_current_user),
     session: AsyncSession = Depends(get_db_session),
 ) -> RegressionAlertsResponse:
@@ -1573,9 +1562,7 @@ async def admin_create_publisher(
                 detail="A publisher with this name already exists",
             )
 
-        existing_key = await get_publisher_by_key(
-            session, current_user.organisation_id, body.public_key_hex
-        )
+        existing_key = await get_publisher_by_key(session, current_user.organisation_id, body.public_key_hex)
         if existing_key is not None:
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
@@ -1642,9 +1629,7 @@ async def admin_update_publisher(
         if "public_key_hex" in updates:
             key_val = updates["public_key_hex"]
             assert isinstance(key_val, str)
-            existing_key = await get_publisher_by_key(
-                session, current_user.organisation_id, key_val
-            )
+            existing_key = await get_publisher_by_key(session, current_user.organisation_id, key_val)
             if existing_key is not None and existing_key.id != publisher_id:
                 raise HTTPException(
                     status_code=status.HTTP_409_CONFLICT,
