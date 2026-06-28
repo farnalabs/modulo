@@ -76,13 +76,8 @@ jobs:
         run: npm run build
       - name: Start backend
         working-directory: backend
-        shell: powershell
-        run: |
-          $log = "C:\actions-runner\_work\modulo\modulo\backend.log"
-          $p = Start-Process -NoNewWindow -RedirectStandardOutput $log -PassThru -FilePath "uv" -ArgumentList "run --no-sync uvicorn modulo.api.main:app --host 0.0.0.0 --port 8000"
-          Write-Host "Backend PID: $($p.Id)"
-          Start-Sleep -Seconds 3
-          Get-Content $log -TotalCount 20
+        shell: cmd
+        run: start /b uv run --no-sync uvicorn modulo.api.main:app --host 0.0.0.0 --port 8000 > C:\actions-runner\_work\modulo\modulo\backend.log 2>&1
         env:
           DATABASE_URL: "postgresql+asyncpg://modulo:modulo@localhost:5432/modulo"
           SECRET_KEY: "ci-secret-key-for-github-actions-testing-only"
