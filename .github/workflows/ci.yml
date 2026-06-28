@@ -53,6 +53,22 @@ jobs:
       - uses: actions/checkout@v7
         with:
           fetch-depth: 0
-      - uses: gitleaks/gitleaks-action@v3
+      - name: Install gitleaks
+        shell: powershell
+        run: |
+          $release = Invoke-RestMethod -Uri "https://api.github.com/repos/gitleaks/gitleaks/releases/latest"
+          $asset = $release.assets | Where-Object { $_.name -like "*windows*amd64*" -or $_.name -like "*windows*x86_64*" }
+          if (-not $asset) { $asset = $release.assets | Where-Object { $_.name -like "*windows*" } | Select-Object -First 1 }
+          $zip = "$env:TEMP\gitleaks.zip"
+          Invoke-WebRequest -Uri $asset.browser_download_url -OutFile $zip
+          Expand-Archive -Path $zip -DestinationPath "$env:TEMP\gitleaks" -Force
+          $dir = "$env:TEMP\gitleaks"
+          if (-not (Test-Path "$dir\gitleaks.exe")) {
+            $dir = (Get-ChildItem -Path "$env:TEMP\gitleaks" -Recurse -Filter "gitleaks.exe" | Select-Object -First 1).DirectoryName
+          }
+          echo "$dir" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+      - name: Run gitleaks
+        shell: powershell
+        run: gitleaks detect --no-git --source . --verbose
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

@@ -11,29 +11,6 @@ concurrency:
 jobs:
   bdd:
     runs-on: self-hosted
-    services:
-      postgres:
-        image: postgres:16-alpine
-        env:
-          POSTGRES_USER: modulo
-          POSTGRES_PASSWORD: modulo
-          POSTGRES_DB: modulo
-        ports:
-          - 5432:5432
-        options: >-
-          --health-cmd pg_isready
-          --health-interval 5s
-          --health-timeout 5s
-          --health-retries 5
-      redis:
-        image: redis:7-alpine
-        ports:
-          - 6379:6379
-        options: >-
-          --health-cmd "redis-cli ping"
-          --health-interval 5s
-          --health-timeout 5s
-          --health-retries 5
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v7
@@ -43,6 +20,35 @@ jobs:
         uses: actions/setup-node@v6
         with:
           node-version: "20"
+      - name: Start Postgres
+        shell: powershell
+        run: |
+          docker rm -f modulo-bdd-pg 2>$null
+          docker run -d --name modulo-bdd-pg `
+            -e POSTGRES_USER=modulo `
+            -e POSTGRES_PASSWORD=modulo `
+            -e POSTGRES_DB=modulo `
+            -p 5432:5432 `
+            postgres:16-alpine
+          Write-Host "Waiting for Postgres..."
+          for ($i=0; $i -lt 60; $i++) {
+            $ok = docker exec modulo-bdd-pg pg_isready -U modulo 2>$null
+            if ($?) { Write-Host "Postgres ready"; break }
+            Start-Sleep -Seconds 2
+          }
+      - name: Start Redis
+        shell: powershell
+        run: |
+          docker rm -f modulo-bdd-redis 2>$null
+          docker run -d --name modulo-bdd-redis `
+            -p 6379:6379 `
+            redis:7-alpine
+          Write-Host "Waiting for Redis..."
+          for ($i=0; $i -lt 30; $i++) {
+            $ok = docker exec modulo-bdd-redis redis-cli ping 2>$null
+            if ($?) { Write-Host "Redis ready"; break }
+            Start-Sleep -Seconds 2
+          }
       - name: Install backend deps
         working-directory: backend
         run: uv sync --frozen
@@ -50,10 +56,9 @@ jobs:
         working-directory: backend
         run: uv run --no-sync playwright install --with-deps chromium
       - name: Pre-create alembic_version table
-        shell: bash
+        shell: powershell
         run: |
-          PGPASSWORD=modulo psql -h localhost -U modulo -d modulo -c \
-            "CREATE TABLE IF NOT EXISTS alembic_version (version_num VARCHAR(255) NOT NULL PRIMARY KEY);"
+          docker exec modulo-bdd-pg psql -U modulo -d modulo -c "CREATE TABLE IF NOT EXISTS alembic_version (version_num VARCHAR(255) NOT NULL PRIMARY KEY);"
       - name: Run migrations
         working-directory: backend
         run: uv run --no-sync alembic upgrade heads
@@ -69,12 +74,13 @@ jobs:
         run: npm run build
       - name: Start backend
         working-directory: backend
+        shell: powershell
         run: |
-          uv run --no-sync uvicorn modulo.api.main:app --host 0.0.0.0 --port 8000 > /tmp/backend.log 2>&1 &
-          echo "Backend PID: $!"
-          sleep 3
-          head -20 /tmp/backend.log
-        shell: bash
+          $log = "C:\actions-runner\_work\modulo\modulo\backend.log"
+          $p = Start-Process -NoNewWindow -RedirectStandardOutput $log -PassThru -FilePath "uv" -ArgumentList "run --no-sync uvicorn modulo.api.main:app --host 0.0.0.0 --port 8000"
+          Write-Host "Backend PID: $($p.Id)"
+          Start-Sleep -Seconds 3
+          Get-Content $log -TotalCount 20
         env:
           DATABASE_URL: "postgresql+asyncpg://modulo:modulo@localhost:5432/modulo"
           SECRET_KEY: "ci-secret-key-for-github-actions-testing-only"
@@ -83,38 +89,39 @@ jobs:
           MODULO_USERS: "admin:admin"
           CORS_ORIGINS: "http://localhost:4173"
           MODULO_PLUGIN_DISCOVERY: "false"
-          REDIS_URL: "redis://redis:6379/0"
+          REDIS_URL: "redis://localhost:6379/0"
       - name: Serve frontend
         working-directory: frontend
-        shell: bash
-        run: npm run preview -- --port 4173 &
+        shell: powershell
+        run: Start-Process -NoNewWindow -FilePath "cmd.exe" -ArgumentList "/c npm run preview -- --port 4173"
       - name: Wait for healthz
-        shell: bash
+        shell: powershell
         run: |
-          for i in $(seq 1 60); do
-            if curl -sf http://localhost:8000/healthz > /dev/null 2>&1; then
-              echo "Backend healthy after ${i}s"
-              exit 0
-            fi
-            sleep 2
-          done
-          echo "=== Backend log ==="
-          head -100 /tmp/backend.log || echo "(no backend log)"
-          echo "=== Process check ==="
-          ps aux | grep uvicorn || echo "(no uvicorn process)"
+          for ($i=0; $i -lt 60; $i++) {
+            try {
+              $r = Invoke-WebRequest -Uri "http://localhost:8000/healthz" -UseBasicParsing -TimeoutSec 2
+              if ($r.StatusCode -eq 200) { Write-Host "Backend healthy after ${i}s"; exit 0 }
+            } catch {}
+            Start-Sleep -Seconds 2
+          }
+          Write-Host "=== Backend log ==="
+          Get-Content "C:\actions-runner\_work\modulo\modulo\backend.log" -TotalCount 100 -ErrorAction SilentlyContinue
+          Write-Host "=== Process check ==="
+          Get-Process -Name "uv" -ErrorAction SilentlyContinue | Format-Table Id, ProcessName
           exit 1
       - name: Wait for frontend
-        shell: bash
+        shell: powershell
         run: npx wait-on http://localhost:4173 --timeout 30000
       - name: Run BDD tests
         working-directory: backend
-        shell: bash
-        run: |
-          uv run --no-sync pytest tests/bdd/ \
-            -m e2e \
-            --base-url http://localhost:4173 \
-            -q
+        run: uv run --no-sync pytest tests/bdd/ -m e2e --base-url http://localhost:4173 -q
         env:
           DATABASE_URL: "postgresql+asyncpg://modulo:modulo@localhost:5432/modulo"
           SECRET_KEY: "ci-secret-key-for-github-actions-testing-only"
           FERNET_KEY: "vK-xU7GqHLflg_GqzJ1FqWI7pHWoHSIyukf4wx-tMHI="
+      - name: Cleanup containers
+        if: always()
+        shell: powershell
+        run: |
+          docker rm -f modulo-bdd-pg 2>$null
+          docker rm -f modulo-bdd-redis 2>$null
