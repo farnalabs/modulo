@@ -16,7 +16,7 @@ case "$DATABASE_URL" in
 esac
 
 echo "=== Running DB migrations ==="
-uv run alembic upgrade head || echo "WARNING: Migration failed — continuing anyway"
+.venv/bin/alembic upgrade head || echo "WARNING: Migration failed — continuing anyway"
 
 echo "=== Starting uvicorn ==="
-exec uv run uvicorn modulo.api.main:app --host 0.0.0.0 --port 8000 --proxy-headers
+exec .venv/bin/uvicorn modulo.api.main:app --host 0.0.0.0 --port 8000 --proxy-headers
