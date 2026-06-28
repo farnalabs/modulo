@@ -15,32 +15,74 @@
 
     <template v-else-if="data">
       <div class="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-        <div class="rounded-lg border bg-card p-4 text-card-foreground shadow-sm">
-          <p class="text-sm font-medium text-muted-foreground">Total Runs</p>
-          <p class="mt-1 text-3xl font-bold">{{ data.total_runs }}</p>
+        <div class="card card-hover p-4">
+          <div class="flex items-center gap-3">
+            <div class="flex h-9 w-9 items-center justify-center rounded-lg bg-primary/10 text-primary">
+              <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="20" x2="12" y2="10"/><line x1="18" y1="20" x2="18" y2="4"/><line x1="6" y1="20" x2="6" y2="16"/></svg>
+            </div>
+            <div class="min-w-0">
+              <p class="text-sm font-medium text-muted-foreground">Total Runs</p>
+              <p class="text-2xl font-bold stat-card-number">{{ data.total_runs }}</p>
+            </div>
+          </div>
         </div>
-        <div class="rounded-lg border bg-card p-4 text-card-foreground shadow-sm">
-          <p class="text-sm font-medium text-muted-foreground">Active Pipelines</p>
-          <p class="mt-1 text-3xl font-bold">{{ data.active_pipelines }}</p>
+        <div class="card card-hover p-4">
+          <div class="flex items-center gap-3">
+            <div class="flex h-9 w-9 items-center justify-center rounded-lg bg-teal-500/10 text-teal-500">
+              <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg>
+            </div>
+            <div class="min-w-0">
+              <p class="text-sm font-medium text-muted-foreground">Active Pipelines</p>
+              <p class="text-2xl font-bold stat-card-number">{{ data.active_pipelines }}</p>
+            </div>
+          </div>
         </div>
-        <div class="rounded-lg border bg-card p-4 text-card-foreground shadow-sm">
-          <p class="text-sm font-medium text-muted-foreground">Running</p>
-          <p class="mt-1 text-3xl font-bold text-success">{{ data.run_counts_by_status.running }}</p>
+        <div class="card card-hover p-4">
+          <div class="flex items-center gap-3">
+            <div class="flex h-9 w-9 items-center justify-center rounded-lg bg-success/10 text-success">
+              <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="23 6 13.5 15.5 8.5 10.5 1 18"/><polyline points="17 6 23 6 23 12"/></svg>
+            </div>
+            <div class="min-w-0">
+              <p class="text-sm font-medium text-muted-foreground">Running</p>
+              <p class="text-2xl font-bold text-success">{{ data.run_counts_by_status.running }}</p>
+            </div>
+          </div>
         </div>
-        <div class="rounded-lg border bg-card p-4 text-card-foreground shadow-sm">
-          <p class="text-sm font-medium text-muted-foreground">Awaiting Human</p>
-          <p class="mt-1 text-3xl font-bold text-warning">{{ data.run_counts_by_status.awaiting_human }}</p>
+        <div class="card card-hover p-4">
+          <div class="flex items-center gap-3">
+            <div class="flex h-9 w-9 items-center justify-center rounded-lg bg-warning/10 text-warning">
+              <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
+            </div>
+            <div class="min-w-0">
+              <p class="text-sm font-medium text-muted-foreground">Awaiting Human</p>
+              <p class="text-2xl font-bold text-warning">{{ data.run_counts_by_status.awaiting_human }}</p>
+            </div>
+          </div>
         </div>
       </div>
 
       <div class="grid gap-4 sm:grid-cols-2">
-        <div class="rounded-lg border bg-card p-4 text-card-foreground shadow-sm">
-          <p class="text-sm font-medium text-muted-foreground">Failed</p>
-          <p class="mt-1 text-3xl font-bold text-destructive">{{ data.run_counts_by_status.failed }}</p>
+        <div class="card card-hover p-4">
+          <div class="flex items-center gap-3">
+            <div class="flex h-9 w-9 items-center justify-center rounded-lg bg-destructive/10 text-destructive">
+              <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="15" y1="9" x2="9" y2="15"/><line x1="9" y1="9" x2="15" y2="15"/></svg>
+            </div>
+            <div class="min-w-0">
+              <p class="text-sm font-medium text-muted-foreground">Failed</p>
+              <p class="text-2xl font-bold text-destructive">{{ data.run_counts_by_status.failed }}</p>
+            </div>
+          </div>
         </div>
-        <div class="rounded-lg border bg-card p-4 text-card-foreground shadow-sm">
-          <p class="text-sm font-medium text-muted-foreground">Idle</p>
-          <p class="mt-1 text-3xl font-bold text-muted-foreground">{{ data.run_counts_by_status.idle }}</p>
+        <div class="card card-hover p-4">
+          <div class="flex items-center gap-3">
+            <div class="flex h-9 w-9 items-center justify-center rounded-lg bg-muted text-muted-foreground">
+              <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+            </div>
+            <div class="min-w-0">
+              <p class="text-sm font-medium text-muted-foreground">Idle</p>
+              <p class="text-2xl font-bold">{{ data.run_counts_by_status.idle }}</p>
+            </div>
+          </div>
         </div>
       </div>
     </template>

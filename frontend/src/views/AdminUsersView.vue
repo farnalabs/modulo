@@ -1,31 +1,40 @@
 <template>
-  <div class="p-6 max-w-4xl mx-auto">
-    <h1 class="text-2xl font-bold mb-2">Users</h1>
-    <p class="text-muted-foreground mb-6">Manage user accounts and permissions.</p>
+  <div class="p-6 max-w-4xl mx-auto space-y-6">
+    <div>
+      <h1 class="text-2xl font-bold tracking-tight">Users</h1>
+      <p class="text-muted-foreground mt-1">Manage user accounts and permissions.</p>
+    </div>
 
-    <div class="rounded-lg border">
+    <div class="card overflow-hidden">
       <table class="w-full text-sm">
         <thead>
-          <tr class="border-b bg-muted/50">
-            <th class="text-left px-4 py-3 font-medium">User</th>
-            <th class="text-left px-4 py-3 font-medium">Role</th>
-            <th class="text-left px-4 py-3 font-medium">Status</th>
-            <th class="text-right px-4 py-3 font-medium">Created</th>
+          <tr class="border-b bg-muted/30">
+            <th class="text-left px-4 py-3 font-medium text-muted-foreground">User</th>
+            <th class="text-left px-4 py-3 font-medium text-muted-foreground">Role</th>
+            <th class="text-left px-4 py-3 font-medium text-muted-foreground">Status</th>
+            <th class="text-right px-4 py-3 font-medium text-muted-foreground">Created</th>
           </tr>
         </thead>
         <tbody>
-          <tr class="border-b last:border-0">
+          <tr class="border-b last:border-0 hover:bg-muted/20 transition-colors">
             <td class="px-4 py-3">
               <div class="flex items-center gap-2">
-                <div class="flex h-7 w-7 items-center justify-center rounded-full bg-primary text-xs font-bold text-primary-foreground">
-                  {{ userInitial }}
+                <div class="avatar-ring">
+                  <div class="flex h-7 w-7 items-center justify-center rounded-full bg-gradient-to-br from-primary to-teal-600 text-xs font-bold text-primary-foreground">
+                    {{ userInitial }}
+                  </div>
                 </div>
-                <span>{{ userEmail }}</span>
+                <span class="font-medium">{{ userEmail }}</span>
               </div>
             </td>
-            <td class="px-4 py-3 text-muted-foreground">Admin</td>
             <td class="px-4 py-3">
-              <span class="rounded-full bg-green-500/10 px-2 py-0.5 text-xs font-medium text-green-600 dark:text-green-400">Active</span>
+              <span class="inline-flex items-center rounded-md border border-primary/20 bg-primary/5 px-2 py-0.5 text-xs font-medium text-primary">Admin</span>
+            </td>
+            <td class="px-4 py-3">
+              <span class="inline-flex items-center gap-1.5 rounded-full bg-success/10 px-2.5 py-0.5 text-xs font-medium text-success">
+                <span class="h-1.5 w-1.5 rounded-full bg-success" />
+                Active
+              </span>
             </td>
             <td class="px-4 py-3 text-right text-muted-foreground">—</td>
           </tr>
