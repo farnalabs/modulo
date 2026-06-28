@@ -1,0 +1,7 @@
+# Trivy ignore file
+# Add known acceptable vulnerabilities here.
+# To suppress a CVE, add its ID as a new line.
+# Optionally add an expiry date: CVE-XXXX-XXXX [expiry: YYYY-MM-DD]
+#
+# Example:
+#   CVE-2023-12345 [expiry: 2025-12-31] [reason: Mitigated by network-layer filtering]

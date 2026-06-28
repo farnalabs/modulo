@@ -44,3 +44,45 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       - name: Semgrep full scan
         run: semgrep --config=.semgrep/ .
+
+  container-scan:
+    if: github.event_name == 'schedule'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build backend image
+        run: docker build ./backend -t modulo-backend:${{ github.sha }}
+
+      - name: Build frontend image
+        run: docker build ./frontend -t modulo-frontend:${{ github.sha }}
+
+      - name: Scan backend with Trivy
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          image-ref: modulo-backend:${{ github.sha }}
+          format: sarif
+          output: trivy-backend.sarif
+          severity: CRITICAL,HIGH
+
+      - name: Scan frontend with Trivy
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          image-ref: modulo-frontend:${{ github.sha }}
+          format: sarif
+          output: trivy-frontend.sarif
+          severity: CRITICAL,HIGH
+
+      - name: Upload backend SARIF
+        if: always()
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: trivy-backend.sarif
+          category: backend
+
+      - name: Upload frontend SARIF
+        if: always()
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: trivy-frontend.sarif
+          category: frontend
