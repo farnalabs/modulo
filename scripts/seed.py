@@ -166,10 +166,10 @@ async def seed() -> None:
             schemas = []
             for sname, slug_name, desc, schema_json in schema_defs_data:
                 s = (await session.execute(
-                    select(Schema).where(Schema.organisation_id == org.id, Schema.slug == slug_name)
+                    select(Schema).where(Schema.organisation_id == org.id, Schema.name == sname)
                 )).scalar_one_or_none()
                 if s is None:
-                    s = Schema(organisation_id=org.id, name=sname, slug=slug_name, description=desc, created_by=admin.id)
+                    s = Schema(organisation_id=org.id, name=sname, description=desc, created_by=admin.id)
                     session.add(s)
                     await session.flush()
                     sv = SchemaVersion(organisation_id=org.id, schema_id=s.id, version="1.0", version_number=1, definition_json=schema_json, created_by=admin.id)
