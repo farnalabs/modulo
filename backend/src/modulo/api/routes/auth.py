@@ -87,17 +87,18 @@ async def login(
     ip = _client_ip(request)
     limiter = get_auth_rate_limiter(settings)
 
-    user = await get_user_by_email(session, body.email)
-    if not user or not authenticate_db_user(body.password, user):
-        await limiter.record_failure(ip)
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Incorrect email or password",
-        )
+    async with session.begin():
+        user = await get_user_by_email(session, body.email)
+        if not user or not authenticate_db_user(body.password, user):
+            await limiter.record_failure(ip)
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Incorrect email or password",
+            )
 
-    await limiter.record_success(ip)
-    await update_last_login(session, user.id)
-    family = await create_family(session, user.id, user.organisation_id)
+        await limiter.record_success(ip)
+        await update_last_login(session, user.id)
+        family = await create_family(session, user.id, user.organisation_id)
 
     access_token = create_access_token(
         user.email,
