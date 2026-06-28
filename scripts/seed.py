@@ -484,7 +484,7 @@ async def seed() -> None:
             for i in range(12):
                 er = EvalResult(
                     organisation_id=org.id, eval_id=eval_defs_list[i % 4].id,
-                    run_id=runs_list[i % len(runs_list)].id, passed=i % 3 != 0,
+                    run_id=runs_list[i % len(runs_list)].id if runs_list else None, passed=i % 3 != 0,
                     score=0.75 + (i % 3) * 0.1, detail=f"eval-result-{i}: {'pass' if i % 3 != 0 else 'fail'}",
                     evaluated_at=now - timedelta(hours=i * 6),
                 )
