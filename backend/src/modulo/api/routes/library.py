@@ -75,7 +75,7 @@ class LibraryPrimitiveResponse(BaseModel):
     checksum: str | None
     ed25519_signature: str | None
     verified: bool | None
-    trust_tier: str | None
+    trust_tier: str | None = None
     download_count: int | None
     average_rating: float | None
     review_count: int | None
