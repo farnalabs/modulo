@@ -29,6 +29,7 @@ import AdminCostBreakdownView from '../views/AdminCostBreakdownView.vue'
 import AdminConnectorsView from '../views/AdminConnectorsView.vue'
 import MyProfileView from '../views/MyProfileView.vue'
 import SettingsLicenseView from '../views/SettingsLicenseView.vue'
+import SettingsMcpView from '../views/SettingsMcpView.vue'
 
 const router = createRouter({
   history: createWebHistory(),
@@ -87,6 +88,11 @@ const router = createRouter({
       path: '/settings/license',
       name: 'settings-license',
       component: SettingsLicenseView,
+    },
+    {
+      path: '/settings/mcp',
+      name: 'settings-mcp',
+      component: SettingsMcpView,
     },
     {
       path: '/schemas/infer',

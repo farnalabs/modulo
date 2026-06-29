@@ -1189,5 +1189,51 @@ export interface components {
       prev_cursor: string | null
       total: number
     }
+    McpConfigResponse: {
+      mcp_url: string
+      config_snippet: string
+    }
+    ApiKeyItem: {
+      id: string
+      prefix: string
+      name: string
+      role: string
+      is_active: boolean
+      last_used_at: string | null
+      created_at: string
+    }
+    ApiKeyCreatedResponse: {
+      id: string
+      key_value: string
+      name: string
+      role: string
+    }
+    CreateApiKeyRequest: {
+      name: string
+      role: string
+    }
+    UpdateApiKeyRequest: {
+      name?: string
+      is_active?: boolean
+    }
+    ApiKeyListResponse: {
+      items: components['schemas']['ApiKeyItem'][]
+    }
+    OAuthClientItem: {
+      id: string
+      client_id: string
+      name: string
+      scopes: string[]
+      redirect_uris: string[]
+      created_at: string
+    }
+    OAuthClientListResponse: {
+      items: components['schemas']['OAuthClientItem'][]
+    }
+    CreateOAuthClientRequest: {
+      name: string
+      redirect_uris: string[]
+      scopes: string[]
+    }
   }
 }
