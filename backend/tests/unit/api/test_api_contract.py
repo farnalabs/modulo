@@ -267,6 +267,7 @@ class TestPipelineEndpointSchemas:
         page_result.total = 0
         page_result.page = 1
         page_result.page_size = 20
+        page_result.next_cursor = None
 
         with (
             patch("modulo.api.routes.pipelines.list_pipelines", return_value=page_result),
@@ -432,6 +433,7 @@ class TestConnectorEndpointSchemas:
         page.total = 0
         page.page = 1
         page.page_size = 20
+        page.next_cursor = None
 
         with (
             patch("modulo.api.routes.connectors.list_connector_instances", return_value=page),

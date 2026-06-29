@@ -93,7 +93,7 @@ _CREATE_BODY = {
 
 
 def test_list_connectors_returns_200(client: TestClient) -> None:
-    page_result = MagicMock(items=[_make_connector()], total=1, page=1, page_size=20)
+    page_result = MagicMock(items=[_make_connector()], total=1, page=1, page_size=20, next_cursor=None)
     with (
         patch("modulo.api.routes.connectors.list_connector_instances", return_value=page_result),
         patch("modulo.api.routes.connectors.set_rls_org"),
