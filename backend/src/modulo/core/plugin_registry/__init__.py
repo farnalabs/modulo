@@ -104,20 +104,21 @@ class PluginRegistry:
         description = dist.metadata.get("Summary", "")
         version = dist.metadata.get("Version", "0.0.0")
 
-        try:
-            builder = ep.load()
-        except Exception:
-            logger.exception("Failed to load entry point %s from package %s", ep.name, plugin_id)
-            detail = f"Failed to load entry point {ep.name}"
-            self._health[plugin_id] = PluginHealth(ok=False, detail=detail)
-            return None
-
         manifest = PluginManifest(
             PLUGIN_ID=plugin_id,
             display_name=display_name,
             description=description,
             version=version,
         )
+
+        try:
+            builder = ep.load()
+        except Exception:
+            logger.exception("Failed to load entry point %s from package %s", ep.name, plugin_id)
+            detail = f"Failed to load entry point {ep.name}"
+            self._plugins[plugin_id] = manifest
+            self._health[plugin_id] = PluginHealth(ok=False, detail=detail)
+            return None
 
         if group == "modulo.connectors":
             self._connector_builders[ep.name] = builder
@@ -213,6 +214,8 @@ class PluginRegistry:
         Returns a dict of ``{plugin_id: PluginHealth}``.
         """
         if plugin_id is not None:
+            if plugin_id in self._health:
+                return {plugin_id: self._health[plugin_id]}
             manifest = self._plugins.get(plugin_id)
             if manifest is None:
                 return {plugin_id: PluginHealth(ok=False, detail="Unknown plugin")}
