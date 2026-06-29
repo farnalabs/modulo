@@ -25,6 +25,7 @@
           <input
             v-model="otlpEndpoint"
             type="url"
+            data-testid="settings-observability-otlp-endpoint"
             class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
             placeholder="https://otlp.example.com:4318"
           />
@@ -37,6 +38,7 @@
           <button
             type="button"
             class="rounded-lg bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground hover:bg-primary/90"
+            data-testid="settings-observability-add-header"
             @click="addHeader"
           >
             Add Header
@@ -49,18 +51,22 @@
           <input
             v-model="header.key"
             type="text"
+            data-testid="settings-observability-header-key"
             class="flex-1 rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
             placeholder="Header name"
           />
           <input
             v-model="header.value"
             type="text"
+            data-testid="settings-observability-header-value"
             class="flex-1 rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
             placeholder="Header value"
           />
           <button
             type="button"
             class="rounded p-1 text-destructive hover:bg-destructive/10"
+            data-testid="settings-observability-remove-header"
+            :aria-label="'Remove header'"
             title="Remove header"
             @click="removeHeader(index)"
           >
@@ -79,6 +85,7 @@
             v-model.number="exportIntervalSeconds"
             type="number"
             min="1"
+            data-testid="settings-observability-export-interval"
             class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
           />
           <p class="mt-1 text-xs text-muted-foreground">How frequently telemetry data is exported. Minimum 1 second.</p>
@@ -92,6 +99,8 @@
             <button
               type="button"
               class="relative inline-flex h-6 w-11 cursor-pointer items-center"
+              data-testid="settings-observability-langsmith-toggle"
+              :aria-label="'Toggle LangSmith'"
               @click="langsmithEnabled = !langsmithEnabled"
             >
               <div
@@ -112,6 +121,7 @@
             <input
               v-model="langsmithApiKey"
               :type="showLangsmithKey ? 'text' : 'password'"
+              data-testid="settings-observability-langsmith-api-key"
               class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
               :placeholder="hasLangsmithKey ? 'Leave blank to keep existing key' : 'Enter LangSmith API key'"
             />
@@ -119,6 +129,7 @@
               <button
                 type="button"
                 class="text-xs text-muted-foreground hover:text-foreground"
+                data-testid="settings-observability-toggle-key-visibility"
                 @click="showLangsmithKey = !showLangsmithKey"
               >
                 {{ showLangsmithKey ? 'Hide' : 'Show' }}
@@ -150,6 +161,7 @@
           type="button"
           :disabled="testing"
           class="rounded-lg border border-input bg-background px-4 py-2 text-sm font-medium hover:bg-accent disabled:opacity-50"
+          data-testid="settings-observability-test-connection"
           @click="testConnection"
         >
           {{ testing ? 'Testing...' : 'Test Connection' }}
@@ -158,6 +170,7 @@
         <button
           type="button"
           class="rounded-lg border border-input bg-background px-4 py-2 text-sm font-medium hover:bg-accent"
+          data-testid="settings-observability-reset"
           @click="resetForm"
         >
           Reset
@@ -166,6 +179,7 @@
           type="submit"
           :disabled="saving"
           class="rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
+          data-testid="settings-observability-save"
         >
           {{ saving ? 'Saving...' : 'Save' }}
         </button>

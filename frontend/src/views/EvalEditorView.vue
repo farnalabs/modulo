@@ -15,6 +15,7 @@
           <label class="mb-1.5 block text-sm font-medium">Pipeline</label>
           <select
             v-model="selectedPipelineId"
+            data-testid="eval-editor-pipeline"
             class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
             @change="onPipelineChange"
           >
@@ -28,6 +29,7 @@
           <select
             v-model="form.node_id"
             :disabled="!selectedPipelineId || nodesLoading"
+            data-testid="eval-editor-node"
             class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50"
           >
             <option value="">All pipeline outputs</option>
@@ -48,6 +50,7 @@
                 <input
                   v-model="form.name"
                   type="text"
+                  data-testid="eval-editor-name"
                   class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                   placeholder="e.g. Response quality check"
                 />
@@ -57,6 +60,7 @@
                 <label class="mb-1 block text-sm font-medium">Eval Type</label>
                 <select
                   v-model="form.eval_type"
+                  data-testid="eval-editor-eval-type"
                   class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                 >
                   <option value="llm_judge">LLM Judge</option>
@@ -71,6 +75,7 @@
                 <textarea
                   v-model="form.config_json"
                   rows="6"
+                  data-testid="eval-editor-config"
                   class="w-full rounded-lg border border-input bg-background px-3 py-2 font-mono text-xs ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                   placeholder='{ "field": "output", "instructions": "..." }'
                 />
@@ -90,6 +95,7 @@
                     min="0"
                     max="1"
                     step="0.05"
+                    data-testid="eval-editor-pass-threshold"
                     class="h-2 w-full cursor-pointer appearance-none rounded-full bg-input accent-primary"
                   />
                   <span class="text-xs text-muted-foreground">1.0</span>
@@ -104,6 +110,7 @@
                       v-model="form.failure_behaviour"
                       type="radio"
                       value="warn"
+                      data-testid="eval-editor-failure-warn"
                       class="accent-primary"
                     />
                     Warn
@@ -113,6 +120,7 @@
                       v-model="form.failure_behaviour"
                       type="radio"
                       value="block"
+                      data-testid="eval-editor-failure-block"
                       class="accent-primary"
                     />
                     Block
@@ -126,6 +134,7 @@
               <div class="flex items-center gap-2 pt-2">
                 <button
                   :disabled="!canSave || saving"
+                  data-testid="eval-editor-save"
                   class="rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
                   @click="saveEval"
                 >
@@ -133,6 +142,7 @@
                 </button>
                 <button
                   v-if="editingEvalId"
+                  data-testid="eval-editor-cancel"
                   class="rounded-lg border border-input bg-background px-4 py-2 text-sm font-medium hover:bg-accent"
                   @click="resetForm"
                 >
@@ -188,6 +198,8 @@
                 </div>
                 <div class="flex shrink-0 items-center gap-1">
                   <button
+                    data-testid="eval-editor-edit"
+                    aria-label="Edit"
                     class="rounded p-1 text-muted-foreground hover:bg-accent"
                     title="Edit"
                     @click="startEdit(ev)"
@@ -198,6 +210,8 @@
                   </button>
                   <button
                     v-if="deletingEvalId !== ev.id"
+                    data-testid="eval-editor-delete"
+                    aria-label="Delete"
                     class="rounded p-1 text-destructive hover:bg-destructive/10"
                     title="Delete"
                     @click="confirmDelete(ev.id)"
@@ -209,12 +223,14 @@
                   <div v-else class="flex items-center gap-1">
                     <button
                       :disabled="deleting"
+                      data-testid="eval-editor-confirm-delete"
                       class="rounded bg-destructive px-2 py-1 text-xs font-medium text-destructive-foreground hover:bg-destructive/90 disabled:opacity-50"
                       @click="deleteEval(ev.id)"
                     >
                       {{ deleting ? '...' : 'Confirm' }}
                     </button>
                     <button
+                      data-testid="eval-editor-cancel-delete"
                       class="rounded px-2 py-1 text-xs font-medium hover:bg-accent"
                       @click="deletingEvalId = null"
                     >

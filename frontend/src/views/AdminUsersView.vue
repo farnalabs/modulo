@@ -97,6 +97,7 @@
       <div v-if="total > pageSize" class="flex justify-center items-center gap-2 py-4 border-t border-border">
         <button
           :disabled="page <= 1"
+          data-testid="admin-users-previous"
           class="px-3 py-1.5 text-sm border border-input bg-background rounded-lg disabled:opacity-30 hover:bg-accent transition-colors"
           @click="page--; loadUsers()"
         >
@@ -107,6 +108,7 @@
         </span>
         <button
           :disabled="page >= Math.ceil(total / pageSize)"
+          data-testid="admin-users-next"
           class="px-3 py-1.5 text-sm border border-input bg-background rounded-lg disabled:opacity-30 hover:bg-accent transition-colors"
           @click="page++; loadUsers()"
         >
@@ -120,19 +122,19 @@
         <h2 class="text-lg font-semibold">Create User</h2>
         <div>
           <label class="block text-sm font-medium mb-1">Email</label>
-          <input v-model="newUser.email" type="email" class="w-full px-3 py-2 border border-input bg-background rounded-lg text-sm" required />
+          <input v-model="newUser.email" data-testid="admin-users-create-email" type="email" class="w-full px-3 py-2 border border-input bg-background rounded-lg text-sm" required />
         </div>
         <div>
           <label class="block text-sm font-medium mb-1">Display Name</label>
-          <input v-model="newUser.display_name" type="text" class="w-full px-3 py-2 border border-input bg-background rounded-lg text-sm" required />
+          <input v-model="newUser.display_name" data-testid="admin-users-create-display-name" type="text" class="w-full px-3 py-2 border border-input bg-background rounded-lg text-sm" required />
         </div>
         <div>
           <label class="block text-sm font-medium mb-1">Password</label>
-          <input v-model="newUser.password" type="password" class="w-full px-3 py-2 border border-input bg-background rounded-lg text-sm" minlength="8" required />
+          <input v-model="newUser.password" data-testid="admin-users-create-password" type="password" class="w-full px-3 py-2 border border-input bg-background rounded-lg text-sm" minlength="8" required />
         </div>
         <div>
           <label class="block text-sm font-medium mb-1">Role</label>
-          <select v-model="newUser.org_role" class="w-full px-3 py-2 border border-input bg-background rounded-lg text-sm">
+          <select v-model="newUser.org_role" data-testid="admin-users-create-role" class="w-full px-3 py-2 border border-input bg-background rounded-lg text-sm">
             <option value="runner">Runner</option>
             <option value="operator">Operator</option>
             <option value="admin">Admin</option>
@@ -141,8 +143,8 @@
         </div>
         <p v-if="createError" class="text-sm text-destructive">{{ createError }}</p>
         <div class="flex justify-end gap-2 pt-2">
-          <button @click="showCreate = false" class="px-4 py-2 border border-input bg-background rounded-lg text-sm">Cancel</button>
-          <button @click="createUser" class="px-4 py-2 bg-primary text-primary-foreground text-sm font-medium rounded-lg">Create</button>
+          <button @click="showCreate = false" data-testid="admin-users-cancel" class="px-4 py-2 border border-input bg-background rounded-lg text-sm">Cancel</button>
+          <button @click="createUser" data-testid="admin-users-create" class="px-4 py-2 bg-primary text-primary-foreground text-sm font-medium rounded-lg">Create</button>
         </div>
       </div>
     </div>

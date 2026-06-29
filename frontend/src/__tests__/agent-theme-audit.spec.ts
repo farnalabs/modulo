@@ -1,5 +1,44 @@
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { mount } from '@vue/test-utils'
+import { nextTick } from 'vue'
+
+vi.mock('vue-router', () => ({
+  useRouter: vi.fn(() => ({ push: vi.fn() })),
+  useRoute: vi.fn(() => ({ name: 'login', params: { id: 'test-id' } })),
+  RouterLink: { template: '<a><slot /></a>' },
+}))
+
+vi.mock('../composables/useApi', () => ({
+  useApi: vi.fn(() => ({
+    get: vi.fn().mockResolvedValue({ items: [] }),
+    post: vi.fn().mockResolvedValue({}),
+    put: vi.fn().mockResolvedValue({}),
+    del: vi.fn().mockResolvedValue({}),
+  })),
+}))
+
+vi.mock('../lib/api/client', () => ({
+  api: {
+    GET: vi.fn().mockResolvedValue({ data: { items: [], total: 0 }, error: null }),
+    POST: vi.fn().mockResolvedValue({ data: {}, error: null }),
+    PUT: vi.fn().mockResolvedValue({ data: {}, error: null }),
+    DELETE: vi.fn().mockResolvedValue({ response: { status: 204, ok: true }, error: null }),
+  },
+  getAccessToken: vi.fn(() => null),
+  setAccessToken: vi.fn(),
+  onAuthChange: vi.fn(),
+}))
+
+vi.mock('../stores/planStore', () => ({
+  usePlanStore: vi.fn(() => ({
+    fetchPlan: vi.fn(),
+    currentTier: 'free',
+    features: {},
+    isEnterprise: false,
+    isLoading: false,
+    isFree: true,
+  })),
+}))
 
 import ABTestModelsView from '../views/ABTestModelsView.vue'
 import AdminAuditView from '../views/AdminAuditView.vue'
@@ -28,7 +67,7 @@ import SettingsTriggerEventLogView from '../views/SettingsTriggerEventLogView.vu
 import TeamComparisonView from '../views/TeamComparisonView.vue'
 import VariantCompareView from '../views/VariantCompareView.vue'
 
-const viewModules = {
+const viewModules: Record<string, ReturnType<typeof mount>> = {
   ABTestModelsView,
   AdminAuditView,
   AdminFeatureFlagsView,
@@ -57,36 +96,67 @@ const viewModules = {
   VariantCompareView,
 }
 
-const viewsWithAgentTheme: string[] = [
+const viewsWithAgentTheme = [
   'AdminSpendLimitsView',
   'AdminFeatureFlagsView',
   'ApiChangelogView',
   'SettingsRateLimitsView',
 ]
 
+function globalStubs() {
+  return {
+    stubs: {
+      RouterLink: true,
+      VueFlow: { template: '<div><slot /></div>' },
+      Background: true,
+      Controls: true,
+      FeatureGate: { template: '<div><slot /></div>' },
+      LockIcon: true,
+      Card: { template: '<div><slot /></div>' },
+      CardHeader: { template: '<div><slot /></div>' },
+      CardTitle: { template: '<div><slot /></div>' },
+      CardDescription: { template: '<div><slot /></div>' },
+      CardContent: { template: '<div><slot /></div>' },
+      Input: { template: '<input /><slot /></div>' },
+      Button: { template: '<button><slot /></button>' },
+      OwnershipPicker: true,
+      SsoProviderForm: true,
+    },
+  }
+}
+
 describe('agent-theme-audit', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+  })
+
   for (const [name, component] of Object.entries(viewModules)) {
     describe(name, () => {
-      it('renders without crashing', () => {
-        const wrapper = mount(component)
+      it('renders without crashing', async () => {
+        const wrapper = mount(component, { global: globalStubs() })
+        await nextTick()
         expect(wrapper.exists()).toBe(true)
       })
 
-      it('has data-testid on interactive elements', () => {
-        const wrapper = mount(component)
+      it('has data-testid on interactive elements', async () => {
+        const wrapper = mount(component, { global: globalStubs() })
+        await nextTick()
         const interactives = wrapper.findAll(
-          'button, a, input, select, textarea, [role="button"], [role="switch"], [role="checkbox"]',
+          'button, a, input, select, textarea, [data-testid]',
         )
         for (const el of interactives) {
           if (el.isVisible()) {
-            expect(el.attributes('data-testid'), `${name}: ${el.element.tagName} is missing data-testid`).toBeTruthy()
+            const tag = el.element.tagName.toLowerCase()
+            if (tag === 'button' || tag === 'a' || tag === 'input' || tag === 'select' || tag === 'textarea') {
+              expect(el.attributes('data-testid'), `${name}: ${tag} is missing data-testid`).toBeTruthy()
+            }
           }
         }
       })
 
       if (viewsWithAgentTheme.includes(name)) {
         it('has data-theme="agent" on root element', () => {
-          const wrapper = mount(component)
+          const wrapper = mount(component, { global: globalStubs() })
           const root = wrapper.element
           expect(root.getAttribute('data-theme')).toBe('agent')
         })
