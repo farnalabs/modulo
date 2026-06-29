@@ -14,7 +14,10 @@ target_metadata = Base.metadata
 
 # Module-level Alembic setup — only safe when context is properly configured
 # (i.e. when env.py is executed via command.upgrade, not imported as a module).
-config = context.config  # type: ignore[has-type]
+try:
+    config = context.config  # type: ignore[has-type]
+except AttributeError:
+    config = None
 if config is not None:
     if config.config_file_name is not None:
         fileConfig(config.config_file_name)
