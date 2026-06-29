@@ -22,6 +22,7 @@
         <SidebarLink to="/settings/sso" icon="Shield" label="SSO" />
         <SidebarLink to="/settings/rate-limits" icon="Gauge" label="Rate Limits" />
         <SidebarLink to="/settings/runtime-config" icon="Settings" label="Runtime Config" />
+        <SidebarLink to="/settings/license" icon="KeyRound" label="License" />
         <SidebarLink to="/schemas/infer" icon="Database" label="Schema Inference" />
 
         <div class="sidebar-section-header">Admin</div>
@@ -49,7 +50,20 @@
           >
             {{ userEmail }}
           </router-link>
-          <span class="badge-plan shrink-0">Free</span>
+          <router-link
+            to="/settings/license"
+            class="shrink-0"
+            :title="planStore.isEnterprise && planStore.expiresAt ? 'Expires: ' + new Date(planStore.expiresAt).toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' }) : undefined"
+          >
+            <span
+              v-if="planStore.currentTier === 'enterprise'"
+              class="badge-plan bg-primary/10 text-primary font-medium"
+            >Enterprise</span>
+            <span
+              v-else
+              class="badge-plan"
+            >Free</span>
+          </router-link>
         </div>
 
         <div class="flex items-center justify-between">
@@ -69,46 +83,43 @@
       </div>
     </aside>
 
-    <!-- Mobile menu button -->
-    <button
-      @click="mobileOpen = !mobileOpen"
-      class="md:hidden fixed top-4 left-4 z-50 rounded-md bg-background border p-2 text-muted-foreground hover:text-foreground"
-      aria-label="Toggle navigation"
-    >
-      <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-        <line x1="3" y1="6" x2="21" y2="6"/>
-        <line x1="3" y1="12" x2="21" y2="12"/>
-        <line x1="3" y1="18" x2="21" y2="18"/>
-      </svg>
-    </button>
+    <!-- Mobile header -->
+    <header class="md:hidden fixed top-0 left-0 right-0 z-50 flex items-center justify-between border-b bg-background px-4 h-14">
+      <button
+        @click="mobileOpen = !mobileOpen"
+        class="rounded-md p-2 text-muted-foreground hover:text-foreground hover:bg-muted transition-colors"
+        :aria-label="mobileOpen ? 'Close navigation' : 'Open navigation'"
+      >
+        <svg v-if="!mobileOpen" xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <line x1="3" y1="6" x2="21" y2="6"/>
+          <line x1="3" y1="12" x2="21" y2="12"/>
+          <line x1="3" y1="18" x2="21" y2="18"/>
+        </svg>
+        <svg v-else xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <line x1="18" y1="6" x2="6" y2="18"/>
+          <line x1="6" y1="6" x2="18" y2="18"/>
+        </svg>
+      </button>
+      <div class="flex items-center gap-2.5">
+        <div class="flex items-center justify-center rounded-lg bg-gradient-to-br from-teal-500/20 to-transparent p-1.5">
+          <LogoMark :size="24" transparent />
+        </div>
+        <h2 class="text-lg font-bold tracking-tight">Modulo</h2>
+      </div>
+    </header>
 
     <!-- Mobile overlay -->
     <div
       v-if="mobileOpen"
-      class="md:hidden fixed inset-0 z-40 bg-black/50"
+      class="md:hidden fixed inset-0 z-30 bg-black/50"
       @click="mobileOpen = false"
     />
 
     <!-- Mobile sidebar -->
     <aside
-      class="md:hidden fixed top-0 left-0 z-50 h-full w-64 border-r bg-background p-4 flex flex-col transition-transform"
+      class="md:hidden fixed top-14 left-0 z-40 h-[calc(100vh-3.5rem)] w-64 border-r bg-background p-4 flex flex-col transition-transform"
       :class="mobileOpen ? 'translate-x-0' : '-translate-x-full'"
     >
-      <div class="mb-6 flex items-center justify-between">
-        <div class="flex items-center gap-2.5 pl-1">
-          <div class="flex items-center justify-center rounded-lg bg-gradient-to-br from-teal-500/20 to-transparent p-1.5">
-            <LogoMark :size="24" transparent />
-          </div>
-          <h2 class="text-lg font-bold tracking-tight">Modulo</h2>
-        </div>
-        <button @click="mobileOpen = false" class="text-muted-foreground hover:text-foreground" aria-label="Close navigation">
-          <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-            <line x1="18" y1="6" x2="6" y2="18"/>
-            <line x1="6" y1="6" x2="18" y2="18"/>
-          </svg>
-        </button>
-      </div>
-
       <nav class="flex-1 space-y-0.5">
         <SidebarLink to="/" icon="LayoutDashboard" label="Dashboard" @click="mobileOpen = false" />
         <SidebarLink to="/library" icon="BookOpen" label="Library" @click="mobileOpen = false" />
@@ -122,6 +133,7 @@
         <SidebarLink to="/settings/sso" icon="Shield" label="SSO" @click="mobileOpen = false" />
         <SidebarLink to="/settings/rate-limits" icon="Gauge" label="Rate Limits" @click="mobileOpen = false" />
         <SidebarLink to="/settings/runtime-config" icon="Settings" label="Runtime Config" @click="mobileOpen = false" />
+        <SidebarLink to="/settings/license" icon="KeyRound" label="License" @click="mobileOpen = false" />
         <SidebarLink to="/schemas/infer" icon="Database" label="Schema Inference" @click="mobileOpen = false" />
 
         <div class="sidebar-section-header">Admin</div>
@@ -149,7 +161,20 @@
           >
             {{ userEmail }}
           </router-link>
-          <span class="badge-plan shrink-0">Free</span>
+          <router-link
+            to="/settings/license"
+            class="shrink-0"
+            :title="planStore.isEnterprise && planStore.expiresAt ? 'Expires: ' + new Date(planStore.expiresAt).toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' }) : undefined"
+          >
+            <span
+              v-if="planStore.currentTier === 'enterprise'"
+              class="badge-plan bg-primary/10 text-primary font-medium"
+            >Enterprise</span>
+            <span
+              v-else
+              class="badge-plan"
+            >Free</span>
+          </router-link>
         </div>
 
         <div class="flex items-center justify-between">
@@ -169,7 +194,7 @@
       </div>
     </aside>
 
-    <main class="flex-1 overflow-auto bg-background">
+    <main class="flex-1 overflow-auto bg-background pt-14 md:pt-0">
       <router-view v-slot="{ Component }">
         <transition name="page" mode="out-in">
           <component :is="Component" />
@@ -201,6 +226,7 @@ const icons: Record<string, string> = {
   GitFork: '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="18" r="3"/><circle cx="6" cy="6" r="3"/><circle cx="18" cy="6" r="3"/><path d="M18 9v1a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2V9"/><path d="M12 12v3"/></svg>',
   Database: '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3"/><path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"/></svg>',
   MessageSquare: '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>',
+  KeyRound: '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2.586 17.414A2 2 0 0 0 2 18.828V21a1 1 0 0 0 1 1h3a1 1 0 0 0 1-1v-1a1 1 0 0 1 1-1h1a1 1 0 0 0 1-1v-1a1 1 0 0 1 1-1h.172a2 2 0 0 0 1.414-.586l.814-.814a6.5 6.5 0 1 0-4-4z"/><circle cx="16.5" cy="7.5" r=".5" fill="currentColor"/></svg>',
 }
 
 export const SidebarLink = defineComponent({
@@ -219,9 +245,12 @@ export const SidebarLink = defineComponent({
 </script>
 
 <script setup lang="ts">
-import { ref } from 'vue'
+import { ref, onMounted } from 'vue'
 import { getAccessToken, clearAccessToken } from '../lib/api/client'
+import { usePlanStore } from '../stores/planStore'
 import LogoMark from './LogoMark.vue'
+
+const planStore = usePlanStore()
 
 const mobileOpen = ref(false)
 
@@ -259,5 +288,9 @@ const userInitial = computed(() => {
   const email = userEmail.value
   if (!email) return '?'
   return email.charAt(0).toUpperCase()
+})
+
+onMounted(() => {
+  planStore.fetchPlan()
 })
 </script>

@@ -81,4 +81,24 @@ describe('usePlanStore', () => {
     expect(store.error).toBe('Request failed')
     expect(store.isLoading).toBe(false)
   })
+
+  it('fetchPlan populates license info from license endpoint', async () => {
+    const { api } = await import('../lib/api/client')
+    ;(api.GET as any).mockImplementation((path: string) => {
+      if (path === '/api/v1/admin/license') {
+        return Promise.resolve({
+          data: { has_license: true, tier: 'enterprise', features: [], expires_at: '2026-12-31T23:59:59Z', org_id: 'Acme Corp' },
+          error: undefined,
+        })
+      }
+      return Promise.resolve({ data: mockFlagsResponse, error: null })
+    })
+
+    const store = usePlanStore()
+    await store.fetchPlan()
+
+    expect(store.expiresAt).toBe('2026-12-31T23:59:59Z')
+    expect(store.orgName).toBe('Acme Corp')
+    expect(store.currentTier).toBe('enterprise')
+  })
 })

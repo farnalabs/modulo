@@ -28,6 +28,7 @@ import AdminSpendLimitsView from '../views/AdminSpendLimitsView.vue'
 import AdminCostBreakdownView from '../views/AdminCostBreakdownView.vue'
 import AdminConnectorsView from '../views/AdminConnectorsView.vue'
 import MyProfileView from '../views/MyProfileView.vue'
+import SettingsLicenseView from '../views/SettingsLicenseView.vue'
 
 const router = createRouter({
   history: createWebHistory(),
@@ -81,6 +82,11 @@ const router = createRouter({
       path: '/settings/runtime-config',
       name: 'settings-runtime-config',
       component: SettingsRuntimeConfigView,
+    },
+    {
+      path: '/settings/license',
+      name: 'settings-license',
+      component: SettingsLicenseView,
     },
     {
       path: '/schemas/infer',
