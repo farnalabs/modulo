@@ -49,6 +49,11 @@ _KNOWN_FLAGS: list[FeatureFlag] = [
         description="Browse and import community-contributed pipeline primitives",
         tier="free",
     ),
+    FeatureFlag(
+        name="saved_views",
+        description="Persistent saved views for run and pipeline lists",
+        tier="free",
+    ),
     # ── Enterprise tier ────────────────────────────────────────────────
     FeatureFlag(
         name="sso",

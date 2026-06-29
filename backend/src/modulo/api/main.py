@@ -57,6 +57,7 @@ from modulo.api.routes.library import router as library_router
 from modulo.api.routes.mcp_oauth import router as mcp_oauth_router
 from modulo.api.routes.me import router as me_router
 from modulo.api.routes.model_backends import router as model_backends_router
+from modulo.api.routes.node_categories import router as node_categories_router
 from modulo.api.routes.notifications import router as notifications_router
 from modulo.api.routes.observability import router as observability_router
 from modulo.api.routes.onboarding import router as onboarding_router
@@ -502,6 +503,7 @@ app.include_router(agents_router)
 app.include_router(hitl_router)
 app.include_router(schemas_router)
 app.include_router(model_backends_router)
+app.include_router(node_categories_router)
 app.include_router(connectors_router)
 app.include_router(contributions_router)
 app.include_router(runs_router)
