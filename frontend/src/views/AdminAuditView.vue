@@ -5,15 +5,38 @@
         <h1 class="text-3xl font-bold tracking-tight">Audit Log</h1>
         <p class="mt-1 text-muted-foreground">Tamper-evident event trail for your organisation</p>
       </div>
-      <button
-        :disabled="exporting"
-        class="rounded-lg border border-input bg-background px-4 py-2 text-sm font-medium hover:bg-accent disabled:opacity-50"
-        data-testid="admin-audit-export-csv"
-        @click="exportCsv"
-      >
-        {{ exporting ? 'Exporting...' : 'Export CSV' }}
-      </button>
+      <div class="flex items-center gap-2">
+        <button
+          :disabled="verifying"
+          class="rounded-lg border border-input bg-background px-4 py-2 text-sm font-medium hover:bg-accent disabled:opacity-50"
+          data-testid="admin-audit-verify-chain"
+          @click="verifyChain"
+        >
+          {{ verifying ? 'Verifying...' : 'Verify Chain' }}
+        </button>
+        <button
+          :disabled="exporting"
+          class="rounded-lg border border-input bg-background px-4 py-2 text-sm font-medium hover:bg-accent disabled:opacity-50"
+          data-testid="admin-audit-export-csv"
+          @click="exportCsv"
+        >
+          {{ exporting ? 'Exporting...' : 'Export CSV' }}
+        </button>
+        <button
+          :disabled="exportingJsonl"
+          class="rounded-lg border border-input bg-background px-4 py-2 text-sm font-medium hover:bg-accent disabled:opacity-50"
+          data-testid="admin-audit-export-jsonl"
+          @click="exportJsonl"
+        >
+          {{ exportingJsonl ? 'Exporting...' : 'Export JSONL' }}
+        </button>
+      </div>
     </header>
+    <div v-if="chainResult" class="rounded-lg border px-4 py-3 text-sm" :class="chainResult.valid ? 'border-green-500 bg-green-50 text-green-800' : 'border-red-500 bg-red-50 text-red-800'" data-testid="admin-audit-chain-result">
+      <strong>Chain Integrity: {{ chainResult.valid ? '✅ Valid' : '❌ Broken' }}</strong>
+      <span v-if="chainResult.event_count" class="ml-2">— {{ chainResult.event_count }} events verified</span>
+      <span v-if="chainResult.error" class="ml-2">— {{ chainResult.error }}</span>
+    </div>
 
     <div class="card p-4">
       <div class="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-5">
@@ -299,6 +322,9 @@ const expandedId = ref<string | null>(null)
 const expandedEvent = ref<AuditEvent | null>(null)
 
 const exporting = ref(false)
+const exportingJsonl = ref(false)
+const verifying = ref(false)
+const chainResult = ref<{ valid: boolean; event_count?: number; error?: string } | null>(null)
 
 function truncateId(id: string): string {
   return id.length > 8 ? id.slice(0, 8) + '...' : id
@@ -477,6 +503,75 @@ async function exportCsv() {
     error.value = `Export failed: ${e instanceof Error ? e.message : String(e)}`
   } finally {
     exporting.value = false
+  }
+}
+
+async function verifyChain() {
+  verifying.value = true
+  chainResult.value = null
+  error.value = null
+  try {
+    const { data, error: err } = await api.GET('/api/v1/admin/audit/verify')
+    if (err) {
+      chainResult.value = { valid: false, error: String(err) }
+    } else if (data) {
+      chainResult.value = {
+        valid: data.valid !== false,
+        event_count: data.event_count,
+        error: data.error,
+      }
+    }
+  } catch (e: unknown) {
+    chainResult.value = { valid: false, error: e instanceof Error ? e.message : String(e) }
+  } finally {
+    verifying.value = false
+  }
+}
+
+async function exportJsonl() {
+  exportingJsonl.value = true
+  try {
+    const allEvents: AuditEvent[] = []
+    let page = 1
+    const pageSize = 1000
+    let totalPages = 1
+
+    while (page <= totalPages) {
+      const { data, error: err } = await api.GET('/api/v1/admin/audit/export', {
+        params: {
+          query: {
+            page,
+            page_size: pageSize,
+            event_type: filterEventType.value || undefined,
+            user_id: filterActor.value || undefined,
+            entity_type: filterTargetType.value || undefined,
+            from_date: filterDateFrom.value || undefined,
+            to_date: filterDateTo.value || undefined,
+          } as any,
+        },
+      })
+      if (err) {
+        error.value = `Export failed: ${err}`
+        return
+      }
+      if (!data) break
+      allEvents.push(...data.items)
+      totalPages = Math.ceil(data.total / pageSize)
+      page++
+    }
+
+    const jsonl = allEvents.map(e => JSON.stringify(e)).join('\n')
+    const blob = new Blob([jsonl], { type: 'application/x-ndjson' })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = `audit-log-${new Date().toISOString().slice(0, 10)}.jsonl`
+    a.click()
+    URL.revokeObjectURL(url)
+  } catch (e: unknown) {
+    error.value = `Export failed: ${e instanceof Error ? e.message : String(e)}`
+  } finally {
+    exportingJsonl.value = false
   }
 }
 
