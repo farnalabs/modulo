@@ -28,7 +28,10 @@ from modulo.model_backends.deepseek import DeepSeekBackend
 from modulo.model_backends.fireworks import FireworksBackend
 from modulo.model_backends.grok import GrokBackend
 from modulo.model_backends.groq import GroqBackend
+from modulo.model_backends.jan import JanBackend
+from modulo.model_backends.llamacpp import LLamaCppBackend
 from modulo.model_backends.lm_studio import LmStudioBackend
+from modulo.model_backends.localai import LocalAIBackend
 from modulo.model_backends.ollama import OllamaBackend
 from modulo.model_backends.openai import OpenAIBackend
 from modulo.model_backends.tgi import TgiBackend
@@ -254,6 +257,14 @@ def _build_backend(
                 base_url=base_url,
                 **default_params,
             )
+        case "localai":
+            base_url = creds.get("base_url", "http://localhost:8080/v1")
+            return LocalAIBackend(
+                api_key=creds.get("api_key", ""),
+                model_id=model_id,
+                base_url=base_url,
+                **default_params,
+            )
         case "ollama":
             base_url = creds.get("base_url", "http://localhost:11434/v1")
             return OllamaBackend(
@@ -276,6 +287,22 @@ def _build_backend(
             return DeepSeekBackend(api_key=creds["api_key"], model_id=model_id, **default_params)
         case "grok":
             return GrokBackend(api_key=creds["api_key"], model_id=model_id, **default_params)
+        case "jan":
+            base_url = creds.get("base_url", "http://localhost:1337/v1")
+            return JanBackend(
+                api_key=creds.get("api_key", ""),
+                model_id=model_id,
+                base_url=base_url,
+                **default_params,
+            )
+        case "llamacpp":
+            base_url = creds.get("base_url", "http://localhost:8080/v1")
+            return LLamaCppBackend(
+                api_key=creds.get("api_key", ""),
+                model_id=model_id,
+                base_url=base_url,
+                **default_params,
+            )
         case "fireworks":
             return FireworksBackend(api_key=creds["api_key"], model_id=model_id, **default_params)
         case "groq":
