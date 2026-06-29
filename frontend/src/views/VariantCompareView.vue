@@ -13,6 +13,7 @@
       <div class="flex flex-wrap items-center gap-4">
         <select
           v-model="selectedGroupId"
+          data-testid="variant-compare-group-select"
           class="min-w-[280px] rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
         >
           <option value="" disabled>Select a variant group…</option>
@@ -23,6 +24,7 @@
 
         <button
           :disabled="!selectedGroupId || runningVariants.size > 0"
+          data-testid="variant-compare-run-variants"
           class="inline-flex items-center gap-2 rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
           @click="runVariants"
         >
@@ -163,6 +165,7 @@
               <span class="text-muted-foreground">Node:</span>
               <select
                 v-model="diffNode"
+                data-testid="variant-compare-diff-node"
                 class="rounded-lg border border-input bg-background px-3 py-1.5 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
               >
                 <option v-for="n in nodeNames" :key="n" :value="n">{{ n }}</option>
@@ -172,6 +175,7 @@
               <span class="text-muted-foreground">Variant A:</span>
               <select
                 v-model="diffVarA"
+                data-testid="variant-compare-diff-variant-a"
                 class="rounded-lg border border-input bg-background px-3 py-1.5 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
               >
                 <option v-for="v in diffVariantsAvailable" :key="v" :value="v">{{ v }}</option>
@@ -181,6 +185,7 @@
               <span class="text-muted-foreground">Variant B:</span>
               <select
                 v-model="diffVarB"
+                data-testid="variant-compare-diff-variant-b"
                 class="rounded-lg border border-input bg-background px-3 py-1.5 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
               >
                 <option v-for="v in diffVariantsAvailable" :key="v" :value="v">{{ v }}</option>

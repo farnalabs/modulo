@@ -11,6 +11,7 @@
           <label class="mb-1 block text-xs font-medium text-muted-foreground">Trigger Type</label>
           <select
             v-model="filterTriggerType"
+            data-testid="settings-trigger-event-log-trigger-type"
             class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring"
           >
             <option value="">All types</option>
@@ -25,6 +26,7 @@
           <label class="mb-1 block text-xs font-medium text-muted-foreground">Result</label>
           <select
             v-model="filterResult"
+            data-testid="settings-trigger-event-log-result"
             class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring"
           >
             <option value="">All results</option>
@@ -46,12 +48,14 @@
         </div>
         <div class="flex items-end gap-2">
           <button
+            data-testid="settings-trigger-event-log-apply"
             class="rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90"
             @click="applyFilters"
           >
             Apply
           </button>
           <button
+            data-testid="settings-trigger-event-log-reset"
             class="rounded-lg border border-input bg-background px-4 py-2 text-sm font-medium hover:bg-accent"
             @click="resetFilters"
           >
@@ -127,6 +131,7 @@
       <div class="flex items-center justify-between">
         <button
           :disabled="!prevCursor"
+          data-testid="settings-trigger-event-log-previous"
           class="rounded-lg border border-input bg-background px-4 py-2 text-sm font-medium hover:bg-accent disabled:opacity-30 disabled:cursor-not-allowed"
           @click="goToPage(prevCursor)"
         >
@@ -137,6 +142,7 @@
         </span>
         <button
           :disabled="!nextCursor"
+          data-testid="settings-trigger-event-log-next"
           class="rounded-lg border border-input bg-background px-4 py-2 text-sm font-medium hover:bg-accent disabled:opacity-30 disabled:cursor-not-allowed"
           @click="goToPage(nextCursor)"
         >

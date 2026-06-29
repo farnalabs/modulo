@@ -10,6 +10,7 @@
         <label class="text-sm font-medium text-muted-foreground">Status</label>
         <select
           v-model="statusFilter"
+          data-testid="feedback-inbox-status-select"
           class="rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
           @change="loadFeedback"
         >
@@ -26,6 +27,7 @@
         <label class="text-sm font-medium text-muted-foreground">Pipeline</label>
         <select
           v-model="pipelineFilter"
+          data-testid="feedback-inbox-pipeline-select"
           class="rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
           @change="loadFeedback"
         >
@@ -45,6 +47,7 @@
         <input
           v-model="dateFrom"
           type="date"
+          data-testid="feedback-inbox-date-from"
           class="rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
           @change="loadFeedback"
         />
@@ -55,6 +58,7 @@
         <input
           v-model="dateTo"
           type="date"
+          data-testid="feedback-inbox-date-to"
           class="rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
           @change="loadFeedback"
         />
@@ -88,6 +92,7 @@
           class="rounded-lg border bg-card shadow-sm"
         >
           <div
+            data-testid="feedback-inbox-toggle-expand"
             class="flex cursor-pointer items-center gap-4 p-4"
             :class="{ 'border-b': expandedId === record.id }"
             @click="toggleExpand(record.id)"
@@ -138,7 +143,7 @@
             <template v-else-if="detailError[record.id]">
               <div class="rounded-lg border border-destructive/50 bg-destructive/10 p-4 text-sm text-destructive">
                 {{ detailError[record.id] }}
-                <button class="ml-2 underline" @click="loadDetail(record.id)">Retry</button>
+                <button data-testid="feedback-inbox-retry" class="ml-2 underline" @click="loadDetail(record.id)">Retry</button>
               </div>
             </template>
 
@@ -162,6 +167,7 @@
                 <div v-if="detailMap[record.id].status === 'pending' || detailMap[record.id].status === 'routing'">
                   <button
                     :disabled="triggering[record.id]"
+                    data-testid="feedback-inbox-trigger-correction"
                     class="rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
                     @click="triggerCorrection(record.id)"
                   >
@@ -174,12 +180,14 @@
                   <textarea
                     v-model="annotations[record.id]"
                     rows="3"
+                    data-testid="feedback-inbox-annotation"
                     class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                     placeholder="Add your review annotation..."
                   />
                   <div class="mt-2 flex items-center gap-2">
                     <button
                       :disabled="savingAnnotation[record.id]"
+                      data-testid="feedback-inbox-save-annotation"
                       class="rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
                       @click="saveAnnotation(record.id)"
                     >
@@ -187,6 +195,7 @@
                     </button>
                     <button
                       :disabled="savingAnnotation[record.id]"
+                      data-testid="feedback-inbox-mark-resolved"
                       class="rounded-lg border border-input bg-background px-4 py-2 text-sm font-medium hover:bg-accent disabled:opacity-50"
                       @click="resolveRecord(record.id)"
                     >

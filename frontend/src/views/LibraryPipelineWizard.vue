@@ -5,6 +5,7 @@
         <button
           class="text-sm text-muted-foreground hover:text-foreground mb-2 inline-flex items-center gap-1"
           @click="$router.push({ name: 'library' })"
+          data-testid="library-wizard-back"
         >
           &larr; Back to Library
         </button>
@@ -51,6 +52,7 @@
                 type="text"
                 class="w-full px-3 py-2 border border-input bg-background rounded-lg text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                 :placeholder="`${primitive?.name ?? 'Pipeline'} (from template)`"
+                data-testid="library-wizard-pipeline-name"
               />
             </div>
 
@@ -61,6 +63,7 @@
                 rows="3"
                 class="w-full px-3 py-2 border border-input bg-background rounded-lg text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                 :placeholder="primitive?.description ?? 'Pipeline created from library template'"
+                data-testid="library-wizard-description"
               />
             </div>
           </div>
@@ -105,12 +108,14 @@
             :disabled="creating"
             class="px-6 py-2.5 bg-primary text-primary-foreground text-sm font-medium rounded-lg hover:brightness-110 disabled:opacity-50 transition-all"
             @click="createPipeline"
+            data-testid="library-wizard-create"
           >
             {{ creating ? 'Creating...' : 'Create Pipeline' }}
           </button>
           <button
             class="px-6 py-2.5 border border-input bg-background text-foreground text-sm font-medium rounded-lg hover:bg-accent transition-colors"
             @click="$router.push({ name: 'library' })"
+            data-testid="library-wizard-cancel"
           >
             Cancel
           </button>
@@ -123,7 +128,7 @@
           <p class="font-medium">Pipeline created!</p>
           <p class="text-sm mt-1">
             {{ result.name }} is ready. 
-            <a :href="`/pipelines/${result.id}`" class="underline font-medium">View pipeline</a>
+             <a :href="`/pipelines/${result.id}`" class="underline font-medium" data-testid="library-wizard-view-pipeline">View pipeline</a>
           </p>
         </div>
 

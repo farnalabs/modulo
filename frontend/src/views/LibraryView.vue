@@ -10,11 +10,13 @@
             placeholder="Search primitives..."
             class="input-teal px-3 py-1.5 border border-input bg-background rounded-lg text-sm"
             @input="loadPrimitives"
+            data-testid="library-search"
           />
           <select
             v-model="typeFilter"
             class="input-teal px-3 py-1.5 border border-input bg-background rounded-lg text-sm"
             @change="loadPrimitives"
+            data-testid="library-type-filter"
           >
             <option value="">All Types</option>
             <option value="pipeline_template">Pipeline Templates</option>
@@ -79,12 +81,14 @@
               v-if="prim.primitive_type === 'pipeline_template'"
               class="flex-1 px-3 py-2 bg-primary text-primary-foreground text-sm font-medium rounded-lg border border-primary/30 hover:border-primary/60 hover:brightness-110 transition-all"
               @click="createPipeline(prim)"
+              data-testid="library-create-pipeline"
             >
               Create Pipeline
             </button>
             <button
               class="flex-1 px-3 py-2 border border-border bg-background text-foreground text-sm font-medium rounded-lg hover:bg-accent transition-colors"
               @click="viewPrimitive(prim)"
+              data-testid="library-view-details"
             >
               View Details
             </button>
@@ -97,6 +101,7 @@
           :disabled="page <= 1"
           class="px-4 py-2 text-sm border border-input bg-background rounded-lg disabled:opacity-30 hover:bg-accent transition-colors"
           @click="prevPage"
+          data-testid="library-previous-page"
         >
           Previous
         </button>
@@ -107,6 +112,7 @@
           :disabled="page >= Math.ceil(total / pageSize)"
           class="px-4 py-2 text-sm border border-input bg-background rounded-lg disabled:opacity-30 hover:bg-accent transition-colors"
           @click="nextPage"
+          data-testid="library-next-page"
         >
           Next
         </button>

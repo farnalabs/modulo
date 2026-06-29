@@ -7,6 +7,7 @@
       </div>
       <button
         @click="showCreate = true"
+        data-testid="admin-users-add-user"
         class="px-4 py-2 bg-primary text-primary-foreground text-sm font-medium rounded-lg border border-primary/30 hover:brightness-110 transition-all"
       >
         + Add User
@@ -47,6 +48,7 @@
             <td class="px-4 py-3">
               <select
                 v-model="u.org_role"
+                :data-testid="`admin-users-role-${u.id}`"
                 class="text-xs border border-input bg-background rounded-md px-2 py-1"
                 @change="updateRole(u)"
               >
@@ -73,6 +75,7 @@
             <td class="px-4 py-3 text-right">
               <button
                 v-if="u.is_active"
+                :data-testid="`admin-users-deactivate-${u.id}`"
                 @click="deactivate(u)"
                 class="text-xs text-destructive hover:underline"
               >
@@ -80,6 +83,7 @@
               </button>
               <button
                 v-else
+                :data-testid="`admin-users-reactivate-${u.id}`"
                 @click="reactivate(u)"
                 class="text-xs text-success hover:underline"
               >

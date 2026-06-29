@@ -1,5 +1,5 @@
 <template>
-  <div class="mx-auto max-w-6xl space-y-6 p-6">
+  <div data-theme="agent" class="mx-auto max-w-6xl space-y-6 p-6">
     <header>
       <h1 class="text-3xl font-bold tracking-tight">Feature Flags</h1>
       <p class="mt-1 text-muted-foreground">All known feature flags and their current activation status</p>

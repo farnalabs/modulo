@@ -7,6 +7,7 @@
       </div>
       <button
         class="btn-glow rounded-lg bg-primary px-4 py-2 text-sm font-semibold text-primary-foreground border border-primary/30 hover:border-primary/60 hover:brightness-110 transition-all duration-150"
+        data-testid="settings-teams-create-team"
         @click="showCreateForm = true"
       >
         Create Team
@@ -26,6 +27,7 @@
             <input
               v-model="createName"
               type="text"
+              data-testid="settings-teams-create-name"
               class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
               placeholder="e.g. Platform Engineering"
             />
@@ -35,6 +37,7 @@
             <textarea
               v-model="createDescription"
               rows="2"
+              data-testid="settings-teams-create-description"
               class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
               placeholder="Optional description"
             />
@@ -42,6 +45,7 @@
           <div class="flex items-center gap-2">
             <button
               :disabled="!createName.trim() || creatingTeam"
+              data-testid="settings-teams-create-submit"
               class="rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
               @click="createTeam"
             >
@@ -49,6 +53,7 @@
             </button>
             <button
               class="rounded-lg border border-input bg-background px-4 py-2 text-sm font-medium hover:bg-accent"
+              data-testid="settings-teams-create-cancel"
               @click="cancelCreate"
             >
               Cancel
@@ -96,6 +101,8 @@
               <span class="text-sm text-muted-foreground">{{ team.member_count }} member{{ team.member_count !== 1 ? 's' : '' }}</span>
               <button
                 class="rounded p-1 text-muted-foreground hover:bg-accent"
+                data-testid="settings-teams-rename"
+                :aria-label="'Rename team'"
                 title="Rename team"
                 @click.stop="startRename(team)"
               >
@@ -105,6 +112,8 @@
               </button>
               <button
                 class="rounded p-1 text-destructive hover:bg-destructive/10"
+                data-testid="settings-teams-delete"
+                :aria-label="'Delete team'"
                 title="Delete team"
                 @click.stop="confirmDelete(team)"
               >
@@ -120,11 +129,13 @@
               <input
                 v-model="renameName"
                 type="text"
+                data-testid="settings-teams-rename-name"
                 class="flex-1 rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                 @keyup.enter="saveRename"
               />
               <button
                 :disabled="!renameName.trim() || renamingTeam"
+                data-testid="settings-teams-rename-save"
                 class="rounded-lg bg-primary px-3 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
                 @click="saveRename"
               >
@@ -132,6 +143,7 @@
               </button>
               <button
                 class="rounded-lg border border-input bg-background px-3 py-2 text-sm font-medium hover:bg-accent"
+                data-testid="settings-teams-rename-cancel"
                 @click="cancelRename"
               >
                 Cancel
@@ -144,6 +156,7 @@
               <div class="mt-3 flex items-center gap-2">
                 <button
                   :disabled="deletingTeam"
+                  data-testid="settings-teams-delete-confirm"
                   class="rounded-lg bg-destructive px-4 py-2 text-sm font-medium text-destructive-foreground hover:bg-destructive/90 disabled:opacity-50"
                   @click="deleteTeam(team.id)"
                 >
@@ -151,6 +164,7 @@
                 </button>
                 <button
                   class="rounded-lg border border-input bg-background px-4 py-2 text-sm font-medium hover:bg-accent"
+                  data-testid="settings-teams-delete-cancel"
                   @click="deleteConfirmTeamId = null"
                 >
                   Cancel
@@ -167,7 +181,7 @@
 
             <div v-else-if="membersError[team.id]" class="mb-3 text-sm text-destructive">
               {{ membersError[team.id] }}
-              <button class="ml-2 underline" @click="loadMembers(team.id)">Retry</button>
+              <button class="ml-2 underline" data-testid="settings-teams-members-retry" @click="loadMembers(team.id)">Retry</button>
             </div>
 
             <template v-else>
@@ -191,6 +205,7 @@
                     <td class="py-2">
                       <select
                         v-model="member.role"
+                        data-testid="settings-teams-member-role"
                         class="rounded border border-input bg-background px-2 py-1 text-xs ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                         @change="changeMemberRole(team.id, member)"
                       >
@@ -203,6 +218,8 @@
                     <td class="py-2 text-right">
                       <button
                         class="rounded p-1 text-muted-foreground hover:text-destructive"
+                        data-testid="settings-teams-member-remove"
+                        :aria-label="'Remove member'"
                         title="Remove member"
                         @click="removeMember(team.id, member)"
                       >
@@ -219,6 +236,7 @@
             <div v-if="addMemberTeamId === team.id" class="mt-4 flex items-center gap-2 rounded-lg border bg-muted/30 p-3">
               <select
                 v-model="addMemberUserId"
+                data-testid="settings-teams-add-member-user"
                 class="flex-1 rounded border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
               >
                 <option value="" disabled>Select a user...</option>
@@ -232,6 +250,7 @@
               </select>
               <select
                 v-model="addMemberRole"
+                data-testid="settings-teams-add-member-role"
                 class="rounded border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
               >
                 <option value="viewer">Viewer</option>
@@ -241,6 +260,7 @@
               </select>
               <button
                 :disabled="!addMemberUserId || addingMember"
+                data-testid="settings-teams-add-member-submit"
                 class="rounded-lg bg-primary px-3 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
                 @click="addMember(team.id)"
               >
@@ -248,6 +268,7 @@
               </button>
               <button
                 class="rounded-lg border border-input bg-background px-3 py-2 text-sm font-medium hover:bg-accent"
+                data-testid="settings-teams-add-member-cancel"
                 @click="addMemberTeamId = null"
               >
                 Cancel
@@ -257,6 +278,7 @@
             <button
               v-else
               class="mt-3 flex items-center gap-1 text-sm text-primary hover:underline"
+              data-testid="settings-teams-add-member"
               @click="addMemberTeamId = team.id"
             >
               <svg class="h-4 w-4" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">

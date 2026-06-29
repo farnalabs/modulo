@@ -15,6 +15,7 @@
           <span class="text-muted-foreground">Pipeline:</span>
           <select
             v-model="selectedPipelineId"
+            data-testid="ab-test-models-pipeline-select"
             class="min-w-[280px] rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
           >
             <option value="" disabled>Select a pipeline…</option>
@@ -28,6 +29,7 @@
           <span class="text-muted-foreground">Existing group:</span>
           <select
             v-model="selectedGroupId"
+            data-testid="ab-test-models-group-select"
             class="min-w-[200px] rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
           >
             <option value="">New group</option>
@@ -48,6 +50,7 @@
               <label class="mb-1 block text-sm font-medium text-muted-foreground">Group Name</label>
               <input
                 v-model="groupName"
+                data-testid="ab-test-models-group-name"
                 type="text"
                 placeholder="e.g. Claude vs GPT-4o"
                 class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
@@ -57,6 +60,7 @@
               <label class="mb-1 block text-sm font-medium text-muted-foreground">Description</label>
               <input
                 v-model="groupDescription"
+                data-testid="ab-test-models-group-description"
                 type="text"
                 placeholder="Compare accuracy and cost across model providers"
                 class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
@@ -74,6 +78,7 @@
               <h3 class="text-sm font-medium text-muted-foreground">Variants</h3>
               <button
                 :disabled="modelBackends.length === 0"
+                data-testid="ab-test-models-add-variant"
                 class="inline-flex items-center gap-1 rounded-lg bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
                 @click="addVariant"
               >
@@ -93,6 +98,7 @@
               <div class="mb-3 flex items-center justify-between">
                 <span class="text-xs font-medium text-muted-foreground">Variant {{ i + 1 }}</span>
                 <button
+                  :data-testid="`ab-test-models-remove-variant-${i}`"
                   class="text-xs text-destructive hover:underline"
                   @click="removeVariant(i)"
                 >
@@ -104,6 +110,7 @@
                   <label class="mb-1 block text-xs font-medium text-muted-foreground">Name</label>
                   <input
                     v-model="v.name"
+                    :data-testid="`ab-test-models-variant-name-${i}`"
                     type="text"
                     placeholder="Variant A"
                     class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
@@ -113,6 +120,7 @@
                   <label class="mb-1 block text-xs font-medium text-muted-foreground">Model Backend</label>
                   <select
                     v-model="v.modelBackendId"
+                    :data-testid="`ab-test-models-model-backend-${i}`"
                     class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                   >
                     <option value="" disabled>Select model…</option>
@@ -131,6 +139,7 @@
                   </label>
                   <input
                     v-model.number="v.weight"
+                    :data-testid="`ab-test-models-weight-${i}`"
                     type="range"
                     min="0"
                     max="100"
@@ -145,6 +154,7 @@
           <div class="flex flex-wrap gap-3 pt-2">
             <button
               :disabled="!canRun"
+              data-testid="ab-test-models-run-ab-test"
               class="inline-flex items-center gap-2 rounded-lg bg-primary px-5 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
               @click="saveAndRun"
             >
@@ -152,6 +162,7 @@
               {{ running ? 'Running…' : 'Run A/B Test' }}
             </button>
             <button
+              data-testid="ab-test-models-save-group"
               class="inline-flex items-center gap-2 rounded-lg border border-input bg-background px-5 py-2 text-sm font-medium hover:bg-muted/50"
               @click="saveGroup"
             >
@@ -238,6 +249,7 @@
             <button
               v-for="s in summaryByVariant"
               :key="`promote-${s.name}`"
+              :data-testid="`ab-test-models-promote-${s.name}`"
               :disabled="promotingName === s.name"
               class="inline-flex items-center gap-2 rounded-lg border border-input bg-background px-4 py-2 text-sm font-medium hover:bg-muted/50 disabled:opacity-50"
               @click="promoteWinner(s.name)"

@@ -1,5 +1,5 @@
 <template>
-  <div class="mx-auto max-w-6xl space-y-6 p-6">
+  <div data-theme="agent" class="mx-auto max-w-6xl space-y-6 p-6">
     <header>
       <h1 class="text-3xl font-bold tracking-tight">Spend Limits</h1>
       <p class="mt-1 text-muted-foreground">Configure daily spend limits at the org and team level</p>
@@ -27,9 +27,9 @@
             <div class="flex items-end gap-3">
               <div class="flex-1">
                 <label class="mb-1.5 block text-xs font-medium text-muted-foreground">Daily limit (USD)</label>
-                <Input v-model.number="orgLimit" type="number" min="0" step="0.01" placeholder="No limit" />
+                <Input v-model.number="orgLimit" type="number" min="0" step="0.01" placeholder="No limit" data-testid="admin-spend-limits-org-limit" />
               </div>
-              <Button :disabled="savingOrg" @click="saveOrgLimit">
+              <Button :disabled="savingOrg" data-testid="admin-spend-limits-org-save" @click="saveOrgLimit">
                 {{ savingOrg ? 'Saving...' : 'Save' }}
               </Button>
             </div>
@@ -66,11 +66,12 @@
                       step="0.01"
                       placeholder="Inherit org limit"
                       class="max-w-40"
+                      :data-testid="'admin-spend-limits-team-limit-' + team.id"
                     />
                     <p v-if="team.saveError" class="mt-1 text-xs text-destructive">{{ team.saveError }}</p>
                   </td>
                   <td class="py-3 text-right">
-                    <Button size="sm" :disabled="team.saving" @click="saveTeamLimit(team)">
+                    <Button size="sm" :disabled="team.saving" :data-testid="'admin-spend-limits-team-save-' + team.id" @click="saveTeamLimit(team)">
                       {{ team.saving ? 'Saving...' : 'Save' }}
                     </Button>
                   </td>

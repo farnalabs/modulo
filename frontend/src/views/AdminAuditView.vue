@@ -8,6 +8,7 @@
       <button
         :disabled="exporting"
         class="rounded-lg border border-input bg-background px-4 py-2 text-sm font-medium hover:bg-accent disabled:opacity-50"
+        data-testid="admin-audit-export-csv"
         @click="exportCsv"
       >
         {{ exporting ? 'Exporting...' : 'Export CSV' }}
@@ -21,6 +22,7 @@
           <select
             v-model="filterEventType"
             class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring"
+            data-testid="admin-audit-event-type"
           >
             <option value="">All types</option>
             <optgroup label="Pipeline">
@@ -85,6 +87,7 @@
             type="text"
             placeholder="User ID..."
             class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring"
+            data-testid="admin-audit-actor"
           />
         </div>
         <div>
@@ -93,6 +96,7 @@
             v-model="filterDateFrom"
             type="date"
             class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring"
+            data-testid="admin-audit-date-from"
           />
         </div>
         <div>
@@ -101,6 +105,7 @@
             v-model="filterDateTo"
             type="date"
             class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring"
+            data-testid="admin-audit-date-to"
           />
         </div>
         <div>
@@ -108,6 +113,7 @@
           <select
             v-model="filterTargetType"
             class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring"
+            data-testid="admin-audit-target-type"
           >
             <option value="">All targets</option>
             <option value="pipeline">Pipeline</option>
@@ -124,12 +130,14 @@
       <div class="mt-3 flex items-center gap-2">
         <button
           class="rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90"
+          data-testid="admin-audit-apply-filters"
           @click="applyFilters"
         >
           Apply Filters
         </button>
         <button
           class="rounded-lg border border-input bg-background px-4 py-2 text-sm font-medium hover:bg-accent"
+          data-testid="admin-audit-reset"
           @click="resetFilters"
         >
           Reset
@@ -169,6 +177,9 @@
               v-for="event in events"
               :key="event.id"
               class="cursor-pointer transition-colors hover:bg-muted/30"
+              role="button"
+              :data-testid="'admin-audit-event-row-' + event.id"
+              :aria-label="'Expand event ' + event.id"
               @click="toggleExpand(event.id)"
             >
               <td class="whitespace-nowrap px-4 py-3 text-sm">
@@ -240,6 +251,7 @@
         <button
           :disabled="!prevCursor"
           class="rounded-lg border border-input bg-background px-4 py-2 text-sm font-medium hover:bg-accent disabled:opacity-30 disabled:cursor-not-allowed"
+          data-testid="admin-audit-previous"
           @click="() => goToPage(prevCursor)"
         >
           Previous
@@ -250,6 +262,7 @@
         <button
           :disabled="!nextCursor"
           class="rounded-lg border border-input bg-background px-4 py-2 text-sm font-medium hover:bg-accent disabled:opacity-30 disabled:cursor-not-allowed"
+          data-testid="admin-audit-next"
           @click="() => goToPage(nextCursor)"
         >
           Next

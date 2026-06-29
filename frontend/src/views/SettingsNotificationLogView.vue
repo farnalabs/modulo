@@ -11,6 +11,7 @@
           <label class="mb-1 block text-xs font-medium text-muted-foreground">Status</label>
           <select
             v-model="filterStatus"
+            data-testid="settings-notification-log-status"
             class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring"
           >
             <option value="">All statuses</option>
@@ -24,6 +25,7 @@
           <input
             v-model="filterDateFrom"
             type="date"
+            data-testid="settings-notification-log-date-from"
             class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring"
           />
         </div>
@@ -32,17 +34,20 @@
           <input
             v-model="filterDateTo"
             type="date"
+            data-testid="settings-notification-log-date-to"
             class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring"
           />
         </div>
         <div class="flex items-end gap-2">
           <button
+            data-testid="settings-notification-log-apply"
             class="rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90"
             @click="applyFilters"
           >
             Apply
           </button>
           <button
+            data-testid="settings-notification-log-reset"
             class="rounded-lg border border-input bg-background px-4 py-2 text-sm font-medium hover:bg-accent"
             @click="resetFilters"
           >
@@ -109,6 +114,7 @@
       <div class="flex items-center justify-between">
         <button
           :disabled="!prevCursor"
+          data-testid="settings-notification-log-previous"
           class="rounded-lg border border-input bg-background px-4 py-2 text-sm font-medium hover:bg-accent disabled:opacity-30 disabled:cursor-not-allowed"
           @click="goToPage(prevCursor)"
         >
@@ -119,6 +125,7 @@
         </span>
         <button
           :disabled="!nextCursor"
+          data-testid="settings-notification-log-next"
           class="rounded-lg border border-input bg-background px-4 py-2 text-sm font-medium hover:bg-accent disabled:opacity-30 disabled:cursor-not-allowed"
           @click="goToPage(nextCursor)"
         >
