@@ -22,6 +22,7 @@ status: covered | partial | gap    # auto-updated by graph-validate
 ## Index
 
 ### Auth and Security
+- [feat-auth-password-change](auth/password-change.md) => PRD 9.4
 - [feat-auth-sso-provider-ui](auth/sso-provider-ui.md) => PRD 9.4
 - [feat-auth-team-api-keys](auth/team-api-keys.md) => PRD 9.3
 - [feat-auth-team-rbac](auth/team-rbac.md) => PRD 9.2, 9.3
