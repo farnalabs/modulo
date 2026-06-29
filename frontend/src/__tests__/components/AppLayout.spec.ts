@@ -73,6 +73,22 @@ describe('AppLayout', () => {
     expect(wrapper.text()).toContain('Enterprise')
   })
 
+  it('renders MCP link in sidebar', async () => {
+    const wrapper = mount(AppLayout, {
+      global: {
+        plugins: [createPinia(), router],
+        stubs: { LogoMark: true },
+      },
+    })
+    await nextTick()
+    await nextTick()
+
+    const sidebarLinks = wrapper.findAllComponents({ name: 'SidebarLink' })
+    const mcpLink = sidebarLinks.find((s) => s.props('label') === 'MCP')
+    expect(mcpLink).toBeTruthy()
+    expect(mcpLink!.props('to')).toBe('/settings/mcp')
+  })
+
   it('renders License badge link that points to settings/license', async () => {
     const pinia = createPinia()
     const wrapper = mount(AppLayout, {
