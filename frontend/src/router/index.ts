@@ -32,6 +32,8 @@ import AdminConnectorsView from '../views/AdminConnectorsView.vue'
 import AdminNodeCategoriesView from '../views/AdminNodeCategoriesView.vue'
 import AdminViewsView from '../views/AdminViewsView.vue'
 import AdminModelBackendsView from '../views/AdminModelBackendsView.vue'
+import AdminOrgSettingsView from '../views/AdminOrgSettingsView.vue'
+import AdminRunRetentionView from '../views/AdminRunRetentionView.vue'
 import MyProfileView from '../views/MyProfileView.vue'
 import SettingsLicenseView from '../views/SettingsLicenseView.vue'
 import SettingsMcpView from '../views/SettingsMcpView.vue'
@@ -199,6 +201,16 @@ const router = createRouter({
       path: '/admin/feature-flags',
       name: 'admin-feature-flags',
       component: AdminFeatureFlagsView,
+    },
+    {
+      path: '/admin/org',
+      name: 'admin-org',
+      component: AdminOrgSettingsView,
+    },
+    {
+      path: '/admin/run-retention',
+      name: 'admin-run-retention',
+      component: AdminRunRetentionView,
     },
     {
       path: '/admin/plugins',

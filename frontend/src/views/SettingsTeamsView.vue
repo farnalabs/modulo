@@ -290,6 +290,9 @@
             <div v-if="memberActionError[team.id]" class="mt-2 text-sm text-destructive">
               {{ memberActionError[team.id] }}
             </div>
+
+            <h3 class="mb-3 mt-6 text-sm font-semibold text-muted-foreground uppercase tracking-wider">Webhook Notifications</h3>
+            <TeamNotificationEndpoints :team-id="team.id" />
           </div>
         </div>
       </div>
@@ -303,6 +306,7 @@ import { api } from '../lib/api/client'
 import type { components } from '../lib/api/client'
 import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
+import TeamNotificationEndpoints from '../components/TeamNotificationEndpoints.vue'
 
 type AdminTeamItem = components['schemas']['AdminTeamItem']
 type MembershipResponse = components['schemas']['MembershipResponse']

@@ -15,6 +15,7 @@ from modulo.auth.jwt import AuthenticatedPrincipal
 from modulo.auth.passwords import hash_password, validate_password_strength
 from modulo.core.eval_engine.okr import track_okr_progress
 from modulo.core.eval_engine.regression import detect_regressions
+from modulo.core.hitl_manager.overdue_warning import get_overdue_claims
 from modulo.db.crud.organisation import get_organisation, update_organisation
 from modulo.db.crud.publisher import (
     create_publisher,
@@ -1854,3 +1855,38 @@ async def admin_purge_stale_runs(
         )
 
     return PurgeRunsResponse(purged_count=result.rowcount)  # type: ignore[attr-defined]
+
+
+# ── HITL Overdue Warning ────────────────────────────────────────────────────
+
+
+class OverdueClaimItem(BaseModel):
+    id: str
+    pipeline_run_id: str
+    node_id: str
+    created_at: str
+    age_hours: float
+    status: str
+
+
+class OverdueClaimsResponse(BaseModel):
+    claims: list[OverdueClaimItem]
+
+
+@router.get("/hitl/overdue", response_model=OverdueClaimsResponse)
+async def admin_overdue_hitl_claims(
+    current_user: AuthenticatedPrincipal = Depends(get_current_user),
+    session: AsyncSession = Depends(get_db_session),
+) -> OverdueClaimsResponse:
+    """List overdue HITL claims across the organisation."""
+    if current_user.org_role not in ("admin", "operator"):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Insufficient permissions",
+        )
+
+    async with session.begin():
+        await set_rls_org(session, current_user.organisation_id)
+        claims = await get_overdue_claims(session, current_user.organisation_id)
+
+    return OverdueClaimsResponse(claims=[OverdueClaimItem(**c) for c in claims])

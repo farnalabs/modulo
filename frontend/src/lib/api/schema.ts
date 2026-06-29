@@ -899,6 +899,84 @@ export interface paths {
       }
     }
   }
+  '/api/v1/notifications': {
+    get: {
+      responses: {
+        200: {
+          content: {
+            'application/json': components['schemas']['NotificationEndpointResponse'][]
+          }
+        }
+      }
+    }
+    post: {
+      requestBody: {
+        content: {
+          'application/json': components['schemas']['NotificationEndpointCreate']
+        }
+      }
+      responses: {
+        201: {
+          content: {
+            'application/json': components['schemas']['NotificationEndpointResponse']
+          }
+        }
+      }
+    }
+  }
+  '/api/v1/notifications/{endpoint_id}': {
+    get: {
+      parameters: {
+        path: { endpoint_id: string }
+      }
+      responses: {
+        200: {
+          content: {
+            'application/json': components['schemas']['NotificationEndpointResponse']
+          }
+        }
+      }
+    }
+    put: {
+      parameters: {
+        path: { endpoint_id: string }
+      }
+      requestBody: {
+        content: {
+          'application/json': components['schemas']['NotificationEndpointUpdate']
+        }
+      }
+      responses: {
+        200: {
+          content: {
+            'application/json': components['schemas']['NotificationEndpointResponse']
+          }
+        }
+      }
+    }
+    delete: {
+      parameters: {
+        path: { endpoint_id: string }
+      }
+      responses: {
+        204: { description: 'No content' }
+      }
+    }
+  }
+  '/api/v1/admin/notifications/{webhook_id}/test': {
+    post: {
+      parameters: {
+        path: { webhook_id: string }
+      }
+      responses: {
+        200: {
+          content: {
+            'application/json': components['schemas']['TestResult']
+          }
+        }
+      }
+    }
+  }
 }
 
 export interface components {
@@ -1530,6 +1608,35 @@ export interface components {
       name: string
       redirect_uris: string[]
       scopes: string[]
+    }
+    NotificationEndpointResponse: {
+      id: string
+      url: string
+      events: string[]
+      description: string | null
+      auto_disabled: boolean
+      consecutive_dead_letter_count: number
+      team_id: string | null
+    }
+    NotificationEndpointCreate: {
+      url: string
+      secret?: string | null
+      events?: string[]
+      description?: string | null
+      team_id?: string | null
+    }
+    NotificationEndpointUpdate: {
+      url?: string | null
+      secret?: string | null
+      events?: string[] | null
+      description?: string | null
+      team_id?: string | null
+    }
+    TestResult: {
+      success: boolean
+      status_code: number | null
+      response_body: string | null
+      error: string | null
     }
   }
 }
