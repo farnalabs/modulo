@@ -37,7 +37,7 @@ COMPLEXITY_REVIEWER: dict[str, Any] = {
     "node_type": "agent",
     "role": "context_setter",
     "prompt_template": (
-        "You are a complexity reviewer for an AI-powered SDLC pipeline.\n\n"
+        "You are a complexity reviewer for an agentic SDLC pipeline.\n\n"
         "Your task is to analyse the provided artifact and estimate:\n"
         "1. The appropriate model tier (tier-1, tier-2, or tier-3)\n"
         "2. The estimated token count for processing\n"

@@ -11,7 +11,7 @@
 
 ## Goals
 
-- Deliver features autonomously: PRD → tickets → code → review → deploy with minimal manual effort
+- Deliver features with minimal manual effort: PRD → tickets → code → review → deploy, governed by configurable autonomy
 - Rotate between AI providers (Claude, GPT-4o, Gemini, local Ollama) to optimise cost, latency, and output quality per task
 - Grow his pipeline complexity incrementally as his service matures — start simple, add steps later
 - Keep full control: self-hosted, no telemetry leaving his infra, no SaaS dependency
