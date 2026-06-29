@@ -90,7 +90,7 @@
             <LoadingSpinner v-if="costsLoading" />
             <div v-else-if="costsError" class="text-sm text-destructive">{{ costsError }}</div>
             <div v-else class="space-y-4">
-              <div class="flex items-center justify-between rounded-lg border bg-muted/20 p-4">
+              <div class="flex items-center justify-between rounded-lg border bg-muted p-4">
                 <span class="text-sm font-medium">Org Total</span>
                 <span class="text-lg font-semibold" :class="overageClass(orgTotalCost, orgLimitValue)">
                   ${{ orgTotalCost.toFixed(2) }}

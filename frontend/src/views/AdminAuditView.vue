@@ -243,7 +243,7 @@
               </td>
             </tr>
             <tr v-if="expandedId">
-              <td colspan="6" class="border-t bg-muted/20 p-4">
+              <td colspan="6" class="border-t bg-muted p-4">
                 <div class="space-y-3">
                   <div v-if="expandedEvent?.payload_json && Object.keys(expandedEvent.payload_json).length > 0">
                     <h4 class="mb-1 text-xs font-semibold uppercase text-muted-foreground">Details</h4>

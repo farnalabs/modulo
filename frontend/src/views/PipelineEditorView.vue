@@ -121,11 +121,11 @@
           </div>
           <div v-if="selectedAgent">
             <label class="mb-1 block text-sm font-medium">Model Backend</label>
-            <div class="rounded-lg border bg-muted/20 px-3 py-2 text-sm">
+            <div class="rounded-lg border bg-muted px-3 py-2 text-sm">
               {{ modelBackendName || 'Loading...' }}
             </div>
           </div>
-          <div v-if="selectedAgent" class="rounded-lg border bg-muted/20 p-3 text-sm">
+          <div v-if="selectedAgent" class="rounded-lg border bg-muted p-3 text-sm">
             <p class="text-xs text-muted-foreground">Schema</p>
             <p class="mt-0.5 font-medium">Input: {{ agentSchemaName(selectedAgent, 'input') }}</p>
             <p class="font-medium">Output: {{ agentSchemaName(selectedAgent, 'output') }}</p>

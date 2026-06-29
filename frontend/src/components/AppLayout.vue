@@ -169,7 +169,7 @@
       </div>
     </aside>
 
-    <main class="flex-1 overflow-auto">
+    <main class="flex-1 overflow-auto bg-background">
       <router-view v-slot="{ Component }">
         <transition name="page" mode="out-in">
           <component :is="Component" />

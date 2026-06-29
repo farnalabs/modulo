@@ -111,11 +111,11 @@
               v-show="expandedNodes.has(node.name)"
             >
               <td colspan="8" class="space-y-3 px-0 pb-4 pt-1">
-                <div class="rounded-lg border bg-muted/20 p-4">
+                <div class="rounded-lg border bg-muted p-4">
                   <h4 class="mb-2 text-xs font-semibold text-muted-foreground">Input</h4>
                   <pre class="max-h-48 overflow-auto rounded bg-background p-3 text-xs leading-relaxed"><code>{{ node.io?.input ? formatJson(node.io.input) : '—' }}</code></pre>
                 </div>
-                <div class="rounded-lg border bg-muted/20 p-4">
+                <div class="rounded-lg border bg-muted p-4">
                   <h4 class="mb-2 text-xs font-semibold text-muted-foreground">Output</h4>
                   <pre class="max-h-48 overflow-auto rounded bg-background p-3 text-xs leading-relaxed"><code>{{ node.io?.output ? formatJson(node.io.output) : '—' }}</code></pre>
                 </div>

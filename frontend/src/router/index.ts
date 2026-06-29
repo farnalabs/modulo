@@ -24,6 +24,7 @@ import TeamComparisonView from '../views/TeamComparisonView.vue'
 import PipelineEditorView from '../views/PipelineEditorView.vue'
 import AdminUsersView from '../views/AdminUsersView.vue'
 import AdminSpendLimitsView from '../views/AdminSpendLimitsView.vue'
+import AdminConnectorsView from '../views/AdminConnectorsView.vue'
 import MyProfileView from '../views/MyProfileView.vue'
 
 const router = createRouter({
@@ -133,6 +134,11 @@ const router = createRouter({
       path: '/admin/audit',
       name: 'admin-audit',
       component: AdminAuditView,
+    },
+    {
+      path: '/admin/connectors',
+      name: 'admin-connectors',
+      component: AdminConnectorsView,
     },
     {
       path: '/admin/feature-flags',
