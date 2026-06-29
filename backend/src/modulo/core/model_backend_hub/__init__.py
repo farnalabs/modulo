@@ -21,6 +21,7 @@ from langchain_core.messages import HumanMessage
 from modulo.core.plugin_registry import get_plugin_registry
 from modulo.core.secrets_backend import SecretsBackend
 from modulo.model_backends.anthropic import AnthropicBackend
+from modulo.model_backends.azure_openai import AzureOpenAIBackend
 from modulo.model_backends.base import ModelBackendBase
 from modulo.model_backends.ollama import OllamaBackend
 from modulo.model_backends.openai import OpenAIBackend
@@ -217,6 +218,18 @@ def _build_backend(
     match provider:
         case "anthropic":
             return AnthropicBackend(api_key=creds["api_key"], model_id=model_id, **default_params)
+        case "azure_openai":
+            azure_endpoint = creds.get("azure_endpoint", "")
+            if not azure_endpoint:
+                raise ValueError("Missing 'azure_endpoint' in credentials for provider 'azure_openai'")
+            api_version = creds.get("api_version", "2024-10-01-preview")
+            return AzureOpenAIBackend(
+                api_key=creds["api_key"],
+                model_id=model_id,
+                azure_endpoint=azure_endpoint,
+                api_version=api_version,
+                **default_params,
+            )
         case "openai":
             return OpenAIBackend(api_key=creds["api_key"], model_id=model_id, **default_params)
         case "ollama":

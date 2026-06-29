@@ -266,3 +266,24 @@ def test_model_backend_no_credentials_shows_false(client: TestClient) -> None:
 def test_list_model_backends_unauthenticated_returns_4xx(unauth_client: TestClient) -> None:
     resp = unauth_client.get("/api/v1/model-backends")
     assert resp.status_code in (401, 403)
+
+
+def test_create_azure_openai_model_backend_round_trips(client: TestClient) -> None:
+    """Creating an azure_openai backend preserves provider and model_id in response."""
+    azure_body = {**_CREATE_BODY, "provider": "azure_openai"}
+    backend = _make_backend(credentials_ciphertext=b"encrypted_bytes")
+    backend.provider = "azure_openai"
+    backend.model_id = "gpt-4-deployment"
+    with (
+        patch("modulo.api.routes.model_backends.create_model_backend", return_value=backend),
+        patch("modulo.api.routes.model_backends.set_rls_org"),
+        patch("modulo.api.routes.model_backends.set_rls_user_context"),
+    ):
+        resp = client.post("/api/v1/model-backends", json=azure_body)
+
+    assert resp.status_code == 201
+    body = resp.json()
+    assert body["provider"] == "azure_openai"
+    assert "credentials_ciphertext" not in body
+    assert "api_key" not in body
+    assert body["has_credentials"] is True
