@@ -49,11 +49,6 @@ _KNOWN_FLAGS: list[FeatureFlag] = [
         description="Browse and import community-contributed pipeline primitives",
         tier="free",
     ),
-    FeatureFlag(
-        name="view_mode",
-        description="Simple/Advanced UI view mode toggle and admin configuration",
-        tier="free",
-    ),
     # ── Enterprise tier ────────────────────────────────────────────────
     FeatureFlag(
         name="sso",
@@ -76,8 +71,8 @@ _KNOWN_FLAGS: list[FeatureFlag] = [
         tier="enterprise",
     ),
     FeatureFlag(
-        name="view_mode_enforcement",
-        description="Admin enforcement of view mode per user, team, or org role",
+        name="view_modes",
+        description="Multiple named UI views with admin-defined feature visibility per view and user/team/role assignment",
         tier="enterprise",
     ),
     # ── v1 tier ────────────────────────────────────────────────────────
