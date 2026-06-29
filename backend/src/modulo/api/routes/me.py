@@ -12,6 +12,7 @@ from modulo.api.routes.auth import me as _me_handler
 from modulo.auth.dependencies import get_current_user
 from modulo.auth.jwt import AuthenticatedPrincipal
 from modulo.auth.passwords import hash_password, validate_password_strength
+from modulo.db.crud.token_family import blacklist_family, list_families_for_user
 from modulo.db.crud.user import get_user_by_id
 
 router = APIRouter(prefix="/api/v1", tags=["user"])
@@ -90,4 +91,9 @@ async def change_password(
 
         user.password_hash = hash_password(body.new_password)
         session.add(user)
+
+        families = await list_families_for_user(session, current_user.user_id)
+        for family in families:
+            await blacklist_family(session, family.family_id)
+
     return {"detail": "Password changed successfully"}
