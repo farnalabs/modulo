@@ -11,7 +11,7 @@ concurrency:
 jobs:
   backend-lint:
     name: Lint (Backend)
-    runs-on: self-hosted
+    runs-on: ubuntu-latest
     defaults:
       run:
         working-directory: backend
@@ -29,8 +29,11 @@ jobs:
       - run: uv run --no-sync pip-audit
 
   backend-test:
-    name: Test (Backend)
-    runs-on: self-hosted
+    name: Test (Backend) - ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
     defaults:
       run:
         working-directory: backend
@@ -51,12 +54,12 @@ jobs:
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: coverage-report
+          name: coverage-report-${{ matrix.os }}
           path: backend/coverage.xml
 
   frontend:
     name: Frontend
-    runs-on: self-hosted
+    runs-on: ubuntu-latest
     defaults:
       run:
         working-directory: frontend

@@ -46,6 +46,7 @@ from modulo.api.routes.connectors import router as connectors_router
 from modulo.api.routes.contributions import router as contributions_router
 from modulo.api.routes.costs import router as costs_router
 from modulo.api.routes.dashboard import router as dashboard_router
+from modulo.api.routes.deployment import router as deployment_router
 from modulo.api.routes.determination import router as determination_router
 from modulo.api.routes.environments import router as environments_router
 from modulo.api.routes.evals import router as evals_router
@@ -74,6 +75,7 @@ from modulo.api.routes.triggers import pipeline_triggers_router
 from modulo.api.routes.triggers import router as triggers_router
 from modulo.api.routes.variants import router as variants_router
 from modulo.api.routes.viewmodel import router as viewmodel_router
+from modulo.api.routes.views import router as views_router
 from modulo.api.routes.webhooks import router as webhooks_router
 from modulo.core.graceful_shutdown import ShutdownManager, ShutdownMiddleware
 from modulo.core.in_process_scheduler import dispose_scheduler_engine, start_schedulers
@@ -492,6 +494,7 @@ app.include_router(auth_router)
 app.include_router(changelog_router)
 app.include_router(sso_router)
 app.include_router(dashboard_router)
+app.include_router(deployment_router)
 app.include_router(costs_router)
 app.include_router(teams_router)
 app.include_router(pipelines_router)
@@ -506,6 +509,7 @@ app.include_router(run_ws_router)
 app.include_router(triggers_router)
 app.include_router(pipeline_triggers_router)
 app.include_router(webhooks_router)
+app.include_router(views_router)
 app.include_router(viewmodel_router)
 app.include_router(api_keys_router)
 app.include_router(audit_router)
