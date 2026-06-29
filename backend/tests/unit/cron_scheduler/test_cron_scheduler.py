@@ -10,8 +10,8 @@ from celery.beat import Scheduler
 from modulo.core.cron_scheduler import (
     DatabaseCronEntry,
     DatabaseCronScheduler,
-    _fire_cron_trigger,
     _get_engine,
+    fire_cron_trigger,
 )
 from modulo.db.models.trigger import Trigger
 from modulo.settings import Settings
@@ -134,7 +134,7 @@ class TestFireCronTrigger:
             patch("modulo.core.cron_scheduler._count_active_runs", new_callable=AsyncMock, return_value=0),
             patch("modulo.core.cron_scheduler._log_event", new_callable=AsyncMock),
         ):
-            result = await _fire_cron_trigger(
+            result = await fire_cron_trigger(
                 trigger_id=trigger_id,
                 org_id=org_id,
                 pipeline_id=pipeline_id,
@@ -178,7 +178,7 @@ class TestFireCronTrigger:
             patch("modulo.core.cron_scheduler._log_event", new_callable=AsyncMock) as mock_log_event,
         ):
             mock_log_event.return_value = MagicMock(id=uuid.uuid4())
-            await _fire_cron_trigger(
+            await fire_cron_trigger(
                 trigger_id=trigger_id,
                 org_id=org_id,
                 pipeline_id=pipeline_id,
