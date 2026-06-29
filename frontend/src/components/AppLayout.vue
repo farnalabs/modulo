@@ -23,6 +23,7 @@
         <SidebarLink to="/settings/rate-limits" icon="Gauge" label="Rate Limits" />
         <SidebarLink to="/settings/runtime-config" icon="Settings" label="Runtime Config" />
         <SidebarLink to="/settings/license" icon="KeyRound" label="License" />
+        <SidebarLink to="/settings/mcp" icon="Cable" label="MCP" />
         <SidebarLink to="/schemas/infer" icon="Database" label="Schema Inference" />
 
         <div class="sidebar-section-header">Admin</div>
@@ -134,6 +135,7 @@
         <SidebarLink to="/settings/rate-limits" icon="Gauge" label="Rate Limits" @click="mobileOpen = false" />
         <SidebarLink to="/settings/runtime-config" icon="Settings" label="Runtime Config" @click="mobileOpen = false" />
         <SidebarLink to="/settings/license" icon="KeyRound" label="License" @click="mobileOpen = false" />
+        <SidebarLink to="/settings/mcp" icon="Cable" label="MCP" @click="mobileOpen = false" />
         <SidebarLink to="/schemas/infer" icon="Database" label="Schema Inference" @click="mobileOpen = false" />
 
         <div class="sidebar-section-header">Admin</div>
@@ -227,6 +229,7 @@ const icons: Record<string, string> = {
   Database: '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3"/><path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"/></svg>',
   MessageSquare: '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>',
   KeyRound: '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2.586 17.414A2 2 0 0 0 2 18.828V21a1 1 0 0 0 1 1h3a1 1 0 0 0 1-1v-1a1 1 0 0 1 1-1h1a1 1 0 0 0 1-1v-1a1 1 0 0 1 1-1h.172a2 2 0 0 0 1.414-.586l.814-.814a6.5 6.5 0 1 0-4-4z"/><circle cx="16.5" cy="7.5" r=".5" fill="currentColor"/></svg>',
+  Cable: '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 2v6"/><path d="M15 2v6"/><path d="M5 8h14"/><path d="M7 8v10a2 2 0 0 0 2 2h6a2 2 0 0 0 2-2V8"/></svg>',
 }
 
 export const SidebarLink = defineComponent({
