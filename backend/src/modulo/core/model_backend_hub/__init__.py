@@ -23,8 +23,12 @@ from modulo.core.secrets_backend import SecretsBackend
 from modulo.model_backends.anthropic import AnthropicBackend
 from modulo.model_backends.azure_openai import AzureOpenAIBackend
 from modulo.model_backends.base import ModelBackendBase
+from modulo.model_backends.deepseek import DeepSeekBackend
+from modulo.model_backends.groq import GroqBackend
 from modulo.model_backends.ollama import OllamaBackend
 from modulo.model_backends.openai import OpenAIBackend
+from modulo.model_backends.togetherai import TogetherAIBackend
+from modulo.model_backends.openrouter import OpenRouterBackend
 
 
 @dataclass
@@ -240,6 +244,12 @@ def _build_backend(
                 base_url=base_url,
                 **default_params,
             )
+        case "togetherai":
+            return TogetherAIBackend(api_key=creds["api_key"], model_id=model_id, **default_params)
+        case "deepseek":
+            return DeepSeekBackend(api_key=creds["api_key"], model_id=model_id, **default_params)
+        case "groq":
+            return GroqBackend(api_key=creds["api_key"], model_id=model_id, **default_params)
         case _:
             registry = get_plugin_registry()
             if registry.has_model_backend(provider):
