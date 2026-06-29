@@ -511,7 +511,9 @@ async function verifyChain() {
   chainResult.value = null
   error.value = null
   try {
-    const { data, error: err } = await api.GET('/api/v1/admin/audit/verify')
+    const res = await (api as any).GET('/api/v1/admin/audit/verify')
+    const data = res.data as any
+    const err = res.error
     if (err) {
       chainResult.value = { valid: false, error: String(err) }
     } else if (data) {
