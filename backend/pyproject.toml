@@ -112,6 +112,7 @@ packages = ["src/modulo"]
 line-length = 120
 target-version = "py312"
 src = ["src"]
+exclude = ["*.feature"]
 
 [tool.ruff.lint]
 select = [
