@@ -17,7 +17,7 @@ from modulo.api.dependencies import get_db_session
 from modulo.db.models.organisation import Organisation
 from modulo.settings import Settings, get_settings
 
-_scim_bearer = HTTPBearer()
+_scim_bearer = HTTPBearer(auto_error=False)
 
 
 class ScimPrincipal:
@@ -28,11 +28,18 @@ class ScimPrincipal:
 
 
 async def get_scim_principal(
-    credentials: HTTPAuthorizationCredentials = Depends(_scim_bearer),
+    credentials: HTTPAuthorizationCredentials | None = Depends(_scim_bearer),
     settings: Settings = Depends(get_settings),
     session: AsyncSession = Depends(get_db_session),
 ) -> ScimPrincipal:
     """Validate Bearer token against MODULO_SCIM_TOKEN and resolve the target org."""
+    if credentials is None:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Missing SCIM token",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
     if not settings.modulo_scim_token:
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
