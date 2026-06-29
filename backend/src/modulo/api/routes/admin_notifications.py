@@ -242,6 +242,102 @@ async def list_all_deliveries(
     return DeliveryLogResponse(items=items, next_cursor=next_cursor, total=total)
 
 
+@router.post("/deliveries/retry-all-failed")
+async def retry_all_failed_deliveries(
+    session: AsyncSession = Depends(get_db_session),
+    principal: AuthenticatedPrincipal = Depends(get_current_user),
+    settings: Settings = Depends(get_settings),
+) -> dict:
+    """Retry all failed and dead_lettered deliveries across all webhooks in the org."""
+    _require_admin(principal)
+    import httpx
+
+    async with session.begin():
+        await set_rls_org(session, principal.organisation_id)
+        failed = list(
+            (
+                await session.execute(
+                    select(NotificationDeliveryLog, NotificationEndpoint)
+                    .join(
+                        NotificationEndpoint,
+                        NotificationDeliveryLog.endpoint_id == NotificationEndpoint.id,
+                    )
+                    .where(
+                        NotificationDeliveryLog.organisation_id == principal.organisation_id,
+                        NotificationDeliveryLog.status.in_(["failed", "dead_lettered"]),
+                    )
+                )
+            ).all()
+        )
+
+    retried = 0
+    errors: list[str] = []
+
+    for delivery, ep in failed:
+        event_type = delivery.event_type
+        body = json.dumps(
+            {
+                "event": delivery.event_type,
+                "timestamp": datetime.now(UTC).isoformat(),
+                "payload": {"event_type": event_type, "retry": True},
+            }
+        ).encode()
+
+        headers = {"Content-Type": "application/json", "User-Agent": "Modulo-Notifier/1.0"}
+        if ep.secret_ciphertext:
+            try:
+                fernet = Fernet(settings.fernet_key.encode())
+                raw_secret = fernet.decrypt(ep.secret_ciphertext)
+                import hashlib
+                import hmac
+
+                sig = hmac.new(raw_secret, body, hashlib.sha256).hexdigest()
+                headers["X-Modulo-Signature"] = f"sha256={sig}"
+            except Exception:
+                import logging
+
+                logging.getLogger(__name__).exception("Failed to sign retry payload")
+
+        try:
+            async with httpx.AsyncClient(timeout=15.0) as client:
+                resp = await client.post(ep.url, content=body, headers=headers)
+
+            async with session.begin():
+                await set_rls_org(session, principal.organisation_id)
+                new_log = NotificationDeliveryLog(
+                    organisation_id=principal.organisation_id,
+                    event_type=delivery.event_type,
+                    endpoint_id=delivery.endpoint_id,
+                    status="delivered" if resp.is_success else "failed",
+                    attempt_count=delivery.attempt_count + 1,
+                    response_code=resp.status_code,
+                    response_body=resp.text[:500] if resp.is_success else None,
+                    last_error=(None if resp.is_success else f"HTTP {resp.status_code}: {resp.text[:200]}"),
+                )
+                session.add(new_log)
+
+            retried += 1
+        except httpx.RequestError as exc:
+            async with session.begin():
+                await set_rls_org(session, principal.organisation_id)
+                new_log = NotificationDeliveryLog(
+                    organisation_id=principal.organisation_id,
+                    event_type=delivery.event_type,
+                    endpoint_id=delivery.endpoint_id,
+                    status="failed",
+                    attempt_count=delivery.attempt_count + 1,
+                    response_code=None,
+                    response_body=None,
+                    last_error=str(exc),
+                )
+                session.add(new_log)
+
+            errors.append(str(exc))
+            retried += 1
+
+    return {"retried": retried, "errors": errors, "success": len(errors) == 0}
+
+
 @router.get("/available-events", response_model=list[str])
 async def list_available_events(
     principal: AuthenticatedPrincipal = Depends(get_current_user),

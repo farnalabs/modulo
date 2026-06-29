@@ -68,10 +68,26 @@
           >
             Reset
           </button>
+          <button
+            v-if="hasRetryableItems"
+            :disabled="retryingAll"
+            data-testid="admin-notification-log-retry-all"
+            class="rounded-lg border border-amber-300 bg-amber-50 px-4 py-2 text-sm font-medium text-amber-800 hover:bg-amber-100 disabled:opacity-40 dark:border-amber-700 dark:bg-amber-950/30 dark:text-amber-300"
+            @click="retryAllFailed"
+          >
+            {{ retryingAll ? 'Retrying All…' : 'Retry All Failed' }}
+          </button>
         </div>
       </div>
       <div v-if="total > 0" class="mt-3 text-sm text-muted-foreground">
         {{ total }} delivery{{ total === 1 ? '' : 'ies' }}
+      </div>
+      <div
+        v-if="retrySuccessMessage"
+        data-testid="admin-notification-log-retry-success"
+        class="mt-3 rounded-lg border border-success/50 bg-success/10 px-4 py-3 text-sm text-success"
+      >
+        {{ retrySuccessMessage }}
       </div>
     </div>
 
@@ -142,8 +158,11 @@
                 {{ entry.last_error || '—' }}
               </td>
               <td class="px-4 py-3">
+                <div v-if="retryMessages[entry.id]" class="text-xs" :class="retryMessages[entry.id].type === 'error' ? 'text-destructive' : 'text-success'">
+                  {{ retryMessages[entry.id].text }}
+                </div>
                 <button
-                  v-if="entry.status === 'failed' || entry.status === 'dead_lettered'"
+                  v-else-if="entry.status === 'failed' || entry.status === 'dead_lettered'"
                   :disabled="retryingId === entry.id"
                   data-testid="admin-notification-log-retry"
                   class="rounded-md bg-primary/10 px-2.5 py-1 text-xs font-medium text-primary hover:bg-primary/20 disabled:opacity-40"
@@ -245,6 +264,11 @@ const filterDateTo = ref('')
 
 const expandedId = ref<string | null>(null)
 const retryingId = ref<string | null>(null)
+const retryingAll = ref(false)
+const retrySuccessMessage = ref<string | null>(null)
+const retryMessages = ref<Record<string, { type: string; text: string }>>({})
+
+const hasRetryableItems = computed(() => items.value.some(e => e.status === 'failed' || e.status === 'dead_lettered'))
 
 const deadLetteredCount = computed(() => items.value.filter(e => e.status === 'dead_lettered').length)
 
@@ -279,6 +303,7 @@ function toggleRow(id: string) {
 async function loadDeliveries(cursor?: string | null) {
   loading.value = true
   error.value = null
+  retrySuccessMessage.value = null
   try {
     const params: Record<string, unknown> = { limit: 50 }
     if (cursor) params.cursor = cursor
@@ -333,11 +358,12 @@ function showDeadLettered() {
 
 async function retryDelivery(entry: DeliveryLogEntry) {
   if (!entry.endpoint_id) {
-    error.value = 'Cannot retry: missing endpoint ID'
+    retryMessages.value[entry.id] = { type: 'error', text: 'Cannot retry: missing endpoint ID' }
     return
   }
   retryingId.value = entry.id
   error.value = null
+  delete retryMessages.value[entry.id]
   try {
     const { data, error: err } = await api.POST(
       '/api/v1/admin/notifications/{webhook_id}/deliveries/{delivery_id}/retry',
@@ -351,19 +377,41 @@ async function retryDelivery(entry: DeliveryLogEntry) {
       },
     )
     if (err) {
-      error.value = `Retry failed: ${err}`
+      retryMessages.value[entry.id] = { type: 'error', text: `Retry failed: ${err}` }
     } else if (data) {
       if (data.success) {
-        loadDeliveries(currentCursor.value)
+        await loadDeliveries(currentCursor.value)
+        retryMessages.value[entry.id] = { type: 'success', text: 'Retry succeeded' }
       } else {
-        error.value = `Retry attempt failed: ${data.error || `HTTP ${data.status_code}`}`
-        loadDeliveries(currentCursor.value)
+        await loadDeliveries(currentCursor.value)
+        retryMessages.value[entry.id] = { type: 'error', text: `Retry failed: ${data.error || `HTTP ${data.status_code}`}` }
       }
     }
   } catch (e: unknown) {
-    error.value = `Retry request failed: ${e instanceof Error ? e.message : String(e)}`
+    retryMessages.value[entry.id] = { type: 'error', text: `Retry request failed: ${e instanceof Error ? e.message : String(e)}` }
   } finally {
     retryingId.value = null
+  }
+}
+
+async function retryAllFailed() {
+  retryingAll.value = true
+  retrySuccessMessage.value = null
+  error.value = null
+  retryMessages.value = {}
+  try {
+    const { data, error: err } = await api.POST('/api/v1/admin/notifications/deliveries/retry-all-failed', {})
+    if (err) {
+      error.value = `Retry all failed: ${err}`
+    } else if (data) {
+      await loadDeliveries(currentCursor.value)
+      const msg = `Retried ${data.retried} deliver${data.retried === 1 ? 'y' : 'ies'}`
+      retrySuccessMessage.value = data.success ? msg : `${msg} with ${data.errors?.length || 0} error(s)`
+    }
+  } catch (e: unknown) {
+    error.value = `Retry all request failed: ${e instanceof Error ? e.message : String(e)}`
+  } finally {
+    retryingAll.value = false
   }
 }
 
