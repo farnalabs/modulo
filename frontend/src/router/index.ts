@@ -28,6 +28,7 @@ import TeamComparisonView from '../views/TeamComparisonView.vue'
 import StageBoardView from '../views/StageBoardView.vue'
 import PipelineEditorView from '../views/PipelineEditorView.vue'
 import CopyPipelineWizard from '../views/CopyPipelineWizard.vue'
+import PipelineTemplateGallery from '../views/PipelineTemplateGallery.vue'
 import AdminUsersView from '../views/AdminUsersView.vue'
 import AdminSpendLimitsView from '../views/AdminSpendLimitsView.vue'
 import AdminCostBreakdownView from '../views/AdminCostBreakdownView.vue'
@@ -262,6 +263,11 @@ const router = createRouter({
       path: '/pipelines/copy',
       name: 'pipeline-copy',
       component: CopyPipelineWizard,
+    },
+    {
+      path: '/templates',
+      name: 'pipeline-templates',
+      component: PipelineTemplateGallery,
     },
     {
       path: '/pipelines/:id/editor',

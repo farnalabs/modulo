@@ -626,11 +626,17 @@ def test_delete_pipeline_not_found_returns_404(client: TestClient) -> None:
 
 
 def test_clone_pipeline_returns_201(client: TestClient) -> None:
+    source = _make_pipeline()
     cloned = _make_pipeline()
     cloned.name = "Copy of Test Pipeline"
     cloned.id = uuid.uuid4()
 
     with (
+        patch("modulo.api.routes.pipelines.get_pipeline", return_value=source),
+        patch(
+            "modulo.api.routes.pipelines.check_pipeline_name_available",
+            return_value=True,
+        ),
         patch("modulo.api.routes.pipelines.clone_pipeline", return_value=cloned) as mock_clone,
         patch("modulo.api.routes.pipelines.set_rls_org"),
         patch("modulo.api.routes.pipelines.set_rls_user_context"),
@@ -651,11 +657,17 @@ def test_clone_pipeline_returns_201(client: TestClient) -> None:
 
 
 def test_clone_pipeline_with_custom_name(client: TestClient) -> None:
+    source = _make_pipeline()
     cloned = _make_pipeline()
     cloned.name = "My Custom Clone"
     cloned.id = uuid.uuid4()
 
     with (
+        patch("modulo.api.routes.pipelines.get_pipeline", return_value=source),
+        patch(
+            "modulo.api.routes.pipelines.check_pipeline_name_available",
+            return_value=True,
+        ),
         patch("modulo.api.routes.pipelines.clone_pipeline", return_value=cloned) as mock_clone,
         patch("modulo.api.routes.pipelines.set_rls_org"),
         patch("modulo.api.routes.pipelines.set_rls_user_context"),
@@ -678,7 +690,7 @@ def test_clone_pipeline_with_custom_name(client: TestClient) -> None:
 
 def test_clone_pipeline_not_found_returns_404(client: TestClient) -> None:
     with (
-        patch("modulo.api.routes.pipelines.clone_pipeline", return_value=None),
+        patch("modulo.api.routes.pipelines.get_pipeline", return_value=None),
         patch("modulo.api.routes.pipelines.set_rls_org"),
         patch("modulo.api.routes.pipelines.set_rls_user_context"),
     ):

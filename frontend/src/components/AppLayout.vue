@@ -14,6 +14,7 @@
         <SidebarLink to="/library" icon="BookOpen" label="Library" />
         <SidebarLink to="/pipelines" icon="GitBranch" label="Pipelines" />
         <SidebarLink to="/pipelines/copy" icon="Copy" label="Copy Pipeline" />
+        <SidebarLink to="/templates" icon="LayoutTemplate" label="Pipeline Templates" />
         <SidebarLink to="/stages" icon="Columns" label="Stages" />
         <SidebarLink to="/evals/editor" icon="CheckSquare" label="Evals" />
         <SidebarLink to="/evals/proposals" icon="Clipboard" label="Eval Proposals" />
@@ -144,6 +145,7 @@
         <SidebarLink to="/library" icon="BookOpen" label="Library" @click="mobileOpen = false" />
         <SidebarLink to="/pipelines" icon="GitBranch" label="Pipelines" @click="mobileOpen = false" />
         <SidebarLink to="/pipelines/copy" icon="Copy" label="Copy Pipeline" @click="mobileOpen = false" />
+        <SidebarLink to="/templates" icon="LayoutTemplate" label="Pipeline Templates" @click="mobileOpen = false" />
         <SidebarLink to="/stages" icon="Columns" label="Stages" @click="mobileOpen = false" />
         <SidebarLink to="/evals/editor" icon="CheckSquare" label="Evals" @click="mobileOpen = false" />
         <SidebarLink to="/evals/proposals" icon="Clipboard" label="Eval Proposals" @click="mobileOpen = false" />
@@ -277,6 +279,7 @@ const icons: Record<string, string> = {
   ShieldQuestion: '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/><path d="M9.1 9a3 3 0 0 1 5.82 1c0 2-3 3-3 3"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>',
   Bell: '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9"/><path d="M10.3 21a1.94 1.94 0 0 0 3.4 0"/></svg>',
   Container: '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/><polyline points="3.27 6.96 12 12.01 20.73 6.96"/><line x1="12" y1="22.08" x2="12" y2="12"/></svg>',
+  LayoutTemplate: '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><line x1="3" y1="9" x2="21" y2="9"/><line x1="9" y1="21" x2="9" y2="9"/></svg>',
 }
 
 export const SidebarLink = defineComponent({
