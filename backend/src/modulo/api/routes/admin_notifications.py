@@ -107,6 +107,7 @@ class DeliveryLogEntry(BaseModel):
     last_error: str | None
     response_body: str | None = None
     endpoint_url: str | None = None
+    endpoint_id: str | None = None
     created_at: str
 
 
@@ -131,6 +132,7 @@ async def list_all_deliveries(
     cursor: str | None = Query(None, description="Cursor from previous response (ISO datetime)"),
     limit: int = Query(default=25, ge=1, le=100),
     status_filter: str | None = Query(None, alias="status"),
+    event_type_filter: str | None = Query(None, alias="event_type"),
     endpoint_id_filter: uuid.UUID | None = Query(None, alias="endpoint_id"),
     date_from: str | None = Query(None, alias="from"),
     date_to: str | None = Query(None, alias="to"),
@@ -159,6 +161,9 @@ async def list_all_deliveries(
 
         if status_filter:
             query = query.where(NotificationDeliveryLog.status == status_filter)
+
+        if event_type_filter:
+            query = query.where(NotificationDeliveryLog.event_type == event_type_filter)
 
         if endpoint_id_filter:
             query = query.where(NotificationDeliveryLog.endpoint_id == endpoint_id_filter)
@@ -211,6 +216,8 @@ async def list_all_deliveries(
     )
     if status_filter:
         count_query = count_query.where(NotificationDeliveryLog.status == status_filter)
+    if event_type_filter:
+        count_query = count_query.where(NotificationDeliveryLog.event_type == event_type_filter)
     if endpoint_id_filter:
         count_query = count_query.where(NotificationDeliveryLog.endpoint_id == endpoint_id_filter)
     count_result = await session.execute(count_query)
@@ -226,6 +233,7 @@ async def list_all_deliveries(
             last_error=d[0].last_error,
             response_body=d[0].response_body,
             endpoint_url=d[1] or "",
+            endpoint_id=str(d[0].endpoint_id) if d[0].endpoint_id else None,
             created_at=d[0].created_at.isoformat() if d[0].created_at else "",
         )
         for d in rows

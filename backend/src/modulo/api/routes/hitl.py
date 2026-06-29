@@ -159,6 +159,7 @@ async def approve_gate(
                 gate_id=gate_id,
                 org_id=principal.organisation_id,
                 claim_token=body.claim_token,
+                actor_id=principal.user_id,
             )
         except GateNotFoundError as exc:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
@@ -262,6 +263,7 @@ async def submit_manual_output(
                 gate_id=gate_id,
                 org_id=principal.organisation_id,
                 claim_token=body.claim_token,
+                actor_id=principal.user_id,
             )
         except GateNotFoundError as exc:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc

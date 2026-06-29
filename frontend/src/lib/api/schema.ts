@@ -284,6 +284,7 @@ export interface paths {
           cursor?: string
           limit?: number
           status?: string
+          event_type?: string
           from?: string
           to?: string
         }
@@ -977,6 +978,20 @@ export interface paths {
       }
     }
   }
+  '/api/v1/admin/notifications/{webhook_id}/deliveries/{delivery_id}/retry': {
+    post: {
+      parameters: {
+        path: { webhook_id: string; delivery_id: string }
+      }
+      responses: {
+        200: {
+          content: {
+            'application/json': components['schemas']['TestResult']
+          }
+        }
+      }
+    }
+  }
 }
 
 export interface components {
@@ -1505,6 +1520,7 @@ export interface components {
       last_error: string | null
       response_body: string | null
       endpoint_url: string | null
+      endpoint_id: string | null
       created_at: string
     }
     DeliveryLogResponse: {
