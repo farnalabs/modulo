@@ -22,11 +22,21 @@ interface FlagsResponse {
   would_activate: FlagItem[]
 }
 
+interface LicenseStatusResponse {
+  has_license: boolean
+  tier: string
+  features: string[]
+  expires_at: string | null
+  org_id: string | null
+}
+
 export const usePlanStore = defineStore('plan', () => {
   const currentTier = ref('free')
   const features = ref<Record<string, boolean>>({})
   const isLoading = ref(false)
   const error = ref<string | null>(null)
+  const expiresAt = ref<string | null>(null)
+  const orgName = ref<string | null>(null)
 
   const isEnterprise = computed(() => currentTier.value === 'enterprise')
 
@@ -50,6 +60,14 @@ export const usePlanStore = defineStore('plan', () => {
         }
         features.value = map
       }
+
+      const licResp = await (api as any).GET('/api/v1/admin/license')
+      if (!licResp.error && licResp.data) {
+        const lic = licResp.data as LicenseStatusResponse
+        expiresAt.value = lic.expires_at ?? null
+        orgName.value = lic.org_id ?? null
+        if (lic.tier) currentTier.value = lic.tier
+      }
     } catch (e: unknown) {
       error.value = e instanceof Error ? e.message : String(e)
     } finally {
@@ -57,5 +75,5 @@ export const usePlanStore = defineStore('plan', () => {
     }
   }
 
-  return { currentTier, features, isLoading, error, isEnterprise, fetchPlan, featureEnabled }
+  return { currentTier, features, isLoading, error, isEnterprise, expiresAt, orgName, fetchPlan, featureEnabled }
 })
