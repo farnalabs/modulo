@@ -168,7 +168,7 @@ async function loadFlags() {
     } else if (data) {
       const resp = data as FlagsResponse
       flags.value = resp.flags
-      license.value = resp.license
+      license.value = resp.license ?? { tier: 'free', has_license_key: false, is_valid: true }
       wouldActivate.value = resp.would_activate
     }
   } catch (e: unknown) {

@@ -741,7 +741,7 @@ async function fetchVariantGroups() {
   try {
     const { data, error: err } = await api.GET('/api/v1/variant-groups')
     if (err) return
-    variantGroups.value = (data ?? []) as unknown as VariantGroup[]
+    variantGroups.value = (Array.isArray(data) ? data : (data as any)?.items ?? []) as unknown as VariantGroup[]
   } catch {
     // Non-critical
   }

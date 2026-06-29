@@ -40,7 +40,7 @@
             </div>
             <div class="min-w-0">
               <p class="text-sm font-medium text-muted-foreground">Running</p>
-              <p class="text-2xl font-bold text-success">{{ data.run_counts_by_status.running }}</p>
+              <p class="text-2xl font-bold text-success">{{ data.run_counts_by_status?.running ?? 0 }}</p>
             </div>
           </div>
         </div>
@@ -51,7 +51,7 @@
             </div>
             <div class="min-w-0">
               <p class="text-sm font-medium text-muted-foreground">Awaiting Human</p>
-              <p class="text-2xl font-bold text-warning">{{ data.run_counts_by_status.awaiting_human }}</p>
+              <p class="text-2xl font-bold text-warning">{{ data.run_counts_by_status?.awaiting_human ?? 0 }}</p>
             </div>
           </div>
         </div>
@@ -65,7 +65,7 @@
             </div>
             <div class="min-w-0">
               <p class="text-sm font-medium text-muted-foreground">Failed</p>
-              <p class="text-2xl font-bold text-destructive">{{ data.run_counts_by_status.failed }}</p>
+              <p class="text-2xl font-bold text-destructive">{{ data.run_counts_by_status?.failed ?? 0 }}</p>
             </div>
           </div>
         </div>
@@ -76,7 +76,7 @@
             </div>
             <div class="min-w-0">
               <p class="text-sm font-medium text-muted-foreground">Idle</p>
-              <p class="text-2xl font-bold">{{ data.run_counts_by_status.idle }}</p>
+              <p class="text-2xl font-bold">{{ data.run_counts_by_status?.idle ?? 0 }}</p>
             </div>
           </div>
         </div>
