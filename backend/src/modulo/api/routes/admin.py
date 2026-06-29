@@ -1037,9 +1037,32 @@ async def confirm_org_deletion(
     )
 
 
+class CancelDeletionResponse(BaseModel):
+    status: str
+
+
 class OrgExportResponse(BaseModel):
     organisation: dict[str, object]
     exported_at: str
+
+
+@router.patch("/org/deletion-cancel", response_model=CancelDeletionResponse)
+async def cancel_org_deletion(
+    current_user: AuthenticatedPrincipal = Depends(get_current_user),
+    session: AsyncSession = Depends(get_db_session),
+) -> CancelDeletionResponse:
+    _require_org_admin(current_user)
+
+    from modulo.db.crud.org_deletion import cancel_org_deletion as _cancel
+
+    async with session.begin():
+        await set_rls_org(session, current_user.organisation_id)
+        try:
+            result = await _cancel(session, org_id=current_user.organisation_id)
+        except ValueError as exc:
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+
+    return CancelDeletionResponse(**result)
 
 
 @router.get("/org/export", response_model=OrgExportResponse)
