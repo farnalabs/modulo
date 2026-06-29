@@ -1,5 +1,6 @@
 """BDD/E2E test fixtures — pytest-bdd, Playwright, and TestClient setup."""
 
+import os
 import uuid
 from collections.abc import AsyncGenerator, Generator
 from typing import Any
@@ -8,6 +9,8 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 from fastapi.testclient import TestClient
 from playwright.sync_api import Page
+
+os.environ.setdefault("MODULO_CSRF_ENABLED", "false")
 
 from modulo.api.dependencies import _get_engine, get_db_session
 from modulo.api.main import app
@@ -58,6 +61,7 @@ def make_settings() -> Settings:
         fernet_key=_VALID_32,
         modulo_admin_password="testpass",
         modulo_license_key="test-license-key",
+        modulo_csrf_enabled=False,
     )
 
 
