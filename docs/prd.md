@@ -1774,6 +1774,10 @@ V1 SSO (OIDC/SAML) supports group-to-team mapping via claims. On JIT user provis
 
 **JWT stale team membership**: team membership changes (add, remove, role change) take effect at the user's next token refresh — up to 15 minutes after the change. This is a known and documented gap, acceptable for routine membership management. For immediate revocation (departing employee, security incident), admins use the **session revocation** action, which invalidates all active tokens for that user via token family invalidation (§6.10). This forces the next request to fail auth and require re-login with current membership. Document this in the admin UI alongside the "Remove from team" action. **Exception**: `required_team_id` HITL gate enforcement always performs a DB-live membership check — the JWT claims are not trusted for this security-critical path.
 
+**Password change**: Logged-in users can change their own password via `PUT /api/v1/me/password`. The endpoint requires the current password for authorisation, validates the new password against the strength policy, and bcrypt-hashes it before storing. On success, all active JWT token families for the user are blacklisted, forcing re-login with the new password. This prevents a hijacked session from changing the password without the user's knowledge (the attacker would need the current password) and ensures that a compromised password's tokens are immediately invalidated on change.
+
+The My Profile page (`/admin/my-profile`) provides the frontend UI for password change with client-side validation (min length, match confirmation) and error display. Users without a local password (SSO/OIDC/SAML provisioned) cannot use this endpoint.
+
 ---
 
 ## 10. Extensibility and Distribution
