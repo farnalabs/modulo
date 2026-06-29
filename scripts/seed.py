@@ -13,6 +13,7 @@ import hashlib
 import json
 import os
 import sys
+import tempfile
 import uuid
 from datetime import UTC, datetime, timedelta
 
@@ -384,7 +385,7 @@ async def seed() -> None:
             for cname, ctype, cfg in [
                 ("Demo GitHub", "github", {"repo": "farnalabs/modulo", "base_url": "https://api.github.com"}),
                 ("Demo Slack", "slack", {"workspace": "farnalabs", "default_channel": "#deployments"}),
-                ("Demo Filesystem", "filesystem", {"base_path": "/tmp/demo/"}),
+                ("Demo Filesystem", "filesystem", {"base_path": os.path.join(tempfile.gettempdir(), "modulo-demo")}),
             ]:
                 session.add(ConnectorInstance(
                     organisation_id=org.id, name=cname, connector_type_id=ctype,

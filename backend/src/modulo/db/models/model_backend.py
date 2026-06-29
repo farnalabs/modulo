@@ -5,16 +5,17 @@ from typing import Any
 from sqlalchemy import JSON, CheckConstraint, DateTime, ForeignKey, LargeBinary, String, Uuid
 from sqlalchemy.orm import Mapped, mapped_column
 
+from modulo.db.enums import ModelBackendProvider
 from modulo.db.models.base import OrgScoped
+
+_PROVIDER_VALUES = sorted(m.value for m in ModelBackendProvider)
+_PROVIDER_SQL = f"provider IN ({', '.join(repr(v) for v in _PROVIDER_VALUES)})"
 
 
 class ModelBackend(OrgScoped):
     __tablename__ = "model_backends"
     __table_args__ = (
-        CheckConstraint(
-            "provider IN ('ai21', 'anthropic', 'deepseek', 'fireworks', 'grok', 'groq', 'jan', 'llamacpp', 'lm_studio', 'localai', 'openai', 'azure_openai', 'bedrock', 'ollama', 'openrouter', 'perplexity', 'qwen', 'tgi', 'togetherai', 'vllm', 'custom')",
-            name="ck_model_backends_provider",
-        ),
+        CheckConstraint(_PROVIDER_SQL, name="ck_model_backends_provider"),
         CheckConstraint("cost_tracking IN ('enabled', 'disabled')", name="ck_model_backends_cost"),
         CheckConstraint("visibility IN ('org', 'team')", name="ck_model_backends_visibility"),
         CheckConstraint(
