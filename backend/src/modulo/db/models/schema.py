@@ -1,7 +1,8 @@
 import uuid
+from datetime import datetime
 from typing import Any
 
-from sqlalchemy import JSON, Boolean, ForeignKey, Integer, String, UniqueConstraint, Uuid
+from sqlalchemy import JSON, Boolean, DateTime, ForeignKey, Integer, String, UniqueConstraint, Uuid, func
 from sqlalchemy.orm import Mapped, mapped_column
 
 from modulo.db.models.base import OrgScoped
@@ -15,6 +16,8 @@ class Schema(OrgScoped):
     description: Mapped[str | None] = mapped_column(String(2000))
     abstract_name: Mapped[str | None] = mapped_column(String(255))
     created_by: Mapped[uuid.UUID] = mapped_column(Uuid(), ForeignKey("users.id", ondelete="RESTRICT"), nullable=False)
+    deprecated: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="false")
+    deprecated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 
 class SchemaVersion(OrgScoped):

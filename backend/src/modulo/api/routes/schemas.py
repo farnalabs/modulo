@@ -31,6 +31,7 @@ from modulo.db.crud.schema import (
     create_schema,
     create_schema_version,
     delete_schema,
+    deprecate_schema,
     get_schema,
     get_schema_version,
     list_schema_versions,
@@ -69,6 +70,8 @@ class SchemaResponse(BaseModel):
     created_by: uuid.UUID
     created_at: datetime
     updated_at: datetime
+    deprecated: bool = False
+    deprecated_at: datetime | None = None
 
     model_config = {"from_attributes": True}
 
@@ -181,6 +184,21 @@ async def update_schema_endpoint(
     async with session.begin():
         await set_rls_org(session, principal.organisation_id)
         schema = await update_schema(session, schema_id, updates)
+    if schema is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Schema not found")
+    return SchemaResponse.model_validate(schema)
+
+
+@router.patch("/{schema_id}/deprecate", response_model=SchemaResponse)
+async def deprecate_schema_endpoint(
+    schema_id: uuid.UUID,
+    session: AsyncSession = Depends(get_db_session),
+    principal: AuthenticatedPrincipal = Depends(get_current_user),
+) -> SchemaResponse:
+    """Mark a schema as deprecated."""
+    async with session.begin():
+        await set_rls_org(session, principal.organisation_id)
+        schema = await deprecate_schema(session, schema_id)
     if schema is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Schema not found")
     return SchemaResponse.model_validate(schema)

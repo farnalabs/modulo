@@ -21,6 +21,13 @@
           <div v-if="run.total_cost_usd != null" class="text-base font-semibold tabular-nums text-foreground">
             Total: ${{ formattedCost }}
           </div>
+          <button
+            data-testid="run-detail-share-summary"
+            class="mt-2 inline-flex items-center gap-1 rounded-md px-3 py-1.5 text-sm font-medium text-primary hover:bg-primary/10"
+            @click="copyShareSummary"
+          >
+            {{ shareCopied ? 'Copied!' : 'Share Summary' }}
+          </button>
         </div>
       </header>
 
@@ -175,6 +182,37 @@ const run = ref<RunResponse | null>(null)
 const runIO = ref<RunIOResponse | null>(null)
 const expandedNodes = ref(new Set<string>())
 const copied = ref(false)
+const shareCopied = ref(false)
+
+const shareSummary = computed(() => {
+  const r = run.value
+  if (!r) return ''
+  const completed = nodeEntries.value.filter(n => n.status === 'complete').length
+  const total = nodeEntries.value.length
+  const tokens = totalTokens.value?.toLocaleString() ?? '—'
+  const cost = r.total_cost_usd != null ? `$${Number(r.total_cost_usd).toFixed(6)}` : '—'
+  return [
+    `Run: ${r.run_id}`,
+    `Pipeline: ${r.pipeline_id}`,
+    `Status: ${r.status}`,
+    `Nodes: ${completed}/${total}`,
+    `Tokens: ${tokens}`,
+    `Cost: ${cost}`,
+    `Duration: —`,
+  ].join('\n')
+})
+
+async function copyShareSummary() {
+  const text = shareSummary.value
+  if (!text) return
+  try {
+    await navigator.clipboard.writeText(text)
+    shareCopied.value = true
+    setTimeout(() => { shareCopied.value = false }, 2000)
+  } catch {
+    // clipboard not available
+  }
+}
 
 function toggleNodeIO(name: string) {
   const s = expandedNodes.value

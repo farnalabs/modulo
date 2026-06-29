@@ -430,6 +430,21 @@ export interface paths {
     }
   }
   '/api/v1/schemas': {
+    get: {
+      parameters: {
+        query: {
+          page?: number
+          page_size?: number
+        }
+      }
+      responses: {
+        200: {
+          content: {
+            'application/json': components['schemas']['SchemaListResponse']
+          }
+        }
+      }
+    }
     post: {
       requestBody: {
         content: {
@@ -440,6 +455,34 @@ export interface paths {
         201: {
           content: {
             'application/json': components['schemas']['SchemaCreateResponse']
+          }
+        }
+      }
+    }
+  }
+  '/api/v1/schemas/{schema_id}': {
+    get: {
+      parameters: {
+        path: { schema_id: string }
+      }
+      responses: {
+        200: {
+          content: {
+            'application/json': components['schemas']['SchemaItem']
+          }
+        }
+      }
+    }
+  }
+  '/api/v1/schemas/{schema_id}/deprecate': {
+    patch: {
+      parameters: {
+        path: { schema_id: string }
+      }
+      responses: {
+        200: {
+          content: {
+            'application/json': components['schemas']['SchemaItem']
           }
         }
       }
@@ -955,6 +998,24 @@ export interface components {
     SchemaCreateResponse: {
       id: string
       name: string
+    }
+    SchemaItem: {
+      id: string
+      organisation_id: string
+      name: string
+      description: string | null
+      abstract_name: string | null
+      created_by: string
+      created_at: string
+      updated_at: string
+      deprecated: boolean
+      deprecated_at: string | null
+    }
+    SchemaListResponse: {
+      items: components['schemas']['SchemaItem'][]
+      total: number
+      page: number
+      page_size: number
     }
     FeedbackRecordItem: {
       id: string

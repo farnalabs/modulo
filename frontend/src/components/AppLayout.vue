@@ -25,6 +25,7 @@
         <SidebarLink to="/settings/runtime-config" icon="Settings" label="Runtime Config" />
         <SidebarLink to="/settings/license" icon="KeyRound" label="License" />
         <SidebarLink to="/settings/mcp" icon="Cable" label="MCP" />
+        <SidebarLink to="/schemas" icon="Database" label="Schemas" />
         <SidebarLink to="/schemas/infer" icon="Database" label="Schema Inference" />
 
         <div class="sidebar-section-header">Admin</div>
@@ -33,6 +34,7 @@
         <SidebarLink to="/admin/audit" icon="FileText" label="Audit Log" />
         <SidebarLink to="/admin/connectors" icon="Plug" label="Connectors" />
         <SidebarLink to="/admin/node-categories" icon="Tag" label="Node Categories" />
+        <SidebarLink to="/admin/views" icon="Eye" label="Saved Views" />
         <SidebarLink to="/admin/costs" icon="DollarSign" label="Cost Breakdown" />
         <SidebarLink to="/admin/costs/limits" icon="CreditCard" label="Spend Limits" />
         <SidebarLink to="/admin/feature-flags" icon="Flag" label="Feature Flags" />
@@ -142,6 +144,7 @@
         <SidebarLink to="/settings/runtime-config" icon="Settings" label="Runtime Config" @click="mobileOpen = false" />
         <SidebarLink to="/settings/license" icon="KeyRound" label="License" @click="mobileOpen = false" />
         <SidebarLink to="/settings/mcp" icon="Cable" label="MCP" @click="mobileOpen = false" />
+        <SidebarLink to="/schemas" icon="Database" label="Schemas" @click="mobileOpen = false" />
         <SidebarLink to="/schemas/infer" icon="Database" label="Schema Inference" @click="mobileOpen = false" />
 
         <div class="sidebar-section-header">Admin</div>
@@ -150,6 +153,7 @@
         <SidebarLink to="/admin/audit" icon="FileText" label="Audit Log" @click="mobileOpen = false" />
         <SidebarLink to="/admin/connectors" icon="Plug" label="Connectors" @click="mobileOpen = false" />
         <SidebarLink to="/admin/node-categories" icon="Tag" label="Node Categories" @click="mobileOpen = false" />
+        <SidebarLink to="/admin/views" icon="Eye" label="Saved Views" @click="mobileOpen = false" />
         <SidebarLink to="/admin/costs" icon="DollarSign" label="Cost Breakdown" @click="mobileOpen = false" />
         <SidebarLink to="/admin/costs/limits" icon="CreditCard" label="Spend Limits" @click="mobileOpen = false" />
         <SidebarLink to="/admin/feature-flags" icon="Flag" label="Feature Flags" @click="mobileOpen = false" />
