@@ -11,6 +11,7 @@ import SettingsRuntimeConfigView from '../views/SettingsRuntimeConfigView.vue'
 import SettingsSsoView from '../views/SettingsSsoView.vue'
 import SettingsTeamsView from '../views/SettingsTeamsView.vue'
 import SchemaInferenceView from '../views/SchemaInferenceView.vue'
+import SchemaListView from '../views/SchemaListView.vue'
 import OnboardingWizard from '../views/OnboardingWizard.vue'
 import FeedbackInboxView from '../views/FeedbackInboxView.vue'
 import EvalEditorView from '../views/EvalEditorView.vue'
@@ -28,6 +29,7 @@ import AdminSpendLimitsView from '../views/AdminSpendLimitsView.vue'
 import AdminCostBreakdownView from '../views/AdminCostBreakdownView.vue'
 import AdminConnectorsView from '../views/AdminConnectorsView.vue'
 import AdminNodeCategoriesView from '../views/AdminNodeCategoriesView.vue'
+import AdminViewsView from '../views/AdminViewsView.vue'
 import MyProfileView from '../views/MyProfileView.vue'
 import SettingsLicenseView from '../views/SettingsLicenseView.vue'
 import SettingsMcpView from '../views/SettingsMcpView.vue'
@@ -94,6 +96,11 @@ const router = createRouter({
       path: '/settings/mcp',
       name: 'settings-mcp',
       component: SettingsMcpView,
+    },
+    {
+      path: '/schemas',
+      name: 'schemas',
+      component: SchemaListView,
     },
     {
       path: '/schemas/infer',
@@ -169,6 +176,11 @@ const router = createRouter({
       path: '/admin/node-categories',
       name: 'admin-node-categories',
       component: AdminNodeCategoriesView,
+    },
+    {
+      path: '/admin/views',
+      name: 'admin-views',
+      component: AdminViewsView,
     },
     {
       path: '/admin/feature-flags',
