@@ -349,6 +349,88 @@ export interface paths {
       }
     }
   }
+  '/api/v1/triggers': {
+    get: {
+      parameters: {
+        query: {
+          pipeline_id?: string
+          trigger_type?: string
+          page?: number
+          page_size?: number
+        }
+      }
+      responses: {
+        200: {
+          content: {
+            'application/json': components['schemas']['TriggerListResponse']
+          }
+        }
+      }
+    }
+  }
+  '/api/v1/triggers/{trigger_id}': {
+    put: {
+      parameters: {
+        path: { trigger_id: string }
+      }
+      requestBody: {
+        content: {
+          'application/json': components['schemas']['TriggerUpdate']
+        }
+      }
+      responses: {
+        200: {
+          content: {
+            'application/json': components['schemas']['TriggerItem']
+          }
+        }
+      }
+    }
+    delete: {
+      parameters: {
+        path: { trigger_id: string }
+      }
+      responses: {
+        204: { description: 'No content' }
+      }
+    }
+  }
+  '/api/v1/triggers/{trigger_id}/toggle': {
+    post: {
+      parameters: {
+        path: { trigger_id: string }
+      }
+      responses: {
+        200: {
+          content: {
+            'application/json': {
+              id: string
+              active: boolean
+            }
+          }
+        }
+      }
+    }
+  }
+  '/api/v1/pipelines/{pipeline_id}/triggers': {
+    post: {
+      parameters: {
+        path: { pipeline_id: string }
+      }
+      requestBody: {
+        content: {
+          'application/json': components['schemas']['TriggerCreate']
+        }
+      }
+      responses: {
+        201: {
+          content: {
+            'application/json': components['schemas']['TriggerItem']
+          }
+        }
+      }
+    }
+  }
   '/api/v1/connectors': {
     get: {
       responses: {
@@ -830,6 +912,51 @@ export interface components {
         failed: number
         idle: number
       }
+      teams: Array<{
+        id: string
+        name: string
+        total_runs: number
+        active_pipelines: number
+        run_counts_by_status: {
+          running: number
+          awaiting_human: number
+          failed: number
+          idle: number
+        }
+        eval_pass_rate?: {
+          total_evals: number
+          passed_evals: number
+          pass_rate: number
+        }
+      }>
+      eval_pass_rate: {
+        overall_pass_rate: number
+        total_evals: number
+        passed_evals: number
+        per_pipeline: Record<string, {
+          total_evals: number
+          passed_evals: number
+          pass_rate: number
+        }>
+        per_team_pipeline: Record<string, Record<string, {
+          total_evals: number
+          passed_evals: number
+          pass_rate: number
+        }>>
+      } | null
+      trend: Array<{
+        date: string
+        run_count: number
+        eval_pass_rate: number | null
+        token_spend_usd: number
+      }>
+      recent_runs: Array<{
+        id: string
+        pipeline_name: string
+        status: string
+        created_at: string
+        trigger_type: string
+      }>
     }
     AdminTeamItem: {
       id: string
@@ -1307,6 +1434,21 @@ export interface components {
       next_cursor: string | null
       total: number
     }
+    TriggerUpdate: {
+      active?: boolean
+      max_concurrent_runs?: number
+      config_json?: Record<string, unknown>
+      cron_expression?: string | null
+      cron_timezone?: string | null
+    }
+    TriggerCreate: {
+      trigger_type: string
+      active?: boolean
+      max_concurrent_runs?: number
+      config_json?: Record<string, unknown>
+      cron_expression?: string | null
+      cron_timezone?: string | null
+    }
     TriggerEventItem: {
       id: string
       trigger_id: string
@@ -1322,6 +1464,26 @@ export interface components {
       next_cursor: string | null
       prev_cursor: string | null
       total: number
+    }
+    TriggerItem: {
+      id: string
+      pipeline_id: string
+      trigger_type: string
+      active: boolean
+      max_concurrent_runs: number
+      config_json: Record<string, unknown>
+      cron_expression: string | null
+      cron_timezone: string | null
+      last_fired_at: string | null
+      next_fire_at: string | null
+      created_by: string
+      created_at?: string | null
+    }
+    TriggerListResponse: {
+      items: components['schemas']['TriggerItem'][]
+      total: number
+      page: number
+      page_size: number
     }
     McpConfigResponse: {
       mcp_url: string

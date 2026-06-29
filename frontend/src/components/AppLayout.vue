@@ -25,6 +25,7 @@
         <SidebarLink to="/settings/runtime-config" icon="Settings" label="Runtime Config" />
         <SidebarLink to="/settings/license" icon="KeyRound" label="License" />
         <SidebarLink to="/settings/mcp" icon="Cable" label="MCP" />
+        <SidebarLink to="/settings/triggers" icon="Zap" label="Triggers" />
         <SidebarLink to="/schemas" icon="Database" label="Schemas" />
         <SidebarLink to="/schemas/infer" icon="Database" label="Schema Inference" />
 
@@ -39,6 +40,7 @@
         <SidebarLink to="/admin/costs" icon="DollarSign" label="Cost Breakdown" />
         <SidebarLink to="/admin/costs/limits" icon="CreditCard" label="Spend Limits" />
         <SidebarLink to="/admin/feature-flags" icon="Flag" label="Feature Flags" />
+        <SidebarLink to="/admin/plugins" icon="Puzzle" label="Plugins" />
         <SidebarLink to="/admin/api-changelog" icon="History" label="Changelog" />
         <SidebarLink to="/admin/teams/comparison" icon="BarChart" label="Team Comparison" />
       </nav>
@@ -145,6 +147,7 @@
         <SidebarLink to="/settings/runtime-config" icon="Settings" label="Runtime Config" @click="mobileOpen = false" />
         <SidebarLink to="/settings/license" icon="KeyRound" label="License" @click="mobileOpen = false" />
         <SidebarLink to="/settings/mcp" icon="Cable" label="MCP" @click="mobileOpen = false" />
+        <SidebarLink to="/settings/triggers" icon="Zap" label="Triggers" @click="mobileOpen = false" />
         <SidebarLink to="/schemas" icon="Database" label="Schemas" @click="mobileOpen = false" />
         <SidebarLink to="/schemas/infer" icon="Database" label="Schema Inference" @click="mobileOpen = false" />
 
@@ -159,6 +162,7 @@
         <SidebarLink to="/admin/costs" icon="DollarSign" label="Cost Breakdown" @click="mobileOpen = false" />
         <SidebarLink to="/admin/costs/limits" icon="CreditCard" label="Spend Limits" @click="mobileOpen = false" />
         <SidebarLink to="/admin/feature-flags" icon="Flag" label="Feature Flags" @click="mobileOpen = false" />
+        <SidebarLink to="/admin/plugins" icon="Puzzle" label="Plugins" @click="mobileOpen = false" />
         <SidebarLink to="/admin/api-changelog" icon="History" label="Changelog" @click="mobileOpen = false" />
         <SidebarLink to="/admin/teams/comparison" icon="BarChart" label="Team Comparison" @click="mobileOpen = false" />
       </nav>
@@ -247,7 +251,9 @@ const icons: Record<string, string> = {
   KeyRound: '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2.586 17.414A2 2 0 0 0 2 18.828V21a1 1 0 0 0 1 1h3a1 1 0 0 0 1-1v-1a1 1 0 0 1 1-1h1a1 1 0 0 0 1-1v-1a1 1 0 0 1 1-1h.172a2 2 0 0 0 1.414-.586l.814-.814a6.5 6.5 0 1 0-4-4z"/><circle cx="16.5" cy="7.5" r=".5" fill="currentColor"/></svg>',
   Cable: '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 2v6"/><path d="M15 2v6"/><path d="M5 8h14"/><path d="M7 8v10a2 2 0 0 0 2 2h6a2 2 0 0 0 2-2V8"/></svg>',
   Tag: '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2H2v10l9.29 9.29c.94.94 2.48.94 3.42 0l6.58-6.58c.94-.94.94-2.48 0-3.42L12 2z"/><path d="M7 7h.01"/></svg>',
+  Puzzle: '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M19.439 7.85c-.049.322.059.648.289.878l1.568 1.568c.47.47.706 1.087.706 1.704s-.235 1.233-.706 1.704l-1.611 1.611a.98.98 0 0 1-.837.276c-.47-.07-.802-.48-.968-.925a2.501 2.501 0 1 0-3.214 3.214c.446.166.855.497.925.968a.979.979 0 0 1-.276.837l-1.61 1.611a2.404 2.404 0 0 1-1.705.706 2.404 2.404 0 0 1-1.704-.706l-1.568-1.568a1.026 1.026 0 0 0-.877-.29c-.493.074-.84.504-1.02.968a2.5 2.5 0 1 1-3.237-3.237c.464-.18.894-.527.967-1.02a1.026 1.026 0 0 0-.289-.877l-1.568-1.568A2.404 2.404 0 0 1 1.998 12c0-.617.236-1.234.706-1.704L4.315 8.685a.98.98 0 0 1 .837-.276c.47.07.802.48.968.925a2.501 2.501 0 1 0 3.214-3.214c-.446-.166-.855-.497-.925-.968a.979.979 0 0 1 .276-.837l1.611-1.611a2.404 2.404 0 0 1 1.704-.706c.617 0 1.234.236 1.704.706l1.568 1.568c.23.23.556.338.877.29.493-.074.84-.504 1.02-.969a2.5 2.5 0 1 1 3.237 3.237c-.464.18-.894.527-.967 1.02Z"/></svg>',
   Cpu: '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="4" width="16" height="16" rx="2"/><rect x="9" y="9" width="6" height="6"/><path d="M15 2v2"/><path d="M15 20v2"/><path d="M2 15h2"/><path d="M20 15h2"/><path d="M9 2v2"/><path d="M9 20v2"/><path d="M2 9h2"/><path d="M20 9h2"/></svg>',
+  Zap: '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>',
 }
 
 export const SidebarLink = defineComponent({
