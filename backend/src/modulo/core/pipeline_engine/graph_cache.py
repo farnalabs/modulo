@@ -13,7 +13,7 @@ import threading
 import uuid
 from collections import OrderedDict, defaultdict
 from collections.abc import Callable
-from typing import Any
+from typing import Annotated, Any
 
 import jmespath
 from langgraph.graph import StateGraph
@@ -148,6 +148,24 @@ def _make_conditional_router(
 # ---------------------------------------------------------------------------
 
 
+# Keys whose values should be concatenated (not replaced) when multiple nodes
+# write to the same channel in the same step (e.g. parallel branches).
+_CONCAT_KEYS: frozenset[str] = frozenset({"artifacts", "_hitl_gates"})
+
+
+def _pipeline_state_reducer(
+    current: dict[str, Any], update: dict[str, Any]
+) -> dict[str, Any]:
+    """Merge a single state update, concatenating list-valued keys for parallel writes."""
+    result = dict(current)
+    for k, v in update.items():
+        if k in _CONCAT_KEYS and k in result:
+            result[k] = result[k] + v
+        else:
+            result[k] = v
+    return result
+
+
 def build_graph_from_json(
     graph_json: dict[str, Any],
     *,
@@ -179,7 +197,7 @@ def build_graph_from_json(
 
     Returns a compiled LangGraph that accepts dict[str, Any] state.
     """
-    graph: StateGraph[Any] = StateGraph(dict[str, Any])
+    graph: StateGraph[Any] = StateGraph(Annotated[dict[str, Any], _pipeline_state_reducer])
 
     nodes: list[dict[str, Any]] = graph_json.get("nodes", [])
     edges: list[dict[str, Any]] = graph_json.get("edges", [])

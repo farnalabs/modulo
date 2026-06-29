@@ -264,7 +264,7 @@ async def test_manual_node_no_schema_passes_any_output():
 
 
 async def test_manual_node_preserves_prior_artifacts():
-    """Manual node should preserve existing artifacts on resume."""
+    """Manual node returns delta artifacts on resume; accumulator handles merge."""
     node_def = {"id": "manual-unit-7", "node_type": "manual"}
     node_fn = make_manual_node_fn(node_def)
     prior = {"node_id": "prior-node", "status": "executed"}
@@ -276,8 +276,9 @@ async def test_manual_node_preserves_prior_artifacts():
         }
     )
 
-    assert len(result["artifacts"]) == 2
-    assert result["artifacts"][0] == prior
+    assert len(result["artifacts"]) == 1
+    assert result["artifacts"][0]["node_id"] == "manual-unit-7"
+    assert result["artifacts"][0]["human_output"] == {"data": "ok"}
 
 
 async def test_manual_node_handles_non_dict_decision():
