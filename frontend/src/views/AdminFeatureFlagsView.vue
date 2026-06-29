@@ -169,7 +169,7 @@ async function loadFlags() {
       const resp = data as FlagsResponse
       flags.value = resp.flags
       license.value = resp.license ?? { tier: 'free', has_license_key: false, is_valid: true }
-      wouldActivate.value = resp.would_activate
+      wouldActivate.value = resp.would_activate ?? []
     }
   } catch (e: unknown) {
     error.value = `Failed to load feature flags: ${e instanceof Error ? e.message : String(e)}`
