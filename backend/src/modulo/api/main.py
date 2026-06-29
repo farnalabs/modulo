@@ -25,7 +25,7 @@ from modulo.api.middleware.correlation_id import CorrelationIdMiddleware
 from modulo.api.middleware.cors_logging import CorsLoggingMiddleware
 from modulo.api.middleware.csrf import CsrfMiddleware
 from modulo.api.middleware.deprecation_headers import DeprecationHeaderMiddleware
-from modulo.api.middleware.rate_limiter import AuthRateLimitMiddleware, RateLimitMiddleware
+from modulo.api.middleware.rate_limiter import AuthRateLimitMiddleware, RateLimitMiddleware, shutdown_rate_limiters
 from modulo.api.middleware.security_headers import SecurityHeadersMiddleware
 from modulo.api.middleware.sensitive_mask import router as sensitive_router
 from modulo.api.routes.admin import router as admin_router
@@ -75,8 +75,10 @@ from modulo.api.routes.triggers import router as triggers_router
 from modulo.api.routes.variants import router as variants_router
 from modulo.api.routes.viewmodel import router as viewmodel_router
 from modulo.api.routes.webhooks import router as webhooks_router
-from modulo.core.in_process_scheduler import start_schedulers
+from modulo.core.graceful_shutdown import ShutdownManager, ShutdownMiddleware
+from modulo.core.in_process_scheduler import dispose_scheduler_engine, start_schedulers
 from modulo.core.logging_config import configure_logging
+from modulo.db.session import engine as db_engine
 from modulo.otel_bridge import setup_otel, shutdown_otel
 from modulo.settings import Settings, get_settings
 
@@ -84,6 +86,9 @@ logger = logging.getLogger(__name__)
 
 # Uptime tracking — set at module import time, read by health endpoints.
 _START_TIME = datetime.now(UTC)
+
+# Graceful shutdown manager — resources registered during lifespan startup.
+_shutdown_manager = ShutdownManager()
 
 
 async def _verify_db_connectivity(settings: Settings) -> None:
@@ -418,6 +423,12 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
     from modulo.core.runtime_config.store import get_runtime_config_store
     get_runtime_config_store()
 
+    # Initialise the graceful shutdown manager with the configured timeout.
+    _shutdown_manager.register("otel", shutdown_otel)
+    _shutdown_manager.register("db_engine", db_engine.dispose)
+    _shutdown_manager.register("rate_limiter_redis", shutdown_rate_limiters)
+    _shutdown_manager.register("scheduler_engine", dispose_scheduler_engine)
+
     # Start the run retention background loop.
     retention_task = asyncio.create_task(_run_retention_loop())
     yield
@@ -433,8 +444,7 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
                 pass
     except asyncio.CancelledError:
         pass
-    shutdown_otel()
-    logger.info("shutdown.stopping")
+    await _shutdown_manager.shutdown()
 
 
 app = FastAPI(
@@ -468,6 +478,7 @@ app.add_middleware(AuthRateLimitMiddleware)  # type: ignore[arg-type]
 app.add_middleware(DeprecationHeaderMiddleware)  # type: ignore[arg-type]
 app.add_middleware(SecurityHeadersMiddleware)  # type: ignore[arg-type]
 app.add_middleware(CatchAllMiddleware)
+app.add_middleware(ShutdownMiddleware, manager=_shutdown_manager)  # type: ignore[arg-type]
 
 app.include_router(health_router)
 app.include_router(admin_router)

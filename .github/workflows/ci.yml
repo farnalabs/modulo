@@ -28,6 +28,32 @@ jobs:
       - run: uv run --no-sync semgrep --config=../.semgrep/ .
       - run: uv run --no-sync pip-audit
 
+  backend-test:
+    name: Test (Backend)
+    runs-on: self-hosted
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v7
+        with:
+          python-version: "3.12"
+          enable-cache: true
+      - run: uv sync --frozen
+      - name: Run unit tests with coverage
+        shell: pwsh
+        run: ../.github/scripts/coverage-thresholds.ps1
+        env:
+          DATABASE_URL: "postgresql+asyncpg://unused:unused@localhost/unused"
+          SECRET_KEY: "ci-secret-key-for-github-actions-testing-only"
+          FERNET_KEY: "vK-xU7GqHLflg_GqzJ1FqWI7pHWoHSIyukf4wx-tMHI="
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: coverage-report
+          path: backend/coverage.xml
+
   frontend:
     name: Frontend
     runs-on: self-hosted
@@ -47,6 +73,18 @@ jobs:
       - run: npm run test:unit
       - run: npm run build
       - run: npm audit
+
+  docker-build:
+    name: Build (Docker)
+    runs-on: self-hosted
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build backend image
+        shell: powershell
+        run: docker build ./backend -t modulo-backend:${{ github.sha }}
+      - name: Build frontend image
+        shell: powershell
+        run: docker build ./frontend -t modulo-frontend:${{ github.sha }}
 
   product-map-validate:
     name: Product map validation
