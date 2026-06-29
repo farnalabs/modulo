@@ -1,175 +1,66 @@
 name: Release
 
 on:
-  workflow_dispatch:
-    inputs:
-      semver_bump:
-        description: 'Semver bump type (ignored if tag is set)'
-        required: true
-        default: 'patch'
-        type: choice
-        options:
-          - patch
-          - minor
-          - major
-      tag:
-        description: 'Explicit tag (e.g. v1.2.3). Overrides auto-bump. Leave empty for default.'
-        required: false
-        default: ''
-        type: string
-  schedule:
-    - cron: '0 9 * * 1'
+  push:
+    tags:
+      - 'v*'
 
 jobs:
-  check:
-    runs-on: ubuntu-latest
-    outputs:
-      has_changes: ${{ steps.check.outputs.has_changes }}
-      last_tag: ${{ steps.check.outputs.last_tag }}
-      next_version: ${{ steps.check.outputs.next_version }}
-      explicit_tag: ${{ steps.check.outputs.explicit_tag }}
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-          fetch-tags: true
-
-      - name: Check for releasable changes
-        id: check
-        run: |
-          EXPLICIT_TAG="${{ inputs.tag }}"
-
-          # If an explicit tag is given, skip the changes check and use it directly
-          if [ -n "$EXPLICIT_TAG" ]; then
-            echo "Explicit tag provided: $EXPLICIT_TAG"
-            echo "has_changes=true" >> $GITHUB_OUTPUT
-            echo "explicit_tag=$EXPLICIT_TAG" >> $GITHUB_OUTPUT
-            exit 0
-          fi
-          echo "explicit_tag=" >> $GITHUB_OUTPUT
-
-          LAST_TAG=$(git tag --list 'v*' --sort=-version:refname | head -1 || echo "")
-          if [ -z "$LAST_TAG" ]; then
-            echo "No previous release tag found — first release"
-            echo "has_changes=true" >> $GITHUB_OUTPUT
-            echo "last_tag=" >> $GITHUB_OUTPUT
-            exit 0
-          fi
-
-          echo "last_tag=$LAST_TAG" >> $GITHUB_OUTPUT
-          COMMITS_SINCE=$(git log "$LAST_TAG"..HEAD --oneline | wc -l)
-          echo "Commits since $LAST_TAG: $COMMITS_SINCE"
-
-          if [ "$COMMITS_SINCE" -eq 0 ]; then
-            echo "has_changes=false" >> $GITHUB_OUTPUT
-            echo "No new commits since $LAST_TAG — nothing to release."
-          else
-            echo "has_changes=true" >> $GITHUB_OUTPUT
-          fi
-
-  version:
-    needs: [check]
-    if: needs.check.outputs.has_changes == 'true'
-    runs-on: ubuntu-latest
-    outputs:
-      version: ${{ steps.determine.outputs.version }}
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-          fetch-tags: true
-
-      - name: Determine next version
-        id: determine
-        run: |
-          EXPLICIT_TAG="${{ needs.check.outputs.explicit_tag }}"
-
-          # If an explicit tag was given, use it directly
-          if [ -n "$EXPLICIT_TAG" ]; then
-            CLEAN="${EXPLICIT_TAG#v}"
-            echo "version=$CLEAN" >> $GITHUB_OUTPUT
-            exit 0
-          fi
-
-          LAST_TAG="${{ needs.check.outputs.last_tag }}"
-
-          if [ "${{ github.event_name }}" == "workflow_dispatch" ]; then
-            BUMP="${{ inputs.semver_bump }}"
-          else
-            BUMP="patch"
-          fi
-
-          if [ -z "$LAST_TAG" ]; then
-            echo "version=0.1.0" >> $GITHUB_OUTPUT
-          else
-            CLEAN="${LAST_TAG#v}"
-            IFS='.' read -r MAJOR MINOR PATCH <<< "$CLEAN"
-            case "$BUMP" in
-              major) echo "version=$((MAJOR + 1)).0.0" >> $GITHUB_OUTPUT ;;
-              minor) echo "version=$MAJOR.$((MINOR + 1)).0" >> $GITHUB_OUTPUT ;;
-              patch) echo "version=$MAJOR.$MINOR.$((PATCH + 1))" >> $GITHUB_OUTPUT ;;
-            esac
-          fi
-
   release:
-    needs: [check, version]
-    if: needs.check.outputs.has_changes == 'true'
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      packages: write
+      id-token: write
+
     steps:
       - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
         with:
-          fetch-depth: 0
-          fetch-tags: true
+          python-version: '3.13'
 
-      - name: Configure git
+      - name: Build Python package
         run: |
-          git config user.name "github-actions"
-          git config user.email "actions@github.com"
+          pip install build
+          cd backend
+          python -m build
 
-      - name: Update version files
-        run: |
-          VERSION="${{ needs.version.outputs.version }}"
-          TAG="v$VERSION"
-          CHANGE_DATE=$(date -d "+3 years" +%Y-%m-%d)
-          echo "Releasing $TAG (Change Date: $CHANGE_DATE)"
+      - name: Package version
+        id: version
+        run: echo "VERSION=${GITHUB_REF#refs/tags/v}" >> $GITHUB_OUTPUT
 
-          # --- LICENSE ---
-          sed -i "s/The Licensed Work is Modulo, version .*/The Licensed Work is Modulo, version $VERSION./" LICENSE
-          sed -i "s/Change Date: .*/Change Date: $CHANGE_DATE/" LICENSE
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
 
-          # --- backend/pyproject.toml ---
-          sed -i "s/^version = \".*\"/version = \"$VERSION\"/" backend/pyproject.toml
-
-          # --- frontend/package.json ---
-          sed -i "s/\"version\": \".*\"/\"version\": \"$VERSION\"/" frontend/package.json
-
-          # --- docs/prd.md ---
-          sed -i "s/^\*\*Version\*\*: .*\$/**Version**: $VERSION/" docs/prd.md
-          sed -i "s/^\*\*Date\*\*: .*\$/**Date**: $(date +%Y-%m-%d)/" docs/prd.md
-
-          # --- Generate SBOM ---
-          python backend/scripts/generate-sbom.py --output sbom.json
-
-          # --- Placeholder: Docker build & publish ---
-          # TODO: docker buildx build --platform linux/amd64,linux/arm64 \
-          #   -t farnalabs/modulo:$TAG -t farnalabs/modulo:latest .
-          # TODO: docker push farnalabs/modulo:$TAG
-          # TODO: docker push farnalabs/modulo:latest
-
-          # --- Commit & tag ---
-          git add LICENSE backend/pyproject.toml frontend/package.json docs/prd.md sbom.json
-          git commit -m "release: $TAG"
-          git tag -a "$TAG" -m "Modulo $TAG"
-
-          # --- Placeholder: GitHub release ---
-          # TODO: gh release create $TAG --title "Modulo $TAG" --notes "See changelog in docs/prd.md"
-
-      - name: Upload SBOM artifact
-        uses: actions/upload-artifact@v4
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
         with:
-          name: sbom
-          path: sbom.json
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Push release
-        run: |
-          git push origin HEAD --tags
+      - name: Build and push all-in-one image
+        uses: docker/build-push-action@v6
+        with:
+          file: Dockerfile.all-in-one
+          push: true
+          tags: |
+            ghcr.io/${{ github.repository }}:${{ steps.version.outputs.VERSION }}
+            ghcr.io/${{ github.repository }}:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Publish to PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: backend/dist/
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          files: |
+            backend/dist/*.whl
+            backend/dist/*.tar.gz
