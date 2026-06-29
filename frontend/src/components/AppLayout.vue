@@ -24,7 +24,7 @@
       </button>
     </div>
 
-    <div v-if="mobileOpen" class="md:hidden bg-background border-b border-border">
+    <div v-if="mobileOpen" class="md:hidden fixed top-14 left-0 right-0 z-40 bg-background border-b border-border shadow-lg">
       <nav class="px-4 py-3 space-y-1">
         <router-link to="/" class="flex items-center gap-3 px-3 py-2 rounded-lg text-sm hover:bg-accent" @click="mobileOpen = false">Dashboard</router-link>
         <router-link to="/library" class="flex items-center gap-3 px-3 py-2 rounded-lg text-sm hover:bg-accent" @click="mobileOpen = false">Library</router-link>

@@ -4,6 +4,7 @@ prd: 8.19
 delivery-tasks: [task-nv3-variant-group]
 bdd:
   - backend/tests/bdd/features/pipelines/run_variants.feature
+  - backend/tests/bdd/features/variants/variant_groups.feature
 code:
   - backend/src/modulo/api/routes/variants.py
   - backend/src/modulo/db/models/variant_group.py
@@ -12,6 +13,7 @@ code:
 unit-tests:
   - backend/tests/unit/api/test_variants.py
   - backend/tests/unit/db/crud/test_variant_group.py
+  - backend/tests/unit/api/test_variant_groups_bdd.py
   - backend/tests/integration/crud/test_variant_group.py
 depends-on: [feat-core-run-context, feat-evals-eval-engine]
 status: partial
