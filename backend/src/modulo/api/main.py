@@ -186,6 +186,10 @@ async def _seed_modulo_users(settings: Settings) -> None:
                     if not existing.password_hash or not existing.password_hash.startswith("$2"):
                         existing.password_hash = pw_hash
                         logger.info("startup.user_rehashed", extra={"email": email})
+                    admin_role = "admin" if email in ("admin", "admin@modulo.run") else None
+                    if admin_role and existing.org_role != "admin":
+                        existing.org_role = "admin"
+                        logger.info("startup.user_role_set_admin", extra={"email": email})
                     else:
                         logger.info("startup.user_exists", extra={"email": email})
                     continue
@@ -195,7 +199,7 @@ async def _seed_modulo_users(settings: Settings) -> None:
                     email=email,
                     display_name=email.split("@")[0],
                     password_hash=pw_hash,
-                    org_role="admin" if email == "admin" else "runner",
+                    org_role="admin" if email in ("admin", "admin@modulo.run") else "runner",
                     auth_provider="local",
                 )
                 session.add(user)
