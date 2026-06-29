@@ -99,6 +99,7 @@ async function loadProfile() {
   try {
     profile.value = await get<Profile>('/api/v1/me')
   } catch {
+    profile.value = { id: '', email: '', display_name: '', org_role: '', active: true, created_at: '' }
   }
 }
 
