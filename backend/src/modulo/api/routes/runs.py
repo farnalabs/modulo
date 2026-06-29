@@ -21,6 +21,13 @@ from modulo.api.middleware.sensitive_mask import is_sensitive_key, mask_sensitiv
 from modulo.auth.dependencies import get_current_user
 from modulo.auth.jwt import AuthenticatedPrincipal
 from modulo.core.pipeline_engine.executor import PipelineExecutor
+from modulo.core.pipeline_engine.recovery import (
+    ConcurrentRecoveryError,
+    NodeAlreadyCompletedError,
+    NodeNotFoundInGraphError,
+    RecoveryNotAllowedError,
+    recover_node,
+)
 from modulo.db.crud.node_observation import observe_node
 from modulo.db.crud.pipeline import get_pipeline
 from modulo.db.crud.pipeline_snapshot import create_snapshot_from_live_graph
@@ -530,6 +537,92 @@ async def observe_run_node(
         node_id=node_id,
         human_observed_at=obs.human_observed_at.isoformat() if obs.human_observed_at else None,
         human_observed_by=str(obs.human_observed_by) if obs.human_observed_by else None,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Node recovery (task-prd-recovery-manual-input)
+# ---------------------------------------------------------------------------
+
+
+class NodeRecoverRequest(BaseModel):
+    input_data: dict[str, Any] | None = None
+
+
+class NodeRecoverResponse(BaseModel):
+    run_id: uuid.UUID
+    node_id: str
+    action: str
+    status: str
+
+
+@router.post(
+    "/{run_id}/nodes/{node_id}/recover",
+    response_model=NodeRecoverResponse,
+    status_code=status.HTTP_200_OK,
+)
+async def recover_run_node(
+    run_id: uuid.UUID,
+    node_id: str,
+    body: NodeRecoverRequest,
+    session: AsyncSession = Depends(get_db_session),
+    engine: AsyncEngine = Depends(_get_engine),
+    principal: AuthenticatedPrincipal = Depends(get_current_user),
+) -> NodeRecoverResponse:
+    """Recover a failed manual-input node.
+
+    Two modes:
+      * **Re-run** — provide ``input_data`` with the new manual output.
+      * **Skip** — omit ``input_data`` (or set ``null``); the node is marked
+        completed with no output and the run resumes.
+
+    Requires operator or admin role.
+    """
+    if principal.org_role not in ("admin", "operator"):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only operators and admins can recover nodes",
+        )
+
+    async with session.begin():
+        await set_rls_org(session, principal.organisation_id)
+        try:
+            run = await recover_node(
+                session,
+                org_id=principal.organisation_id,
+                run_id=run_id,
+                node_id=node_id,
+                input_data=body.input_data,
+                actor_id=principal.user_id,
+            )
+        except RecoveryNotAllowedError as exc:
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+        except NodeNotFoundInGraphError as exc:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+        except NodeAlreadyCompletedError as exc:
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+        except ConcurrentRecoveryError as exc:
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+
+    action = "skip" if body.input_data is None else "replay"
+
+    # Resume the graph with the recovery data.
+    resume_data: dict[str, Any] = {"output": body.input_data}
+    if action == "skip":
+        resume_data = {"action": "skip", "output": None}
+
+    executor = PipelineExecutor(engine)
+    await executor.resume(
+        run_id=run_id,
+        org_id=principal.organisation_id,
+        resume_data=resume_data,
+    )
+
+    return NodeRecoverResponse(
+        run_id=run_id,
+        node_id=node_id,
+        action=action,
+        status=run.status,
     )
 
 
