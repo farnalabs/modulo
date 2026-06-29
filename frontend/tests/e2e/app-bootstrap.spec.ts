@@ -20,7 +20,7 @@ test.describe('App Bootstrap', () => {
     await page.waitForLoadState('networkidle')
 
     await expect(page.locator('h1')).toContainText('Modulo')
-    await expect(page.locator('text=SDLC pipeline orchestration')).toBeVisible()
+    await expect(page.locator('text=Governed orchestration for your agentic SDLC')).toBeVisible()
     await expect(page.locator('button[type="submit"]')).toContainText('Sign in')
   })
 })

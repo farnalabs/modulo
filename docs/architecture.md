@@ -1,6 +1,6 @@
 # Architecture Guide
 
-Modulo is an orchestration layer for AI-powered SDLC pipelines. This document
+Modulo is an orchestration layer for agentic SDLC pipelines. This document
 covers the system architecture, key design decisions, and module boundaries.
 
 ## System overview
