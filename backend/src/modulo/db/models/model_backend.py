@@ -12,7 +12,7 @@ class ModelBackend(OrgScoped):
     __tablename__ = "model_backends"
     __table_args__ = (
         CheckConstraint(
-            "provider IN ('anthropic', 'deepseek', 'groq', 'openai', 'azure_openai', 'bedrock', 'ollama', 'openrouter', 'togetherai', 'custom')",
+            "provider IN ('anthropic', 'deepseek', 'fireworks', 'grok', 'groq', 'openai', 'azure_openai', 'bedrock', 'ollama', 'openrouter', 'perplexity', 'qwen', 'togetherai', 'custom')",
             name="ck_model_backends_provider",
         ),
         CheckConstraint("cost_tracking IN ('enabled', 'disabled')", name="ck_model_backends_cost"),
