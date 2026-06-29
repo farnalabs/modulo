@@ -1,0 +1,49 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: modulo
+      POSTGRES_USER: modulo
+      POSTGRES_PASSWORD: ${MODULO_DB_PASSWORD:-changeme}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U modulo"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  modulo:
+    image: ghcr.io/farnalabs/modulo:${TAG:-latest}
+    ports:
+      - "${PORT:-80}:80"
+    environment:
+      MODULO_DB_URL: postgresql://modulo:${MODULO_DB_PASSWORD:-changeme}@postgres:5432/modulo
+      MODULO_REDIS_URL: redis://redis:6379/0
+      MODULO_PUBLIC_URL: ${MODULO_PUBLIC_URL:-http://localhost:80}
+      MODULO_ENV: production
+      MODULO_LOG_LEVEL: ${MODULO_LOG_LEVEL:-info}
+      MODULO_LICENSE_KEY: ${MODULO_LICENSE_KEY:-}
+      MODULO_SECRET_KEY: ${MODULO_SECRET_KEY:-change-me-in-production}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
+volumes:
+  postgres_data:
+  redis_data:

@@ -27,6 +27,7 @@ import AdminUsersView from '../views/AdminUsersView.vue'
 import AdminSpendLimitsView from '../views/AdminSpendLimitsView.vue'
 import AdminCostBreakdownView from '../views/AdminCostBreakdownView.vue'
 import AdminConnectorsView from '../views/AdminConnectorsView.vue'
+import AdminNodeCategoriesView from '../views/AdminNodeCategoriesView.vue'
 import MyProfileView from '../views/MyProfileView.vue'
 import SettingsLicenseView from '../views/SettingsLicenseView.vue'
 import SettingsMcpView from '../views/SettingsMcpView.vue'
@@ -163,6 +164,11 @@ const router = createRouter({
       path: '/admin/connectors',
       name: 'admin-connectors',
       component: AdminConnectorsView,
+    },
+    {
+      path: '/admin/node-categories',
+      name: 'admin-node-categories',
+      component: AdminNodeCategoriesView,
     },
     {
       path: '/admin/feature-flags',
