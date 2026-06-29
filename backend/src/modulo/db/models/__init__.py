@@ -11,7 +11,9 @@ from modulo.db.models.feedback_record import FeedbackRecord
 from modulo.db.models.hitl_claim import HitlClaim
 from modulo.db.models.library_primitive import LibraryPrimitive
 from modulo.db.models.model_backend import ModelBackend
+from modulo.db.models.node import Node
 from modulo.db.models.node_category import NodeCategory
+from modulo.db.models.node_observation import NodeObservation
 from modulo.db.models.notification_delivery import NotificationDeliveryLog
 from modulo.db.models.notification_endpoint import NotificationEndpoint
 from modulo.db.models.oauth_client import OAuthClient
@@ -54,7 +56,9 @@ __all__ = [
     "HitlClaim",
     "LibraryPrimitive",
     "ModelBackend",
+    "Node",
     "NodeCategory",
+    "NodeObservation",
     "NotificationDeliveryLog",
     "NotificationEndpoint",
     "OAuthAuthorizationCode",

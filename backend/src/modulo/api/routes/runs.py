@@ -21,6 +21,7 @@ from modulo.api.middleware.sensitive_mask import is_sensitive_key, mask_sensitiv
 from modulo.auth.dependencies import get_current_user
 from modulo.auth.jwt import AuthenticatedPrincipal
 from modulo.core.pipeline_engine.executor import PipelineExecutor
+from modulo.db.crud.node_observation import observe_node
 from modulo.db.crud.pipeline import get_pipeline
 from modulo.db.crud.pipeline_snapshot import create_snapshot_from_live_graph
 from modulo.db.crud.run import (
@@ -475,6 +476,61 @@ async def get_run_node_output(
 
     masked = _mask_output_value(node_output)
     return NodeOutputResponse(run_id=run_id, node_id=node_id, output=masked)
+
+
+# ---------------------------------------------------------------------------
+# Node observation (task-nv24-node-observed-human)
+# ---------------------------------------------------------------------------
+
+
+class ObserveNodeResponse(BaseModel):
+    run_id: uuid.UUID
+    node_id: str
+    human_observed_at: str | None = None
+    human_observed_by: str | None = None
+
+
+@router.post("/{run_id}/nodes/{node_id}/observe", response_model=ObserveNodeResponse)
+async def observe_run_node(
+    run_id: uuid.UUID,
+    node_id: str,
+    session: AsyncSession = Depends(get_db_session),
+    principal: AuthenticatedPrincipal = Depends(get_current_user),
+) -> ObserveNodeResponse:
+    """Mark a node as observed by a human.
+
+    Requires operator or admin role.  Idempotent — observing the same
+    node multiple times returns the original observation timestamp.
+    """
+    if principal.org_role not in ("admin", "operator"):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only operators and admins can observe nodes",
+        )
+
+    async with session.begin():
+        await set_rls_org(session, principal.organisation_id)
+        run = await get_run(session, run_id)
+
+    if run is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Run not found")
+
+    async with session.begin():
+        await set_rls_org(session, principal.organisation_id)
+        obs = await observe_node(
+            session,
+            organisation_id=principal.organisation_id,
+            run_id=run_id,
+            node_id=node_id,
+            observed_by=principal.user_id,
+        )
+
+    return ObserveNodeResponse(
+        run_id=run_id,
+        node_id=node_id,
+        human_observed_at=obs.human_observed_at.isoformat() if obs.human_observed_at else None,
+        human_observed_by=str(obs.human_observed_by) if obs.human_observed_by else None,
+    )
 
 
 # ---------------------------------------------------------------------------

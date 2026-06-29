@@ -1,0 +1,21 @@
+import uuid
+from datetime import datetime
+
+from sqlalchemy import DateTime, ForeignKey, String, UniqueConstraint, Uuid
+from sqlalchemy.orm import Mapped, mapped_column
+
+from modulo.db.models.base import OrgScoped
+
+
+class NodeObservation(OrgScoped):
+    __tablename__ = "node_observations"
+    __table_args__ = (UniqueConstraint("run_id", "node_id", name="uq_node_observations_run_node"),)
+
+    run_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid(), ForeignKey("runs.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    node_id: Mapped[str] = mapped_column(String(255), nullable=False)
+    human_observed_by: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid(), ForeignKey("users.id", ondelete="SET NULL")
+    )
+    human_observed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)

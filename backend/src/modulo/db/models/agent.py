@@ -1,7 +1,7 @@
 import uuid
 from typing import Any
 
-from sqlalchemy import JSON, ForeignKey, ForeignKeyConstraint, Integer, String, Text, Uuid
+from sqlalchemy import JSON, Boolean, ForeignKey, ForeignKeyConstraint, Integer, String, Text, Uuid
 from sqlalchemy.orm import Mapped, mapped_column
 
 from modulo.db.models.base import OrgScoped
@@ -32,6 +32,7 @@ class Agent(OrgScoped):
         ),
     )
 
+    is_executable: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     description: Mapped[str | None] = mapped_column(String(2000))
     input_schema_id: Mapped[uuid.UUID] = mapped_column(Uuid(), nullable=False)
