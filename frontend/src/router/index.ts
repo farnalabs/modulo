@@ -12,6 +12,7 @@ import SettingsSsoView from '../views/SettingsSsoView.vue'
 import SettingsTeamsView from '../views/SettingsTeamsView.vue'
 import SchemaInferenceView from '../views/SchemaInferenceView.vue'
 import SchemaListView from '../views/SchemaListView.vue'
+import SchemaEditorView from '../views/SchemaEditorView.vue'
 import OnboardingWizard from '../views/OnboardingWizard.vue'
 import FeedbackInboxView from '../views/FeedbackInboxView.vue'
 import EvalEditorView from '../views/EvalEditorView.vue'
@@ -26,6 +27,7 @@ import ApiChangelogView from '../views/ApiChangelogView.vue'
 import TeamComparisonView from '../views/TeamComparisonView.vue'
 import StageBoardView from '../views/StageBoardView.vue'
 import PipelineEditorView from '../views/PipelineEditorView.vue'
+import CopyPipelineWizard from '../views/CopyPipelineWizard.vue'
 import AdminUsersView from '../views/AdminUsersView.vue'
 import AdminSpendLimitsView from '../views/AdminSpendLimitsView.vue'
 import AdminCostBreakdownView from '../views/AdminCostBreakdownView.vue'
@@ -41,6 +43,7 @@ import SettingsMcpView from '../views/SettingsMcpView.vue'
 import SettingsTriggersView from '../views/SettingsTriggersView.vue'
 import SettingsHitlReviewView from '../views/SettingsHitlReviewView.vue'
 import AdminNotificationDeliveryLogView from '../views/AdminNotificationDeliveryLogView.vue'
+import AdminEnvironmentProfilesView from '../views/AdminEnvironmentProfilesView.vue'
 
 const router = createRouter({
   history: createWebHistory(),
@@ -119,6 +122,11 @@ const router = createRouter({
       path: '/schemas',
       name: 'schemas',
       component: SchemaListView,
+    },
+    {
+      path: '/schemas/editor/:id?',
+      name: 'schema-editor',
+      component: SchemaEditorView,
     },
     {
       path: '/schemas/infer',
@@ -241,9 +249,19 @@ const router = createRouter({
       component: AdminNotificationDeliveryLogView,
     },
     {
+      path: '/admin/environments',
+      name: 'admin-environments',
+      component: AdminEnvironmentProfilesView,
+    },
+    {
       path: '/stages',
       name: 'stages',
       component: StageBoardView,
+    },
+    {
+      path: '/pipelines/copy',
+      name: 'pipeline-copy',
+      component: CopyPipelineWizard,
     },
     {
       path: '/pipelines/:id/editor',
