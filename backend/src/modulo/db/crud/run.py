@@ -341,3 +341,40 @@ async def batch_delete_old_terminal_runs(
         if len(ids) < batch_size:
             break
     return deleted_total
+
+
+async def purge_runs(
+    session: AsyncSession,
+    *,
+    older_than: str,
+    batch_size: int = 500,
+) -> dict[str, int]:
+    """Delete terminal runs completed before *older_than* date, in batches.
+
+    Requires RLS org context to be set by the caller.
+    Returns dict with ``deleted_run_count``.
+    """
+    cutoff = datetime.strptime(older_than, "%Y-%m-%d").replace(tzinfo=UTC)
+    deleted_total = 0
+    while True:
+        ids = list(
+            (
+                await session.execute(
+                    select(Run.id)
+                    .where(
+                        Run.status.in_(["complete", "failed", "cancelled"]),
+                        Run.completed_at < cutoff,
+                    )
+                    .limit(batch_size)
+                )
+            )
+            .scalars()
+            .all()
+        )
+        if not ids:
+            break
+        await session.execute(delete(Run).where(Run.id.in_(ids)))
+        deleted_total += len(ids)
+        if len(ids) < batch_size:
+            break
+    return {"deleted_run_count": deleted_total}

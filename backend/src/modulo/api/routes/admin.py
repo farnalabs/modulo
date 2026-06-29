@@ -28,6 +28,7 @@ from modulo.db.crud.publisher import (
 from modulo.db.crud.publisher import (
     update_publisher as crud_update_publisher,
 )
+from modulo.db.crud.run import batch_delete_old_terminal_runs, purge_runs
 from modulo.db.crud.team import create_team, delete_team, list_teams
 from modulo.db.crud.team import update_team as crud_update_team
 from modulo.db.crud.team_membership import list_memberships_for_user, remove_team_member
@@ -1720,3 +1721,63 @@ async def admin_delete_publisher(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Publisher not found",
         )
+
+
+# ── Run Retention / Purge ──────────────────────────────────────────────
+
+
+class PurgeRunsRequest(BaseModel):
+    max_age_days: int = 90
+
+
+@router.post("/purge/runs", status_code=status.HTTP_200_OK)
+async def admin_purge_runs(
+    body: PurgeRunsRequest,
+    current_user: AuthenticatedPrincipal = Depends(get_current_user),
+    session: AsyncSession = Depends(get_db_session),
+) -> dict[str, int]:
+    if current_user.org_role != "admin":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only admin users can trigger run retention purge",
+        )
+
+    async with session.begin():
+        await set_rls_org(session, current_user.organisation_id)
+        deleted = await batch_delete_old_terminal_runs(session, max_age_days=body.max_age_days)
+
+    return {"deleted_run_count": deleted}
+
+
+class ManualPurgeRequest(BaseModel):
+    older_than: str
+
+
+@router.post("/purge", status_code=status.HTTP_200_OK)
+async def admin_manual_purge(
+    body: ManualPurgeRequest,
+    current_user: AuthenticatedPrincipal = Depends(get_current_user),
+    session: AsyncSession = Depends(get_db_session),
+) -> dict[str, int]:
+    if current_user.org_role != "admin":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only admin users can purge runs",
+        )
+
+    from modulo.core.audit_logger import append_audit_event
+
+    async with session.begin():
+        await set_rls_org(session, current_user.organisation_id)
+        result = await purge_runs(session, older_than=body.older_than)
+
+    await append_audit_event(
+        session,
+        org_id=current_user.organisation_id,
+        event_type="run_purge",
+        actor_user_id=current_user.user_id,
+        resource_type="run",
+        payload_json={"older_than": body.older_than},
+    )
+
+    return result
