@@ -12,6 +12,7 @@ import asyncio
 import datetime
 import logging
 import uuid
+from typing import Any
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
@@ -25,16 +26,32 @@ _log = logging.getLogger(__name__)
 
 _POLL_INTERVAL = 30  # seconds between DB polls
 
+# Engine reference set by start_schedulers(). Use dispose_scheduler_engine()
+# on shutdown to clean up the connection pool.
+_scheduler_engine: Any = None
 
-async def start_schedulers() -> list[asyncio.Task]:
+
+async def start_schedulers(
+    engine: Any | None = None,
+) -> list[asyncio.Task]:
     """Start all in-process scheduler loops.
+
+    Args:
+        engine: Optional pre-built async engine. When provided, the caller
+            is responsible for disposing it on shutdown. When ``None``, a
+            new engine is created and must be disposed via the returned
+            engine reference (available as ``_scheduler_engine`` module var).
 
     Returns a list of ``asyncio.Task`` handles. The caller should cancel
     them on shutdown.
     """
+    global _scheduler_engine
     settings = get_settings()
-    engine = create_async_engine(settings.database_url)
-    factory = async_sessionmaker(engine, expire_on_commit=False)
+    if engine is not None:
+        _scheduler_engine = engine
+    else:
+        _scheduler_engine = create_async_engine(settings.database_url)
+    factory = async_sessionmaker(_scheduler_engine, expire_on_commit=False)
 
     tasks = [
         asyncio.create_task(_cron_scheduler_loop(factory), name="cron-scheduler"),
@@ -199,3 +216,19 @@ async def _fire_polling_wrapper(factory: async_sessionmaker, info: dict) -> None
             _log.info("In-process polling trigger %s → run %s", info["id"], result.get("run_id"))
     except Exception:
         _log.exception("In-process polling trigger %s failed", info["id"])
+
+
+async def dispose_scheduler_engine() -> None:
+    """Dispose the engine created by ``start_schedulers()``.
+
+    Safe to call even if ``start_schedulers()`` was never called or if
+    the engine was provided externally (in which case the caller owns it).
+    """
+    global _scheduler_engine
+    if _scheduler_engine is not None:
+        try:
+            await _scheduler_engine.dispose()
+            _log.info("Scheduler engine disposed")
+        except Exception:
+            _log.exception("Failed to dispose scheduler engine")
+        _scheduler_engine = None

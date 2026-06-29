@@ -24,6 +24,9 @@ redis_available: bool = False
 
 _log = logging.getLogger(__name__)
 
+# Tracked Redis clients for graceful shutdown.
+_redis_clients: set[Any] = set()
+
 
 def _create_registry(settings: Settings) -> RateLimiterRegistry:
     """Create a rate limiter registry, connecting to Redis if configured."""
@@ -39,6 +42,7 @@ def _create_registry(settings: Settings) -> RateLimiterRegistry:
             from redis.asyncio import Redis
 
             client: Any = Redis.from_url(settings.redis_url, decode_responses=False)
+            _redis_clients.add(client)
             registry = RateLimiterRegistry(redis_client=client)
             redis_available = True
             _log.info("ratelimit.redis_enabled")
@@ -190,6 +194,7 @@ def get_auth_rate_limiter(settings: Settings | None = None) -> AuthRateLimiterCl
             from redis.asyncio import Redis
 
             client: Any = Redis.from_url(resolved.redis_url, decode_responses=False)
+            _redis_clients.add(client)
             _auth_rate_limiter = AuthRateLimiterCls(
                 redis_client=client,
                 max_attempts=max_attempts,
@@ -258,3 +263,20 @@ class AuthRateLimitMiddleware(BaseHTTPMiddleware):
         if request.client:
             return request.client.host
         return "unknown"
+
+
+async def shutdown_rate_limiters() -> None:
+    """Close all Redis clients created by the rate limiter middleware.
+
+    Call during application shutdown to release Redis connections.
+    Safe to call multiple times — subsequent calls are no-ops once
+    the set is empty.
+    """
+    global _redis_clients
+    for client in list(_redis_clients):
+        try:
+            await client.aclose()
+        except Exception:
+            _log.exception("Failed to close rate limiter Redis client")
+    _redis_clients.clear()
+    _log.info("Rate limiter Redis clients closed")
