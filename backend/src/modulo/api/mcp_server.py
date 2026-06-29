@@ -269,7 +269,7 @@ class McpAuthMiddleware(BaseHTTPMiddleware):
 mcp = FastMCP(
     name="Modulo",
     instructions=(
-        "Modulo is a self-hosted agentic SDLC platform. "
+        "Modulo is governed orchestration for your agentic SDLC. "
         "Use trigger_pipeline to fire runs, get_run_status to track them, "
         "get_run_output to inspect node outputs, "
         "and review_hitl to handle human-in-the-loop gates."
