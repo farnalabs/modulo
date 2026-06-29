@@ -4,7 +4,7 @@
 **Date**: 2026-06-29  
 **Status**: Pre-development  
 **Changelog**:  
-- v0.23 — §8.21 View Mode System: Simple/Advanced UI view mode toggle (free tier) with admin-configurable feature visibility panel; enterprise-gated view mode enforcement (per user, per team, per role); `view_mode` and `view_mode_enforcement` feature flags registered in `feature_flags.py`
+- v0.23 — §8.21 View Modes (Enterprise): multiple named UI views with admin-defined feature visibility per view, assignment to users/teams/org roles, enforcement, self-lockout prevention guards; `view_modes` enterprise feature flag replaces previously planned `view_mode` + `view_mode_enforcement`
 - v0.22 — Enterprise tier clarified: no SLAs, no dedicated support, no bespoke services. Enterprise = self-serve feature gate only (SSO, RBAC, audit viewer, admin spend limits). Pricing page updated. BSL 1.1 LICENSE file created at repo root; `Dev-Harness/tools/release.ps1` release script created with placeholder steps for Docker Hub, GitHub release, etc.
 - v0.21 — shadcn-vue + Radix Vue added as component library foundation (replaces build-from-scratch UI primitives); tier badge spec (Free/Enterprise pill in sidebar nav footer; lock icon on gated features); `/settings/license` page spec; `planStore` added to Pinia stores; `GET /api/v1/license` endpoint; frontend tech stack table updated
 - v0.20 — Licensing and monetization model: BSL/Fair Source with 3-year Apache 2.0 auto-conversion; cryptographic offline license key replaces modulo-cloud plan injection for self-hosted; DefaultPlanContext now defaults to Free Tier (not permissive); enterprise feature gate defined (SSO, team RBAC, audit viewer, admin spend limits); modulo-cloud deferred to V3; billing changed from telemetry-metered to flat annual fee (token counting remains for internal cost controls only); MODULO_LICENSE_KEY env var added; audit event *recording* stays free, viewer/export is enterprise; open question on audit gate documented  
@@ -278,14 +278,12 @@ Named feature flags used by core (exhaustive list as of v0.20):
 - `cron_trigger` — scheduled triggers (v1)
 - `mcp_server` — remote MCP endpoint
 - `community_library` — browse and copy community registry primitives
-- `view_mode` — Simple/Advanced UI view mode toggle and admin configuration (§8.21)
-
 *Enterprise tier — requires valid license key:*
 - `sso` — OIDC/SAML authentication
 - `team_rbac` — team entity and team-scoped roles (previously `team_management`)
 - `audit_viewer` — AuditEvent viewer UI and export (recording always active)
 - `admin_spend_limits` — org/team-level spend and run limit configuration
-- `view_mode_enforcement` — admin enforcement of view mode per user, team, or role (§8.21)
+- `view_modes` — multiple named UI views with admin-defined feature visibility per view and user/team/role assignment (§8.21)
 
 #### API Keys
 Per-org, role-scoped API keys for CI/CD pipelines and external agents.
@@ -1499,114 +1497,182 @@ The feedback inbox is a first-class UI surface (v1), parallel to the HITL review
 
 ---
 
-### 8.21 View Mode System
+### 8.21 View Modes (Enterprise)
 
-The UI ships a two-tier view mode system — **Simple** and **Advanced** — that controls which sidebar navigation items, dashboard widgets, configuration panels, and input fields are visible. The toggle behaves like the theme toggle: in-place, no page reload, no state loss, and purely additive (switching from Simple to Advanced never resets or discards any information).
+The UI supports an arbitrary set of **named views** — admin-definable visibility profiles that control which sidebar navigation items, dashboard widgets, configuration panels, and input fields each user sees. This is a progressive disclosure system: admins create views tailored to different roles, teams, or individuals, and users see only what's relevant to them.
 
-#### UX Model
+The entire View Modes feature is **enterprise-gated** (`view_modes` feature flag). Without a valid Enterprise license key, the feature is entirely absent — no toggle, no view selector, no admin configuration.
 
-A single toggle in the sidebar footer (adjacent to the theme toggle and tier badge) switches between modes. The current selection is persisted in `localStorage` and hydrated on page load. The page re-renders in place via Vue's reactive system — no route change, no reload, no flash of content.
+#### Data Model
 
-**Rules:**
-- Switching modes does not change any application state, config, or in-progress data
-- Simple mode is a *subset* of Advanced — every element visible in Simple is also visible in Advanced
-- Simple mode hides advanced features (eval configuration, variant groups, pipeline diff/rollback, connector health check details, etc.) behind a reactive `v-if` driven by a Pinia store
-- Components that are hidden in Simple mode must not render at all (not `v-show`, not CSS `display:none`) — the DOM subtree is removed. This ensures agent-theme browser drivers and DOM scrapers cannot see controls the user chose to hide
-- Form inputs hidden by Simple mode are unmounted — they do not participate in form state, validation, or submission
+A **View** is an org-scoped entity:
 
-#### Admin Configuration
+| Field | Type | Description |
+|---|---|---|
+| `id` | UUID | |
+| `organisation_id` | FK | Org-scoped |
+| `name` | string | Human-readable label, e.g. "Developer", "Manager", "Minimal" |
+| `slug` | string | URL-safe unique key within org, e.g. `developer`, `manager` |
+| `description` | string | Optional explanation of who this view is for |
+| `feature_keys` | string[] | Ordered list of feature keys that are visible in this view. Features not in this list are hidden. See known feature keys below. |
+| `created_at` | timestamptz | |
 
-`/settings/view-modes` (admin only) provides a feature-level configuration panel:
+**Default views on first org setup** (seeded by migration or startup):
+- **Simple**: shows core navigation (pipelines, stages, runs, library, settings), dashboard summary widgets, basic run/trigger views, HITL review queue, run list, basic agent/schema/connector management
+- **Advanced**: shows everything
+
+Admins can rename, delete, or reset defaults. Deleting the last view is blocked (every user needs at least one assignable view).
+
+#### View Assignment and Resolution
+
+Views are assigned to three target types via a `view_assignments` table:
+
+| Field | Type | Description |
+|---|---|---|
+| `id` | UUID | |
+| `view_id` | FK → views | |
+| `assignee_type` | enum | `user` \| `team` \| `org_role` |
+| `assignee_id` | string | User ID, team ID, or role name (`admin`/`operator`/`runner`/`viewer`) |
+| `enforced` | boolean | When true, the assignee cannot switch away from this view |
+
+**Resolution algorithm** (evaluated on every page load, returned in `GET /api/v1/me`):
+
+1. Collect all views the user qualifies for (direct user assignment + team memberships + org role)
+2. If any qualifying assignment has `enforced: true`, the highest-priority enforced view is returned as the user's active view. The view selector is hidden from the UI.
+3. If no enforced view exists and the user has exactly one qualifying view, that view is active. The view selector is hidden (no choice to make).
+4. If no enforced view exists and the user has multiple qualifying views, the user's `localStorage` preference (saved view slug) determines the active view. Falls back to the first qualifying view in creation order.
+5. If no qualifying views exist (should not happen — every user gets at least the org default), fall back to a hardcoded "Full" view that shows all features.
+
+**Enforcement priority** (for step 2, when multiple enforced views apply): per-user > per-team > per-role. Within the same priority level (e.g. user belongs to two teams, each with a different enforced view), the most recently created assignment wins. This is a deliberate simplification — avoid assigning a user to multiple teams with conflicting enforced views.
+
+#### User Experience
+
+**View selector** — a dropdown/pill switcher in the sidebar footer (adjacent to the theme toggle and tier badge) when the user has multiple qualifying views. Shows the current view name. Switching selects a different view. The page re-renders in place via Vue's reactive system — no route change, no reload, no flash, no state mutation.
+
+**When hidden**:
+- No enterprise license: the view selector and all view infrastructure are absent from the UI. The page renders as if view modes don't exist.
+- Enterprise license, single qualifying view: the view selector is hidden (no choice).
+- Enterprise license, enforced view: the view selector is hidden (choice removed).
+
+**Rules**:
+- Switching views does not change any application state, config, or in-progress data
+- A view is a *subset* of features — switching from a broader to a narrower view hides components; switching back shows them again
+- Components hidden by the current view must not render at all (not `v-show`, not CSS `display:none`) — the DOM subtree is removed
+- Form inputs hidden by a view switch are unmounted — they do not participate in form state, validation, or submission
+
+#### Admin Configuration: `/settings/view-modes`
+
+`/settings/view-modes` (admin only, enterprise-gated) is a full view management page:
 
 | Section | Content |
 |---|---|
-| Feature list | Searchable table of every routable view, sidebar item, dashboard widget, and config panel in the application |
-| Per-feature toggle | Each feature has a two-state selector: **Simple** (checked = visible in Simple mode) or **Advanced only** (unchecked = only visible in Advanced mode) |
-| Bulk actions | "Show all in Simple" / "Reset to defaults" buttons |
-| Preview | A live preview pane showing how the sidebar would look in each mode based on current toggles |
+| View list | Named cards or tabs, one per view. "Simple", "Advanced", and any custom views. |
+| Create view | Name + slug + description form. New views start with an empty feature set. |
+| Edit view | Rename, update description, reorder or toggle features (see below) |
+| Delete view | Confirmation dialog. Blocked if it's the last remaining view. |
+| Feature checklist | Searchable, categorised table of every routable view, sidebar item, dashboard widget, and config panel. Each feature has a toggle to include it in (check) or exclude from (uncheck) this view. |
+| Assignments | Per-view assignment panel: add users, teams, or org roles. Each assignment has an "Enforce" toggle. Shows current assignees with remove button. |
+| Preview | Live preview pane showing how the sidebar would look in the selected view based on current feature toggles |
 
-The configuration is stored server-side as part of org `settings_json` under a `view_mode_config` key:
+**Known feature keys** (exhaustive list, registered in a central constant shared by frontend and backend):
+
+```
+sidebar.pipelines          sidebar.stages          sidebar.runs
+sidebar.library            sidebar.settings        sidebar.evals
+sidebar.variants           sidebar.diff_rollback   dashboard.summary
+dashboard.eval_trend       dashboard.cost_breakdown
+pipeline_editor.basic      pipeline_editor.eval_binding
+pipeline_editor.variant_group    pipeline_editor.schema_inference
+pipeline_editor.feedback_inbox   pipeline_editor.diff_rollback
+settings.license           settings.view_modes     settings.teams
+settings.sso               settings.mcp            settings.audit
+settings.cost_limits       settings.otel           settings.rate_limits
+settings.mcp_oauth         settings.plugins        admin.users
+admin.audit_viewer         admin.scim
+```
+
+Each view's `feature_keys` array lists the features that are **visible**. Features not in the array are hidden. The "Advanced" default view includes all keys.
+
+#### Backend API
+
+| Endpoint | Method | Auth | Enterprise Gate | Description |
+|---|---|---|---|---|
+| `/api/v1/admin/views` | GET | admin | `view_modes` | List all views in org |
+| `/api/v1/admin/views` | POST | admin | `view_modes` | Create a new view |
+| `/api/v1/admin/views/{id}` | GET | admin | `view_modes` | Get view detail |
+| `/api/v1/admin/views/{id}` | PUT | admin | `view_modes` | Update view (name, description, feature_keys) |
+| `/api/v1/admin/views/{id}` | DELETE | admin | `view_modes` | Delete view (blocked if last remaining) |
+| `/api/v1/admin/views/{id}/assignments` | GET | admin | `view_modes` | List assignments for a view |
+| `/api/v1/admin/views/{id}/assignments` | POST | admin | `view_modes` | Create assignment (assignee_type, assignee_id, enforced) |
+| `/api/v1/admin/views/assignments/{id}` | DELETE | admin | `view_modes` | Remove assignment |
+| `/api/v1/admin/views/assignments/{id}` | PATCH | admin | `view_modes` | Toggle enforcement on an assignment |
+
+The `GET /api/v1/me` response is extended with:
 
 ```json
 {
-  "view_mode_config": {
-    "sidebar.evals": "simple",
-    "sidebar.variants": "advanced",
-    "sidebar.diff_rollback": "advanced",
-    "dashboard.eval_trend": "advanced",
-    "pipeline_editor.eval_binding": "advanced",
-    "pipeline_editor.variant_group": "advanced",
-    "settings.license": "simple",
-    "settings.view_modes": "advanced"
-  }
+  "active_view": {
+    "id": "uuid",
+    "name": "Developer",
+    "slug": "developer",
+    "feature_keys": ["sidebar.pipelines", "sidebar.runs", ...],
+    "enforced": false
+  },
+  "available_views": [
+    {"id": "...", "name": "Manager", "slug": "manager"},
+    {"id": "...", "name": "Developer", "slug": "developer"}
+  ]
 }
 ```
 
-The server exposes `GET /api/v1/admin/view-modes` (returns current config) and `PUT /api/v1/admin/view-modes` (replaces config, validated against a known feature key list). Both are admin-only. The config is loaded by the frontend at session start alongside `/me` and `planStore`, and cached in a `viewModeStore` Pinia store.
+- `active_view` is the resolved view per the resolution algorithm above
+- `available_views` lists all qualifying views the user could switch to (non-enforced only if enforcement is active)
+- Both are null when no enterprise license is present
 
-#### Default Configuration
-
-Out of the box, Simple mode shows: sidebar navigation (pipelines, stages, runs, library, settings), dashboard summary widgets, basic pipeline run/trigger views, HITL review queue, run list with status, and basic agent/schema/connector management. The following are **Advanced only by default** and must be explicitly toggled on by an admin:
-
-- Eval definition UI and eval suite management
-- Variant / A/B testing UI
-- Pipeline diff/rollback
-- Schema inference UI
-- Feedback inbox and correction runs
-- SCIM provisioning, audit viewer, SSO configuration (enterprise-gated features remain behind their license gate — view mode is independent of licensing)
-- Cost breakdown and admin spend limits UI
-- OTel exporter config
-- Rate limit admin panel
-- MCP OAuth client registration
-- Plugin registry
-
-#### Enterprise Enforcement
-
-With an Enterprise license key (`view_mode_enforcement` feature flag), admins gain the ability to **enforce** a view mode on specific users, teams, or org roles:
-
-| Enforce on | Scope | Behaviour |
-|---|---|---|
-| Specific user | `GET /api/v1/admin/users/{id}/view-mode` | Overrides the user's `localStorage` preference on every page load. The toggle is hidden from that user's UI. |
-| Entire team | `PUT /api/v1/admin/teams/{id}` with `enforced_view_mode` field | All members of that team see the enforced mode. Individual user overrides within the team are not permitted (team-level enforcement is absolute). |
-| Org role | Admin-set default per role (`admin`, `operator`, `runner`, `viewer`) | Default applied to all users of that role. A per-user override still applies if set (user > role). |
-
-**Enforcement priority**: per-user > per-team > per-role > user preference (localStorage).
-
-Enforcement is server-side: the `GET /api/v1/me` response includes an `enforced_view_mode` field (null if no enforcement applies). The frontend `viewModeStore` reads this field on hydration and disables the toggle accordingly. The toggle is visually hidden (not just disabled) when enforcement is active — the user should not see controls they cannot use.
-
-#### View Mode Feature Flag
-
-`view_mode` — **free tier**: the core toggle, admin configuration panel, and all per-feature visibility toggles are available on the Free Tier. This is not an enterprise-gated feature — every team benefits from progressive disclosure.
-
-`view_mode_enforcement` — **enterprise tier**: only available with a valid Enterprise license key. Enables per-user, per-team, and per-role enforcement as described above.
-
-Both flags are registered in the feature flag registry (`_KNOWN_FLAGS` in `feature_flags.py`).
+All view mode endpoints return 402 `Payment Required` when `view_modes` feature is not enabled.
 
 #### Pinia Store
 
 ```ts
 interface ViewModeState {
-  mode: 'simple' | 'advanced'
-  config: Record<string, 'simple' | 'advanced'>  // feature key → visibility
-  enforced: boolean                               // true when admin has locked mode
+  activeView: View | null        // currently active view (resolved per algorithm)
+  availableViews: ViewSummary[]  // views the user can switch to
   loading: boolean
 }
 
-// Methods:
-// setMode(mode): persists to localStorage, updates reactive state
-// featureVisible(key): returns true if feature should render in current mode
-// fetchConfig(): hydrates from GET /api/v1/admin/view-modes
-// isEnforced(): checks GET /api/v1/me for enforced_view_mode
+interface View {
+  id: string
+  name: string
+  slug: string
+  description: string
+  featureKeys: string[]
+  enforced: boolean
+}
+
+interface ViewSummary {
+  id: string
+  name: string
+  slug: string
+}
 ```
 
-#### Conditional Rendering Directive
+**Methods**:
+- `fetchViews()`: hydrates `activeView` and `availableViews` from `GET /api/v1/me`
+- `featureVisible(key)`: returns true if `key` is in `activeView.featureKeys`
+- `switchView(slug)`: persists to `localStorage`, sets `activeView`, triggers reactive re-render. No-op if current view is enforced.
 
-A composable `useViewMode(key: string)` returns `{ visible: ComputedRef<boolean> }`. Components use it as:
+#### Conditional Rendering Composable
+
+```ts
+function useViewMode(featureKey: string): { visible: ComputedRef<boolean> }
+```
+
+Components use it as:
 
 ```vue
 <template>
   <div v-if="visible">
-    <!-- advanced-only eval config panel -->
+    <!-- eval config panel — only renders if active view includes this feature -->
   </div>
 </template>
 <script setup lang="ts">
@@ -1614,43 +1680,42 @@ const { visible } = useViewMode('pipeline_editor.eval_binding')
 </script>
 ```
 
-This composable reads from `viewModeStore` and returns `true` when:
-1. The current mode is `advanced` (all features visible), OR
-2. The current mode is `simple` AND the feature's config is `simple`
+Returns `true` when:
+1. `viewModeStore.activeView` is null (no enterprise license — feature is always visible), OR
+2. `featureKey` is in `viewModeStore.activeView.featureKeys`
 
-If enforcement is active, the mode is read-only — the composable does not offer write access.
-
-#### Backend API
-
-| Endpoint | Method | Auth | Description |
-|---|---|---|---|
-| `/api/v1/admin/view-modes` | GET | admin | Returns current `view_mode_config` JSON from org settings |
-| `/api/v1/admin/view-modes` | PUT | admin | Replaces `view_mode_config` (validated against known keys); returns updated config |
-| `/api/v1/admin/users/{id}/view-mode` | GET | admin | Returns user's enforced view mode (null if none) |
-| `/api/v1/admin/users/{id}/view-mode` | PUT | admin | Set/clear enforced view mode for a specific user |
-| `/api/v1/admin/teams/{id}` extended | PATCH | admin | `enforced_view_mode` field on team update; enterprise-gated |
-
-The `GET /api/v1/me` response is extended with:
-```json
-{
-  "enforced_view_mode": "simple" | "advanced" | null
-}
-```
+This means: without an enterprise license, all features are visible (no view filtering). With an enterprise license, only features in the active view's list are visible.
 
 #### Enterprise Gate Integration
 
-The `view_mode_enforcement` flag follows the same pattern as all other enterprise gates. The server returns 402 `Payment Required` when a non-enterprise instance tries to set or read enforcement endpoints. The frontend `planStore.featureEnabled('view_mode_enforcement')` gate hides the enforcement UI sections from the admin view-mode configuration page.
-
-The `view_mode` flag itself is free tier — no license required.
+The entire View Modes feature is behind the `view_modes` enterprise flag:
+- `GET /api/v1/me` returns null `activeView` and empty `availableViews` when the flag is disabled — no frontend code path activates
+- All admin view/assignment endpoints return 402 when the flag is disabled
+- The `planStore.featureEnabled('view_modes')` gate hides the entire `/settings/view-modes` route and the view selector from the sidebar
+- On license downgrade or expiry, the view selector disappears on next page load (when `GET /api/v1/me` returns null). Active view filtering stops; all features become visible again. No data is lost — the views and assignments remain in the database and re-appear if the license is renewed
 
 #### No State Mutation on Switch
 
-This is not a "profile" or "workspace" switch. The view mode toggle is a **display filter only**. It must never:
+This is not a "profile" or "workspace" switch. The view selector is a **display filter only**. It must never:
 - Change which pipeline is selected
 - Reset any form input
 - Clear any store state (beyond mounting/unmounting components)
 - Trigger any API call (beyond the initial config fetch at session start)
 - Modify any server-side resource
+
+#### Self-Lockout Prevention
+
+View mode configuration is self-referential — a view determines whether the user can see `/settings/view-modes` to change views at all. Without guards, an admin could enforce a view on themselves that hides `settings.view_modes`, permanently locking themselves out of view management. The following server-side invariants prevent this:
+
+1. **A user cannot remove their own access to view management.** Any server-side action (create/update assignment, delete view, update view feature_keys) that would result in the requesting user's effective view no longer including `settings.view_modes` is rejected with a `view_self_lockout` error. This applies to the authenticated user making the request — not to other users.
+
+2. **The last view containing `settings.view_modes` cannot be deleted.** If exactly one view in the org includes `settings.view_modes`, DELETE on that view returns 409 `last_view_with_view_management`.
+
+3. **The `settings.view_modes` feature key cannot be removed from a view if that view is the only remaining source of view management access for any user.** PUT on a view's `feature_keys` that removes `settings.view_modes` is validated: the server checks whether any user who has this view as their only qualifying view containing `settings.view_modes` would lose access. If so, the update is rejected with `view_would_orphan_users`.
+
+4. **Frontend guard**: the "Delete view" and "Remove `settings.view_modes`" actions in the admin UI display a warning when the current user's own active view would be affected. This is informational only — the server-side guard is the authoritative enforcement.
+
+These guards mirror the pattern established for admin self-demotion protection and last-admin deletion prevention in other systems. They are enforced at the ViewModel command layer, not solely in the UI.
 
 ---
 
