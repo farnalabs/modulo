@@ -24,6 +24,7 @@ import TeamComparisonView from '../views/TeamComparisonView.vue'
 import PipelineEditorView from '../views/PipelineEditorView.vue'
 import AdminUsersView from '../views/AdminUsersView.vue'
 import AdminSpendLimitsView from '../views/AdminSpendLimitsView.vue'
+import AdminCostBreakdownView from '../views/AdminCostBreakdownView.vue'
 import AdminConnectorsView from '../views/AdminConnectorsView.vue'
 import MyProfileView from '../views/MyProfileView.vue'
 
@@ -129,6 +130,11 @@ const router = createRouter({
       path: '/admin/costs/limits',
       name: 'admin-costs-limits',
       component: AdminSpendLimitsView,
+    },
+    {
+      path: '/admin/costs',
+      name: 'admin-costs',
+      component: AdminCostBreakdownView,
     },
     {
       path: '/admin/audit',
