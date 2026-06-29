@@ -183,6 +183,31 @@ async def confirm_org_deletion(
     }
 
 
+async def cancel_org_deletion(
+    session: AsyncSession,
+    org_id: uuid.UUID,
+) -> dict[str, Any]:
+    """Cancel a pending org deletion — restores status to active.
+
+    The org must be in 'deleted' status with a valid deletion_token set.
+    Clears the soft-delete fields and restores the organisation to active state.
+    """
+    org = await get_organisation(session, org_id)
+    if org is None:
+        raise ValueError("Organisation not found")
+    if org.status != "deleted" or org.deletion_token is None:
+        raise ValueError("No pending deletion found")
+
+    org.status = "active"
+    org.deleted_at = None
+    org.deletion_token = None
+    org.deletion_token_expires_at = None
+
+    await session.flush()
+
+    return {"status": "active"}
+
+
 async def export_org_data(
     session: AsyncSession,
     org_id: uuid.UUID,
