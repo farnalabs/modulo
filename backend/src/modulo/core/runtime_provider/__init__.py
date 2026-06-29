@@ -100,4 +100,10 @@ def create_default_hub(max_local_concurrency: int = 2) -> RuntimeProviderHub:
         e2b = E2BRuntimeProvider()
         hub.register("e2b", e2b)
 
+    if os.environ.get("MODULO_DOCKER_HOST") or os.environ.get("DOCKER_HOST"):
+        from modulo.core.runtime_provider.docker import DockerRuntimeProvider
+
+        docker = DockerRuntimeProvider()
+        hub.register("docker", docker)
+
     return hub
