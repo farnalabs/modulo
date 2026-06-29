@@ -36,6 +36,7 @@ from modulo.db.models.trigger import Trigger
 from modulo.db.models.trigger_event import TriggerEvent
 from modulo.db.models.user import User
 from modulo.db.models.variant_group import VariantGroup
+from modulo.db.models.view import SavedView
 from modulo.db.models.webhook import WebhookDedupHash, WebhookPayload
 from modulo.db.models.workspace_lease import WorkspaceLease
 
@@ -68,6 +69,7 @@ __all__ = [
     "PrimitiveRating",
     "Publisher",
     "Run",
+    "SavedView",
     "ScheduledReport",
     "Schema",
     "SchemaVersion",
