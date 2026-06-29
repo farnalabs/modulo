@@ -30,6 +30,7 @@ import AdminCostBreakdownView from '../views/AdminCostBreakdownView.vue'
 import AdminConnectorsView from '../views/AdminConnectorsView.vue'
 import AdminNodeCategoriesView from '../views/AdminNodeCategoriesView.vue'
 import AdminViewsView from '../views/AdminViewsView.vue'
+import AdminModelBackendsView from '../views/AdminModelBackendsView.vue'
 import MyProfileView from '../views/MyProfileView.vue'
 import SettingsLicenseView from '../views/SettingsLicenseView.vue'
 import SettingsMcpView from '../views/SettingsMcpView.vue'
@@ -181,6 +182,11 @@ const router = createRouter({
       path: '/admin/views',
       name: 'admin-views',
       component: AdminViewsView,
+    },
+    {
+      path: '/admin/model-backends',
+      name: 'admin-model-backends',
+      component: AdminModelBackendsView,
     },
     {
       path: '/admin/feature-flags',

@@ -24,6 +24,7 @@ celery_app = Celery(
         "modulo.core.cron_scheduler",
         "modulo.core.trigger_engine.polling",
         "modulo.core.reports.scheduler",
+        "modulo.core.cleanup_jobs.webhook_dedup_cleanup",
     ],
 )
 

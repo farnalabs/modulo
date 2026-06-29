@@ -17,6 +17,7 @@ from typing import Any
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
+from modulo.core.cleanup_jobs.webhook_dedup_cleanup import cleanup_scheduler_loop
 from modulo.core.cron_scheduler import fire_cron_trigger
 from modulo.core.trigger_engine.polling import fire_polling_trigger
 from modulo.db.models.trigger import Trigger
@@ -56,8 +57,9 @@ async def start_schedulers(
     tasks = [
         asyncio.create_task(_cron_scheduler_loop(factory), name="cron-scheduler"),
         asyncio.create_task(_polling_scheduler_loop(factory), name="polling-scheduler"),
+        asyncio.create_task(cleanup_scheduler_loop(factory), name="cleanup-scheduler"),
     ]
-    _log.info("In-process schedulers started — cron and polling triggers active")
+    _log.info("In-process schedulers started — cron, polling, and cleanup tasks active")
     return tasks
 
 

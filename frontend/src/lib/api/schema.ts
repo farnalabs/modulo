@@ -666,6 +666,59 @@ export interface paths {
         }
       }
     }
+    post: {
+      requestBody: {
+        content: {
+          'application/json': components['schemas']['ModelBackendCreate']
+        }
+      }
+      responses: {
+        201: {
+          content: {
+            'application/json': components['schemas']['ModelBackendResponse']
+          }
+        }
+      }
+    }
+  }
+  '/api/v1/model-backends/{backend_id}': {
+    get: {
+      parameters: {
+        path: { backend_id: string }
+      }
+      responses: {
+        200: {
+          content: {
+            'application/json': components['schemas']['ModelBackendResponse']
+          }
+        }
+      }
+    }
+    patch: {
+      parameters: {
+        path: { backend_id: string }
+      }
+      requestBody: {
+        content: {
+          'application/json': components['schemas']['ModelBackendUpdate']
+        }
+      }
+      responses: {
+        200: {
+          content: {
+            'application/json': components['schemas']['ModelBackendResponse']
+          }
+        }
+      }
+    }
+    delete: {
+      parameters: {
+        path: { backend_id: string }
+      }
+      responses: {
+        204: { description: 'No content' }
+      }
+    }
   }
   '/api/v1/pipelines/{pipeline_id}/snapshots': {
     get: {
@@ -1118,6 +1171,7 @@ export interface components {
       has_credentials: boolean
       default_params: Record<string, unknown>
       visibility: string
+      fallback_backend_ids: string[] | null
       created_by: string
       created_at: string
       updated_at: string
@@ -1127,6 +1181,25 @@ export interface components {
       total: number
       page: number
       page_size: number
+    }
+    ModelBackendCreate: {
+      name: string
+      display_name: string
+      provider: string
+      model_id: string
+      api_key: string
+      default_params?: Record<string, unknown>
+      visibility?: string
+      fallback_backend_ids?: string[] | null
+    }
+    ModelBackendUpdate: {
+      name?: string | null
+      display_name?: string | null
+      model_id?: string | null
+      api_key?: string | null
+      default_params?: Record<string, unknown> | null
+      visibility?: string | null
+      fallback_backend_ids?: string[] | null
     }
     SnapshotItem: {
       id: string
