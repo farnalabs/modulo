@@ -50,6 +50,7 @@
             <tr
               v-for="team in data.teams"
               :key="team.id"
+              :data-testid="`team-comparison-team-row-${team.id}`"
               class="cursor-pointer transition-colors hover:bg-muted/30"
               @click="toggleExpand(team.id)"
             >

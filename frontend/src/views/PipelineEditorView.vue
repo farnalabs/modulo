@@ -74,6 +74,7 @@
         <div class="mt-6 space-y-2">
           <button
             v-if="selectedNodeData.node_type === 'manual'"
+            data-testid="pipeline-editor-convert-to-agent"
             class="inline-flex w-full items-center justify-center rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90"
             @click="openAgentPicker"
           >
@@ -81,6 +82,7 @@
           </button>
           <button
             v-if="selectedNodeData.node_type === 'agent'"
+            data-testid="pipeline-editor-revert-to-manual"
             class="inline-flex w-full items-center justify-center rounded-lg border border-input bg-background px-4 py-2 text-sm font-medium hover:bg-accent"
             @click="openRevertDialog"
           >
@@ -98,6 +100,7 @@
             <label class="mb-1 block text-sm font-medium">Agent</label>
             <select
               v-model="pickerAgentId"
+              data-testid="pipeline-editor-agent-select"
               class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm"
               @change="onAgentChange"
             >
@@ -109,6 +112,7 @@
             <label class="mb-1 block text-sm font-medium">Connector</label>
             <select
               v-model="pickerConnectorId"
+              data-testid="pipeline-editor-connector-select"
               class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm"
             >
               <option value="">Select a connector...</option>
@@ -133,6 +137,7 @@
 
           <div class="flex justify-end gap-2">
             <button
+              data-testid="pipeline-editor-cancel"
               class="rounded-lg border border-input bg-background px-4 py-2 text-sm hover:bg-accent"
               @click="showAgentPicker = false"
             >
@@ -140,6 +145,7 @@
             </button>
             <button
               :disabled="!canConvert"
+              data-testid="pipeline-editor-convert"
               class="rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
               @click="convertToAgent"
             >
@@ -164,6 +170,7 @@
             <label class="mb-1 block text-sm font-medium">Snapshot</label>
             <select
               v-model="revertSnapshotId"
+              data-testid="pipeline-editor-snapshot-select"
               class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm"
             >
               <option value="">Select a snapshot...</option>
@@ -183,6 +190,7 @@
 
           <div class="flex justify-end gap-2">
             <button
+              data-testid="pipeline-editor-revert-cancel"
               class="rounded-lg border border-input bg-background px-4 py-2 text-sm hover:bg-accent"
               @click="showRevertDialog = false"
             >
@@ -190,6 +198,7 @@
             </button>
             <button
               :disabled="!revertSnapshotId"
+              data-testid="pipeline-editor-revert"
               class="rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
               @click="revertToManual"
             >

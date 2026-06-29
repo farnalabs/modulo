@@ -51,13 +51,14 @@
         </div>
         <div v-else-if="connectorsError" class="rounded-lg border border-destructive/50 bg-destructive/10 p-4 text-sm text-destructive">{{ connectorsError }}</div>
         <div v-else-if="connectors.length === 0" class="rounded-lg border border-dashed p-8 text-center text-sm text-muted-foreground">
-          No connectors found. <a href="/settings/connectors" class="text-primary underline">Create one</a> first, then come back.
+          No connectors found. <a href="/settings/connectors" data-testid="onboarding-wizard-create-connector" class="text-primary underline">Create one</a> first, then come back.
         </div>
         <div v-else class="space-y-2">
           <label class="mb-1 block text-sm font-medium">Select a connector instance</label>
           <div
             v-for="c in connectors"
             :key="c.id"
+            data-testid="onboarding-wizard-connector-card"
             class="flex cursor-pointer items-center gap-3 rounded-lg border p-4 transition-colors hover:bg-accent"
             :class="wizardState.connectorId === c.id ? 'border-primary bg-primary/5' : 'border-input'"
             @click="wizardState.connectorId = c.id; wizardState.connectorName = c.name"
@@ -83,6 +84,7 @@
           <input
             v-model="wizardState.resourceType"
             type="text"
+            data-testid="onboarding-wizard-resource-type"
             class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
             placeholder="e.g. issues, repositories, pull_requests"
           />
@@ -92,6 +94,7 @@
           <textarea
             v-model="wizardState.sampleQuery"
             rows="2"
+            data-testid="onboarding-wizard-sample-query"
             class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
             placeholder="e.g. state=open&sort=updated"
           />
@@ -99,6 +102,7 @@
         <div class="flex items-center gap-2">
           <button
             :disabled="!wizardState.resourceType.trim() || inferring"
+            data-testid="onboarding-wizard-infer-schema"
             class="rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
             @click="inferSchema"
           >
@@ -148,6 +152,7 @@
               <input
                 v-model="editableSchemaName"
                 type="text"
+                data-testid="onboarding-wizard-schema-name"
                 class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
               />
             </div>
@@ -156,6 +161,7 @@
               <input
                 v-model="editableSchemaDescription"
                 type="text"
+                data-testid="onboarding-wizard-schema-description"
                 class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
               />
             </div>
@@ -186,6 +192,7 @@
           <div class="flex items-center gap-2">
             <button
               :disabled="savingSchema"
+              data-testid="onboarding-wizard-confirm-save-schema"
               class="rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
               @click="saveSchema"
             >
@@ -214,10 +221,12 @@
               v-model="librarySearch"
               type="text"
               placeholder="Filter items..."
+              data-testid="onboarding-wizard-library-search"
               class="flex-1 rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
             />
             <select
               v-model="libraryTypeFilter"
+              data-testid="onboarding-wizard-library-type-filter"
               class="rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
             >
               <option value="">All types</option>
@@ -231,6 +240,7 @@
             <div
               v-for="item in filteredLibraryItems"
               :key="item.id"
+              data-testid="onboarding-wizard-library-item"
               class="cursor-pointer rounded-lg border p-4 transition-colors hover:bg-accent"
               :class="wizardState.selectedLibraryItemId === item.id ? 'border-primary bg-primary/5' : 'border-input'"
               @click="wizardState.selectedLibraryItemId = wizardState.selectedLibraryItemId === item.id ? null : item.id"
@@ -260,6 +270,7 @@
           <input
             v-model="wizardState.pipelineName"
             type="text"
+            data-testid="onboarding-wizard-pipeline-name"
             class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
             placeholder="My Onboarding Pipeline"
           />
@@ -269,6 +280,7 @@
           <textarea
             v-model="wizardState.pipelineDescription"
             rows="3"
+            data-testid="onboarding-wizard-pipeline-description"
             class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
             placeholder="What does this pipeline do?"
           />
@@ -281,6 +293,7 @@
         <div class="flex items-center gap-2">
           <button
             :disabled="!wizardState.pipelineName.trim() || creatingPipeline"
+            data-testid="onboarding-wizard-create-pipeline"
             class="rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
             @click="createPipeline"
           >
@@ -330,6 +343,7 @@
           <button
             v-if="wizardState.createdPipelineId"
             :disabled="runningPipeline"
+            data-testid="onboarding-wizard-run-pipeline-now"
             class="rounded-lg bg-primary px-6 py-2.5 text-sm font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
             @click="runPipeline"
           >
@@ -337,6 +351,7 @@
           </button>
           <router-link
             :to="{ name: 'dashboard' }"
+            data-testid="onboarding-wizard-go-to-dashboard"
             class="rounded-lg border border-input bg-background px-6 py-2.5 text-sm font-medium hover:bg-accent"
           >
             Go to Dashboard
@@ -353,6 +368,7 @@
       <div>
         <button
           v-if="currentStep > 0"
+          data-testid="onboarding-wizard-previous"
           class="rounded-lg border border-input bg-background px-4 py-2 text-sm font-medium hover:bg-accent"
           @click="prevStep"
         >
@@ -362,6 +378,7 @@
       <div class="flex items-center gap-3">
         <button
           v-if="currentStep > 0 && currentStep < 5"
+          data-testid="onboarding-wizard-skip-to-end"
           class="text-sm text-muted-foreground hover:text-foreground"
           @click="skipToEnd"
         >
@@ -369,6 +386,7 @@
         </button>
         <button
           :disabled="!canProceed"
+          data-testid="onboarding-wizard-next"
           class="rounded-lg bg-primary px-6 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
           @click="nextStep"
         >

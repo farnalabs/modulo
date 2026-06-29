@@ -32,6 +32,7 @@
             type="password"
             class="w-full px-3 py-2 border border-input bg-background rounded-lg text-sm"
             required
+            data-testid="my-profile-current-password"
           />
         </div>
         <div>
@@ -42,6 +43,7 @@
             class="w-full px-3 py-2 border border-input bg-background rounded-lg text-sm"
             minlength="8"
             required
+            data-testid="my-profile-new-password"
           />
         </div>
         <div>
@@ -52,6 +54,7 @@
             class="w-full px-3 py-2 border border-input bg-background rounded-lg text-sm"
             minlength="8"
             required
+            data-testid="my-profile-confirm-password"
           />
         </div>
         <p v-if="passError" class="text-sm text-destructive">{{ passError }}</p>
@@ -59,6 +62,7 @@
         <button
           type="submit"
           class="px-4 py-2 bg-primary text-primary-foreground text-sm font-medium rounded-lg border border-primary/30 hover:brightness-110 transition-all"
+          data-testid="my-profile-update-password"
         >
           Update Password
         </button>

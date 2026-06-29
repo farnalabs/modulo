@@ -17,6 +17,7 @@
             <label class="mb-1 block text-sm font-medium">Connector</label>
             <select
               v-model="selectedConnectorId"
+              data-testid="schema-inference-connector"
               class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
             >
               <option value="" disabled>Select a connector...</option>
@@ -38,6 +39,7 @@
             <input
               v-model="resourceType"
               type="text"
+              data-testid="schema-inference-resource-type"
               class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
               placeholder="e.g. issues, repositories, pull_requests"
             />
@@ -51,6 +53,7 @@
             <textarea
               v-model="sampleQuery"
               rows="2"
+              data-testid="schema-inference-sample-query"
               class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
               placeholder="e.g. state=open&sort=updated"
             />
@@ -59,6 +62,7 @@
           <div class="flex items-center gap-2">
             <button
               :disabled="!selectedConnectorId || !resourceType.trim() || inferring"
+              data-testid="schema-inference-infer-schema"
               class="rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
               @click="inferSchema"
             >
@@ -114,6 +118,7 @@
 
         <div class="mb-4">
           <button
+            data-testid="schema-inference-toggle-raw-json"
             class="flex items-center gap-1 text-sm text-primary hover:underline"
             @click="showRawJson = !showRawJson"
           >

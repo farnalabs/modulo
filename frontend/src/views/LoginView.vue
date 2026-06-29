@@ -37,6 +37,7 @@
             class="input-teal w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
             placeholder="admin@example.com"
             required
+            data-testid="login-email"
           />
         </div>
         <div class="space-y-2">
@@ -47,12 +48,14 @@
             class="input-teal w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
             placeholder="Enter your password"
             required
+            data-testid="login-password"
           />
         </div>
         <button
           type="submit"
           :disabled="loading"
           class="btn-glow w-full rounded-md bg-primary px-4 py-2.5 text-sm font-semibold text-primary-foreground border border-primary/30 hover:border-primary/60 hover:brightness-110 disabled:opacity-50 transition-all duration-150"
+          data-testid="login-submit"
         >
           {{ loading ? 'Signing in...' : 'Sign in' }}
         </button>

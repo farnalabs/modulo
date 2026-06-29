@@ -442,6 +442,38 @@
   --dot-color: rgba(0, 0, 0, 0.04);
 }
 
+[data-theme="agent"] {
+  --background: 222 30% 8%;
+  --foreground: 210 30% 96%;
+  --card: 222 28% 12%;
+  --card-foreground: 210 30% 96%;
+  --popover: 222 28% 12%;
+  --popover-foreground: 210 30% 96%;
+  --primary: 169 100% 55%;
+  --primary-foreground: 222 30% 8%;
+  --secondary: 222 25% 18%;
+  --secondary-foreground: 210 30% 96%;
+  --muted: 222 25% 18%;
+  --muted-foreground: 215 14% 65%;
+  --accent: 222 25% 18%;
+  --accent-foreground: 210 30% 96%;
+  --destructive: 0 90% 65%;
+  --destructive-foreground: 0 0% 100%;
+  --success: 142 80% 50%;
+  --warning: 38 95% 55%;
+  --border: 222 20% 30%;
+  --input: 222 20% 30%;
+  --ring: 169 100% 55%;
+  --dot-color: rgba(255, 255, 255, 0.06);
+  --focus-ring: 169 100% 55%;
+  font-family: 'JetBrains Mono', 'SF Mono', 'Cascadia Code', 'Consolas', monospace;
+}
+
+[data-theme="agent"] *:focus-visible {
+  outline: 2px solid hsl(var(--focus-ring));
+  outline-offset: 2px;
+}
+
 body {
   background-color: hsl(var(--background));
   background-image: radial-gradient(circle at 1px 1px, var(--dot-color) 1px, transparent 0);

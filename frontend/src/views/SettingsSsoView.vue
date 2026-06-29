@@ -7,6 +7,7 @@
       </div>
       <button
         class="btn-glow rounded-lg bg-primary px-4 py-2 text-sm font-semibold text-primary-foreground border border-primary/30 hover:border-primary/60 hover:brightness-110 transition-all duration-150"
+        data-testid="settings-sso-add-provider"
         @click="openAddForm"
       >
         Add Provider
@@ -66,6 +67,7 @@
               <button
                 :disabled="testingId === provider.id"
                 class="rounded-lg border border-input bg-background px-3 py-1.5 text-xs font-medium hover:bg-accent disabled:opacity-50"
+                data-testid="settings-sso-test"
                 title="Test connection"
                 @click="testConnection(provider.id)"
               >
@@ -73,6 +75,8 @@
               </button>
               <button
                 class="rounded p-1 text-muted-foreground hover:bg-accent"
+                data-testid="settings-sso-edit"
+                :aria-label="'Edit provider'"
                 title="Edit provider"
                 @click="openEditForm(provider)"
               >
@@ -82,6 +86,8 @@
               </button>
               <button
                 class="rounded p-1 text-destructive hover:bg-destructive/10"
+                data-testid="settings-sso-delete"
+                :aria-label="'Delete provider'"
                 title="Delete provider"
                 @click="confirmDelete(provider)"
               >
@@ -91,6 +97,9 @@
               </button>
               <label
                 class="relative inline-flex cursor-pointer items-center"
+                data-testid="settings-sso-toggle"
+                :aria-label="'Toggle provider'"
+                role="switch"
                 @click.prevent.stop="toggleProvider(provider)"
               >
                 <div
@@ -126,6 +135,7 @@
             <div class="mt-3 flex items-center gap-2">
               <button
                 :disabled="deleting"
+                data-testid="settings-sso-delete-confirm"
                 class="rounded-lg bg-destructive px-4 py-2 text-sm font-medium text-destructive-foreground hover:brightness-110 disabled:opacity-50 transition-all"
                 @click="deleteProvider(provider.id)"
               >
@@ -133,6 +143,7 @@
               </button>
               <button
                 class="rounded-lg border border-input bg-background px-4 py-2 text-sm font-medium hover:bg-accent"
+                data-testid="settings-sso-delete-cancel"
                 @click="deleteConfirmProviderId = null"
               >
                 Cancel

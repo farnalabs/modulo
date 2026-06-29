@@ -1,5 +1,5 @@
 <template>
-  <div class="mx-auto max-w-4xl space-y-8 p-6">
+  <div data-theme="agent" class="mx-auto max-w-4xl space-y-8 p-6">
     <header>
       <h1 class="text-3xl font-bold tracking-tight">Rate Limits</h1>
       <p class="mt-1 text-muted-foreground">View per-route rate limiting rules and current usage</p>

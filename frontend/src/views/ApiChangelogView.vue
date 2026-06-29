@@ -1,5 +1,5 @@
 <template>
-  <div class="mx-auto max-w-4xl space-y-6 p-6">
+  <div data-theme="agent" class="mx-auto max-w-4xl space-y-6 p-6">
     <header>
       <h1 class="text-3xl font-bold tracking-tight">API Changelog</h1>
       <p class="mt-1 text-muted-foreground">Version history and deprecation notices for the Modulo API</p>
