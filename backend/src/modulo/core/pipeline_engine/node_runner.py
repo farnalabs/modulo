@@ -98,16 +98,13 @@ def make_node_fn(
 
     @cancellable_node(timeout=timeout, role=role)
     async def _node(state: dict[str, Any]) -> dict[str, Any]:
-        artifacts: list[dict[str, Any]] = list(state.get("artifacts") or [])
-
         # Truncate input if max_input_length is configured for this agent.
         run_context: dict[str, Any] = state.get("run_context") or {}
         raw_input = run_context.get("input", {})
         if max_input_length is not None and isinstance(raw_input, str):
             run_context["input"] = truncate_input(raw_input, max_input_length)
 
-        artifacts.append({"node_id": node_id, "status": "executed"})
-        return {"artifacts": artifacts}
+        return {"artifacts": [{"node_id": node_id, "status": "executed"}]}
 
     _node.__name__ = f"node_{node_id}"
     return _node
@@ -150,16 +147,16 @@ def make_hitl_gate_fn(
         if decision is not None:
             is_rejected = isinstance(decision, dict) and decision.get("action") == "rejected"
             result_status = "rejected" if is_rejected else "approved"
-            out_artifacts: list[dict[str, Any]] = list(state.get("artifacts") or [])
-            out_artifacts.append(
-                {
-                    "node_id": gate_id,
-                    "status": "interrupted",
-                    "result": result_status,
-                    "human_data": decision,
-                }
-            )
-            return {"artifacts": out_artifacts}
+            return {
+                "artifacts": [
+                    {
+                        "node_id": gate_id,
+                        "status": "interrupted",
+                        "result": result_status,
+                        "human_data": decision,
+                    }
+                ],
+            }
 
         # --- Conditional gate (§8.17) — evaluate condition against state. ---
         if condition_expr is not None:
@@ -167,16 +164,16 @@ def make_hitl_gate_fn(
             result = compiled.search(state)
             if not _is_truthy(result):
                 # Condition falsy — skip the gate entirely.
-                artifacts: list[dict[str, Any]] = list(state.get("artifacts") or [])
-                artifacts.append(
-                    {
-                        "node_id": gate_id,
-                        "status": "condition_skipped",
-                        "condition": condition_expr,
-                        "condition_result": result,
-                    }
-                )
-                return {"artifacts": artifacts}
+                return {
+                    "artifacts": [
+                        {
+                            "node_id": gate_id,
+                            "status": "condition_skipped",
+                            "condition": condition_expr,
+                            "condition_result": result,
+                        }
+                    ],
+                }
 
         # --- Eval-before-interrupt (§8.17) — run node-scoped evals. ---
         if eval_definitions:
@@ -196,26 +193,26 @@ def make_hitl_gate_fn(
             pass
         elif should_skip_hitl_gate(autonomy):
             # fully_autonomous: silently skip the gate.
-            artifacts = list(state.get("artifacts") or [])
-            artifacts.append(
-                {
-                    "node_id": gate_id,
-                    "status": "skipped",
-                    "autonomy": autonomy.value,
-                }
-            )
-            return {"artifacts": artifacts}
+            return {
+                "artifacts": [
+                    {
+                        "node_id": gate_id,
+                        "status": "skipped",
+                        "autonomy": autonomy.value,
+                    }
+                ],
+            }
         elif should_notify_on_complete(autonomy):
             # notify_on_complete: auto-approve, record notification artifact.
-            artifacts = list(state.get("artifacts") or [])
-            artifacts.append(
-                {
-                    "node_id": gate_id,
-                    "status": "auto_approved",
-                    "autonomy": autonomy.value,
-                }
-            )
-            return {"artifacts": artifacts}
+            return {
+                "artifacts": [
+                    {
+                        "node_id": gate_id,
+                        "status": "auto_approved",
+                        "autonomy": autonomy.value,
+                    }
+                ],
+            }
 
         # First invocation — store config and interrupt.
         hitl_gates: list[dict[str, Any]] = list(state.get("_hitl_gates") or [])
@@ -259,15 +256,6 @@ def make_manual_node_fn(
             if output_schema_json and manual_output is not None:
                 _validate_against_schema(manual_output, output_schema_json)
 
-            out_artifacts: list[dict[str, Any]] = list(state.get("artifacts") or [])
-            out_artifacts.append(
-                {
-                    "node_id": node_id,
-                    "status": "completed",
-                    "human_output": manual_output,
-                }
-            )
-
             _log.info(
                 "manual_node.completed",
                 extra={
@@ -277,7 +265,13 @@ def make_manual_node_fn(
             )
 
             return {
-                "artifacts": out_artifacts,
+                "artifacts": [
+                    {
+                        "node_id": node_id,
+                        "status": "completed",
+                        "human_output": manual_output,
+                    }
+                ],
                 "manual_output": manual_output,
             }
 

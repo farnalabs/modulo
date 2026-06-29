@@ -93,6 +93,7 @@ async def test_hitl_gate_resume_with_rejected():
 
 
 async def test_hitl_gate_resume_preserves_existing_artifacts():
+    """Gate returns delta artifacts on resume; accumulator handles merge."""
     gate_config = {"gate_id": "review-step"}
     prior_artifact = {"node_id": "prior-node", "status": "executed"}
     node_fn = make_hitl_gate_fn(gate_config)
@@ -104,8 +105,9 @@ async def test_hitl_gate_resume_preserves_existing_artifacts():
         }
     )
 
-    assert len(result["artifacts"]) == 2
-    assert result["artifacts"][0] == prior_artifact
+    assert len(result["artifacts"]) == 1
+    assert result["artifacts"][0]["node_id"] == "review-step"
+    assert result["artifacts"][0]["result"] == "approved"
 
 
 # ---------------------------------------------------------------------------
@@ -323,9 +325,9 @@ async def test_hitl_gate_notify_on_complete_preserves_artifacts():
         }
     )
 
-    assert len(result["artifacts"]) == 2
-    assert result["artifacts"][0] == prior_artifact
-    assert result["artifacts"][1]["status"] == "auto_approved"
+    assert len(result["artifacts"]) == 1
+    assert result["artifacts"][0]["node_id"] == "notify-preserve"
+    assert result["artifacts"][0]["status"] == "auto_approved"
 
 
 # ---------------------------------------------------------------------------
