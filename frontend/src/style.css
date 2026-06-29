@@ -486,3 +486,8 @@ body {
   background-color: hsla(var(--primary) / 0.3);
   color: #fff;
 }
+
+select option {
+  background-color: hsl(var(--background));
+  color: hsl(var(--foreground));
+}

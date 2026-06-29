@@ -36,6 +36,8 @@
         <span class="text-xs text-muted-foreground">OTel Trace ID:</span>
         <code class="rounded bg-muted px-1.5 py-0.5 font-mono text-xs">{{ run.trace_id }}</code>
         <button
+          data-testid="run-detail-copy-trace-id"
+          aria-label="Copy trace ID"
           class="inline-flex items-center gap-1 rounded-md px-2 py-1 text-xs font-medium text-primary hover:bg-primary/10"
           @click="copyTraceId"
         >
@@ -81,6 +83,8 @@
               <td class="py-3 pr-4">
                 <code
                   v-if="node.traceId"
+                  data-testid="run-detail-node-trace-id"
+                  aria-label="Copy node trace ID"
                   class="cursor-pointer rounded bg-muted px-1.5 py-0.5 font-mono text-xs"
                   :title="node.traceId"
                   @click="copyText(node.traceId!)"
@@ -90,6 +94,7 @@
               <td class="py-3">
                 <button
                   v-if="node.io"
+                  data-testid="run-detail-toggle-io"
                   class="inline-flex items-center gap-1 rounded-md px-2 py-1 text-xs font-medium text-primary hover:bg-primary/10"
                   @click="toggleNodeIO(node.name)"
                 >

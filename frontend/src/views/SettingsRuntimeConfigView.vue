@@ -15,6 +15,7 @@
       <button
         type="button"
         class="rounded-lg border border-input bg-background px-4 py-2 text-sm font-medium hover:bg-accent disabled:opacity-50"
+        data-testid="settings-runtime-config-reload"
         :disabled="loading"
         @click="reloadConfig"
       >
@@ -69,6 +70,7 @@
               <input
                 v-if="entry.hot_reloadable"
                 v-model="editedValues[entry.key]"
+                data-testid="settings-runtime-config-value"
                 :class="inputClasses(entry)"
                 @input="markEdited(entry.key)"
               />
@@ -99,6 +101,7 @@
               <button
                 v-if="isEdited(entry.key)"
                 class="text-sm text-primary hover:underline"
+                data-testid="settings-runtime-config-apply"
                 :disabled="saving"
                 @click="applyOverride(entry.key)"
               >
@@ -107,6 +110,7 @@
               <button
                 v-if="entry.override_value"
                 class="ml-2 text-sm text-destructive hover:underline"
+                data-testid="settings-runtime-config-reset"
                 :disabled="saving"
                 @click="clearOverride(entry.key)"
               >

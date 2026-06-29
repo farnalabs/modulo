@@ -27,7 +27,7 @@
             <div class="flex items-end gap-3">
               <div class="flex-1">
                 <label class="mb-1.5 block text-xs font-medium text-muted-foreground">Daily limit (USD)</label>
-                <Input v-model.number="orgLimit" type="number" min="0" step="0.01" placeholder="No limit" data-testid="admin-spend-limits-org-limit" />
+                <Input :model-value="orgLimit ?? undefined" @update:model-value="(v: any) => orgLimit = v === '' ? null : Number(v)" type="number" min="0" step="0.01" placeholder="No limit" data-testid="admin-spend-limits-org-limit" />
               </div>
               <Button :disabled="savingOrg" data-testid="admin-spend-limits-org-save" @click="saveOrgLimit">
                 {{ savingOrg ? 'Saving...' : 'Save' }}
@@ -60,7 +60,7 @@
                   <td class="py-3 font-medium">{{ team.name }}</td>
                   <td class="py-3">
                     <Input
-                      v-model.number="team.editingLimit"
+                      :model-value="team.editingLimit ?? undefined" @update:model-value="(v: any) => team.editingLimit = v === '' ? null : Number(v)"
                       type="number"
                       min="0"
                       step="0.01"
