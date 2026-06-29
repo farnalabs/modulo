@@ -18,7 +18,6 @@ class TestConstants:
             "viewer": 0,
             "runner": 1,
             "operator": 2,
-            "admin": 3,
         }
 
     def test_org_role_hierarchy_has_expected_roles(self) -> None:
@@ -30,7 +29,7 @@ class TestConstants:
         }
 
     def test_valid_team_roles_is_frozenset(self) -> None:
-        assert VALID_TEAM_ROLES == frozenset({"viewer", "runner", "operator", "admin"})
+        assert VALID_TEAM_ROLES == frozenset({"viewer", "runner", "operator"})
 
     def test_valid_org_roles_is_frozenset(self) -> None:
         assert VALID_ORG_ROLES == frozenset({"viewer", "runner", "operator", "admin"})
@@ -50,33 +49,30 @@ class TestEffectiveAccessModel:
         assert caps["viewer"] == "viewer"
         assert caps["runner"] == "runner"
         assert caps["operator"] == "runner"
-        assert caps["admin"] == "runner"
 
     def test_operator_org_caps_team_roles_above_operator(self) -> None:
         caps = EFFECTIVE_ACCESS_MODEL["operator"]
         assert caps["viewer"] == "viewer"
         assert caps["runner"] == "runner"
         assert caps["operator"] == "operator"
-        assert caps["admin"] == "operator"
 
     def test_admin_org_allows_all_team_roles(self) -> None:
         caps = EFFECTIVE_ACCESS_MODEL["admin"]
         assert caps["viewer"] == "viewer"
         assert caps["runner"] == "runner"
         assert caps["operator"] == "operator"
-        assert caps["admin"] == "admin"
 
 
 class TestGetEffectiveTeamRole:
     def test_returns_correct_role_for_valid_pairs(self) -> None:
-        assert get_effective_team_role("admin", "admin") == "admin"
+        assert get_effective_team_role("admin", "operator") == "operator"
         assert get_effective_team_role("admin", "viewer") == "viewer"
-        assert get_effective_team_role("viewer", "admin") == "viewer"
-        assert get_effective_team_role("operator", "admin") == "operator"
+        assert get_effective_team_role("viewer", "operator") == "viewer"
+        assert get_effective_team_role("operator", "runner") == "runner"
         assert get_effective_team_role("runner", "operator") == "runner"
 
     def test_unknown_org_role_falls_back_to_viewer(self) -> None:
-        assert get_effective_team_role("superadmin", "admin") == "viewer"
+        assert get_effective_team_role("superadmin", "operator") == "viewer"
 
     def test_unknown_team_role_falls_back_to_viewer(self) -> None:
         assert get_effective_team_role("admin", "superadmin") == "viewer"
@@ -90,7 +86,6 @@ class TestTeamRoleLevel:
         assert team_role_level("viewer") == 0
         assert team_role_level("runner") == 1
         assert team_role_level("operator") == 2
-        assert team_role_level("admin") == 3
 
     def test_returns_minus_one_for_unknown_role(self) -> None:
         assert team_role_level("superadmin") == -1

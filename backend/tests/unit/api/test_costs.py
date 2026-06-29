@@ -10,10 +10,12 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from fastapi.testclient import TestClient
 
-from modulo.api.dependencies import _get_engine, get_db_session
+from modulo.api.dependencies import _get_engine, get_db_session, get_plan_context
 from modulo.api.main import app
 from modulo.auth.dependencies import get_current_user
 from modulo.auth.jwt import AuthenticatedPrincipal
+from modulo.core.feature_flags import FeatureFlagRegistry
+from modulo.core.license import LicenseData
 from modulo.settings import Settings, get_settings
 
 _VALID_32 = "a" * 32
@@ -57,13 +59,25 @@ def client() -> Generator[TestClient, None, None]:
         user_id=_USER_ID,
         org_role="admin",
     )
+    app.dependency_overrides[get_plan_context] = lambda: _EnterprisePlan()
     yield TestClient(app)
     app.dependency_overrides.clear()
+
+
+class _EnterprisePlan:
+    """Stub plan context that enables all enterprise features for tests."""
+
+    def feature_enabled(self, name: str) -> bool:
+        return True
+
+    def list_enabled_features(self) -> list:
+        return []
 
 
 @pytest.fixture()
 def unauth_client() -> Generator[TestClient, None, None]:
     app.dependency_overrides[get_settings] = _make_settings
+    app.dependency_overrides[get_plan_context] = lambda: _EnterprisePlan()
     yield TestClient(app)
     app.dependency_overrides.clear()
 
@@ -84,6 +98,7 @@ def operator_client() -> Generator[TestClient, None, None]:
         user_id=_USER_ID,
         org_role="operator",
     )
+    app.dependency_overrides[get_plan_context] = lambda: _EnterprisePlan()
     yield TestClient(app)
     app.dependency_overrides.clear()
 

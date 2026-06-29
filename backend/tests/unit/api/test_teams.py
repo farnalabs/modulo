@@ -303,7 +303,7 @@ class TestAddMember:
             m_get_user.return_value = target_user
             resp = client.post(
                 f"/api/v1/teams/{_TEAM_ID}/members",
-                json={"user_id": str(_USER_ID), "role": "admin"},
+                json={"user_id": str(_USER_ID), "role": "operator"},
             )
         assert resp.status_code == 422
         data = resp.json()

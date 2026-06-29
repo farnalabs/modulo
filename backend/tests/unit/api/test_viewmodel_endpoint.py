@@ -56,7 +56,9 @@ def _make_mock_session() -> AsyncMock:
     session.begin = MagicMock(return_value=begin_cm)
 
     execute_result = MagicMock()
-    execute_result.scalars.return_value = iter([])
+    scalars_mock = AsyncMock()
+    scalars_mock.all = AsyncMock(return_value=[])
+    execute_result.scalars.return_value = scalars_mock
     session.execute = AsyncMock(return_value=execute_result)
     return session
 
@@ -158,7 +160,9 @@ def test_viewmodel_current_includes_pending_hitl(client: TestClient) -> None:
 
     # The viewmodel does its own session.execute for HITL — override what scalars() returns
     execute_result = MagicMock()
-    execute_result.scalars.return_value = iter([hitl])
+    scalars_mock = AsyncMock()
+    scalars_mock.all = AsyncMock(return_value=[hitl])
+    execute_result.scalars.return_value = scalars_mock
 
     with (
         patch("modulo.api.routes.viewmodel.list_pipelines", return_value=pipelines_page),

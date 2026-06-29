@@ -198,8 +198,8 @@ def test_ws_token_endpoint_returns_200(client: TestClient) -> None:
     body = resp.json()
     assert "ws_token" in body
     assert len(body["ws_token"]) > 20
-    assert body["token_type"] == "bearer"
-    assert body["expires_in_minutes"] == 15
+    assert body["token_type"] == "ws-jwt"
+    assert body["expires_in_seconds"] == 60
 
 
 def test_ws_token_decodes_correctly(client: TestClient) -> None:
