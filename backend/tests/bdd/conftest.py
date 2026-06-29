@@ -11,6 +11,8 @@ from fastapi.testclient import TestClient
 from playwright.sync_api import Page
 
 os.environ.setdefault("MODULO_CSRF_ENABLED", "false")
+os.environ.setdefault("REDIS_URL", "")
+os.environ.setdefault("MODULO_AUTH_RATE_LIMIT_ENABLED", "false")
 
 from modulo.api.dependencies import _get_engine, get_db_session
 from modulo.api.main import app

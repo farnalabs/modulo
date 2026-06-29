@@ -447,7 +447,7 @@ async def saml_process_response(
         attr_name = attr.get("Name", "")
         values = [v.text.strip() for v in attr.findall("saml:AttributeValue", ns) if v.text and v.text.strip()]
         if values:
-            attrs[attr_name] = values[0]
+            attrs[attr_name] = ",".join(values)
 
     email = attrs.get("email", "") or attrs.get("Email", "") or name_id or ""
     display_name = (
