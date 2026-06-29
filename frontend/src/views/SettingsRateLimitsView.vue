@@ -72,7 +72,7 @@ async function loadRules() {
       loadError.value = `Failed to load rate limits: ${err}`
     } else if (data) {
       mode.value = data.mode
-      rules.value = data.rules
+      rules.value = data.rules ?? []
     }
   } catch (e: unknown) {
     loadError.value = `Failed to load rate limits: ${e instanceof Error ? e.message : String(e)}`

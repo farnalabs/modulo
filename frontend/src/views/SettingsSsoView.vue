@@ -245,7 +245,7 @@ async function loadProviders() {
     if (err) {
       error.value = `Failed to load providers: ${err}`
     } else if (data) {
-      providers.value = data
+      providers.value = (Array.isArray(data) ? data : (data as any)?.items ?? [])
     }
   } catch (e: unknown) {
     error.value = `Failed to load providers: ${e instanceof Error ? e.message : String(e)}`
