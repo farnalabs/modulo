@@ -57,6 +57,7 @@ def make_settings() -> Settings:
         secret_key=_VALID_32,
         fernet_key=_VALID_32,
         modulo_admin_password="testpass",
+        modulo_license_key="test-license-key",
     )
 
 
@@ -196,7 +197,7 @@ def alt_org_client(mock_session: AsyncMock) -> Generator[TestClient, None, None]
         username="otheruser",
         organisation_id=ALT_ORG_ID,
         user_id=uuid.uuid4(),
-        org_role="viewer",
+        org_role="admin",
     )
 
     yield TestClient(app)

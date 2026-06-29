@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from uuid import UUID as _UUID
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -20,6 +20,14 @@ from modulo.core.audit_logger import (
 from modulo.db.rls import set_rls_org
 
 router = APIRouter(prefix="/api/v1/admin/audit", tags=["audit"], dependencies=[require_feature("audit_viewer")])
+
+
+def _require_admin(principal: AuthenticatedPrincipal) -> None:
+    if principal.org_role != "admin":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Admin role required",
+        )
 
 
 class BatchDetailRequest(BaseModel):
@@ -51,6 +59,7 @@ async def list_audit_events_endpoint(
     entity_type (resource_type), from_date, to_date.
     """
     actor_uid = _UUID(actor_user_id) if actor_user_id else None
+    _require_admin(principal)
     async with session.begin():
         await set_rls_org(session, principal.organisation_id)
         result = await list_audit_events(
@@ -75,6 +84,7 @@ async def batch_detail_endpoint(
 ) -> list[dict[str, object]]:
     """Return full details for a batch of audit event IDs."""
     async with session.begin():
+        _require_admin(principal)
         await set_rls_org(session, principal.organisation_id)
         result = await get_audit_events_batch(
             session,
@@ -91,6 +101,7 @@ async def verify_chain_endpoint(
 ) -> dict[str, object]:
     """Verify the cryptographic integrity of the org's audit chain."""
     async with session.begin():
+        _require_admin(principal)
         await set_rls_org(session, principal.organisation_id)
         result = await verify_chain(session, principal.organisation_id)
     return result
@@ -105,6 +116,7 @@ async def export_chain_endpoint(
 ) -> dict[str, object]:
     """Export audit events as paginated JSON."""
     async with session.begin():
+        _require_admin(principal)
         await set_rls_org(session, principal.organisation_id)
         result = await export_chain(session, principal.organisation_id, page=page, page_size=page_size)
     return result
