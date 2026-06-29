@@ -15,7 +15,7 @@ if [ -f /tmp/database_url.env ]; then
 fi
 
 echo "=== Running DB migrations ==="
-# Fix stale alembic_version entries from prior branches
+# Ensure alembic_version can hold branch migration IDs (VARCHAR(255))
 .venv/bin/python3 -c "
 import os
 os.environ['DATABASE_URL'] = os.environ.get('DATABASE_URL', '')
@@ -25,9 +25,10 @@ import asyncio
 async def fix():
     async with AsyncSessionLocal() as s:
         async with s.begin():
+            await s.execute(text('CREATE TABLE IF NOT EXISTS alembic_version (version_num VARCHAR(255) NOT NULL PRIMARY KEY)'))
             await s.execute(text(\"DELETE FROM alembic_version WHERE version_num = '0037_agent_columns'\"))
 asyncio.run(fix())
-" 2>&1 || echo "WARNING: Alembic fix step failed — continuing anyway"
+" 2>&1 || echo "WARNING: Alembic prep step failed — continuing anyway"
 .venv/bin/alembic upgrade head || echo "WARNING: Migration failed — continuing anyway"
 
 echo "=== Applying schema patches (columns missing from base migrations) ==="
