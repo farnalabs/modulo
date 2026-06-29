@@ -20,6 +20,7 @@ from langchain_core.messages import HumanMessage
 
 from modulo.core.plugin_registry import get_plugin_registry
 from modulo.core.secrets_backend import SecretsBackend
+from modulo.model_backends.ai21 import Ai21Backend
 from modulo.model_backends.anthropic import AnthropicBackend
 from modulo.model_backends.azure_openai import AzureOpenAIBackend
 from modulo.model_backends.base import ModelBackendBase
@@ -27,11 +28,14 @@ from modulo.model_backends.deepseek import DeepSeekBackend
 from modulo.model_backends.fireworks import FireworksBackend
 from modulo.model_backends.grok import GrokBackend
 from modulo.model_backends.groq import GroqBackend
+from modulo.model_backends.lm_studio import LmStudioBackend
 from modulo.model_backends.ollama import OllamaBackend
 from modulo.model_backends.openai import OpenAIBackend
+from modulo.model_backends.tgi import TgiBackend
 from modulo.model_backends.perplexity import PerplexityBackend
 from modulo.model_backends.qwen import QwenBackend
 from modulo.model_backends.togetherai import TogetherAIBackend
+from modulo.model_backends.vllm import VllmBackend
 from modulo.model_backends.openrouter import OpenRouterBackend
 
 
@@ -224,6 +228,8 @@ def _build_backend(
     if "api_key" not in creds:
         raise ValueError(f"Missing 'api_key' in credentials for provider {provider!r}")
     match provider:
+        case "ai21":
+            return Ai21Backend(api_key=creds["api_key"], model_id=model_id, **default_params)
         case "anthropic":
             return AnthropicBackend(api_key=creds["api_key"], model_id=model_id, **default_params)
         case "azure_openai":
@@ -240,9 +246,25 @@ def _build_backend(
             )
         case "openai":
             return OpenAIBackend(api_key=creds["api_key"], model_id=model_id, **default_params)
+        case "lm_studio":
+            base_url = creds.get("base_url", "http://localhost:1234/v1")
+            return LmStudioBackend(
+                api_key=creds.get("api_key", ""),
+                model_id=model_id,
+                base_url=base_url,
+                **default_params,
+            )
         case "ollama":
             base_url = creds.get("base_url", "http://localhost:11434/v1")
             return OllamaBackend(
+                api_key=creds.get("api_key", ""),
+                model_id=model_id,
+                base_url=base_url,
+                **default_params,
+            )
+        case "tgi":
+            base_url = creds.get("base_url", "http://localhost:8080/v1")
+            return TgiBackend(
                 api_key=creds.get("api_key", ""),
                 model_id=model_id,
                 base_url=base_url,
@@ -262,6 +284,14 @@ def _build_backend(
             return PerplexityBackend(api_key=creds["api_key"], model_id=model_id, **default_params)
         case "qwen":
             return QwenBackend(api_key=creds["api_key"], model_id=model_id, **default_params)
+        case "vllm":
+            base_url = creds.get("base_url", "http://localhost:8000/v1")
+            return VllmBackend(
+                api_key=creds.get("api_key", ""),
+                model_id=model_id,
+                base_url=base_url,
+                **default_params,
+            )
         case _:
             registry = get_plugin_registry()
             if registry.has_model_backend(provider):
