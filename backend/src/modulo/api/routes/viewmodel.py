@@ -18,8 +18,10 @@ from modulo.auth.dependencies import get_current_user
 from modulo.auth.jwt import AuthenticatedPrincipal
 from modulo.db.crud.pipeline import list_pipelines
 from modulo.db.crud.run import list_runs
+from modulo.db.crud.view import get_view, list_views
 from modulo.db.models.hitl_claim import HitlClaim
 from modulo.db.models.team import Team
+from modulo.db.models.view import SavedView
 from modulo.db.rls import set_rls_org, set_rls_user_context
 from modulo.settings import Settings, get_settings
 
@@ -94,6 +96,33 @@ class LicenseInfo(BaseModel):
     is_valid: bool = True
 
 
+class ViewInfo(BaseModel):
+    id: uuid.UUID
+    name: str
+    description: str | None
+    view_type: str
+    filters: dict
+    columns: list[str] | None
+    sort_by: str | None
+    sort_order: str
+    created_by: uuid.UUID
+    created_by_me: bool
+    created_at: datetime
+    updated_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
+class ViewModelViewsResponse(BaseModel):
+    items: list[ViewInfo]
+    total: int
+    page: int
+    page_size: int
+    run_list_views: list[ViewInfo]
+    pipeline_list_views: list[ViewInfo]
+    audit_log_views: list[ViewInfo]
+
+
 class ViewModelCurrent(BaseModel):
     user: UserInfo
     pipelines: list[PipelineSummary]
@@ -101,6 +130,8 @@ class ViewModelCurrent(BaseModel):
     recent_runs: list[RunSummary]
     runs_total: int
     pending_hitl_gates: list[PendingHitlGate]
+    views: list[ViewInfo] | None = None
+    current_view: ViewInfo | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -146,6 +177,7 @@ async def viewmodel_current(
     session: AsyncSession = Depends(get_db_session),
     current_user: AuthenticatedPrincipal = Depends(get_current_user),
     view_as_team: uuid.UUID | None = Query(None),
+    current_view_id: uuid.UUID | None = Query(None),
 ) -> ViewModelCurrent:
     if view_as_team is not None and current_user.org_role != "admin":
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Only admins can use view_as_team")
@@ -177,6 +209,15 @@ async def viewmodel_current(
         scalar_result = pending_hitl_result.scalars()
         pending_hitl = await scalar_result.all()
 
+        all_views_result = await list_views(session, page=1, page_size=100)
+        all_views = [_enrich_view(v, current_user.user_id) for v in all_views_result.items]
+
+        current_view = None
+        if current_view_id is not None:
+            view = await get_view(session, current_view_id)
+            if view is not None:
+                current_view = _enrich_view(view, current_user.user_id)
+
     return ViewModelCurrent(
         user=UserInfo(username=current_user.username),
         pipelines=[PipelineSummary.model_validate(p) for p in pipelines_page.items],
@@ -184,4 +225,36 @@ async def viewmodel_current(
         recent_runs=[RunSummary.model_validate(r) for r in runs_page.items],
         runs_total=runs_page.total,
         pending_hitl_gates=[PendingHitlGate.model_validate(h) for h in pending_hitl],
+        views=all_views,
+        current_view=current_view,
     )
+
+
+@router.get("/api/v1/viewmodel/views", response_model=ViewModelViewsResponse)
+async def viewmodel_list_views(
+    session: AsyncSession = Depends(get_db_session),
+    current_user: AuthenticatedPrincipal = Depends(get_current_user),
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=100, ge=1, le=200),
+) -> ViewModelViewsResponse:
+    async with session.begin():
+        await set_rls_org(session, current_user.organisation_id)
+        await set_rls_user_context(session, current_user.user_id, current_user.org_role)
+        result = await list_views(session, page=page, page_size=page_size)
+
+    items = [_enrich_view(v, current_user.user_id) for v in result.items]
+    return ViewModelViewsResponse(
+        items=items,
+        total=result.total,
+        page=result.page,
+        page_size=result.page_size,
+        run_list_views=[v for v in items if v.view_type == "run_list"],
+        pipeline_list_views=[v for v in items if v.view_type == "pipeline_list"],
+        audit_log_views=[v for v in items if v.view_type == "audit_log"],
+    )
+
+
+def _enrich_view(view: SavedView, user_id: uuid.UUID) -> ViewInfo:
+    info = ViewInfo.model_validate(view)
+    info.created_by_me = view.created_by == user_id
+    return info
