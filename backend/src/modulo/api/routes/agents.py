@@ -38,6 +38,7 @@ router = APIRouter(prefix="/api/v1/agents", tags=["agents"])
 class AgentCreate(BaseModel):
     name: str = Field(min_length=1)
     description: str | None = None
+    is_executable: bool = True
     input_schema_id: uuid.UUID
     input_schema_version: str
     output_schema_id: uuid.UUID
@@ -55,6 +56,7 @@ class AgentCreate(BaseModel):
 class AgentUpdate(BaseModel):
     name: str | None = None
     description: str | None = None
+    is_executable: bool | None = None
     prompt_template: str | None = None
     model_backend_id: uuid.UUID | None = None
     connector_type_refs: list[dict[str, Any]] | None = None
@@ -69,6 +71,7 @@ class AgentResponse(BaseModel):
     organisation_id: uuid.UUID
     name: str
     description: str | None
+    is_executable: bool
     input_schema_id: uuid.UUID
     input_schema_version: str
     output_schema_id: uuid.UUID
@@ -192,6 +195,7 @@ async def create_agent_endpoint(
             output_schema_version=body.output_schema_version,
             prompt_template=body.prompt_template,
             model_backend_id=body.model_backend_id,
+            is_executable=body.is_executable,
             description=body.description,
             connector_type_refs=body.connector_type_refs,
             evals=body.evals,
