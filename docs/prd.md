@@ -45,7 +45,7 @@ Modulo is a composition layer, not an opinionated workflow tool. Users define th
 
 **Discipline scope**: the SDLC is the first and primary vertical. The underlying abstractions — typed schemas, swappable connectors, versioned agents, HITL gates, auditable runs — are discipline-agnostic. Any process that moves typed artifacts through a governed, multi-step pipeline could be served by the same platform. Non-SDLC disciplines are a deliberate future expansion; SDLC is the wedge.
 
-> **Core philosophy**: We handle the boilerplate. You handle the remainder.
+> **Core philosophy**: Modulo handles the boilerplate. You handle the remainder.
 
 ---
 
@@ -106,9 +106,9 @@ The closest alternatives in each layer, and why Modulo makes a different bet:
 | **n8n** | General workflow automation with a large connector ecosystem. | n8n is a peer, not a competitor. The architecture supports treating n8n workflows as callable ConnectorTypes (webhook-in, webhook-out), giving Modulo access to n8n's connector ecosystem without rebuilding it. A native n8n ConnectorType is a v2 roadmap item; teams can wire n8n via the generic webhook connector in the interim. |
 | **LangGraph Platform** | Hosted LangGraph runtime with Studio UI. | Modulo builds on LangGraph but wraps it: typed schemas, HITL governance, connector swappability, community library, and a Remote MCP server are not part of LangGraph Platform. LangGraph is the engine; Modulo is the platform. |
 | **GitHub Copilot Agents** | Issue→PR automation native to the code host. | GitHub-native and code-focused. Cannot serve teams in regulated environments with data-residency constraints, and does not address pre-code SDLC steps (PRD, tickets, grooming). Modulo is the control plane for the steps GitHub doesn't own. |
-| **SpecFlow / Dume.ai / Jira AI** | SaaS point solutions for PRD→tickets. | Zero-setup but zero-configurability and zero on-premises option. Modulo's community library delivers the same off-the-shelf experience, self-hosted, with schemas the team controls. |
+| **SpecFlow / Dume.ai / Jira AI** | SaaS point solutions for PRD→tickets. | Zero-setup but zero-configurability and zero self-hosted option. Modulo's community library delivers the same off-the-shelf experience, self-hosted, with schemas the team controls. |
 
-**Modulo's defensible position**: the open, self-hosted, schema-governed, bring-your-own-agent control plane for SDLC pipelines — for teams who need on-premises data handling, tool-specific conventions, and human governance built into the workflow. The community library of SDLC modules is the primary acquisition vector; the governance layer (HITL, audit trail, team-scoped access) is the retention moat.
+**Modulo's defensible position**: the open, self-hosted, schema-governed, bring-your-own-agent control plane for SDLC pipelines — for teams who need self-hosted data handling, tool-specific conventions, and human governance built into the workflow. The community library of SDLC modules is the primary acquisition vector; the governance layer (HITL, audit trail, team-scoped access) is the retention moat.
 
 ---
 
@@ -501,7 +501,7 @@ MCP SSE event streams validate org context on every event — not just at connec
 This page ships in alpha. Without it, connecting an MCP client requires manual config and has no discoverability path.
 
 #### MCP Capabilities and Modulo
-The MCP server is a thin adapter over the ViewModel API. It adds no business logic. A Modulo pipeline that surfaces a HITL gate automatically appears as a pending tool call in a connected LLM client — the LLM can inspect the gate context via `modulo://runs/{id}/hitl/{gate_id}` and call `review_hitl` without human intervention (unless `human_only: true`), enabling fully autonomous pipeline execution when desired.
+The MCP server is a thin adapter over the ViewModel API. It adds no business logic. A Modulo pipeline that surfaces a HITL gate automatically appears as a pending tool call in a connected LLM client — the LLM can inspect the gate context via `modulo://runs/{id}/hitl/{gate_id}` and call `review_hitl` without human intervention (unless `human_only: true`), enabling governed pipeline execution with configurable autonomy when desired.
 
 This is the meta-layer: Modulo manages AI agents; an AI agent can manage Modulo.
 

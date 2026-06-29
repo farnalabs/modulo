@@ -439,7 +439,7 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
 
 app = FastAPI(
     title="Modulo",
-    description="Self-hosted agentic SDLC platform",
+    description="Governed orchestration for your agentic SDLC",
     version="0.1.0",
     lifespan=_lifespan,
 )

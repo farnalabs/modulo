@@ -12,7 +12,7 @@ build-backend = "hatchling.build"
 [project]
 name = "modulo"
 version = "0.1.0"
-description = "Self-hosted agentic SDLC platform"
+description = "Governed orchestration for your agentic SDLC"
 requires-python = ">=3.12"
 dependencies = [
     # Settings

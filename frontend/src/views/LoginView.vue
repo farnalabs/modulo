@@ -21,7 +21,7 @@
           </div>
         </div>
         <h1 class="text-3xl font-bold tracking-tight">Modulo</h1>
-        <p class="mt-1 text-muted-foreground">SDLC pipeline orchestration</p>
+        <p class="mt-1 text-muted-foreground">Governed orchestration for your agentic SDLC</p>
       </div>
 
       <div v-if="error" class="rounded-lg border border-destructive/50 bg-destructive/10 p-4 text-sm text-destructive">
