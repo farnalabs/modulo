@@ -359,6 +359,59 @@ export interface paths {
         }
       }
     }
+    post: {
+      requestBody: {
+        content: {
+          'application/json': components['schemas']['ConnectorCreate']
+        }
+      }
+      responses: {
+        201: {
+          content: {
+            'application/json': components['schemas']['ConnectorResponse']
+          }
+        }
+      }
+    }
+  }
+  '/api/v1/connectors/{connector_id}': {
+    get: {
+      parameters: {
+        path: { connector_id: string }
+      }
+      responses: {
+        200: {
+          content: {
+            'application/json': components['schemas']['ConnectorResponse']
+          }
+        }
+      }
+    }
+    put: {
+      parameters: {
+        path: { connector_id: string }
+      }
+      requestBody: {
+        content: {
+          'application/json': components['schemas']['ConnectorUpdate']
+        }
+      }
+      responses: {
+        200: {
+          content: {
+            'application/json': components['schemas']['ConnectorResponse']
+          }
+        }
+      }
+    }
+    delete: {
+      parameters: {
+        path: { connector_id: string }
+      }
+      responses: {
+        204: { description: 'No content' }
+      }
+    }
   }
   '/api/v1/schemas/infer': {
     post: {
@@ -856,6 +909,27 @@ export interface components {
     }
     ConnectorListResponse: {
       items: components['schemas']['ConnectorItem'][]
+    }
+    ConnectorCreate: {
+      name: string
+      connector_type: string
+      description?: string | null
+      config_json?: string | null
+    }
+    ConnectorUpdate: {
+      name?: string | null
+      description?: string | null
+      config_json?: string | null
+    }
+    ConnectorResponse: {
+      id: string
+      name: string
+      connector_type: string
+      description: string | null
+      config_json: string | null
+      enabled: boolean
+      created_at: string | null
+      updated_at: string | null
     }
     SchemaInferRequest: {
       connector_instance_id: string

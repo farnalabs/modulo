@@ -97,7 +97,7 @@
             </tr>
             <!-- Expanded drill-down row -->
             <tr v-if="expandedTeamId">
-              <td colspan="7" class="border-t bg-muted/20 p-4">
+              <td colspan="7" class="border-t bg-muted p-4">
                 <div class="space-y-4">
                   <div class="flex items-center justify-between">
                     <h3 class="text-lg font-semibold">{{ expandedTeam?.name }} — Pipeline Eval Breakdown</h3>

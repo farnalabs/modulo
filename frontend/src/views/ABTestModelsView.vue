@@ -93,7 +93,7 @@
             <div
               v-for="(v, i) in variants"
               :key="v.id"
-              class="rounded-lg border bg-muted/20 p-4"
+              class="rounded-lg border bg-muted p-4"
             >
               <div class="mb-3 flex items-center justify-between">
                 <span class="text-xs font-medium text-muted-foreground">Variant {{ i + 1 }}</span>
