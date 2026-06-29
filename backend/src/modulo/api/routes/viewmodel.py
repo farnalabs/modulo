@@ -8,7 +8,7 @@ import uuid
 from datetime import datetime
 from typing import Any
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -19,7 +19,8 @@ from modulo.auth.jwt import AuthenticatedPrincipal
 from modulo.db.crud.pipeline import list_pipelines
 from modulo.db.crud.run import list_runs
 from modulo.db.models.hitl_claim import HitlClaim
-from modulo.db.rls import set_rls_org
+from modulo.db.models.team import Team
+from modulo.db.rls import set_rls_org, set_rls_user_context
 from modulo.settings import Settings, get_settings
 
 router = APIRouter(tags=["viewmodel"])
@@ -144,9 +145,25 @@ async def me(current_user: AuthenticatedPrincipal = Depends(get_current_user)) -
 async def viewmodel_current(
     session: AsyncSession = Depends(get_db_session),
     current_user: AuthenticatedPrincipal = Depends(get_current_user),
+    view_as_team: uuid.UUID | None = Query(None),
 ) -> ViewModelCurrent:
+    if view_as_team is not None and current_user.org_role != "admin":
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Only admins can use view_as_team")
+
     async with session.begin():
         await set_rls_org(session, current_user.organisation_id)
+        await set_rls_user_context(session, current_user.user_id, current_user.org_role)
+
+        if view_as_team is not None:
+            team_result = await session.execute(
+                select(Team).where(
+                    Team.id == view_as_team,
+                    Team.organisation_id == current_user.organisation_id,
+                )
+            )
+            team = await team_result.scalar_one_or_none()
+            if team is None:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Team not found")
 
         pipelines_page = await list_pipelines(session, page=1, page_size=20)
         runs_page = await list_runs(session, page=1, page_size=10)
@@ -157,7 +174,8 @@ async def viewmodel_current(
                 HitlClaim.decision.is_(None),
             )
         )
-        pending_hitl = list(pending_hitl_result.scalars())
+        scalar_result = pending_hitl_result.scalars()
+        pending_hitl = await scalar_result.all()
 
     return ViewModelCurrent(
         user=UserInfo(username=current_user.username),

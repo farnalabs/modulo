@@ -3,6 +3,7 @@
 import os
 import uuid
 from collections.abc import AsyncGenerator, Generator
+from datetime import datetime
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
@@ -73,6 +74,17 @@ def make_mock_session() -> AsyncMock:
     begin_cm.__aenter__ = AsyncMock(return_value=None)
     begin_cm.__aexit__ = AsyncMock(return_value=False)
     session.begin = MagicMock(return_value=begin_cm)
+    scalar_mock = MagicMock()
+    scalar_mock.all = AsyncMock(return_value=[])
+    team_mock = MagicMock()
+    team_mock.id = uuid.uuid4()
+    team_mock.organisation_id = ORG_ID
+    team_mock.name = "test-team"
+    hitl_result = AsyncMock()
+    hitl_result.scalar_one_or_none = AsyncMock(return_value=team_mock)
+    hitl_result.scalar_one = AsyncMock(return_value=0)
+    hitl_result.scalars = MagicMock(return_value=scalar_mock)
+    session.execute.return_value = hitl_result
     return session
 
 
@@ -88,8 +100,8 @@ def make_mock_pipeline(**kwargs: Any) -> MagicMock:
     p.node_timeout_seconds = kwargs.get("node_timeout_seconds", 300)
     p.run_context_defaults = kwargs.get("run_context_defaults", {})
     p.created_by = uuid.uuid4()
-    p.created_at = None
-    p.updated_at = None
+    p.created_at = kwargs.get("created_at", datetime.now())
+    p.updated_at = kwargs.get("updated_at", datetime.now())
     return p
 
 
