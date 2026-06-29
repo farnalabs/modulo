@@ -252,8 +252,7 @@ import type { components } from '../lib/api/client'
 import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
 
-type ConnectorResponse = components['schemas']['ConnectorResponse']
-type ConnectorItem = components['schemas']['ConnectorItem']
+type ConnectorItem = components['schemas']['ConnectorItem'] & { enabled?: boolean }
 
 interface ConnectorFormState {
   name: string
