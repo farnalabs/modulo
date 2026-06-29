@@ -77,7 +77,13 @@ class RunEventBroker:
         self._subscribers.discard(q)
 
     def replay_since(self, seq: int) -> list[RunEvent]:
-        """Return all buffered events with seq > the given value (oldest first)."""
+        """Return all buffered events with seq > the given value (oldest first).
+
+        Returns empty list if the requested seq is older than the oldest
+        buffered event (i.e. has been evicted from the ring buffer).
+        """
+        if not self._buffer or (seq > 0 and seq < self._buffer[0].seq):
+            return []
         return [e for e in self._buffer if e.seq > seq]
 
     def close(self) -> None:
