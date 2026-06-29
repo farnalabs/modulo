@@ -14,6 +14,7 @@ import SchemaInferenceView from '../views/SchemaInferenceView.vue'
 import OnboardingWizard from '../views/OnboardingWizard.vue'
 import FeedbackInboxView from '../views/FeedbackInboxView.vue'
 import EvalEditorView from '../views/EvalEditorView.vue'
+import EvalProposalsQueueView from '../views/EvalProposalsQueueView.vue'
 import VariantCompareView from '../views/VariantCompareView.vue'
 import ABTestModelsView from '../views/ABTestModelsView.vue'
 import RunDetailView from '../views/RunDetailView.vue'
@@ -100,6 +101,11 @@ const router = createRouter({
       path: '/evals/editor',
       name: 'eval-editor',
       component: EvalEditorView,
+    },
+    {
+      path: '/evals/proposals',
+      name: 'eval-proposals-queue',
+      component: EvalProposalsQueueView,
     },
     {
       path: '/variants/compare',
