@@ -19,10 +19,10 @@ jobs:
       - name: Install backend deps
         working-directory: backend
         run: uv sync --frozen
-      - name: Run unit tests
+      - name: Run unit tests with coverage threshold enforcement
         working-directory: backend
-        run: uv run --no-sync pytest tests/unit/ -n auto --cov=src/modulo --cov-report=xml -q
-        continue-on-error: true
+        run: ../.github/scripts/coverage-thresholds.ps1
+        shell: pwsh
         env:
           DATABASE_URL: "postgresql+asyncpg://unused:unused@localhost/unused"
           SECRET_KEY: "ci-secret-key-for-github-actions-testing-only"
