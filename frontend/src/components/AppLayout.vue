@@ -14,6 +14,7 @@
         <SidebarLink to="/library" icon="BookOpen" label="Library" />
         <SidebarLink to="/pipelines" icon="GitBranch" label="Pipelines" />
         <SidebarLink to="/evals/editor" icon="CheckSquare" label="Evals" />
+        <SidebarLink to="/evals/proposals" icon="Clipboard" label="Eval Proposals" />
         <SidebarLink to="/variants/compare" icon="GitFork" label="Variants" />
 
         <div class="sidebar-section-header">Settings</div>
@@ -30,6 +31,9 @@
         <SidebarLink to="/admin/users" icon="UserCircle" label="Users" />
         <SidebarLink to="/feedback/inbox" icon="MessageSquare" label="Feedback Inbox" />
         <SidebarLink to="/admin/audit" icon="FileText" label="Audit Log" />
+        <SidebarLink to="/admin/connectors" icon="Plug" label="Connectors" />
+        <SidebarLink to="/admin/costs" icon="DollarSign" label="Cost Breakdown" />
+        <SidebarLink to="/admin/costs/limits" icon="CreditCard" label="Spend Limits" />
         <SidebarLink to="/admin/feature-flags" icon="Flag" label="Feature Flags" />
         <SidebarLink to="/admin/api-changelog" icon="History" label="Changelog" />
         <SidebarLink to="/admin/teams/comparison" icon="BarChart" label="Team Comparison" />
@@ -126,6 +130,7 @@
         <SidebarLink to="/library" icon="BookOpen" label="Library" @click="mobileOpen = false" />
         <SidebarLink to="/pipelines" icon="GitBranch" label="Pipelines" @click="mobileOpen = false" />
         <SidebarLink to="/evals/editor" icon="CheckSquare" label="Evals" @click="mobileOpen = false" />
+        <SidebarLink to="/evals/proposals" icon="Clipboard" label="Eval Proposals" @click="mobileOpen = false" />
         <SidebarLink to="/variants/compare" icon="GitFork" label="Variants" @click="mobileOpen = false" />
 
         <div class="sidebar-section-header">Settings</div>
@@ -142,6 +147,9 @@
         <SidebarLink to="/admin/users" icon="UserCircle" label="Users" @click="mobileOpen = false" />
         <SidebarLink to="/feedback/inbox" icon="MessageSquare" label="Feedback Inbox" @click="mobileOpen = false" />
         <SidebarLink to="/admin/audit" icon="FileText" label="Audit Log" @click="mobileOpen = false" />
+        <SidebarLink to="/admin/connectors" icon="Plug" label="Connectors" @click="mobileOpen = false" />
+        <SidebarLink to="/admin/costs" icon="DollarSign" label="Cost Breakdown" @click="mobileOpen = false" />
+        <SidebarLink to="/admin/costs/limits" icon="CreditCard" label="Spend Limits" @click="mobileOpen = false" />
         <SidebarLink to="/admin/feature-flags" icon="Flag" label="Feature Flags" @click="mobileOpen = false" />
         <SidebarLink to="/admin/api-changelog" icon="History" label="Changelog" @click="mobileOpen = false" />
         <SidebarLink to="/admin/teams/comparison" icon="BarChart" label="Team Comparison" @click="mobileOpen = false" />
