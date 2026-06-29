@@ -178,8 +178,9 @@ def _bdd_auth_in_org(org: str) -> None:
 
 
 @given(parsers.parse('I am authenticated as a viewer in org "{org}"'))
-def _bdd_auth_viewer_in_org(org: str) -> None:
-    """No-op — viewer_client fixture handles this."""
+def _bdd_auth_viewer_in_org(org: str, request) -> None:
+    """Flag viewer authentication so ``@when`` steps can choose the right client."""
+    request.node._viewer_auth = True
 
 
 @given(parsers.parse("the response status is {status:d}"))
