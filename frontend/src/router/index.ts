@@ -23,6 +23,7 @@ import ApiChangelogView from '../views/ApiChangelogView.vue'
 import TeamComparisonView from '../views/TeamComparisonView.vue'
 import PipelineEditorView from '../views/PipelineEditorView.vue'
 import AdminUsersView from '../views/AdminUsersView.vue'
+import AdminSpendLimitsView from '../views/AdminSpendLimitsView.vue'
 import MyProfileView from '../views/MyProfileView.vue'
 
 const router = createRouter({
@@ -122,6 +123,11 @@ const router = createRouter({
       path: '/admin/users',
       name: 'admin-users',
       component: AdminUsersView,
+    },
+    {
+      path: '/admin/costs/limits',
+      name: 'admin-costs-limits',
+      component: AdminSpendLimitsView,
     },
     {
       path: '/admin/audit',
