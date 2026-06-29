@@ -28,3 +28,4 @@ class HitlClaim(OrgScoped):
     expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     decision: Mapped[str | None] = mapped_column(String(20))
     decision_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    delivered_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))

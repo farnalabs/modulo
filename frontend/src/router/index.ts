@@ -24,6 +24,7 @@ import AdminFeatureFlagsView from '../views/AdminFeatureFlagsView.vue'
 import AdminPluginsView from '../views/AdminPluginsView.vue'
 import ApiChangelogView from '../views/ApiChangelogView.vue'
 import TeamComparisonView from '../views/TeamComparisonView.vue'
+import StageBoardView from '../views/StageBoardView.vue'
 import PipelineEditorView from '../views/PipelineEditorView.vue'
 import AdminUsersView from '../views/AdminUsersView.vue'
 import AdminSpendLimitsView from '../views/AdminSpendLimitsView.vue'
@@ -38,6 +39,8 @@ import MyProfileView from '../views/MyProfileView.vue'
 import SettingsLicenseView from '../views/SettingsLicenseView.vue'
 import SettingsMcpView from '../views/SettingsMcpView.vue'
 import SettingsTriggersView from '../views/SettingsTriggersView.vue'
+import SettingsHitlReviewView from '../views/SettingsHitlReviewView.vue'
+import AdminNotificationDeliveryLogView from '../views/AdminNotificationDeliveryLogView.vue'
 
 const router = createRouter({
   history: createWebHistory(),
@@ -106,6 +109,11 @@ const router = createRouter({
       path: '/settings/triggers',
       name: 'settings-triggers',
       component: SettingsTriggersView,
+    },
+    {
+      path: '/settings/hitl-review',
+      name: 'settings-hitl-review',
+      component: SettingsHitlReviewView,
     },
     {
       path: '/schemas',
@@ -226,6 +234,16 @@ const router = createRouter({
       path: '/admin/teams/comparison',
       name: 'team-comparison',
       component: TeamComparisonView,
+    },
+    {
+      path: '/admin/notification-delivery',
+      name: 'admin-notification-delivery',
+      component: AdminNotificationDeliveryLogView,
+    },
+    {
+      path: '/stages',
+      name: 'stages',
+      component: StageBoardView,
     },
     {
       path: '/pipelines/:id/editor',

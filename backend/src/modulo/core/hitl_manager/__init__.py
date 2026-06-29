@@ -19,6 +19,7 @@ run_id + gate_id + client_id, signed with SECRET_KEY. Opaque tokens from the
 alpha are still accepted for backwards compatibility.
 """
 
+import logging
 import secrets
 import uuid
 from datetime import UTC, datetime, timedelta
@@ -30,8 +31,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.auth.jwt import create_claim_token as _create_claim_jwt
 from modulo.auth.jwt import decode_claim_token as _decode_claim_jwt
+from modulo.core.audit_logger import append_audit_event
 from modulo.db.models.hitl_claim import HitlClaim
 from modulo.db.models.team_membership import TeamMembership
+
+_log = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
 # Public API
@@ -246,9 +250,15 @@ class HITLManager:
         gate_id: str,
         org_id: uuid.UUID,
         claim_token: str,
+        actor_id: uuid.UUID | None = None,
     ) -> HitlClaim:
-        """Record approval. Raises on missing token, expired token, or decided gate."""
-        return await self._decide(
+        """Record approval and log a ``hitl.output_delivered`` audit event.
+
+        Raises on missing token, expired token, or decided gate.
+        Sets ``delivered_at`` on the claim after successful audit logging.
+        If audit logging fails, logs ``hitl.output_delivery_failed`` instead.
+        """
+        gate = await self._decide(
             session,
             run_id=run_id,
             gate_id=gate_id,
@@ -256,6 +266,47 @@ class HITLManager:
             claim_token=claim_token,
             decision="approved",
         )
+
+        try:
+            await append_audit_event(
+                session,
+                org_id=org_id,
+                event_type="hitl.output_delivered",
+                actor_user_id=actor_id,
+                resource_type="hitl_claim",
+                resource_id=gate.id,
+                payload_json={
+                    "pipeline_run_id": str(gate.run_id),
+                    "node_id": gate.gate_id,
+                    "decision": gate.decision,
+                    "team_id": str(gate.required_team_id) if gate.required_team_id else None,
+                },
+            )
+            gate.delivered_at = datetime.now(UTC)
+            await session.flush()
+        except BaseException:
+            _log.exception("Failed to log hitl.output_delivered audit event for claim %s", gate.id)
+            try:
+                await append_audit_event(
+                    session,
+                    org_id=org_id,
+                    event_type="hitl.output_delivery_failed",
+                    actor_user_id=actor_id,
+                    resource_type="hitl_claim",
+                    resource_id=gate.id,
+                    payload_json={
+                        "pipeline_run_id": str(gate.run_id),
+                        "node_id": gate.gate_id,
+                        "decision": gate.decision,
+                        "team_id": str(gate.required_team_id) if gate.required_team_id else None,
+                    },
+                )
+                await session.flush()
+            except BaseException:
+                _log.exception("Failed to log hitl.output_delivery_failed audit event for claim %s", gate.id)
+            raise
+
+        return gate
 
     async def reject(
         self,

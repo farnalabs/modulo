@@ -13,6 +13,7 @@
         <SidebarLink to="/" icon="LayoutDashboard" label="Dashboard" />
         <SidebarLink to="/library" icon="BookOpen" label="Library" />
         <SidebarLink to="/pipelines" icon="GitBranch" label="Pipelines" />
+        <SidebarLink to="/stages" icon="Columns" label="Stages" />
         <SidebarLink to="/evals/editor" icon="CheckSquare" label="Evals" />
         <SidebarLink to="/evals/proposals" icon="Clipboard" label="Eval Proposals" />
         <SidebarLink to="/variants/compare" icon="GitFork" label="Variants" />
@@ -26,6 +27,7 @@
         <SidebarLink to="/settings/license" icon="KeyRound" label="License" />
         <SidebarLink to="/settings/mcp" icon="Cable" label="MCP" />
         <SidebarLink to="/settings/triggers" icon="Zap" label="Triggers" />
+        <SidebarLink to="/settings/hitl-review" icon="ShieldQuestion" label="HITL Review" />
         <SidebarLink to="/schemas" icon="Database" label="Schemas" />
         <SidebarLink to="/schemas/infer" icon="Database" label="Schema Inference" />
 
@@ -45,6 +47,7 @@
         <SidebarLink to="/admin/plugins" icon="Puzzle" label="Plugins" />
         <SidebarLink to="/admin/api-changelog" icon="History" label="Changelog" />
         <SidebarLink to="/admin/teams/comparison" icon="BarChart" label="Team Comparison" />
+        <SidebarLink to="/admin/notification-delivery" icon="Bell" label="Notification Delivery" />
       </nav>
 
       <div class="border-t pt-4 mt-4 space-y-3">
@@ -137,6 +140,7 @@
         <SidebarLink to="/" icon="LayoutDashboard" label="Dashboard" @click="mobileOpen = false" />
         <SidebarLink to="/library" icon="BookOpen" label="Library" @click="mobileOpen = false" />
         <SidebarLink to="/pipelines" icon="GitBranch" label="Pipelines" @click="mobileOpen = false" />
+        <SidebarLink to="/stages" icon="Columns" label="Stages" @click="mobileOpen = false" />
         <SidebarLink to="/evals/editor" icon="CheckSquare" label="Evals" @click="mobileOpen = false" />
         <SidebarLink to="/evals/proposals" icon="Clipboard" label="Eval Proposals" @click="mobileOpen = false" />
         <SidebarLink to="/variants/compare" icon="GitFork" label="Variants" @click="mobileOpen = false" />
@@ -150,6 +154,7 @@
         <SidebarLink to="/settings/license" icon="KeyRound" label="License" @click="mobileOpen = false" />
         <SidebarLink to="/settings/mcp" icon="Cable" label="MCP" @click="mobileOpen = false" />
         <SidebarLink to="/settings/triggers" icon="Zap" label="Triggers" @click="mobileOpen = false" />
+        <SidebarLink to="/settings/hitl-review" icon="ShieldQuestion" label="HITL Review" @click="mobileOpen = false" />
         <SidebarLink to="/schemas" icon="Database" label="Schemas" @click="mobileOpen = false" />
         <SidebarLink to="/schemas/infer" icon="Database" label="Schema Inference" @click="mobileOpen = false" />
 
@@ -169,6 +174,7 @@
         <SidebarLink to="/admin/plugins" icon="Puzzle" label="Plugins" @click="mobileOpen = false" />
         <SidebarLink to="/admin/api-changelog" icon="History" label="Changelog" @click="mobileOpen = false" />
         <SidebarLink to="/admin/teams/comparison" icon="BarChart" label="Team Comparison" @click="mobileOpen = false" />
+        <SidebarLink to="/admin/notification-delivery" icon="Bell" label="Notification Delivery" @click="mobileOpen = false" />
       </nav>
 
       <div class="border-t pt-4 mt-4 space-y-3">
@@ -238,6 +244,7 @@ const icons: Record<string, string> = {
   LayoutDashboard: '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="9"/><rect x="14" y="3" width="7" height="5"/><rect x="14" y="12" width="7" height="9"/><rect x="3" y="16" width="7" height="5"/></svg>',
   BookOpen: '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z"/><path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z"/></svg>',
   GitBranch: '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="6" y1="3" x2="6" y2="15"/><circle cx="18" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><path d="M18 9a9 9 0 0 1-9 9"/></svg>',
+  Columns: '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"/><line x1="12" y1="3" x2="12" y2="21"/></svg>',
   Users: '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>',
   Shield: '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>',
   Gauge: '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 15.5v-3"/><path d="M9 12l3-3 3 3"/><circle cx="12" cy="12" r="10"/></svg>',
@@ -260,6 +267,8 @@ const icons: Record<string, string> = {
   Cpu: '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="4" width="16" height="16" rx="2"/><rect x="9" y="9" width="6" height="6"/><path d="M15 2v2"/><path d="M15 20v2"/><path d="M2 15h2"/><path d="M20 15h2"/><path d="M9 2v2"/><path d="M9 20v2"/><path d="M2 9h2"/><path d="M20 9h2"/></svg>',
   Zap: '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>',
   Building: '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="2" width="16" height="20" rx="2" ry="2"/><path d="M9 22v-4h6v4"/><path d="M8 6h.01"/><path d="M16 6h.01"/><path d="M12 6h.01"/><path d="M12 10h.01"/><path d="M12 14h.01"/><path d="M16 10h.01"/><path d="M16 14h.01"/><path d="M8 10h.01"/><path d="M8 14h.01"/></svg>',
+  ShieldQuestion: '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/><path d="M9.1 9a3 3 0 0 1 5.82 1c0 2-3 3-3 3"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>',
+  Bell: '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9"/><path d="M10.3 21a1.94 1.94 0 0 0 3.4 0"/></svg>',
 }
 
 export const SidebarLink = defineComponent({
