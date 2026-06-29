@@ -1,11 +1,11 @@
 """Admin-only routes for organisation, user, team, and billing management."""
 
 import uuid
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, Field
-from sqlalchemy import case, func, select, text
+from sqlalchemy import case, delete, func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.api.dependencies import get_db_session, require_feature
@@ -39,6 +39,7 @@ from modulo.db.models.api_key import OrgApiKey
 from modulo.db.models.eval_definition import EvalDefinition
 from modulo.db.models.eval_result import EvalResult
 from modulo.db.models.pipeline import Pipeline
+from modulo.db.models.run import Run
 from modulo.db.models.team import Team
 from modulo.db.models.user import User
 from modulo.db.rls import set_rls_org, set_rls_user_context
@@ -1761,13 +1762,13 @@ async def admin_delete_publisher(
 # ── Run Retention / Purge ──────────────────────────────────────────────
 
 
-class PurgeRunsRequest(BaseModel):
+class RetentionPurgeRequest(BaseModel):
     max_age_days: int = 90
 
 
 @router.post("/purge/runs", status_code=status.HTTP_200_OK)
-async def admin_purge_runs(
-    body: PurgeRunsRequest,
+async def admin_retention_purge_runs(
+    body: RetentionPurgeRequest,
     current_user: AuthenticatedPrincipal = Depends(get_current_user),
     session: AsyncSession = Depends(get_db_session),
 ) -> dict[str, int]:
@@ -1816,3 +1817,40 @@ async def admin_manual_purge(
     )
 
     return result
+
+
+class PurgeRunsRequest(BaseModel):
+    older_than_days: int = 90
+
+
+class PurgeRunsResponse(BaseModel):
+    purged_count: int
+
+
+@router.post("/runs/purge", status_code=status.HTTP_200_OK)
+async def admin_purge_stale_runs(
+    request: PurgeRunsRequest,
+    current_user: AuthenticatedPrincipal = Depends(get_current_user),
+    session: AsyncSession = Depends(get_db_session),
+) -> PurgeRunsResponse:
+    if current_user.org_role != "admin":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only admin users can purge stale runs",
+        )
+
+    cutoff = datetime.now(UTC) - timedelta(days=request.older_than_days)
+    terminal_states = ("complete", "failed", "eval_failed", "cancelled")
+
+    async with session.begin():
+        await set_rls_org(session, current_user.organisation_id)
+        result = await session.execute(
+            delete(Run)
+            .where(
+                Run.organisation_id == current_user.organisation_id,
+                Run.status.in_(terminal_states),
+                Run.created_at < cutoff,
+            )
+        )
+
+    return PurgeRunsResponse(purged_count=result.rowcount)  # type: ignore[attr-defined]

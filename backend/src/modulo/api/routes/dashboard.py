@@ -259,6 +259,30 @@ async def dashboard_summary(
                 }
             )
 
+        recent_runs_query = (
+            select(
+                Run.id,
+                Pipeline.name.label("pipeline_name"),
+                Run.status,
+                Run.created_at,
+                Run.trigger_type,
+            )
+            .join(Pipeline, Run.pipeline_id == Pipeline.id)
+            .order_by(Run.created_at.desc())
+            .limit(10)
+        )
+        recent_runs_rows = (await session.execute(recent_runs_query)).all()
+        recent_runs = [
+            {
+                "id": str(row.id),
+                "pipeline_name": row.pipeline_name,
+                "status": row.status,
+                "created_at": row.created_at.isoformat(),
+                "trigger_type": row.trigger_type,
+            }
+            for row in recent_runs_rows
+        ]
+
     return {
         "total_runs": total_runs,
         "active_pipelines": active_pipelines,
@@ -266,6 +290,7 @@ async def dashboard_summary(
         "teams": team_metrics,
         "eval_pass_rate": eval_pass_rate,
         "trend": trend,
+        "recent_runs": recent_runs,
     }
 
 
