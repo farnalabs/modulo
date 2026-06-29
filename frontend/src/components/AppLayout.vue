@@ -32,6 +32,7 @@
         <SidebarLink to="/feedback/inbox" icon="MessageSquare" label="Feedback Inbox" />
         <SidebarLink to="/admin/audit" icon="FileText" label="Audit Log" />
         <SidebarLink to="/admin/connectors" icon="Plug" label="Connectors" />
+        <SidebarLink to="/admin/node-categories" icon="Tag" label="Node Categories" />
         <SidebarLink to="/admin/costs" icon="DollarSign" label="Cost Breakdown" />
         <SidebarLink to="/admin/costs/limits" icon="CreditCard" label="Spend Limits" />
         <SidebarLink to="/admin/feature-flags" icon="Flag" label="Feature Flags" />
@@ -148,6 +149,7 @@
         <SidebarLink to="/feedback/inbox" icon="MessageSquare" label="Feedback Inbox" @click="mobileOpen = false" />
         <SidebarLink to="/admin/audit" icon="FileText" label="Audit Log" @click="mobileOpen = false" />
         <SidebarLink to="/admin/connectors" icon="Plug" label="Connectors" @click="mobileOpen = false" />
+        <SidebarLink to="/admin/node-categories" icon="Tag" label="Node Categories" @click="mobileOpen = false" />
         <SidebarLink to="/admin/costs" icon="DollarSign" label="Cost Breakdown" @click="mobileOpen = false" />
         <SidebarLink to="/admin/costs/limits" icon="CreditCard" label="Spend Limits" @click="mobileOpen = false" />
         <SidebarLink to="/admin/feature-flags" icon="Flag" label="Feature Flags" @click="mobileOpen = false" />
@@ -238,6 +240,7 @@ const icons: Record<string, string> = {
   MessageSquare: '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>',
   KeyRound: '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2.586 17.414A2 2 0 0 0 2 18.828V21a1 1 0 0 0 1 1h3a1 1 0 0 0 1-1v-1a1 1 0 0 1 1-1h1a1 1 0 0 0 1-1v-1a1 1 0 0 1 1-1h.172a2 2 0 0 0 1.414-.586l.814-.814a6.5 6.5 0 1 0-4-4z"/><circle cx="16.5" cy="7.5" r=".5" fill="currentColor"/></svg>',
   Cable: '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 2v6"/><path d="M15 2v6"/><path d="M5 8h14"/><path d="M7 8v10a2 2 0 0 0 2 2h6a2 2 0 0 0 2-2V8"/></svg>',
+  Tag: '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2H2v10l9.29 9.29c.94.94 2.48.94 3.42 0l6.58-6.58c.94-.94.94-2.48 0-3.42L12 2z"/><path d="M7 7h.01"/></svg>',
 }
 
 export const SidebarLink = defineComponent({

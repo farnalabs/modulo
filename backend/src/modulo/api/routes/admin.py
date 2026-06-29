@@ -575,6 +575,34 @@ class UpdateUserRequest(BaseModel):
     is_active: bool | None = None
 
 
+async def _prevent_last_admin_lockout(
+    current_user_id: uuid.UUID,
+    target_user_id: uuid.UUID,
+    org_id: uuid.UUID,
+    new_role: str | None,
+    db_session: AsyncSession,
+) -> None:
+    if target_user_id != current_user_id:
+        return
+    if new_role is None or new_role == "admin":
+        return
+
+    result = await db_session.execute(
+        select(func.count()).where(
+            User.organisation_id == org_id,
+            User.org_role == "admin",
+            User.active == True,  # noqa: E712
+        )
+    )
+    admin_count = result.scalar() or 0
+
+    if admin_count <= 1:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Cannot remove the last admin. Promote another user to admin first.",
+        )
+
+
 @router.put("/users/{user_id}", response_model=UserListItem)
 async def admin_update_user(
     user_id: uuid.UUID,
@@ -596,6 +624,13 @@ async def admin_update_user(
 
     async with session.begin():
         await set_rls_org(session, current_user.organisation_id)
+        await _prevent_last_admin_lockout(
+            current_user_id=current_user.user_id,
+            target_user_id=user_id,
+            org_id=current_user.organisation_id,
+            new_role=body.org_role,
+            db_session=session,
+        )
         user = await crud_update_user(session, user_id, updates)
 
     if user is None:

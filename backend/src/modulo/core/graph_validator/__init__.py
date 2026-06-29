@@ -7,16 +7,18 @@ Checks:
 4. Model backend health: pinned model backends exist and are active
 5. Environment capability: bound EnvironmentProfile declares all agent required capabilities
 6. Pre-run input payload compatibility with entry node schema
+7. Node category: ``node_category_id`` references exist and are compatible with node type
 """
 
 import uuid
-from dataclasses import dataclass, field
 from typing import Any
 
 import jmespath
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from modulo.core.graph_validator._types import ValidationResult
+from modulo.core.graph_validator.category_validator import validate_node_categories
 from modulo.db.models.agent import Agent
 from modulo.db.models.connector_instance import ConnectorInstance
 from modulo.db.models.environment_profile import EnvironmentProfile
@@ -33,29 +35,6 @@ _JSON_TYPE_MAP: dict[str, type | tuple[type, ...]] = {
     "object": dict,
     "array": list,
 }
-
-
-@dataclass
-class ValidationIssue:
-    severity: str  # "error" | "warning"
-    code: str
-    message: str
-    node_id: str | None = None
-
-
-@dataclass
-class ValidationResult:
-    issues: list[ValidationIssue] = field(default_factory=list)
-
-    @property
-    def is_valid(self) -> bool:
-        return not any(i.severity == "error" for i in self.issues)
-
-    def error(self, code: str, message: str, node_id: str | None = None) -> None:
-        self.issues.append(ValidationIssue("error", code, message, node_id))
-
-    def warning(self, code: str, message: str, node_id: str | None = None) -> None:
-        self.issues.append(ValidationIssue("warning", code, message, node_id))
 
 
 class GraphValidator:
@@ -106,6 +85,8 @@ class GraphValidator:
             session,
             result,
         )
+
+        await self._check_node_categories(graph_json, session, result)
 
         return result
 
@@ -158,6 +139,9 @@ class GraphValidator:
             session,
             result,
         )
+
+        # Node category check.
+        await self._check_node_categories(snapshot.graph_json, session, result)
 
         return self._strip_warnings(result)
 
@@ -615,3 +599,21 @@ class GraphValidator:
                     f"Agent '{agent.name}' requires capabilities {missing}"
                     f" not declared by EnvironmentProfile '{profile.name}'",
                 )
+
+    # ------------------------------------------------------------------
+    # Node categories
+    # ------------------------------------------------------------------
+
+    async def _check_node_categories(
+        self,
+        graph_json: dict[str, Any],
+        session: AsyncSession,
+        result: ValidationResult,
+    ) -> None:
+        """Check that all ``node_category_id`` references are valid.
+
+        Delegates to ``validate_node_categories`` for the actual check
+        and merges results into the running result.
+        """
+        cat_result = await validate_node_categories(graph_json, session)
+        result.issues.extend(cat_result.issues)
