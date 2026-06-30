@@ -206,8 +206,13 @@ async function loadUsers() {
   error.value = ''
   try {
     const data = await get<UserListResponse>(`/api/v1/admin/users?page=${page.value}&page_size=${pageSize.value}`)
-    users.value = data.items
-    total.value = data.total
+    if (data && Array.isArray(data.items)) {
+      users.value = data.items
+      total.value = data.total ?? 0
+    } else {
+      users.value = []
+      total.value = 0
+    }
   } catch (e) {
     error.value = e instanceof Error ? e.message : 'Failed to load users'
   } finally {
@@ -243,6 +248,23 @@ async function reactivate(u: UserItem) {
 
 async function createUser() {
   createError.value = ''
+  const { email, display_name, password } = newUser.value
+  if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+    createError.value = 'Please enter a valid email address'
+    return
+  }
+  if (!display_name || !display_name.trim()) {
+    createError.value = 'Display name is required'
+    return
+  }
+  if (!password || password.length < 8) {
+    createError.value = 'Password must be at least 8 characters'
+    return
+  }
+  if (!/[A-Z]/.test(password) || !/[a-z]/.test(password) || !/\d/.test(password)) {
+    createError.value = 'Password must contain at least one uppercase letter, one lowercase letter, and one digit'
+    return
+  }
   try {
     await post('/api/v1/admin/users', newUser.value)
     showCreate.value = false
