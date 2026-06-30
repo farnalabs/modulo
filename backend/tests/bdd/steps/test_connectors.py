@@ -1129,6 +1129,108 @@ def step_records_contain_channel_metadata(ctx):
         )
 
 
+@when(
+    parsers.parse(
+        'I query resource "{resource}" with channel "{channel}"'
+        ' and oldest "{oldest}" and latest "{latest}"'
+    )
+)
+def step_slack_query_messages_with_dates(resource, channel, oldest, latest, ctx):
+    from modulo.connectors.base import ConnectorQuery
+
+    q = ConnectorQuery(
+        resource=resource,
+        filters={"channel": channel, "oldest": oldest, "latest": latest},
+    )
+    import asyncio
+
+    try:
+        result = asyncio.new_event_loop().run_until_complete(ctx["connector"].query(q))
+        ctx["query_result"] = result
+        ctx["query_error"] = None
+    except Exception as exc:
+        ctx["query_result"] = None
+        ctx["query_error"] = str(exc)
+
+
+@when(parsers.parse('I query resource "{resource}" with cursor "{cursor}"'))
+def step_slack_query_with_cursor(resource, cursor, ctx):
+    from modulo.connectors.base import ConnectorQuery
+
+    q = ConnectorQuery(resource=resource, cursor=cursor)
+    if resource == "messages":
+        q.filters["channel"] = "C001"
+    import asyncio
+
+    try:
+        result = asyncio.new_event_loop().run_until_complete(ctx["connector"].query(q))
+        ctx["query_result"] = result
+        ctx["query_error"] = None
+    except Exception as exc:
+        ctx["query_result"] = None
+        ctx["query_error"] = str(exc)
+
+
+@when(parsers.parse('I query resource "{resource}"'))
+def step_slack_query_unknown(resource, ctx):
+    from modulo.connectors.base import ConnectorQuery
+
+    q = ConnectorQuery(resource=resource)
+    import asyncio
+
+    try:
+        asyncio.new_event_loop().run_until_complete(ctx["connector"].query(q))
+        ctx["query_result"] = "unexpected_success"
+        ctx["query_error"] = None
+    except Exception as exc:
+        ctx["query_result"] = None
+        ctx["query_error"] = str(exc)
+
+
+@when(parsers.parse('I write resource "{resource}" with no channel'))
+def step_slack_write_no_channel(resource, ctx):
+    from modulo.connectors.base import ConnectorPayload
+
+    payload = ConnectorPayload(resource=resource, data={"text": "Hello"})
+    import asyncio
+
+    try:
+        asyncio.new_event_loop().run_until_complete(ctx["connector"].write(payload))
+        ctx["write_result"] = "unexpected_success"
+        ctx["query_error"] = None
+    except Exception as exc:
+        ctx["write_result"] = None
+        ctx["query_error"] = str(exc)
+
+
+@then("the write is an error")
+def step_write_is_error(ctx):
+    assert ctx.get("write_result") is None, "Expected an error but write succeeded"
+
+
+@given("a Slack connector with invalid bot token")
+def step_slack_connector_invalid(ctx):
+    from unittest.mock import AsyncMock
+
+    mock_connector = AsyncMock()
+    mock_connector.connector_type = "slack"
+
+    async def mock_health_check():
+        from modulo.connectors.base import HealthResult
+
+        return HealthResult(ok=False, detail="invalid_auth")
+
+    mock_connector.health_check = mock_health_check
+    ctx["connector"] = mock_connector
+
+
+@then("the health result indicates failure")
+def step_health_result_indicates_failure(ctx):
+    result = ctx.get("health_result")
+    assert result is not None, "No health check result"
+    assert result.ok is False, "Health check should have failed but passed"
+
+
 # ============================================================================
 # connectors/gitea_connector.feature  â€”  6 scenarios
 # ============================================================================
