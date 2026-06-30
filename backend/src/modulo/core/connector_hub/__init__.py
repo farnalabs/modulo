@@ -55,9 +55,9 @@ from modulo.connectors.opsgenie import OpsgenieConnector
 from modulo.connectors.pagerduty import PagerDutyConnector
 from modulo.connectors.sentry import SentryConnector
 from modulo.connectors.sharepoint import SharePointConnector
-from modulo.connectors.snyk import SnykConnector
 from modulo.connectors.shortcut import ShortcutConnector
 from modulo.connectors.slack import SlackConnector
+from modulo.connectors.snyk import SnykConnector
 from modulo.connectors.sonarqube import SonarQubeConnector
 from modulo.connectors.teamcity import TeamCityConnector
 from modulo.connectors.trello import TrelloConnector
