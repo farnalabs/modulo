@@ -125,6 +125,7 @@ status: covered | partial | gap    # auto-updated by graph-validate
 - [feat-pipelines-cicd-pipeline](pipelines/cicd-pipeline.md) => PRD 8.4
 - [feat-pipelines-core](pipelines/core.md) => PRD 8.4
 - [feat-pipelines-library](pipelines/library.md) => PRD 8.14
+- [feat-pipelines-prompt-reveal](pipelines/prompt-reveal.md) => PRD 8.9
 
 ### Teams
 - [feat-teams-team-isolation](teams/team-isolation.md) => PRD 9.3

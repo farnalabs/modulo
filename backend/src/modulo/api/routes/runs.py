@@ -698,6 +698,7 @@ class PromptRevealResponse(BaseModel):
     prompt: str
     messages: list[dict[str, str]]
     token_count: int
+    prompt_always_visible: bool = False
 
 
 def _mask_prompt_text(text: str) -> str:
@@ -896,6 +897,7 @@ async def reveal_node_prompt(
 
     # Load agent for prompt template (if this is an agent node).
     agent: Agent | None = None
+    prompt_always_visible = False
     if agent_id is not None:
         agent_result = await session.execute(select(Agent).where(Agent.id == agent_id))
         agent = agent_result.scalar_one_or_none()
@@ -904,6 +906,7 @@ async def reveal_node_prompt(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail=f"Agent {agent_id} not found for node {node_id}",
             )
+        prompt_always_visible = bool(agent.prompt_always_visible)
 
     # Try to load checkpoint state for richer prompt reconstruction.
     thread_id = run.langgraph_thread_id
@@ -934,6 +937,7 @@ async def reveal_node_prompt(
         prompt=full_prompt,
         messages=masked_messages,
         token_count=token_count,
+        prompt_always_visible=prompt_always_visible,
     )
 
 

@@ -875,6 +875,23 @@ export interface paths {
       }
     }
   }
+  '/api/v1/runs/{run_id}/nodes/{node_id}/prompt/reveal': {
+    post: {
+      parameters: {
+        path: {
+          run_id: string
+          node_id: string
+        }
+      }
+      responses: {
+        200: {
+          content: {
+            'application/json': components['schemas']['PromptRevealResponse']
+          }
+        }
+      }
+    }
+  }
   '/api/v1/settings/observability': {
     get: {
       responses: {
@@ -1683,6 +1700,12 @@ export interface components {
       events?: string[] | null
       description?: string | null
       team_id?: string | null
+    }
+    PromptRevealResponse: {
+      prompt: string
+      messages: { role: string; content: string }[]
+      token_count: number
+      prompt_always_visible: boolean
     }
     TestResult: {
       success: boolean

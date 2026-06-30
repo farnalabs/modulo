@@ -33,6 +33,7 @@ class Agent(OrgScoped):
     )
 
     is_executable: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    prompt_always_visible: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     description: Mapped[str | None] = mapped_column(String(2000))
     input_schema_id: Mapped[uuid.UUID] = mapped_column(Uuid(), nullable=False)
