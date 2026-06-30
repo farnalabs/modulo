@@ -145,9 +145,23 @@ def make_hitl_gate_fn(
         # --- Resume check — always first so condition/evals aren't re-evaluated. ---
         decision = state.get("_hitl_decision")
         if decision is not None:
-            is_rejected = isinstance(decision, dict) and decision.get("action") == "rejected"
+            action = decision.get("action") if isinstance(decision, dict) else None
+            if action == "deliver_manual":
+                manual_output = decision.get("output", {})
+                return {
+                    "artifacts": [
+                        {
+                            "node_id": gate_id,
+                            "status": "interrupted",
+                            "result": "delivered_manual",
+                            "human_data": decision,
+                            "manual_output": manual_output,
+                        }
+                    ],
+                }
+            is_rejected = action == "rejected"
             result_status = "rejected" if is_rejected else "approved"
-            return {
+            result: dict[str, Any] = {
                 "artifacts": [
                     {
                         "node_id": gate_id,
@@ -157,6 +171,12 @@ def make_hitl_gate_fn(
                     }
                 ],
             }
+            # If the human provided modified output, write it into state so
+            # downstream nodes receive the human's version instead of the
+            # original agent output.
+            if isinstance(decision, dict) and "modified_output" in decision:
+                result["output"] = decision["modified_output"]
+            return result
 
         # --- Conditional gate (§8.17) — evaluate condition against state. ---
         if condition_expr is not None:

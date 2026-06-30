@@ -617,3 +617,42 @@ async def test_resume_skips_condition_and_eval():
     assert len(result["artifacts"]) == 1
     assert result["artifacts"][0]["status"] == "interrupted"
     assert result["artifacts"][0]["result"] == "approved"
+
+
+# ---------------------------------------------------------------------------
+# HITL gate node — modify-then-approve
+# ---------------------------------------------------------------------------
+
+
+async def test_hitl_gate_resume_with_modified_output_writes_output_key():
+    """When _hitl_decision contains modified_output, it is written to state as `output`."""
+    gate_config = {"gate_id": "modify-gate"}
+    node_fn = make_hitl_gate_fn(gate_config)
+
+    modified = {"summary": "Human-edited output", "approved": True}
+    result = await node_fn(
+        {
+            "artifacts": [],
+            "_hitl_decision": {"action": "approved", "modified_output": modified},
+        }
+    )
+
+    assert result["output"] == modified
+    assert result["artifacts"][0]["result"] == "approved"
+    assert result["artifacts"][0]["human_data"]["modified_output"] == modified
+
+
+async def test_hitl_gate_resume_without_modified_output_skips_output_key():
+    """Regular approval without modified_output does NOT write an `output` key."""
+    gate_config = {"gate_id": "plain-approve"}
+    node_fn = make_hitl_gate_fn(gate_config)
+
+    result = await node_fn(
+        {
+            "artifacts": [],
+            "_hitl_decision": {"action": "approved", "notes": "Looks good"},
+        }
+    )
+
+    assert "output" not in result
+    assert result["artifacts"][0]["result"] == "approved"
