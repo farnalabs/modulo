@@ -2,13 +2,15 @@
 id: feat-connectors-linear
 prd: 8.6
 delivery-tasks: []
+bdd:
   - backend/tests/bdd/features/connectors/connector_health.feature
   - backend/tests/bdd/features/connectors/linear_connector.feature
 unit-tests: []
 code:
   - backend/src/modulo/connectors/linear/__init__.py
   - backend/src/modulo/connectors/base.py
-
+depends-on:
+  - feat-connectors-hub
 status: partial
 ---
 
@@ -26,8 +28,6 @@ Async Linear GraphQL API connector implementing `ConnectorBase`. Provides read/w
 - [x] `health_check()` executes viewer query to validate API key
 - [x] Return authenticated user name on success
 - [x] Return `HealthResult(ok=False)` with error detail on GraphQL errors
-- [ ] Support API key rotation via ConnectorHub without disrupting in-flight runs
-- [ ] Rate-limit awareness — no 429 retry/backoff
 
 ### GraphQL Operations — query and mutation execution
 
@@ -68,7 +68,7 @@ Async Linear GraphQL API connector implementing `ConnectorBase`. Provides read/w
 - [x] `ConnectorType.LINEAR` defined in `base.py` enum
 - [x] `ConnectorType.LINEAR.capabilities` returns `{ISSUE_READ, ISSUE_WRITE, ISSUE_SEARCH}` in `base.py`
 - [x] `LinearConnector.connector_type` returns `ConnectorType.LINEAR`
-- [ ] Capability-based graph validation — agent requirements vs connector capabilities not yet wired in ConnectorHub
+
 
 ### Health Check — connectivity and credential validation
 
@@ -77,13 +77,6 @@ Async Linear GraphQL API connector implementing `ConnectorBase`. Provides read/w
 - [x] Return error detail from GraphQL `"errors"` response on failure
 - [ ] Detect expired API keys vs network errors vs insufficient permissions
 - [ ] Per-operation permission check before mutation calls
-
-### Credential Lifetime — ConnectorHub integration
-
-- [ ] Credentials decrypted once at run-start by ConnectorHub — not yet wired
-- [ ] Decrypted connector instance held in run-scoped context, never enters LangGraph state
-- [ ] One Fernet decrypt call per connector per run — not per node invocation
-- [ ] Discard decrypted connector at run end
 
 ### Prompt Portability — GraphQL query maintenance
 
@@ -102,4 +95,4 @@ Async Linear GraphQL API connector implementing `ConnectorBase`. Provides read/w
 - [ ] **BDD placeholder**: `backend/tests/bdd/features/connectors/linear_connector.feature` is a 3-line placeholder with no real scenarios
 - [ ] **No unit tests**: `unit-tests` field is empty
 - [ ] **No rate-limit handling**: no GraphQL query cost measurement, no 429 handling
-- [ ] **ConnectorHub pre-run health check not wired**: credentials are not yet decrypted and validated at run-start via ConnectorHub
+
