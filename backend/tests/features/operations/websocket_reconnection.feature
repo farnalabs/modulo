@@ -47,3 +47,18 @@ Feature: WebSocket Reconnection and Event Replay
     Given I subscribe to run "test-run-1"
     When the run_websocket handler receives since_event_seq=-1
     Then the WebSocket is closed with code 4001
+
+  Scenario: Concurrent WebSocket connections all receive events
+    Given run "test-run-concurrent" has an active event broker
+    And 3 subscribers are connected to the same run
+    When the broker publishes 5 events
+    Then all 3 subscribers receive all 5 events
+    And each subscriber receives events with correct monotonic sequence
+
+  Scenario: Disconnecting one subscriber does not affect others
+    Given run "test-run-concurrent" has an active event broker
+    And 3 subscribers are connected to the same run
+    When 1 subscriber disconnects
+    And the broker publishes 3 events
+    Then the remaining 2 subscribers receive the 3 events
+    And the disconnected subscriber receives nothing

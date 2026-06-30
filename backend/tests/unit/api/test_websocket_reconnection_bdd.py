@@ -1,10 +1,12 @@
 """Unit tests for WebSocket reconnection and event replay.
 
 Covers the RunEventBroker ring buffer, replay_since, subscribe/unsubscribe,
-BrokerRegistry lifecycle, and the run_ws.py handler contract in isolation.
+BrokerRegistry lifecycle, concurrent subscribers, and the run_ws.py handler
+contract in isolation.
 BDD feature file at tests/features/operations/websocket_reconnection.feature.
 """
 
+import asyncio
 import uuid
 
 import pytest
@@ -380,3 +382,134 @@ class TestReplaySequenceContract:
         broker.publish("next", {})
         live = q.get_nowait()
         assert live.seq == 11
+
+
+# ===========================================================================
+# Concurrent subscribers
+# ===========================================================================
+
+
+class TestConcurrentSubscribers:
+    """Tests for multiple simultaneous subscribers to the same run broker."""
+
+    def setup_method(self) -> None:
+        self.broker = RunEventBroker(_RUN_ID)
+
+    def test_multiple_subscribers_all_receive_all_events(self) -> None:
+        n_subscribers = 3
+        n_events = 5
+        queues = [self.broker.subscribe() for _ in range(n_subscribers)]
+
+        for _ in range(n_events):
+            self.broker.publish("ev", {})
+
+        for i, q in enumerate(queues):
+            received = []
+            while not q.empty():
+                received.append(q.get_nowait())
+            assert len(received) == n_events, (
+                f"Subscriber {i} got {len(received)} events, expected {n_events}"
+            )
+
+    def test_subscriber_events_have_monotonic_sequence(self) -> None:
+        n_subscribers = 3
+        n_events = 10
+        queues = [self.broker.subscribe() for _ in range(n_subscribers)]
+
+        for i in range(1, n_events + 1):
+            self.broker.publish("ev", {"index": i})
+
+        for i, q in enumerate(queues):
+            seqs = []
+            while not q.empty():
+                seqs.append(q.get_nowait().seq)
+            assert seqs == list(range(1, n_events + 1)), (
+                f"Subscriber {i} seqs {seqs} != [1..{n_events}]"
+            )
+
+    def test_unsubscribed_subscriber_stops_receiving(self) -> None:
+        q1 = self.broker.subscribe()
+        q2 = self.broker.subscribe()
+
+        self.broker.publish("ev", {"n": 1})
+        assert not q1.empty()
+        assert not q2.empty()
+        q1.get_nowait()
+        q2.get_nowait()
+
+        self.broker.unsubscribe(q2)
+        self.broker.publish("ev", {"n": 2})
+
+        assert not q1.empty()
+        q1.get_nowait()
+        assert q2.empty(), "Unsubscribed subscriber should not receive events"
+
+    def test_subscriber_count_reflects_active_subscriptions(self) -> None:
+        assert self.broker.subscriber_count == 0
+        q1 = self.broker.subscribe()
+        assert self.broker.subscriber_count == 1
+        q2 = self.broker.subscribe()
+        assert self.broker.subscriber_count == 2
+        self.broker.unsubscribe(q1)
+        assert self.broker.subscriber_count == 1
+        self.broker.unsubscribe(q2)
+        assert self.broker.subscriber_count == 0
+
+    def test_subscriber_count_not_affected_by_gc_of_weakref(self) -> None:
+        def _add_and_drop() -> None:
+            q = self.broker.subscribe()
+            self.broker.publish("ev", {})
+            q.get_nowait()
+
+        _add_and_drop()
+        assert self.broker.subscriber_count == 0
+
+    async def test_concurrent_subscribers_async_receive_all(self) -> None:
+        n = 5
+        queues = [self.broker.subscribe() for _ in range(n)]
+
+        for _ in range(20):
+            self.broker.publish("ev", {})
+
+        for i, q in enumerate(queues):
+            count = 0
+            while not q.empty():
+                await asyncio.sleep(0)
+                q.get_nowait()
+                count += 1
+            assert count == 20, f"Subscriber {i} got {count} events"
+
+    def test_new_subscriber_after_events_does_not_get_old_events(self) -> None:
+        self.broker.publish("ev", {"n": 1})
+        self.broker.publish("ev", {"n": 2})
+
+        q = self.broker.subscribe()
+        assert q.empty(), "New subscriber should not receive events published before subscribe"
+
+    def test_after_close_sentinel_is_last_item(self) -> None:
+        """After close, the last item on the queue is the None sentinel."""
+        q = self.broker.subscribe()
+        self.broker.publish("ev", {"n": 1})
+        self.broker.close()
+
+        items = []
+        while not q.empty():
+            items.append(q.get_nowait())
+        assert items[-1] is None, "Expected None sentinel as last item"
+
+    def test_multiple_subscribers_all_get_sentinel_on_close(self) -> None:
+        n = 4
+        queues = [self.broker.subscribe() for _ in range(n)]
+        self.broker.close()
+
+        for i, q in enumerate(queues):
+            item = q.get_nowait()
+            assert item is None, f"Subscriber {i} should get None sentinel"
+
+    def test_subscriber_count_is_accurate_with_many_subscribers(self) -> None:
+        n = 100
+        queues = [self.broker.subscribe() for _ in range(n)]
+        assert self.broker.subscriber_count == n
+        for q in queues:
+            self.broker.unsubscribe(q)
+        assert self.broker.subscriber_count == 0
