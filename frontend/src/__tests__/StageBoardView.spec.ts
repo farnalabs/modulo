@@ -9,9 +9,9 @@ vi.mock('../composables/useApi', () => ({
       if (url === '/api/v1/stages') {
         return Promise.resolve({
           items: [
-            { id: 'stage-1', name: 'Development', description: 'Build stage', position: 0, visibility: 'org', created_at: '2026-06-01T00:00:00Z', updated_at: '2026-06-01T00:00:00Z' },
-            { id: 'stage-2', name: 'Testing', description: 'QA stage', position: 1, visibility: 'org', created_at: '2026-06-01T00:00:00Z', updated_at: '2026-06-01T00:00:00Z' },
-            { id: 'stage-3', name: 'Production', description: 'Live stage', position: 2, visibility: 'team', created_at: '2026-06-01T00:00:00Z', updated_at: '2026-06-01T00:00:00Z' },
+            { id: 'stage-1', name: 'Development', description: 'Build stage', position: 0, visibility: 'org', owner_team_id: null, created_at: '2026-06-01T00:00:00Z', updated_at: '2026-06-01T00:00:00Z' },
+            { id: 'stage-2', name: 'Testing', description: 'QA stage', position: 1, visibility: 'org', owner_team_id: 'team-alpha', created_at: '2026-06-01T00:00:00Z', updated_at: '2026-06-01T00:00:00Z' },
+            { id: 'stage-3', name: 'Production', description: 'Live stage', position: 2, visibility: 'team', owner_team_id: 'team-beta', created_at: '2026-06-01T00:00:00Z', updated_at: '2026-06-01T00:00:00Z' },
           ],
           total: 3,
         })
@@ -189,5 +189,67 @@ describe('StageBoardView', () => {
     await nextTick()
     expect(wrapper.text()).toContain('Pipeline Details')
     expect(wrapper.text()).toContain('Feature X')
+  })
+
+  it('shows all stages when no team filter is selected', async () => {
+    router.push('/stages')
+    await router.isReady()
+    const wrapper = mount(StageBoardView, {
+      global: { plugins: [router] },
+    })
+    await flushPromises()
+    await nextTick()
+    expect(wrapper.text()).toContain('Development')
+    expect(wrapper.text()).toContain('Testing')
+    expect(wrapper.text()).toContain('Production')
+  })
+
+  it('filters stages by team when a team is selected', async () => {
+    router.push('/stages')
+    await router.isReady()
+    const wrapper = mount(StageBoardView, {
+      global: { plugins: [router] },
+    })
+    await flushPromises()
+    await nextTick()
+    const select = wrapper.find('[data-testid="stage-board-team-filter"]')
+    await select.setValue('team-alpha')
+    await nextTick()
+    expect(wrapper.text()).toContain('Testing')
+    expect(wrapper.text()).not.toContain('Production')
+  })
+
+  it('shows all stages when switching back to All Teams', async () => {
+    router.push('/stages')
+    await router.isReady()
+    const wrapper = mount(StageBoardView, {
+      global: { plugins: [router] },
+    })
+    await flushPromises()
+    await nextTick()
+    const select = wrapper.find('[data-testid="stage-board-team-filter"]')
+    await select.setValue('team-alpha')
+    await nextTick()
+    expect(wrapper.text()).not.toContain('Production')
+    await select.setValue('')
+    await nextTick()
+    expect(wrapper.text()).toContain('Development')
+    expect(wrapper.text()).toContain('Testing')
+    expect(wrapper.text()).toContain('Production')
+  })
+
+  it('populates team filter dropdown with loaded teams', async () => {
+    router.push('/stages')
+    await router.isReady()
+    const wrapper = mount(StageBoardView, {
+      global: { plugins: [router] },
+    })
+    await flushPromises()
+    await nextTick()
+    const options = wrapper.find('[data-testid="stage-board-team-filter"]').findAll('option')
+    const optionTexts = options.map(o => o.text())
+    expect(optionTexts).toContain('All Teams')
+    expect(optionTexts).toContain('Alpha')
+    expect(optionTexts).toContain('Beta')
   })
 })

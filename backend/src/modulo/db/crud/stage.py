@@ -49,12 +49,18 @@ async def list_stages(
     *,
     page: int = 1,
     page_size: int = 20,
+    owner_team_id: uuid.UUID | None = None,
 ) -> PageResult[Stage]:
     offset = (page - 1) * page_size
-    total = (await session.execute(select(func.count()).select_from(Stage))).scalar_one()
+    query = select(Stage)
+    count_query = select(func.count()).select_from(Stage)
+    if owner_team_id is not None:
+        query = query.where(Stage.owner_team_id == owner_team_id)
+        count_query = count_query.where(Stage.owner_team_id == owner_team_id)
+    total = (await session.execute(count_query)).scalar_one()
     items = list(
         (
-            await session.execute(select(Stage).order_by(Stage.position, Stage.name).offset(offset).limit(page_size))
+            await session.execute(query.order_by(Stage.position, Stage.name).offset(offset).limit(page_size))
         ).scalars()
     )
     return PageResult(items=items, total=total, page=page, page_size=page_size)
