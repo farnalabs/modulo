@@ -1632,3 +1632,397 @@ def step_trello_card_fields(ctx):
     assert "id" in rec and "name" in rec, (
         f"Record missing card fields: {rec}"
     )
+
+
+# ============================================================================
+# connectors/asana.feature  —  11 scenarios
+# ============================================================================
+try:
+    scenarios("../../features/connectors/asana.feature")
+except (FileNotFoundError, OSError):
+    pass
+
+
+@given("an Asana connector with valid Personal Access Token")
+def step_asana_connector(ctx):
+    from unittest.mock import AsyncMock
+
+    mock_connector = AsyncMock()
+    mock_connector.connector_type = "asana"
+
+    async def mock_health_check():
+        return HealthResult(ok=True, detail="Test User")
+
+    async def mock_query(q):
+        from modulo.connectors.base import ConnectorResult
+
+        match q.resource:
+            case "workspaces":
+                return ConnectorResult(
+                    records=[
+                        {"gid": "w1", "name": "My Workspace"},
+                        {"gid": "w2", "name": "Team Workspace"},
+                    ],
+                    total=2,
+                )
+            case "projects":
+                workspace = q.filters.get("workspace", "")
+                if not workspace:
+                    raise ValueError("Asana projects query requires 'workspace' filter")
+                return ConnectorResult(
+                    records=[
+                        {"gid": "p1", "name": "Project Alpha", "workspace": {"gid": workspace}},
+                        {"gid": "p2", "name": "Project Beta", "workspace": {"gid": workspace}},
+                    ],
+                    total=2,
+                )
+            case "project":
+                project_id = q.filters.get("project_id", "")
+                if not project_id:
+                    raise ValueError("Asana project query requires 'project_id' filter")
+                return ConnectorResult(
+                    records=[{"gid": project_id, "name": "Project Alpha", "notes": "A project"}]
+                )
+            case "tasks":
+                project_id = q.filters.get("project_id", "")
+                if not project_id:
+                    raise ValueError("Asana tasks query requires 'project_id' filter")
+                return ConnectorResult(
+                    records=[
+                        {"gid": "t1", "name": "Task One", "projects": [{"gid": project_id}]},
+                        {"gid": "t2", "name": "Task Two", "projects": [{"gid": project_id}]},
+                    ],
+                    total=2,
+                )
+            case "sections":
+                project_id = q.filters.get("project_id", "")
+                if not project_id:
+                    raise ValueError("Asana sections query requires 'project_id' filter")
+                return ConnectorResult(
+                    records=[
+                        {"gid": "s1", "name": "To Do", "project": {"gid": project_id}},
+                        {"gid": "s2", "name": "In Progress", "project": {"gid": project_id}},
+                    ],
+                    total=2,
+                )
+            case "users":
+                return ConnectorResult(
+                    records=[
+                        {"gid": "u1", "name": "Alice"},
+                        {"gid": "u2", "name": "Bob"},
+                    ],
+                    total=2,
+                )
+            case _:
+                raise ValueError(f"Unsupported Asana resource: {q.resource!r}")
+
+    async def mock_write(payload):
+        match payload.resource:
+            case "task":
+                return {
+                    "gid": "t_new",
+                    "name": payload.data.get("name", ""),
+                    "projects": payload.data.get("projects", []),
+                    "resource_type": "task",
+                }
+            case "task_update":
+                task_id = payload.data.get("id", "")
+                if not task_id:
+                    raise ValueError("Asana task_update requires 'id' in data")
+                return {"gid": task_id, "name": "Updated Name", "completed": True}
+            case "project":
+                return {
+                    "gid": "p_new",
+                    "name": payload.data.get("name", ""),
+                    "resource_type": "project",
+                }
+            case "section":
+                project_gid = payload.data.get("project", "")
+                if not project_gid:
+                    raise ValueError("Asana section requires 'project' in data")
+                return {
+                    "gid": "s_new",
+                    "name": payload.data.get("name", ""),
+                    "project": {"gid": project_gid},
+                    "resource_type": "section",
+                }
+            case "comment":
+                task_id = payload.data.get("task_id", "")
+                if not task_id:
+                    raise ValueError("Asana comment requires 'task_id' in data")
+                return {
+                    "gid": "st1",
+                    "text": payload.data.get("text", ""),
+                    "target": {"gid": task_id},
+                    "resource_type": "story",
+                }
+            case _:
+                raise ValueError(f"Unsupported Asana write resource: {payload.resource!r}")
+
+    mock_connector.health_check = mock_health_check
+    mock_connector.query = mock_query
+    mock_connector.write = mock_write
+    ctx["connector"] = mock_connector
+    ctx["query_error"] = None
+
+
+@given("the Asana API returns a valid user profile")
+def step_asana_health_valid(ctx):
+    async def mock_health():
+        return HealthResult(ok=True, detail="Test User")
+    ctx["connector"].health_check = mock_health
+
+
+@given("the Asana API returns 401 Unauthorized")
+def step_asana_health_401(ctx):
+    async def mock_health():
+        return HealthResult(ok=False, detail="HTTP 401: Unauthorized")
+    ctx["connector"].health_check = mock_health
+
+
+@given("the Asana API returns available workspaces")
+def step_asana_workspaces_available(ctx):
+    connector = ctx["connector"]
+
+    async def mock_query(q):
+        from modulo.connectors.base import ConnectorResult
+        if q.resource == "workspaces":
+            return ConnectorResult(
+                records=[
+                    {"gid": "w1", "name": "My Workspace"},
+                    {"gid": "w2", "name": "Team Workspace"},
+                ],
+                total=2,
+            )
+        raise ValueError(f"Unsupported Asana resource: {q.resource!r}")
+
+    connector.query = mock_query
+
+
+@given("the Asana API returns projects for a workspace")
+def step_asana_projects_available(ctx):
+    connector = ctx["connector"]
+
+    async def mock_query(q):
+        from modulo.connectors.base import ConnectorResult
+        if q.resource == "projects":
+            return ConnectorResult(
+                records=[
+                    {"gid": "p1", "name": "Project Alpha", "workspace": {"gid": q.filters.get("workspace", "")}},
+                    {"gid": "p2", "name": "Project Beta", "workspace": {"gid": q.filters.get("workspace", "")}},
+                ],
+                total=2,
+            )
+        raise ValueError(f"Unsupported Asana resource: {q.resource!r}")
+
+    connector.query = mock_query
+
+
+@given("the Asana API returns a single project")
+def step_asana_single_project(ctx):
+    connector = ctx["connector"]
+
+    async def mock_query(q):
+        from modulo.connectors.base import ConnectorResult
+        if q.resource == "project":
+            return ConnectorResult(
+                records=[{"gid": q.filters.get("project_id", ""), "name": "Project Alpha", "notes": "A project"}]
+            )
+        raise ValueError(f"Unsupported Asana resource: {q.resource!r}")
+
+    connector.query = mock_query
+
+
+@given("the Asana API returns tasks for a project")
+def step_asana_tasks_available(ctx):
+    connector = ctx["connector"]
+
+    async def mock_query(q):
+        from modulo.connectors.base import ConnectorResult
+        if q.resource == "tasks":
+            return ConnectorResult(
+                records=[
+                    {"gid": "t1", "name": "Task One"},
+                    {"gid": "t2", "name": "Task Two"},
+                ],
+                total=2,
+            )
+        raise ValueError(f"Unsupported Asana resource: {q.resource!r}")
+
+    connector.query = mock_query
+
+
+@given("the Asana API returns sections for a project")
+def step_asana_sections_available(ctx):
+    connector = ctx["connector"]
+
+    async def mock_query(q):
+        from modulo.connectors.base import ConnectorResult
+        if q.resource == "sections":
+            return ConnectorResult(
+                records=[
+                    {"gid": "s1", "name": "To Do"},
+                    {"gid": "s2", "name": "In Progress"},
+                ],
+                total=2,
+            )
+        raise ValueError(f"Unsupported Asana resource: {q.resource!r}")
+
+    connector.query = mock_query
+
+
+@given("the Asana API accepts task creation")
+def step_asana_accepts_task_create(ctx):
+    connector = ctx["connector"]
+
+    async def mock_write(payload):
+        if payload.resource == "task":
+            return {
+                "gid": "t_new",
+                "name": payload.data.get("name", ""),
+                "projects": payload.data.get("projects", []),
+                "resource_type": "task",
+            }
+        raise ValueError(f"Unsupported Asana write: {payload.resource!r}")
+
+    connector.write = mock_write
+
+
+@given("the Asana API accepts comments")
+def step_asana_accepts_comments(ctx):
+    connector = ctx["connector"]
+
+    async def mock_write(payload):
+        if payload.resource == "comment":
+            return {
+                "gid": "st1",
+                "text": payload.data.get("text", ""),
+                "resource_type": "story",
+            }
+        raise ValueError(f"Unsupported Asana write: {payload.resource!r}")
+
+    connector.write = mock_write
+
+
+@given("the Asana connector is configured")
+def step_asana_configured(ctx):
+    pass
+
+
+@when(
+    parsers.parse('I query resource "{resource}" with workspace "{workspace}"')
+)
+def step_asana_query_with_workspace(resource, workspace, ctx):
+    from modulo.connectors.base import ConnectorQuery
+
+    q = ConnectorQuery(resource=resource, filters={"workspace": workspace})
+    import asyncio
+
+    try:
+        result = asyncio.new_event_loop().run_until_complete(ctx["connector"].query(q))
+        ctx["query_result"] = result
+        ctx["query_error"] = None
+    except Exception as exc:
+        ctx["query_result"] = None
+        ctx["query_error"] = str(exc)
+
+
+@when(
+    parsers.parse('I query resource "{resource}" with project_id "{project_id}"')
+)
+def step_asana_query_with_project_id(resource, project_id, ctx):
+    from modulo.connectors.base import ConnectorQuery
+
+    q = ConnectorQuery(resource=resource, filters={"project_id": project_id})
+    import asyncio
+
+    try:
+        result = asyncio.new_event_loop().run_until_complete(ctx["connector"].query(q))
+        ctx["query_result"] = result
+        ctx["query_error"] = None
+    except Exception as exc:
+        ctx["query_result"] = None
+        ctx["query_error"] = str(exc)
+
+
+@when(
+    parsers.parse(
+        'I write resource "{resource}" with name "{name}" and project "{project}"'
+    )
+)
+def step_asana_create_task(resource, name, project, ctx):
+    from modulo.connectors.base import ConnectorPayload
+
+    payload = ConnectorPayload(
+        resource=resource,
+        data={"name": name, "projects": [project]},
+    )
+    import asyncio
+
+    try:
+        result = asyncio.new_event_loop().run_until_complete(ctx["connector"].write(payload))
+        ctx["write_result"] = result
+        ctx["query_error"] = None
+    except Exception as exc:
+        ctx["write_result"] = None
+        ctx["query_error"] = str(exc)
+
+
+@when(
+    parsers.parse(
+        'I write resource "{resource}" for task "{task_id}" with text "{text}"'
+    )
+)
+def step_asana_add_comment(resource, task_id, text, ctx):
+    from modulo.connectors.base import ConnectorPayload
+
+    payload = ConnectorPayload(
+        resource=resource,
+        data={"task_id": task_id, "text": text},
+    )
+    import asyncio
+
+    try:
+        result = asyncio.new_event_loop().run_until_complete(ctx["connector"].write(payload))
+        ctx["write_result"] = result
+        ctx["query_error"] = None
+    except Exception as exc:
+        ctx["write_result"] = None
+        ctx["query_error"] = str(exc)
+
+
+@then("the records contain workspace metadata")
+def step_asana_workspace_metadata(ctx):
+    result = ctx["query_result"]
+    for rec in result.records:
+        assert "gid" in rec and "name" in rec, (
+            f"Record missing workspace metadata: {rec}"
+        )
+
+
+@then("the records contain project metadata")
+def step_asana_project_metadata(ctx):
+    result = ctx["query_result"]
+    for rec in result.records:
+        assert "gid" in rec and "name" in rec, (
+            f"Record missing project metadata: {rec}"
+        )
+
+
+@then("the record contains project fields")
+def step_asana_project_fields(ctx):
+    result = ctx["query_result"]
+    assert len(result.records) > 0
+    rec = result.records[0]
+    assert "gid" in rec and "name" in rec, (
+        f"Record missing project fields: {rec}"
+    )
+
+
+@then("the records contain section metadata")
+def step_asana_section_metadata(ctx):
+    result = ctx["query_result"]
+    for rec in result.records:
+        assert "gid" in rec and "name" in rec, (
+            f"Record missing section metadata: {rec}"
+        )
