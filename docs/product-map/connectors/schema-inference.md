@@ -2,6 +2,7 @@
 id: feat-connectors-schema-inference
 prd: 8.16
 delivery-tasks: []
+bdd:
   - backend/tests/bdd/features/connectors/schema_inference.feature
 unit-tests: []
 code:
@@ -9,7 +10,8 @@ code:
   - backend/src/modulo/connectors/base.py
 depends-on:
   - feat-core-schema-inference
-status: partial
+  - feat-connectors-hub
+status: gap
 ---
 
 # Schema Inference from Connected Tools
