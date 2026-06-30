@@ -109,7 +109,7 @@
               <path d="m9 18 6-6-6-6" />
             </svg>
 
-            <span :class="statusBadgeClass(record.status)">
+            <span :class="statusBadgeClass(record.status)" class="capitalize">
               {{ record.status }}
             </span>
 
