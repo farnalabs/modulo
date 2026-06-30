@@ -56,6 +56,7 @@ from modulo.connectors.sentry import SentryConnector
 from modulo.connectors.sharepoint import SharePointConnector
 from modulo.connectors.shortcut import ShortcutConnector
 from modulo.connectors.slack import SlackConnector
+from modulo.connectors.sonarqube import SonarQubeConnector
 from modulo.connectors.teamcity import TeamCityConnector
 from modulo.connectors.trello import TrelloConnector
 from modulo.connectors.youtrack import YouTrackConnector
@@ -374,6 +375,11 @@ def _build_connector(type_id: str, config: dict[str, Any], creds: dict[str, Any]
             return DiscordConnector(token=_get_cred(creds, "token", type_id))
         case "opsgenie":
             return OpsgenieConnector(api_key=_get_cred(creds, "api_key", type_id))
+        case "sonarqube":
+            return SonarQubeConnector(
+                token=_get_cred(creds, "token", type_id),
+                base_url=config.get("base_url", "http://localhost:9000"),
+            )
         case _:
             registry = get_plugin_registry()
             if registry.has_connector_type(type_id):

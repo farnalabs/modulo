@@ -62,6 +62,7 @@ class ConnectorType(StrEnum):
     MICROSOFT_TEAMS = "microsoft_teams"
     DISCORD = "discord"
     OPSGENIE = "opsgenie"
+    SONARQUBE = "sonarqube"
 
     @property
     def capabilities(self) -> frozenset[Capability]:
@@ -182,6 +183,10 @@ class ConnectorType(StrEnum):
             case ConnectorType.OPSGENIE:
                 return frozenset({
                     Capability.INCIDENT_MANAGEMENT, Capability.MONITORING, Capability.NOTIFICATION,
+                })
+            case ConnectorType.SONARQUBE:
+                return frozenset({
+                    Capability.READ, Capability.WRITE, Capability.MONITORING, Capability.OBSERVABILITY,
                 })
             case _:
                 return frozenset()
