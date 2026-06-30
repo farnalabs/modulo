@@ -31,6 +31,7 @@ from modulo.connectors.base import (
     ConnectorType,
     HealthResult,
 )
+from modulo.connectors.circleci import CircleCIConnector
 from modulo.connectors.ci_runner import GitHubActionsCIRunner, GitLabCIRunner
 from modulo.connectors.confluence import ConfluenceConnector
 from modulo.connectors.dropbox_paper import DropboxPaperConnector
@@ -310,6 +311,8 @@ def _build_connector(type_id: str, config: dict[str, Any], creds: dict[str, Any]
             return NotionConnector(token=_get_cred(creds, "token", type_id))
         case "dropbox_paper":
             return DropboxPaperConnector(token=_get_cred(creds, "token", type_id))
+        case "circleci":
+            return CircleCIConnector(token=_get_cred(creds, "token", type_id))
         case "confluence":
             instance = config.get("instance", "")
             if not instance:
