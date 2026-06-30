@@ -57,6 +57,7 @@ from modulo.db.session import AsyncSessionLocal
 from modulo.auth.passwords import hash_password
 from sqlalchemy import select, text
 import asyncio
+import uuid
 async def fix():
     async with AsyncSessionLocal() as s:
         async with s.begin():
@@ -71,7 +72,7 @@ async def fix():
                     org_r = await s.execute(select(text('id')).select_from(text('organisations')).order_by(text('created_at')).limit(1))
                     org_row = org_r.one_or_none()
                     if org_row:
-                        await s.execute(text(f\"INSERT INTO users (organisation_id, email, display_name, password_hash, org_role, auth_provider) VALUES (:oid, :email, :disp, :pw, :role, 'local')\"), {'oid': org_row[0], 'email': email, 'disp': email.split('@')[0], 'pw': pw, 'role': role})
+                        await s.execute(text(f\"INSERT INTO users (id, organisation_id, email, display_name, password_hash, org_role, auth_provider) VALUES (:id, :oid, :email, :disp, :pw, :role, 'local')\"), {'id': uuid.uuid4(), 'oid': org_row[0], 'email': email, 'disp': email.split('@')[0], 'pw': pw, 'role': role})
                         print(f'{email} created with admin role')
                     else:
                         print(f'No org found — skipping {email}')
