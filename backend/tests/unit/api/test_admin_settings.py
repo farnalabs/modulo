@@ -502,7 +502,7 @@ class TestBillingOverview:
 
     def test_billing_free_plan(self, client: TestClient) -> None:
         fake_org = MagicMock()
-        fake_org.plan_id = "free"
+        fake_org.plan_id = "community"
         fake_org.daily_spend_limit = None
         fake_org.settings_json = {}
 
@@ -513,7 +513,7 @@ class TestBillingOverview:
             resp = client.get(self.URL)
 
         assert resp.status_code == 200
-        assert resp.json()["plan_tier"] == "free"
+        assert resp.json()["plan_tier"] == "community"
 
     def test_billing_unauthorized(self, unauth_client: TestClient) -> None:
         resp = unauth_client.get(self.URL)

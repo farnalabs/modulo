@@ -111,7 +111,7 @@ def _make_mock_membership(**kwargs):
 def _make_mock_config_entry(**kwargs):
     entry = MagicMock()
     entry.key = kwargs.get("key", "default_plan")
-    entry.value = kwargs.get("value", "enterprise")
+    entry.value = kwargs.get("value", "team")
     entry.updated_at = kwargs.get("updated_at", datetime.now(UTC))
     return entry
 

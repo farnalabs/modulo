@@ -94,12 +94,12 @@ def _make_mock_plan_context() -> MagicMock:
     flag1 = MagicMock()
     flag1.name = "parallel_branches"
     flag1.description = "Run branching logic in parallel within a pipeline"
-    flag1.tier = "free"
+    flag1.tier = "community"
     flag1.currently_active = True
     flag2 = MagicMock()
     flag2.name = "eval_system"
     flag2.description = "Built-in eval runner for LLM output quality gates"
-    flag2.tier = "free"
+    flag2.tier = "community"
     flag2.currently_active = True
     ctx.list_enabled_features = MagicMock(return_value=[flag1, flag2])
     return ctx

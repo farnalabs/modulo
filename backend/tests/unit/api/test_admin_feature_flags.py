@@ -57,7 +57,7 @@ class TestListFeatureFlags:
         resp = client.get("/api/v1/admin/feature-flags")
         body = resp.json()
         assert "license" in body
-        assert body["license"]["tier"] in ("free", "enterprise")
+        assert body["license"]["tier"] in ("community", "team")
         assert "has_license_key" in body["license"]
         assert body["license"]["is_valid"] is True
 
@@ -77,13 +77,13 @@ class TestListFeatureFlags:
         body = resp.json()
         assert "would_activate" in body
 
-    def test_free_tier_has_enterprise_flags_in_would_activate(self, client: TestClient) -> None:
+    def test_community_tier_has_team_flags_in_would_activate(self, client: TestClient) -> None:
         resp = client.get("/api/v1/admin/feature-flags")
         body = resp.json()
-        if body["license"]["tier"] == "free":
+        if body["license"]["tier"] == "community":
             assert len(body["would_activate"]) > 0
             for flag in body["would_activate"]:
-                assert flag["tier"] != "free"
+                assert flag["tier"] != "community"
 
     def test_unauthenticated_returns_4xx(self, unauth_client: TestClient) -> None:
         resp = unauth_client.get("/api/v1/admin/feature-flags")
@@ -112,7 +112,7 @@ class TestGetFeatureFlag:
         assert resp.status_code == 200
         body = resp.json()
         assert body["name"] == "sso"
-        assert body["tier"] == "enterprise"
+        assert body["tier"] == "team"
 
     def test_returns_404_for_unknown_flag(self, client: TestClient) -> None:
         resp = client.get("/api/v1/admin/feature-flags/nonexistent_flag")
