@@ -166,6 +166,26 @@ class TestGetPromptVersion:
             resp = client.get(f"{BASE}/prompts/v99")
         assert resp.status_code == 404
 
+    def test_get_current_version_returns_active_prompt(self, client: TestClient) -> None:
+        agent = _make_agent()
+        current_entry = {
+            "version": "current",
+            "template": agent.prompt_template,
+            "created_at": _NOW.isoformat(),
+            "notes": "Current active prompt",
+            "optimized_from": None,
+            "eval_result_ids": [],
+        }
+        with (
+            patch("modulo.api.routes.agents.get_prompt_version", return_value=current_entry),
+            patch("modulo.api.routes.agents.set_rls_org"),
+        ):
+            resp = client.get(f"{BASE}/prompts/current")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["version"] == "current"
+        assert data["template"] == "current prompt v3"
+
 
 class TestRollback:
     def test_rollback_success(self, client: TestClient) -> None:
