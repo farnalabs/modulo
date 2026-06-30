@@ -1,7 +1,10 @@
 ---
 id: feat-core-schema-inference
 prd: 8.16
-delivery-tasks: [task-nv5-schema-inference-service, task-nv5-schema-infer-endpoint]
+delivery-tasks:
+  - task-nv5-schema-inference-service
+  - task-nv5-schema-infer-endpoint
+bdd:
   - backend/tests/bdd/features/connectors/schema_inference.feature
 unit-tests:
   - backend/tests/unit/core/test_schema_inference.py

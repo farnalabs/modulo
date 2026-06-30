@@ -12,7 +12,15 @@ unit-tests:
   - backend/tests/integration/crud/test_cost_attribution.py
 status: partial
 ---
-# Cost Breakdown Discovered from 1 completed delivery tasks. ## Behaviours ### Spend Limit Enforcement (`check_and_record_spend`) - [ ] Happy path: spend approved when no org limit set (no limit = allow any)
+# Cost Breakdown
+
+Discovered from 1 completed delivery tasks.
+
+## Behaviours
+
+### Spend Limit Enforcement (`check_and_record_spend`)
+
+- [ ] Happy path: spend approved when no org limit set (no limit = allow any)
 - [ ] Happy path: spend under both org and team limits approved
 - [ ] Boundary: spend exactly at org limit approved
 - [ ] Boundary: spend exactly at team limit approved

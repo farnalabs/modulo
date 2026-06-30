@@ -2,6 +2,7 @@
 id: feat-core-replace-step-agent
 prd: 8.4
 delivery-tasks: [task-nv11-replace-step-agent]
+bdd:
   - backend/tests/bdd/features/pipelines/node_types.feature
   - backend/tests/bdd/features/hitl/manual_node.feature
   - backend/tests/bdd/features/ui/pipeline_builder.feature
@@ -14,7 +15,13 @@ code:
 depends-on: [feat-core-pipeline-execution]
 status: partial
 ---
-# Replace Step Agent Replacing a manual placeholder node with an AI agent node (and reverting from agent back to manual). Powers the SDLC onboarding path where teams model their existing process in Modulo and progressively replace manual steps with AI agents. ## Behaviours ### Manual Node Runtime
+# Replace Step Agent
+
+Replacing a manual placeholder node with an AI agent node (and reverting from agent back to manual). Powers the SDLC onboarding path where teams model their existing process in Modulo and progressively replace manual steps with AI agents.
+
+## Behaviours
+
+### Manual Node Runtime
 - [x] Manual node compiles successfully in a pipeline graph via build_graph_from_json
 - [x] Manual node raises NodeInterrupt on first invocation with manual=True payload
 - [x] Manual node awaits human input until _hitl_decision is provided on resume

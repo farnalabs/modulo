@@ -2,7 +2,8 @@
 id: feat-core-ai-schema-gen
 prd: 8.16
 delivery-tasks: [task-nv9-ai-schema-gen]
-bdd: backend/tests/bdd/features/connectors/schema_inference.feature
+bdd:
+  - backend/tests/bdd/features/connectors/schema_inference.feature
 code:
   - backend/src/modulo/core/schema_registry/inference.py
   - backend/src/modulo/core/schema_registry/generation.py
@@ -10,7 +11,13 @@ code:
 depends-on: [feat-core-schema-inference]
 status: partial
 ---
-# AI Schema Inference & Generation Schema Inference (8.16) samples records from a connected tool and uses an LLM to produce a draft JSON Schema. Schema Generation takes a natural-language description plus optional examples and produces a draft schema. Both are read-only, LLM-assisted drafting tools — output always goes through human review before publishing. ### Behaviours #### Schema Inference — service (`inference.py`, `SchemaInferenceService.infer`)
+# AI Schema Inference & Generation
+
+Schema Inference (8.16) samples records from a connected tool and uses an LLM to produce a draft JSON Schema. Schema Generation takes a natural-language description plus optional examples and produces a draft schema. Both are read-only, LLM-assisted drafting tools — output always goes through human review before publishing.
+
+### Behaviours
+
+#### Schema Inference — service (`inference.py`, `SchemaInferenceService.infer`)
 - [x] LLM infers draft JSON Schema (draft-07/2020-12) from sample data records
 - [x] Samples capped at configurable max (default 50, `_MAX_SAMPLE_RECORDS`)
 - [x] Handles LLM responses wrapped in markdown code fences (with or without lang hint)
