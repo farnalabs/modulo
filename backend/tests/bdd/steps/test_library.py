@@ -8,10 +8,7 @@ from pytest_bdd import given, parsers, scenarios, then, when
 
 scenarios("../../features/library/browse.feature")
 scenarios("../../features/library/copy_to_adapt.feature")
-try:
-    scenarios("../../features/library/ratings.feature")
-except (FileNotFoundError, OSError):
-    pass
+scenarios("../../features/library/ratings.feature")
 
 PRIMITIVE_10 = uuid.UUID("00000000-0000-0000-0000-000000000010")
 PRIMITIVE_20 = uuid.UUID("00000000-0000-0000-0000-000000000020")
