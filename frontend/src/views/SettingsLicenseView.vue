@@ -31,7 +31,7 @@
             <Badge variant="outline">Community</Badge>
           </div>
           <p class="mt-2 text-sm text-muted-foreground">
-            You are currently on the Community tier. Upgrade to Team to unlock all features.
+            You are currently on the {{ planStore.getTierLabel(licenseInfo.tier) }} tier. Upgrade to {{ planStore.getTierLabel('team') }} to unlock all features.
           </p>
           <a
             href="https://modulo.run/pricing"
