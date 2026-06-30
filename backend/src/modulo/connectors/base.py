@@ -63,6 +63,7 @@ class ConnectorType(StrEnum):
     DISCORD = "discord"
     OPSGENIE = "opsgenie"
     SONARQUBE = "sonarqube"
+    CODECLIMATE = "codeclimate"
 
     @property
     def capabilities(self) -> frozenset[Capability]:
@@ -188,6 +189,8 @@ class ConnectorType(StrEnum):
                 return frozenset({
                     Capability.READ, Capability.WRITE, Capability.MONITORING, Capability.OBSERVABILITY,
                 })
+            case ConnectorType.CODECLIMATE:
+                return frozenset({Capability.MONITORING, Capability.OBSERVABILITY})
             case _:
                 return frozenset()
 
