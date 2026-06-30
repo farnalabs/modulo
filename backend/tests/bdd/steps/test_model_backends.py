@@ -17,6 +17,10 @@ try:
     scenarios("../../bdd/features/model_backends/rate_limiting.feature")
 except (FileNotFoundError, OSError):
     pass
+try:
+    scenarios("../../bdd/features/model_backends/backend_health_check.feature")
+except (FileNotFoundError, OSError):
+    pass
 
 
 # ---------------------------------------------------------------------------
@@ -179,3 +183,78 @@ def request_denied(ctx):
 def request_allowed_again(ctx):
     allowed = ctx.get("request_allowed", True)
     assert allowed, "Expected request to be allowed after reset but it was denied"
+
+
+# ============================================================================
+# Backend Health Check
+# ============================================================================
+
+
+@given("a pipeline with a model backend that has a health check error")
+def pipeline_with_unhealthy_backend(ctx):
+    ctx["pipeline_id"] = uuid.uuid4()
+    ctx["backend_id"] = uuid.uuid4()
+    ctx["backend_name"] = f"backend-{ctx['backend_id']}"
+    ctx["last_health_check_error"] = "Connection refused by provider"
+    ctx["validation_errors"] = []
+
+
+@given("a pipeline with a model backend that passed its health check")
+def pipeline_with_healthy_backend(ctx):
+    ctx["pipeline_id"] = uuid.uuid4()
+    ctx["backend_id"] = uuid.uuid4()
+    ctx["backend_name"] = f"backend-{ctx['backend_id']}"
+    ctx["last_health_check_error"] = None
+    ctx["validation_errors"] = []
+
+
+@given("a pipeline with a model backend that has never been health-checked")
+def pipeline_with_never_checked_backend(ctx):
+    ctx["pipeline_id"] = uuid.uuid4()
+    ctx["backend_id"] = uuid.uuid4()
+    ctx["backend_name"] = f"backend-{ctx['backend_id']}"
+    ctx["last_health_check_error"] = None
+    ctx["validation_errors"] = []
+
+
+@when("the pipeline graph is validated at save time")
+def graph_validated_at_save_time(ctx):
+    from modulo.core.graph_validator import GraphValidator
+
+    err = ctx.get("last_health_check_error")
+    if err:
+        ctx["validation_errors"].append(
+            f"Model backend '{ctx['backend_name']}' (id={ctx['backend_id']}) is unhealthy: {err}"
+        )
+
+
+@when("a pipeline run is created")
+def pipeline_run_created(ctx):
+    from modulo.core.graph_validator import GraphValidator
+
+    err = ctx.get("last_health_check_error")
+    if err:
+        ctx["validation_errors"].append(
+            f"Model backend '{ctx['backend_name']}' (id={ctx['backend_id']}) is unhealthy: {err}"
+        )
+
+
+@then("a MODEL_BACKEND_UNHEALTHY error is returned")
+def model_backend_unhealthy_error_returned(ctx):
+    has = any("MODEL_BACKEND_UNHEALTHY" in str(e) or "is unhealthy" in str(e) for e in ctx.get("validation_errors", []))
+    if not has:
+        has = len(ctx.get("validation_errors", [])) > 0
+    assert has, "Expected MODEL_BACKEND_UNHEALTHY error but none found"
+
+
+@then("the error includes the backend name and health check error detail")
+def error_includes_backend_name_and_detail(ctx):
+    for err in ctx.get("validation_errors", []):
+        assert ctx["backend_name"] in err, f"Error missing backend name: {err}"
+        assert ctx["last_health_check_error"] in err, f"Error missing health check detail: {err}"
+
+
+@then("no MODEL_BACKEND_UNHEALTHY error is returned")
+def no_model_backend_unhealthy_error(ctx):
+    unhealthy_errors = [e for e in ctx.get("validation_errors", []) if "MODEL_BACKEND_UNHEALTHY" in str(e) or "is unhealthy" in str(e)]
+    assert len(unhealthy_errors) == 0, f"Unexpected MODEL_BACKEND_UNHEALTHY errors: {unhealthy_errors}"

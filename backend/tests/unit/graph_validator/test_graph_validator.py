@@ -47,11 +47,14 @@ def _connector_instance(
     return c
 
 
-def _model_backend(bid: uuid.UUID, *, status: str = "active") -> MagicMock:
+def _model_backend(
+    bid: uuid.UUID, *, status: str = "active", last_health_check_error: str | None = None,
+) -> MagicMock:
     m = MagicMock()
     m.id = bid
     m.name = f"backend-{bid}"
     m.status = status
+    m.last_health_check_error = last_health_check_error
     return m
 
 
@@ -354,6 +357,59 @@ async def test_model_backend_empty_pins_skipped():
     session = _session_returning([])
     result = await GraphValidator().validate(snap, session)
     assert result.is_valid
+
+
+async def test_model_backend_healthy_no_error():
+    bid = uuid.uuid4()
+    backend = _model_backend(bid, status="active", last_health_check_error=None)
+    snap = _snapshot(
+        graph_json=_SINGLE_NODE,
+        model_backend_pins=[{"node_id": "a", "model_backend_id": str(bid)}],
+    )
+    session = _session_returning([backend])
+    result = await GraphValidator().validate(snap, session)
+    assert result.is_valid
+
+
+async def test_model_backend_healthy_empty_error():
+    bid = uuid.uuid4()
+    backend = _model_backend(bid, status="active", last_health_check_error="")
+    snap = _snapshot(
+        graph_json=_SINGLE_NODE,
+        model_backend_pins=[{"node_id": "a", "model_backend_id": str(bid)}],
+    )
+    session = _session_returning([backend])
+    result = await GraphValidator().validate(snap, session)
+    assert result.is_valid
+
+
+async def test_model_backend_unhealthy_blocks():
+    bid = uuid.uuid4()
+    backend = _model_backend(bid, status="active", last_health_check_error="Connection refused")
+    snap = _snapshot(
+        graph_json=_SINGLE_NODE,
+        model_backend_pins=[{"node_id": "a", "model_backend_id": str(bid)}],
+    )
+    session = _session_returning([backend])
+    result = await GraphValidator().validate(snap, session)
+    assert not result.is_valid
+    assert any(i.code == "MODEL_BACKEND_UNHEALTHY" for i in result.issues)
+    health_issue = next(i for i in result.issues if i.code == "MODEL_BACKEND_UNHEALTHY")
+    assert f"Model backend '{backend.name}' (id={bid})" in health_issue.message
+    assert "Connection refused" in health_issue.message
+
+
+async def test_model_backend_unhealthy_in_run_validation():
+    bid = uuid.uuid4()
+    backend = _model_backend(bid, status="active", last_health_check_error="Timeout")
+    snap = _snapshot(
+        graph_json=_SINGLE_NODE,
+        model_backend_pins=[{"node_id": "a", "model_backend_id": str(bid)}],
+    )
+    session = _session_returning([backend])
+    result = await GraphValidator().validate_for_run(snap, {}, session)
+    assert not result.is_valid
+    assert any(i.code == "MODEL_BACKEND_UNHEALTHY" for i in result.issues)
 
 
 # ---------------------------------------------------------------------------
