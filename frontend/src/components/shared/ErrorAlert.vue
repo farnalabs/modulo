@@ -1,7 +1,7 @@
 <template>
   <div class="rounded-lg border border-destructive/50 bg-destructive/10 p-4 text-destructive">
     <p>{{ message }}</p>
-    <button v-if="onRetry" class="ml-2 underline" @click="onRetry">Retry</button>
+    <button v-if="onRetry && retryable !== false" class="ml-2 underline" @click="onRetry">Retry</button>
   </div>
 </template>
 
@@ -9,5 +9,6 @@
 defineProps<{
   message: string
   onRetry?: () => void
+  retryable?: boolean
 }>()
 </script>
