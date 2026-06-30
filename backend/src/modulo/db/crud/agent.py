@@ -157,7 +157,14 @@ async def get_prompt_version(
         return None
 
     if version == "current":
-        return None
+        return {
+            "version": "current",
+            "template": agent.prompt_template,
+            "created_at": agent.updated_at.isoformat() if agent.updated_at else None,
+            "notes": "Current active prompt",
+            "optimized_from": None,
+            "eval_result_ids": [],
+        }
 
     history = list(agent.prompt_version_history or [])
     for entry in history:
