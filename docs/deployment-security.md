@@ -668,4 +668,5 @@ before marking a production deployment as complete.
 | Dependency policy | `docs/security/dependency-policy.md` |
 | Penetration test plan | `docs/security/penetration-test-plan.md` |
 | Backup & restore | `docs/operations/backup.md` |
+| Self-hosted admin operations | `docs/operations/self-hosted-admin.md` |
 | Network egress audit | `docs/operations/network-egress.md` |
