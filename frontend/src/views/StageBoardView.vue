@@ -1,5 +1,15 @@
 <template>
-  <div class="mx-auto space-y-6 p-6">
+  <FeatureGate feature-name="team_rbac" required-tier="enterprise">
+    <template #locked="{ tooltip }">
+      <div class="mx-auto space-y-6 p-6">
+        <div class="mb-4 flex items-center gap-2 rounded-lg border border-warning/30 bg-warning/5 p-4 text-sm text-warning">
+          <LockIcon :locked="true" :tooltip="tooltip" />
+          <span>Team RBAC is not available on your current plan.</span>
+        </div>
+      </div>
+    </template>
+
+    <div class="mx-auto space-y-6 p-6">
     <header class="flex flex-wrap items-center justify-between gap-4">
       <div>
         <h1 class="text-3xl font-bold tracking-tight">Stage Board</h1>
@@ -336,12 +346,17 @@
       </div>
     </div>
   </div>
+  </FeatureGate>
 </template>
 
 <script setup lang="ts">
 import { ref, computed, onMounted } from 'vue'
 import { useApi } from '../composables/useApi'
+import { usePlanStore } from '../stores/planStore'
+import FeatureGate from '../components/FeatureGate.vue'
+import LockIcon from '../components/LockIcon.vue'
 
+const planStore = usePlanStore()
 const { get, post, patch } = useApi()
 
 const loading = ref(true)
@@ -504,6 +519,7 @@ async function createStage() {
 }
 
 onMounted(async () => {
+  planStore.fetchPlan()
   try {
     await Promise.all([loadStages(), loadPipelines(), loadTeams()])
   } catch {
