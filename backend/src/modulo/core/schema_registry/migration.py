@@ -289,6 +289,58 @@ class MigrationRegistry:
             result = mf.func(result)
         return result
 
+    def describe_chain(
+        self, source_version: str, target_version: str
+    ) -> list[dict[str, str]]:
+        """Return descriptions of each step in a migration chain without running it."""
+        chain = self.get_migration_chain(source_version, target_version)
+        return [
+            {
+                "source_version": m.source_version,
+                "target_version": m.target_version,
+                "description": m.description or m.func.__name__,
+            }
+            for m in chain
+        ]
+
+    def dry_run(
+        self,
+        data: dict[str, Any],
+        source_version: str,
+        target_version: str,
+    ) -> list[dict[str, Any]]:
+        """Simulate the full migration chain and return per-step diff.
+
+        Each step report shows:
+        - source/target version
+        - description
+        - which fields were added, removed, or changed
+        - the before/after values for changed fields
+
+        The original data is never modified.
+        """
+        chain = self.get_migration_chain(source_version, target_version)
+        steps: list[dict[str, Any]] = []
+        current = deepcopy(data)
+        for mf in chain:
+            before = deepcopy(current)
+            current = mf.func(current)
+            added = sorted(set(current) - set(before))
+            removed = sorted(set(before) - set(current))
+            changed = {}
+            for key in set(current) & set(before):
+                if current[key] != before[key]:
+                    changed[key] = {"old": before[key], "new": current[key]}
+            steps.append({
+                "source_version": mf.source_version,
+                "target_version": mf.target_version,
+                "description": mf.description or mf.func.__name__,
+                "added_fields": added,
+                "removed_fields": removed,
+                "changed_fields": changed,
+            })
+        return steps
+
     def clear(self) -> None:
         self._migrations.clear()
 
