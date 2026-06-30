@@ -67,26 +67,61 @@
             </td>
 
             <td class="px-4 py-3">
-              <input
-                v-if="entry.hot_reloadable"
-                v-model="editedValues[entry.key]"
-                data-testid="settings-runtime-config-value"
-                :class="inputClasses(entry)"
-                @input="markEdited(entry.key)"
-              />
-              <code v-else class="text-sm font-mono break-all max-w-xs inline-block">
-                {{ entry.current_value || '(empty)' }}
-              </code>
+              <template v-if="isKeySensitive(entry.key) && !revealedKeys.has(entry.key)">
+                <div class="flex items-center gap-2">
+                  <code class="text-sm font-mono">********</code>
+                  <button
+                    class="text-xs text-primary hover:underline"
+                    @click="revealKey(entry.key)"
+                  >
+                    Reveal
+                  </button>
+                </div>
+              </template>
+              <template v-else>
+                <input
+                  v-if="entry.hot_reloadable"
+                  v-model="editedValues[entry.key]"
+                  data-testid="settings-runtime-config-value"
+                  :class="inputClasses(entry)"
+                  @input="markEdited(entry.key)"
+                />
+                <code v-else class="text-sm font-mono break-all max-w-xs inline-block">
+                  {{ entry.current_value || '(empty)' }}
+                </code>
+              </template>
             </td>
 
             <td class="px-4 py-3">
-              <code class="text-sm font-mono text-muted-foreground break-all max-w-xs inline-block">
+              <template v-if="isKeySensitive(entry.key) && !revealedKeys.has(entry.key)">
+                <div class="flex items-center gap-2">
+                  <code class="text-sm font-mono text-muted-foreground">********</code>
+                  <button
+                    class="text-xs text-primary hover:underline"
+                    @click="revealKey(entry.key)"
+                  >
+                    Reveal
+                  </button>
+                </div>
+              </template>
+              <code v-else class="text-sm font-mono text-muted-foreground break-all max-w-xs inline-block">
                 {{ entry.env_value || '(not set)' }}
               </code>
             </td>
 
             <td class="px-4 py-3">
-              <code class="text-sm text-muted-foreground break-all max-w-xs inline-block">
+              <template v-if="isKeySensitive(entry.key) && !revealedKeys.has(entry.key)">
+                <div class="flex items-center gap-2">
+                  <code class="text-sm text-muted-foreground">********</code>
+                  <button
+                    class="text-xs text-primary hover:underline"
+                    @click="revealKey(entry.key)"
+                  >
+                    Reveal
+                  </button>
+                </div>
+              </template>
+              <code v-else class="text-sm text-muted-foreground break-all max-w-xs inline-block">
                 {{ entry.default_value || '(none)' }}
               </code>
             </td>
@@ -161,6 +196,18 @@ const items = ref<ConfigEntry[]>([])
 const hasDrift = ref(false)
 const editedValues = reactive<Record<string, string>>({})
 const editedKeys = reactive(new Set<string>())
+
+const SENSITIVE_KEY_PATTERNS = /SECRET|PASSWORD|TOKEN|KEY|DATABASE_URL|ENCRYPTION|SIGNING|PRIVATE/i
+
+const revealedKeys = reactive(new Set<string>())
+
+function isKeySensitive(key: string): boolean {
+  return SENSITIVE_KEY_PATTERNS.test(key)
+}
+
+function revealKey(key: string): void {
+  revealedKeys.add(key)
+}
 
 function entryHasDrift(entry: ConfigEntry): boolean {
   if (entry.override_value) return false
