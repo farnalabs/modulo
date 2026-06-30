@@ -15,7 +15,7 @@ import re
 from collections.abc import Sequence
 from datetime import UTC, datetime
 from enum import StrEnum
-from typing import Any, Literal, Protocol
+from typing import Any, ClassVar, Literal, Protocol
 from uuid import UUID, uuid4
 
 import jsonschema  # type: ignore[import-untyped]
@@ -129,12 +129,18 @@ def _result_from_dict(
     node_id: str,
     eval_id: UUID,
 ) -> EvalResult:
+    score: float | None = None
+    if raw.get("score") is not None:
+        try:
+            score = float(raw["score"])
+        except (ValueError, TypeError):
+            score = None
     return EvalResult(
         run_id=run_id,
         node_id=node_id,
         eval_id=eval_id,
         passed=bool(raw["passed"]),
-        score=float(raw["score"]) if raw.get("score") is not None else None,
+        score=score,
         detail=str(raw.get("detail", "")),
     )
 
@@ -185,6 +191,14 @@ class EvalEngine:
 
         return result
 
+    _RE_FLAG_MAP: ClassVar[dict[str, int]] = {
+        "i": re.IGNORECASE,
+        "m": re.MULTILINE,
+        "s": re.DOTALL,
+        "x": re.VERBOSE,
+        "u": re.UNICODE,
+    }
+
     def _evaluate_regex(
         self,
         output: dict[str, Any],
@@ -212,7 +226,24 @@ class EvalEngine:
                 detail="Regex eval missing 'field' in config",
             )
         value = str(output.get(field, ""))
-        passed = bool(re.search(pattern_str, value))
+        flags = 0
+        flags_str = eval_def.config.get("flags", "")
+        if flags_str:
+            for ch in flags_str:
+                flag = self._RE_FLAG_MAP.get(ch)
+                if flag is not None:
+                    flags |= flag
+        try:
+            passed = bool(re.search(pattern_str, value, flags))
+        except re.error as exc:
+            return EvalResult(
+                run_id=run_id,
+                node_id=eval_def.node_id or "",
+                eval_id=eval_def.id,
+                passed=False,
+                score=0.0,
+                detail=f"Regex eval invalid pattern: {exc}",
+            )
         return EvalResult(
             run_id=run_id,
             node_id=eval_def.node_id or "",
