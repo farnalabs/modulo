@@ -136,6 +136,20 @@ async def test_initialise_creates_shortcut_connector():
     assert connector.connector_type == ConnectorType.SHORTCUT
 
 
+async def test_initialise_creates_youtrack_connector():
+    ci = _FakeCI(
+        id=uuid.uuid4(),
+        connector_type_id="youtrack",
+        credentials_ciphertext=_encrypt({"token": "yt_perm_token_123"}),
+    )
+    backend = create_secrets_backend(fernet_key=_KEY, backend_name="fernet")
+    with patch.object(backend, "get_secret", return_value='{"token": "yt_perm_token_123"}'):
+        hub = ConnectorHub(secrets_backend=backend)
+        await hub.initialise([ci])
+    connector = hub.get(ci.id)
+    assert connector.connector_type == ConnectorType.YOUTRACK
+
+
 async def test_get_unknown_raises():
     backend = create_secrets_backend(fernet_key=_KEY, backend_name="fernet")
     hub = ConnectorHub(secrets_backend=backend)
