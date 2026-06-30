@@ -69,6 +69,7 @@ class ConnectorType(StrEnum):
     CODECLIMATE = "codeclimate"
     SNYK = "snyk"
     TRIVY = "trivy"
+    ONEPASSWORD = "onepassword"
 
     @property
     def capabilities(self) -> frozenset[Capability]:
@@ -207,6 +208,10 @@ class ConnectorType(StrEnum):
             case ConnectorType.TRIVY:
                 return frozenset({
                     Capability.READ, Capability.VULNERABILITY_SCANNING, Capability.MONITORING,
+                })
+            case ConnectorType.ONEPASSWORD:
+                return frozenset({
+                    Capability.SECRETS_MANAGEMENT, Capability.READ, Capability.WRITE,
                 })
             case _:
                 return frozenset()
