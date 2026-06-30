@@ -85,10 +85,7 @@ class ConnectorType(StrEnum):
                 return frozenset({Capability.READ, Capability.WRITE})
             case ConnectorType.SHORTCUT:
                 return frozenset({Capability.READ, Capability.WRITE})
-            case ConnectorType.YOUTRACK:
-            case ConnectorType.NOTION:
-            case ConnectorType.CONFLUENCE:
-            case ConnectorType.SHAREPOINT:
+            case ConnectorType.YOUTRACK | ConnectorType.NOTION | ConnectorType.CONFLUENCE | ConnectorType.SHAREPOINT:
                 return frozenset({Capability.READ, Capability.WRITE})
             case _:
                 return frozenset()
