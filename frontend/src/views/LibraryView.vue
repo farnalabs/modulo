@@ -76,6 +76,21 @@
             </span>
           </div>
 
+          <div v-if="prim.forked_from" class="flex items-center gap-2 mb-3">
+            <span class="text-xs text-muted-foreground">Auto-update</span>
+            <button
+              class="relative inline-flex h-5 w-9 items-center rounded-full transition-colors focus:outline-none"
+              :class="prim.auto_update ? 'bg-primary' : 'bg-muted'"
+              @click="toggleAutoUpdate(prim)"
+              :data-testid="`auto-update-toggle-${prim.id}`"
+            >
+              <span
+                class="inline-block h-3.5 w-3.5 rounded-full bg-background transition-transform"
+                :class="prim.auto_update ? 'translate-x-[18px]' : 'translate-x-[2px]'"
+              />
+            </button>
+          </div>
+
           <div class="flex items-center gap-2">
             <button
               v-if="prim.primitive_type === 'pipeline_template'"
@@ -138,6 +153,8 @@ interface LibraryPrimitive {
   version: string
   tags: string[]
   visibility: string
+  forked_from: string | null
+  auto_update: boolean
   created_at: string
   updated_at: string
 }
@@ -150,7 +167,7 @@ interface ListResponse {
 }
 
 const router = useRouter()
-const { get } = useApi()
+const { get, patch } = useApi()
 
 const primitives = ref<LibraryPrimitive[]>([])
 const loading = ref(true)
@@ -214,6 +231,16 @@ function createPipeline(prim: LibraryPrimitive) {
 
 function viewPrimitive(prim: LibraryPrimitive) {
   router.push({ name: 'library-pipeline-wizard', params: { id: prim.id } })
+}
+
+async function toggleAutoUpdate(prim: LibraryPrimitive) {
+  const newValue = !prim.auto_update
+  try {
+    await patch<LibraryPrimitive>(`/api/v1/libraries/${prim.id}`, { auto_update: newValue })
+    prim.auto_update = newValue
+  } catch (e) {
+    console.error('Failed to toggle auto-update', e)
+  }
 }
 
 onMounted(loadPrimitives)
