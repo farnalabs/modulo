@@ -1,18 +1,17 @@
 ---
 id: feat-connectors-github
 prd: 8.6
-delivery-tasks:
-  - backend/tests/features/connectors/github.feature
-  - backend/tests/bdd/features/connectors/github_connector.feature
+delivery-tasks: []
 bdd:
   - backend/tests/bdd/features/connectors/github_connector.feature
-  - backend/tests/features/connectors/github.feature
 unit-tests:
   - backend/tests/unit/connectors/test_github.py
   - backend/tests/unit/connectors/test_github_scopes.py
 code:
   - backend/src/modulo/connectors/github/__init__.py
   - backend/src/modulo/connectors/base.py
+depends-on:
+  - feat-connectors-hub
 status: partial
 ---
 
@@ -32,8 +31,6 @@ Async GitHub REST API connector implementing `ConnectorBase`. Provides read/writ
 - [x] Return `HealthResult(ok=False)` with HTTP status and response body on non-200
 - [x] Return `HealthResult(ok=True)` with authenticated user login on success
 - [ ] Accept configurable API base URL for GHES (hard-coded to `api.github.com`)
-- [ ] Support token rotation via ConnectorHub without disrupting in-flight runs
-- [ ] Rate-limit awareness — no 429 retry/backoff on `read()`/`write()` calls
 
 ### OAuth Scopes — capability verification
 
@@ -103,7 +100,6 @@ Async GitHub REST API connector implementing `ConnectorBase`. Provides read/writ
 - [x] `GitHubConnector.connector_type` returns `ConnectorType.GITHUB`
 - [ ] `CREATE_PR` capability declared but `write("pr")` not implemented — capability mismatch
 - [ ] `ISSUE_READ`/`ISSUE_WRITE`/`ISSUE_SEARCH` not assigned — no issue operations possible
-- [ ] Capability-based graph validation — agent requirements vs connector capabilities not yet wired in ConnectorHub
 
 ## Known Gaps
 

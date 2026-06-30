@@ -2,13 +2,15 @@
 id: feat-connectors-jira
 prd: 8.6
 delivery-tasks: []
+bdd:
   - backend/tests/bdd/features/connectors/connector_health.feature
   - backend/tests/bdd/features/connectors/jira_connector.feature
 unit-tests: []
 code:
   - backend/src/modulo/connectors/jira/__init__.py
   - backend/src/modulo/connectors/base.py
-
+depends-on:
+  - feat-connectors-hub
 status: partial
 ---
 
@@ -28,9 +30,7 @@ Async Jira Cloud REST API v3 connector implementing `ConnectorBase`. Provides re
 - [x] `health_check()` calls `GET /myself` to validate credentials
 - [x] Return authenticated user displayName on success
 - [x] Return `HealthResult(ok=False)` with HTTP status on non-200
-- [ ] Support API token rotation via ConnectorHub without disrupting in-flight runs
 - [ ] Jira Data Center (self-hosted) API support — URL format differs
-- [ ] Rate-limit awareness — no 429 retry/backoff
 - [ ] Handle Jira Cloud 401 vs 403 distinction in health check detail
 
 ### Issue Operations — CRUD via Jira REST API
@@ -64,7 +64,7 @@ Async Jira Cloud REST API v3 connector implementing `ConnectorBase`. Provides re
 - [x] `ConnectorType.JIRA` defined in `base.py` enum
 - [x] `ConnectorType.JIRA.capabilities` returns `{ISSUE_READ, ISSUE_WRITE, ISSUE_SEARCH}` in `base.py`
 - [x] `JiraConnector.connector_type` returns `ConnectorType.JIRA`
-- [ ] Capability-based graph validation — agent requirements vs connector capabilities not yet wired in ConnectorHub
+
 
 ### Health Check — connectivity and credential validation
 
@@ -73,13 +73,6 @@ Async Jira Cloud REST API v3 connector implementing `ConnectorBase`. Provides re
 - [x] Return HTTP status and response body on failure
 - [ ] Detect expired tokens vs invalid instance URL vs network errors
 - [ ] Per-operation permission check before write operations
-
-### Credential Lifetime — ConnectorHub integration
-
-- [ ] Credentials decrypted once at run-start by ConnectorHub — not yet wired
-- [ ] Decrypted connector instance held in run-scoped context, never enters LangGraph state
-- [ ] One Fernet decrypt call per connector per run — not per node invocation
-- [ ] Discard decrypted connector at run end
 
 ### Prompt Portability — issue-tracker terminology
 
@@ -99,4 +92,4 @@ Async Jira Cloud REST API v3 connector implementing `ConnectorBase`. Provides re
 - [ ] **BDD placeholder**: `backend/tests/bdd/features/connectors/jira_connector.feature` is a 3-line placeholder with no real scenarios
 - [ ] **No unit tests**: `unit-tests` field is empty
 - [ ] **No rate-limit handling**: no 429 retry, no `X-RateLimit-*` header inspection
-- [ ] **ConnectorHub pre-run health check not wired**: credentials are not yet decrypted and validated at run-start via ConnectorHub
+

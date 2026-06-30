@@ -2,12 +2,14 @@
 id: feat-connectors-gitlab
 prd: 8.6
 delivery-tasks: []
+bdd:
   - backend/tests/bdd/features/connectors/connector_health.feature
 unit-tests: []
 code:
   - backend/src/modulo/connectors/gitlab/__init__.py
   - backend/src/modulo/connectors/base.py
-
+depends-on:
+  - feat-connectors-hub
 status: partial
 ---
 
@@ -21,13 +23,11 @@ Async GitLab REST API v4 connector implementing `ConnectorBase`. Provides read/w
 
 - [x] Authenticate all requests via `Authorization: Bearer <token>` header
 - [x] Set `Accept: application/json` header on all requests
-- [x] Use `httpx.AsyncClient` with base URL defaulting to `https://gitlab.com/api/v4`
+- [x] Use `httpx.AsyncClient` with base URL `https://gitlab.com/api/v4`
 - [x] `health_check()` calls `GET /user` to validate token
 - [x] Return `HealthResult(ok=False)` with HTTP status on non-200
 - [x] Return `HealthResult(ok=True)` with authenticated user info on success
 - [ ] Accept configurable base URL for self-hosted GitLab instances (hard-coded to `gitlab.com/api/v4`)
-- [ ] Support token rotation via ConnectorHub without disrupting in-flight runs
-- [ ] Rate-limit awareness — no 429 retry/backoff on `read()`/`write()` calls
 - [ ] Report `X-Request-Id` on API errors for GitLab support debugging
 
 ### OAuth Scopes — capability verification
@@ -82,8 +82,7 @@ Async GitLab REST API v4 connector implementing `ConnectorBase`. Provides read/w
 - [x] `ConnectorType.GITLAB` defined in `base.py` enum
 - [x] `GitLabConnector.connector_type` returns `ConnectorType.GITLAB`
 - [x] `ConnectorType.GITLAB.capabilities` returns `{read, write, git_push, create_pr}` in `base.py`
-- [ ] `CREATE_PR` / `GIT_PUSH` capabilities should be declared but are not
-- [ ] Capability-based graph validation — agent requirements vs connector capabilities not yet wired in ConnectorHub
+
 
 ### Health Check — connectivity and credential validation
 
@@ -95,13 +94,6 @@ Async GitLab REST API v4 connector implementing `ConnectorBase`. Provides read/w
 - [ ] Per-operation scope verification — no granular check before `write()` calls
 - [ ] Report self-hosted GitLab version for diagnostic purposes
 
-### Credential Lifetime — ConnectorHub integration
-
-- [ ] Credentials decrypted once at run-start by ConnectorHub — not yet wired
-- [ ] Decrypted connector instance held in run-scoped context, never enters LangGraph state
-- [ ] One Fernet decrypt call per connector per run — not per node invocation
-- [ ] Discard decrypted connector at run end
-
 ## Known Gaps
 
 - [ ] **No self-hosted GitLab support**: API base URL is hard-coded to `https://gitlab.com/api/v4`
@@ -109,7 +101,7 @@ Async GitLab REST API v4 connector implementing `ConnectorBase`. Provides read/w
 - [ ] **MR operations limited**: only listing and creation work — no comments, merges, approvals, or labels
 - [ ] **Scope verification incomplete**: health check doesn't verify individual scopes
 - [ ] **No pagination**: `query("projects")` and `query("mrs")` don't return `next_cursor`
-- [ ] **BDD placeholder**: `backend/tests/bdd/features/connectors/github_connector.feature` only — no GitLab-specific feature file exists
+- [ ] **No BDD scenarios**: GitLab has no dedicated feature file — only `connector_health.feature` (shared) covers GitLab
 - [ ] **No unit tests**: `unit-tests` field is empty
 - [ ] **No rate-limit handling**: no 429 retry, no GitLab `RateLimit-*` header inspection
-- [ ] **ConnectorHub pre-run health check not wired**: credentials are not yet decrypted and validated at run-start via ConnectorHub
+
