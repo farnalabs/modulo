@@ -14,6 +14,7 @@ code:
 depends-on: [feat-pipelines-run-trace-observability, feat-core-agent-model]
 status: partial
 ---
+
 # Prompt Reveal API
 
 Server-authenticated reveal of the rendered prompt sent to an LLM for a specific run node. Prompts are masked by default (`[Prompt hidden — click to reveal]`) and revealed per-node on click. Sensitive credential-like values (api_key, secret, token, password) are always masked in the response. The `prompt_always_visible` agent flag disables frontend masking for pipelines whose prompts contain no sensitive data.
