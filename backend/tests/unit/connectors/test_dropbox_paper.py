@@ -18,7 +18,9 @@ def connector():
     return DropboxPaperConnector(token=TOKEN)
 
 
-def _mock_response(status: int = 200, json: dict | None = None, text: str = "", headers: dict | None = None) -> httpx.Response:
+def _mock_response(
+    status: int = 200, json: dict | None = None, text: str = "", headers: dict | None = None
+) -> httpx.Response:
     if json is not None:
         return httpx.Response(status, json=json, headers=headers or {})
     return httpx.Response(status, text=text, headers=headers or {})
@@ -43,9 +45,7 @@ async def test_health_check_ok(connector):
 
 @respx.mock
 async def test_health_check_fail(connector):
-    respx.post(f"{_BASE}/users/get_current_account").mock(
-        return_value=_mock_response(status=401, text="Unauthorized")
-    )
+    respx.post(f"{_BASE}/users/get_current_account").mock(return_value=_mock_response(status=401, text="Unauthorized"))
     result = await connector.health_check()
     assert result.ok is False
     assert "401" in result.detail
@@ -57,12 +57,8 @@ async def test_query_docs(connector):
         "doc_ids": ["doc1", "doc2"],
         "cursor": {"value": "next_cursor_val"},
     }
-    route = respx.post(f"{_BASE}/paper/docs/list").mock(
-        return_value=_mock_response(json=json_body)
-    )
-    result = await connector.query(
-        ConnectorQuery(resource="docs", filters={"filter_by": "docs_created"}, limit=10)
-    )
+    route = respx.post(f"{_BASE}/paper/docs/list").mock(return_value=_mock_response(json=json_body))
+    result = await connector.query(ConnectorQuery(resource="docs", filters={"filter_by": "docs_created"}, limit=10))
     assert len(result.records) == 2
     assert result.records[0]["doc_id"] == "doc1"
     assert result.records[1]["doc_id"] == "doc2"
@@ -76,9 +72,7 @@ async def test_query_docs(connector):
 
 @respx.mock
 async def test_query_docs_with_sort(connector):
-    route = respx.post(f"{_BASE}/paper/docs/list").mock(
-        return_value=_mock_response(json={"doc_ids": []})
-    )
+    route = respx.post(f"{_BASE}/paper/docs/list").mock(return_value=_mock_response(json={"doc_ids": []}))
     await connector.query(
         ConnectorQuery(
             resource="docs",
@@ -94,12 +88,8 @@ async def test_query_docs_with_sort(connector):
 async def test_query_doc(connector):
     content = "# My Paper Doc\n\nHello world."
     doc_id = "abc123"
-    route = respx.post(f"{_BASE}/paper/docs/download").mock(
-        return_value=_mock_response(text=content)
-    )
-    result = await connector.query(
-        ConnectorQuery(resource="doc", filters={"doc_id": doc_id})
-    )
+    route = respx.post(f"{_BASE}/paper/docs/download").mock(return_value=_mock_response(text=content))
+    result = await connector.query(ConnectorQuery(resource="doc", filters={"doc_id": doc_id}))
     assert len(result.records) == 1
     assert result.records[0]["doc_id"] == doc_id
     assert result.records[0]["content"] == content
@@ -123,9 +113,7 @@ async def test_query_folders(connector):
     route = respx.post(f"{_BASE}/files/list_folder").mock(
         return_value=_mock_response(json={"entries": entries, "cursor": "cursor_val"})
     )
-    result = await connector.query(
-        ConnectorQuery(resource="folders", filters={"path": "/Paper", "recursive": True})
-    )
+    result = await connector.query(ConnectorQuery(resource="folders", filters={"path": "/Paper", "recursive": True}))
     assert len(result.records) == 2
     assert result.records[0]["name"] == "My Folder"
     assert result.next_cursor == "cursor_val"
@@ -139,9 +127,7 @@ async def test_query_folders_with_cursor(connector):
     route = respx.post(f"{_BASE}/files/list_folder").mock(
         return_value=_mock_response(json={"entries": [], "cursor": None})
     )
-    await connector.query(
-        ConnectorQuery(resource="folders", cursor="prev_cursor")
-    )
+    await connector.query(ConnectorQuery(resource="folders", cursor="prev_cursor"))
     sent = json.loads(route.calls[0].request.content)
     assert sent["cursor"] == "prev_cursor"
 
@@ -165,13 +151,13 @@ async def test_query_unsupported_resource(connector):
 async def test_write_doc(connector):
     title = "New Paper Doc"
     content = "# Hello\n\nThis is a test."
-    result_headers = {"Dropbox-API-Result": '{"doc_id": "new_doc_123", "title": "New Paper Doc", "url": "https://paper.dropbox.com/doc/New-Paper-Doc-abc123"}'}
+    result_headers = {
+        "Dropbox-API-Result": '{"doc_id": "new_doc_123", "title": "New Paper Doc", "url": "https://paper.dropbox.com/doc/New-Paper-Doc-abc123"}'
+    }
     route = respx.post(f"{_BASE}/paper/docs/create").mock(
         return_value=_mock_response(status=200, json={}, headers=result_headers)
     )
-    result = await connector.write(
-        ConnectorPayload(resource="doc", data={"title": title, "content": content})
-    )
+    result = await connector.write(ConnectorPayload(resource="doc", data={"title": title, "content": content}))
     assert result["doc_id"] == "new_doc_123"
     assert result["title"] == "New Paper Doc"
     assert route.called
@@ -186,9 +172,7 @@ async def test_write_doc_default_title(connector):
     route = respx.post(f"{_BASE}/paper/docs/create").mock(
         return_value=_mock_response(status=200, json={}, headers={"Dropbox-API-Result": '{"doc_id": "d1"}'})
     )
-    result = await connector.write(
-        ConnectorPayload(resource="doc", data={"content": "Some content"})
-    )
+    result = await connector.write(ConnectorPayload(resource="doc", data={"content": "Some content"}))
     assert result["doc_id"] == "d1"
     arg_header = route.calls[0].request.headers.get("Dropbox-API-Arg")
     assert "Untitled" in arg_header
