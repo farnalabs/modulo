@@ -1127,3 +1127,176 @@ def step_records_contain_channel_metadata(ctx):
         assert "id" in rec and "name" in rec, (
             f"Record missing channel metadata: {rec}"
         )
+
+
+# ============================================================================
+# connectors/gitea_connector.feature  —  6 scenarios
+# ============================================================================
+try:
+    scenarios("../../features/connectors/gitea_connector.feature")
+except (FileNotFoundError, OSError):
+    pass
+
+
+@given("a Gitea connector with valid token")
+def step_gitea_connector(ctx):
+    from unittest.mock import AsyncMock
+
+    mock_connector = AsyncMock()
+    mock_connector.connector_type = "gitea"
+
+    async def mock_query(q):
+        from modulo.connectors.base import ConnectorResult
+
+        match q.resource:
+            case "repos":
+                return ConnectorResult(
+                    records=[
+                        {"full_name": "owner/repo1", "name": "repo1"},
+                        {"full_name": "owner/repo2", "name": "repo2"},
+                    ],
+                    total=2,
+                )
+            case "file":
+                return ConnectorResult(
+                    records=[
+                        {
+                            "name": "README.md",
+                            "content": "my readme",
+                            "encoding": "base64",
+                        }
+                    ]
+                )
+            case "pulls":
+                return ConnectorResult(
+                    records=[
+                        {"number": 1, "title": "Fix bug", "state": "open"},
+                        {"number": 2, "title": "Add feature", "state": "open"},
+                    ],
+                    total=2,
+                )
+            case "issues":
+                return ConnectorResult(
+                    records=[
+                        {"id": 1, "title": "Bug report", "state": "open"},
+                        {"id": 2, "title": "Feature request", "state": "open"},
+                    ],
+                    total=2,
+                )
+            case _:
+                raise ValueError(f"Unsupported resource: {q.resource!r}")
+
+    mock_connector.query = mock_query
+
+    async def mock_write(payload):
+        match payload.resource:
+            case "file":
+                return {
+                    "content": {"name": "new.md"},
+                    "commit": {"sha": "abc123"},
+                }
+            case "pull":
+                return {
+                    "number": 42,
+                    "title": payload.data.get("title", ""),
+                    "head": {"label": payload.data.get("head", "")},
+                    "base": {"label": payload.data.get("base", "main")},
+                    "state": "open",
+                }
+            case "issue":
+                return {
+                    "id": 100,
+                    "number": 10,
+                    "title": payload.data.get("title", ""),
+                    "state": "open",
+                }
+            case _:
+                raise ValueError(f"Unsupported write: {payload.resource!r}")
+
+    mock_connector.write = mock_write
+
+    ctx["connector"] = mock_connector
+    ctx["connector_type"] = "gitea"
+    ctx["query_error"] = None
+
+
+@when(
+    parsers.parse(
+        'I query resource "{resource}" with filters repo'
+        ' "{repo}" and state "{state}"'
+    )
+)
+def step_gitea_query_pulls_issues(resource, repo, state, ctx):
+    from modulo.connectors.base import ConnectorQuery
+
+    connector = ctx["connector"]
+    q = ConnectorQuery(
+        resource=resource,
+        filters={"repo": repo, "state": state},
+    )
+    import asyncio
+
+    try:
+        result = asyncio.new_event_loop().run_until_complete(connector.query(q))
+        ctx["query_result"] = result
+        ctx["query_error"] = None
+    except Exception as exc:
+        ctx["query_result"] = None
+        ctx["query_error"] = str(exc)
+
+
+@when(
+    parsers.parse(
+        'I write Gitea resource "{resource}" with title "{title}"'
+        ' head "{head}" and base "{base}"'
+    )
+)
+def step_gitea_create_pr(resource, title, head, base, ctx):
+    from modulo.connectors.base import ConnectorPayload
+
+    connector = ctx["connector"]
+    payload = ConnectorPayload(
+        resource=resource,
+        data={
+            "repo": "owner/repo",
+            "title": title,
+            "head": head,
+            "base": base,
+        },
+    )
+    import asyncio
+
+    try:
+        result = asyncio.new_event_loop().run_until_complete(connector.write(payload))
+        ctx["write_result"] = result
+        ctx["query_error"] = None
+    except Exception as exc:
+        ctx["write_result"] = None
+        ctx["query_error"] = str(exc)
+
+
+@when(
+    parsers.parse(
+        'I write Gitea resource "{resource}" with title "{title}"'
+    )
+)
+def step_gitea_create_issue(resource, title, ctx):
+    from modulo.connectors.base import ConnectorPayload
+
+    connector = ctx["connector"]
+    payload = ConnectorPayload(
+        resource=resource,
+        data={
+            "repo": "owner/repo",
+            "title": title,
+        },
+    )
+    import asyncio
+
+    try:
+        result = asyncio.new_event_loop().run_until_complete(connector.write(payload))
+        ctx["write_result"] = result
+        ctx["query_error"] = None
+    except Exception as exc:
+        ctx["write_result"] = None
+        ctx["query_error"] = str(exc)
