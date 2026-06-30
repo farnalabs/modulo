@@ -13,7 +13,6 @@ build-backend = "hatchling.build"
 name = "modulo"
 version = "0.1.0"
 description = "Governed orchestration for your agentic SDLC"
-readme = "README.md"
 license = "MIT"
 authors = [
     { name = "Duncan Tait", email = "duncan@farnalabs.com" },
