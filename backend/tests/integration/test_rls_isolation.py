@@ -12,7 +12,7 @@ import pytest
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker
 
-from modulo.db.rls import set_rls_org
+from modulo.db.rls import register_rls_reset_hook, set_rls_org, set_rls_user_context
 
 # ---------------------------------------------------------------------------
 # SET LOCAL / set_config scoping tests
@@ -224,3 +224,98 @@ async def test_rls_filters_rows_for_non_superuser(db_engine: AsyncEngine) -> Non
             await conn.execute(text(f'DROP OWNED BY "{role}"'))
             await conn.execute(text(f'DROP ROLE IF EXISTS "{role}"'))
             await conn.execute(text("COMMIT"))
+
+
+# ---------------------------------------------------------------------------
+# set_rls_user_context helper tests
+# ---------------------------------------------------------------------------
+
+
+async def test_set_rls_user_context_requires_active_transaction(db_engine: AsyncEngine) -> None:
+    """set_rls_user_context raises if called without an active transaction."""
+    factory = async_sessionmaker(db_engine, expire_on_commit=False)
+    async with factory() as session:
+        with pytest.raises(RuntimeError, match="requires an active transaction"):
+            await set_rls_user_context(session, uuid.uuid4(), "admin")
+
+
+async def test_set_rls_user_context_sets_gucs(db_engine: AsyncEngine) -> None:
+    """set_rls_user_context must write app.user_id and app.org_role."""
+    user_id = uuid.uuid4()
+    org_role = "operator"
+    factory = async_sessionmaker(db_engine, expire_on_commit=False)
+    async with factory() as session:
+        async with session.begin():
+            await set_rls_user_context(session, user_id, org_role)
+            uid_val = (await session.execute(text("SELECT current_setting('app.user_id', true)"))).scalar()
+            role_val = (await session.execute(text("SELECT current_setting('app.org_role', true)"))).scalar()
+            assert uid_val == str(user_id)
+            assert role_val == org_role
+
+
+async def test_set_rls_user_context_resets_after_commit(db_engine: AsyncEngine) -> None:
+    """set_rls_user_context GUCs must revert after transaction commit."""
+    user_id = uuid.uuid4()
+    factory = async_sessionmaker(db_engine, expire_on_commit=False)
+    async with factory() as session:
+        async with session.begin():
+            await set_rls_user_context(session, user_id, "admin")
+
+        post_uid = (await session.execute(text("SELECT current_setting('app.user_id', true)"))).scalar()
+        post_role = (await session.execute(text("SELECT current_setting('app.org_role', true)"))).scalar()
+        assert post_uid in (None, ""), f"user_id leaked after commit: {post_uid!r}"
+        assert post_role in (None, ""), f"org_role leaked after commit: {post_role!r}"
+
+
+# ---------------------------------------------------------------------------
+# Pool checkout reset hook test
+# ---------------------------------------------------------------------------
+
+
+async def test_register_rls_reset_hook_clears_gucs_on_checkout(db_engine: AsyncEngine) -> None:
+    """register_rls_reset_hook must set all three GUCs to empty string on checkout.
+
+    Sets a session-level default, registers the hook, checks out a connection,
+    and verifies the GUCs are empty.
+    """
+    register_rls_reset_hook(db_engine)
+
+    # Set session-level defaults (simulates stale context from a prior request)
+    async with db_engine.connect() as conn:
+        await conn.execute(text("SELECT set_config('app.organisation_id', 'stale-org-id', false)"))
+        await conn.execute(text("SELECT set_config('app.user_id', 'stale-user-id', false)"))
+        await conn.execute(text("SELECT set_config('app.org_role', 'stale-role', false)"))
+        await conn.commit()
+
+    # On next checkout, the reset hook should clear these
+    async with db_engine.connect() as conn:
+        org_val = (await conn.execute(text("SELECT current_setting('app.organisation_id', true)"))).scalar()
+        uid_val = (await conn.execute(text("SELECT current_setting('app.user_id', true)"))).scalar()
+        role_val = (await conn.execute(text("SELECT current_setting('app.org_role', true)"))).scalar()
+        assert org_val in (None, ""), f"org_id not cleared: {org_val!r}"
+        assert uid_val in (None, ""), f"user_id not cleared: {uid_val!r}"
+        assert role_val in (None, ""), f"org_role not cleared: {role_val!r}"
+
+
+# ---------------------------------------------------------------------------
+# Team-scoped RLS policy existence test
+# ---------------------------------------------------------------------------
+
+
+async def test_rls_team_isolation_policies_exist(db_engine: AsyncEngine) -> None:
+    """Migration 0025 must have created rls_team_isolation on team-scoped tables.
+
+    Checks the five tables that should have the policy: pipelines, stages,
+    connector_instances, model_backends, library_primitives.
+    """
+    async with db_engine.connect() as conn:
+        tables_with_policy = {
+            row[0]
+            for row in (
+                await conn.execute(text("SELECT tablename FROM pg_policies WHERE policyname = 'rls_team_isolation'"))
+            ).fetchall()
+        }
+
+    expected = {"pipelines", "stages", "connector_instances", "model_backends", "library_primitives"}
+    missing = expected - tables_with_policy
+    assert not missing, f"Tables missing rls_team_isolation policy: {sorted(missing)}"
