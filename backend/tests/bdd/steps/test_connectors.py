@@ -2831,3 +2831,277 @@ def step_shortcut_story_fields(ctx):
     assert "id" in rec and "name" in rec, (
         f"Record missing story fields: {rec}"
     )
+
+
+# ============================================================================
+# connectors/confluence.feature  —  9 scenarios
+# ============================================================================
+try:
+    scenarios("../../features/connectors/confluence.feature")
+except (FileNotFoundError, OSError):
+    pass
+
+
+@given("a Confluence connector with valid credentials")
+def step_confluence_connector(ctx):
+    from unittest.mock import AsyncMock
+
+    mock_connector = AsyncMock()
+    mock_connector.connector_type = "confluence"
+
+    async def mock_query(q):
+        from modulo.connectors.base import ConnectorResult
+
+        match q.resource:
+            case "pages":
+                space_id = q.filters.get("space_id")
+                return ConnectorResult(
+                    records=[
+                        {"id": "p1", "title": "Page One", "spaceId": space_id or "s1"},
+                        {"id": "p2", "title": "Page Two", "spaceId": space_id or "s1"},
+                    ],
+                    total=2,
+                )
+            case "page":
+                page_id = q.filters.get("page_id", "")
+                if not page_id:
+                    raise ValueError("Confluence page query requires 'page_id' filter")
+                return ConnectorResult(
+                    records=[
+                        {"id": page_id, "title": "Single Page", "spaceId": "s1", "version": {"number": 2}}
+                    ]
+                )
+            case "spaces":
+                space_type = q.filters.get("type", "global")
+                return ConnectorResult(
+                    records=[
+                        {"id": "s1", "name": "Space One", "key": "SP1", "type": space_type},
+                    ],
+                    total=1,
+                )
+            case "content":
+                cql = q.filters.get("cql", "")
+                if not cql:
+                    raise ValueError("Confluence content query requires 'cql' filter")
+                return ConnectorResult(
+                    records=[
+                        {"id": "c1", "title": "Found Page", "type": "page"},
+                    ],
+                    total=1,
+                )
+            case "children":
+                page_id = q.filters.get("page_id", "")
+                if not page_id:
+                    raise ValueError("Confluence children query requires 'page_id' filter")
+                return ConnectorResult(
+                    records=[
+                        {"id": "c1", "title": "Child One"},
+                        {"id": "c2", "title": "Child Two"},
+                    ],
+                    total=2,
+                )
+            case "labels":
+                page_id = q.filters.get("page_id", "")
+                if not page_id:
+                    raise ValueError("Confluence labels query requires 'page_id' filter")
+                return ConnectorResult(
+                    records=[
+                        {"id": "l1", "name": "documentation"},
+                        {"id": "l2", "name": "how-to"},
+                    ],
+                    total=2,
+                )
+            case _:
+                raise ValueError(f"Unsupported Confluence resource: {q.resource!r}")
+
+    async def mock_write(payload):
+        match payload.resource:
+            case "page":
+                return {
+                    "id": "p_new",
+                    "title": payload.data.get("title", ""),
+                    "spaceId": payload.data.get("spaceId", ""),
+                    "version": {"number": 1},
+                }
+            case "label":
+                return {
+                    "page_id": payload.data.get("page_id", ""),
+                    "label": payload.data.get("label", ""),
+                    "created": True,
+                }
+            case _:
+                raise ValueError(f"Unsupported Confluence write resource: {payload.resource!r}")
+
+    async def mock_health_check():
+        from modulo.connectors.base import HealthResult
+
+        return HealthResult(ok=True, detail="testuser")
+
+    mock_connector.query = mock_query
+    mock_connector.write = mock_write
+    mock_connector.health_check = mock_health_check
+    ctx["connector"] = mock_connector
+    ctx["query_error"] = None
+
+
+@when(parsers.parse('I query resource "pages" with space_id "{space_id}"'))
+def step_confluence_query_pages(space_id, ctx):
+    from modulo.connectors.base import ConnectorQuery
+
+    q = ConnectorQuery(resource="pages", filters={"space_id": space_id})
+    import asyncio
+
+    try:
+        result = asyncio.new_event_loop().run_until_complete(ctx["connector"].query(q))
+        ctx["query_result"] = result
+        ctx["query_error"] = None
+    except Exception as exc:
+        ctx["query_result"] = None
+        ctx["query_error"] = str(exc)
+
+
+@when(parsers.parse('I query resource "page" with page_id "{page_id}"'))
+def step_confluence_query_page(page_id, ctx):
+    from modulo.connectors.base import ConnectorQuery
+
+    q = ConnectorQuery(resource="page", filters={"page_id": page_id})
+    import asyncio
+
+    try:
+        result = asyncio.new_event_loop().run_until_complete(ctx["connector"].query(q))
+        ctx["query_result"] = result
+        ctx["query_error"] = None
+    except Exception as exc:
+        ctx["query_result"] = None
+        ctx["query_error"] = str(exc)
+
+
+@when(parsers.parse('I query resource "spaces" with type "{space_type}"'))
+def step_confluence_query_spaces(space_type, ctx):
+    from modulo.connectors.base import ConnectorQuery
+
+    q = ConnectorQuery(resource="spaces", filters={"type": space_type})
+    import asyncio
+
+    try:
+        result = asyncio.new_event_loop().run_until_complete(ctx["connector"].query(q))
+        ctx["query_result"] = result
+        ctx["query_error"] = None
+    except Exception as exc:
+        ctx["query_result"] = None
+        ctx["query_error"] = str(exc)
+
+
+@when(parsers.parse('I query resource "content" with cql "{cql}"'))
+def step_confluence_query_content(cql, ctx):
+    from modulo.connectors.base import ConnectorQuery
+
+    q = ConnectorQuery(resource="content", filters={"cql": cql})
+    import asyncio
+
+    try:
+        result = asyncio.new_event_loop().run_until_complete(ctx["connector"].query(q))
+        ctx["query_result"] = result
+        ctx["query_error"] = None
+    except Exception as exc:
+        ctx["query_result"] = None
+        ctx["query_error"] = str(exc)
+
+
+@when(parsers.parse('I query resource "children" with page_id "{page_id}"'))
+def step_confluence_query_children(page_id, ctx):
+    from modulo.connectors.base import ConnectorQuery
+
+    q = ConnectorQuery(resource="children", filters={"page_id": page_id})
+    import asyncio
+
+    try:
+        result = asyncio.new_event_loop().run_until_complete(ctx["connector"].query(q))
+        ctx["query_result"] = result
+        ctx["query_error"] = None
+    except Exception as exc:
+        ctx["query_result"] = None
+        ctx["query_error"] = str(exc)
+
+
+@when(parsers.parse('I query resource "labels" with page_id "{page_id}"'))
+def step_confluence_query_labels(page_id, ctx):
+    from modulo.connectors.base import ConnectorQuery
+
+    q = ConnectorQuery(resource="labels", filters={"page_id": page_id})
+    import asyncio
+
+    try:
+        result = asyncio.new_event_loop().run_until_complete(ctx["connector"].query(q))
+        ctx["query_result"] = result
+        ctx["query_error"] = None
+    except Exception as exc:
+        ctx["query_result"] = None
+        ctx["query_error"] = str(exc)
+
+
+@when(parsers.parse('I write resource "page" in space "{space_id}" with title "{title}"'))
+def step_confluence_create_page(space_id, title, ctx):
+    from modulo.connectors.base import ConnectorPayload
+
+    payload = ConnectorPayload(
+        resource="page",
+        data={"spaceId": space_id, "title": title, "body": {"representation": "storage", "value": "<p>Content</p>"}},
+    )
+    import asyncio
+
+    try:
+        result = asyncio.new_event_loop().run_until_complete(ctx["connector"].write(payload))
+        ctx["write_result"] = result
+        ctx["query_error"] = None
+    except Exception as exc:
+        ctx["write_result"] = None
+        ctx["query_error"] = str(exc)
+
+
+@when(parsers.parse('I write resource "label" on page "{page_id}" with name "{label}"'))
+def step_confluence_add_label(page_id, label, ctx):
+    from modulo.connectors.base import ConnectorPayload
+
+    payload = ConnectorPayload(
+        resource="label",
+        data={"page_id": page_id, "label": label},
+    )
+    import asyncio
+
+    try:
+        result = asyncio.new_event_loop().run_until_complete(ctx["connector"].write(payload))
+        ctx["write_result"] = result
+        ctx["query_error"] = None
+    except Exception as exc:
+        ctx["write_result"] = None
+        ctx["query_error"] = str(exc)
+
+
+@then("the records contain page metadata")
+def step_confluence_page_metadata(ctx):
+    result = ctx["query_result"]
+    for rec in result.records:
+        assert "id" in rec and "title" in rec, f"Record missing page metadata: {rec}"
+
+
+@then("the record contains page fields")
+def step_confluence_page_fields(ctx):
+    result = ctx["query_result"]
+    assert len(result.records) > 0
+    rec = result.records[0]
+    assert "id" in rec and "title" in rec and "spaceId" in rec, f"Record missing page fields: {rec}"
+
+
+@then("the records contain space metadata")
+def step_confluence_space_metadata(ctx):
+    result = ctx["query_result"]
+    for rec in result.records:
+        assert "id" in rec and "name" in rec and "key" in rec, f"Record missing space metadata: {rec}"
+
+
+@then("the records contain label metadata")
+def step_confluence_label_metadata(ctx):
+    result = ctx["query_result"]
+    for rec in result.records:
+        assert "id" in rec and "name" in rec, f"Record missing label metadata: {rec}"
