@@ -158,6 +158,7 @@ import { ref, onMounted } from 'vue'
 import { api } from '../lib/api/client'
 import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
+import { formatError } from '../lib/utils'
 
 interface TeamRunStatus {
   running: number
@@ -241,11 +242,11 @@ async function loadData() {
     ])
 
     if (summaryErr) {
-      error.value = `Failed to load dashboard: ${summaryErr}`
+      error.value = `Failed to load dashboard: ${formatError(summaryErr)}`
       return
     }
     if (teamsErr) {
-      error.value = `Failed to load teams: ${teamsErr}`
+      error.value = `Failed to load teams: ${formatError(teamsErr)}`
       return
     }
 
