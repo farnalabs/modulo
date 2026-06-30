@@ -8,6 +8,7 @@ if test isolation is needed.
 """
 
 from collections.abc import AsyncGenerator
+from typing import Any
 
 from fastapi import Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import (
@@ -70,7 +71,16 @@ def get_or_create_engine(settings: Settings) -> AsyncEngine:
     """
     global _engine
     if _engine is None:
-        _engine = create_async_engine(settings.database_url, pool_pre_ping=True, connect_args={"timeout": 10})
+        kw: dict[str, Any] = {
+            "url": settings.database_url,
+            "pool_pre_ping": True,
+            "connect_args": {"timeout": 10},
+        }
+        db_type = settings.modulo_db.lower()
+        if db_type != "sqlite":
+            kw["pool_size"] = 10
+            kw["max_overflow"] = 5
+        _engine = create_async_engine(**kw)
     return _engine
 
 

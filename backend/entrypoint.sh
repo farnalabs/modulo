@@ -16,4 +16,8 @@ alembic upgrade heads
 
 echo "Migrations complete. Starting uvicorn..."
 
-exec uvicorn modulo.api.main:app --host 0.0.0.0 --port 8000
+exec uvicorn modulo.api.main:app \
+    --host 0.0.0.0 --port 8000 \
+    --timeout-keep-alive 30 \
+    --timeout-graceful-shutdown 30 \
+    --limit-concurrency 100

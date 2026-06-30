@@ -26,6 +26,7 @@ from modulo.api.middleware.cors_logging import CorsLoggingMiddleware
 from modulo.api.middleware.csrf import CsrfMiddleware
 from modulo.api.middleware.deprecation_headers import DeprecationHeaderMiddleware
 from modulo.api.middleware.rate_limiter import AuthRateLimitMiddleware, RateLimitMiddleware, shutdown_rate_limiters
+from modulo.api.middleware.request_timeout import RequestTimeoutMiddleware
 from modulo.api.middleware.security_headers import SecurityHeadersMiddleware
 from modulo.api.middleware.sensitive_mask import router as sensitive_router
 from modulo.api.routes.admin import router as admin_router
@@ -489,6 +490,8 @@ app.add_middleware(DeprecationHeaderMiddleware)  # type: ignore[arg-type]
 app.add_middleware(SecurityHeadersMiddleware)  # type: ignore[arg-type]
 app.add_middleware(CatchAllMiddleware)
 app.add_middleware(ShutdownMiddleware, manager=_shutdown_manager)  # type: ignore[arg-type]
+app.add_middleware(RequestTimeoutMiddleware, timeout_seconds=120,
+    overrides={"/healthz": 5, "/healthz/ready": 15})
 
 app.include_router(health_router)
 app.include_router(admin_router)

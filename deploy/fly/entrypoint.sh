@@ -79,4 +79,9 @@ asyncio.run(fix())
 " 2>&1 || echo "WARNING: Admin password fix failed — continuing anyway"
 
 echo "=== Starting uvicorn ==="
-exec .venv/bin/uvicorn modulo.api.main:app --host 0.0.0.0 --port 8000 --proxy-headers
+exec .venv/bin/uvicorn modulo.api.main:app \
+    --host 0.0.0.0 --port 8000 \
+    --proxy-headers \
+    --timeout-keep-alive 30 \
+    --timeout-graceful-shutdown 30 \
+    --limit-concurrency 100
