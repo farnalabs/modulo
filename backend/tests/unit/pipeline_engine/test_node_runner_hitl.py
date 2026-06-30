@@ -7,7 +7,7 @@ import pytest
 from langgraph.errors import NodeInterrupt
 
 from modulo.core.eval_engine import EvalBlockedError, EvalDefinition, EvalType
-from modulo.core.pipeline_engine.node_runner import make_hitl_gate_fn, make_manual_node_fn
+from modulo.core.pipeline_engine.node_runner import _evaluate_eval_condition, make_hitl_gate_fn, make_manual_node_fn
 
 # ---------------------------------------------------------------------------
 # HITL gate node — first invocation (raises NodeInterrupt)
@@ -562,6 +562,178 @@ async def test_empty_eval_definitions_proceeds_to_interrupt():
 
 
 # ---------------------------------------------------------------------------
+# Eval-reference condition (§8.17 v1)
+# ---------------------------------------------------------------------------
+
+
+async def test_eval_condition_below_threshold_triggers_interrupt():
+    """Eval-reference condition: score < threshold (operator lt) → interrupt."""
+    gate_config = {
+        "gate_id": "eval-cond-gate",
+        "eval_condition": {"eval_name": "quality-check", "threshold": 0.8, "operator": "lt"},
+    }
+    eval_def = EvalDefinition(
+        id=uuid4(),
+        org_id=uuid4(),
+        name="quality-check",
+        eval_type=EvalType.REGEX,
+        config={"pattern": "pass", "field": "level"},
+        failure_behaviour="warn",
+    )
+    node_fn = make_hitl_gate_fn(gate_config, eval_definitions=[eval_def])
+
+    with pytest.raises(NodeInterrupt) as exc_info:
+        await node_fn(
+            {
+                "artifacts": [],
+                "_hitl_gates": [],
+                "level": "fail",
+            }
+        )
+
+    interrupt_list = exc_info.value.args[0]
+    assert interrupt_list[0].value["gate_id"] == "eval-cond-gate"
+
+
+async def test_eval_condition_at_threshold_skips_gate():
+    """Eval-reference condition: score >= threshold (operator lt) → gate skipped."""
+    gate_config = {
+        "gate_id": "eval-cond-gate",
+        "eval_condition": {"eval_name": "quality-check", "threshold": 0.8, "operator": "lt"},
+    }
+    eval_def = EvalDefinition(
+        id=uuid4(),
+        org_id=uuid4(),
+        name="quality-check",
+        eval_type=EvalType.REGEX,
+        config={"pattern": "pass", "field": "level"},
+        failure_behaviour="warn",
+    )
+    node_fn = make_hitl_gate_fn(gate_config, eval_definitions=[eval_def])
+
+    result = await node_fn(
+        {
+            "artifacts": [],
+            "level": "pass",
+        }
+    )
+
+    assert result["artifacts"][0]["status"] == "condition_skipped"
+    assert result["artifacts"][0]["condition_result"] is False
+
+
+async def test_eval_condition_with_gt_operator():
+    """Eval-reference condition with gt: score > threshold → gate fires."""
+    gate_config = {
+        "gate_id": "eval-cond-gt",
+        "eval_condition": {"eval_name": "anomaly-check", "threshold": 0.5, "operator": "gt"},
+    }
+    eval_def = EvalDefinition(
+        id=uuid4(),
+        org_id=uuid4(),
+        name="anomaly-check",
+        eval_type=EvalType.REGEX,
+        config={"pattern": "anomaly", "field": "level"},
+        failure_behaviour="warn",
+    )
+    node_fn = make_hitl_gate_fn(gate_config, eval_definitions=[eval_def])
+
+    with pytest.raises(NodeInterrupt):
+        await node_fn(
+            {
+                "artifacts": [],
+                "_hitl_gates": [],
+                "level": "anomaly detected",
+            }
+        )
+
+
+async def test_eval_condition_no_eval_definition_skips_check():
+    """No eval definitions means eval_condition has nothing to check — gate passes through."""
+    gate_config = {
+        "gate_id": "eval-cond-absent",
+        "eval_condition": {"eval_name": "missing-eval", "threshold": 0.8, "operator": "lt"},
+    }
+    node_fn = make_hitl_gate_fn(gate_config, eval_definitions=[])
+
+    with pytest.raises(NodeInterrupt):
+        await node_fn(
+            {
+                "artifacts": [],
+                "_hitl_gates": [],
+            }
+        )
+
+
+async def test_eval_condition_none_skips_check():
+    """eval_condition absent → no condition check, normal interrupt."""
+    gate_config = {"gate_id": "no-eval-cond"}
+    node_fn = make_hitl_gate_fn(gate_config)
+
+    with pytest.raises(NodeInterrupt):
+        await node_fn(
+            {
+                "artifacts": [],
+                "_hitl_gates": [],
+            }
+        )
+
+
+async def test_eval_condition_score_equal_threshold_with_eq():
+    """eval_condition with operator eq: score == threshold → gate fires."""
+    gate_config = {
+        "gate_id": "eval-cond-eq",
+        "eval_condition": {"eval_name": "exact-check", "threshold": 1.0, "operator": "eq"},
+    }
+    eval_def = EvalDefinition(
+        id=uuid4(),
+        org_id=uuid4(),
+        name="exact-check",
+        eval_type=EvalType.REGEX,
+        config={"pattern": "perfect", "field": "level"},
+        failure_behaviour="warn",
+    )
+    node_fn = make_hitl_gate_fn(gate_config, eval_definitions=[eval_def])
+
+    with pytest.raises(NodeInterrupt):
+        await node_fn(
+            {
+                "artifacts": [],
+                "_hitl_gates": [],
+                "level": "perfect",
+            }
+        )
+
+
+async def test_eval_condition_resume_skips_condition_and_eval():
+    """On resume with _hitl_decision, eval_condition is not checked."""
+    gate_config = {
+        "gate_id": "resume-eval-cond",
+        "eval_condition": {"eval_name": "quality", "threshold": 0.8, "operator": "lt"},
+    }
+    eval_def = EvalDefinition(
+        id=uuid4(),
+        org_id=uuid4(),
+        name="quality",
+        eval_type=EvalType.REGEX,
+        config={"pattern": "pass", "field": "x"},
+        failure_behaviour="block",
+    )
+    node_fn = make_hitl_gate_fn(gate_config, eval_definitions=[eval_def])
+
+    result = await node_fn(
+        {
+            "artifacts": [],
+            "x": "fail",
+            "_hitl_decision": {"action": "approved"},
+        }
+    )
+
+    assert result["artifacts"][0]["result"] == "approved"
+    # No EvalBlockedError means evals were skipped due to resume priority.
+
+
+# ---------------------------------------------------------------------------
 # Condition + eval interaction
 # ---------------------------------------------------------------------------
 
@@ -701,3 +873,52 @@ async def test_hitl_gate_resume_without_modified_output_skips_output_key():
 
     assert "output" not in result
     assert result["artifacts"][0]["result"] == "approved"
+
+
+# ---------------------------------------------------------------------------
+# _evaluate_eval_condition pure function
+# ---------------------------------------------------------------------------
+
+
+class TestEvaluateEvalCondition:
+    def test_lt_below_threshold_true(self):
+        assert _evaluate_eval_condition(0.4, 0.8, "lt") is True
+
+    def test_lt_equal_threshold_false(self):
+        assert _evaluate_eval_condition(0.8, 0.8, "lt") is False
+
+    def test_lt_above_threshold_false(self):
+        assert _evaluate_eval_condition(0.9, 0.8, "lt") is False
+
+    def test_gt_above_threshold_true(self):
+        assert _evaluate_eval_condition(0.9, 0.8, "gt") is True
+
+    def test_gt_below_threshold_false(self):
+        assert _evaluate_eval_condition(0.4, 0.8, "gt") is False
+
+    def test_lte_at_threshold_true(self):
+        assert _evaluate_eval_condition(0.8, 0.8, "lte") is True
+
+    def test_lte_below_threshold_true(self):
+        assert _evaluate_eval_condition(0.5, 0.8, "lte") is True
+
+    def test_gte_at_threshold_true(self):
+        assert _evaluate_eval_condition(0.8, 0.8, "gte") is True
+
+    def test_gte_above_threshold_true(self):
+        assert _evaluate_eval_condition(0.9, 0.8, "gte") is True
+
+    def test_eq_matching_true(self):
+        assert _evaluate_eval_condition(0.8, 0.8, "eq") is True
+
+    def test_eq_not_matching_false(self):
+        assert _evaluate_eval_condition(0.7, 0.8, "eq") is False
+
+    def test_neq_different_true(self):
+        assert _evaluate_eval_condition(0.7, 0.8, "neq") is True
+
+    def test_neq_same_false(self):
+        assert _evaluate_eval_condition(0.8, 0.8, "neq") is False
+
+    def test_unknown_operator_false(self):
+        assert _evaluate_eval_condition(0.8, 0.8, "unknown") is False

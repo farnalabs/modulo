@@ -249,31 +249,87 @@ class GraphValidator:
         edges: list[dict[str, Any]],
         result: ValidationResult,
     ) -> None:
-        """Validate JMESPath condition expressions on conditional edges.
+        """Validate JMESPath condition expressions on conditional edges
+        and eval-reference conditions on HITL gates.
 
         Each conditional edge must have a non-empty ``condition_expression``
         that compiles as valid JMESPath.
+
+        Each HITL gate with an ``eval_condition`` must have valid fields.
         """
         for edge in edges:
-            if edge.get("type") != "conditional":
-                continue
-            src: str = str(edge.get("source", edge.get("source_node_id", "?")))
-            expr: str | None = edge.get("condition_expression")
-            if not expr or not expr.strip():
-                result.error(
-                    "CONDITION_MISSING_EXPRESSION",
-                    f"Edge from '{src}': conditional edge requires a condition_expression",
-                    node_id=src,
-                )
-                continue
-            try:
-                jmespath.compile(expr.strip())
-            except Exception as exc:
-                result.error(
-                    "CONDITION_INVALID_EXPRESSION",
-                    f"Edge from '{src}': invalid JMESPath expression: {exc}",
-                    node_id=src,
-                )
+            self._validate_jmespath_conditional(edge, result)
+            self._validate_hitl_eval_condition(edge, result)
+
+    @staticmethod
+    def _validate_jmespath_conditional(
+        edge: dict[str, Any],
+        result: ValidationResult,
+    ) -> None:
+        if edge.get("type") != "conditional":
+            return
+        src: str = str(edge.get("source", edge.get("source_node_id", "?")))
+        expr: str | None = edge.get("condition_expression")
+        if not expr or not expr.strip():
+            result.error(
+                "CONDITION_MISSING_EXPRESSION",
+                f"Edge from '{src}': conditional edge requires a condition_expression",
+                node_id=src,
+            )
+            return
+        try:
+            jmespath.compile(expr.strip())
+        except Exception as exc:
+            result.error(
+                "CONDITION_INVALID_EXPRESSION",
+                f"Edge from '{src}': invalid JMESPath expression: {exc}",
+                node_id=src,
+            )
+
+    @staticmethod
+    def _validate_hitl_eval_condition(
+        edge: dict[str, Any],
+        result: ValidationResult,
+    ) -> None:
+        """Validate eval_condition on a HITL gate config, if present."""
+        hitl_config = edge.get("hitl_gate_config")
+        if not hitl_config:
+            return
+        eval_cond = hitl_config.get("eval_condition")
+        if not eval_cond:
+            return
+        src: str = str(edge.get("source", edge.get("source_node_id", "?")))
+        eval_name: str | None = eval_cond.get("eval_name")
+        if not eval_name or not eval_name.strip():
+            result.error(
+                "HITL_EVAL_CONDITION_MISSING_NAME",
+                f"Edge from '{src}': eval_condition requires a non-empty eval_name",
+                node_id=src,
+            )
+            return
+        threshold = eval_cond.get("threshold")
+        if threshold is None or not isinstance(threshold, (int, float)):
+            result.error(
+                "HITL_EVAL_CONDITION_INVALID_THRESHOLD",
+                f"Edge from '{src}': eval_condition.threshold must be a number",
+                node_id=src,
+            )
+            return
+        if not (0.0 <= threshold <= 1.0):
+            result.error(
+                "HITL_EVAL_CONDITION_THRESHOLD_RANGE",
+                f"Edge from '{src}': eval_condition.threshold must be between 0.0 and 1.0 (got {threshold})",
+                node_id=src,
+            )
+            return
+        valid_ops = {"lt", "gt", "lte", "gte", "eq", "neq"}
+        operator: str | None = eval_cond.get("operator")
+        if operator not in valid_ops:
+            result.error(
+                "HITL_EVAL_CONDITION_INVALID_OPERATOR",
+                f"Edge from '{src}': eval_condition.operator must be one of {valid_ops} (got {operator!r})",
+                node_id=src,
+            )
 
     # ------------------------------------------------------------------
     # Schema compatibility
