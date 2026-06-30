@@ -60,6 +60,7 @@ class ConnectorType(StrEnum):
     PAGERDUTY = "pagerduty"
     GRAFANA = "grafana"
     MICROSOFT_TEAMS = "microsoft_teams"
+    DISCORD = "discord"
 
     @property
     def capabilities(self) -> frozenset[Capability]:
@@ -172,6 +173,10 @@ class ConnectorType(StrEnum):
                 return frozenset({
                     Capability.COLLABORATION, Capability.MESSAGING, Capability.NOTIFICATION,
                     Capability.READ, Capability.WRITE,
+                })
+            case ConnectorType.DISCORD:
+                return frozenset({
+                    Capability.COLLABORATION, Capability.MESSAGING, Capability.NOTIFICATION,
                 })
             case _:
                 return frozenset()
