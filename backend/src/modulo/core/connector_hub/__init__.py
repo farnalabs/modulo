@@ -38,6 +38,7 @@ from modulo.connectors.github import GitHubConnector
 from modulo.connectors.gitlab import GitLabConnector
 from modulo.connectors.jira import JiraConnector
 from modulo.connectors.linear import LinearConnector
+from modulo.connectors.monday import MondayConnector
 from modulo.connectors.slack import SlackConnector
 from modulo.connectors.trello import TrelloConnector
 from modulo.core.pipeline_engine.output_filter import filter_payload_for_injection
@@ -288,6 +289,8 @@ def _build_connector(type_id: str, config: dict[str, Any], creds: dict[str, Any]
             )
         case "asana":
             return AsanaConnector(personal_access_token=_get_cred(creds, "personal_access_token", type_id))
+        case "monday":
+            return MondayConnector(api_key=_get_cred(creds, "api_key", type_id))
         case _:
             registry = get_plugin_registry()
             if registry.has_connector_type(type_id):
