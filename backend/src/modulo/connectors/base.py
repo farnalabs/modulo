@@ -20,6 +20,8 @@ class Capability(StrEnum):
     ISSUE_READ = "issue_read"
     ISSUE_WRITE = "issue_write"
     ISSUE_SEARCH = "issue_search"
+    MONITORING = "monitoring"
+    OBSERVABILITY = "observability"
 
 
 class ConnectorType(StrEnum):
@@ -49,6 +51,7 @@ class ConnectorType(StrEnum):
     JENKINS = "jenkins"
     TEAMCITY = "teamcity"
     AZURE_PIPELINES = "azure_pipelines"
+    DATADOG = "datadog"
 
     @property
     def capabilities(self) -> frozenset[Capability]:
@@ -140,6 +143,8 @@ class ConnectorType(StrEnum):
                         Capability.LIST_RUNS,
                     }
                 )
+            case ConnectorType.DATADOG:
+                return frozenset({Capability.MONITORING, Capability.OBSERVABILITY, Capability.READ, Capability.WRITE})
             case _:
                 return frozenset()
 
