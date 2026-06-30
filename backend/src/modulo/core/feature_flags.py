@@ -235,6 +235,8 @@ def resolve_plan_context(settings: Any) -> PlanContext:
 class FeatureFlagRegistry:
     """Knows all feature flags and determines active status from the current tier."""
 
+    _overrides: dict[str, bool] = {}
+
     def __init__(self, current_tier: str = "free", has_license_key: bool = False) -> None:
         self._current_tier = current_tier
         self._has_license_key = has_license_key
@@ -247,6 +249,12 @@ class FeatureFlagRegistry:
         for flag in self._flags:
             flag_tier_rank = TIER_RANK.get(flag.tier, 0)
             flag.currently_active = flag_tier_rank <= current_rank
+
+        for name, enabled in self._overrides.items():
+            for flag in self._flags:
+                if flag.name == name:
+                    flag.currently_active = enabled
+                    break
 
     def refresh(self, current_tier: str, has_license_key: bool) -> None:
         self._current_tier = current_tier
@@ -261,6 +269,17 @@ class FeatureFlagRegistry:
             if flag.name == name:
                 return flag
         return None
+
+    def set_override(self, name: str, enabled: bool) -> None:
+        self._overrides[name] = enabled
+        self._refresh()
+
+    def clear_override(self, name: str) -> None:
+        self._overrides.pop(name, None)
+        self._refresh()
+
+    def get_override(self, name: str) -> bool | None:
+        return self._overrides.get(name)
 
     def tier_gap_flags(self) -> list[FeatureFlag]:
         """Return flags whose tier is above free but inactive because license is free."""

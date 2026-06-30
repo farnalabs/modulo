@@ -6,6 +6,7 @@ import logging
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.responses import JSONResponse
+from pydantic import BaseModel
 from starlette.responses import Response
 
 from modulo.auth.dependencies import get_current_user
@@ -103,6 +104,49 @@ async def get_feature_flag(
                 "error": {
                     "code": "INTERNAL_ERROR",
                     "message": f"Failed to get feature flag: {flag_name}",
+                }
+            },
+        )
+
+
+class ToggleFlagRequest(BaseModel):
+    enabled: bool
+
+
+@router.put("/{flag_name}")
+async def toggle_feature_flag(
+    flag_name: str,
+    body: ToggleFlagRequest,
+    settings: Settings = Depends(get_settings),
+    current_user: AuthenticatedPrincipal = Depends(get_current_user),
+) -> Response:
+    try:
+        registry = _build_registry(settings)
+        flag = registry.get_flag(flag_name)
+        if flag is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Unknown feature flag: {flag_name}",
+            )
+        registry.set_override(flag_name, body.enabled)
+        return {
+            "name": flag.name,
+            "description": flag.description,
+            "tier": flag.tier,
+            "currently_active": flag.currently_active,
+            "depends_on": flag.depends_on,
+            "overridden": True,
+        }
+    except HTTPException:
+        raise
+    except Exception:
+        logger.exception("feature_flags.toggle_failed", extra={"flag_name": flag_name})
+        return JSONResponse(
+            status_code=500,
+            content={
+                "error": {
+                    "code": "INTERNAL_ERROR",
+                    "message": f"Failed to toggle feature flag: {flag_name}",
                 }
             },
         )
