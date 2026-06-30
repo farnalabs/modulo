@@ -37,6 +37,7 @@ from modulo.connectors.ci_runner import GitHubActionsCIRunner, GitLabCIRunner
 from modulo.connectors.circleci import CircleCIConnector
 from modulo.connectors.confluence import ConfluenceConnector
 from modulo.connectors.datadog import DatadogConnector
+from modulo.connectors.discord import DiscordConnector
 from modulo.connectors.dropbox_paper import DropboxPaperConnector
 from modulo.connectors.filesystem import FilesystemConnector
 from modulo.connectors.gitea import GiteaConnector
@@ -368,6 +369,8 @@ def _build_connector(type_id: str, config: dict[str, Any], creds: dict[str, Any]
             return GrafanaConnector(token=_get_cred(creds, "token", type_id), base_url=config.get("base_url", "http://localhost:3000"))
         case "microsoft_teams":
             return MicrosoftTeamsConnector(token=_get_cred(creds, "token", type_id))
+        case "discord":
+            return DiscordConnector(token=_get_cred(creds, "token", type_id))
         case _:
             registry = get_plugin_registry()
             if registry.has_connector_type(type_id):
