@@ -43,6 +43,7 @@ class ConnectorType(StrEnum):
     YOUTRACK = "youtrack"
     NOTION = "notion"
     CONFLUENCE = "confluence"
+    DROPBOX_PAPER = "dropbox_paper"
 
     @property
     def capabilities(self) -> frozenset[Capability]:
@@ -86,6 +87,8 @@ class ConnectorType(StrEnum):
             case ConnectorType.SHORTCUT:
                 return frozenset({Capability.READ, Capability.WRITE})
             case ConnectorType.YOUTRACK | ConnectorType.NOTION | ConnectorType.CONFLUENCE | ConnectorType.SHAREPOINT:
+                return frozenset({Capability.READ, Capability.WRITE})
+            case ConnectorType.DROPBOX_PAPER:
                 return frozenset({Capability.READ, Capability.WRITE})
             case _:
                 return frozenset()
