@@ -58,9 +58,20 @@ class ApproveRequest(BaseModel):
     notes: str | None = None
 
 
+class ApproveWithModificationRequest(BaseModel):
+    claim_token: str
+    modified_output: dict[str, Any]
+    notes: str | None = None
+
+
 class RejectRequest(BaseModel):
     claim_token: str
     reason: str = Field(..., min_length=1)
+
+
+class DeliverManualRequest(BaseModel):
+    claim_token: str
+    output: dict[str, Any]
 
 
 class ManualOutputRequest(BaseModel):
@@ -185,6 +196,68 @@ async def approve_gate(
 
 
 # ---------------------------------------------------------------------------
+# Approve with modification
+# ---------------------------------------------------------------------------
+
+
+@router.post(
+    "/runs/{run_id}/hitl/{gate_id}/approve-with-modification",
+    status_code=status.HTTP_200_OK,
+)
+async def approve_gate_with_modification(
+    run_id: uuid.UUID,
+    gate_id: str,
+    body: ApproveWithModificationRequest,
+    session: AsyncSession = Depends(get_db_session),
+    engine: AsyncEngine = Depends(_get_engine),
+    principal: AuthenticatedPrincipal = Depends(get_current_user),
+) -> dict[str, str]:
+    """Approve a HITL gate with a modified output payload.
+
+    The human reviewer's modified output replaces the agent's original output
+    for downstream nodes.  A ``hitl.output_modified`` audit event is logged
+    documenting the change.
+    """
+    mgr = HITLManager()
+    async with session.begin():
+        await set_rls_org(session, principal.organisation_id)
+        try:
+            await mgr.approve_with_modification(
+                session,
+                run_id=run_id,
+                gate_id=gate_id,
+                org_id=principal.organisation_id,
+                claim_token=body.claim_token,
+                modified_output=body.modified_output,
+                actor_id=principal.user_id,
+            )
+        except GateNotFoundError as exc:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+        except GateAlreadyDecidedError as exc:
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+        except ClaimTokenInvalidError as exc:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
+        except ClaimTokenExpiredError as exc:
+            raise HTTPException(status_code=status.HTTP_410_GONE, detail=str(exc)) from exc
+
+    resume_data: dict[str, Any] = {
+        "action": "approved",
+        "modified_output": body.modified_output,
+    }
+    if body.notes:
+        resume_data["notes"] = body.notes
+
+    executor = PipelineExecutor(engine)
+    await executor.resume(
+        run_id=run_id,
+        org_id=principal.organisation_id,
+        resume_data=resume_data,
+    )
+
+    return {"status": "approved_with_modification", "run_id": str(run_id)}
+
+
+# ---------------------------------------------------------------------------
 # Reject
 # ---------------------------------------------------------------------------
 
@@ -233,6 +306,68 @@ async def reject_gate(
     )
 
     return {"status": "rejected", "run_id": str(run_id)}
+
+
+# ---------------------------------------------------------------------------
+# Deliver Manual — human supplies output directly at a HITL gate
+# ---------------------------------------------------------------------------
+
+
+@router.post(
+    "/runs/{run_id}/hitl/{gate_id}/deliver-manual",
+    status_code=status.HTTP_200_OK,
+)
+async def deliver_manual_output(
+    run_id: uuid.UUID,
+    gate_id: str,
+    body: DeliverManualRequest,
+    session: AsyncSession = Depends(get_db_session),
+    engine: AsyncEngine = Depends(_get_engine),
+    principal: AuthenticatedPrincipal = Depends(get_current_user),
+) -> dict[str, str]:
+    """Deliver manually-supplied output at a HITL gate and resume the run.
+
+    The reviewer provides the output directly instead of routing to a
+    correction run or back to the agent. The output is validated and the
+    run continues past the gate with the manually-supplied value.
+    """
+    if not body.output:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="output must be a non-empty object",
+        )
+
+    mgr = HITLManager()
+    async with session.begin():
+        await set_rls_org(session, principal.organisation_id)
+        try:
+            await mgr.deliver_manual(
+                session,
+                run_id=run_id,
+                gate_id=gate_id,
+                org_id=principal.organisation_id,
+                claim_token=body.claim_token,
+                output=body.output,
+                actor_id=principal.user_id,
+            )
+        except GateNotFoundError as exc:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+        except GateAlreadyDecidedError as exc:
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+        except ClaimTokenInvalidError as exc:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
+        except ClaimTokenExpiredError as exc:
+            raise HTTPException(status_code=status.HTTP_410_GONE, detail=str(exc)) from exc
+
+    resume_data: dict[str, Any] = {"action": "deliver_manual", "output": body.output}
+    executor = PipelineExecutor(engine)
+    await executor.resume(
+        run_id=run_id,
+        org_id=principal.organisation_id,
+        resume_data=resume_data,
+    )
+
+    return {"status": "delivered_manual", "run_id": str(run_id)}
 
 
 # ---------------------------------------------------------------------------

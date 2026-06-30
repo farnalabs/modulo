@@ -1,4 +1,4 @@
-"""HITLManager — atomic claim, approve, reject, and expiry for HITL gates.
+"""HITLManager — atomic claim, approve, reject, deliver_manual, and expiry for HITL gates.
 
 Each pipeline run that reaches a HITL gate edge creates one `hitl_claims` row.
 The claim lifecycle:
@@ -6,8 +6,12 @@ The claim lifecycle:
   unclaimed (claimed_by IS NULL)
       ↓  claim()
   claimed  (claimed_by set, claim_token set, expires_at set)
-      ↓  approve() or reject()
+      ↓  approve(), reject(), or deliver_manual()
   decided  (decision set, claim released)
+
+``deliver_manual`` is similar to approve but the reviewer supplies the output
+directly instead of accepting the agent's output. The manually-supplied output
+is validated and passed through to the pipeline on resume.
 
 Claim expiry resets a held claim back to unclaimed when `expires_at < NOW()`.
 
@@ -242,6 +246,72 @@ class HITLManager:
     # Approve / Reject
     # ------------------------------------------------------------------
 
+    async def approve_with_modification(
+        self,
+        session: AsyncSession,
+        *,
+        run_id: uuid.UUID,
+        gate_id: str,
+        org_id: uuid.UUID,
+        claim_token: str,
+        modified_output: dict[str, Any],
+        actor_id: uuid.UUID | None = None,
+    ) -> HitlClaim:
+        """Record approval with a modified output payload.
+
+        Logs a ``hitl.output_modified`` audit event documenting the change,
+        then logs the standard ``hitl.output_delivered`` event.
+
+        Raises on missing token, expired token, or decided gate.
+        """
+        gate = await self._decide(
+            session,
+            run_id=run_id,
+            gate_id=gate_id,
+            org_id=org_id,
+            claim_token=claim_token,
+            decision="approved",
+        )
+
+        try:
+            await append_audit_event(
+                session,
+                org_id=org_id,
+                event_type="hitl.output_modified",
+                actor_user_id=actor_id,
+                resource_type="hitl_claim",
+                resource_id=gate.id,
+                payload_json={
+                    "pipeline_run_id": str(gate.run_id),
+                    "node_id": gate.gate_id,
+                    "decision": gate.decision,
+                    "modified_output": modified_output,
+                    "team_id": str(gate.required_team_id) if gate.required_team_id else None,
+                },
+            )
+            await append_audit_event(
+                session,
+                org_id=org_id,
+                event_type="hitl.output_delivered",
+                actor_user_id=actor_id,
+                resource_type="hitl_claim",
+                resource_id=gate.id,
+                payload_json={
+                    "pipeline_run_id": str(gate.run_id),
+                    "node_id": gate.gate_id,
+                    "decision": gate.decision,
+                    "team_id": str(gate.required_team_id) if gate.required_team_id else None,
+                    "modified": True,
+                },
+            )
+            gate.delivered_at = datetime.now(UTC)
+            await session.flush()
+        except BaseException:
+            _log.exception("Failed to log audit event for modified approval for claim %s", gate.id)
+            raise
+
+        return gate
+
     async def approve(
         self,
         session: AsyncSession,
@@ -326,6 +396,79 @@ class HITLManager:
             claim_token=claim_token,
             decision="rejected",
         )
+
+    async def deliver_manual(
+        self,
+        session: AsyncSession,
+        *,
+        run_id: uuid.UUID,
+        gate_id: str,
+        org_id: uuid.UUID,
+        claim_token: str,
+        output: dict[str, Any],
+        actor_id: uuid.UUID | None = None,
+    ) -> HitlClaim:
+        """Record manual delivery and log a ``hitl.manual_delivery`` audit event.
+
+        The reviewer provides *output* directly instead of routing to a
+        correction run or back to the agent. The output is validated against
+        the expected output schema (if available) and the run resumes past the
+        HITL gate with the manually-supplied value.
+
+        Raises on missing token, expired token, or decided gate.
+        Sets ``delivered_at`` on the claim after successful audit logging.
+        If audit logging fails, logs ``hitl.output_delivery_failed`` instead.
+        """
+        gate = await self._decide(
+            session,
+            run_id=run_id,
+            gate_id=gate_id,
+            org_id=org_id,
+            claim_token=claim_token,
+            decision="deliver_manual",
+        )
+
+        try:
+            await append_audit_event(
+                session,
+                org_id=org_id,
+                event_type="hitl.manual_delivery",
+                actor_user_id=actor_id,
+                resource_type="hitl_claim",
+                resource_id=gate.id,
+                payload_json={
+                    "pipeline_run_id": str(gate.run_id),
+                    "node_id": gate.gate_id,
+                    "decision": gate.decision,
+                    "manual_output": output,
+                    "team_id": str(gate.required_team_id) if gate.required_team_id else None,
+                },
+            )
+            gate.delivered_at = datetime.now(UTC)
+            await session.flush()
+        except BaseException:
+            _log.exception("Failed to log hitl.manual_delivery audit event for claim %s", gate.id)
+            try:
+                await append_audit_event(
+                    session,
+                    org_id=org_id,
+                    event_type="hitl.output_delivery_failed",
+                    actor_user_id=actor_id,
+                    resource_type="hitl_claim",
+                    resource_id=gate.id,
+                    payload_json={
+                        "pipeline_run_id": str(gate.run_id),
+                        "node_id": gate.gate_id,
+                        "decision": gate.decision,
+                        "team_id": str(gate.required_team_id) if gate.required_team_id else None,
+                    },
+                )
+                await session.flush()
+            except BaseException:
+                _log.exception("Failed to log hitl.output_delivery_failed audit event for claim %s", gate.id)
+            raise
+
+        return gate
 
     # ------------------------------------------------------------------
     # Expiry

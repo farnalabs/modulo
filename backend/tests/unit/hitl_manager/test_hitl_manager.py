@@ -425,6 +425,98 @@ async def test_approve_null_expires_at_raises_expired():
 
 
 # ---------------------------------------------------------------------------
+# approve_with_modification
+# ---------------------------------------------------------------------------
+
+
+async def test_approve_with_modification_valid_token_and_audit():
+    """approve_with_modification records decision, logs audit, and sets delivered_at."""
+    future = datetime.now(UTC) + timedelta(minutes=5)
+    gate = _gate(claimed_by=_USER, claim_token="good-token", expires_at=future)
+    gate_decided = _gate(claimed_by=None, claim_token=None, expires_at=None, decision="approved")
+    session = _session_decide(update_returns_id=gate.id, session_get_gate=gate_decided)
+    modified = {"summary": "Modified output from human review"}
+
+    mgr = HITLManager()
+    result = await mgr.approve_with_modification(
+        session,
+        run_id=_RUN,
+        gate_id=_GATE,
+        org_id=_ORG,
+        claim_token="good-token",
+        modified_output=modified,
+        actor_id=_USER,
+    )
+    assert result.decision == "approved"
+    assert result.claim_token is None
+    assert result.claimed_by is None
+
+    # Verify that two audit events were appended: output_modified + output_delivered
+    assert session.add.call_count >= 2
+
+
+async def test_approve_with_modification_wrong_token_raises():
+    future = datetime.now(UTC) + timedelta(minutes=5)
+    gate = _gate(claimed_by=_USER, claim_token="correct", expires_at=future)
+    session = _session_decide(update_returns_id=None, diagnosis_gate=gate)
+    mgr = HITLManager()
+    with pytest.raises(ClaimTokenInvalidError):
+        await mgr.approve_with_modification(
+            session,
+            run_id=_RUN,
+            gate_id=_GATE,
+            org_id=_ORG,
+            claim_token="wrong",
+            modified_output={"data": "x"},
+        )
+
+
+async def test_approve_with_modification_expired_token_raises():
+    past = datetime.now(UTC) - timedelta(minutes=1)
+    gate = _gate(claimed_by=_USER, claim_token="tok", expires_at=past)
+    session = _session_decide(update_returns_id=None, diagnosis_gate=gate)
+    mgr = HITLManager()
+    with pytest.raises(ClaimTokenExpiredError):
+        await mgr.approve_with_modification(
+            session,
+            run_id=_RUN,
+            gate_id=_GATE,
+            org_id=_ORG,
+            claim_token="tok",
+            modified_output={"data": "x"},
+        )
+
+
+async def test_approve_with_modification_gate_not_found_raises():
+    session = _session_decide(update_returns_id=None, diagnosis_gate=None)
+    mgr = HITLManager()
+    with pytest.raises(GateNotFoundError):
+        await mgr.approve_with_modification(
+            session,
+            run_id=_RUN,
+            gate_id=_GATE,
+            org_id=_ORG,
+            claim_token="tok",
+            modified_output={"data": "x"},
+        )
+
+
+async def test_approve_with_modification_already_decided_raises():
+    gate = _gate(decision="rejected")
+    session = _session_decide(update_returns_id=None, diagnosis_gate=gate)
+    mgr = HITLManager()
+    with pytest.raises(GateAlreadyDecidedError):
+        await mgr.approve_with_modification(
+            session,
+            run_id=_RUN,
+            gate_id=_GATE,
+            org_id=_ORG,
+            claim_token="tok",
+            modified_output={"data": "x"},
+        )
+
+
+# ---------------------------------------------------------------------------
 # reject
 # ---------------------------------------------------------------------------
 
@@ -447,6 +539,129 @@ async def test_reject_wrong_token_raises():
     mgr = HITLManager()
     with pytest.raises(ClaimTokenInvalidError):
         await mgr.reject(session, run_id=_RUN, gate_id=_GATE, org_id=_ORG, claim_token="wrong")
+
+
+# ---------------------------------------------------------------------------
+# deliver_manual
+# ---------------------------------------------------------------------------
+
+
+async def test_deliver_manual_valid_token_records_decision():
+    """deliver_manual with valid token records decision and output in audit."""
+    future = datetime.now(UTC) + timedelta(minutes=5)
+    gate = _gate(claimed_by=_USER, claim_token="good-token", expires_at=future)
+    gate_decided = _gate(claimed_by=None, claim_token=None, expires_at=None, decision="deliver_manual")
+    session = _session_decide(update_returns_id=gate.id, session_get_gate=gate_decided)
+    manual_output = {"summary": "Manually provided output", "status": "approved"}
+    mgr = HITLManager()
+    result = await mgr.deliver_manual(
+        session,
+        run_id=_RUN,
+        gate_id=_GATE,
+        org_id=_ORG,
+        claim_token="good-token",
+        output=manual_output,
+        actor_id=_USER,
+    )
+    assert result.decision == "deliver_manual"
+    assert result.claim_token is None
+    assert result.claimed_by is None
+
+
+async def test_deliver_manual_with_empty_output_accepts():
+    """deliver_manual accepts an empty output dict (validation at API layer)."""
+    future = datetime.now(UTC) + timedelta(minutes=5)
+    gate = _gate(claimed_by=_USER, claim_token="tok", expires_at=future)
+    gate_decided = _gate(claimed_by=None, claim_token=None, expires_at=None, decision="deliver_manual")
+    session = _session_decide(update_returns_id=gate.id, session_get_gate=gate_decided)
+    mgr = HITLManager()
+    result = await mgr.deliver_manual(
+        session,
+        run_id=_RUN,
+        gate_id=_GATE,
+        org_id=_ORG,
+        claim_token="tok",
+        output={},
+        actor_id=_USER,
+    )
+    assert result.decision == "deliver_manual"
+
+
+async def test_deliver_manual_wrong_token_raises():
+    future = datetime.now(UTC) + timedelta(minutes=5)
+    gate = _gate(claimed_by=_USER, claim_token="correct", expires_at=future)
+    session = _session_decide(update_returns_id=None, diagnosis_gate=gate)
+    mgr = HITLManager()
+    with pytest.raises(ClaimTokenInvalidError):
+        await mgr.deliver_manual(
+            session,
+            run_id=_RUN,
+            gate_id=_GATE,
+            org_id=_ORG,
+            claim_token="wrong",
+            output={"data": "x"},
+        )
+
+
+async def test_deliver_manual_expired_token_raises():
+    past = datetime.now(UTC) - timedelta(minutes=1)
+    gate = _gate(claimed_by=_USER, claim_token="tok", expires_at=past)
+    session = _session_decide(update_returns_id=None, diagnosis_gate=gate)
+    mgr = HITLManager()
+    with pytest.raises(ClaimTokenExpiredError):
+        await mgr.deliver_manual(
+            session,
+            run_id=_RUN,
+            gate_id=_GATE,
+            org_id=_ORG,
+            claim_token="tok",
+            output={"data": "x"},
+        )
+
+
+async def test_deliver_manual_gate_not_found_raises():
+    session = _session_decide(update_returns_id=None, diagnosis_gate=None)
+    mgr = HITLManager()
+    with pytest.raises(GateNotFoundError):
+        await mgr.deliver_manual(
+            session,
+            run_id=_RUN,
+            gate_id=_GATE,
+            org_id=_ORG,
+            claim_token="tok",
+            output={"data": "x"},
+        )
+
+
+async def test_deliver_manual_already_decided_raises():
+    gate = _gate(decision="approved")
+    session = _session_decide(update_returns_id=None, diagnosis_gate=gate)
+    mgr = HITLManager()
+    with pytest.raises(GateAlreadyDecidedError):
+        await mgr.deliver_manual(
+            session,
+            run_id=_RUN,
+            gate_id=_GATE,
+            org_id=_ORG,
+            claim_token="tok",
+            output={"data": "x"},
+        )
+
+
+async def test_deliver_manual_null_expires_at_raises_expired():
+    """expires_at=None on a claimed gate (defensive guard) -> ClaimTokenExpiredError."""
+    gate = _gate(claimed_by=_USER, claim_token="tok", expires_at=None)
+    session = _session_decide(update_returns_id=None, diagnosis_gate=gate)
+    mgr = HITLManager()
+    with pytest.raises(ClaimTokenExpiredError):
+        await mgr.deliver_manual(
+            session,
+            run_id=_RUN,
+            gate_id=_GATE,
+            org_id=_ORG,
+            claim_token="tok",
+            output={"data": "x"},
+        )
 
 
 # ---------------------------------------------------------------------------
