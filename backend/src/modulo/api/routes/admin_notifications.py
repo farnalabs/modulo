@@ -589,75 +589,69 @@ async def list_deliveries(
     _require_admin(principal)
     from sqlalchemy import func as sa_func
 
-    try:
-        async with session.begin():
-            await set_rls_org(session, principal.organisation_id)
-            ep = await session.get(NotificationEndpoint, webhook_id)
-            if ep is None or ep.organisation_id != principal.organisation_id:
-                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Webhook not found")
+    async with session.begin():
+        await set_rls_org(session, principal.organisation_id)
+        ep = await session.get(NotificationEndpoint, webhook_id)
+        if ep is None or ep.organisation_id != principal.organisation_id:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Webhook not found")
 
-            query = select(NotificationDeliveryLog).where(
-                NotificationDeliveryLog.endpoint_id == webhook_id,
-                NotificationDeliveryLog.organisation_id == principal.organisation_id,
-            )
-
-            if status_filter:
-                query = query.where(NotificationDeliveryLog.status == status_filter)
-
-            if cursor:
-                try:
-                    cursor_dt = datetime.fromisoformat(cursor)
-                except ValueError as exc:
-                    raise HTTPException(
-                        status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-                        detail="Invalid cursor format",
-                    ) from exc
-                query = query.where(NotificationDeliveryLog.created_at < cursor_dt)
-
-            query = query.order_by(NotificationDeliveryLog.created_at.desc()).limit(limit + 1)
-
-            rows = list((await session.execute(query)).scalars())
-
-        has_more = len(rows) > limit
-        if has_more:
-            rows = rows[:limit]
-
-        next_cursor: str | None = None
-        if has_more and rows:
-            next_cursor = rows[-1].created_at.isoformat() if rows[-1].created_at else None
-
-        total = 0
-        count_result = await session.execute(
-            select(sa_func.count(NotificationDeliveryLog.id)).where(
-                NotificationDeliveryLog.endpoint_id == webhook_id,
-                NotificationDeliveryLog.organisation_id == principal.organisation_id,
-            )
+        query = select(NotificationDeliveryLog).where(
+            NotificationDeliveryLog.endpoint_id == webhook_id,
+            NotificationDeliveryLog.organisation_id == principal.organisation_id,
         )
-        total = count_result.scalar() or 0
 
-        endpoint_url = ep.url
+        if status_filter:
+            query = query.where(NotificationDeliveryLog.status == status_filter)
 
-        items = [
-            DeliveryLogEntry(
-                id=str(d.id),
-                event_type=d.event_type,
-                status=d.status,
-                attempt_count=d.attempt_count,
-                response_code=d.response_code,
-                last_error=d.last_error,
-                response_body=d.response_body,
-                endpoint_url=endpoint_url,
-                created_at=d.created_at.isoformat() if d.created_at else "",
-            )
-            for d in rows
-        ]
+        if cursor:
+            try:
+                cursor_dt = datetime.fromisoformat(cursor)
+            except ValueError as exc:
+                raise HTTPException(
+                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                    detail="Invalid cursor format",
+                ) from exc
+            query = query.where(NotificationDeliveryLog.created_at < cursor_dt)
 
-        return DeliveryLogResponse(items=items, next_cursor=next_cursor, total=total)
-    except ProgrammingError:
-        raise HTTPException(
-            status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="Notification delivery logs are not available. Run database migrations to enable them.",
+        query = query.order_by(NotificationDeliveryLog.created_at.desc()).limit(limit + 1)
+
+        rows = list((await session.execute(query)).scalars())
+
+    has_more = len(rows) > limit
+    if has_more:
+        rows = rows[:limit]
+
+    next_cursor: str | None = None
+    if has_more and rows:
+        next_cursor = rows[-1].created_at.isoformat() if rows[-1].created_at else None
+
+    total = 0
+    count_result = await session.execute(
+        select(sa_func.count(NotificationDeliveryLog.id)).where(
+            NotificationDeliveryLog.endpoint_id == webhook_id,
+            NotificationDeliveryLog.organisation_id == principal.organisation_id,
         )
+    )
+    total = count_result.scalar() or 0
+
+    endpoint_url = ep.url
+
+    items = [
+        DeliveryLogEntry(
+            id=str(d.id),
+            event_type=d.event_type,
+            status=d.status,
+            attempt_count=d.attempt_count,
+            response_code=d.response_code,
+            last_error=d.last_error,
+            response_body=d.response_body,
+            endpoint_url=endpoint_url,
+            created_at=d.created_at.isoformat() if d.created_at else "",
+        )
+        for d in rows
+    ]
+
+    return DeliveryLogResponse(items=items, next_cursor=next_cursor, total=total)
 
 
 # ── Manual retry ───────────────────────────────────────────────────────
