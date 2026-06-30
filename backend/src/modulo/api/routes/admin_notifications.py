@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import uuid
 from datetime import UTC, datetime
 
@@ -10,7 +11,10 @@ from cryptography.fernet import Fernet
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, Field, field_validator
 from sqlalchemy import select
+from sqlalchemy.exc import ProgrammingError
 from sqlalchemy.ext.asyncio import AsyncSession
+
+logger = logging.getLogger(__name__)
 
 from modulo.api.dependencies import get_db_session
 from modulo.auth.dependencies import get_current_user
@@ -140,6 +144,37 @@ async def list_all_deliveries(
     principal: AuthenticatedPrincipal = Depends(get_current_user),
 ) -> DeliveryLogResponse:
     _require_admin(principal)
+    try:
+        return await _list_deliveries(
+            cursor=cursor,
+            limit=limit,
+            status_filter=status_filter,
+            event_type_filter=event_type_filter,
+            endpoint_id_filter=endpoint_id_filter,
+            date_from=date_from,
+            date_to=date_to,
+            session=session,
+            principal=principal,
+        )
+    except ProgrammingError:
+        logger.exception("notifications.delivery_table_missing")
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="Notification delivery logging is not available. Run database migrations to enable it.",
+        )
+
+
+async def _list_deliveries(
+    cursor: str | None,
+    limit: int,
+    status_filter: str | None,
+    event_type_filter: str | None,
+    endpoint_id_filter: uuid.UUID | None,
+    date_from: str | None,
+    date_to: str | None,
+    session: AsyncSession,
+    principal: AuthenticatedPrincipal,
+) -> DeliveryLogResponse:
     from sqlalchemy import func as sa_func
 
     async with session.begin():
