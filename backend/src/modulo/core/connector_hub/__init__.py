@@ -37,6 +37,7 @@ from modulo.connectors.ci_runner import GitHubActionsCIRunner, GitLabCIRunner
 from modulo.connectors.circleci import CircleCIConnector
 from modulo.connectors.confluence import ConfluenceConnector
 from modulo.connectors.datadog import DatadogConnector
+from modulo.connectors.sentry import SentryConnector
 from modulo.connectors.dropbox_paper import DropboxPaperConnector
 from modulo.connectors.filesystem import FilesystemConnector
 from modulo.connectors.gitea import GiteaConnector
@@ -351,6 +352,12 @@ def _build_connector(type_id: str, config: dict[str, Any], creds: dict[str, Any]
                 api_key=_get_cred(creds, "api_key", type_id),
                 app_key=_get_cred(creds, "app_key", type_id),
                 site=config.get("site", "us"),
+            )
+        case "sentry":
+            return SentryConnector(
+                token=_get_cred(creds, "token", type_id),
+                organization=config.get("organization", ""),
+                base_url=config.get("base_url", "https://sentry.io"),
             )
         case _:
             registry = get_plugin_registry()
