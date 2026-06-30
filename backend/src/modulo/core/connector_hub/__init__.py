@@ -41,15 +41,16 @@ from modulo.connectors.discord import DiscordConnector
 from modulo.connectors.dropbox_paper import DropboxPaperConnector
 from modulo.connectors.filesystem import FilesystemConnector
 from modulo.connectors.gitea import GiteaConnector
-from modulo.connectors.grafana import GrafanaConnector
 from modulo.connectors.github import GitHubConnector
 from modulo.connectors.gitlab import GitLabConnector
+from modulo.connectors.grafana import GrafanaConnector
 from modulo.connectors.jenkins import JenkinsConnector
 from modulo.connectors.jira import JiraConnector
 from modulo.connectors.linear import LinearConnector
 from modulo.connectors.microsoft_teams import MicrosoftTeamsConnector
 from modulo.connectors.monday import MondayConnector
 from modulo.connectors.notion import NotionConnector
+from modulo.connectors.opsgenie import OpsgenieConnector
 from modulo.connectors.pagerduty import PagerDutyConnector
 from modulo.connectors.sentry import SentryConnector
 from modulo.connectors.sharepoint import SharePointConnector
@@ -371,6 +372,8 @@ def _build_connector(type_id: str, config: dict[str, Any], creds: dict[str, Any]
             return MicrosoftTeamsConnector(token=_get_cred(creds, "token", type_id))
         case "discord":
             return DiscordConnector(token=_get_cred(creds, "token", type_id))
+        case "opsgenie":
+            return OpsgenieConnector(api_key=_get_cred(creds, "api_key", type_id))
         case _:
             registry = get_plugin_registry()
             if registry.has_connector_type(type_id):
