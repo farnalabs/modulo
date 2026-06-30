@@ -270,6 +270,7 @@
 <script setup lang="ts">
 import { ref, onMounted, onUnmounted } from 'vue'
 import { api } from '../lib/api/client'
+import { formatApiError } from '../lib/api/formatError'
 import type { components } from '../lib/api/client'
 import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
@@ -375,7 +376,7 @@ async function loadAll() {
     }
     apiKeys.value = (keysResp.data as { items: ApiKeyItem[] }).items
   } catch (e: unknown) {
-    loadError.value = `Failed to load data: ${e instanceof Error ? e.message : String(e)}`
+    loadError.value = `Failed to load data: ${formatApiError(e)}`
   } finally {
     loading.value = false
   }
@@ -398,7 +399,7 @@ async function createKey() {
       body: { name: createKeyName.value.trim(), role: createKeyRole.value },
     })
     if (err) {
-      createKeyError.value = String(err)
+      createKeyError.value = formatApiError(err)
     } else if (data) {
       const created = data as ApiKeyCreatedResponse
       createdKeyValue.value = created.key_value
@@ -409,7 +410,7 @@ async function createKey() {
       await loadAll()
     }
   } catch (e: unknown) {
-    createKeyError.value = e instanceof Error ? e.message : String(e)
+    createKeyError.value = formatApiError(e)
   } finally {
     creatingKey.value = false
   }
@@ -431,14 +432,14 @@ async function revokeKey() {
       body: { is_active: false },
     })
     if (err) {
-      revokeKeyError.value = String(err)
+      revokeKeyError.value = formatApiError(err)
     } else {
       revokeKeyDialogOpen.value = false
       revokeKeyTarget.value = null
       await loadAll()
     }
   } catch (e: unknown) {
-    revokeKeyError.value = e instanceof Error ? e.message : String(e)
+    revokeKeyError.value = formatApiError(e)
   } finally {
     revokingKey.value = false
   }

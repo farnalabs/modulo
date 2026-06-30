@@ -1,5 +1,6 @@
 import createClient from 'openapi-fetch'
 import type { paths } from './schema'
+import { formatApiError } from './formatError'
 
 const TOKEN_KEY = 'modulo_access_token'
 
@@ -66,6 +67,9 @@ function withAuth(fn: (...args: any[]) => any) {
     if (resp.response?.status === 401) {
       clearAccessToken()
       window.location.href = '/login'
+    }
+    if (resp.error && typeof resp.error === 'object') {
+      resp.error = formatApiError(resp.error) as any
     }
     return resp
   }
