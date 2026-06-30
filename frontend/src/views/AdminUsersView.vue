@@ -129,32 +129,34 @@
     <div v-if="showCreate" class="fixed inset-0 z-50 flex items-center justify-center bg-black/50" @click.self="showCreate = false">
       <div class="bg-background rounded-xl border shadow-lg p-6 w-full max-w-md mx-4 space-y-4">
         <h2 class="text-lg font-semibold">Create User</h2>
-        <div>
-          <label class="block text-sm font-medium mb-1">Email</label>
-          <input v-model="newUser.email" data-testid="admin-users-create-email" type="email" class="w-full px-3 py-2 border border-input bg-background rounded-lg text-sm" required />
-        </div>
-        <div>
-          <label class="block text-sm font-medium mb-1">Display Name</label>
-          <input v-model="newUser.display_name" data-testid="admin-users-create-display-name" type="text" class="w-full px-3 py-2 border border-input bg-background rounded-lg text-sm" required />
-        </div>
-        <div>
-          <label class="block text-sm font-medium mb-1">Password</label>
-          <input v-model="newUser.password" data-testid="admin-users-create-password" type="password" class="w-full px-3 py-2 border border-input bg-background rounded-lg text-sm" minlength="8" required />
-        </div>
-        <div>
-          <label class="block text-sm font-medium mb-1">Role</label>
-          <select v-model="newUser.org_role" data-testid="admin-users-create-role" class="w-full px-3 py-2 border border-input bg-background rounded-lg text-sm">
-            <option value="runner">Runner</option>
-            <option value="operator">Operator</option>
-            <option value="admin">Admin</option>
-            <option value="viewer">Viewer</option>
-          </select>
-        </div>
-        <p v-if="createError" class="text-sm text-destructive">{{ createError }}</p>
-        <div class="flex justify-end gap-2 pt-2">
-          <button @click="showCreate = false" data-testid="admin-users-cancel" class="px-4 py-2 border border-input bg-background rounded-lg text-sm">Cancel</button>
-          <button @click="createUser" data-testid="admin-users-create" class="px-4 py-2 bg-primary text-primary-foreground text-sm font-medium rounded-lg">Create</button>
-        </div>
+        <form @submit.prevent="createUser">
+          <div>
+            <label class="block text-sm font-medium mb-1">Email</label>
+            <input v-model="newUser.email" data-testid="admin-users-create-email" type="email" class="w-full px-3 py-2 border border-input bg-background rounded-lg text-sm" required />
+          </div>
+          <div>
+            <label class="block text-sm font-medium mb-1">Display Name</label>
+            <input v-model="newUser.display_name" data-testid="admin-users-create-display-name" type="text" class="w-full px-3 py-2 border border-input bg-background rounded-lg text-sm" required />
+          </div>
+          <div>
+            <label class="block text-sm font-medium mb-1">Password</label>
+            <input v-model="newUser.password" data-testid="admin-users-create-password" type="password" class="w-full px-3 py-2 border border-input bg-background rounded-lg text-sm" minlength="8" required />
+          </div>
+          <div>
+            <label class="block text-sm font-medium mb-1">Role</label>
+            <select v-model="newUser.org_role" data-testid="admin-users-create-role" class="w-full px-3 py-2 border border-input bg-background rounded-lg text-sm">
+              <option value="runner">Runner</option>
+              <option value="operator">Operator</option>
+              <option value="admin">Admin</option>
+              <option value="viewer">Viewer</option>
+            </select>
+          </div>
+          <p v-if="createError" class="text-sm text-destructive">{{ createError }}</p>
+          <div class="flex justify-end gap-2 pt-2">
+            <button type="button" @click="showCreate = false" data-testid="admin-users-cancel" class="px-4 py-2 border border-input bg-background rounded-lg text-sm">Cancel</button>
+            <button type="submit" data-testid="admin-users-create" class="px-4 py-2 bg-primary text-primary-foreground text-sm font-medium rounded-lg">Create</button>
+          </div>
+        </form>
       </div>
     </div>
   </div>
