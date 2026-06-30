@@ -12,11 +12,12 @@ from modulo.model_backends.lm_studio import LmStudioBackend
 from modulo.model_backends.localai import LocalAIBackend
 from modulo.model_backends.ollama import OllamaBackend
 from modulo.model_backends.openai import OpenAIBackend
-from modulo.model_backends.tgi import TgiBackend
 from modulo.model_backends.perplexity import PerplexityBackend
 from modulo.model_backends.qwen import QwenBackend
 from modulo.model_backends.stub import StubModelBackend
+from modulo.model_backends.tgi import TgiBackend
 from modulo.model_backends.togetherai import TogetherAIBackend
+from modulo.model_backends.vertexai import VertexAIBackend
 from modulo.model_backends.vllm import VllmBackend
 from modulo.model_backends.watsonx import WatsonXBackend
 
@@ -29,17 +30,18 @@ __all__ = [
     "GroqBackend",
     "JanBackend",
     "LLamaCppBackend",
-    "ModelBackendBase",
     "LmStudioBackend",
     "LocalAIBackend",
+    "ModelBackendBase",
     "OllamaBackend",
     "OpenAIBackend",
-    "QwenBackend",
     "OpenRouterBackend",
     "PerplexityBackend",
+    "QwenBackend",
     "StubModelBackend",
     "TgiBackend",
     "TogetherAIBackend",
+    "VertexAIBackend",
     "VllmBackend",
     "WatsonXBackend",
 ]

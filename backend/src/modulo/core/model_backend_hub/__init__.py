@@ -43,6 +43,7 @@ from modulo.model_backends.perplexity import PerplexityBackend
 from modulo.model_backends.qwen import QwenBackend
 from modulo.model_backends.tgi import TgiBackend
 from modulo.model_backends.togetherai import TogetherAIBackend
+from modulo.model_backends.vertexai import VertexAIBackend
 from modulo.model_backends.vllm import VllmBackend
 from modulo.model_backends.watsonx import WatsonXBackend
 
@@ -336,6 +337,13 @@ def _build_backend(
                 api_key=creds.get("api_key", ""),
                 model_id=model_id,
                 base_url=base_url,
+                **default_params,
+            )
+        case "vertexai":
+            return VertexAIBackend(
+                project=creds["project"],
+                model_id=model_id,
+                location=creds.get("location", "us-central-1"),
                 **default_params,
             )
         case "watsonx":
