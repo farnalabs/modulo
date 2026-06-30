@@ -96,7 +96,11 @@ class ConnectorType(StrEnum):
             case ConnectorType.GITEA:
                 return frozenset({Capability.READ, Capability.WRITE, Capability.GIT_PUSH, Capability.CREATE_PR})
             case ConnectorType.GITLAB:
-                return frozenset({Capability.READ, Capability.WRITE, Capability.GIT_PUSH, Capability.CREATE_PR})
+                return frozenset({
+                    Capability.READ, Capability.WRITE, Capability.GIT_PUSH, Capability.CREATE_PR,
+                    Capability.ISSUE_READ, Capability.ISSUE_WRITE, Capability.ISSUE_SEARCH,
+                    Capability.TRIGGER_RUN,
+                })
             case ConnectorType.AZURE_REPOS:
                 return frozenset({Capability.READ, Capability.WRITE, Capability.GIT_PUSH, Capability.CREATE_PR})
             case ConnectorType.JIRA:

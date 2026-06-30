@@ -29,15 +29,35 @@ class GitLabConnector(ConnectorBase):
     """Read/write GitLab via the REST API v4.
 
     Supported query resources:
-      "projects"  — list projects accessible to the token
-      "file"     — read a file; filters: {"project": "group/project", "path": "...", "ref": "main"}
-      "mrs"      — list merge requests; filters: {"project": "group/project", "state": "opened"}
+      "projects"          — list projects accessible to the token
+      "file"              — read a file
+      "mrs"               — list merge requests (legacy, alias for merge_requests)
+      "issues"            — list project issues (filters: state, labels, milestone, search, sort, order_by, assignee_id)
+      "issue"             — get single issue by IID
+      "labels"            — list project labels
+      "label"             — get single label by ID
+      "milestones"        — list project milestones
+      "issue_notes"       — list notes on an issue
+      "issue_discussions" — list discussions on an issue
+      "merge_requests"    — list merge requests (filters: state, labels, milestone)
+      "merge_request"     — get single MR by IID
+      "branch"            — get single branch
+      "branches"          — list branches
+      "tags"              — list tags
+      "pipelines"         — list pipelines
+      "jobs"              — list jobs for a pipeline
 
     Supported write resources:
-      "file"     — create/update a file; data: {"project": ..., "path": ..., "content": ...,
-                   "message": ..., "sha": <required for update>}
-      "mr"       — create a merge request; data: {"project": ..., "title": ...,
-                   "source_branch": ..., "target_branch": ..., "description": ...}
+      "file"              — create/update a file
+      "mr"                — create a merge request (legacy)
+      "issue"             — create an issue
+      "issue_update"      — update an issue (close/reopen, edit title/description)
+      "issue_note"        — add a note to an issue
+      "issue_label"       — replace labels on an issue
+      "label"             — create a project label
+      "milestone"         — create a project milestone
+      "merge_request"     — create a merge request (filters: source_branch, target_branch, title, description)
+      "pipeline_run"      — trigger a pipeline
     """
 
     def __init__(self, token: str) -> None:
@@ -57,11 +77,6 @@ class GitLabConnector(ConnectorBase):
         return httpx.AsyncClient(base_url=_GITLAB_API, headers=self._headers(), timeout=30)
 
     async def health_check(self) -> HealthResult:
-        """Check API access and verify required scopes.
-
-        Required scopes: read_api, write_repository, api.
-        Scope verification relies on the 401/403 response from endpoints.
-        """
         async with self._client() as client:
             r = await client.get("/user")
 
@@ -97,21 +112,163 @@ class GitLabConnector(ConnectorBase):
                     )
                     r.raise_for_status()
                     info: dict[str, Any] = r.json()
-                    # GitLab returns content as base64-encoded string
                     if "content" in info:
                         info["content"] = base64.b64decode(info["content"]).decode("utf-8")
                     return ConnectorResult(records=[info])
-                case "mrs":
+                case "mrs" | "merge_requests":
                     project = q.filters["project"]
-                    state = q.filters.get("state", "opened")
                     encoded = _project_path(project)
+                    params: dict[str, Any] = {"per_page": q.limit}
+                    if "state" in q.filters:
+                        params["state"] = q.filters["state"]
+                    if "labels" in q.filters:
+                        params["labels"] = q.filters["labels"]
+                    if "milestone" in q.filters:
+                        params["milestone"] = q.filters["milestone"]
                     r = await client.get(
                         f"/projects/{encoded}/merge_requests",
-                        params={"state": state, "per_page": q.limit},
+                        params=params,
                     )
                     r.raise_for_status()
                     mrs: list[dict[str, Any]] = r.json()
                     return ConnectorResult(records=mrs, total=len(mrs))
+                case "merge_request":
+                    project = q.filters["project"]
+                    mr_iid = q.filters["iid"]
+                    encoded = _project_path(project)
+                    r = await client.get(
+                        f"/projects/{encoded}/merge_requests/{mr_iid}",
+                    )
+                    r.raise_for_status()
+                    return ConnectorResult(records=[r.json()])
+                case "issues":
+                    project = q.filters["project"]
+                    encoded = _project_path(project)
+                    params = {"per_page": q.limit}
+                    for key in ("state", "labels", "milestone", "search", "sort", "order_by", "assignee_id"):
+                        if key in q.filters:
+                            params[key] = q.filters[key]
+                    r = await client.get(
+                        f"/projects/{encoded}/issues",
+                        params=params,
+                    )
+                    r.raise_for_status()
+                    issues: list[dict[str, Any]] = r.json()
+                    return ConnectorResult(records=issues, total=len(issues))
+                case "issue":
+                    project = q.filters["project"]
+                    issue_iid = q.filters["iid"]
+                    encoded = _project_path(project)
+                    r = await client.get(
+                        f"/projects/{encoded}/issues/{issue_iid}",
+                    )
+                    r.raise_for_status()
+                    return ConnectorResult(records=[r.json()])
+                case "labels":
+                    project = q.filters["project"]
+                    encoded = _project_path(project)
+                    r = await client.get(
+                        f"/projects/{encoded}/labels",
+                        params={"per_page": q.limit},
+                    )
+                    r.raise_for_status()
+                    labels: list[dict[str, Any]] = r.json()
+                    return ConnectorResult(records=labels, total=len(labels))
+                case "label":
+                    project = q.filters["project"]
+                    label_id = q.filters["label_id"]
+                    encoded = _project_path(project)
+                    r = await client.get(
+                        f"/projects/{encoded}/labels/{label_id}",
+                    )
+                    r.raise_for_status()
+                    return ConnectorResult(records=[r.json()])
+                case "milestones":
+                    project = q.filters["project"]
+                    encoded = _project_path(project)
+                    r = await client.get(
+                        f"/projects/{encoded}/milestones",
+                        params={"per_page": q.limit},
+                    )
+                    r.raise_for_status()
+                    milestones: list[dict[str, Any]] = r.json()
+                    return ConnectorResult(records=milestones, total=len(milestones))
+                case "issue_notes":
+                    project = q.filters["project"]
+                    issue_iid = q.filters["iid"]
+                    encoded = _project_path(project)
+                    params = {"per_page": q.limit}
+                    for key in ("sort", "order_by"):
+                        if key in q.filters:
+                            params[key] = q.filters[key]
+                    r = await client.get(
+                        f"/projects/{encoded}/issues/{issue_iid}/notes",
+                        params=params,
+                    )
+                    r.raise_for_status()
+                    notes: list[dict[str, Any]] = r.json()
+                    return ConnectorResult(records=notes, total=len(notes))
+                case "issue_discussions":
+                    project = q.filters["project"]
+                    issue_iid = q.filters["iid"]
+                    encoded = _project_path(project)
+                    r = await client.get(
+                        f"/projects/{encoded}/issues/{issue_iid}/discussions",
+                        params={"per_page": q.limit},
+                    )
+                    r.raise_for_status()
+                    discussions: list[dict[str, Any]] = r.json()
+                    return ConnectorResult(records=discussions, total=len(discussions))
+                case "branch":
+                    project = q.filters["project"]
+                    branch_name = q.filters["name"]
+                    encoded = _project_path(project)
+                    r = await client.get(
+                        f"/projects/{encoded}/repository/branches/{quote(branch_name, safe='')}",
+                    )
+                    r.raise_for_status()
+                    return ConnectorResult(records=[r.json()])
+                case "branches":
+                    project = q.filters["project"]
+                    encoded = _project_path(project)
+                    r = await client.get(
+                        f"/projects/{encoded}/repository/branches",
+                        params={"per_page": q.limit},
+                    )
+                    r.raise_for_status()
+                    branches: list[dict[str, Any]] = r.json()
+                    return ConnectorResult(records=branches, total=len(branches))
+                case "tags":
+                    project = q.filters["project"]
+                    encoded = _project_path(project)
+                    r = await client.get(
+                        f"/projects/{encoded}/repository/tags",
+                        params={"per_page": q.limit},
+                    )
+                    r.raise_for_status()
+                    tags: list[dict[str, Any]] = r.json()
+                    return ConnectorResult(records=tags, total=len(tags))
+                case "pipelines":
+                    project = q.filters["project"]
+                    encoded = _project_path(project)
+                    r = await client.get(
+                        f"/projects/{encoded}/pipelines",
+                        params={"per_page": q.limit},
+                    )
+                    r.raise_for_status()
+                    pipelines: list[dict[str, Any]] = r.json()
+                    return ConnectorResult(records=pipelines, total=len(pipelines))
+                case "jobs":
+                    project = q.filters["project"]
+                    pipeline_id = q.filters["pipeline_id"]
+                    encoded = _project_path(project)
+                    r = await client.get(
+                        f"/projects/{encoded}/pipelines/{pipeline_id}/jobs",
+                        params={"per_page": q.limit},
+                    )
+                    r.raise_for_status()
+                    jobs: list[dict[str, Any]] = r.json()
+                    return ConnectorResult(records=jobs, total=len(jobs))
                 case _:
                     raise ValueError(f"Unsupported GitLab resource: {q.resource!r}")
 
@@ -135,7 +292,7 @@ class GitLabConnector(ConnectorBase):
                     r.raise_for_status()
                     result: dict[str, Any] = r.json()
                     return result
-                case "mr":
+                case "mr" | "merge_request":
                     project = payload.data["project"]
                     encoded = _project_path(project)
                     body = {
@@ -152,5 +309,117 @@ class GitLabConnector(ConnectorBase):
                     r.raise_for_status()
                     mr: dict[str, Any] = r.json()
                     return mr
+                case "issue":
+                    project = payload.data["project"]
+                    encoded = _project_path(project)
+                    body = {
+                        "title": payload.data["title"],
+                    }
+                    if "description" in payload.data:
+                        body["description"] = payload.data["description"]
+                    if "labels" in payload.data:
+                        body["labels"] = payload.data["labels"]
+                    if "milestone_id" in payload.data:
+                        body["milestone_id"] = payload.data["milestone_id"]
+                    if "assignee_ids" in payload.data:
+                        body["assignee_ids"] = payload.data["assignee_ids"]
+                    r = await client.post(
+                        f"/projects/{encoded}/issues",
+                        json=body,
+                    )
+                    r.raise_for_status()
+                    issue: dict[str, Any] = r.json()
+                    return issue
+                case "issue_update":
+                    project = payload.data["project"]
+                    issue_iid = payload.data["iid"]
+                    encoded = _project_path(project)
+                    body = {}
+                    for key in ("state_event", "title", "description"):
+                        if key in payload.data:
+                            body[key] = payload.data[key]
+                    r = await client.put(
+                        f"/projects/{encoded}/issues/{issue_iid}",
+                        json=body,
+                    )
+                    r.raise_for_status()
+                    updated: dict[str, Any] = r.json()
+                    return updated
+                case "issue_note":
+                    project = payload.data["project"]
+                    issue_iid = payload.data["iid"]
+                    encoded = _project_path(project)
+                    body = {
+                        "body": payload.data["body"],
+                    }
+                    r = await client.post(
+                        f"/projects/{encoded}/issues/{issue_iid}/notes",
+                        json=body,
+                    )
+                    r.raise_for_status()
+                    note: dict[str, Any] = r.json()
+                    return note
+                case "issue_label":
+                    project = payload.data["project"]
+                    issue_iid = payload.data["iid"]
+                    encoded = _project_path(project)
+                    body = {
+                        "labels": payload.data["labels"],
+                    }
+                    r = await client.put(
+                        f"/projects/{encoded}/issues/{issue_iid}",
+                        json=body,
+                    )
+                    r.raise_for_status()
+                    labeled: dict[str, Any] = r.json()
+                    return labeled
+                case "label":
+                    project = payload.data["project"]
+                    encoded = _project_path(project)
+                    body = {
+                        "name": payload.data["name"],
+                        "color": payload.data.get("color", "#428BCA"),
+                    }
+                    if "description" in payload.data:
+                        body["description"] = payload.data["description"]
+                    r = await client.post(
+                        f"/projects/{encoded}/labels",
+                        json=body,
+                    )
+                    r.raise_for_status()
+                    label_res: dict[str, Any] = r.json()
+                    return label_res
+                case "milestone":
+                    project = payload.data["project"]
+                    encoded = _project_path(project)
+                    body = {
+                        "title": payload.data["title"],
+                    }
+                    if "description" in payload.data:
+                        body["description"] = payload.data["description"]
+                    if "due_date" in payload.data:
+                        body["due_date"] = payload.data["due_date"]
+                    r = await client.post(
+                        f"/projects/{encoded}/milestones",
+                        json=body,
+                    )
+                    r.raise_for_status()
+                    ms: dict[str, Any] = r.json()
+                    return ms
+                case "pipeline_run":
+                    project = payload.data["project"]
+                    encoded = _project_path(project)
+                    body = {
+                        "ref": payload.data["ref"],
+                    }
+                    if "variables" in payload.data:
+                        body["variables"] = payload.data["variables"]
+                    r = await client.post(
+                        f"/projects/{encoded}/pipeline",
+                        json=body,
+                    )
+                    r.raise_for_status()
+                    pipeline: dict[str, Any] = r.json()
+                    return pipeline
                 case _:
                     raise ValueError(f"Unsupported GitLab write resource: {payload.resource!r}")

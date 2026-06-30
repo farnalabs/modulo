@@ -1232,6 +1232,352 @@ def step_health_result_indicates_failure(ctx):
 
 
 # ============================================================================
+# connectors/gitlab_issues.feature  â€”  23 scenarios
+# ============================================================================
+try:
+    scenarios("../../features/connectors/gitlab_issues.feature")
+except (FileNotFoundError, OSError):
+    pass
+
+
+@given("a GitLab connector with valid token")
+def step_gitlab_connector(ctx):
+    from unittest.mock import AsyncMock
+
+    mock_connector = AsyncMock()
+    mock_connector.connector_type = "gitlab"
+
+    async def mock_query(q):
+        from modulo.connectors.base import ConnectorResult
+
+        match q.resource:
+            case "issues":
+                return ConnectorResult(
+                    records=[
+                        {"id": 1, "iid": 42, "title": "Bug found", "state": "opened"},
+                        {"id": 2, "iid": 43, "title": "Feature request", "state": "opened"},
+                    ],
+                    total=2,
+                )
+            case "issue":
+                return ConnectorResult(
+                    records=[{"id": 1, "iid": int(q.filters.get("iid", 0)), "title": "Bug found", "state": "opened"}]
+                )
+            case "labels":
+                return ConnectorResult(
+                    records=[
+                        {"id": 1, "name": "bug", "color": "#FF0000"},
+                        {"id": 2, "name": "feature", "color": "#00FF00"},
+                    ],
+                    total=2,
+                )
+            case "label":
+                return ConnectorResult(
+                    records=[{"id": int(q.filters.get("label_id", 0)), "name": "bug", "color": "#FF0000"}]
+                )
+            case "milestones":
+                return ConnectorResult(
+                    records=[{"id": 1, "title": "Sprint 1", "state": "active"}],
+                    total=1,
+                )
+            case "issue_notes":
+                return ConnectorResult(
+                    records=[{"id": 101, "body": "Working on it", "author": {"id": 1}}],
+                    total=1,
+                )
+            case "issue_discussions":
+                return ConnectorResult(
+                    records=[{"id": "disc1", "notes": [{"id": 101, "body": "Discussion note"}]}],
+                    total=1,
+                )
+            case "merge_requests" | "mrs":
+                return ConnectorResult(
+                    records=[
+                        {"id": 1, "iid": 5, "title": "Fix bug", "state": "opened"},
+                    ],
+                    total=1,
+                )
+            case "merge_request":
+                return ConnectorResult(
+                    records=[{"id": 1, "iid": int(q.filters.get("iid", 0)), "title": "Fix bug", "state": "opened"}]
+                )
+            case "branch":
+                return ConnectorResult(
+                    records=[{"name": q.filters.get("name", ""), "commit": {"id": "abc123"}}]
+                )
+            case "branches":
+                return ConnectorResult(
+                    records=[{"name": "main", "commit": {"id": "abc123"}}],
+                    total=1,
+                )
+            case "tags":
+                return ConnectorResult(
+                    records=[{"name": "v1.0", "commit": {"id": "abc123"}}],
+                    total=1,
+                )
+            case "pipelines":
+                return ConnectorResult(
+                    records=[{"id": 1, "ref": "main", "status": "success"}],
+                    total=1,
+                )
+            case "jobs":
+                return ConnectorResult(
+                    records=[{"id": 10, "name": "test", "status": "success"}],
+                    total=1,
+                )
+            case _:
+                raise ValueError(f"Unsupported GitLab resource: {q.resource!r}")
+
+    async def mock_write(payload):
+        match payload.resource:
+            case "issue":
+                return {"id": 100, "iid": 50, "title": payload.data.get("title", ""), "state": "opened"}
+            case "issue_update":
+                return {"id": 100, "iid": int(payload.data.get("iid", 0)), "state": payload.data.get("state_event", "")}
+            case "issue_note":
+                return {"id": 200, "body": payload.data.get("body", ""), "author": {"id": 1}}
+            case "issue_label":
+                return {"id": 100, "iid": int(payload.data.get("iid", 0)), "labels": payload.data.get("labels", [])}
+            case "label":
+                return {"id": 5, "name": payload.data.get("name", ""), "color": payload.data.get("color", "#428BCA")}
+            case "milestone":
+                return {"id": 10, "title": payload.data.get("title", ""), "state": "active"}
+            case "pipeline_run":
+                return {"id": 99, "ref": payload.data.get("ref", ""), "status": "pending"}
+            case "mr" | "merge_request":
+                return {"id": 50, "iid": 25, "title": payload.data.get("title", ""), "state": "opened"}
+            case _:
+                raise ValueError(f"Unsupported GitLab write: {payload.resource!r}")
+
+    async def mock_health_check():
+        from modulo.connectors.base import HealthResult
+        return HealthResult(ok=True, detail="testuser")
+
+    mock_connector.query = mock_query
+    mock_connector.write = mock_write
+    mock_connector.health_check = mock_health_check
+
+    ctx["connector"] = mock_connector
+    ctx["connector_type"] = "gitlab"
+    ctx["query_error"] = None
+
+
+@when(parsers.parse('I query GitLab resource "{resource}" with project "{project}" and state "{state}"'))
+def step_gitlab_query_with_state(resource, project, state, ctx):
+    from modulo.connectors.base import ConnectorQuery
+    q = ConnectorQuery(resource=resource, filters={"project": project, "state": state})
+    import asyncio
+    try:
+        result = asyncio.new_event_loop().run_until_complete(ctx["connector"].query(q))
+        ctx["query_result"] = result
+        ctx["query_error"] = None
+    except Exception as exc:
+        ctx["query_result"] = None
+        ctx["query_error"] = str(exc)
+
+
+@when(parsers.parse('I query GitLab resource "{resource}" with project "{project}"'))
+def step_gitlab_query_project(resource, project, ctx):
+    from modulo.connectors.base import ConnectorQuery
+    q = ConnectorQuery(resource=resource, filters={"project": project})
+    import asyncio
+    try:
+        result = asyncio.new_event_loop().run_until_complete(ctx["connector"].query(q))
+        ctx["query_result"] = result
+        ctx["query_error"] = None
+    except Exception as exc:
+        ctx["query_result"] = None
+        ctx["query_error"] = str(exc)
+
+
+@when(parsers.parse('I query GitLab resource "{resource}" with project "{project}" and iid "{iid}"'))
+def step_gitlab_query_with_iid(resource, project, iid, ctx):
+    from modulo.connectors.base import ConnectorQuery
+    q = ConnectorQuery(resource=resource, filters={"project": project, "iid": iid})
+    import asyncio
+    try:
+        result = asyncio.new_event_loop().run_until_complete(ctx["connector"].query(q))
+        ctx["query_result"] = result
+        ctx["query_error"] = None
+    except Exception as exc:
+        ctx["query_result"] = None
+        ctx["query_error"] = str(exc)
+
+
+@when(parsers.parse('I query GitLab resource "{resource}" with project "{project}" and label_id "{label_id}"'))
+def step_gitlab_query_with_label_id(resource, project, label_id, ctx):
+    from modulo.connectors.base import ConnectorQuery
+    q = ConnectorQuery(resource=resource, filters={"project": project, "label_id": label_id})
+    import asyncio
+    try:
+        result = asyncio.new_event_loop().run_until_complete(ctx["connector"].query(q))
+        ctx["query_result"] = result
+        ctx["query_error"] = None
+    except Exception as exc:
+        ctx["query_result"] = None
+        ctx["query_error"] = str(exc)
+
+
+@when(parsers.parse('I query GitLab resource "{resource}" with project "{project}" and name "{name}"'))
+def step_gitlab_query_with_name(resource, project, name, ctx):
+    from modulo.connectors.base import ConnectorQuery
+    q = ConnectorQuery(resource=resource, filters={"project": project, "name": name})
+    import asyncio
+    try:
+        result = asyncio.new_event_loop().run_until_complete(ctx["connector"].query(q))
+        ctx["query_result"] = result
+        ctx["query_error"] = None
+    except Exception as exc:
+        ctx["query_result"] = None
+        ctx["query_error"] = str(exc)
+
+
+@when(parsers.parse('I query GitLab resource "{resource}" with project "{project}" and pipeline_id "{pipeline_id}"'))
+def step_gitlab_query_with_pipeline_id(resource, project, pipeline_id, ctx):
+    from modulo.connectors.base import ConnectorQuery
+    q = ConnectorQuery(resource=resource, filters={"project": project, "pipeline_id": pipeline_id})
+    import asyncio
+    try:
+        result = asyncio.new_event_loop().run_until_complete(ctx["connector"].query(q))
+        ctx["query_result"] = result
+        ctx["query_error"] = None
+    except Exception as exc:
+        ctx["query_result"] = None
+        ctx["query_error"] = str(exc)
+
+
+@when(parsers.parse('I write GitLab issue with project "{project}" and title "{title}"'))
+def step_gitlab_write_issue(project, title, ctx):
+    from modulo.connectors.base import ConnectorPayload
+    payload = ConnectorPayload(resource="issue", data={"project": project, "title": title})
+    import asyncio
+    try:
+        result = asyncio.new_event_loop().run_until_complete(ctx["connector"].write(payload))
+        ctx["write_result"] = result
+        ctx["query_error"] = None
+    except Exception as exc:
+        ctx["write_result"] = None
+        ctx["query_error"] = str(exc)
+
+
+@when(parsers.parse('I write GitLab issue_update for issue "{iid}" with project "{project}" and state_event "{state_event}"'))
+def step_gitlab_update_issue(iid, project, state_event, ctx):
+    from modulo.connectors.base import ConnectorPayload
+    payload = ConnectorPayload(
+        resource="issue_update",
+        data={"project": project, "iid": iid, "state_event": state_event},
+    )
+    import asyncio
+    try:
+        result = asyncio.new_event_loop().run_until_complete(ctx["connector"].write(payload))
+        ctx["write_result"] = result
+        ctx["query_error"] = None
+    except Exception as exc:
+        ctx["write_result"] = None
+        ctx["query_error"] = str(exc)
+
+
+@when(parsers.parse('I write GitLab issue_note for issue "{iid}" with project "{project}" and body "{body}"'))
+def step_gitlab_write_note(iid, project, body, ctx):
+    from modulo.connectors.base import ConnectorPayload
+    payload = ConnectorPayload(
+        resource="issue_note",
+        data={"project": project, "iid": iid, "body": body},
+    )
+    import asyncio
+    try:
+        result = asyncio.new_event_loop().run_until_complete(ctx["connector"].write(payload))
+        ctx["write_result"] = result
+        ctx["query_error"] = None
+    except Exception as exc:
+        ctx["write_result"] = None
+        ctx["query_error"] = str(exc)
+
+
+@when(parsers.parse('I write GitLab issue_label for issue "{iid}" with project "{project}" and labels "{labels}"'))
+def step_gitlab_write_label(iid, project, labels, ctx):
+    from modulo.connectors.base import ConnectorPayload
+    payload = ConnectorPayload(
+        resource="issue_label",
+        data={"project": project, "iid": iid, "labels": labels.split(",")},
+    )
+    import asyncio
+    try:
+        result = asyncio.new_event_loop().run_until_complete(ctx["connector"].write(payload))
+        ctx["write_result"] = result
+        ctx["query_error"] = None
+    except Exception as exc:
+        ctx["write_result"] = None
+        ctx["query_error"] = str(exc)
+
+
+@when(parsers.parse('I write GitLab label with project "{project}" and name "{name}"'))
+def step_gitlab_write_project_label(project, name, ctx):
+    from modulo.connectors.base import ConnectorPayload
+    payload = ConnectorPayload(
+        resource="label",
+        data={"project": project, "name": name},
+    )
+    import asyncio
+    try:
+        result = asyncio.new_event_loop().run_until_complete(ctx["connector"].write(payload))
+        ctx["write_result"] = result
+        ctx["query_error"] = None
+    except Exception as exc:
+        ctx["write_result"] = None
+        ctx["query_error"] = str(exc)
+
+
+@when(parsers.parse('I write GitLab milestone with project "{project}" and title "{title}"'))
+def step_gitlab_write_milestone(project, title, ctx):
+    from modulo.connectors.base import ConnectorPayload
+    payload = ConnectorPayload(
+        resource="milestone",
+        data={"project": project, "title": title},
+    )
+    import asyncio
+    try:
+        result = asyncio.new_event_loop().run_until_complete(ctx["connector"].write(payload))
+        ctx["write_result"] = result
+        ctx["query_error"] = None
+    except Exception as exc:
+        ctx["write_result"] = None
+        ctx["query_error"] = str(exc)
+
+
+@when(parsers.parse('I write GitLab pipeline_run with project "{project}" and ref "{ref}"'))
+def step_gitlab_trigger_pipeline(project, ref, ctx):
+    from modulo.connectors.base import ConnectorPayload
+    payload = ConnectorPayload(
+        resource="pipeline_run",
+        data={"project": project, "ref": ref},
+    )
+    import asyncio
+    try:
+        result = asyncio.new_event_loop().run_until_complete(ctx["connector"].write(payload))
+        ctx["write_result"] = result
+        ctx["query_error"] = None
+    except Exception as exc:
+        ctx["write_result"] = None
+        ctx["query_error"] = str(exc)
+
+
+@then("the records contain issue metadata")
+def step_records_contain_issue_metadata(ctx):
+    result = ctx["query_result"]
+    for rec in result.records:
+        assert "id" in rec and "iid" in rec, f"Record missing issue metadata: {rec}"
+
+
+@then("the records contain issue fields")
+def step_records_contain_issue_fields(ctx):
+    result = ctx["query_result"]
+    assert len(result.records) > 0
+    rec = result.records[0]
+    assert any(k in rec for k in ("id", "iid", "title", "state")), f"Record missing issue fields: {rec}"
+
+
+# ============================================================================
 # connectors/gitea_connector.feature  â€”  6 scenarios
 # ============================================================================
 try:
