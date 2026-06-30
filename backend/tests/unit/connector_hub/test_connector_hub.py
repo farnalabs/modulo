@@ -94,6 +94,20 @@ async def test_initialise_creates_trello_connector():
     assert connector.connector_type == ConnectorType.TRELLO
 
 
+async def test_initialise_creates_asana_connector():
+    ci = _FakeCI(
+        id=uuid.uuid4(),
+        connector_type_id="asana",
+        credentials_ciphertext=_encrypt({"personal_access_token": "asana_pat_123"}),
+    )
+    backend = create_secrets_backend(fernet_key=_KEY, backend_name="fernet")
+    with patch.object(backend, "get_secret", return_value='{"personal_access_token": "asana_pat_123"}'):
+        hub = ConnectorHub(secrets_backend=backend)
+        await hub.initialise([ci])
+    connector = hub.get(ci.id)
+    assert connector.connector_type == ConnectorType.ASANA
+
+
 async def test_get_unknown_raises():
     backend = create_secrets_backend(fernet_key=_KEY, backend_name="fernet")
     hub = ConnectorHub(secrets_backend=backend)
