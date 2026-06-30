@@ -208,9 +208,11 @@ async def viewmodel_current(
 
     async with session.begin():
         await set_rls_org(session, current_user.organisation_id)
-        await set_rls_user_context(session, current_user.account_id, current_user.org_role)
+        await set_rls_user_context(session, current_user.account_id, current_user.org_role or "")
 
         if view_as_team is not None:
+            if current_user.organisation_id is None:
+                raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Cannot use view_as_team without an organisation")
             team_result = await session.execute(
                 select(Team).where(
                     Team.id == view_as_team,
@@ -221,8 +223,12 @@ async def viewmodel_current(
             if team is None:
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Team not found")
 
-        org = await get_organisation(session, current_user.organisation_id)
-        if org is None:
+        org = None
+        if current_user.organisation_id is not None:
+            org = await get_organisation(session, current_user.organisation_id)
+            if org is None:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Organisation not found")
+        elif not current_user.is_system_admin:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Organisation not found")
 
         account = await get_account_by_id(session, current_user.account_id)
@@ -231,26 +237,33 @@ async def viewmodel_current(
 
         memberships = await list_team_memberships_for_account(session, current_user.account_id)
 
-        pipelines_page = await list_pipelines(session, page=1, page_size=20)
-        runs_page = await list_runs(session, page=1, page_size=10)
+        if current_user.organisation_id is not None:
+            pipelines_page = await list_pipelines(session, page=1, page_size=20)
+            runs_page = await list_runs(session, page=1, page_size=10)
 
-        pending_hitl_result = await session.execute(
-            select(HitlClaim).where(
-                HitlClaim.organisation_id == current_user.organisation_id,
-                HitlClaim.decision.is_(None),
+            pending_hitl_result = await session.execute(
+                select(HitlClaim).where(
+                    HitlClaim.organisation_id == current_user.organisation_id,
+                    HitlClaim.decision.is_(None),
+                )
             )
-        )
-        scalar_result = pending_hitl_result.scalars()
-        pending_hitl = scalar_result.all()
+            scalar_result = pending_hitl_result.scalars()
+            pending_hitl = scalar_result.all()
 
-        all_views_result = await list_views(session, page=1, page_size=100)
-        all_views = [_enrich_view(v, current_user.account_id) for v in all_views_result.items]
+            all_views_result = await list_views(session, page=1, page_size=100)
+            all_views = [_enrich_view(v, current_user.account_id) for v in all_views_result.items]
 
-        current_view = None
-        if current_view_id is not None:
-            view = await get_view(session, current_view_id)
-            if view is not None:
-                current_view = _enrich_view(view, current_user.account_id)
+            current_view = None
+            if current_view_id is not None:
+                view = await get_view(session, current_view_id)
+                if view is not None:
+                    current_view = _enrich_view(view, current_user.account_id)
+        else:
+            pipelines_page = None
+            runs_page = None
+            pending_hitl = []
+            all_views = []
+            current_view = None
 
     plan_ctx = resolve_plan_context(settings)
     enabled_features = plan_ctx.list_enabled_features()
@@ -267,11 +280,11 @@ async def viewmodel_current(
     return ViewModelCurrent(
         user=UserInfo(username=current_user.username),
         org=OrganisationInfo(
-            org_id=org.id,
-            org_name=org.name,
-            settings=org.settings_json,
+            org_id=org.id if org else current_user.organisation_id or uuid.uuid4(),
+            org_name=org.name if org else "System Admin",
+            settings=org.settings_json if org else {},
         ),
-        org_role=current_user.org_role,
+        org_role=current_user.org_role or "",
         team_memberships=[
             TeamMembershipInfo(team_id=m.team_id, team_role=m.role)
             for m in memberships
@@ -281,12 +294,12 @@ async def viewmodel_current(
         feature_flags=feature_flags,
         plan=PlanInfo(
             tier=_resolve_tier(settings),
-            daily_spend_limit=float(org.daily_spend_limit) if org.daily_spend_limit is not None else None,
+            daily_spend_limit=float(org.daily_spend_limit) if org is not None and org.daily_spend_limit is not None else None,
         ),
-        pipelines=[PipelineSummary.model_validate(p) for p in pipelines_page.items],
-        pipelines_total=pipelines_page.total,
-        recent_runs=[RunSummary.model_validate(r) for r in runs_page.items],
-        runs_total=runs_page.total,
+        pipelines=[PipelineSummary.model_validate(p) for p in (pipelines_page.items if pipelines_page else [])],
+        pipelines_total=pipelines_page.total if pipelines_page else 0,
+        recent_runs=[RunSummary.model_validate(r) for r in (runs_page.items if runs_page else [])],
+        runs_total=runs_page.total if runs_page else 0,
         pending_hitl_gates=[PendingHitlGate.model_validate(h) for h in pending_hitl],
         views=all_views,
         current_view=current_view,

@@ -24,4 +24,4 @@ class SavedView(OrgScoped):
     columns: Mapped[list[str] | None] = mapped_column(JSON, nullable=True)
     sort_by: Mapped[str | None] = mapped_column(String(100), nullable=True)
     sort_order: Mapped[str] = mapped_column(String(10), nullable=False, default="desc")
-    created_by: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=False)
+    account_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("accounts.id"), nullable=False)
