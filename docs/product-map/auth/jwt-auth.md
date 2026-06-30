@@ -7,7 +7,7 @@ depends-on: []
 status: gap
 ---
 
-# Auth Jwt Auth
+# JWT Auth
 
 Stub entry created for graph integrity. Needs generate-behaviours enrichment.
 
