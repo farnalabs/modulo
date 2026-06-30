@@ -26,6 +26,7 @@ def _build_engine() -> Any:
         kw["pool_pre_ping"] = True
         kw["pool_size"] = 10
         kw["max_overflow"] = 5
+        kw["pool_timeout"] = 10
 
     engine = create_async_engine(**kw)
 

@@ -1,4 +1,7 @@
+import asyncio
+import logging
 import os
+import time as _time
 import uuid
 from typing import Any
 
@@ -16,8 +19,12 @@ from modulo.db.crud.observability import get_otel_config, update_otel_config
 from modulo.db.rls import set_rls_org
 from modulo.settings import Settings, get_settings
 
+_log = logging.getLogger(__name__)
+
 router = APIRouter(prefix="/api/v1/settings/observability", tags=["observability"])
 
+_DB_TIMEOUT = 10  # seconds — max time for DB operations per request
+_CACHE_TTL = 60   # seconds — how long to serve stale cache after DB failure
 
 _SENSITIVE_HEADER_KEYS = frozenset({"authorization", "x-api-key", "api-key", "x-otlp-token"})
 
@@ -69,6 +76,29 @@ _DEFAULT_OTEL_CONFIG: dict[str, Any] = {
     "langsmith_api_key_ciphertext": None,
 }
 
+# In-memory cache: last successfully-read config per org_id.
+# Falls back to these values when the database is unreachable.
+_config_cache: dict[str, dict[str, Any]] = {}
+_config_cache_ts: dict[str, float] = {}
+
+
+def _cached_config(org_id: str) -> dict[str, Any] | None:
+    entry = _config_cache.get(org_id)
+    ts = _config_cache_ts.get(org_id, 0.0)
+    if entry is not None and (_time.monotonic() - ts) < _CACHE_TTL:
+        return dict(entry)
+    return None
+
+
+def _update_cache(org_id: str, config: dict[str, Any]) -> None:
+    _config_cache[org_id] = dict(config)
+    _config_cache_ts[org_id] = _time.monotonic()
+
+
+def _invalidate_cache(org_id: str) -> None:
+    _config_cache.pop(org_id, None)
+    _config_cache_ts.pop(org_id, None)
+
 
 def _config_to_response(
     config: dict[str, Any],
@@ -87,16 +117,45 @@ def _config_to_response(
     )
 
 
+async def _fetch_config_from_db(session: AsyncSession, org_id: uuid.UUID) -> dict[str, Any]:
+    raw = await asyncio.wait_for(get_otel_config(session, org_id), timeout=_DB_TIMEOUT)
+    return {**_DEFAULT_OTEL_CONFIG, **raw}
+
+
+async def _fetch_and_cache(session: AsyncSession, org_id: uuid.UUID) -> dict[str, Any]:
+    raw = await _fetch_config_from_db(session, org_id)
+    _update_cache(str(org_id), raw)
+    return raw
+
+
+def _build_degraded_response(org_id: str) -> OtelSettingsResponse:
+    cached = _cached_config(org_id)
+    merged = cached if cached is not None else dict(_DEFAULT_OTEL_CONFIG)
+    return _config_to_response(merged)
+
+
 @router.get("", response_model=OtelSettingsResponse)
 async def get_observability_settings(
     session: AsyncSession = Depends(get_db_session),
     principal: AuthenticatedPrincipal = Depends(get_current_user),
 ) -> OtelSettingsResponse:
-    async with session.begin():
-        await set_rls_org(session, principal.organisation_id)
-        raw = await get_otel_config(session, principal.organisation_id)
-    merged = {**_DEFAULT_OTEL_CONFIG, **raw}
-    return _config_to_response(merged)
+    try:
+        async with asyncio.timeout(_DB_TIMEOUT):
+            async with session.begin():
+                await set_rls_org(session, principal.organisation_id)
+                merged = await _fetch_and_cache(session, principal.organisation_id)
+        return _config_to_response(merged)
+    except (TimeoutError, asyncio.TimeoutError):
+        _log.warning(
+            "observability.get.timeout",
+            extra={"org_id": str(principal.organisation_id)},
+        )
+    except Exception:
+        _log.exception(
+            "observability.get.failed",
+            extra={"org_id": str(principal.organisation_id)},
+        )
+    return _build_degraded_response(str(principal.organisation_id))
 
 
 @router.put("", response_model=OtelSettingsResponse)
@@ -122,10 +181,25 @@ async def update_observability_settings(
             fernet = Fernet(settings.fernet_key.encode())
             updates["langsmith_api_key_ciphertext"] = fernet.encrypt(body.langsmith_api_key.encode()).decode()
 
-    async with session.begin():
-        await set_rls_org(session, principal.organisation_id)
-        merged = await update_otel_config(session, principal.organisation_id, updates)
-    return _config_to_response(merged)
+    try:
+        async with asyncio.timeout(_DB_TIMEOUT):
+            async with session.begin():
+                await set_rls_org(session, principal.organisation_id)
+                merged = await update_otel_config(session, principal.organisation_id, updates)
+        _invalidate_cache(str(principal.organisation_id))
+        return _config_to_response(merged)
+    except (TimeoutError, asyncio.TimeoutError):
+        _log.warning(
+            "observability.put.timeout",
+            extra={"org_id": str(principal.organisation_id)},
+        )
+        raise
+    except Exception:
+        _log.exception(
+            "observability.put.failed",
+            extra={"org_id": str(principal.organisation_id)},
+        )
+        raise
 
 
 @router.post("/test", response_model=TestSpanResult)
@@ -140,7 +214,6 @@ async def test_otel_connection(
     url = f"{endpoint}/v1/traces"
     trace_id = uuid.uuid4().hex[:32]
     span_id = uuid.uuid4().hex[:16]
-    import time as _time
 
     now_ns = str(int(_time.time() * 1_000_000_000))
     service_attr = {"key": "service.name", "value": {"stringValue": "modulo-test"}}
@@ -202,10 +275,25 @@ async def get_export_preview(
     session: AsyncSession = Depends(get_db_session),
     principal: AuthenticatedPrincipal = Depends(get_current_user),
 ) -> ExportPreviewResponse:
-    async with session.begin():
-        await set_rls_org(session, principal.organisation_id)
-        raw = await get_otel_config(session, principal.organisation_id)
-    merged = {**_DEFAULT_OTEL_CONFIG, **raw}
+    try:
+        async with asyncio.timeout(_DB_TIMEOUT):
+            async with session.begin():
+                await set_rls_org(session, principal.organisation_id)
+                merged = await _fetch_and_cache(session, principal.organisation_id)
+    except (TimeoutError, asyncio.TimeoutError):
+        _log.warning(
+            "observability.preview.timeout",
+            extra={"org_id": str(principal.organisation_id)},
+        )
+        cached = _cached_config(str(principal.organisation_id))
+        merged = cached if cached is not None else dict(_DEFAULT_OTEL_CONFIG)
+    except Exception:
+        _log.exception(
+            "observability.preview.failed",
+            extra={"org_id": str(principal.organisation_id)},
+        )
+        cached = _cached_config(str(principal.organisation_id))
+        merged = cached if cached is not None else dict(_DEFAULT_OTEL_CONFIG)
 
     trace_id = uuid.uuid4().hex[:32]
     span_id = uuid.uuid4().hex[:16]

@@ -29,6 +29,7 @@ class TestEnginePoolConfig:
         assert _call_kwargs["pool_pre_ping"] is True
         assert _call_kwargs["pool_size"] == 10
         assert _call_kwargs["max_overflow"] == 5
+        assert _call_kwargs["pool_timeout"] == 10
 
     def test_skips_pool_size_for_sqlite(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("DATABASE_URL", "sqlite+aiosqlite:///./test.db")
@@ -49,3 +50,4 @@ class TestEnginePoolConfig:
         assert _call_kwargs["pool_pre_ping"] is True
         assert "pool_size" not in _call_kwargs
         assert "max_overflow" not in _call_kwargs
+        assert "pool_timeout" not in _call_kwargs
