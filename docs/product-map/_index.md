@@ -41,6 +41,7 @@ status: covered | partial | gap    # auto-updated by graph-validate
 - [feat-connectors-gitlab](connectors/gitlab-connector.md) => PRD 8.6
 
 ### Core Platform
+- [feat-core-alpha-exit-verification](core/alpha-exit-verification.md) => PRD 10.3b
 - [feat-core-replace-step-agent](core/replace-step-agent.md) => PRD 8.4
 - [feat-core-registry-protocol-v2](core/registry-protocol-v2.md) => PRD 8.14
 - [feat-core-rollback-agent-replacement](core/rollback-agent-replacement.md) => PRD 8.4
