@@ -1,6 +1,7 @@
 """Schema and SchemaVersion CRUD REST API."""
 
 import json
+import logging
 import uuid
 from copy import deepcopy
 from datetime import datetime
@@ -9,7 +10,10 @@ from typing import Any
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from jsonschema import Draft202012Validator, ValidationError  # type: ignore[import-untyped]
 from pydantic import BaseModel, Field
+from sqlalchemy.exc import ProgrammingError
 from sqlalchemy.ext.asyncio import AsyncSession
+
+logger = logging.getLogger(__name__)
 
 from modulo.api.dependencies import get_db_session
 from modulo.auth.dependencies import get_current_user
@@ -130,9 +134,16 @@ async def list_schemas_endpoint(
     session: AsyncSession = Depends(get_db_session),
     principal: AuthenticatedPrincipal = Depends(get_current_user),
 ) -> SchemaListResponse:
-    async with session.begin():
-        await set_rls_org(session, principal.organisation_id)
-        result = await list_schemas(session, page=page, page_size=page_size)
+    try:
+        async with session.begin():
+            await set_rls_org(session, principal.organisation_id)
+            result = await list_schemas(session, page=page, page_size=page_size)
+    except ProgrammingError:
+        logger.exception("schemas.table_missing")
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="Schema management is not available. Run database migrations to enable it.",
+        )
     return SchemaListResponse(
         items=[SchemaResponse.model_validate(s) for s in result.items],
         total=result.total,

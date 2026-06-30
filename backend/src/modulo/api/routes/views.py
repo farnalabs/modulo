@@ -1,11 +1,15 @@
 """Saved View CRUD REST API — persisted filters and display preferences."""
 
+import logging
 import uuid
 from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, Field
+from sqlalchemy.exc import ProgrammingError
 from sqlalchemy.ext.asyncio import AsyncSession
+
+logger = logging.getLogger(__name__)
 
 from modulo.api.dependencies import get_db_session
 from modulo.auth.dependencies import get_current_user
@@ -76,10 +80,17 @@ async def list_views_endpoint(
     session: AsyncSession = Depends(get_db_session),
     principal: AuthenticatedPrincipal = Depends(get_current_user),
 ) -> ViewListResponse:
-    async with session.begin():
-        await set_rls_org(session, principal.organisation_id)
-        await set_rls_user_context(session, principal.user_id, principal.org_role)
-        result = await list_views(session, view_type=view_type, page=page, page_size=page_size)
+    try:
+        async with session.begin():
+            await set_rls_org(session, principal.organisation_id)
+            await set_rls_user_context(session, principal.user_id, principal.org_role)
+            result = await list_views(session, view_type=view_type, page=page, page_size=page_size)
+    except ProgrammingError:
+        logger.exception("views.table_missing")
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="The saved_views feature is not available. Run database migrations to enable it.",
+        )
     return ViewListResponse(
         items=[ViewResponse.model_validate(v) for v in result.items],
         total=result.total,
@@ -94,20 +105,27 @@ async def create_view_endpoint(
     session: AsyncSession = Depends(get_db_session),
     principal: AuthenticatedPrincipal = Depends(get_current_user),
 ) -> ViewResponse:
-    async with session.begin():
-        await set_rls_org(session, principal.organisation_id)
-        await set_rls_user_context(session, principal.user_id, principal.org_role)
-        view = await create_view(
-            session,
-            org_id=principal.organisation_id,
-            name=body.name,
-            view_type=body.view_type,
-            created_by=principal.user_id,
-            description=body.description,
-            filters=body.filters,
-            columns=body.columns,
-            sort_by=body.sort_by,
-            sort_order=body.sort_order,
+    try:
+        async with session.begin():
+            await set_rls_org(session, principal.organisation_id)
+            await set_rls_user_context(session, principal.user_id, principal.org_role)
+            view = await create_view(
+                session,
+                org_id=principal.organisation_id,
+                name=body.name,
+                view_type=body.view_type,
+                created_by=principal.user_id,
+                description=body.description,
+                filters=body.filters,
+                columns=body.columns,
+                sort_by=body.sort_by,
+                sort_order=body.sort_order,
+            )
+    except ProgrammingError:
+        logger.exception("views.table_missing")
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="The saved_views feature is not available. Run database migrations to enable it.",
         )
     return ViewResponse.model_validate(view)
 
@@ -118,10 +136,17 @@ async def get_view_endpoint(
     session: AsyncSession = Depends(get_db_session),
     principal: AuthenticatedPrincipal = Depends(get_current_user),
 ) -> ViewResponse:
-    async with session.begin():
-        await set_rls_org(session, principal.organisation_id)
-        await set_rls_user_context(session, principal.user_id, principal.org_role)
-        view = await get_view(session, view_id)
+    try:
+        async with session.begin():
+            await set_rls_org(session, principal.organisation_id)
+            await set_rls_user_context(session, principal.user_id, principal.org_role)
+            view = await get_view(session, view_id)
+    except ProgrammingError:
+        logger.exception("views.table_missing")
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="The saved_views feature is not available. Run database migrations to enable it.",
+        )
     if view is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="View not found")
     return ViewResponse.model_validate(view)
@@ -135,10 +160,17 @@ async def update_view_endpoint(
     principal: AuthenticatedPrincipal = Depends(get_current_user),
 ) -> ViewResponse:
     updates = {k: v for k, v in body.model_dump().items() if v is not None}
-    async with session.begin():
-        await set_rls_org(session, principal.organisation_id)
-        await set_rls_user_context(session, principal.user_id, principal.org_role)
-        view = await update_view(session, view_id, updates)
+    try:
+        async with session.begin():
+            await set_rls_org(session, principal.organisation_id)
+            await set_rls_user_context(session, principal.user_id, principal.org_role)
+            view = await update_view(session, view_id, updates)
+    except ProgrammingError:
+        logger.exception("views.table_missing")
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="The saved_views feature is not available. Run database migrations to enable it.",
+        )
     if view is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="View not found")
     return ViewResponse.model_validate(view)
@@ -150,9 +182,16 @@ async def delete_view_endpoint(
     session: AsyncSession = Depends(get_db_session),
     principal: AuthenticatedPrincipal = Depends(get_current_user),
 ) -> None:
-    async with session.begin():
-        await set_rls_org(session, principal.organisation_id)
-        await set_rls_user_context(session, principal.user_id, principal.org_role)
-        deleted = await delete_view(session, view_id)
+    try:
+        async with session.begin():
+            await set_rls_org(session, principal.organisation_id)
+            await set_rls_user_context(session, principal.user_id, principal.org_role)
+            deleted = await delete_view(session, view_id)
+    except ProgrammingError:
+        logger.exception("views.table_missing")
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="The saved_views feature is not available. Run database migrations to enable it.",
+        )
     if not deleted:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="View not found")
