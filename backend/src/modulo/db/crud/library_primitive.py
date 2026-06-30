@@ -167,6 +167,7 @@ async def create_library_primitive(
     owner_team_id: uuid.UUID | None,
     visibility: str,
     created_by: uuid.UUID | None,
+    auto_update: bool = True,
 ) -> LibraryPrimitive:
     primitive = LibraryPrimitive(
         organisation_id=org_id,
@@ -190,6 +191,7 @@ async def create_library_primitive(
         owner_team_id=owner_team_id,
         visibility=visibility,
         created_by=created_by,
+        auto_update=auto_update,
     )
     session.add(primitive)
     await session.flush()
