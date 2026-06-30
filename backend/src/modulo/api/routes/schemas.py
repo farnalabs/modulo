@@ -158,15 +158,21 @@ async def create_schema_endpoint(
     session: AsyncSession = Depends(get_db_session),
     principal: AuthenticatedPrincipal = Depends(get_current_user),
 ) -> SchemaResponse:
-    async with session.begin():
-        await set_rls_org(session, principal.organisation_id)
-        schema = await create_schema(
-            session,
-            org_id=principal.organisation_id,
-            name=body.name,
-            account_id=principal.account_id,
-            description=body.description,
-            abstract_name=body.abstract_name,
+    try:
+        async with session.begin():
+            await set_rls_org(session, principal.organisation_id)
+            schema = await create_schema(
+                session,
+                org_id=principal.organisation_id,
+                name=body.name,
+                account_id=principal.account_id,
+                description=body.description,
+                abstract_name=body.abstract_name,
+            )
+    except ProgrammingError:
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="Schema management is not available. Run database migrations to enable it.",
         )
     return SchemaResponse.model_validate(schema)
 
@@ -177,9 +183,15 @@ async def get_schema_endpoint(
     session: AsyncSession = Depends(get_db_session),
     principal: AuthenticatedPrincipal = Depends(get_current_user),
 ) -> SchemaResponse:
-    async with session.begin():
-        await set_rls_org(session, principal.organisation_id)
-        schema = await get_schema(session, schema_id)
+    try:
+        async with session.begin():
+            await set_rls_org(session, principal.organisation_id)
+            schema = await get_schema(session, schema_id)
+    except ProgrammingError:
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="Schema management is not available. Run database migrations to enable it.",
+        )
     if schema is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Schema not found")
     return SchemaResponse.model_validate(schema)
@@ -193,9 +205,15 @@ async def update_schema_endpoint(
     principal: AuthenticatedPrincipal = Depends(get_current_user),
 ) -> SchemaResponse:
     updates = {k: v for k, v in body.model_dump().items() if v is not None}
-    async with session.begin():
-        await set_rls_org(session, principal.organisation_id)
-        schema = await update_schema(session, schema_id, updates)
+    try:
+        async with session.begin():
+            await set_rls_org(session, principal.organisation_id)
+            schema = await update_schema(session, schema_id, updates)
+    except ProgrammingError:
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="Schema management is not available. Run database migrations to enable it.",
+        )
     if schema is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Schema not found")
     return SchemaResponse.model_validate(schema)
@@ -208,9 +226,15 @@ async def deprecate_schema_endpoint(
     principal: AuthenticatedPrincipal = Depends(get_current_user),
 ) -> SchemaResponse:
     """Mark a schema as deprecated."""
-    async with session.begin():
-        await set_rls_org(session, principal.organisation_id)
-        schema = await deprecate_schema(session, schema_id)
+    try:
+        async with session.begin():
+            await set_rls_org(session, principal.organisation_id)
+            schema = await deprecate_schema(session, schema_id)
+    except ProgrammingError:
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="Schema management is not available. Run database migrations to enable it.",
+        )
     if schema is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Schema not found")
     return SchemaResponse.model_validate(schema)
@@ -226,6 +250,11 @@ async def delete_schema_endpoint(
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
             deleted = await delete_schema(session, schema_id)
+    except ProgrammingError:
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="Schema management is not available. Run database migrations to enable it.",
+        )
     except SchemaDeletionProtectedError as exc:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
@@ -248,12 +277,18 @@ async def list_schema_versions_endpoint(
     session: AsyncSession = Depends(get_db_session),
     principal: AuthenticatedPrincipal = Depends(get_current_user),
 ) -> SchemaVersionListResponse:
-    async with session.begin():
-        await set_rls_org(session, principal.organisation_id)
-        schema = await get_schema(session, schema_id)
-        if schema is None:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Schema not found")
-        result = await list_schema_versions(session, schema_id, page=page, page_size=page_size)
+    try:
+        async with session.begin():
+            await set_rls_org(session, principal.organisation_id)
+            schema = await get_schema(session, schema_id)
+            if schema is None:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Schema not found")
+            result = await list_schema_versions(session, schema_id, page=page, page_size=page_size)
+    except ProgrammingError:
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="Schema management is not available. Run database migrations to enable it.",
+        )
     return SchemaVersionListResponse(
         items=[SchemaVersionResponse.model_validate(sv) for sv in result.items],
         total=result.total,
@@ -273,20 +308,26 @@ async def create_schema_version_endpoint(
     session: AsyncSession = Depends(get_db_session),
     principal: AuthenticatedPrincipal = Depends(get_current_user),
 ) -> SchemaVersionResponse:
-    async with session.begin():
-        await set_rls_org(session, principal.organisation_id)
-        schema = await get_schema(session, schema_id)
-        if schema is None:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Schema not found")
-        sv = await create_schema_version(
-            session,
-            org_id=principal.organisation_id,
-            schema_id=schema_id,
-            version=body.version,
-            version_number=body.version_number,
-            definition_json=body.definition_json,
-            account_id=principal.account_id,
-            published=body.published,
+    try:
+        async with session.begin():
+            await set_rls_org(session, principal.organisation_id)
+            schema = await get_schema(session, schema_id)
+            if schema is None:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Schema not found")
+            sv = await create_schema_version(
+                session,
+                org_id=principal.organisation_id,
+                schema_id=schema_id,
+                version=body.version,
+                version_number=body.version_number,
+                definition_json=body.definition_json,
+                account_id=principal.account_id,
+                published=body.published,
+            )
+    except ProgrammingError:
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="Schema management is not available. Run database migrations to enable it.",
         )
     return SchemaVersionResponse.model_validate(sv)
 
@@ -298,9 +339,15 @@ async def get_schema_version_endpoint(
     session: AsyncSession = Depends(get_db_session),
     principal: AuthenticatedPrincipal = Depends(get_current_user),
 ) -> SchemaVersionResponse:
-    async with session.begin():
-        await set_rls_org(session, principal.organisation_id)
-        sv = await get_schema_version(session, schema_id, version)
+    try:
+        async with session.begin():
+            await set_rls_org(session, principal.organisation_id)
+            sv = await get_schema_version(session, schema_id, version)
+    except ProgrammingError:
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="Schema management is not available. Run database migrations to enable it.",
+        )
     if sv is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Schema version not found")
     return SchemaVersionResponse.model_validate(sv)
