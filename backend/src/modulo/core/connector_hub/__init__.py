@@ -281,7 +281,10 @@ def _build_connector(type_id: str, config: dict[str, Any], creds: dict[str, Any]
         case "slack":
             return SlackConnector(bot_token=_get_cred(creds, "bot_token", type_id))
         case "trello":
-            return TrelloConnector(api_key=_get_cred(creds, "api_key", type_id), token=_get_cred(creds, "token", type_id))
+            return TrelloConnector(
+                api_key=_get_cred(creds, "api_key", type_id),
+                token=_get_cred(creds, "token", type_id),
+            )
         case _:
             registry = get_plugin_registry()
             if registry.has_connector_type(type_id):
