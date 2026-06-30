@@ -91,6 +91,7 @@ dependencies = [
     # CLI
     "click>=8.1.0",
     "tqdm>=4.66.0",
+    "langchain-ibm>=1.1.0",
 ]
 
 [project.urls]

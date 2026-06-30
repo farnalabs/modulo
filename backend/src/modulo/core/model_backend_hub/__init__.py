@@ -44,6 +44,7 @@ from modulo.model_backends.qwen import QwenBackend
 from modulo.model_backends.tgi import TgiBackend
 from modulo.model_backends.togetherai import TogetherAIBackend
 from modulo.model_backends.vllm import VllmBackend
+from modulo.model_backends.watsonx import WatsonXBackend
 
 
 @dataclass
@@ -335,6 +336,14 @@ def _build_backend(
                 api_key=creds.get("api_key", ""),
                 model_id=model_id,
                 base_url=base_url,
+                **default_params,
+            )
+        case "watsonx":
+            return WatsonXBackend(
+                api_key=creds["api_key"],
+                model_id=model_id,
+                project_id=creds["project_id"],
+                url=creds.get("url", "https://us-south.ml.cloud.ibm.com"),
                 **default_params,
             )
         case _:
