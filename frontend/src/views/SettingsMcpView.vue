@@ -1,5 +1,15 @@
 <template>
-  <div data-theme="agent" class="mx-auto max-w-4xl space-y-8 p-6">
+  <FeatureGate feature-name="mcp_server" required-tier="enterprise">
+    <template #locked="{ tooltip }">
+      <div data-theme="agent" class="mx-auto max-w-4xl space-y-8 p-6">
+        <div class="mb-4 flex items-center gap-2 rounded-lg border border-warning/30 bg-warning/5 p-4 text-sm text-warning">
+          <LockIcon :locked="true" :tooltip="tooltip" />
+          <span>MCP server is not available on your current plan.</span>
+        </div>
+      </div>
+    </template>
+
+    <div data-theme="agent" class="mx-auto max-w-4xl space-y-8 p-6">
     <header>
       <h1 class="text-3xl font-bold tracking-tight">MCP Configuration</h1>
       <p class="mt-1 text-muted-foreground">Configure Model Context Protocol (MCP) server settings and API keys</p>
@@ -254,6 +264,7 @@
     </Dialog>
 
   </div>
+  </FeatureGate>
 </template>
 
 <script setup lang="ts">
@@ -266,6 +277,11 @@ import { Badge } from '../components/ui/badge'
 import { Button } from '../components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '../components/ui/card'
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '../components/ui/dialog'
+import { usePlanStore } from '../stores/planStore'
+import FeatureGate from '../components/FeatureGate.vue'
+import LockIcon from '../components/LockIcon.vue'
+
+const planStore = usePlanStore()
 
 type McpConfigResponse = components['schemas']['McpConfigResponse']
 type ApiKeyItem = components['schemas']['ApiKeyItem']
@@ -446,6 +462,6 @@ async function copyToClipboard(text: string, field: string) {
   }
 }
 
-onMounted(loadAll)
+onMounted(() => { planStore.fetchPlan(); loadAll() })
 onUnmounted(clearKeyMaskTimer)
 </script>

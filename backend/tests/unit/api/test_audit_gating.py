@@ -80,26 +80,28 @@ def client_with_audit() -> Generator[TestClient, None, None]:
 # ── Audit endpoints return 402 when feature disabled ──
 
 
+def _assert_feature_402(resp):
+    assert resp.status_code == 402
+    body = resp.json()
+    detail = body["detail"]
+    if isinstance(detail, dict):
+        assert detail["code"] == "feature_required"
+        assert detail["feature"] == "audit_viewer"
+    else:
+        assert "audit_viewer" in detail.lower()
+
 class TestAuditGating:
     def test_list_events_returns_402_when_disabled(self, client_no_audit: TestClient) -> None:
-        resp = client_no_audit.get("/api/v1/admin/audit")
-        assert resp.status_code == 402
-        assert "audit_viewer" in resp.json()["detail"].lower()
+        _assert_feature_402(client_no_audit.get("/api/v1/admin/audit"))
 
     def test_batch_detail_returns_402_when_disabled(self, client_no_audit: TestClient) -> None:
-        resp = client_no_audit.post("/api/v1/admin/audit/batch-detail", json={"event_ids": []})
-        assert resp.status_code == 402
-        assert "audit_viewer" in resp.json()["detail"].lower()
+        _assert_feature_402(client_no_audit.post("/api/v1/admin/audit/batch-detail", json={"event_ids": []}))
 
     def test_verify_chain_returns_402_when_disabled(self, client_no_audit: TestClient) -> None:
-        resp = client_no_audit.get("/api/v1/admin/audit/verify")
-        assert resp.status_code == 402
-        assert "audit_viewer" in resp.json()["detail"].lower()
+        _assert_feature_402(client_no_audit.get("/api/v1/admin/audit/verify"))
 
     def test_export_returns_402_when_disabled(self, client_no_audit: TestClient) -> None:
-        resp = client_no_audit.get("/api/v1/admin/audit/export")
-        assert resp.status_code == 402
-        assert "audit_viewer" in resp.json()["detail"].lower()
+        _assert_feature_402(client_no_audit.get("/api/v1/admin/audit/export"))
 
 
 # ── Audit endpoints succeed when feature enabled ──
