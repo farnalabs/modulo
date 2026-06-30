@@ -278,7 +278,7 @@ const router = createRouter({
     },
     {
       path: '/pipelines',
-      redirect: '/templates',
+      redirect: '/library',
     },
     {
       path: '/templates',
