@@ -35,8 +35,9 @@ Feature: Regex Eval
     And the eval config has pattern "TODO|FIXME"
     And the eval config has field "code"
     And the eval has failure_behaviour "block"
-    When the node outputs {"code": "# TODO: implement this function"}
-    Then the eval result has passed true
+    When the node outputs {"code": "def implement(): pass"}
+    Then the eval result has passed false
+    And the eval result has score 0.0
     And an EvalBlockedError is raised
 
   Scenario: Regex eval with warn behaviour on no match
@@ -44,8 +45,9 @@ Feature: Regex Eval
     And the eval config has pattern "TODO|FIXME"
     And the eval config has field "code"
     And the eval has failure_behaviour "warn"
-    When the node outputs {"code": "# TODO: implement this function"}
-    Then the eval result has passed true
+    When the node outputs {"code": "def implement(): pass"}
+    Then the eval result has passed false
+    And the eval result has score 0.0
     And a warning is logged
     And pipeline execution continues
 
