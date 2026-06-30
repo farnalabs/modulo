@@ -803,6 +803,76 @@ export interface paths {
       }
     }
   }
+  '/api/v1/node-categories': {
+    get: {
+      parameters: {
+        query: {
+          page?: number
+          page_size?: number
+        }
+      }
+      responses: {
+        200: {
+          content: {
+            'application/json': components['schemas']['NodeCategoryListResponse']
+          }
+        }
+      }
+    }
+    post: {
+      requestBody: {
+        content: {
+          'application/json': components['schemas']['NodeCategoryCreate']
+        }
+      }
+      responses: {
+        201: {
+          content: {
+            'application/json': components['schemas']['NodeCategoryResponse']
+          }
+        }
+      }
+    }
+  }
+  '/api/v1/node-categories/{category_id}': {
+    get: {
+      parameters: {
+        path: { category_id: string }
+      }
+      responses: {
+        200: {
+          content: {
+            'application/json': components['schemas']['NodeCategoryResponse']
+          }
+        }
+      }
+    }
+    patch: {
+      parameters: {
+        path: { category_id: string }
+      }
+      requestBody: {
+        content: {
+          'application/json': components['schemas']['NodeCategoryUpdate']
+        }
+      }
+      responses: {
+        200: {
+          content: {
+            'application/json': components['schemas']['NodeCategoryResponse']
+          }
+        }
+      }
+    }
+    delete: {
+      parameters: {
+        path: { category_id: string }
+      }
+      responses: {
+        204: { description: 'No content' }
+      }
+    }
+  }
   '/api/v1/pipelines/{pipeline_id}/snapshots': {
     get: {
       parameters: {
@@ -1453,6 +1523,38 @@ export interface components {
       default_params?: Record<string, unknown> | null
       visibility?: string | null
       fallback_backend_ids?: string[] | null
+    }
+    NodeCategoryResponse: {
+      id: string
+      organisation_id: string
+      name: string
+      description: string | null
+      color: string
+      icon: string | null
+      sort_order: number
+      created_by: string
+      created_at: string
+      updated_at: string
+    }
+    NodeCategoryListResponse: {
+      items: components['schemas']['NodeCategoryResponse'][]
+      total: number
+      page: number
+      page_size: number
+    }
+    NodeCategoryCreate: {
+      name: string
+      description?: string | null
+      color?: string
+      icon?: string | null
+      sort_order?: number
+    }
+    NodeCategoryUpdate: {
+      name?: string | null
+      description?: string | null
+      color?: string | null
+      icon?: string | null
+      sort_order?: number | null
     }
     SnapshotItem: {
       id: string

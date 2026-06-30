@@ -92,7 +92,7 @@
 
 <script setup lang="ts">
 import { ref, reactive, computed, watch } from 'vue'
-import { getAccessToken } from '../lib/api/client'
+import { api } from '../lib/api/client'
 
 export interface NodeCategoryForm {
   name: string
@@ -151,7 +151,7 @@ async function save() {
   saving.value = true
   error.value = null
 
-  const body: Record<string, unknown> = {
+  const body = {
     name: form.name.trim(),
     description: form.description.trim() || null,
     color: form.color,
@@ -160,36 +160,28 @@ async function save() {
   }
 
   try {
-    const token = getAccessToken()
-    const headers: Record<string, string> = {
-      'Content-Type': 'application/json',
-    }
-    if (token) {
-      headers['Authorization'] = `Bearer ${token}`
-    }
-
-    let response: Response
     if (isEditing.value && props.category?.id) {
-      response = await fetch(`/api/v1/node-categories/${props.category.id}`, {
-        method: 'PATCH',
-        headers,
-        body: JSON.stringify(body),
+      const { data, error: err } = await api.PATCH('/api/v1/node-categories/{category_id}', {
+        params: { path: { category_id: props.category.id } },
+        body,
       })
+      if (err) {
+        throw new Error(String(err))
+      }
+      if (data) {
+        emit('saved', data)
+      }
     } else {
-      response = await fetch('/api/v1/node-categories', {
-        method: 'POST',
-        headers,
-        body: JSON.stringify(body),
+      const { data, error: err } = await api.POST('/api/v1/node-categories', {
+        body,
       })
+      if (err) {
+        throw new Error(String(err))
+      }
+      if (data) {
+        emit('saved', data)
+      }
     }
-
-    if (!response.ok) {
-      const errData = await response.json().catch(() => null)
-      throw new Error(errData?.detail ?? `Request failed (${response.status})`)
-    }
-
-    const data = await response.json()
-    emit('saved', data)
   } catch (e) {
     error.value = e instanceof Error ? e.message : 'An unexpected error occurred'
   } finally {
