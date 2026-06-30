@@ -67,7 +67,14 @@
             </button>
           </div>
 
-          <div v-if="filteredPipelines.length === 0" class="py-12 text-center text-sm text-muted-foreground">
+          <div v-if="!searchQuery && visibilityFilter === 'all' && pipelines.length === 0" class="card p-8 text-center">
+            <p class="text-lg font-medium">No pipelines available</p>
+            <p class="mt-1 text-sm text-muted-foreground">
+              Create one from the Library first.
+            </p>
+          </div>
+
+          <div v-else-if="filteredPipelines.length === 0" class="py-12 text-center text-sm text-muted-foreground">
             No pipelines match your search.
           </div>
 

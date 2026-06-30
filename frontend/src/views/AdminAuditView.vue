@@ -175,7 +175,7 @@
 
     <ErrorAlert v-else-if="error" :message="error" :on-retry="loadEvents" />
 
-      <div v-else-if="events.length === 0" class="card p-8 text-center">
+    <div v-else-if="events.length === 0" class="card p-8 text-center">
       <p class="text-lg font-medium">No audit events found</p>
       <p class="mt-1 text-sm text-muted-foreground">
         Try adjusting your filters or wait for activity to be recorded.
