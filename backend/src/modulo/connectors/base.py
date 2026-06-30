@@ -78,7 +78,10 @@ class ConnectorType(StrEnum):
             case ConnectorType.FILESYSTEM:
                 return frozenset({Capability.READ, Capability.WRITE})
             case ConnectorType.GITHUB:
-                return frozenset({Capability.READ, Capability.WRITE, Capability.GIT_PUSH, Capability.CREATE_PR})
+                return frozenset({
+                    Capability.READ, Capability.WRITE, Capability.GIT_PUSH, Capability.CREATE_PR,
+                    Capability.ISSUE_READ, Capability.ISSUE_WRITE,
+                })
             case ConnectorType.BITBUCKET:
                 return frozenset({Capability.READ, Capability.WRITE, Capability.GIT_PUSH, Capability.CREATE_PR})
             case ConnectorType.CI_RUNNER:
