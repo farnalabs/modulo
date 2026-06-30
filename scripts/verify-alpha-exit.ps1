@@ -1,6 +1,6 @@
 ﻿<#
 .SYNOPSIS
-    Verifies all 6 alpha exit criteria from PRD §10.3b.
+    Verifies all 6 alpha exit criteria from PRD sec10.3b.
 .DESCRIPTION
     Runs machine-verifiable checks (BDD test pass/fail, git log presence)
     and prints a human-verifiable checklist for criteria requiring manual sign-off.
@@ -46,21 +46,35 @@ function RunPytest($dir, $args_) {
     $original = Get-Location
     try {
         Set-Location -LiteralPath $dir
-        $output = uv run pytest $args_ 2>&1 | Out-String
-        $exitCode = $LASTEXITCODE
-        return @{ Output = $output; ExitCode = $exitCode }
+        $tempOut = [System.IO.Path]::GetTempFileName()
+        $tempErr = [System.IO.Path]::GetTempFileName()
+        $p = Start-Process -FilePath "uv" -ArgumentList "run pytest $args_" -NoNewWindow -RedirectStandardOutput $tempOut -RedirectStandardError $tempErr -Wait -PassThru
+        $stdout = Get-Content -Path $tempOut -Encoding UTF8 -Raw
+        $stderr = Get-Content -Path $tempErr -Encoding UTF8 -Raw
+        Remove-Item -Path $tempOut -Force -ErrorAction SilentlyContinue
+        Remove-Item -Path $tempErr -Force -ErrorAction SilentlyContinue
+        return @{ Output = $stdout; ErrorOutput = $stderr; ExitCode = $p.ExitCode }
+    } catch {
+        return @{ Output = ""; ErrorOutput = "ERROR: $_"; ExitCode = 1 }
     } finally {
         Set-Location -LiteralPath $original
     }
 }
 
-function RunTool($dir, $cmd) {
+function RunTool($dir, $exe, $args_) {
     $original = Get-Location
     try {
         Set-Location -LiteralPath $dir
-        $output = Invoke-Expression $cmd 2>&1 | Out-String
-        $exitCode = $LASTEXITCODE
-        return @{ Output = $output; ExitCode = $exitCode }
+        $tempOut = [System.IO.Path]::GetTempFileName()
+        $tempErr = [System.IO.Path]::GetTempFileName()
+        $p = Start-Process -FilePath $exe -ArgumentList $args_ -NoNewWindow -RedirectStandardOutput $tempOut -RedirectStandardError $tempErr -Wait -PassThru
+        $stdout = Get-Content -Path $tempOut -Encoding UTF8 -Raw
+        $stderr = Get-Content -Path $tempErr -Encoding UTF8 -Raw
+        Remove-Item -Path $tempOut -Force -ErrorAction SilentlyContinue
+        Remove-Item -Path $tempErr -Force -ErrorAction SilentlyContinue
+        return @{ Output = $stdout; ErrorOutput = $stderr; ExitCode = $p.ExitCode }
+    } catch {
+        return @{ Output = ""; ErrorOutput = "ERROR: $_"; ExitCode = 1 }
     } finally {
         Set-Location -LiteralPath $original
     }
@@ -123,14 +137,14 @@ if (-not (Test-Path -LiteralPath $backendDir)) {
             $machinePassed = $false
             if ($output -match '(\d+) failed') {
                 $failed = $Matches[1]
-                LogCheckbox $false "BDD scenarios: $failed failing — see output above"
+                LogCheckbox $false "BDD scenarios: $failed failing -- see output above"
             } else {
                 LogCheckbox $false "BDD scenarios: FAILED (exit code $exitCode)"
             }
         }
     } catch {
         $machinePassed = $false
-        LogCheckbox $false "BDD scenarios: ERROR — $_"
+        LogCheckbox $false "BDD scenarios: ERROR -- $_"
     }
 }
 
@@ -171,14 +185,15 @@ Log ""
 
 # --- Code quality: ruff ---
 Log "Running ruff check..."
-$ruffResult = RunTool $backendDir "uv run ruff check . 2>&1"
+$ruffResult = RunTool $backendDir "uv" "run ruff check ."
 if ($ruffResult.ExitCode -eq 0) {
     LogCheckbox $true "ruff check passes"
 } else {
     $machinePassed = $false
-    LogCheckbox $false "ruff check has issues — run 'ruff check .' to see details"
+    LogCheckbox $false "ruff check has issues -- run 'ruff check .' to see details"
+    $allOutput = $ruffResult.Output + $ruffResult.ErrorOutput
     Log "  First lines of output:"
-    $ruffResult.Output -split "`r`n|`n" | Select-Object -First 5 | ForEach-Object { Log "    $_" }
+    $allOutput -split "`r`n|`n" | Select-Object -First 5 | ForEach-Object { Log "    $_" }
 }
 
 Log ""
@@ -188,7 +203,9 @@ Log "Running backend unit tests..."
 $unitResult = RunPytest $backendDir @("tests/unit/", "-x", "--tb=short", "-q")
 $unitOutput = $unitResult.Output
 $unitExitCode = $unitResult.ExitCode
-Log $unitOutput
+if ($unitOutput.Trim().Length -gt 0) {
+    Log "  (output truncated for readability)"
+}
 if ($unitExitCode -eq 0) {
     if ($unitOutput -match '(\d+) passed') {
         $passed = $Matches[1]
@@ -200,10 +217,12 @@ if ($unitExitCode -eq 0) {
     $machinePassed = $false
     if ($unitOutput -match '(\d+) failed') {
         $failed = $Matches[1]
-        LogCheckbox $false "Unit tests: $failed failing — see output above"
+        LogCheckbox $false "Unit tests: $failed failing"
     } else {
         LogCheckbox $false "Unit tests: FAILED (exit code $unitExitCode)"
     }
+    $allOut = $unitResult.Output + "`n" + $unitResult.ErrorOutput
+    $allOut -split "`r`n|`n" | Select-String "FAILED|ERROR" | Select-Object -First 10 | ForEach-Object { Log "    $_" }
 }
 
 Log ""
@@ -227,22 +246,21 @@ try {
 Log ""
 
 # --- Alpha documentation ---
-LogHeader "Alpha Documentation (PRD §10.3a)"
+LogHeader "Alpha Documentation (PRD sec10.3a)"
 Log ""
-$docOk = $true
-$docOk = $docOk -and (CheckFileExists (Join-Path $productRoot "docs/dev-setup.md") "docs/dev-setup.md exists")
-$docOk = $docOk -and (CheckFileExists (Join-Path $productRoot "docs/architecture.md") "docs/architecture.md exists")
-$docOk = $docOk -and (CheckFileExists (Join-Path $productRoot "CONTRIBUTING.md") "CONTRIBUTING.md exists")
-
+$null = CheckFileExists (Join-Path $productRoot "docs/dev-setup.md") "docs/dev-setup.md exists"
+$null = CheckFileExists (Join-Path $productRoot "docs/architecture.md") "docs/architecture.md exists"
+$null = CheckFileExists (Join-Path $productRoot "CONTRIBUTING.md") "CONTRIBUTING.md exists"
+Log "  (Missing doc files are noted but do not fail machine checks)"
 Log ""
 
 # --- Alpha implementation artifacts ---
-LogHeader "Alpha Implementation Artifacts (PRD §13)"
+LogHeader "Alpha Implementation Artifacts (PRD sec13)"
 Log ""
 
 # Connector implementations
-$fsConn = Join-Path $backendDir "src" "modulo" "connectors" "filesystem"
-$ghConn = Join-Path $backendDir "src" "modulo" "connectors" "github"
+$fsConn = Join-Path (Join-Path (Join-Path (Join-Path $backendDir "src") "modulo") "connectors") "filesystem"
+$ghConn = Join-Path (Join-Path (Join-Path (Join-Path $backendDir "src") "modulo") "connectors") "github"
 $fsOk = Test-Path -LiteralPath $fsConn
 $ghOk = Test-Path -LiteralPath $ghConn
 LogCheckbox $fsOk "FilesystemConnector exists ($fsConn)"
@@ -251,25 +269,27 @@ if (-not $fsOk) { $machinePassed = $false }
 if (-not $ghOk) { $machinePassed = $false }
 
 # Model backend implementations
-$modelBackendDir = Join-Path $backendDir "src" "modulo" "model_backends"
+$modelBackendDir = Join-Path (Join-Path (Join-Path $backendDir "src") "modulo") "model_backends"
 $backendExists = Test-Path -LiteralPath $modelBackendDir
 LogCheckbox $backendExists "Model backend directory exists"
 
 # Seed data / demo pipeline
-$seedFile = Join-Path $backendDir "scripts" "seed.py"
+$seedFile = Join-Path (Join-Path $productRoot "scripts") "seed.py"
 $seedOk = Test-Path -LiteralPath $seedFile
-LogCheckbox $seedOk "Seed data script exists"
-$seedPy = Get-ChildItem -Recurse -Filter "seed*.py" -LiteralPath $backendDir -ErrorAction SilentlyContinue
-$hasSeedLogic = ($seedPy.Count -gt 0)
-LogCheckbox $hasSeedLogic "Seed data scripts found"
+LogCheckbox $seedOk "Seed data script exists ($seedFile)"
 
 # BDD feature files exist
-$bddFeatures = Get-ChildItem -Recurse -Filter "*.feature" -LiteralPath (Join-Path $backendDir "tests") -ErrorAction SilentlyContinue
-$bddCount = ($bddFeatures | Measure-Object).Count
-LogCheckbox ($bddCount -gt 0) "BDD feature files exist ($bddCount found)"
+$bddTestDir = Join-Path $backendDir "tests"
+if (Test-Path -LiteralPath $bddTestDir) {
+    $bddFeatures = Get-ChildItem -Recurse -Filter "*.feature" -LiteralPath $bddTestDir -ErrorAction SilentlyContinue
+    $bddCount = ($bddFeatures | Measure-Object).Count
+    LogCheckbox ($bddCount -gt 0) "BDD feature files exist ($bddCount found)"
+} else {
+    LogCheckbox $false "BDD test directory not found"
+}
 
 # Trigger types
-$triggerDir = Join-Path $backendDir "src" "modulo" "core" "trigger_engine"
+$triggerDir = Join-Path (Join-Path (Join-Path (Join-Path $backendDir "src") "modulo") "core") "trigger_engine"
 $triggerOk = Test-Path -LiteralPath $triggerDir
 LogCheckbox $triggerOk "Trigger engine directory exists"
 
@@ -325,8 +345,8 @@ Log "      +- 1. Configure MODULO_USERS with at least 2 entries"
 Log "      +- 2. User A creates a pipeline with a HITL gate"
 Log "      +- 3. Run the pipeline until it reaches the HITL gate"
 Log "      +- 4. User B claims the HITL request"
-Log "      +- 5. User B approves the request — pipeline continues"
-Log "      +- 6. In a second run, User B rejects — pipeline stops"
+Log "      +- 5. User B approves the request -- pipeline continues"
+Log "      +- 6. In a second run, User B rejects -- pipeline stops"
 Log "      +- 7. Both outcomes are visible in run inspection"
 Log ""
 Log "      MODULO_USERS configured: ___"
@@ -337,14 +357,14 @@ Log "      Verified by: ___ (date) ___ (signed)"
 Log ""
 
 # --- Criterion #5: Connector swap ---
-LogHeader "Criterion #5: Connector swap (Filesystem ↔ GitHub)"
+LogHeader "Criterion #5: Connector swap (Filesystem <-> GitHub)"
 Log ""
 Log "  [ ] Criterion #5: Connector swap demonstrated"
 Log "      +- How to verify"
 Log "      +- 1. Create a pipeline bound to FilesystemConnector"
-Log "      +- 2. Run the pipeline to completion — verify output"
+Log "      +- 2. Run the pipeline to completion -- verify output"
 Log "      +- 3. Rebind the pipeline to GitHubConnector (same schema)"
-Log "      +- 4. Run the pipeline again — verify equivalent output"
+Log "      +- 4. Run the pipeline again -- verify equivalent output"
 Log "      +- 5. Both runs produce correct, inspectable results"
 Log ""
 Log "      Filesystem run ID: ___"
@@ -424,5 +444,9 @@ if ($machinePassed) {
 } else {
     exit 1
 }
+
+
+
+
 
 
