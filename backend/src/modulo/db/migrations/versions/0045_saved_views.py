@@ -20,7 +20,7 @@ def upgrade() -> None:
     op.create_table(
         "saved_views",
         sa.Column("id", sa.Uuid(), nullable=False),
-        sa.Column("organisation_id", sa.Uuid(), sa.ForeignKey("organisations.id", ondelete="CASCADE"), nullable=False, index=True),
+        sa.Column("organisation_id", sa.Uuid(), sa.ForeignKey("organisations.id", ondelete="CASCADE"), nullable=False),
         sa.Column("name", sa.String(255), nullable=False),
         sa.Column("description", sa.Text(), nullable=True),
         sa.Column("view_type", sa.String(50), nullable=False),
@@ -28,13 +28,13 @@ def upgrade() -> None:
         sa.Column("columns", sa.JSON(), nullable=True),
         sa.Column("sort_by", sa.String(100), nullable=True),
         sa.Column("sort_order", sa.String(10), nullable=False, server_default="desc"),
-        sa.Column("created_by", sa.Uuid(), sa.ForeignKey("accounts.id"), nullable=False),
+        sa.Column("account_id", sa.Uuid(), sa.ForeignKey("accounts.id"), nullable=False),
         sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.text("now()"), nullable=False),
         sa.Column("updated_at", sa.DateTime(timezone=True), server_default=sa.text("now()"), nullable=False),
         sa.CheckConstraint("view_type IN ('run_list', 'pipeline_list', 'audit_log')", name="ck_saved_views_type"),
         sa.PrimaryKeyConstraint("id"),
     )
-    op.create_index(op.f("ix_saved_views_organisation_id"), "saved_views", ["organisation_id"])
+    op.execute("CREATE INDEX IF NOT EXISTS ix_saved_views_organisation_id ON saved_views (organisation_id)")
 
     op.execute("ALTER TABLE saved_views ENABLE ROW LEVEL SECURITY")
     op.execute(
