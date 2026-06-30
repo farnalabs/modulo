@@ -104,6 +104,7 @@
 <script setup lang="ts">
 import { ref, onMounted } from 'vue'
 import { api } from '../lib/api/client'
+import { formatApiError } from '../lib/api/formatError'
 import type { components } from '../lib/api/client'
 import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
@@ -127,7 +128,7 @@ async function loadSchemas() {
       params: { query: { page: 1, page_size: 100 } },
     })
     if (err) {
-      error.value = `Failed to load schemas: ${err}`
+      error.value = `Failed to load schemas: ${formatApiError(err)}`
     } else if (data) {
       schemas.value = data.items
     }
