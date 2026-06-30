@@ -13,7 +13,10 @@ code:
 depends-on: [feat-teams-team-crud, feat-evals-eval-engine]
 status: partial
 ---
-# Team Comparison Side-by-side eval pass rates and pipeline metrics across teams. Built on the org dashboard summary API. Route at `/admin/teams/comparison`. Discovered from 1 completed delivery tasks. ## Behaviours - [x] Side-by-side eval pass rates across teams with color-coded progress bars (green ≥80%, amber 50–79%, red <50%)
+# Team Comparison Side-by-side eval pass rates and pipeline metrics across teams. Built on the org dashboard summary API. Route at `/admin/teams/comparison`. Discovered from 1 completed delivery tasks.
+
+## Behaviours
+- [x] Side-by-side eval pass rates across teams with color-coded progress bars (green ≥80%, amber 50–79%, red <50%)
 - [ ] Org-wide summary cards: total runs, active pipelines, org eval pass rate, team count
 - [ ] Team run status breakdown in table columns (running, awaiting_human, failed, idle)
 - [ ] Team member count shown in comparison table
@@ -28,7 +31,9 @@ status: partial
 - [ ] Loading state — shows spinner during data fetch
 - [ ] Pipeline names API fails — silently falls back to truncated pipeline ID as display name
 - [ ] Toggle expand/collapse of team drill-down — clicking expanded team collapses; clicking different team switches drill-down
-- [ ] Expand/collapse chevron rotates 180° on open state ## Known Gaps
+- [ ] Expand/collapse chevron rotates 180° on open state
+
+## Known Gaps
 - **Per-team eval pass rate now computed**: Backend (dashboard.py:118-141) computes per-team eval pass rates via `per_team_eval_query` grouping EvalResults by `Run.owner_team_id`. The dashboard summary API returns `teams[].eval_pass_rate` with `total_evals`, `passed_evals`, and `pass_rate` per team. Frontend (TeamComparisonView.vue:291) reads `team.eval_pass_rate?.pass_rate` — each team now displays its own pass rate, not the org-wide average. The drill-down per-pipeline data lives in `eval_pass_rate.per_team_pipeline` (TeamComparisonView.vue:301). This gap is **CLOSED**.
 - **No dedicated BDD feature file**: only covered as a persona scenario in `elena-engineering-director.feature` (`@goal-elena-team-comparison`). No standalone BDD in `backend/tests/bdd/features/`.
 - **No frontend unit tests**: `TeamComparisonView.vue` has no corresponding spec file.
