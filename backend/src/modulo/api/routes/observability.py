@@ -24,7 +24,7 @@ _log = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/v1/settings/observability", tags=["observability"])
 
 _DB_TIMEOUT = 10  # seconds — max time for DB operations per request
-_CACHE_TTL = 60   # seconds — how long to serve stale cache after DB failure
+_CACHE_TTL = 60  # seconds — how long to serve stale cache after DB failure
 
 _SENSITIVE_HEADER_KEYS = frozenset({"authorization", "x-api-key", "api-key", "x-otlp-token"})
 
@@ -145,7 +145,7 @@ async def get_observability_settings(
                 await set_rls_org(session, principal.organisation_id)
                 merged = await _fetch_and_cache(session, principal.organisation_id)
         return _config_to_response(merged)
-    except (TimeoutError, asyncio.TimeoutError):
+    except TimeoutError:
         _log.warning(
             "observability.get.timeout",
             extra={"org_id": str(principal.organisation_id)},
@@ -188,7 +188,7 @@ async def update_observability_settings(
                 merged = await update_otel_config(session, principal.organisation_id, updates)
         _invalidate_cache(str(principal.organisation_id))
         return _config_to_response(merged)
-    except (TimeoutError, asyncio.TimeoutError):
+    except TimeoutError:
         _log.warning(
             "observability.put.timeout",
             extra={"org_id": str(principal.organisation_id)},
@@ -280,7 +280,7 @@ async def get_export_preview(
             async with session.begin():
                 await set_rls_org(session, principal.organisation_id)
                 merged = await _fetch_and_cache(session, principal.organisation_id)
-    except (TimeoutError, asyncio.TimeoutError):
+    except TimeoutError:
         _log.warning(
             "observability.preview.timeout",
             extra={"org_id": str(principal.organisation_id)},
