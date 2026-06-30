@@ -1,5 +1,15 @@
 <template>
-  <div data-theme="agent" class="mx-auto max-w-6xl space-y-6 p-6">
+  <FeatureGate feature-name="team_rbac" required-tier="enterprise">
+    <template #locked="{ tooltip }">
+      <div data-theme="agent" class="mx-auto max-w-6xl space-y-6 p-6">
+        <div class="mb-4 flex items-center gap-2 rounded-lg border border-warning/30 bg-warning/5 p-4 text-sm text-warning">
+          <LockIcon :locked="true" :tooltip="tooltip" />
+          <span>Team RBAC is not available on your current plan.</span>
+        </div>
+      </div>
+    </template>
+
+    <div data-theme="agent" class="mx-auto max-w-6xl space-y-6 p-6">
     <header>
       <h1 class="text-3xl font-bold tracking-tight">Organisation Settings</h1>
       <p class="mt-1 text-muted-foreground">Manage your organisation profile, export data, or delete the organisation</p>
@@ -156,6 +166,7 @@
       </DialogContent>
     </Dialog>
   </div>
+  </FeatureGate>
 </template>
 
 <script setup lang="ts">
@@ -172,7 +183,11 @@ import {
   DialogHeader,
   DialogTitle,
 } from '../components/ui/dialog'
+import { usePlanStore } from '../stores/planStore'
+import FeatureGate from '../components/FeatureGate.vue'
+import LockIcon from '../components/LockIcon.vue'
 
+const planStore = usePlanStore()
 const router = useRouter()
 
 const loading = ref(true)
@@ -323,5 +338,5 @@ async function confirmDelete() {
   }
 }
 
-onMounted(loadData)
+onMounted(() => { planStore.fetchPlan(); loadData() })
 </script>

@@ -1,5 +1,15 @@
 <template>
-  <div class="mx-auto max-w-4xl space-y-8 p-6">
+  <FeatureGate feature-name="plugin-management" required-tier="enterprise">
+    <template #locked="{ tooltip }">
+      <div class="mx-auto max-w-4xl space-y-8 p-6">
+        <div class="mb-4 flex items-center gap-2 rounded-lg border border-warning/30 bg-warning/5 p-4 text-sm text-warning">
+          <LockIcon :locked="true" :tooltip="tooltip" />
+          <span>Plugin management is not available on your current plan.</span>
+        </div>
+      </div>
+    </template>
+
+    <div class="mx-auto max-w-4xl space-y-8 p-6">
     <header class="flex items-center justify-between">
       <div>
         <h1 class="text-3xl font-bold tracking-tight">Connectors</h1>
@@ -243,6 +253,7 @@
       </div>
     </template>
   </div>
+  </FeatureGate>
 </template>
 
 <script setup lang="ts">
@@ -251,6 +262,11 @@ import { api } from '../lib/api/client'
 import type { components } from '../lib/api/client'
 import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
+import { usePlanStore } from '../stores/planStore'
+import FeatureGate from '../components/FeatureGate.vue'
+import LockIcon from '../components/LockIcon.vue'
+
+const planStore = usePlanStore()
 
 type ConnectorItem = components['schemas']['ConnectorItem'] & { enabled?: boolean }
 
@@ -437,5 +453,5 @@ async function deleteConnector() {
   }
 }
 
-onMounted(loadConnectors)
+onMounted(() => { planStore.fetchPlan(); loadConnectors() })
 </script>

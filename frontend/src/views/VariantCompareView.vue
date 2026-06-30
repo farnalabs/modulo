@@ -1,5 +1,15 @@
 <template>
-  <div class="mx-auto max-w-6xl space-y-8 p-6">
+  <FeatureGate feature-name="team_rbac" required-tier="enterprise">
+    <template #locked="{ tooltip }">
+      <div class="mx-auto max-w-6xl space-y-8 p-6">
+        <div class="mb-4 flex items-center gap-2 rounded-lg border border-warning/30 bg-warning/5 p-4 text-sm text-warning">
+          <LockIcon :locked="true" :tooltip="tooltip" />
+          <span>Team RBAC is not available on your current plan.</span>
+        </div>
+      </div>
+    </template>
+
+    <div class="mx-auto max-w-6xl space-y-8 p-6">
     <LoadingSpinner v-if="loading" />
     <ErrorAlert v-else-if="error" :message="error" />
     <template v-else>
@@ -217,6 +227,7 @@
       </div>
     </template>
   </div>
+  </FeatureGate>
 </template>
 
 <script setup lang="ts">
@@ -225,6 +236,11 @@ import { api } from '../lib/api/client'
 import type { components } from '../lib/api/client'
 import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
+import { usePlanStore } from '../stores/planStore'
+import FeatureGate from '../components/FeatureGate.vue'
+import LockIcon from '../components/LockIcon.vue'
+
+const planStore = usePlanStore()
 
 type VariantGroup = components['schemas']['VariantGroupResponse']
 type RunResponse = components['schemas']['RunResponse']
@@ -366,8 +382,9 @@ const diffContentB = computed(() => {
   return output ? JSON.stringify(output, null, 2) : ''
 })
 
-onMounted(async () => {
-  await fetchGroups()
+onMounted(() => {
+  planStore.fetchPlan()
+  fetchGroups()
 })
 
 watch(selectedGroupId, async (id) => {

@@ -1,5 +1,15 @@
 <template>
-  <div class="mx-auto max-w-6xl space-y-6 p-6">
+  <FeatureGate feature-name="audit_viewer" required-tier="enterprise">
+    <template #locked="{ tooltip }">
+      <div class="mx-auto max-w-6xl space-y-6 p-6">
+        <div class="mb-4 flex items-center gap-2 rounded-lg border border-warning/30 bg-warning/5 p-4 text-sm text-warning">
+          <LockIcon :locked="true" :tooltip="tooltip" />
+          <span>Audit viewer is not available on your current plan.</span>
+        </div>
+      </div>
+    </template>
+
+    <div class="mx-auto max-w-6xl space-y-6 p-6">
     <header class="flex items-center justify-between">
       <div>
         <h1 class="text-3xl font-bold tracking-tight">Audit Log</h1>
@@ -293,6 +303,7 @@
       </div>
     </template>
   </div>
+  </FeatureGate>
 </template>
 
 <script setup lang="ts">
@@ -302,6 +313,11 @@ import type { components } from '../lib/api/client'
 import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
 import { formatError } from '../lib/utils'
+import { usePlanStore } from '../stores/planStore'
+import FeatureGate from '../components/FeatureGate.vue'
+import LockIcon from '../components/LockIcon.vue'
+
+const planStore = usePlanStore()
 
 type AuditEvent = components['schemas']['AuditEventResponse']
 
@@ -578,5 +594,5 @@ async function exportJsonl() {
   }
 }
 
-onMounted(() => loadEvents(null))
+onMounted(() => { planStore.fetchPlan(); loadEvents(null) })
 </script>
