@@ -76,6 +76,11 @@ _KNOWN_FLAGS: list[FeatureFlag] = [
         tier="enterprise",
     ),
     FeatureFlag(
+        name="observability",
+        description="OpenTelemetry export and LangSmith integration settings",
+        tier="enterprise",
+    ),
+    FeatureFlag(
         name="view_modes",
         description="Multiple named UI views with admin-defined feature visibility per view and user/team/role assignment",
         tier="enterprise",

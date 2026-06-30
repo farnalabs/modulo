@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { mount } from '@vue/test-utils'
+import { createPinia, setActivePinia } from 'pinia'
 import { nextTick } from 'vue'
 
 vi.mock('../lib/api/client', () => ({
@@ -26,11 +27,14 @@ import SettingsObservabilityView from '../views/SettingsObservabilityView.vue'
 
 describe('SettingsObservabilityView', () => {
   beforeEach(() => {
+    setActivePinia(createPinia())
     vi.clearAllMocks()
   })
 
   it('renders without crashing', async () => {
-    const wrapper = mount(SettingsObservabilityView)
+    const wrapper = mount(SettingsObservabilityView, {
+      global: { plugins: [createPinia()] },
+    })
     await nextTick()
     expect(wrapper.exists()).toBe(true)
     expect(wrapper.text()).toContain('Observability')
