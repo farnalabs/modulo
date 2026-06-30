@@ -1,5 +1,15 @@
 <template>
-  <div data-theme="agent" class="mx-auto max-w-6xl space-y-6 p-6">
+  <FeatureGate feature-name="webhook_trigger" required-tier="enterprise">
+    <template #locked="{ tooltip }">
+      <div data-theme="agent" class="mx-auto max-w-6xl space-y-6 p-6">
+        <div class="mb-4 flex items-center gap-2 rounded-lg border border-warning/30 bg-warning/5 p-4 text-sm text-warning">
+          <LockIcon :locked="true" :tooltip="tooltip" />
+          <span>Webhook triggers are not available on your current plan.</span>
+        </div>
+      </div>
+    </template>
+
+    <div data-theme="agent" class="mx-auto max-w-6xl space-y-6 p-6">
     <header class="flex items-center justify-between">
       <div>
         <h1 class="text-3xl font-bold tracking-tight">Triggers</h1>
@@ -353,6 +363,7 @@
       </DialogContent>
     </Dialog>
   </div>
+  </FeatureGate>
 </template>
 
 <script setup lang="ts">
@@ -362,6 +373,11 @@ import type { components } from '../lib/api/client'
 import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '../components/ui/dialog'
+import { usePlanStore } from '../stores/planStore'
+import FeatureGate from '../components/FeatureGate.vue'
+import LockIcon from '../components/LockIcon.vue'
+
+const planStore = usePlanStore()
 
 type TriggerItem = components['schemas']['TriggerItem']
 type PipelineItem = components['schemas']['PipelineItem']
@@ -666,5 +682,5 @@ async function loadAll() {
   loading.value = false
 }
 
-onMounted(() => loadAll())
+onMounted(() => { planStore.fetchPlan(); loadAll() })
 </script>

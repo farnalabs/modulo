@@ -1,5 +1,15 @@
 <template>
-  <div class="mx-auto max-w-6xl space-y-8 p-6">
+  <FeatureGate feature-name="team_rbac" required-tier="enterprise">
+    <template #locked="{ tooltip }">
+      <div class="mx-auto max-w-6xl space-y-8 p-6">
+        <div class="mb-4 flex items-center gap-2 rounded-lg border border-warning/30 bg-warning/5 p-4 text-sm text-warning">
+          <LockIcon :locked="true" :tooltip="tooltip" />
+          <span>Team RBAC is not available on your current plan.</span>
+        </div>
+      </div>
+    </template>
+
+    <div class="mx-auto max-w-6xl space-y-8 p-6">
     <header>
       <h1 class="text-3xl font-bold tracking-tight">HITL Review</h1>
       <p class="mt-1 text-muted-foreground">Review and respond to pending human-in-the-loop gates</p>
@@ -273,6 +283,7 @@
       </div>
     </template>
   </div>
+  </FeatureGate>
 </template>
 
 <script setup lang="ts">
@@ -281,6 +292,11 @@ import { api } from '../lib/api/client'
 import { formatApiError } from '../lib/api/formatError'
 import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
+import { usePlanStore } from '../stores/planStore'
+import FeatureGate from '../components/FeatureGate.vue'
+import LockIcon from '../components/LockIcon.vue'
+
+const planStore = usePlanStore()
 
 interface GateItem {
   run_id: string
@@ -535,6 +551,7 @@ function stopAutoRefresh() {
 }
 
 onMounted(async () => {
+  planStore.fetchPlan()
   await Promise.all([loadGates(), loadPipelines()])
   startAutoRefresh()
 })

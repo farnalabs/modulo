@@ -1,5 +1,15 @@
 <template>
-  <div class="mx-auto max-w-5xl space-y-8 p-6">
+  <FeatureGate feature-name="eval_system" required-tier="enterprise">
+    <template #locked="{ tooltip }">
+      <div class="mx-auto max-w-5xl space-y-8 p-6">
+        <div class="mb-4 flex items-center gap-2 rounded-lg border border-warning/30 bg-warning/5 p-4 text-sm text-warning">
+          <LockIcon :locked="true" :tooltip="tooltip" />
+          <span>Eval system is not available on your current plan.</span>
+        </div>
+      </div>
+    </template>
+
+    <div class="mx-auto max-w-5xl space-y-8 p-6">
     <header>
       <h1 class="text-3xl font-bold tracking-tight">Eval Editor</h1>
       <p class="mt-1 text-muted-foreground">Create and manage evaluation definitions for your pipelines</p>
@@ -245,6 +255,7 @@
       </div>
     </template>
   </div>
+  </FeatureGate>
 </template>
 
 <script setup lang="ts">
@@ -252,7 +263,11 @@ import { ref, reactive, computed, onMounted } from 'vue'
 import { useApi } from '../composables/useApi'
 import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
+import { usePlanStore } from '../stores/planStore'
+import FeatureGate from '../components/FeatureGate.vue'
+import LockIcon from '../components/LockIcon.vue'
 
+const planStore = usePlanStore()
 const { get, post, put, del } = useApi()
 
 interface PipelineItem {
@@ -490,5 +505,5 @@ async function loadAll() {
   }
 }
 
-onMounted(loadAll)
+onMounted(() => { planStore.fetchPlan(); loadAll() })
 </script>

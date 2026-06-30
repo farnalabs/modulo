@@ -1,0 +1,50 @@
+name: Staging Deploy
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - backend/**
+      - frontend/**
+      - deploy/**
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    runs-on: [self-hosted, windows, docker]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Deploy to staging
+        working-directory: Development/Product
+        shell: powershell
+        run: fly deploy --app staging-modulo --config fly.staging.toml --strategy immediate
+
+      - name: Wait for healthz
+        shell: powershell
+        run: |
+          Write-Host "Waiting for https://staging-modulo.fly.dev/healthz ..."
+          for ($i=0; $i -lt 30; $i++) {
+            try {
+              $r = curl.exe -s -f "https://staging-modulo.fly.dev/healthz" 2>$null
+              if ($LASTEXITCODE -eq 0) { Write-Host "Health check passed after ${i}s"; exit 0 }
+            } catch {}
+            Start-Sleep -Seconds 2
+          }
+          Write-Host "Health check failed after 60s"
+          exit 1
+
+      - name: Smoke test frontend
+        shell: powershell
+        run: |
+          Write-Host "Verifying frontend returns Modulo title..."
+          $resp = curl.exe -s -m 10 "https://staging-modulo.fly.dev/" 2>$null
+          if ($resp -match '<title>Modulo') {
+            Write-Host "Frontend OK"
+          } else {
+            Write-Host "Frontend smoke test failed — expected '<title>Modulo' in response"
+            exit 1
+          }

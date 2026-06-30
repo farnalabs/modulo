@@ -133,6 +133,21 @@ _KNOWN_FLAGS: list[FeatureFlag] = [
         description="Diff-based pipeline version comparison and rollback",
         tier="v2",
     ),
+    FeatureFlag(
+        name="model-backend-management",
+        description="Manage LLM backend connections and credentials",
+        tier="enterprise",
+    ),
+    FeatureFlag(
+        name="environment-profiles",
+        description="Sandbox environment profiles for code execution",
+        tier="enterprise",
+    ),
+    FeatureFlag(
+        name="plugin-management",
+        description="Manage plugins, connectors, and node categories",
+        tier="enterprise",
+    ),
 ]
 
 
