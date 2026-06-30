@@ -2,22 +2,26 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { mount } from '@vue/test-utils'
 import { nextTick } from 'vue'
 
-vi.mock('../lib/api/client', () => ({
-  getAccessToken: vi.fn().mockReturnValue('mock-token'),
-}))
+const mockGet = vi.fn()
+const mockDelete = vi.fn()
 
-const mockFetch = vi.fn()
-global.fetch = mockFetch
+vi.mock('../lib/api/client', () => ({
+  api: {
+    GET: (...args: unknown[]) => mockGet(...args),
+    POST: vi.fn(),
+    PUT: vi.fn(),
+    PATCH: vi.fn(),
+    DELETE: (...args: unknown[]) => mockDelete(...args),
+  },
+}))
 
 import AdminNodeCategoriesView from '../views/AdminNodeCategoriesView.vue'
 
 describe('AdminNodeCategoriesView', () => {
   beforeEach(() => {
     vi.clearAllMocks()
-    mockFetch.mockResolvedValue({
-      ok: true,
-      json: () => Promise.resolve({ items: [] }),
-    })
+    mockGet.mockResolvedValue({ data: { items: [] }, error: null })
+    mockDelete.mockResolvedValue({ response: { status: 204 }, error: null })
   })
 
   it('renders without crashing', async () => {
