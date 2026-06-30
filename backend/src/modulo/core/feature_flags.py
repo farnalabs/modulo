@@ -277,7 +277,11 @@ def resolve_plan_context(settings: Any) -> PlanContext:
 
 
 class FeatureFlagRegistry:
-    """Knows all feature flags and determines active status from the current tier."""
+    """Knows all feature flags and determines active status from the current tier.
+
+    Falls back to hardcoded ``_KNOWN_FLAGS`` / ``TIER_RANK`` when DB-backed data
+    has not been loaded.  Call ``load_from_db()`` to replace with catalog data.
+    """
 
     _overrides: dict[str, bool] = {}
 
@@ -287,11 +291,44 @@ class FeatureFlagRegistry:
         self._flags = _KNOWN_FLAGS
         self._refresh()
 
+    async def load_from_db(self, session: Any) -> None:
+        """Replace hardcoded flag data with DB-backed data from tier_catalog / feature_flag_catalog."""
+        from modulo.db.crud.tier_catalog import list_feature_flags, list_tiers
+
+        db_tiers = await list_tiers(session)
+        self._tier_rank = {t["tier_id"]: t["rank"] for t in db_tiers}
+
+        db_flags = await list_feature_flags(session)
+        self._flags = [
+            FeatureFlag(
+                name=f["name"],
+                description=f["description"],
+                tier=f["tier_id"],
+                depends_on=f["depends_on"],
+            )
+            for f in db_flags
+            if f["is_active"]
+        ]
+        self._refresh()
+
+    @classmethod
+    async def from_db(
+        cls,
+        session: Any,
+        current_tier: str,
+        has_license_key: bool = False,
+    ) -> FeatureFlagRegistry:
+        """Create a registry pre-loaded from the DB tier/feature catalog."""
+        instance = cls(current_tier=current_tier, has_license_key=has_license_key)
+        await instance.load_from_db(session)
+        return instance
+
     def _refresh(self) -> None:
-        current_rank = TIER_RANK.get(self._current_tier, 0)
+        tier_rank: dict[str, int] = getattr(self, "_tier_rank", TIER_RANK)
+        current_rank = tier_rank.get(self._current_tier, 0)
 
         for flag in self._flags:
-            flag_tier_rank = TIER_RANK.get(flag.tier, 0)
+            flag_tier_rank = tier_rank.get(flag.tier, 0)
             flag.currently_active = flag_tier_rank <= current_rank
 
         for name, enabled in self._overrides.items():
@@ -329,7 +366,9 @@ class FeatureFlagRegistry:
         """Return flags whose tier is above community but inactive because license is community."""
         if self._current_tier != "community":
             return []
-        return [f for f in self._flags if f.tier != "community" and not f.currently_active]
+        tier_rank: dict[str, int] = getattr(self, "_tier_rank", TIER_RANK)
+        community_rank = tier_rank.get("community", 0)
+        return [f for f in self._flags if tier_rank.get(f.tier, 0) > community_rank and not f.currently_active]
 
 
 async def get_plan_for_org(

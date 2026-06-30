@@ -39,6 +39,7 @@ from modulo.api.routes.admin_rotation import router as admin_rotation_router
 from modulo.api.routes.admin_runtime_config import router as admin_runtime_config_router
 from modulo.api.routes.admin_sso import router as admin_sso_router
 from modulo.api.routes.admin_system_config import router as admin_system_config_router
+from modulo.api.routes.admin_tiers import router as admin_tiers_router
 from modulo.api.routes.admin_triggers import router as admin_triggers_router
 from modulo.api.routes.agents import router as agents_router
 from modulo.api.routes.api_keys import router as api_keys_router
@@ -536,6 +537,7 @@ app.include_router(admin_rate_limits_router)
 app.include_router(admin_runtime_config_router)
 app.include_router(admin_sso_router)
 app.include_router(admin_system_config_router)
+app.include_router(admin_tiers_router)
 app.include_router(admin_triggers_router)
 app.include_router(auth_router)
 app.include_router(changelog_router)
