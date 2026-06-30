@@ -1,6 +1,6 @@
 # improve-architecture Tracker
 
-Current index: 14
+Current index: 17
 Last updated: 2026-06-30
 
 ## History
@@ -16,3 +16,4 @@ Last updated: 2026-06-30
 - 2026-06-30: feat-auth-team-rbac → complete, cross-cutting QA: created 13 team BDD feature files (28 scenarios in rbac.feature, 11 team CRUD, 6 membership, 3 deletion, cross-team, HITL, view_as_team, stale JWT, admin override, ownership picker), marked 40 behaviours [x], documented new gaps (PATCH membership, operator self-escalation, team deletion blocking only in admin.py)
 - 2026-06-30: feat-pipelines-pipeline-versioning → complete, cross-cutting QA: fixed frontmatter (added bdd:, unit-tests), added 10 BDD snapshot lifecycle scenarios, 25 step definitions, 34 behaviours verified [x], 5 UI/run-engine behaviours remain [ ]
 - 2026-06-30: feat-core-notifications → complete, cross-cutting QA: fixed frontmatter (added unit-tests: []), marked 44 [ ] → [x] (claim_expired dispatch, retry + dead-letter, delivery log, admin API, expiry job, security, concurrency, backward compat), added 6 new checkboxes from error path audit (ProgrammingError catch gap on 9/11 routes, notifier dispatch_event top-level try/except, _record_delivery exception wrapping), discovered 4 BDD mismatches (X-Modulo-Signature-256 vs X-Modulo-Signature header, per-org vs per-endpoint secrets in signing.feature, 5 vs 10 failures in failure_webhook.feature, X-Modulo-Timestamp missing from code), consolidated known gaps from 6→16 with detailed descriptions
+- 2026-06-30: feat-core-audit-trail → complete, cross-cutting QA: fixed frontmatter (bdd path mismatch, added missing code/unit-test refs), added 11 implemented [x] event types (dot-notation naming, actual dispatch), kept 18 PRD event types as [ ] (genuinely missing), added 20 unit tests (payload None default, request_id passthrough, invalid cursor, batch UUID filtering, has_more pagination, large payload, null date, list filtering), rewrote event_recording.feature with correct event types, added 13 new known gaps documenting PRD-vs-implementation divergence (no run_started, no hitl_claimed/approved/rejected, no team CRUD, no permission/auth/api_key events), updated improve-architecture-tracker
