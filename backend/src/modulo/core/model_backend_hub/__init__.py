@@ -28,6 +28,7 @@ from modulo.model_backends.bedrock import BedrockBackend
 from modulo.model_backends.cohere import CohereBackend
 from modulo.model_backends.deepseek import DeepSeekBackend
 from modulo.model_backends.fireworks import FireworksBackend
+from modulo.model_backends.gemini import GeminiBackend
 from modulo.model_backends.grok import GrokBackend
 from modulo.model_backends.groq import GroqBackend
 from modulo.model_backends.jan import JanBackend
@@ -297,6 +298,8 @@ def _build_backend(
             return TogetherAIBackend(api_key=creds["api_key"], model_id=model_id, **default_params)
         case "deepseek":
             return DeepSeekBackend(api_key=creds["api_key"], model_id=model_id, **default_params)
+        case "gemini":
+            return GeminiBackend(api_key=creds["api_key"], model_id=model_id, **default_params)
         case "grok":
             return GrokBackend(api_key=creds["api_key"], model_id=model_id, **default_params)
         case "jan":
