@@ -1,10 +1,9 @@
 ---
 id: feat-core-contribution-provenance
 prd: 8.14
-delivery-tasks: [task-nv8-contribution-provenance]
-  - backend/tests/bdd/features/library/browse.feature
-  - backend/tests/bdd/features/library/copy_to_adapt.feature
-  - backend/tests/bdd/features/library/ratings.feature
+delivery-tasks:
+  - task-nv8-contribution-provenance
+  - task-prd-plugin-api-docs
 code:
   - backend/src/modulo/core/registry/
   - backend/src/modulo/api/routes/registry.py
@@ -12,11 +11,19 @@ code:
   - backend/src/modulo/db/crud/library_primitive.py
   - backend/src/modulo/core/library_service/
   - backend/src/modulo/core/plugin_registry/
+  - backend/src/modulo/api/routes/plugins.py
   - backend/src/modulo/db/migrations/versions/0001_initial_schema.py
+  - docs/plugin-api.md
 depends-on: [feat-core-contribute-primitive]
 status: partial
 ---
-# Contribution Provenance Cryptographic signing, verification, and fork tracking for community library primitives, including the Ed25519 registry protocol, publisher trust tiers, and the plugin discovery system. ## Behaviours ### Data model & fork provenance
+# Contribution Provenance
+
+Cryptographic signing, verification, and fork tracking for community library primitives, including the Ed25519 registry protocol, publisher trust tiers, and the plugin discovery system.
+
+## Behaviours
+
+### Data model & fork provenance
 - [ ] `library_primitives` table has `source` discriminator (`local` | `registry`)
 - [ ] `forked_from` is immutable after creation (enforced by DB trigger `enforce_library_fork_provenance()`)
 - [ ] `forked_from` must reference a `source: registry` entry (enforced by same trigger)
@@ -47,22 +54,40 @@ status: partial
 - [ ] 10-minute submission cooldown per user
 - [ ] Ratings displayed as weighted average with review count
 - [ ] Report abuse: admin review queue ### Plugin registry (ConnectorType discovery)
-- [ ] `PluginRegistry.discover_plugins()` finds `modulo.connectors` and `modulo.model_backends` entry points
-- [ ] ConnectorType registration is in-memory at startup, not DB-backed
-- [ ] `ConnectorInstance.connector_type_id` is a string resolved at runtime from in-memory registry
-- [ ] Pre-run health check fails with `connector_type_unavailable` for missing types
-- [ ] Runtime `pip install` explicitly disallowed — only build-time install
-- [ ] Admin UI surfaces unavailable connector types with warning badge ### BDD-tested scenarios
+- [x] `PluginRegistry.discover_plugins()` finds `modulo.connectors` and `modulo.model_backends` entry points
+- [x] ConnectorType registration is in-memory at startup, not DB-backed
+- [x] `ConnectorInstance.connector_type_id` is a string resolved at runtime from in-memory registry
+- [x] Pre-run health check fails with `connector_type_unavailable` for missing types
+- [x] Runtime `pip install` explicitly disallowed — only build-time install
+- [ ] Admin UI surfaces unavailable connector types with warning badge
+- [x] `GET /api/v1/plugins` returns all discovered plugins with health status
+- [x] `GET /api/v1/plugins/{plugin_id}/health` returns health for a single plugin
+- [x] Plugin discovery gated by `MODULO_PLUGIN_DISCOVERY` env var (default: true)
+- [x] `ConnectorHub` falls back to plugin registry for unknown connector types
+- [x] `ModelBackendHub` falls back to plugin registry for unknown model providers
+- [x] Entry point load failures are recorded as unhealthy (not silently dropped)
+- [x] `get_plugin_registry()` returns a module-level singleton shared across consumers
+- [x] Manual `register_connector_type()` / `register_model_backend()` available for in-tree registration
+- [x] Plugin API documented at `docs/plugin-api.md` ### BDD-tested scenarios
 - [ ] Browse: list all primitives, filter by type, search by name, filter to local only, view single primitive
 - [ ] Copy-to-adapt: browser adapt succeeds, MCP adapt returns 403, team assignment, non-existent returns 404
-- [ ] Ratings: view aggregate, submit thumbs-up/down, list ratings, aggregate updates after new rating ## Known Gaps - No BDD tests for registry publish or pull endpoints
+- [ ] Ratings: view aggregate, submit thumbs-up/down, list ratings, aggregate updates after new rating ## Known Gaps
+
+### Registry & signing
+- No BDD tests for registry publish or pull endpoints
 - No BDD tests for Ed25519 signature verification
 - No BDD tests for fork provenance immutability (DB trigger)
 - No BDD tests for trust tier display or community warning flow
 - No BDD tests for publisher registration or revocation
+
+### Plugin registry
 - No BDD tests for plugin registry discovery or health check
+- No BDD tests for connector type unavailability on missing plugin
+- No BDD tests for plugin REST API (`GET /api/v1/plugins`)
+- Admin UI warning badge for unavailable connector types not yet implemented
+
+### Ratings
 - No BDD tests for rating submission cooldown enforcement
 - No BDD tests for self-rating block
 - No BDD tests for rating-requires-prior-adapt rule
 - No BDD tests for ownership picker during copy-to-adapt
-- No BDD tests for connector type unavailability on missing plugin 
