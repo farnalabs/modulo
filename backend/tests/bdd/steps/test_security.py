@@ -1,9 +1,13 @@
 """Step definitions for security features: credential store, input sanitization, RLS."""
 
+import uuid
 from typing import Any
+from unittest.mock import AsyncMock
 
 from cryptography.fernet import Fernet, InvalidToken
 from pytest_bdd import given, parsers, scenarios, then, when
+
+from modulo.db.rls import set_rls_org, set_rls_user_context
 
 # ---------------------------------------------------------------------------
 # Register feature files
@@ -177,17 +181,194 @@ def step_yaml_injection() -> bool:
 
 
 # ===========================================================================
-# security/rls_enforcement.feature  —  TODO stub (no scenarios yet)
+# security/rls_enforcement.feature  —  7 scenarios
 # ===========================================================================
 
 
-@given("a database connection without RLS context")
-def step_no_rls_context() -> bool:
-    """Placeholder: DB-level RLS bypass tests."""
-    return True
+# -- Scenario: Authenticated user can access their org's pipelines ----------
 
 
-@given("a connection with stale org context from a prior request")
-def step_stale_org_context() -> bool:
-    """Placeholder: RLS reset hook interaction test."""
-    return True
+@given(
+    parsers.parse('I am authenticated in org "{org}"'),
+    target_fixture="current_org",
+)
+def step_authenticated_org(org: str) -> str:
+    """Record which org the user is authenticated in."""
+    return org
+
+
+@when(
+    parsers.parse('the service accesses pipelines as user in org "{org}"'),
+    target_fixture="pipeline_response",
+)
+def step_access_pipelines(org: str, client, alt_org_client, mock_session, current_org: str):
+    """GET /api/v1/pipelines with the correct TestClient for the org."""
+    from types import SimpleNamespace
+    from unittest.mock import patch
+
+    test_client = alt_org_client if org == "other-org" else client
+    with patch("modulo.api.routes.pipelines.list_pipelines") as mock_list:
+        mock_list.return_value = SimpleNamespace(items=[], total=0, page=1, page_size=20)
+        resp = test_client.get("/api/v1/pipelines")
+        return resp
+
+
+@then("the response status is 200")
+def step_status_200(pipeline_response) -> None:
+    assert pipeline_response.status_code == 200, (
+        f"Expected 200, got {pipeline_response.status_code}: {pipeline_response.text}"
+    )
+
+
+# -- Scenario: Cross-org pipeline access returns 404 ------------------------
+
+
+@when(
+    parsers.parse('the service accesses pipeline {pipeline_id} as user in org "{org}"'),
+    target_fixture="pipeline_response",
+)
+def step_access_cross_org_pipeline(pipeline_id: str, org: str, alt_org_client, mock_session):
+    """GET /api/v1/pipelines/{id} with alt org — simulates cross-org access returning 404."""
+    from unittest.mock import patch
+
+    with patch("modulo.api.routes.pipelines.get_pipeline") as mock_get:
+        mock_get.return_value = None
+        resp = alt_org_client.get(f"/api/v1/pipelines/{pipeline_id}")
+        return resp
+
+
+@then("the response status is 404")
+def step_status_404(pipeline_response) -> None:
+    assert pipeline_response.status_code == 404, (
+        f"Expected 404, got {pipeline_response.status_code}: {pipeline_response.text}"
+    )
+
+
+# -- Scenario: Unauthenticated request returns 401 --------------------------
+
+
+@when("an unauthenticated request accesses pipelines", target_fixture="pipeline_response")
+def step_unauthenticated_access(unauth_client):
+    """GET /api/v1/pipelines without any auth headers."""
+    resp = unauth_client.get("/api/v1/pipelines")
+    return resp
+
+
+@then("the response status is 401")
+def step_status_401(pipeline_response) -> None:
+    assert pipeline_response.status_code == 401, (
+        f"Expected 401, got {pipeline_response.status_code}: {pipeline_response.text}"
+    )
+
+
+# -- Scenario: Viewer role cannot create pipelines --------------------------
+
+
+@given(
+    parsers.parse('I am authenticated as a viewer in org "{org}"'),
+    target_fixture="viewer_org",
+)
+def step_viewer_auth(org: str) -> str:
+    """Record viewer authentication context."""
+    return org
+
+
+@when(
+    parsers.parse('a viewer tries to create a pipeline named {name}'),
+    target_fixture="create_response",
+)
+def step_viewer_create_pipeline(name: str, client):
+    """POST /api/v1/pipelines as viewer — expecting rejection."""
+    from unittest.mock import patch
+
+    with patch("modulo.api.dependencies.get_current_user") as mock_user:
+        mock_user.return_value = {
+            "org_id": str(uuid.UUID("00000000-0000-0000-0000-000000000001")),
+            "user_id": str(uuid.uuid4()),
+            "org_role": "viewer",
+        }
+        resp = client.post(
+            "/api/v1/pipelines",
+            json={"name": name, "description": ""},
+        )
+        return resp
+
+
+@then("the viewer pipeline creation is rejected")
+def step_viewer_rejected(create_response) -> None:
+    assert create_response.status_code == 403, (
+        f"Expected 403 for viewer, got {create_response.status_code}: {create_response.text}"
+    )
+
+
+# -- Scenario: RLS context requires an active transaction -------------------
+
+
+@when("RLS context is set outside a transaction", target_fixture="rls_error")
+async def step_rls_outside_tx(mock_session):
+    """Call set_rls_org outside an active transaction and catch RuntimeError."""
+    mock_session.in_transaction.return_value = False
+    try:
+        await set_rls_org(mock_session, uuid.uuid4())
+        return None
+    except RuntimeError as exc:
+        return exc
+
+
+@then("a RuntimeError is raised")
+def step_runtime_error(rls_error) -> None:
+    assert rls_error is not None, "Expected RuntimeError but none was raised"
+    assert isinstance(rls_error, RuntimeError), f"Expected RuntimeError, got {type(rls_error).__name__}"
+    assert "requires an active transaction" in str(rls_error), (
+        f"Unexpected error message: {rls_error}"
+    )
+
+
+# -- Scenario: set_rls_user_context requires active transaction --------------
+
+
+@when("set_rls_user_context is called outside a transaction", target_fixture="user_context_error")
+async def step_user_context_outside_tx(mock_session):
+    """Call set_rls_user_context outside an active transaction and catch RuntimeError."""
+    mock_session.in_transaction.return_value = False
+    try:
+        await set_rls_user_context(mock_session, uuid.uuid4(), "admin")
+        return None
+    except RuntimeError as exc:
+        return exc
+
+
+# -- Scenario: set_rls_user_context sets user ID and org role ----------------
+
+
+@given("an active transaction", target_fixture="active_tx_session")
+def step_active_tx(mock_session):
+    """Mark the mock session as having an active transaction."""
+    mock_session.in_transaction.return_value = True
+    return mock_session
+
+
+@when(
+    parsers.parse('set_rls_user_context is called with user "{username}" and role "{role}"'),
+    target_fixture="user_context_result",
+)
+async def step_set_user_context(username: str, role: str, mock_session):
+    """Call set_rls_user_context and record what was executed."""
+    user_id = uuid.uuid5(uuid.NAMESPACE_DNS, username)
+    mock_session.info.clear()
+    mock_session.execute = AsyncMock()
+    await set_rls_user_context(mock_session, user_id, role)
+    return {"user_id": user_id, "role": role}
+
+
+@then("the RLS user context is set correctly")
+def step_verify_user_context(user_context_result: dict, mock_session) -> None:
+    """Verify the executed SQL includes set_config calls for user_id and org_role."""
+    assert mock_session.execute.called, "set_rls_user_context did not execute any SQL"
+    calls = mock_session.execute.call_args_list
+    texts = [str(call[0][0]) for call in calls]
+
+    found_user_id = any("app.user_id" in t for t in texts)
+    found_org_role = any("app.org_role" in t for t in texts)
+    assert found_user_id, "No set_config call for app.user_id found"
+    assert found_org_role, "No set_config call for app.org_role found"
