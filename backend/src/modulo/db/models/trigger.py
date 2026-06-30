@@ -40,7 +40,7 @@ class Trigger(OrgScoped):
     max_concurrent_runs: Mapped[int] = mapped_column(Integer, nullable=False, server_default="1")
     daily_spend_limit: Mapped[Decimal | None] = mapped_column(Numeric(12, 4))
     config_json: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False, default=dict)
-    created_by: Mapped[uuid.UUID] = mapped_column(Uuid(), ForeignKey("users.id", ondelete="RESTRICT"), nullable=False)
+    account_id: Mapped[uuid.UUID] = mapped_column(Uuid(), ForeignKey("accounts.id", ondelete="RESTRICT"), nullable=False)
     # Cron-specific fields (nullable for non-cron trigger types)
     cron_expression: Mapped[str | None] = mapped_column(String(100), nullable=True)
     cron_timezone: Mapped[str | None] = mapped_column(String(50), nullable=True)

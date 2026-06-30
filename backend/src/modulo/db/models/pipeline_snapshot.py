@@ -25,7 +25,7 @@ class PipelineSnapshot(OrgScoped):
         index=True,
     )
     snapshot_version: Mapped[int] = mapped_column(Integer, nullable=False)
-    created_by: Mapped[uuid.UUID | None] = mapped_column(Uuid(), ForeignKey("users.id", ondelete="SET NULL"))
+    account_id: Mapped[uuid.UUID | None] = mapped_column(Uuid(), ForeignKey("accounts.id", ondelete="SET NULL"))
     environment_profile_id: Mapped[uuid.UUID | None] = mapped_column(
         Uuid(),
         ForeignKey("environment_profiles.id", ondelete="SET NULL"),

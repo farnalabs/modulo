@@ -20,7 +20,7 @@ async def copy_to_adapt(
     primitive_id: uuid.UUID,
     target_org_id: uuid.UUID,
     target_team_id: uuid.UUID | None,
-    created_by: uuid.UUID | None,
+    account_id: uuid.UUID | None,
 ) -> LibraryPrimitive | None:
     source = await get_library_primitive(session, primitive_id)
     if source is None:
@@ -55,7 +55,7 @@ async def copy_to_adapt(
         review_count=None,
         owner_team_id=target_team_id,
         visibility="org",
-        created_by=created_by,
+        created_by=account_id,
     )
     session.add(copied)
     await session.flush()
@@ -166,7 +166,7 @@ async def create_library_primitive(
     review_count: int | None,
     owner_team_id: uuid.UUID | None,
     visibility: str,
-    created_by: uuid.UUID | None,
+    account_id: uuid.UUID | None,
     auto_update: bool = True,
 ) -> LibraryPrimitive:
     primitive = LibraryPrimitive(
@@ -190,7 +190,7 @@ async def create_library_primitive(
         review_count=review_count,
         owner_team_id=owner_team_id,
         visibility=visibility,
-        created_by=created_by,
+        created_by=account_id,
         auto_update=auto_update,
     )
     session.add(primitive)

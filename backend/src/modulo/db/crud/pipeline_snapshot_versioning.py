@@ -105,7 +105,7 @@ async def rollback_to_snapshot(
     session: AsyncSession,
     pipeline_id: uuid.UUID,
     target_snapshot_id: uuid.UUID,
-    created_by: uuid.UUID | None = None,
+    account_id: uuid.UUID | None = None,
 ) -> PipelineSnapshot | None:
     """Create a new snapshot that restores the graph from a previous snapshot.
 
@@ -124,7 +124,7 @@ async def rollback_to_snapshot(
     pipeline.graph_nodes_json = copy.deepcopy(target.graph_json.get("nodes", []))
     await session.flush()
 
-    new_snapshot = await create_snapshot_from_live_graph(session, pipeline_id=pipeline_id, created_by=created_by)
+    new_snapshot = await create_snapshot_from_live_graph(session, pipeline_id=pipeline_id, created_by=account_id)
     if new_snapshot is not None:
         new_snapshot.tag = f"rollback-v{target.snapshot_version}"
         new_snapshot.notes = f"Rollback to snapshot version {target.snapshot_version}"

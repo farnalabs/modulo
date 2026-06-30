@@ -16,7 +16,7 @@ async def create_environment_profile(
     org_id: uuid.UUID,
     name: str,
     image_ref: str,
-    created_by: uuid.UUID,
+    account_id: uuid.UUID,
     description: str | None = None,
     capabilities: list[str] | None = None,
     egress_policy: str | None = None,
@@ -34,7 +34,7 @@ async def create_environment_profile(
         timeout_seconds=timeout_seconds,
         persistence_policy=persistence_policy or {},
         resource_limits_json=resource_limits or {},
-        created_by=created_by,
+        created_by=account_id,
         is_active=True,
     )
     session.add(profile)

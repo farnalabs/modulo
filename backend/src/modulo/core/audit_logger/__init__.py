@@ -157,7 +157,7 @@ async def verify_chain(
     for idx, event in enumerate(events):
         canonical_hash = _compute_event_hash(
             event_type=event.event_type,
-            actor_user_id=str(event.actor_user_id) if event.actor_user_id else None,
+            actor_user_id=str(event.account_id) if event.account_id else None,
             resource_type=event.resource_type,
             resource_id=str(event.resource_id) if event.resource_id else None,
             payload_json=event.payload_json,
@@ -221,7 +221,7 @@ async def export_chain(
             {
                 "id": str(e.id),
                 "event_type": e.event_type,
-                "actor_user_id": str(e.actor_user_id) if e.actor_user_id else None,
+                "actor_user_id": str(e.account_id) if e.account_id else None,
                 "resource_type": e.resource_type,
                 "resource_id": str(e.resource_id) if e.resource_id else None,
                 "payload_json": e.payload_json,
@@ -260,7 +260,7 @@ async def list_audit_events(
     if event_type:
         query = query.where(AuditEvent.event_type == event_type)
     if actor_user_id:
-        query = query.where(AuditEvent.actor_user_id == actor_user_id)
+        query = query.where(AuditEvent.account_id == actor_user_id)
     if resource_type:
         query = query.where(AuditEvent.resource_type == resource_type)
     if from_date:
@@ -296,7 +296,7 @@ async def list_audit_events(
             {
                 "id": str(e.id),
                 "event_type": e.event_type,
-                "actor_user_id": str(e.actor_user_id) if e.actor_user_id else None,
+                "actor_user_id": str(e.account_id) if e.account_id else None,
                 "resource_type": e.resource_type,
                 "resource_id": str(e.resource_id) if e.resource_id else None,
                 "payload_json": e.payload_json,
@@ -345,7 +345,7 @@ async def get_audit_events_batch(
             {
                 "id": str(e.id),
                 "event_type": e.event_type,
-                "actor_user_id": str(e.actor_user_id) if e.actor_user_id else None,
+                "actor_user_id": str(e.account_id) if e.account_id else None,
                 "resource_type": e.resource_type,
                 "resource_id": str(e.resource_id) if e.resource_id else None,
                 "payload_json": e.payload_json,

@@ -21,7 +21,7 @@ async def create_agent(
     *,
     org_id: uuid.UUID,
     name: str,
-    created_by: uuid.UUID,
+    account_id: uuid.UUID,
     is_executable: bool = True,
     input_schema_id: uuid.UUID,
     input_schema_version: str,
@@ -40,7 +40,7 @@ async def create_agent(
     agent = Agent(
         organisation_id=org_id,
         name=name,
-        created_by=created_by,
+        created_by=account_id,
         is_executable=is_executable,
         input_schema_id=input_schema_id,
         input_schema_version=input_schema_version,

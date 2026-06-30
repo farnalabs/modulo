@@ -95,7 +95,7 @@ def _to_response(mb: Any) -> ModelBackendResponse:
         default_params=mb.default_params,
         visibility=mb.visibility,
         fallback_backend_ids=fallback_ids,
-        created_by=mb.created_by,
+        created_by=mb.account_id,
         created_at=mb.created_at,
         updated_at=mb.updated_at,
     )

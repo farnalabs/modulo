@@ -120,7 +120,7 @@ def _to_response(p: EnvironmentProfile) -> ProfileResponse:
         resource_limits=p.resource_limits_json,
         persistence_policy=p.persistence_policy,
         is_active=p.is_active,
-        created_by=str(p.created_by) if p.created_by else None,
+        created_by=str(p.account_id) if p.account_id else None,
         created_at=p.created_at.isoformat() if p.created_at else None,
         updated_at=p.updated_at.isoformat() if p.updated_at else None,
     )

@@ -20,14 +20,14 @@ from modulo.db.models.primitive_rating import PrimitiveRating
 _COOLDOWN_MINUTES = 10
 
 
-async def _guard_self_rating(session: AsyncSession, primitive_id: uuid.UUID, user_id: uuid.UUID | None) -> None:
+async def _guard_self_rating(session: AsyncSession, primitive_id: uuid.UUID, account_id: uuid.UUID | None) -> None:
     """Block self-rating: a user cannot rate their own primitive."""
-    if user_id is None:
+    if account_id is None:
         return
     stmt = select(LibraryPrimitive).where(LibraryPrimitive.id == primitive_id).limit(1)
     result = await session.execute(stmt)
     prim = result.scalar_one_or_none()
-    if prim is not None and prim.created_by == user_id:
+    if prim is not None and prim.account_id == account_id:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="You cannot rate your own primitive",
@@ -35,10 +35,10 @@ async def _guard_self_rating(session: AsyncSession, primitive_id: uuid.UUID, use
 
 
 async def _guard_cooldown(
-    session: AsyncSession, primitive_id: uuid.UUID, org_id: uuid.UUID, user_id: uuid.UUID | None
+    session: AsyncSession, primitive_id: uuid.UUID, org_id: uuid.UUID, account_id: uuid.UUID | None
 ) -> None:
     """Enforce 10-min cooldown between ratings from the same user on the same primitive."""
-    if user_id is None:
+    if account_id is None:
         return
     cutoff = datetime.now(UTC) - timedelta(minutes=_COOLDOWN_MINUTES)
     stmt = (
@@ -47,7 +47,7 @@ async def _guard_cooldown(
         .where(
             PrimitiveRating.organisation_id == org_id,
             PrimitiveRating.primitive_id == primitive_id,
-            PrimitiveRating.user_id == user_id,
+            PrimitiveRating.account_id == account_id,
             PrimitiveRating.created_at > cutoff,
         )
     )
@@ -60,10 +60,10 @@ async def _guard_cooldown(
 
 
 async def _guard_copy_to_adapt(
-    session: AsyncSession, primitive_id: uuid.UUID, org_id: uuid.UUID, user_id: uuid.UUID | None
+    session: AsyncSession, primitive_id: uuid.UUID, org_id: uuid.UUID, account_id: uuid.UUID | None
 ) -> None:
     """Require that the user has copied the primitive before rating it."""
-    if user_id is None:
+    if account_id is None:
         return
     stmt = (
         select(func.count())
@@ -71,7 +71,7 @@ async def _guard_copy_to_adapt(
         .where(
             LibraryPrimitive.organisation_id == org_id,
             LibraryPrimitive.forked_from == primitive_id,
-            LibraryPrimitive.created_by == user_id,
+            LibraryPrimitive.account_id == account_id,
         )
     )
     copy_count = (await session.execute(stmt)).scalar_one()
@@ -94,18 +94,18 @@ async def submit_rating(
     primitive_id: uuid.UUID,
     thumbs_up: bool,
     comment: str | None = None,
-    user_id: uuid.UUID | None = None,
+    account_id: uuid.UUID | None = None,
 ) -> PrimitiveRating:
     """Submit a rating with validation guards (self-rating, cooldown, copy-to-adapt)."""
     # Run validation guards in order.
-    await _guard_self_rating(session, primitive_id, user_id)
-    await _guard_cooldown(session, primitive_id, org_id, user_id)
-    await _guard_copy_to_adapt(session, primitive_id, org_id, user_id)
+    await _guard_self_rating(session, primitive_id, account_id)
+    await _guard_cooldown(session, primitive_id, org_id, account_id)
+    await _guard_copy_to_adapt(session, primitive_id, org_id, account_id)
 
     rating = PrimitiveRating(
         organisation_id=org_id,
         primitive_id=primitive_id,
-        user_id=user_id,
+        account_id=account_id,
         thumbs_up=thumbs_up,
         comment=comment,
     )
@@ -191,7 +191,7 @@ async def submit_abuse_report(
     org_id: uuid.UUID,
     primitive_id: uuid.UUID,
     rating_id: uuid.UUID | None = None,
-    reporter_user_id: uuid.UUID | None = None,
+    reporter_account_id: uuid.UUID | None = None,
     reason: str,
 ) -> PrimitiveAbuseReport:
     """Submit an abuse report against a rating."""
@@ -199,7 +199,7 @@ async def submit_abuse_report(
         organisation_id=org_id,
         primitive_id=primitive_id,
         rating_id=rating_id,
-        reporter_user_id=reporter_user_id,
+        reporter_account_id=reporter_account_id,
         reason=reason,
         status="pending",
     )
@@ -242,7 +242,7 @@ async def review_abuse_report(
     report_id: uuid.UUID,
     *,
     new_status: str,
-    reviewed_by: uuid.UUID | None = None,
+    reviewer_account_id: uuid.UUID | None = None,
 ) -> PrimitiveAbuseReport | None:
     """Update the status of an abuse report (admin)."""
     stmt = select(PrimitiveAbuseReport).where(PrimitiveAbuseReport.id == report_id)
@@ -250,7 +250,7 @@ async def review_abuse_report(
     report = result.scalar_one_or_none()
     if report is not None:
         report.status = new_status
-        report.reviewed_by = reviewed_by
+        report.reviewer_account_id = reviewer_account_id
         report.reviewed_at = datetime.now(UTC)
         await session.flush()
     return report

@@ -19,7 +19,7 @@ async def create_node_category(
     *,
     org_id: uuid.UUID,
     name: str,
-    created_by: uuid.UUID,
+    account_id: uuid.UUID,
     description: str | None = None,
     color: str = "#6366f1",
     icon: str | None = None,
@@ -28,7 +28,7 @@ async def create_node_category(
     category = NodeCategory(
         organisation_id=org_id,
         name=name,
-        created_by=created_by,
+        created_by=account_id,
         description=description,
         color=color,
         icon=icon,

@@ -763,7 +763,7 @@ def _snapshot_to_response(s: Any) -> SnapshotResponse:
         tag=s.tag,
         notes=s.notes,
         created_at=s.created_at,
-        created_by=s.created_by,
+        created_by=s.account_id,
     )
 
 
@@ -775,7 +775,7 @@ def _snapshot_to_detail_response(s: Any) -> SnapshotDetailResponse:
         tag=s.tag,
         notes=s.notes,
         created_at=s.created_at,
-        created_by=s.created_by,
+        created_by=s.account_id,
         graph_json=s.graph_json,
         connector_bindings_json=s.connector_bindings_json,
         schema_pins_json=s.schema_pins_json,

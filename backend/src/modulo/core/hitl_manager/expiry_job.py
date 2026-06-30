@@ -102,11 +102,11 @@ class ClaimExpiryJob:
                             HitlClaim.id,
                             HitlClaim.run_id,
                             HitlClaim.gate_id,
-                            HitlClaim.claimed_by,
+                            HitlClaim.account_id,
                         ).where(
                             HitlClaim.organisation_id == org_id,
                             HitlClaim.expires_at < now,
-                            HitlClaim.claimed_by.is_not(None),
+                            HitlClaim.account_id.is_not(None),
                             HitlClaim.decision.is_(None),
                         )
                     )

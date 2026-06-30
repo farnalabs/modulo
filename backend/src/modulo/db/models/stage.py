@@ -18,4 +18,4 @@ class Stage(OrgScoped):
     position: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
     owner_team_id: Mapped[uuid.UUID | None] = mapped_column(Uuid(), ForeignKey("teams.id", ondelete="RESTRICT"))
     visibility: Mapped[str] = mapped_column(String(10), nullable=False, server_default="org")
-    created_by: Mapped[uuid.UUID] = mapped_column(Uuid(), ForeignKey("users.id", ondelete="RESTRICT"), nullable=False)
+    account_id: Mapped[uuid.UUID] = mapped_column(Uuid(), ForeignKey("accounts.id", ondelete="RESTRICT"), nullable=False)

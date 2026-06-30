@@ -186,7 +186,7 @@ class McpAuthMiddleware(BaseHTTPMiddleware):
                 _ctx_org_id.set(org_id)
                 _ctx_role.set(key.role)
                 _ctx_key_id.set(key.id)
-                _ctx_user_id.set(key.created_by)
+                _ctx_user_id.set(key.account_id)
                 _ctx_auth_token.set(token)
                 _ctx_auth_type.set("api_key")
                 request.scope["auth_principal"] = {
@@ -478,7 +478,7 @@ async def list_pending_hitl(page: int = 1, page_size: int = 20) -> dict[str, Any
                     "run_id": str(g.run_id),
                     "gate_id": g.gate_id,
                     "pipeline_id": str(g.pipeline_id),
-                    "claimed_by": str(g.claimed_by) if g.claimed_by else None,
+                    "claimed_by": str(g.account_id) if g.account_id else None,
                     "expires_at": g.expires_at.isoformat() if g.expires_at else None,
                     "required_team_id": str(g.required_team_id) if g.required_team_id else None,
                 }
@@ -931,7 +931,7 @@ async def resource_hitl_gate(run_id: str, gate_id: str) -> str:
         f"Run: {run_id}",
         f"Pipeline: {gate.pipeline_id}",
         f"Decision: {gate.decision or 'pending'}",
-        f"Claimed by: {gate.claimed_by or 'unclaimed'}",
+        f"Claimed by: {gate.account_id or 'unclaimed'}",
     ]
     if gate.expires_at:
         parts.append(f"Claim expires: {gate.expires_at.isoformat()}")

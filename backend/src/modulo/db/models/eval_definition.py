@@ -35,4 +35,4 @@ class EvalDefinition(OrgScoped):
     failure_behaviour: Mapped[str] = mapped_column(String(10), nullable=False, server_default="warn")
     pass_threshold: Mapped[float | None] = mapped_column(Float, nullable=True)
     suite_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
-    created_by: Mapped[uuid.UUID] = mapped_column(Uuid(), ForeignKey("users.id", ondelete="RESTRICT"), nullable=False)
+    account_id: Mapped[uuid.UUID] = mapped_column(Uuid(), ForeignKey("accounts.id", ondelete="RESTRICT"), nullable=False)

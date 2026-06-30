@@ -19,7 +19,7 @@ async def create_stage(
     *,
     org_id: uuid.UUID,
     name: str,
-    created_by: uuid.UUID,
+    account_id: uuid.UUID,
     description: str | None = None,
     position: int = 0,
     owner_team_id: uuid.UUID | None = None,
@@ -28,7 +28,7 @@ async def create_stage(
     stage = Stage(
         organisation_id=org_id,
         name=name,
-        created_by=created_by,
+        created_by=account_id,
         description=description,
         position=position,
         owner_team_id=owner_team_id,

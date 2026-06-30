@@ -31,17 +31,17 @@ class PrimitiveAbuseReport(OrgScoped):
         ForeignKey("primitive_ratings.id", ondelete="SET NULL"),
         nullable=True,
     )
-    reporter_user_id: Mapped[uuid.UUID | None] = mapped_column(
+    reporter_account_id: Mapped[uuid.UUID | None] = mapped_column(
         Uuid(),
-        ForeignKey("users.id", ondelete="SET NULL"),
+        ForeignKey("accounts.id", ondelete="SET NULL"),
         nullable=True,
     )
     reason: Mapped[str] = mapped_column(String(500), nullable=False)
     status: Mapped[str] = mapped_column(String(20), nullable=False, server_default="pending")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
     reviewed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
-    reviewed_by: Mapped[uuid.UUID | None] = mapped_column(
+    reviewer_account_id: Mapped[uuid.UUID | None] = mapped_column(
         Uuid(),
-        ForeignKey("users.id", ondelete="SET NULL"),
+        ForeignKey("accounts.id", ondelete="SET NULL"),
         nullable=True,
     )

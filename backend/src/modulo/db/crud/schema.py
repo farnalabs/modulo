@@ -37,14 +37,14 @@ async def create_schema(
     *,
     org_id: uuid.UUID,
     name: str,
-    created_by: uuid.UUID,
+    account_id: uuid.UUID,
     description: str | None = None,
     abstract_name: str | None = None,
 ) -> Schema:
     schema = Schema(
         organisation_id=org_id,
         name=name,
-        created_by=created_by,
+        created_by=account_id,
         description=description,
         abstract_name=abstract_name,
     )
@@ -136,7 +136,7 @@ async def create_schema_version(
     version: str,
     version_number: int,
     definition_json: dict[str, Any],
-    created_by: uuid.UUID,
+    account_id: uuid.UUID,
     published: bool = False,
 ) -> SchemaVersion:
     sv = SchemaVersion(
@@ -145,7 +145,7 @@ async def create_schema_version(
         version=version,
         version_number=version_number,
         definition_json=definition_json,
-        created_by=created_by,
+        created_by=account_id,
         published=published,
     )
     session.add(sv)

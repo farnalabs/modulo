@@ -51,8 +51,8 @@ FK_SPECS: list[tuple[str, str, str, str]] = [
     ("node_observations", "human_observed_by", "account_id", "SET NULL"),
     ("oauth_clients", "created_by", "account_id", "SET NULL"),
     ("primitive_ratings", "user_id", "account_id", "SET NULL"),
-    ("primitive_abuse_reports", "reporter_user_id", "account_id", "SET NULL"),
-    ("primitive_abuse_reports", "reviewed_by", "account_id", "SET NULL"),
+    ("primitive_abuse_reports", "reporter_user_id", "reporter_account_id", "SET NULL"),
+    ("primitive_abuse_reports", "reviewed_by", "reviewer_account_id", "SET NULL"),
     ("pipeline_snapshots", "created_by", "account_id", "SET NULL"),
 ]
 
@@ -93,22 +93,36 @@ def _rename_columns() -> None:
     for table, old_col, new_col, _on_delete in FK_SPECS:
         if old_col == new_col:
             continue
-        op.execute(f"ALTER TABLE {table} RENAME COLUMN {old_col} TO {new_col}")
+        op.execute(
+            f"""
+            DO $$
+            BEGIN
+                IF EXISTS (SELECT FROM pg_tables WHERE tablename = '{table}') THEN
+                    EXECUTE 'ALTER TABLE {table} RENAME COLUMN {old_col} TO {new_col}';
+                END IF;
+            END $$;
+            """
+        )
 
 
 def _recreate_fks() -> None:
     for table, _old_col, new_col, on_delete in FK_SPECS:
         constraint_name = f"fk_{table}_{new_col}_accounts"
-        if on_delete == "NO ACTION":
-            op.execute(
-                f"ALTER TABLE {table} ADD CONSTRAINT {constraint_name} "
-                f"FOREIGN KEY ({new_col}) REFERENCES accounts(id)"
-            )
-        else:
-            op.execute(
-                f"ALTER TABLE {table} ADD CONSTRAINT {constraint_name} "
-                f"FOREIGN KEY ({new_col}) REFERENCES accounts(id) ON DELETE {on_delete}"
-            )
+        fk_sql = (
+            f"FOREIGN KEY ({new_col}) REFERENCES accounts(id)"
+            if on_delete == "NO ACTION"
+            else f"FOREIGN KEY ({new_col}) REFERENCES accounts(id) ON DELETE {on_delete}"
+        )
+        op.execute(
+            f"""
+            DO $$
+            BEGIN
+                IF EXISTS (SELECT FROM pg_tables WHERE tablename = '{table}') THEN
+                    EXECUTE 'ALTER TABLE {table} ADD CONSTRAINT {constraint_name} {fk_sql}';
+                END IF;
+            END $$;
+            """
+        )
 
 
 def upgrade() -> None:

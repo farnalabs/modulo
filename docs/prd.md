@@ -4,6 +4,7 @@
 **Date**: 2026-06-29  
 **Status**: Pre-development  
 **Changelog**:  
+- v0.24 — Tier rename: free→Community, enterprise→Team across all UI text, API responses, backend code, docs, and tests. Community Edition (free, no license key) and Team Edition (self-serve paid, feature-gated, no SLA/support commitment). §6.2 updated to reflect new naming; §6.2.1 Tier System Architecture added describing the future-state flexible tier catalog.
 - v0.23 — §8.21 View Modes (Enterprise): multiple named UI views with admin-defined feature visibility per view, assignment to users/teams/org roles, enforcement, self-lockout prevention guards; `view_modes` enterprise feature flag replaces previously planned `view_mode` + `view_mode_enforcement`
 - v0.22 — Enterprise tier clarified: no SLAs, no dedicated support, no bespoke services. Enterprise = self-serve feature gate only (SSO, RBAC, audit viewer, admin spend limits). Pricing page updated. BSL 1.1 LICENSE file created at repo root; `Dev-Harness/tools/release.ps1` release script created with placeholder steps for Docker Hub, GitHub release, etc.
 - v0.21 — shadcn-vue + Radix Vue added as component library foundation (replaces build-from-scratch UI primitives); tier badge spec (Free/Enterprise pill in sidebar nav footer; lock icon on gated features); `/settings/license` page spec; `planStore` added to Pinia stores; `GET /api/v1/license` endpoint; frontend tech stack table updated
@@ -249,9 +250,9 @@ class PlanContext(Protocol):
         ...
 ```
 
-**`FreeTierPlanContext`** (default when no valid license key is present): returns `False` for all enterprise features listed below, `None` for all limits (unbounded within the free tier). This is the default for self-hosted instances without a license key.
+**`CommunityTierPlanContext`** (default when no valid license key is present): returns `False` for all Team-tier features listed below, `None` for all limits (unbounded within the Community tier). This is the default for self-hosted instances without a license key.
 
-**`LicenseKeyPlanContext`** (self-hosted with `MODULO_LICENSE_KEY` set): on startup, the application verifies the signed JSON payload in `MODULO_LICENSE_KEY` using the embedded Ed25519 public key. If the signature is valid and the key has not expired, the enabled features listed in the payload's `features` array are activated; all others remain disabled. If the key is invalid, expired, or malformed, startup logs a warning and falls back to `FreeTierPlanContext`.
+**`LicenseKeyPlanContext`** (self-hosted with `MODULO_LICENSE_KEY` set): on startup, the application verifies the signed JSON payload in `MODULO_LICENSE_KEY` using the embedded Ed25519 public key. If the signature is valid and the key has not expired, the enabled features listed in the payload's `features` array are activated; all others remain disabled. If the key is invalid, expired, or malformed, startup logs a warning and falls back to `CommunityTierPlanContext`.
 
 **License key format**: a base64-encoded signed JSON payload, e.g.:
 ```json
@@ -259,31 +260,87 @@ class PlanContext(Protocol):
 ```
 Signed offline by the Modulo private key. Verified on startup using the public key embedded in the repository. No outbound network call required.
 
-**Enterprise feature gate**: the following features require a valid license key with the named flag. Absence of a key, or an expired key, returns `False`:
+**Team feature gate**: the following features require a valid license key with the named flag. Absence of a key, or an expired key, returns `False`:
 - `sso` — OIDC, SAML 2.0, JIT provisioning
 - `team_rbac` — team entity, team-scoped roles, team pipeline visibility
-- `audit_viewer` — AuditEvent bulk export and advanced filtering. *Audit event recording is always active (free tier). A read-only recent-events view (max 50 events, no export) and chain verification endpoint are also free.* Only bulk export (CSV/JSONL) and batch-detail are enterprise-gated.
+- `audit_viewer` — AuditEvent bulk export and advanced filtering. *Audit event recording is always active (Community tier). A read-only recent-events view (max 50 events, no export) and chain verification endpoint are also Community.* Only bulk export (CSV/JSONL) and batch-detail are Team-gated.
 - `admin_spend_limits` — org and team-level run/spend limit configuration
 
-> **Resolved (2026-06-30)**: a read-only recent-events endpoint (`GET /api/v1/admin/audit`) with chain verification (`GET /api/v1/admin/audit/verify`) stays free — max 50 events, no export. This gives regulated teams tamper-evidence proof during evaluation without requiring an enterprise license. Bulk export (CSV/JSONL) and batch-detail endpoints remain enterprise-gated.
+> **Resolved (2026-06-30)**: a read-only recent-events endpoint (`GET /api/v1/admin/audit`) with chain verification (`GET /api/v1/admin/audit/verify`) stays Community — max 50 events, no export. This gives regulated teams tamper-evidence proof during evaluation without requiring a Team license. Bulk export (CSV/JSONL) and batch-detail endpoints remain Team-gated.
 
 **`CloudPlanContext`** (V3 SaaS — not yet built): would be injected by the modulo-cloud gateway middleware per-org, enforcing SaaS plan-tier flags and rate limits. Core never knows the plan tier — it only calls the interface.
 
-Named feature flags used by core (exhaustive list as of v0.20):
+Named feature flags used by core (exhaustive list as of v0.24):
 
-*Free tier — always enabled:*
+*Community tier — always enabled:*
 - `parallel_branches` — pipeline nodes with multiple outgoing edges running concurrently
 - `eval_system` — §7.16 eval engine
 - `webhook_trigger` — inbound webhook triggers
 - `cron_trigger` — scheduled triggers (v1)
 - `mcp_server` — remote MCP endpoint
 - `community_library` — browse and copy community registry primitives
-*Enterprise tier — requires valid license key:*
+*Team tier — requires valid license key:*
 - `sso` — OIDC/SAML authentication
 - `team_rbac` — team entity and team-scoped roles (previously `team_management`)
-- `audit_viewer` — AuditEvent bulk export and batch detail (read-only recent-events view and chain verification always free; recording always active)
+- `audit_viewer` — AuditEvent bulk export and batch detail (read-only recent-events view and chain verification always Community; recording always active)
 - `admin_spend_limits` — org/team-level spend and run limit configuration
 - `view_modes` — multiple named UI views with admin-defined feature visibility per view and user/team/role assignment (§8.21)
+
+> **Tier rename (v0.24)**: the formerly-named "Free" tier is now **Community**; the formerly-named "Enterprise" tier is now **Team**. The reserved future tiers v1 and v2 remain as-is. This rename reflects that the paid tier is a self-serve feature gate (no SLA, no support contract, no bespoke services) — "Team" more accurately describes what the gated features enable (team collaboration: SSO, RBAC, audit, spend limits) without promising enterprise-grade sales support.
+
+##### Tier System Architecture (future state)
+
+The current tier system has the tier names, feature-to-tier assignments, and plan context resolution all hardcoded in Python source. While functional, this makes it difficult to:
+
+- Rename tiers without touching code
+- Add new tiers (a third, fourth, fifth tier) without writing new PlanContext classes
+- Change which features belong to which tier without a code deploy
+- Support non-linear tier hierarchies (e.g., tiers A and B have partially overlapping but not superset features)
+
+A flexible tier system would decouple tier definitions from code via a **DB-backed tier catalog**:
+
+**`tier_catalog` table**: stores tier definitions — name, display label, rank/ordering, whether it requires a license key, description.
+
+```sql
+CREATE TABLE tier_catalog (
+    tier_id       TEXT PRIMARY KEY,     -- e.g. 'community', 'team', 'pro', 'enterprise'
+    label         TEXT NOT NULL,         -- human-readable: 'Community', 'Team', 'Pro', 'Enterprise'
+    rank          INT NOT NULL,          -- for cumulative activation (≤ rank activates)
+    requires_license BOOLEAN DEFAULT FALSE,
+    description   TEXT
+);
+```
+
+**`feature_flag_catalog` table**: replaces the hardcoded `_KNOWN_FLAGS` list — each flag belongs to a tier and can be reassigned via data change.
+
+```sql
+CREATE TABLE feature_flag_catalog (
+    name          TEXT PRIMARY KEY,
+    description   TEXT,
+    tier_id       TEXT REFERENCES tier_catalog(tier_id),
+    depends_on    TEXT[],
+    is_active     BOOLEAN DEFAULT TRUE   -- manual override
+);
+```
+
+**Benefits:**
+- Renaming a tier or reassigning a feature is an INSERT/UPDATE, not a code change
+- Adding a new tier is an INSERT into `tier_catalog` plus reassigning features into it
+- Non-linear tier structures are possible via explicit feature lists per org (instead of rank-based cumulative)
+- A `GET /api/v1/admin/tiers` endpoint can list all known tiers and their display labels — the frontend no longer hardcodes `tierSections`
+- PlanContext resolution reads from DB instead of hardcoded Python classes
+
+**Migration path:**
+1. Create the `tier_catalog` and `feature_flag_catalog` tables
+2. Seed them with current tier definitions (community, team, v1, v2) and all existing feature flags
+3. Refactor `FeatureFlagRegistry` to read from DB instead of `_KNOWN_FLAGS`
+4. Refactor `get_plan_context()` to resolve from `tier_catalog` instead of hardcoded class dict
+5. Add `GET /api/v1/admin/tiers` endpoint
+6. Update frontend `planStore` and `AdminFeatureFlagsView` to consume tier labels from API
+7. Add data migration for existing orgs' `plan_id` values
+8. Deprecate the hardcoded `_KNOWN_FLAGS` and `TIER_RANK` after one release cycle
+
+> **Status**: Not yet implemented. Tracked as a delivery-phase task. The v0.24 rename to Community/Team is done as a direct source rename first; the tier-catalog refactor follows in a subsequent delivery sprint.
 
 #### API Keys
 Per-org, role-scoped API keys for CI/CD pipelines and external agents.
@@ -378,16 +435,16 @@ Future themes (`dark`, `high-contrast`, `compact`) are additive CSS layers — n
 
 | State | Display | Behaviour |
 |---|---|---|
-| No license key / Free Tier | `Free` badge (neutral colour) | Links to `/settings/license` |
-| Valid enterprise key | `Enterprise` badge (accent colour) + expiry date tooltip | Links to `/settings/license` |
-| Expired enterprise key | `License expired` badge (destructive colour) | Links to `/settings/license`; startup also logs a warning |
+| No license key / Community tier | `Community` badge (neutral colour) | Links to `/settings/license` |
+| Valid Team key | `Team` badge (accent colour) + expiry date tooltip | Links to `/settings/license` |
+| Expired Team key | `License expired` badge (destructive colour) | Links to `/settings/license`; startup also logs a warning |
 
 The badge reads from `planStore` (see below) — it does not make its own API call.
 
-**Enterprise-gated features in the UI**: features gated behind the enterprise tier are **never hidden**. They render with:
+**Team-gated features in the UI**: features gated behind the Team tier are **never hidden**. They render with:
 - A lock icon (`🔒` via Radix Vue `LockClosedIcon`) adjacent to the feature label
-- An `Enterprise` badge (shadcn-vue `Badge` variant `outline`) inline
-- On click/focus, a tooltip: "Requires an Enterprise license — see `/settings/license`"
+- A `Team` badge (shadcn-vue `Badge` variant `outline`) inline
+- On click/focus, a tooltip: "Requires a Team license — see `/settings/license`"
 - The underlying control is `disabled` and `aria-disabled="true"`
 
 This pattern creates a passive upgrade funnel without jarring empty states.
@@ -396,27 +453,27 @@ This pattern creates a passive upgrade funnel without jarring empty states.
 
 ```ts
 interface PlanState {
-  tier: 'free' | 'enterprise'
+  tier: 'community' | 'team'
   features: string[]          // active feature flags from license payload
-  expiresAt: string | null    // ISO date string; null for free tier
+  expiresAt: string | null    // ISO date string; null for Community tier
   orgName: string | null      // org name from license payload
 }
 ```
 
 `planStore.featureEnabled(flag: string)` is the client-side gate used by all UI components. It mirrors `PlanContext.feature_enabled()` on the backend — both must agree or a component will be incorrectly enabled/disabled.
 
-**`GET /api/v1/license`** endpoint (admin only): returns current tier, active features, expiry, and org name from the validated license payload. Returns `{"tier": "free", "features": [], "expires_at": null, "org_name": null}` when no valid key is present. Never returns the raw signed key material.
+**`GET /api/v1/license`** endpoint (admin only): returns current tier, active features, expiry, and org name from the validated license payload. Returns `{"tier": "community", "features": [], "expires_at": null, "org_name": null}` when no valid key is present. Never returns the raw signed key material.
 
 **`/settings/license` page** (admin only):
 
 | Section | Content |
 |---|---|
-| Current tier | `Free Tier` or `Enterprise` card with expiry date and licensed org name |
-| Active features | Checklist of all defined feature flags; each shows enabled (✓) or disabled (✗ with "requires Enterprise") |
+| Current tier | `Community` or `Team` card with expiry date and licensed org name |
+| Active features | Checklist of all defined feature flags; each shows enabled (✓) or disabled (✗ with "requires Team") |
 | License key management | Textarea to paste a new `MODULO_LICENSE_KEY` value (writes to server env / config file); "Verify key" dry-run before applying; confirmation dialog on apply (requires server restart warning) |
-| Upgrade CTA | "Get an Enterprise License" link (external); only shown on Free Tier |
+| Upgrade CTA | "Get a Team License" link (external); only shown on Community tier |
 
-The license page is also reachable from any enterprise-gated feature's lock icon tooltip.
+The license page is also reachable from any Team-gated feature's lock icon tooltip.
 
 **Playwright loading state convention**: async data-loading components set `data-loading="true"` on their root element while fetching and `data-loading="false"` on completion. Playwright tests wait with `waitForSelector('[data-loading="false"]')` rather than arbitrary `page.waitForTimeout()` calls. This applies to all Playwright feature tests — no hard-coded delays.
 
@@ -1497,11 +1554,11 @@ The feedback inbox is a first-class UI surface (v1), parallel to the HITL review
 
 ---
 
-### 8.21 View Modes (Enterprise)
+### 8.21 View Modes (Team)
 
-The UI can show different subsets of features depending on the user's selected **view**. Every enterprise deployment ships with two default views — **Simple** and **Advanced** — that an admin can customise. Admins may also create additional named views and assign them to specific users, teams, or roles.
+The UI can show different subsets of features depending on the user's selected **view**. Every Team-licensed deployment ships with two default views — **Simple** and **Advanced** — that an admin can customise. Admins may also create additional named views and assign them to specific users, teams, or roles.
 
-The entire View Modes feature is **enterprise-gated** (`view_modes` feature flag). Without a valid Enterprise license key, the feature is entirely absent — every feature is always visible, no toggle, no admin configuration.
+The entire View Modes feature is **Team-gated** (`view_modes` feature flag). Without a valid Team license key, the feature is entirely absent — every feature is always visible, no toggle, no admin configuration.
 
 #### Default UX: Simple/Advanced Toggle
 
@@ -2010,9 +2067,9 @@ V1 Feature Tests (separate suite, not in alpha CI — these features do not exis
 - [ ] Vue 3 + Pinia scaffold; org context in all stores; `planStore` hydrated from `GET /api/v1/license` on page load
 - [ ] shadcn-vue component library initialised: `Button`, `Badge`, `Dialog`, `Tooltip`, `DropdownMenu`, `Input`, `Label`, `Separator` installed as baseline primitives before any feature UI is built; components live in `src/components/ui/`
 - [ ] Theme system: `data-theme` on root element; `standard` and `agent` themes in alpha; `?theme=<name>` query param override; `localStorage` persistence; admin deployment default
-- [ ] Sidebar tier badge: `Free` / `Enterprise` / `License expired` pill in nav footer; reads from `planStore`; links to `/settings/license`
-- [ ] `/settings/license` page: current tier card, active feature checklist, license key paste + verify + apply, upgrade CTA on free tier
-- [ ] Enterprise-gated feature pattern: lock icon + `Enterprise` badge + disabled control + tooltip on all gated UI elements
+- [ ] Sidebar tier badge: `Community` / `Team` / `License expired` pill in nav footer; reads from `planStore`; links to `/settings/license`
+- [ ] `/settings/license` page: current tier card, active feature checklist, license key paste + verify + apply, upgrade CTA on Community tier
+- [ ] Team-gated feature pattern: lock icon + `Team` badge + disabled control + tooltip on all gated UI elements
 - [ ] Vue Flow pipeline canvas: nodes with ConnectorBinding picker, HITL gate edge type, inline validation errors
 - [ ] Agent config UI: prompt editor (sandbox warning), model backend selector, connector type + binding picker, prompt version history viewer
 - [ ] Schema editor: field definition, type selection, version history, deletion guard
