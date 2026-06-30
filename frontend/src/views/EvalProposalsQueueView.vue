@@ -1,5 +1,5 @@
 <template>
-  <FeatureGate feature-name="eval_system" required-tier="enterprise">
+  <FeatureGate feature-name="eval_system" required-tier="team">
     <template #locked="{ tooltip }">
       <div class="mx-auto max-w-5xl space-y-8 p-6">
         <div class="mb-4 flex items-center gap-2 rounded-lg border border-warning/30 bg-warning/5 p-4 text-sm text-warning">

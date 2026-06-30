@@ -17,7 +17,7 @@
           /
           <span>{{ allFlagsCount }}</span>
         </span>
-        <span v-if="planStore.isEnterprise" class="font-medium badge badge-context-purple">Enterprise tier</span>
+        <span v-if="planStore.isTeam" class="font-medium badge badge-context-purple">Team tier</span>
       </div>
     </header>
 
@@ -63,7 +63,7 @@
       <h2 class="mb-2 text-sm font-semibold text-warning">Would activate with a license key</h2>
       <p class="mb-3 text-sm text-warning/80">
         The following {{ filteredWouldActivate.length }} feature{{ filteredWouldActivate.length === 1 ? '' : 's' }} would become available
-        if an enterprise license key were configured.
+        if a Team license key were configured.
       </p>
       <div class="flex flex-wrap gap-2">
         <span
@@ -235,7 +235,7 @@ interface FlagGroup {
 }
 
 const flags = ref<FlagItem[]>([])
-const license = ref<LicenseInfo>({ tier: 'free', has_license_key: false, is_valid: true })
+const license = ref<LicenseInfo>({ tier: 'community', has_license_key: false, is_valid: true })
 const wouldActivate = ref<FlagItem[]>([])
 const loading = ref(true)
 const error = ref<string | null>(null)
@@ -244,8 +244,8 @@ const currentPage = ref(1)
 const pageSize = 10
 
 const tierSections: Record<string, string> = {
-  free: 'Free',
-  enterprise: 'Enterprise',
+  community: 'Community',
+  team: 'Team',
   v1: 'V1',
   v2: 'V2',
 }
@@ -284,7 +284,7 @@ const paginatedGroups = computed(() => {
   }
 
   groups.sort((a, b) => {
-    const order = ['free', 'enterprise']
+    const order = ['community', 'team']
     return order.indexOf(a.tier) - order.indexOf(b.tier)
   })
 
@@ -321,7 +321,7 @@ async function loadFlags() {
     } else if (data) {
       const resp = data as FlagsResponse
       flags.value = resp.flags
-      license.value = resp.license ?? { tier: 'free', has_license_key: false, is_valid: true }
+      license.value = resp.license ?? { tier: 'community', has_license_key: false, is_valid: true }
       wouldActivate.value = resp.would_activate ?? []
     }
   } catch (e: unknown) {

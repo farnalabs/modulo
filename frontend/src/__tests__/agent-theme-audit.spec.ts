@@ -34,9 +34,9 @@ vi.mock('../lib/api/client', () => ({
 vi.mock('../stores/planStore', () => ({
   usePlanStore: vi.fn(() => ({
     fetchPlan: vi.fn(),
-    currentTier: 'free',
+    currentTier: 'community',
     features: {},
-    isEnterprise: false,
+    isTeam: false,
     isLoading: false,
     isFree: true,
   })),
