@@ -20,6 +20,7 @@ from typing import Any, cast
 from opentelemetry import trace
 from opentelemetry.trace import Status, StatusCode
 
+from modulo.connectors.azure_repos import AzureReposConnector
 from modulo.connectors.base import (
     ConnectorACL,
     ConnectorBase,
@@ -250,6 +251,11 @@ def _build_connector(type_id: str, config: dict[str, Any], creds: dict[str, Any]
         case "gitea":
             base_url = config.get("base_url", "https://codeberg.org")
             return GiteaConnector(token=_get_cred(creds, "token", type_id), base_url=base_url)
+        case "azure_repos":
+            organization = config.get("organization", "")
+            if not organization:
+                raise ValueError("AzureReposConnector requires 'organization' in config_json")
+            return AzureReposConnector(token=_get_cred(creds, "token", type_id), organization=organization)
         case "github":
             return GitHubConnector(token=_get_cred(creds, "token", type_id))
         case "github_actions_ci":
