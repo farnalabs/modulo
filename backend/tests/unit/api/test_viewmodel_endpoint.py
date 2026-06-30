@@ -76,12 +76,12 @@ def _make_mock_plan_context() -> MagicMock:
     flag1 = MagicMock()
     flag1.name = "parallel_branches"
     flag1.description = "Run branching logic in parallel within a pipeline"
-    flag1.tier = "free"
+    flag1.tier = "community"
     flag1.currently_active = True
     flag2 = MagicMock()
     flag2.name = "eval_system"
     flag2.description = "Built-in eval runner for LLM output quality gates"
-    flag2.tier = "free"
+    flag2.tier = "community"
     flag2.currently_active = True
     ctx.list_enabled_features = MagicMock(return_value=[flag1, flag2])
     return ctx
@@ -191,7 +191,7 @@ def test_viewmodel_current_returns_200(client: TestClient) -> None:
     assert body["team_memberships_truncated"] is False
     assert body["preferences"] == {}
     assert len(body["feature_flags"]) > 0
-    assert body["plan"]["tier"] == "free"
+    assert body["plan"]["tier"] == "community"
 
 
 def test_viewmodel_current_unauthenticated_returns_4xx(unauth_client: TestClient) -> None:
@@ -272,7 +272,7 @@ def test_viewmodel_current_includes_feature_flags(client: TestClient) -> None:
     assert "eval_system" in flag_names
     for flag in body["feature_flags"]:
         assert flag["active"] is True
-        assert flag["tier"] == "free"
+        assert flag["tier"] == "community"
 
 
 def test_viewmodel_current_includes_org_info(client: TestClient) -> None:
@@ -384,7 +384,7 @@ def test_viewmodel_current_includes_plan(client: TestClient) -> None:
     assert resp.status_code == 200
     body = resp.json()
     assert "plan" in body
-    assert body["plan"]["tier"] == "free"
+    assert body["plan"]["tier"] == "community"
     assert body["plan"]["daily_spend_limit"] is None
 
 

@@ -154,7 +154,7 @@ def client() -> Generator[TestClient, None, None]:
     _app.dependency_overrides[_get_engine] = lambda: MagicMock()
     _app.dependency_overrides[get_plan_context] = lambda: LicenseKeyTier(
         LicenseData(
-            tier="enterprise",
+            tier="team",
             features=["sso"],
             expires_at="",
             org_id="",
@@ -186,7 +186,7 @@ def saml_client() -> Generator[TestClient, None, None]:
     _app.dependency_overrides[_get_engine] = lambda: MagicMock()
     _app.dependency_overrides[get_plan_context] = lambda: LicenseKeyTier(
         LicenseData(
-            tier="enterprise",
+            tier="team",
             features=["sso"],
             expires_at="",
             org_id="",
@@ -240,7 +240,7 @@ class TestAdminSetGroupMappings:
 
     def test_requires_admin_role(self, client: TestClient) -> None:
         _app.dependency_overrides[get_plan_context] = lambda: LicenseKeyTier(
-            LicenseData(tier="enterprise", features=["sso"], expires_at="", org_id="", raw_payload={}, raw_key="k")
+            LicenseData(tier="team", features=["sso"], expires_at="", org_id="", raw_payload={}, raw_key="k")
         )
         from modulo.auth.dependencies import get_current_user
         from modulo.auth.jwt import AuthenticatedPrincipal

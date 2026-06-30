@@ -7,7 +7,7 @@ format::
 
 The payload is a JSON object with keys:
 
-    tier        — "free" | "enterprise" | "v1" | "v2"
+    tier        — "community" | "team" | "v1" | "v2"
     features    — list of feature flag names
     expires_at  — ISO 8601 expiration timestamp
     org_id      — organisation identifier
@@ -92,7 +92,7 @@ def parse_and_verify(key: str) -> LicenseValidation:
     if not verify_signature(payload, sig_hex, _LICENSE_PUBLIC_KEY_HEX):
         return LicenseValidation(valid=False, error="Signature verification failed")
 
-    tier = payload.get("tier", "free")
+    tier = payload.get("tier", "community")
     features = payload.get("features", [])
     expires_at = payload.get("expires_at", "")
     org_id = payload.get("org_id", "")

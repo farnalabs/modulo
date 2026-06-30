@@ -120,7 +120,7 @@ async def get_plan_context(
     Resolution order:
     1. Organisation.plan_id (per-org, from DB)
     2. SystemConfig.default_plan (deployment-wide, from DB)
-    3. FreeTier (default fallback)
+    3. CommunityTier (default fallback)
     """
     plan_id = await get_plan_for_org(session, current_user.organisation_id)
     return resolve_plan_by_id(plan_id)

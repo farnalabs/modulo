@@ -19,7 +19,7 @@ router = APIRouter(prefix="/api/v1/admin/license", tags=["admin-license"])
 
 class LicenseStatusResponse(BaseModel):
     has_license: bool
-    tier: str = "free"
+    tier: str = "community"
     features: list[str] = Field(default_factory=list)
     expires_at: str | None = None
     org_id: str | None = None

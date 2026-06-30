@@ -70,7 +70,7 @@ def _reset_cache():
 
 @pytest.fixture()
 def free_client() -> Generator[TestClient, None, None]:
-    """Client with no license — observability is enterprise-gated."""
+    """Client with no license — observability is team-gated."""
     mock_session = _make_mock_session()
 
     async def override_session() -> AsyncGenerator[AsyncMock, None]:
