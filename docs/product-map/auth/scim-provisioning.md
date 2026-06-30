@@ -1,6 +1,6 @@
 ---
 id: feat-auth-scim
-prd: 9.2, 9.4
+prd: [9.2, 9.4]
 delivery-tasks: [task-nv1-team-api-keys]
 bdd: backend/tests/features/scim/scim_provisioning.feature
 code:

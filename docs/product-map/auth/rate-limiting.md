@@ -2,6 +2,7 @@
 id: feat-auth-rate-limiting
 prd: 7.18
 delivery-tasks: [task-nv12-rate-limiting]
+bdd:
   - backend/tests/bdd/features/model_backends/rate_limiting.feature
 code:
   - backend/src/modulo/api/middleware/rate_limiter.py
@@ -10,25 +11,41 @@ code:
 
 status: partial
 ---
-# API Rate Limiting ## Behaviours ### Auth rate limiting (6.10 cross-ref)
+# API Rate Limiting
+
+## Behaviours
+
+### Auth rate limiting (6.10 cross-ref)
 - [ ] Login endpoint: 10 failed attempts per IP per minute returns 429
 - [ ] Exponential backoff applied after rate limit exceeded on login
-- [ ] Counter resets after successful login ### POST /api/v1/runs
+- [ ] Counter resets after successful login
+
+### POST /api/v1/runs
 - [x] 60 requests per minute per API key (middleware rule matches PRD §7.18)
 - [x] Returns 429 with `retry-after` header when exceeded
 - [x] Response body includes `error_code: rate_limit_exceeded`
 - [x] GET requests to the same path are not rate limited
-- [x] PUT/PATCH requests are rate limited ### POST /api/v1/webhooks/<trigger_id>
+- [x] PUT/PATCH requests are rate limited
+
+### POST /api/v1/webhooks/&lt;trigger_id&gt;
 - [x] 100 requests per minute per trigger (middleware rule matches PRD §7.18)
 - [x] Returns 429 when exceeded
 - [x] Exceeded requests logged as `TriggerEvent` with `rate_limited` status
-- [ ] Webhook flood protection separate from per-trigger rate limit ### MCP trigger_pipeline tool
+- [ ] Webhook flood protection separate from per-trigger rate limit
+
+### MCP trigger_pipeline tool
 - [x] 60 calls per minute per MCP client ID (app-level TokenBucket with rate=1.0, burst=60)
-- [x] Returns error response when exceeded (returns `{"error":"rate_limited",...}`) ### POST /runs/{id}/hitl/{gate_id}/review
+- [x] Returns error response when exceeded (returns `{"error":"rate_limited",...}`)
+
+### POST /runs/{id}/hitl/{gate_id}/review
 - [ ] 20 requests per minute per user (not yet enforced as separate rule — covered by runs catch-all at 60/min)
-- [ ] Returns 429 when exceeded ### Any MCP tool call
+- [ ] Returns 429 when exceeded
+
+### Any MCP tool call
 - [x] 200 requests per minute per MCP client ID (middleware rule matches PRD §7.18)
-- [x] Returns 429 when exceeded ### Backend implementation
+- [x] Returns 429 when exceeded
+
+### Backend implementation
 - [x] Redis-backed sliding window (ZADD + ZREMRANGEBYSCORE) as primary
 - [x] In-memory token bucket fallback when Redis unavailable
 - [x] Startup warning logged when running in-memory mode
@@ -38,10 +55,14 @@ status: partial
 - [x] Bypass token (`MODULO_RATELIMIT_BYPASS_TOKEN`) skips rate limiting
 - [x] Client keyed by `X-Forwarded-For` IP + request path
 - [x] Only POST/PUT/PATCH methods are rate limited
-- [x] `Retry-After` header set to the window duration in seconds ### Concurrency & multi-worker
+- [x] `Retry-After` header set to the window duration in seconds
+
+### Concurrency & multi-worker
 - [x] Redis coordinates rate limit state across multiple worker processes
 - [ ] In-memory fallback is per-process — effectively doubles limit on N replicas
-- [ ] `Retry-After` response returned before the request handler runs (middleware order) ### Unit test coverage
+- [ ] `Retry-After` response returned before the request handler runs (middleware order)
+
+### Unit test coverage
 - [x] TokenBucket: consume when tokens available
 - [x] TokenBucket: blocks when empty, refills over time
 - [x] TokenBucket: burst ceiling enforced
@@ -62,7 +83,9 @@ status: partial
 - [x] Middleware: MCP paths rate limited
 - [ ] Admin API: GET returns rules and mode
 - [ ] Admin API: PUT updates rules dynamically
-- [ ] Admin API: non-admin gets 403 ### Edge cases
+- [ ] Admin API: non-admin gets 403
+
+### Edge cases
 - [x] Missing `X-Forwarded-For` header falls back to `request.client.host` (rate_limiter.py:128)
 - [x] Unknown client host falls back to `"unknown"` (rate_limiter.py:128)
 - [x] Empty bypass token header treated as no token (rate_limiter.py:112-113: empty str is falsy)
@@ -73,7 +96,9 @@ status: partial
 - [ ] Runtime rules update does not reset existing in-flight counters
 - [ ] At least one rule required on PUT (400 if empty)
 - [x] Path prefix matching: `/api/v1/runs` matches both exact and sub-routes (rate_limiter.py:121: `path.startswith(prefix)`)
-- [x] TokenBucket thread-safe via `asyncio.Lock` ## Known Gaps
+- [x] TokenBucket thread-safe via `asyncio.Lock`
+
+## Known Gaps
 - BDD feature file at `backend/tests/bdd/features/model_backends/rate_limiting.feature` is a placeholder — no real scenarios
 - No BDD coverage for any rate limit endpoint or behaviour
 - No integration/E2E test that exercises Redis sliding window against a real Redis
