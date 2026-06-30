@@ -23,7 +23,7 @@ from modulo.db.crud.scheduled_report import (
     list_scheduled_reports,
 )
 from modulo.db.crud.spend_anomaly import dismiss_anomaly, list_anomalies
-from modulo.db.crud.team import get_team
+from modulo.db.crud.team import get_team, list_teams
 from modulo.db.models.daily_run_count import OrgDailyRunCount
 from modulo.db.rls import set_rls_org
 
@@ -161,6 +161,82 @@ async def set_team_spend_limit(
         "team_id": team_id,
         "daily_spend_limit": body.daily_spend_limit,
     }
+
+
+class CostControlsResponse(BaseModel):
+    teams: list[dict[str, object]]
+    budget: float | None = None
+    alertThresholds: list[float] = []
+    circuitBreakerEnabled: bool = False
+    currency: str = "USD"
+    billingPeriod: str = "monthly"
+
+
+class UpdateCostControlsRequest(BaseModel):
+    budget: float | None = None
+    alertThresholds: list[float] | None = None
+    circuitBreakerEnabled: bool | None = None
+    currency: str | None = None
+    billingPeriod: str | None = None
+
+
+@router.get("/controls", response_model=CostControlsResponse)
+async def get_cost_controls(
+    current_user: AuthenticatedPrincipal = Depends(get_current_user),
+    session: AsyncSession = Depends(get_db_session),
+) -> CostControlsResponse:
+    _require_admin(current_user)
+    async with session.begin():
+        await set_rls_org(session, current_user.organisation_id)
+        teams_result = await list_teams(session, org_id=current_user.organisation_id, page=1, page_size=1000)
+        org = await get_organisation(session, current_user.organisation_id)
+
+    from modulo.db.models.team import Team
+
+    return CostControlsResponse(
+        teams=[
+            {
+                "id": str(t.id),
+                "name": t.name,
+                "daily_limit_usd": float(t.daily_spend_limit) if t.daily_spend_limit is not None else None,
+            }
+            for t in teams_result.items
+        ],
+        budget=float(org.daily_spend_limit) if org and org.daily_spend_limit is not None else None,
+    )
+
+
+@router.put("/controls", response_model=CostControlsResponse)
+async def update_cost_controls(
+    body: UpdateCostControlsRequest,
+    current_user: AuthenticatedPrincipal = Depends(get_current_user),
+    session: AsyncSession = Depends(get_db_session),
+) -> CostControlsResponse:
+    _require_admin(current_user)
+    async with session.begin():
+        await set_rls_org(session, current_user.organisation_id)
+        if body.budget is not None:
+            org = await get_organisation(session, current_user.organisation_id)
+            if org is None:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Organisation not found")
+            from decimal import Decimal
+            org.daily_spend_limit = Decimal(str(body.budget))
+            await session.flush()
+
+        teams_result = await list_teams(session, org_id=current_user.organisation_id, page=1, page_size=1000)
+        org = await get_organisation(session, current_user.organisation_id)
+
+    return CostControlsResponse(
+        teams=[
+            {
+                "id": str(t.id),
+                "name": t.name,
+                "daily_limit_usd": float(t.daily_spend_limit) if t.daily_spend_limit is not None else None,
+            }
+            for t in teams_result.items
+        ],
+        budget=float(org.daily_spend_limit) if org and org.daily_spend_limit is not None else None,
+    )
 
 
 # ── Export ────────────────────────────────────────────────────────────────────

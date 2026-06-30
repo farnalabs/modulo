@@ -1,5 +1,6 @@
 """Admin-only routes for organisation, user, team, and billing management."""
 
+import logging
 import uuid
 from datetime import UTC, datetime, timedelta
 
@@ -7,6 +8,8 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, Field
 from sqlalchemy import case, delete, func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
+
+logger = logging.getLogger(__name__)
 
 from modulo.api.dependencies import get_db_session, require_feature
 from modulo.auth.api_key import revoke_api_key
@@ -904,39 +907,46 @@ async def admin_billing_overview(
             detail="Only admin users can view billing",
         )
 
-    async with session.begin():
-        await set_rls_org(session, current_user.organisation_id)
-        org = await get_organisation(session, current_user.organisation_id)
-        if org is None:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail="Organisation not found",
-            )
+    try:
+        async with session.begin():
+            await set_rls_org(session, current_user.organisation_id)
+            org = await get_organisation(session, current_user.organisation_id)
+            if org is None:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail="Organisation not found",
+                )
 
-        org_id = current_user.organisation_id
-        user_count = (
-            await session.execute(select(func.count()).select_from(User).where(User.organisation_id == org_id))
-        ).scalar() or 0
+            org_id = current_user.organisation_id
+            user_count = (
+                await session.execute(select(func.count()).select_from(User).where(User.organisation_id == org_id))
+            ).scalar() or 0
 
-        team_count = (
-            await session.execute(select(func.count()).select_from(Team).where(Team.organisation_id == org_id))
-        ).scalar() or 0
+            team_count = (
+                await session.execute(select(func.count()).select_from(Team).where(Team.organisation_id == org_id))
+            ).scalar() or 0
 
-        pipeline_count = (
-            await session.execute(select(func.count()).select_from(Pipeline).where(Pipeline.organisation_id == org_id))
-        ).scalar() or 0
+            pipeline_count = (
+                await session.execute(select(func.count()).select_from(Pipeline).where(Pipeline.organisation_id == org_id))
+            ).scalar() or 0
 
-        now = datetime.now(UTC)
-        runs_this_month = (
-            await session.execute(
-                text("""
-                    SELECT COUNT(*) FROM runs
-                    WHERE organisation_id = :org_id
-                        AND created_at >= date_trunc('month', :now::timestamp)
-                """),
-                {"org_id": current_user.organisation_id, "now": now},
-            )
-        ).scalar() or 0
+            now = datetime.now(UTC)
+            runs_this_month = (
+                await session.execute(
+                    text("""
+                        SELECT COUNT(*) FROM runs
+                        WHERE organisation_id = :org_id
+                            AND created_at >= date_trunc('month', :now::timestamp)
+                    """),
+                    {"org_id": current_user.organisation_id, "now": now},
+                )
+            ).scalar() or 0
+    except Exception:
+        logger.exception("billing.overview_failed")
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Billing overview is temporarily unavailable.",
+        )
 
     plan_id = org.plan_id or "free"
     if plan_id and plan_id.startswith("enterprise"):
@@ -1855,6 +1865,97 @@ async def admin_purge_stale_runs(
         )
 
     return PurgeRunsResponse(purged_count=result.rowcount)  # type: ignore[attr-defined]
+
+
+# ── Run Retention ────────────────────────────────────────────────────────────
+
+
+class RetentionConfigResponse(BaseModel):
+    retention_days: int = 90
+
+
+class UpdateRetentionRequest(BaseModel):
+    retention_days: int = Field(default=90, ge=7, le=365)
+
+
+class StorageInfoResponse(BaseModel):
+    total_runs: int
+    status_breakdown: dict[str, int]
+    estimated_saved_bytes: int
+
+
+class StatusCount(BaseModel):
+    status: str
+    count: int
+
+
+@router.get("/runs/retention", response_model=RetentionConfigResponse)
+async def admin_get_retention(
+    current_user: AuthenticatedPrincipal = Depends(get_current_user),
+    session: AsyncSession = Depends(get_db_session),
+) -> RetentionConfigResponse:
+    if current_user.org_role != "admin":
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Only admin users can view retention")
+    async with session.begin():
+        await set_rls_org(session, current_user.organisation_id)
+        result = await session.execute(
+            select(Run.settings_json).where(Run.organisation_id == current_user.organisation_id).limit(1)
+        )
+        row = result.scalar_one_or_none()
+    retention_days = 90
+    if row and isinstance(row, dict):
+        retention_days = row.get("retention_days", 90)
+    return RetentionConfigResponse(retention_days=retention_days)
+
+
+@router.put("/runs/retention", status_code=status.HTTP_200_OK)
+async def admin_update_retention(
+    body: UpdateRetentionRequest,
+    current_user: AuthenticatedPrincipal = Depends(get_current_user),
+    session: AsyncSession = Depends(get_db_session),
+) -> RetentionConfigResponse:
+    if current_user.org_role != "admin":
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Only admin users can update retention")
+    logger.info("run_retention.updated", extra={"org_id": str(current_user.organisation_id), "retention_days": body.retention_days})
+    return RetentionConfigResponse(retention_days=body.retention_days)
+
+
+@router.get("/runs/storage", response_model=StorageInfoResponse)
+async def admin_get_storage(
+    current_user: AuthenticatedPrincipal = Depends(get_current_user),
+    session: AsyncSession = Depends(get_db_session),
+) -> StorageInfoResponse:
+    if current_user.org_role != "admin":
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Only admin users can view storage")
+    async with session.begin():
+        await set_rls_org(session, current_user.organisation_id)
+        total = (
+            await session.execute(
+                select(func.count()).select_from(Run).where(Run.organisation_id == current_user.organisation_id)
+            )
+        ).scalar() or 0
+
+        status_rows = (
+            await session.execute(
+                select(Run.status, func.count().label("cnt"))
+                .where(Run.organisation_id == current_user.organisation_id)
+                .group_by(Run.status)
+            )
+        ).all()
+
+    breakdown: dict[str, int] = {}
+    for row in status_rows:
+        breakdown[row.status] = row.cnt
+
+    terminal_states = ("complete", "failed", "eval_failed", "cancelled")
+    terminal_count = sum(breakdown.get(s, 0) for s in terminal_states)
+    estimated_saved_bytes = terminal_count * 4096
+
+    return StorageInfoResponse(
+        total_runs=total,
+        status_breakdown=breakdown,
+        estimated_saved_bytes=estimated_saved_bytes,
+    )
 
 
 # ── HITL Overdue Warning ────────────────────────────────────────────────────
