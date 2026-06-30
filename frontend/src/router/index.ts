@@ -20,6 +20,7 @@ import EvalProposalsQueueView from '../views/EvalProposalsQueueView.vue'
 import VariantCompareView from '../views/VariantCompareView.vue'
 import ABTestModelsView from '../views/ABTestModelsView.vue'
 import RunDetailView from '../views/RunDetailView.vue'
+import AgentOutputDiffView from '../views/AgentOutputDiffView.vue'
 import AdminAuditView from '../views/AdminAuditView.vue'
 import AdminFeatureFlagsView from '../views/AdminFeatureFlagsView.vue'
 import AdminPluginsView from '../views/AdminPluginsView.vue'
@@ -169,6 +170,11 @@ const router = createRouter({
       path: '/runs/:id',
       name: 'run-detail',
       component: RunDetailView,
+    },
+    {
+      path: '/runs/diff',
+      name: 'runs-diff',
+      component: AgentOutputDiffView,
     },
     {
       path: '/admin/my-profile',
