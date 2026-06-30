@@ -55,8 +55,8 @@ class McpConfigResponse(BaseModel):
     config_snippet: dict[str, Any]
 
 
-def _require_team_rbac(settings: Settings) -> None:
-    ctx = resolve_plan_context(settings)
+async def _require_team_rbac(settings: Settings, session: AsyncSession) -> None:
+    ctx = await resolve_plan_context(settings, session)
     if not ctx.feature_enabled("team_rbac"):
         raise HTTPException(
             status_code=status.HTTP_402_PAYMENT_REQUIRED,
@@ -86,7 +86,7 @@ async def create_api_key_endpoint(
         )
     team_id: uuid.UUID | None = None
     if body.team_id is not None:
-        _require_team_rbac(settings)
+        await _require_team_rbac(settings, session)
         _require_admin(principal)
         team_id = uuid.UUID(body.team_id)
     expires_at: datetime | None = None
@@ -141,7 +141,7 @@ async def update_api_key_endpoint(
         )
     team_id: uuid.UUID | None = None
     if body.team_id is not None:
-        _require_team_rbac(settings)
+        await _require_team_rbac(settings, session)
         _require_admin(principal)
         team_id = uuid.UUID(body.team_id)
     async with session.begin():

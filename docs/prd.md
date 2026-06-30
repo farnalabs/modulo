@@ -303,8 +303,8 @@ A flexible tier system would decouple tier definitions from code via a **DB-back
 
 ```sql
 CREATE TABLE tier_catalog (
-    tier_id       TEXT PRIMARY KEY,     -- e.g. 'community', 'team', 'pro', 'enterprise'
-    label         TEXT NOT NULL,         -- human-readable: 'Community', 'Team', 'Pro', 'Enterprise'
+    tier_id       TEXT PRIMARY KEY,     -- e.g. 'community', 'team'
+    label         TEXT NOT NULL,         -- human-readable: 'Community', 'Team'
     rank          INT NOT NULL,          -- for cumulative activation (≤ rank activates)
     requires_license BOOLEAN DEFAULT FALSE,
     description   TEXT
@@ -330,17 +330,17 @@ CREATE TABLE feature_flag_catalog (
 - A `GET /api/v1/admin/tiers` endpoint can list all known tiers and their display labels — the frontend no longer hardcodes `tierSections`
 - PlanContext resolution reads from DB instead of hardcoded Python classes
 
-**Migration path:**
-1. Create the `tier_catalog` and `feature_flag_catalog` tables
-2. Seed them with current tier definitions (community, team, v1, v2) and all existing feature flags
-3. Refactor `FeatureFlagRegistry` to read from DB instead of `_KNOWN_FLAGS`
-4. Refactor `get_plan_context()` to resolve from `tier_catalog` instead of hardcoded class dict
-5. Add `GET /api/v1/admin/tiers` endpoint
-6. Update frontend `planStore` and `AdminFeatureFlagsView` to consume tier labels from API
-7. Add data migration for existing orgs' `plan_id` values
-8. Deprecate the hardcoded `_KNOWN_FLAGS` and `TIER_RANK` after one release cycle
+**Seeded tiers**: only **Community** (rank 0) and **Team** (rank 1) are seeded. Flags for undelivered features stay in `_KNOWN_FLAGS` (the hardcoded fallback) and never activate until a license key grants their tier. Adding a new third tier (whatever it's called) is a simple INSERT into `tier_catalog` + optionally moving flags from `_KNOWN_FLAGS` to `feature_flag_catalog` — no code changes beyond the seed script.
 
-> **Status**: Not yet implemented. Tracked as a delivery-phase task. The v0.24 rename to Community/Team is done as a direct source rename first; the tier-catalog refactor follows in a subsequent delivery sprint.
+**Migration path (completed in phase-tier-catalog):**
+1. Create the `tier_catalog` and `feature_flag_catalog` tables ✓
+2. Seed with Community + Team + all current feature flags ✓
+3. Refactor `FeatureFlagRegistry` to support DB-backed loading with `_KNOWN_FLAGS` fallback ✓
+4. Add `GET /api/v1/admin/tiers` endpoint ✓
+5. Update frontend to consume tier labels from API ✓
+6. Future: migrate PlanContext resolution to read from `tier_catalog`
+7. Future: add data migration for existing orgs' `plan_id` values
+8. Future: deprecate `_KNOWN_FLAGS` and `TIER_RANK` after one release cycle
 
 #### API Keys
 Per-org, role-scoped API keys for CI/CD pipelines and external agents.
