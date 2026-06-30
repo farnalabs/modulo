@@ -31,6 +31,7 @@ from modulo.connectors.base import (
 )
 from modulo.connectors.ci_runner import GitHubActionsCIRunner, GitLabCIRunner
 from modulo.connectors.filesystem import FilesystemConnector
+from modulo.connectors.gitea import GiteaConnector
 from modulo.connectors.github import GitHubConnector
 from modulo.connectors.gitlab import GitLabConnector
 from modulo.connectors.jira import JiraConnector
@@ -246,6 +247,9 @@ def _build_connector(type_id: str, config: dict[str, Any], creds: dict[str, Any]
             if not base_path:
                 raise ValueError("FilesystemConnector requires 'base_path' in config_json")
             return FilesystemConnector(base_path=base_path)
+        case "gitea":
+            base_url = config.get("base_url", "https://codeberg.org")
+            return GiteaConnector(token=_get_cred(creds, "token", type_id), base_url=base_url)
         case "github":
             return GitHubConnector(token=_get_cred(creds, "token", type_id))
         case "github_actions_ci":
