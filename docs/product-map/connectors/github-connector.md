@@ -1,14 +1,18 @@
 ---
 id: feat-connectors-github
 prd: 8.6
-delivery-tasks: []
+delivery-tasks:
   - backend/tests/features/connectors/github.feature
   - backend/tests/bdd/features/connectors/github_connector.feature
-unit-tests: []
+bdd:
+  - backend/tests/bdd/features/connectors/github_connector.feature
+  - backend/tests/features/connectors/github.feature
+unit-tests:
+  - backend/tests/unit/connectors/test_github.py
+  - backend/tests/unit/connectors/test_github_scopes.py
 code:
   - backend/src/modulo/connectors/github/__init__.py
   - backend/src/modulo/connectors/base.py
-
 status: partial
 ---
 
@@ -33,12 +37,12 @@ Async GitHub REST API connector implementing `ConnectorBase`. Provides read/writ
 
 ### OAuth Scopes — capability verification
 
-- [x] Declare required scopes: `repo:read`, `repo:write`, `pull_requests:write` (code constant)
-- [x] Verify `repo:read` scope by probing `GET /user/repos` during health check
-- [ ] Verify `repo:write` scope — not checked, only `repo:read` is probed
-- [ ] Verify `pull_requests:write` scope — not checked during health check
-- [ ] **Scope mismatch with PRD**: PRD §8.6 lists scopes as `contents:read`, `contents:write`, `pull_requests:write` — code uses `repo:read`, `repo:write`, `pull_requests:write`. These are different GitHub OAuth scope sets (`repo` is broader than `contents`). Needs resolution.
-- [ ] Report missing scopes individually in health check detail (e.g. `missing_scope:repo:write`)
+- [x] Declare required scopes via `REQUIRED_SCOPES` constant: `{"repo", "read:org"}` (classic PAT scopes from `X-OAuth-Scopes` header)
+- [x] Verify scopes by reading `X-OAuth-Scopes` response header from `GET /user` during health check
+- [x] Report missing scopes in health check detail with scope names (e.g. `Missing scopes: read:org`)
+- [ ] Verify `pull_requests:write` scope — not in `REQUIRED_SCOPES`; classic PAT `repo` scope encompasses PR access, but fine-grained PAT would need explicit `pull_requests:write`
+- [ ] **Scope mismatch with PRD**: PRD §7.11 specifies fine-grained PAT scopes (`contents:read`, `contents:write`, `pull_requests:write`) but code uses classic PAT scopes (`repo`, `read:org`). These are different scope systems — fine-grained PATs are more restrictive and granular. The `repo` classic scope is broadly equivalent to `contents:read` + `contents:write` + `pull_requests:write` combined.
+- [ ] Report missing scopes as individually named errors (e.g. `missing_scope:repo`) — health check mentions scope names in prose but no machine-parseable error codes
 - [ ] Block run start when scopes are insufficient (pre-run health check in ConnectorHub)
 
 ### PR Operations — listing and commenting
@@ -86,11 +90,11 @@ Async GitHub REST API connector implementing `ConnectorBase`. Provides read/writ
 ### Health Check — connectivity and credential validation
 
 - [x] Validate token by calling `GET /user` — fail if status != 200
-- [x] Probe `repo:read` scope via `GET /user/repos` — fail on 401/403
+- [x] Probe scopes via `X-OAuth-Scopes` response header from `GET /user` — fail if `REQUIRED_SCOPES` not satisfied
 - [x] Return authenticated user login in `detail` on success
 - [x] Return HTTP status and truncated body on failure
-- [ ] Full scope check — only `repo:read` is verified; `pull_requests:write` and implied `repo:write` are not probed
-- [ ] Detect expired tokens vs insufficient scopes vs network errors — all return as "HTTP {code}: {body}"
+- [ ] Full scope check — only `repo` and `read:org` are verified; `pull_requests:write` not probed
+- [ ] Detect expired tokens vs insufficient scopes vs network errors — all collapsed to generic "HTTP {code}: {body}"
 - [ ] Per-operation scope verification — no granular check before `write()` calls
 
 ### ConnectorType Capability Declaration
@@ -107,10 +111,12 @@ Async GitHub REST API connector implementing `ConnectorBase`. Provides read/writ
 - [ ] **PR creation unimplemented**: `CREATE_PR` capability declared, but `write("pr")` resource handler missing
 - [ ] **Issue operations entirely absent**: no issue CRUD despite BDD scenario and base capability enums existing
 - [ ] **PR commenting not wired**: BDD scenario exists but no `write("pr_comment")` in connector code
-- [ ] **Scope verification incomplete**: health check only probes `repo:read`; `repo:write` and `pull_requests:write` unchecked
-- [ ] **PRD vs code scope mismatch**: PRD §8.6 says `contents:read/write`, code uses `repo:read/write` — these are different GitHub OAuth scope sets
+- [ ] **Scope verification incomplete**: health check verifies `repo` and `read:org` classic PAT scopes; fine-grained PAT `pull_requests:write` not checked
+- [ ] **PRD vs code scope mismatch**: PRD §7.11 specifies fine-grained PAT scopes (`contents:read`, `contents:write`, `pull_requests:write`) but code uses classic PAT scopes (`repo`, `read:org`) — different scope systems
 - [ ] **No pagination**: `query("pulls")` and `query("repos")` don't return `next_cursor`
-- [ ] **BDD placeholder**: `backend/tests/bdd/features/connectors/github_connector.feature` is a 3-line placeholder with no real scenarios
-- [ ] **No unit tests**: `unit-tests` field is empty
 - [ ] **No GHES support**: API base URL is hard-coded to `https://api.github.com`
 - [ ] **No rate-limit handling**: no 429 retry, no `X-RateLimit-Remaining` header inspection
+- [ ] **No retry on transient HTTP errors**: `raise_for_status()` propagates all non-2xx as exceptions; no retry logic for 5xx or 429
+- [ ] **Token expiry not distinguished from other errors**: expired PAT, insufficient scopes, and network errors all return `HTTP {code}: {body}` with no structured error type
+- [ ] **Fine-grained PAT not supported**: code requires classic PAT `repo` scope; fine-grained PAT with `contents:read`, `contents:write`, `pull_requests:write` would fail `REQUIRED_SCOPES` check
+- [ ] **`read:org` scope requirement unclear**: product map doesn't explain why `read:org` is required — may be unnecessary for most agent workflows
