@@ -27,6 +27,7 @@ class Capability(StrEnum):
     COLLABORATION = "collaboration"
     MESSAGING = "messaging"
     NOTIFICATION = "notification"
+    SECRETS_MANAGEMENT = "secrets_management"
 
 
 class ConnectorType(StrEnum):
@@ -55,6 +56,7 @@ class ConnectorType(StrEnum):
     BUILDKITE = "buildkite"
     JENKINS = "jenkins"
     TEAMCITY = "teamcity"
+    AZURE_KEY_VAULT = "azure_key_vault"
     AZURE_PIPELINES = "azure_pipelines"
     DATADOG = "datadog"
     SENTRY = "sentry"
@@ -149,6 +151,10 @@ class ConnectorType(StrEnum):
                         Capability.LIST_RUNS,
                     }
                 )
+            case ConnectorType.AZURE_KEY_VAULT:
+                return frozenset({
+                    Capability.SECRETS_MANAGEMENT, Capability.READ, Capability.WRITE,
+                })
             case ConnectorType.AZURE_PIPELINES:
                 return frozenset(
                     {

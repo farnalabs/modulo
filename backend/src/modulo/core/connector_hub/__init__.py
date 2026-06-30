@@ -21,6 +21,7 @@ from opentelemetry import trace
 from opentelemetry.trace import Status, StatusCode
 
 from modulo.connectors.asana import AsanaConnector
+from modulo.connectors.azure_key_vault import AzureKeyVaultConnector
 from modulo.connectors.azure_pipelines import AzurePipelinesConnector
 from modulo.connectors.azure_repos import AzureReposConnector
 from modulo.connectors.base import (
@@ -345,6 +346,14 @@ def _build_connector(type_id: str, config: dict[str, Any], creds: dict[str, Any]
             return TeamCityConnector(
                 token=_get_cred(creds, "token", type_id),
                 base_url=config.get("base_url", "http://localhost:8111"),
+            )
+        case "azure_key_vault":
+            vault_url = config.get("vault_url", "")
+            if not vault_url:
+                raise ValueError("AzureKeyVaultConnector requires 'vault_url' in config_json")
+            return AzureKeyVaultConnector(
+                token=_get_cred(creds, "token", type_id),
+                vault_url=vault_url,
             )
         case "azure_pipelines":
             organization = config.get("organization", "")
