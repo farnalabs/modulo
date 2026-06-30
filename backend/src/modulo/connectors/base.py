@@ -36,6 +36,7 @@ class ConnectorType(StrEnum):
     ASANA = "asana"
     SLACK = "slack"
     SHELL = "shell"
+    MONDAY = "monday"
     CUSTOM = "custom"
 
     @property
@@ -74,6 +75,8 @@ class ConnectorType(StrEnum):
             case ConnectorType.SLACK:
                 return frozenset({Capability.READ, Capability.WRITE})
             case ConnectorType.SHELL:
+                return frozenset({Capability.READ, Capability.WRITE})
+            case ConnectorType.MONDAY:
                 return frozenset({Capability.READ, Capability.WRITE})
             case _:
                 return frozenset()
