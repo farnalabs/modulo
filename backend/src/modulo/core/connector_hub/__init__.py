@@ -51,6 +51,7 @@ from modulo.connectors.jira import JiraConnector
 from modulo.connectors.linear import LinearConnector
 from modulo.connectors.microsoft_teams import MicrosoftTeamsConnector
 from modulo.connectors.monday import MondayConnector
+from modulo.connectors.n8n import N8NConnector
 from modulo.connectors.notion import NotionConnector
 from modulo.connectors.npm import NpmConnector
 from modulo.connectors.onepassword import OnePasswordConnector
@@ -414,6 +415,11 @@ def _build_connector(type_id: str, config: dict[str, Any], creds: dict[str, Any]
             return TrivyConnector(
                 token=creds.get("token", ""),
                 base_url=config.get("base_url", "http://localhost:8080"),
+            )
+        case "n8n":
+            return N8NConnector(
+                token=_get_cred(creds, "token", type_id),
+                base_url=config.get("base_url", "http://localhost:5678"),
             )
         case _:
             registry = get_plugin_registry()

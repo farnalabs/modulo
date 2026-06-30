@@ -29,6 +29,7 @@ class Capability(StrEnum):
     NOTIFICATION = "notification"
     PACKAGE_MANAGEMENT = "package_management"
     SECRETS_MANAGEMENT = "secrets_management"
+    AUTOMATION = "automation"
 
 
 class ConnectorType(StrEnum):
@@ -73,6 +74,7 @@ class ConnectorType(StrEnum):
     TRIVY = "trivy"
     ONEPASSWORD = "onepassword"
     PYPI = "pypi"
+    N8N = "n8n"
 
     @property
     def capabilities(self) -> frozenset[Capability]:
@@ -227,6 +229,8 @@ class ConnectorType(StrEnum):
                 return frozenset({Capability.PACKAGE_MANAGEMENT, Capability.READ})
             case ConnectorType.PYPI:
                 return frozenset({Capability.PACKAGE_MANAGEMENT, Capability.READ})
+            case ConnectorType.N8N:
+                return frozenset({Capability.AUTOMATION, Capability.READ, Capability.WRITE})
             case _:
                 return frozenset()
 
