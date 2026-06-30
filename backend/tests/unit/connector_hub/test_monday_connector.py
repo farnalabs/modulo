@@ -211,7 +211,7 @@ async def test_query_workspaces(connector):
 
 
 async def test_query_unsupported_resource(connector):
-    with pytest.raises(ValueError, match="Unsupported Monday.com resource"):
+    with pytest.raises(ValueError, match=r"Unsupported Monday\.com resource"):
         await connector.query(ConnectorQuery(resource="unknown"))
 
 
@@ -362,7 +362,7 @@ async def test_write_update_missing_fields(connector):
 
 
 async def test_write_unsupported_resource(connector):
-    with pytest.raises(ValueError, match="Unsupported Monday.com write resource"):
+    with pytest.raises(ValueError, match=r"Unsupported Monday\.com write resource"):
         await connector.write(ConnectorPayload(resource="delete", data={}))
 
 
@@ -388,7 +388,7 @@ async def test_graphql_errors(connector):
             json={"errors": [{"message": "Invalid API key", "code": "unauthorized"}]},
         ),
     )
-    with pytest.raises(ValueError, match="Monday.com API error"):
+    with pytest.raises(ValueError, match=r"Monday\.com API error"):
         await connector.query(ConnectorQuery(resource="boards"))
 
 
