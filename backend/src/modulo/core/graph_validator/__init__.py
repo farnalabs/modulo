@@ -544,6 +544,14 @@ class GraphValidator:
                     f"Model backend {bid} ({backend.name!r}) has status {backend.status!r}",
                     node_id,
                 )
+                continue
+
+            if backend.last_health_check_error:
+                result.error(
+                    "MODEL_BACKEND_UNHEALTHY",
+                    f"Model backend '{backend.name}' (id={bid}) is unhealthy: {backend.last_health_check_error}",
+                    node_id,
+                )
 
     # ------------------------------------------------------------------
     # Environment capabilities
