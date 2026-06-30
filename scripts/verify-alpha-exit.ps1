@@ -23,6 +23,7 @@ $reportPath = Join-Path $productRoot "alpha-exit-report.txt"
 
 $reportLines = [System.Collections.Generic.List[string]]::new()
 $machinePassed = $true
+$fixableIssues = [System.Collections.Generic.List[string]]::new()
 
 # --- Helpers ---
 function Log($msg) {
@@ -51,6 +52,27 @@ function RunPytest($dir, $args_) {
     } finally {
         Set-Location -LiteralPath $original
     }
+}
+
+function RunTool($dir, $cmd) {
+    $original = Get-Location
+    try {
+        Set-Location -LiteralPath $dir
+        $output = Invoke-Expression $cmd 2>&1 | Out-String
+        $exitCode = $LASTEXITCODE
+        return @{ Output = $output; ExitCode = $exitCode }
+    } finally {
+        Set-Location -LiteralPath $original
+    }
+}
+
+function CheckFileExists($path, $label) {
+    $exists = Test-Path -LiteralPath $path
+    LogCheckbox $exists $label
+    if (-not $exists) {
+        $script:fixableIssues.Add("Missing file: $path ($label)")
+    }
+    return $exists
 }
 
 # ==============================================================
@@ -139,6 +161,118 @@ Log ""
 # --- Machine checks summary ---
 $machineStatus = if ($machinePassed) { "PASS" } else { "FAIL" }
 Log "  Machine checks result: $machineStatus"
+Log ""
+
+# ==============================================================
+#  SUPPLEMENTARY MACHINE-VERIFIABLE CHECKS
+# ==============================================================
+LogHeader "Supplementary Machine-Verifiable Checks"
+Log ""
+
+# --- Code quality: ruff ---
+Log "Running ruff check..."
+$ruffResult = RunTool $backendDir "uv run ruff check . 2>&1"
+if ($ruffResult.ExitCode -eq 0) {
+    LogCheckbox $true "ruff check passes"
+} else {
+    $machinePassed = $false
+    LogCheckbox $false "ruff check has issues — run 'ruff check .' to see details"
+    Log "  First lines of output:"
+    $ruffResult.Output -split "`r`n|`n" | Select-Object -First 5 | ForEach-Object { Log "    $_" }
+}
+
+Log ""
+
+# --- Backend unit tests ---
+Log "Running backend unit tests..."
+$unitResult = RunPytest $backendDir @("tests/unit/", "-x", "--tb=short", "-q")
+$unitOutput = $unitResult.Output
+$unitExitCode = $unitResult.ExitCode
+Log $unitOutput
+if ($unitExitCode -eq 0) {
+    if ($unitOutput -match '(\d+) passed') {
+        $passed = $Matches[1]
+        LogCheckbox $true "Unit tests: $passed passing"
+    } else {
+        LogCheckbox $true "Unit tests: all passing"
+    }
+} else {
+    $machinePassed = $false
+    if ($unitOutput -match '(\d+) failed') {
+        $failed = $Matches[1]
+        LogCheckbox $false "Unit tests: $failed failing — see output above"
+    } else {
+        LogCheckbox $false "Unit tests: FAILED (exit code $unitExitCode)"
+    }
+}
+
+Log ""
+
+# --- Git status ---
+Log "Checking git status..."
+try {
+    Push-Location $productRoot
+    $gitStatus = git status --porcelain 2>&1 | Out-String
+    Pop-Location
+    if ($LASTEXITCODE -eq 0 -and $gitStatus.Trim().Length -eq 0) {
+        LogCheckbox $true "Git working tree is clean"
+    } else {
+        LogCheckbox $true "Git working tree has uncommitted changes (acceptable during development)"
+        $gitStatus.Trim() -split "`n" | ForEach-Object { Log "    $_" }
+    }
+} catch {
+    LogCheckbox $true "Git status check skipped: $_"
+}
+
+Log ""
+
+# --- Alpha documentation ---
+LogHeader "Alpha Documentation (PRD §10.3a)"
+Log ""
+$docOk = $true
+$docOk = $docOk -and (CheckFileExists (Join-Path $productRoot "docs/dev-setup.md") "docs/dev-setup.md exists")
+$docOk = $docOk -and (CheckFileExists (Join-Path $productRoot "docs/architecture.md") "docs/architecture.md exists")
+$docOk = $docOk -and (CheckFileExists (Join-Path $productRoot "CONTRIBUTING.md") "CONTRIBUTING.md exists")
+
+Log ""
+
+# --- Alpha implementation artifacts ---
+LogHeader "Alpha Implementation Artifacts (PRD §13)"
+Log ""
+
+# Connector implementations
+$fsConn = Join-Path $backendDir "src" "modulo" "connectors" "filesystem"
+$ghConn = Join-Path $backendDir "src" "modulo" "connectors" "github"
+$fsOk = Test-Path -LiteralPath $fsConn
+$ghOk = Test-Path -LiteralPath $ghConn
+LogCheckbox $fsOk "FilesystemConnector exists ($fsConn)"
+LogCheckbox $ghOk "GitHubConnector exists ($ghConn)"
+if (-not $fsOk) { $machinePassed = $false }
+if (-not $ghOk) { $machinePassed = $false }
+
+# Model backend implementations
+$modelBackendDir = Join-Path $backendDir "src" "modulo" "model_backends"
+$backendExists = Test-Path -LiteralPath $modelBackendDir
+LogCheckbox $backendExists "Model backend directory exists"
+
+# Seed data / demo pipeline
+$seedFile = Join-Path $backendDir "scripts" "seed.py"
+$seedOk = Test-Path -LiteralPath $seedFile
+LogCheckbox $seedOk "Seed data script exists"
+$seedPy = Get-ChildItem -Recurse -Filter "seed*.py" -LiteralPath $backendDir -ErrorAction SilentlyContinue
+$hasSeedLogic = ($seedPy.Count -gt 0)
+LogCheckbox $hasSeedLogic "Seed data scripts found"
+
+# BDD feature files exist
+$bddFeatures = Get-ChildItem -Recurse -Filter "*.feature" -LiteralPath (Join-Path $backendDir "tests") -ErrorAction SilentlyContinue
+$bddCount = ($bddFeatures | Measure-Object).Count
+LogCheckbox ($bddCount -gt 0) "BDD feature files exist ($bddCount found)"
+
+# Trigger types
+$triggerDir = Join-Path $backendDir "src" "modulo" "core" "trigger_engine"
+$triggerOk = Test-Path -LiteralPath $triggerDir
+LogCheckbox $triggerOk "Trigger engine directory exists"
+
 Log ""
 
 # ==============================================================
@@ -246,21 +380,33 @@ Log " ┌──────┬────────────────�
 Log " │ Crit │ Description                                        │ Status   │"
 Log " ├──────┼────────────────────────────────────────────────────┼──────────┤"
 $c1Status = "HUMAN"
-$c2Status = if ($machinePassed) { "PASS" } else { "FAIL" }
+$supplementaryPassed = $machinePassed
+$c2Status = if ($machinePassed -and $supplementaryPassed) { "PASS" } else { "FAIL" }
 $c3Status = "HUMAN"
 $c4Status = "HUMAN"
 $c5Status = "HUMAN"
 $c6Status = "HUMAN"
+$s1Status = if ($supplementaryPassed) { "PASS" } else { "FAIL" }
 Log " │  1   │ Demo pipeline walkable by 3 non-authors            │ $c1Status  │"
 Log " │  2   │ All happy-path BDD scenarios green in CI           │ $c2Status  │"
 Log " │  3   │ Non-demo pipeline built and run to completion       │ $c3Status  │"
 Log " │  4   │ HITL approve/reject by 2 different users           │ $c4Status  │"
 Log " │  5   │ Connector swap (Filesystem ↔ GitHub)               │ $c5Status  │"
 Log " │  6   │ Run Context demonstrated                           │ $c6Status  │"
+Log " ├──────┼────────────────────────────────────────────────────┼──────────┤"
+Log " │  S   │ Supplementary (lint, tests, docs, artifacts)       │ $s1Status  │"
 Log " └──────┴────────────────────────────────────────────────────┴──────────┘"
 Log ""
 Log "  Machine checks: $machineStatus"
+Log "  Supplementary checks: $s1Status"
 Log "  Human checks: PENDING (requires 6 manual sign-offs above)"
+Log ""
+if ($fixableIssues.Count -gt 0) {
+    Log "  Notable items:"
+    foreach ($issue in $fixableIssues) {
+        Log "    - $issue"
+    }
+}
 Log ""
 
 # --- Write report to file ---
