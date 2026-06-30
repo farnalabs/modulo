@@ -2,6 +2,7 @@
 id: feat-teams-user-offboarding
 prd: 9.4
 delivery-tasks: [task-nv1-user-offboarding]
+bdd:
   - backend/tests/bdd/features/orgs/member_management.feature
 code:
   - backend/src/modulo/api/routes/admin.py
@@ -9,8 +10,7 @@ code:
   - backend/src/modulo/auth/jwt.py
   - backend/src/modulo/db/crud/token_family.py
   - backend/src/modulo/db/crud/team_membership.py
-unit-tests:
-  - backend/tests/bdd/features/orgs/member_management.feature
+unit-tests: []
 depends-on: [feat-auth-jwt-auth, feat-teams-team-crud]
 status: partial
 ---
