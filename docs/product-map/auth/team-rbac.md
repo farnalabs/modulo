@@ -58,38 +58,38 @@ Org-level and team-level role hierarchy with privilege cap, team membership mana
 - [x] The privilege cap trigger is applied to every INSERT or UPDATE on team_memberships
 
 ### Team CRUD
-- [ ] Admin can create a team with name, description, and organisation
-- [ ] Team creation assigns a UUID and tracks the creating user
-- [ ] Team name is unique within an organisation
-- [ ] Team name is limited to 255 characters
-- [ ] Team description is limited to 2000 characters
-- [ ] Non-admin users cannot create a team
-- [ ] Admin can update team name and description
-- [ ] Admin can list all teams in an organisation with pagination
-- [ ] Admin can get a single team by ID
-- [ ] Admin can delete a team with no owned resources
+- [x] Admin can create a team with name, description, and organisation
+- [x] Team creation assigns a UUID and tracks the creating user
+- [x] Team name is unique within an organisation
+- [x] Team name is limited to 255 characters
+- [x] Team description is limited to 2000 characters
+- [x] Non-admin users cannot create a team
+- [x] Admin can update team name and description
+- [x] Admin can list all teams in an organisation with pagination
+- [x] Admin can get a single team by ID
+- [x] Admin can delete a team with no owned resources
 - [ ] Team deletion is blocked if any resource has owner_team_id pointing to the team
 - [ ] Team deletion returns a `team_has_resources` error when blocked
 - [ ] Admin can bulk-reassign all team-owned resources to org-wide before deletion
 - [ ] Team deletion writes a `team_deleted` audit event
-- [ ] Admin can rename a team without affecting its resource ownership
-- [ ] Pagination defaults to page 1, page size 20, max 100
+- [x] Admin can rename a team without affecting its resource ownership
+- [x] Pagination defaults to page 1, page size 20, max 100
 
 ### Team membership management
-- [ ] Admin can add any org user to any team with a role
-- [ ] Admin can remove any user from any team
-- [ ] Admin can change a user's team role
-- [ ] A team operator can add members to their own team only
+- [x] Admin can add any org user to any team with a role
+- [x] Admin can remove any user from any team
+- [ ] Admin can change a user's team role (no PATCH endpoint exists for membership role)
+- [ ] A team operator can add members to their own team only (add_member requires admin)
 - [ ] A team operator can only grant roles up to their own team role (no self-escalation)
-- [ ] A user cannot be added to a team if they are not a member of the organisation
-- [ ] Adding a user whose org role is below the requested team role is rejected
-- [ ] A user can be a member of multiple teams with different roles in each
-- [ ] A user can be removed from one team without affecting their other team memberships
-- [ ] Membership has a unique constraint per (team_id, user_id) — no duplicates
-- [ ] Deleting a team cascades to delete all its memberships
-- [ ] Deleting a user cascades to delete all their team memberships
-- [ ] Membership tracks who added the user and when
-- [ ] Listing team members supports pagination
+- [x] A user cannot be added to a team if they are not a member of the organisation
+- [x] Adding a user whose org role is below the requested team role is rejected
+- [x] A user can be a member of multiple teams with different roles in each
+- [x] A user can be removed from one team without affecting their other team memberships
+- [x] Membership has a unique constraint per (team_id, user_id) — no duplicates
+- [x] Deleting a team cascades to delete all its memberships
+- [x] Deleting a user cascades to delete all their team memberships
+- [x] Membership tracks who added the user and when
+- [x] Listing team members supports pagination
 
 ### Resource ownership and visibility
 - [ ] Pipeline, Stage, ConnectorInstance, and ModelBackend carry owner_team_id (nullable)
@@ -153,21 +153,21 @@ Org-level and team-level role hierarchy with privilege cap, team membership mana
 - [ ] Bulk "Reassign all resources to org-wide" action is admin-only
 
 ### Edge cases and error states
-- [ ] Adding a user to a team that does not exist returns 404
-- [ ] Adding a non-existent user to a team returns 404
-- [ ] Requesting a team role that does not exist in the hierarchy is rejected
-- [ ] Removing the last operator from a team is not blocked (no operator self-protection)
-- [ ] Creating a team with a duplicate name within the same org returns 409
-- [ ] Creating a team with an empty name is rejected
-- [ ] Creating a team with whitespace-only name is rejected
-- [ ] Updating a team to an already-taken name returns 409
-- [ ] Fetching a non-existent team returns 404
-- [ ] Deleting a non-existent team returns 404
-- [ ] Team with resources cannot be deleted
-- [ ] Bulk reassign followed by delete is idempotent (reassigning already-org resources)
-- [ ] A user assigned the same team role via SSO on repeated JIT provision is not re-added
-- [ ] Orphaned team_memberships on user deletion are cleaned up via FK CASCADE
-- [ ] Null role in membership creation is rejected
+- [x] Adding a user to a team that does not exist returns 404
+- [x] Adding a non-existent user to a team returns 404
+- [x] Requesting a team role that does not exist in the hierarchy is rejected (Pydantic regex pattern)
+- [x] Removing the last operator from a team is not blocked (no operator self-protection)
+- [x] Creating a team with a duplicate name within the same org returns 409
+- [x] Creating a team with an empty name is rejected
+- [ ] Creating a team with whitespace-only name is rejected (min_length allows whitespace strings)
+- [x] Updating a team to an already-taken name returns 409
+- [x] Fetching a non-existent team returns 404
+- [x] Deleting a non-existent team returns 404
+- [ ] Team with resources cannot be deleted (not implemented in teams.py)
+- [ ] Bulk reassign followed by delete is idempotent (not implemented)
+- [ ] A user assigned the same team role via SSO on repeated JIT provision is not re-added (SSO JIT not yet wired)
+- [x] Orphaned team_memberships on user deletion are cleaned up via FK CASCADE
+- [x] Null role in membership creation is rejected (Pydantic default + regex)
 
 ### Concurrency and data integrity
 - [x] Team name uniqueness is enforced at the database level (unique constraint)
@@ -182,20 +182,22 @@ Org-level and team-level role hierarchy with privilege cap, team membership mana
 
 ### Backward compatibility
 - [x] Legacy `member` role values in team_memberships are migrated to `viewer` on upgrade
-- [ ] Existing pipelines without owner_team_id continue to work (NULL = legacy / org-wide)
+- [x] Existing pipelines without owner_team_id continue to work (NULL = legacy / org-wide)
 - [x] The migration from `member` to `viewer` is reversible via downgrade (downgrade reverses to `member`)
-- [ ] Org-wide API keys (no team_id) continue to function unchanged
-- [ ] Pipelines with visibility: org are unaffected by team RBAC changes
+- [x] Org-wide API keys (no team_id) continue to function unchanged (API key routes treat NULL team_id as org-wide)
+- [x] Pipelines with visibility: org are unaffected by team RBAC changes
 - [x] The privilege cap trigger only fires for new/updated rows — existing data is unchanged (BEFORE INSERT OR UPDATE trigger, no backfill)
 - [ ] Export bundle strips owner_team_id to prevent leakage across organisations
 - [ ] Import with owner_team_id set validates the team exists and user has access
 
 ## Known Gaps
-- BDD feature file at `backend/tests/bdd/features/auth/rbac.feature` is a placeholder — no real scenarios exist yet
+- Feature gate `team_rbac` blocks endpoints at the router level, but there is no dedicated `require_feature("team_rbac")` on the team-scoped API key _require_team_rbac helper is a separate check
+- `owner_team_id` blocking on team deletion is only implemented in admin.py, not in teams.py DELETE endpoint
 - Stage board team filtering (`/settings/teams` UI) is v1, not yet implemented
 - V1 team membership requires email-based invitation acceptance — not yet implemented
 - No operator self-protection: removing the last operator from a team is not blocked
+- No PATCH endpoint for changing a membership role
 - Team cost attribution moved to v1
-- No tests for cross-team connector binding enforcement
 - No integration tests for the privilege cap trigger with concurrent inserts
-- No test for DB-live membership check on required_team_id with stale JWT claims 
+- No test for DB-live membership check on required_team_id with stale JWT claims
+- No cross-team connector binding enforcement test 
