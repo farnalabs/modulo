@@ -9,7 +9,9 @@
           <p class="text-sm text-muted-foreground">{{ tooltipText }}</p>
         </div>
         <a
-          href="/settings/license"
+          href="https://modulo.run/pricing"
+          target="_blank"
+          rel="noopener noreferrer"
           class="btn-glow inline-flex items-center gap-2 rounded-lg bg-primary px-4 py-2 text-sm font-semibold text-primary-foreground border border-primary/30 hover:border-primary/60 hover:brightness-110 transition-all duration-150"
         >
           View Plans
