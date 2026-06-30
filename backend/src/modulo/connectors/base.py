@@ -55,6 +55,7 @@ class ConnectorType(StrEnum):
     DATADOG = "datadog"
     SENTRY = "sentry"
     PAGERDUTY = "pagerduty"
+    GRAFANA = "grafana"
 
     @property
     def capabilities(self) -> frozenset[Capability]:
@@ -156,6 +157,11 @@ class ConnectorType(StrEnum):
             case ConnectorType.PAGERDUTY:
                 return frozenset({
                     Capability.INCIDENT_MANAGEMENT, Capability.MONITORING,
+                    Capability.READ, Capability.WRITE,
+                })
+            case ConnectorType.GRAFANA:
+                return frozenset({
+                    Capability.MONITORING, Capability.OBSERVABILITY,
                     Capability.READ, Capability.WRITE,
                 })
             case _:
