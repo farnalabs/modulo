@@ -22,6 +22,7 @@ class Capability(StrEnum):
     ISSUE_SEARCH = "issue_search"
     MONITORING = "monitoring"
     OBSERVABILITY = "observability"
+    VULNERABILITY_SCANNING = "vulnerability_scanning"
     INCIDENT_MANAGEMENT = "incident_management"
     COLLABORATION = "collaboration"
     MESSAGING = "messaging"
@@ -64,6 +65,7 @@ class ConnectorType(StrEnum):
     OPSGENIE = "opsgenie"
     SONARQUBE = "sonarqube"
     CODECLIMATE = "codeclimate"
+    SNYK = "snyk"
 
     @property
     def capabilities(self) -> frozenset[Capability]:
@@ -191,6 +193,10 @@ class ConnectorType(StrEnum):
                 })
             case ConnectorType.CODECLIMATE:
                 return frozenset({Capability.MONITORING, Capability.OBSERVABILITY})
+            case ConnectorType.SNYK:
+                return frozenset({
+                    Capability.READ, Capability.VULNERABILITY_SCANNING, Capability.MONITORING,
+                })
             case _:
                 return frozenset()
 

@@ -55,6 +55,7 @@ from modulo.connectors.opsgenie import OpsgenieConnector
 from modulo.connectors.pagerduty import PagerDutyConnector
 from modulo.connectors.sentry import SentryConnector
 from modulo.connectors.sharepoint import SharePointConnector
+from modulo.connectors.snyk import SnykConnector
 from modulo.connectors.shortcut import ShortcutConnector
 from modulo.connectors.slack import SlackConnector
 from modulo.connectors.sonarqube import SonarQubeConnector
@@ -383,6 +384,8 @@ def _build_connector(type_id: str, config: dict[str, Any], creds: dict[str, Any]
             )
         case "codeclimate":
             return CodeClimateConnector(token=_get_cred(creds, "token", type_id))
+        case "snyk":
+            return SnykConnector(token=_get_cred(creds, "token", type_id))
         case _:
             registry = get_plugin_registry()
             if registry.has_connector_type(type_id):
