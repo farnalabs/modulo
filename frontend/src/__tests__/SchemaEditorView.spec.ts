@@ -107,8 +107,8 @@ vi.mock('../lib/api/client', () => ({
 vi.mock('../stores/planStore', () => ({
   usePlanStore: vi.fn(() => ({
     featureEnabled: vi.fn().mockReturnValue(true),
-    currentTier: 'enterprise',
-    isEnterprise: true,
+    currentTier: 'team',
+    isTeam: true,
     fetchPlan: vi.fn(),
   })),
 }))

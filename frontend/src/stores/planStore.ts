@@ -31,14 +31,14 @@ interface LicenseStatusResponse {
 }
 
 export const usePlanStore = defineStore('plan', () => {
-  const currentTier = ref('free')
+  const currentTier = ref('community')
   const features = ref<Record<string, boolean>>({})
   const isLoading = ref(false)
   const error = ref<string | null>(null)
   const expiresAt = ref<string | null>(null)
   const orgName = ref<string | null>(null)
 
-  const isEnterprise = computed(() => currentTier.value === 'enterprise')
+  const isTeam = computed(() => currentTier.value === 'team')
 
   function featureEnabled(name: string): boolean {
     return features.value[name] ?? false
@@ -75,5 +75,5 @@ export const usePlanStore = defineStore('plan', () => {
     }
   }
 
-  return { currentTier, features, isLoading, error, isEnterprise, expiresAt, orgName, fetchPlan, featureEnabled }
+  return { currentTier, features, isLoading, error, isTeam, expiresAt, orgName, fetchPlan, featureEnabled }
 })

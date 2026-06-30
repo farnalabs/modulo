@@ -27,7 +27,7 @@ const mockGet = vi.hoisted(() => vi.fn().mockImplementation((path: string) => {
   }
   if (path === '/api/v1/admin/feature-flags') {
     return Promise.resolve({
-      data: { license: { tier: 'enterprise', has_license_key: true, is_valid: true }, flags: [{ name: 'admin_cost_controls', description: 'Cost Controls', tier: 'enterprise', currently_active: true, depends_on: null }], would_activate: [] },
+      data: { license: { tier: 'team', has_license_key: true, is_valid: true }, flags: [{ name: 'admin_cost_controls', description: 'Cost Controls', tier: 'team', currently_active: true, depends_on: null }], would_activate: [] },
       error: undefined,
     })
   }
@@ -107,7 +107,7 @@ describe('AdminCostControlsView', () => {
     mockGet.mockImplementation((path: string) => {
       if (path === '/api/v1/admin/feature-flags') {
         return Promise.resolve({
-          data: { license: { tier: 'free', has_license_key: false, is_valid: true }, flags: [], would_activate: [] },
+          data: { license: { tier: 'community', has_license_key: false, is_valid: true }, flags: [], would_activate: [] },
           error: undefined,
         })
       }

@@ -1,5 +1,5 @@
 <template>
-  <FeatureGate feature-name="webhook_trigger" required-tier="enterprise">
+  <FeatureGate feature-name="webhook_trigger" required-tier="team">
     <template #locked="{ tooltip }">
       <div data-theme="agent" class="mx-auto max-w-6xl space-y-6 p-6">
         <div class="mb-4 flex items-center gap-2 rounded-lg border border-warning/30 bg-warning/5 p-4 text-sm text-warning">

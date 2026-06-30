@@ -7,15 +7,15 @@ vi.mock('../lib/api/client', () => ({
   api: {
     GET: vi.fn().mockResolvedValue({
       data: {
-        license: { tier: 'free', has_license_key: false, is_valid: true },
+        license: { tier: 'community', has_license_key: false, is_valid: true },
         flags: [
-          { name: 'flag-connectors', description: 'Third-party connector support', tier: 'free', currently_active: true, depends_on: null },
-          { name: 'flag-audit-log', description: 'Audit log retention', tier: 'enterprise', currently_active: false, depends_on: null },
-          { name: 'flag-advanced-analytics', description: 'Advanced analytics dashboards', tier: 'enterprise', currently_active: false, depends_on: ['flag-audit-log'] },
+          { name: 'flag-connectors', description: 'Third-party connector support', tier: 'community', currently_active: true, depends_on: null },
+          { name: 'flag-audit-log', description: 'Audit log retention', tier: 'team', currently_active: false, depends_on: null },
+          { name: 'flag-advanced-analytics', description: 'Advanced analytics dashboards', tier: 'team', currently_active: false, depends_on: ['flag-audit-log'] },
         ],
         would_activate: [
-          { name: 'flag-audit-log', description: 'Audit log retention', tier: 'enterprise', depends_on: null },
-          { name: 'flag-advanced-analytics', description: 'Advanced analytics dashboards', tier: 'enterprise', depends_on: ['flag-audit-log'] },
+          { name: 'flag-audit-log', description: 'Audit log retention', tier: 'team', depends_on: null },
+          { name: 'flag-advanced-analytics', description: 'Advanced analytics dashboards', tier: 'team', depends_on: ['flag-audit-log'] },
         ],
       },
       error: undefined,
@@ -65,8 +65,8 @@ describe('AdminFeatureFlagsView', () => {
 
   it('groups flags by tier with section headers', async () => {
     const wrapper = await mountView()
-    expect(wrapper.text()).toContain('Free')
-    expect(wrapper.text()).toContain('Enterprise')
+    expect(wrapper.text()).toContain('Community')
+    expect(wrapper.text()).toContain('Team')
   })
 
   it('shows toggle indicators for each flag', async () => {
@@ -92,7 +92,7 @@ describe('AdminFeatureFlagsView', () => {
   it('renders the license status card', async () => {
     const wrapper = await mountView()
     expect(wrapper.text()).toContain('License Status')
-    expect(wrapper.text()).toContain('free')
+    expect(wrapper.text()).toContain('community')
     expect(wrapper.text()).toContain('Not set')
     expect(wrapper.text()).toContain('Valid')
   })
@@ -107,10 +107,10 @@ describe('AdminFeatureFlagsView', () => {
   it('shows count per tier section', async () => {
     const wrapper = await mountView()
     const sections = wrapper.findAll('.uppercase.tracking-wider.text-muted-foreground')
-    const freeSection = sections.find(s => s.text().includes('Free'))
-    const enterpriseSection = sections.find(s => s.text().includes('Enterprise'))
-    expect(freeSection).toBeDefined()
-    expect(enterpriseSection).toBeDefined()
+    const communitySection = sections.find(s => s.text().includes('Community'))
+    const teamSection = sections.find(s => s.text().includes('Team'))
+    expect(communitySection).toBeDefined()
+    expect(teamSection).toBeDefined()
   })
 
   it('shows tooltip trigger elements', async () => {

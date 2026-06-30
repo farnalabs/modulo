@@ -5,36 +5,36 @@ import { nextTick } from 'vue'
 
 const mockLicenseFree = {
   has_license: false,
-  tier: 'free',
+  tier: 'community',
   features: [],
   expires_at: null,
   org_id: null,
 }
 
-const mockLicenseEnterprise = {
+const mockLicenseTeam = {
   has_license: true,
-  tier: 'enterprise',
+  tier: 'team',
   features: ['parallel_branches', 'eval_system'],
   expires_at: '2026-12-31T23:59:59Z',
   org_id: 'Acme Corp',
 }
 
 const mockFlagsFree = {
-  license: { tier: 'free', has_license_key: false, is_valid: true },
+  license: { tier: 'community', has_license_key: false, is_valid: true },
   flags: [
-    { name: 'parallel_branches', description: 'Run parallel branches', tier: 'enterprise', currently_active: false, depends_on: null },
-    { name: 'hitl_gates', description: 'Human-in-the-loop gates', tier: 'free', currently_active: true, depends_on: null },
+    { name: 'parallel_branches', description: 'Run parallel branches', tier: 'team', currently_active: false, depends_on: null },
+    { name: 'hitl_gates', description: 'Human-in-the-loop gates', tier: 'community', currently_active: true, depends_on: null },
   ],
   would_activate: [
-    { name: 'parallel_branches', description: 'Run parallel branches', tier: 'enterprise', currently_active: false, depends_on: null },
+    { name: 'parallel_branches', description: 'Run parallel branches', tier: 'team', currently_active: false, depends_on: null },
   ],
 }
 
-const mockFlagsEnterprise = {
-  license: { tier: 'enterprise', has_license_key: true, is_valid: true },
+const mockFlagsTeam = {
+  license: { tier: 'team', has_license_key: true, is_valid: true },
   flags: [
-    { name: 'parallel_branches', description: 'Run parallel branches', tier: 'enterprise', currently_active: true, depends_on: null },
-    { name: 'hitl_gates', description: 'Human-in-the-loop gates', tier: 'free', currently_active: true, depends_on: null },
+    { name: 'parallel_branches', description: 'Run parallel branches', tier: 'team', currently_active: true, depends_on: null },
+    { name: 'hitl_gates', description: 'Human-in-the-loop gates', tier: 'community', currently_active: true, depends_on: null },
   ],
   would_activate: [],
 }
@@ -42,7 +42,7 @@ const mockFlagsEnterprise = {
 vi.mock('../lib/api/client', () => ({
   api: {
     GET: vi.fn(),
-    POST: vi.fn().mockResolvedValue({ data: { tier: 'enterprise', expires_at: '2027-01-01' }, error: undefined }),
+    POST: vi.fn().mockResolvedValue({ data: { tier: 'team', expires_at: '2027-01-01' }, error: undefined }),
     DELETE: vi.fn().mockResolvedValue({ error: undefined }),
   },
   getAccessToken: vi.fn().mockReturnValue('mock-token'),
@@ -117,13 +117,13 @@ describe('SettingsLicenseView', () => {
     await nextTick()
     await nextTick()
     await nextTick()
-    expect(wrapper.text()).toContain('Free Tier')
-    expect(wrapper.text()).toContain('Get an Enterprise License')
+    expect(wrapper.text()).toContain('Community')
+    expect(wrapper.text()).toContain('Get a Team License')
   })
 
-  it('displays Enterprise tier content', async () => {
+  it('displays Team tier content', async () => {
     const { api } = await import('../lib/api/client')
-    mockApiResponses(api.GET, mockLicenseEnterprise, mockFlagsEnterprise)
+    mockApiResponses(api.GET, mockLicenseTeam, mockFlagsTeam)
 
     const wrapper = mount(SettingsLicenseView, {
       global: { plugins: [createPinia()], stubs: dialogStubs },
@@ -131,15 +131,15 @@ describe('SettingsLicenseView', () => {
     await nextTick()
     await nextTick()
     await nextTick()
-    expect(wrapper.text()).toContain('Enterprise')
+    expect(wrapper.text()).toContain('Team')
     expect(wrapper.text()).toContain('Acme Corp')
     expect(wrapper.text()).toContain('December')
-    expect(wrapper.text()).toContain('Enterprise license key active')
+    expect(wrapper.text()).toContain('Team license key active')
   })
 
   it('renders feature flags list with enabled/disabled states', async () => {
     const { api } = await import('../lib/api/client')
-    mockApiResponses(api.GET, mockLicenseEnterprise, mockFlagsEnterprise)
+    mockApiResponses(api.GET, mockLicenseTeam, mockFlagsTeam)
 
     const wrapper = mount(SettingsLicenseView, {
       global: { plugins: [createPinia()], stubs: dialogStubs },
@@ -155,7 +155,7 @@ describe('SettingsLicenseView', () => {
 
   it('renders license key textarea and action buttons', async () => {
     const { api } = await import('../lib/api/client')
-    mockApiResponses(api.GET, mockLicenseEnterprise, mockFlagsEnterprise)
+    mockApiResponses(api.GET, mockLicenseTeam, mockFlagsTeam)
 
     const wrapper = mount(SettingsLicenseView, {
       global: { plugins: [createPinia()], stubs: dialogStubs },

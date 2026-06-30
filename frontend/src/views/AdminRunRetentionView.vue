@@ -5,7 +5,7 @@
       <p class="mt-1 text-muted-foreground">Configure run retention policies and manual purge</p>
     </header>
 
-    <FeatureGate feature-name="admin_run_retention" required-tier="enterprise">
+    <FeatureGate feature-name="admin_run_retention" required-tier="team">
       <template #locked="{ tooltip }">
         <div class="mb-4 flex items-center gap-2 rounded-lg border border-warning/30 bg-warning/5 p-4 text-sm text-warning">
           <LockIcon :locked="true" :tooltip="tooltip" />

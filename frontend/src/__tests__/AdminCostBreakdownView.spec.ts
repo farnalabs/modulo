@@ -32,8 +32,8 @@ vi.mock('../lib/api/client', () => ({
       if (path === '/api/v1/admin/feature-flags') {
         return Promise.resolve({
           data: {
-            license: { tier: 'enterprise', has_license_key: true, is_valid: true },
-            flags: [{ name: 'admin_cost_breakdown', description: '', tier: 'enterprise', currently_active: true, depends_on: null }],
+            license: { tier: 'team', has_license_key: true, is_valid: true },
+            flags: [{ name: 'admin_cost_breakdown', description: '', tier: 'team', currently_active: true, depends_on: null }],
             would_activate: [],
           },
           error: undefined,
