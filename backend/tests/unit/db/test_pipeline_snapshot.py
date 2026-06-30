@@ -66,6 +66,8 @@ async def test_live_graph_becomes_executable_snapshot_with_dependency_pins() -> 
     agent.prompt_template = "Build the artifact"
     agent.updated_at = datetime(2026, 6, 20, tzinfo=UTC)
     agent.model_backend_id = backend_id
+    agent.token_budget = None
+    agent.max_input_length = None
 
     connector = MagicMock()
     connector.id = connector_id
