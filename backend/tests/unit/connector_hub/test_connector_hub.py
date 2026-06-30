@@ -122,6 +122,20 @@ async def test_initialise_creates_asana_connector():
     assert connector.connector_type == ConnectorType.ASANA
 
 
+async def test_initialise_creates_shortcut_connector():
+    ci = _FakeCI(
+        id=uuid.uuid4(),
+        connector_type_id="shortcut",
+        credentials_ciphertext=_encrypt({"token": "shortcut_token"}),
+    )
+    backend = create_secrets_backend(fernet_key=_KEY, backend_name="fernet")
+    with patch.object(backend, "get_secret", return_value='{"token": "shortcut_token"}'):
+        hub = ConnectorHub(secrets_backend=backend)
+        await hub.initialise([ci])
+    connector = hub.get(ci.id)
+    assert connector.connector_type == ConnectorType.SHORTCUT
+
+
 async def test_get_unknown_raises():
     backend = create_secrets_backend(fernet_key=_KEY, backend_name="fernet")
     hub = ConnectorHub(secrets_backend=backend)

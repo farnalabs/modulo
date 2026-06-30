@@ -54,6 +54,7 @@ FK_SPECS: list[tuple[str, str, str, str]] = [
     ("primitive_abuse_reports", "reporter_user_id", "reporter_account_id", "SET NULL"),
     ("primitive_abuse_reports", "reviewed_by", "reviewer_account_id", "SET NULL"),
     ("pipeline_snapshots", "created_by", "account_id", "SET NULL"),
+    ("scheduled_reports", "created_by", "account_id", "SET NULL"),
 ]
 
 
