@@ -1,7 +1,10 @@
 ---
 id: feat-core-run-context
 prd: 8.18
-delivery-tasks: [task-nv0-complexity-reviewer, task-nv0-run-context-tests]
+delivery-tasks:
+  - task-nv0-complexity-reviewer
+  - task-nv0-run-context-tests
+bdd:
   - backend/tests/features/triggers/manual.feature
   - backend/tests/features/pipelines/run_sequential.feature
   - backend/tests/features/evals/conditional_hitl.feature
@@ -31,7 +34,11 @@ unit-tests:
 depends-on: []
 status: partial
 ---
-# Run Context ## Behaviours ### Seeding
+# Run Context
+
+## Behaviours
+
+### Seeding
 - [x] run_context seeded from PipelineSnapshot.run_context_defaults at run start
 - [ ] Trigger run_context_overrides merge over pipeline defaults (later wins)
 - [x] Empty defaults produce empty run_context dict

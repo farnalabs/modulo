@@ -2,6 +2,7 @@
 id: feat-core-audit-crypto-chain
 prd: 8.12
 delivery-tasks: [task-nv10-audit-crypto-chain]
+bdd:
   - backend/tests/features/audit/event_recording.feature
   - backend/tests/features/personas/marcus-ciso.feature
 code:
@@ -10,11 +11,13 @@ code:
 depends-on: [feat-core-audit-trail]
 status: partial
 ---
-# Audit — Cryptographic Hash Chain SHA-256 cryptographic chaining of audit events per organisation, providing
-tamper-evident integrity. Each event records the hash of the prior event in
-the org's sequence, forming a linked chain. Verification recomputes every
-hash and validates against the stored chain head. Builds on the base audit trail (feat-core-audit-trail). The cryptographic
-linking is the V2 addition described in PRD 8.12. ## Behaviours ### Hash Computation
+# Audit — Cryptographic Hash Chain
+
+SHA-256 cryptographic chaining of audit events per organisation, providing tamper-evident integrity. Each event records the hash of the prior event in the org's sequence, forming a linked chain. Verification recomputes every hash and validates against the stored chain head. Builds on the base audit trail (feat-core-audit-trail). The cryptographic linking is the V2 addition described in PRD 8.12.
+
+## Behaviours
+
+### Hash Computation
 - [x] SHA-256 hash computed from canonical JSON of all identity fields: event_type, actor_user_id, resource_type, resource_id, payload_json, request_id, previous_hash, event_id, organisation_id, created_at
 - [x] Canonical JSON uses sort_keys=True and separators=(",", ":") — no whitespace, sorted keys
 - [x] Hash is deterministic — same inputs always produce the same output

@@ -2,6 +2,7 @@
 id: feat-core-contribute-primitive
 prd: 8.14
 delivery-tasks: [task-nv8-contribute-primitive]
+bdd:
   - backend/tests/bdd/features/library/browse.feature
   - backend/tests/bdd/features/library/copy_to_adapt.feature
   - backend/tests/bdd/features/library/ratings.feature
@@ -11,7 +12,13 @@ code:
 
 status: partial
 ---
-# Contribute Primitive Users can create draft fixture contributions, submit them for review, and (as an admin/owner) publish them to the community library. Currently scoped to `test_fixture` primitive type only. ## Behaviours - [ ] Create draft fixture contribution — POST /api/v1/library/contribute returns 201 with draft status
+# Contribute Primitive
+
+Users can create draft fixture contributions, submit them for review, and (as an admin/owner) publish them to the community library. Currently scoped to `test_fixture` primitive type only.
+
+## Behaviours
+
+- [ ] Create draft fixture contribution — POST /api/v1/library/contribute returns 201 with draft status
 - [ ] Required fields: name, slug, fixture_map — missing either returns 422
 - [ ] Optional fields: description, tags, source_run_id, source_pipeline_id, owner_team_id
 - [ ] Submit draft for review — POST .../submit moves draft → review_queue, returns 200

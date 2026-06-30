@@ -2,7 +2,8 @@
 id: feat-core-schema-inference-ui
 prd: 8.16
 delivery-tasks: [task-nv5-schema-inference-ui]
-bdd: backend/tests/bdd/features/connectors/schema_inference.feature
+bdd:
+  - backend/tests/bdd/features/connectors/schema_inference.feature
 code:
   - frontend/src/views/SchemaInferenceView.vue
   - frontend/src/views/OnboardingWizard.vue

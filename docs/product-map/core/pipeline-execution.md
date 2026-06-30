@@ -15,8 +15,13 @@ unit-tests: [backend/tests/unit/core/test_pipeline_engine.py]
 depends-on: [feat-core-agent-model, feat-core-schema-system, feat-core-trigger-system]
 status: partial
 ---
-# Pipeline Execution StateGraph-based pipeline executor. Compiles pipeline config into a LangGraph graph
-manages node dispatch, checkpointing, event emission, and HITL interrupt/resume. ## Behaviours ### Graph Compilation & Startup
+# Pipeline Execution
+
+StateGraph-based pipeline executor. Compiles pipeline config into a LangGraph graph, manages node dispatch, checkpointing, event emission, and HITL interrupt/resume.
+
+## Behaviours
+
+### Graph Compilation & Startup
 - [x] Pipeline with valid config compiles to StateGraph
 - [x] Invalid DAG (cycle, disconnected node) → validation error pre-run
 - [x] Missing entry node → validation error

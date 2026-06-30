@@ -13,7 +13,13 @@ unit-tests:
 
 status: partial
 ---
-# OIDC Integration OpenID Connect SSO with authorization code flow, discovery document parsing, JIT user provisioning, and group-to-team mapping. ## Behaviours ### Provider configuration (env-var seeding)
+# OIDC Integration
+
+OpenID Connect SSO with authorization code flow, discovery document parsing, JIT user provisioning, and group-to-team mapping.
+
+## Behaviours
+
+### Provider configuration (env-var seeding)
 - [ ] One-time migration from `MODULO_OIDC_PROVIDERS` env var to `sso_providers` DB table on startup
 - [ ] Migration skips when env var is empty or `[]`
 - [ ] Migration skips when providers already exist in DB

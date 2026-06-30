@@ -2,6 +2,7 @@
 id: feat-core-audit-trail
 prd: 8.12
 delivery-tasks: [task-nv0-immutable-audit]
+bdd:
   - backend/tests/bdd/features/audit/event_recording.feature
 code:
   - backend/src/modulo/core/audit_logger/__init__.py
@@ -14,9 +15,13 @@ unit-tests:
 
 status: partial
 ---
-# Audit Trail Immutable SHA-256-linked audit event chain per organisation. Each event
-records a timestamp, actor, resource, and payload. UPDATE/DELETE blocked
-at both Postgres and ORM levels. V1: viewer UI, export, chain verification. ## Behaviours ### Event Creation
+# Audit Trail
+
+Immutable SHA-256-linked audit event chain per organisation. Each event records a timestamp, actor, resource, and payload. UPDATE/DELETE blocked at both Postgres and ORM levels. V1: viewer UI, export, chain verification.
+
+## Behaviours
+
+### Event Creation
 - [x] Create AuditEvent with organisation_id, event_type, payload_json
 - [x] First event in an org: previous_hash is None, creates AuditChainHead
 - [x] Subsequent events: previous_hash = SHA-256 of prior event

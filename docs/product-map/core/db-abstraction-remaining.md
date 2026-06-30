@@ -2,6 +2,7 @@
 id: feat-core-db-abstraction-remaining
 prd: 8.17
 delivery-tasks: [task-nv12-db-abstraction-remaining]
+bdd:
   - backend/tests/bdd/features/security/rls_enforcement.feature
   - backend/tests/bdd/features/auth/tenant_isolation.feature
 code:
@@ -11,7 +12,13 @@ code:
 depends-on: [feat-core-db-abstraction-core]
 status: partial
 ---
-# Core — Database Abstraction (remaining work) Multi-backend database abstraction. Phase 1 (UUID swap, Repository ABC + Hub) is done. This entry tracks Phases 2–5 from ADR 002 and other remaining gaps. ## Behaviours ### Repository Layer - [ ] `BaseRepository.set_org_context` dispatches to `set_rls_org` for both Postgres and generic backends
+# Core — Database Abstraction (remaining work)
+
+Multi-backend database abstraction. Phase 1 (UUID swap, Repository ABC + Hub) is done. This entry tracks Phases 2–5 from ADR 002 and other remaining gaps.
+
+## Behaviours
+
+### Repository Layer - [ ] `BaseRepository.set_org_context` dispatches to `set_rls_org` for both Postgres and generic backends
 - [ ] `BaseRepository.apply_tenant_filter` returns stmt unchanged on Postgres (RLS handles scoping)
 - [ ] `BaseRepository.apply_tenant_filter` injects `WHERE organisation_id = :org_id` on generic backends
 - [ ] `BaseRepository.paginate` applies LIMIT/OFFSET and returns `PageResult` with total count
