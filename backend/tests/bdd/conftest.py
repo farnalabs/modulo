@@ -14,6 +14,9 @@ from playwright.sync_api import Page
 os.environ.setdefault("MODULO_CSRF_ENABLED", "false")
 os.environ.setdefault("REDIS_URL", "")
 os.environ.setdefault("MODULO_AUTH_RATE_LIMIT_ENABLED", "false")
+os.environ.setdefault("DATABASE_URL", "sqlite+aiosqlite:///./test.db")
+os.environ.setdefault("SECRET_KEY", "a" * 32)
+os.environ.setdefault("FERNET_KEY", "b" * 32)
 
 from modulo.api.dependencies import _get_engine, get_db_session
 from modulo.api.main import app
@@ -237,6 +240,27 @@ def viewer_client(mock_session: AsyncMock) -> Generator[TestClient, None, None]:
         organisation_id=ORG_ID,
         account_id=uuid.uuid4(),
         org_role="viewer",
+    )
+
+    yield TestClient(app)
+
+    app.dependency_overrides.clear()
+
+
+@pytest.fixture
+def system_admin_client(mock_session: AsyncMock) -> Generator[TestClient, None, None]:
+    async def override_session() -> AsyncGenerator[AsyncMock, None]:
+        yield mock_session
+
+    app.dependency_overrides[get_settings] = make_settings
+    app.dependency_overrides[get_db_session] = override_session
+    app.dependency_overrides[_get_engine] = lambda: MagicMock()
+    app.dependency_overrides[get_current_user] = lambda: AuthenticatedPrincipal(
+        username="sysadmin",
+        organisation_id=ORG_ID,
+        account_id=USER_ID,
+        org_role="admin",
+        is_system_admin=True,
     )
 
     yield TestClient(app)
