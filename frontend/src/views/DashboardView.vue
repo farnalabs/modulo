@@ -227,6 +227,28 @@
         </div>
       </div>
 
+      <!-- Empty state CTA for fresh organisations -->
+      <div v-if="summary.total_runs === 0 && summary.active_pipelines === 0" class="rounded-lg border bg-card p-8 text-center">
+        <p class="text-lg font-medium">Welcome to Modulo</p>
+        <p class="mt-1 text-sm text-muted-foreground">
+          Get started by creating your first pipeline or exploring a template.
+        </p>
+        <div class="mt-4 flex items-center justify-center gap-3">
+          <a
+            href="/library"
+            class="rounded-lg bg-primary px-4 py-2 text-sm font-semibold text-primary-foreground border border-primary/30 hover:brightness-110 transition-all"
+          >
+            Create Pipeline
+          </a>
+          <a
+            href="/templates"
+            class="rounded-lg border border-input bg-background px-4 py-2 text-sm font-medium hover:bg-accent transition-all"
+          >
+            Browse Templates
+          </a>
+        </div>
+      </div>
+
     </template>
   </div>
 </template>
