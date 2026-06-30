@@ -28,6 +28,13 @@ VIEWER_PRINCIPAL = AuthenticatedPrincipal(
     account_id=uuid4(),
     org_role="viewer",
 )
+SYSTEM_ADMIN_PRINCIPAL = AuthenticatedPrincipal(
+    username="sysadmin@test",
+    organisation_id=ORG_ID,
+    account_id=uuid4(),
+    org_role="admin",
+    is_system_admin=True,
+)
 
 
 @pytest.fixture
@@ -66,12 +73,23 @@ def client_viewer(mock_session):
     app.dependency_overrides.clear()
 
 
+@pytest.fixture
+def client_system_admin(mock_session):
+    """Test client with system admin auth."""
+    app.dependency_overrides[get_db_session] = lambda: mock_session
+    app.dependency_overrides[get_current_user] = lambda: SYSTEM_ADMIN_PRINCIPAL
+    transport = ASGITransport(app=app)
+    client = AsyncClient(transport=transport, base_url="http://test")
+    yield client
+    app.dependency_overrides.clear()
+
+
 # ── POST /api/v1/admin/orgs ──────────────────────────────────────────────
 
 
 @pytest.mark.anyio
-async def test_create_org_success(client_admin, mock_session):
-    """Admin can create an org with valid name and slug."""
+async def test_create_org_success(client_system_admin, mock_session):
+    """System admin can create an org with valid name and slug."""
     import modulo.api.routes.admin_orgs as admin_orgs
 
     original_get_slug = admin_orgs.get_organisation_by_slug
@@ -92,7 +110,7 @@ async def test_create_org_success(client_admin, mock_session):
     admin_orgs.create_organisation = mock_create_org
 
     try:
-        resp = await client_admin.post(
+        resp = await client_system_admin.post(
             "/api/v1/admin/orgs",
             json={"name": "Test Org", "slug": "test-org"},
         )
@@ -109,7 +127,7 @@ async def test_create_org_success(client_admin, mock_session):
 
 @pytest.mark.anyio
 async def test_create_org_viewer_forbidden(client_viewer):
-    """Non-admin users get 403 when creating orgs."""
+    """Viewers get 403 when creating orgs."""
     resp = await client_viewer.post(
         "/api/v1/admin/orgs",
         json={"name": "Test Org", "slug": "test-org"},
@@ -118,9 +136,19 @@ async def test_create_org_viewer_forbidden(client_viewer):
 
 
 @pytest.mark.anyio
-async def test_create_org_invalid_slug(client_admin):
-    """Invalid slug format returns 422."""
+async def test_create_org_admin_forbidden(client_admin):
+    """Regular org admin (not system admin) gets 403 when creating orgs."""
     resp = await client_admin.post(
+        "/api/v1/admin/orgs",
+        json={"name": "Test Org", "slug": "test-org"},
+    )
+    assert resp.status_code == 403
+
+
+@pytest.mark.anyio
+async def test_create_org_invalid_slug(client_system_admin):
+    """Invalid slug format returns 422."""
+    resp = await client_system_admin.post(
         "/api/v1/admin/orgs",
         json={"name": "Test Org", "slug": "UPPERCASE-SLUG"},
     )
@@ -128,7 +156,7 @@ async def test_create_org_invalid_slug(client_admin):
 
 
 @pytest.mark.anyio
-async def test_create_org_slug_collision(client_admin):
+async def test_create_org_slug_collision(client_system_admin):
     """Duplicate slug returns 409."""
     import modulo.api.routes.admin_orgs as admin_orgs
 
@@ -140,7 +168,7 @@ async def test_create_org_slug_collision(client_admin):
     admin_orgs.get_organisation_by_slug = AsyncMock(return_value=existing)
 
     try:
-        resp = await client_admin.post(
+        resp = await client_system_admin.post(
             "/api/v1/admin/orgs",
             json={"name": "Test", "slug": "taken"},
         )
@@ -150,7 +178,7 @@ async def test_create_org_slug_collision(client_admin):
 
 
 @pytest.mark.anyio
-async def test_create_org_duplicate_slug_orig(client_admin):
+async def test_create_org_duplicate_slug_orig(client_system_admin):
     """Duplicate slug returns 409 (alternate path)."""
     import modulo.api.routes.admin_orgs as admin_orgs
 
@@ -162,7 +190,7 @@ async def test_create_org_duplicate_slug_orig(client_admin):
     admin_orgs.get_organisation_by_slug = AsyncMock(return_value=existing_org)
 
     try:
-        resp = await client_admin.post(
+        resp = await client_system_admin.post(
             "/api/v1/admin/orgs",
             json={"name": "Test Org", "slug": "dup-slug"},
         )
@@ -175,8 +203,8 @@ async def test_create_org_duplicate_slug_orig(client_admin):
 
 
 @pytest.mark.anyio
-async def test_create_org_user_success(client_admin):
-    """Create a user in a specified org."""
+async def test_create_org_user_success(client_system_admin):
+    """System admin can create a user in a specified org."""
     import modulo.api.routes.admin_orgs as admin_orgs
     from modulo.db.models.account import Account
 
@@ -223,7 +251,7 @@ async def test_create_org_user_success(client_admin):
     admin_orgs.create_membership = mock_create_membership
 
     try:
-        resp = await client_admin.post(
+        resp = await client_system_admin.post(
             f"/api/v1/admin/orgs/{target_org_id}/users",
             json={
                 "email": "newuser@example.com",
@@ -245,7 +273,22 @@ async def test_create_org_user_success(client_admin):
 
 
 @pytest.mark.anyio
-async def test_create_org_user_org_not_found(client_admin):
+async def test_create_org_user_admin_forbidden(client_admin):
+    """Regular org admin (not system admin) gets 403 when creating org users."""
+    resp = await client_admin.post(
+        f"/api/v1/admin/orgs/{uuid4()}/users",
+        json={
+            "email": "user@example.com",
+            "display_name": "User",
+            "password": "securepassword123",
+            "org_role": "runner",
+        },
+    )
+    assert resp.status_code == 403
+
+
+@pytest.mark.anyio
+async def test_create_org_user_org_not_found(client_system_admin):
     """Non-existent org returns 404."""
     import modulo.api.routes.admin_orgs as admin_orgs
 
@@ -253,7 +296,7 @@ async def test_create_org_user_org_not_found(client_admin):
     admin_orgs.get_organisation = AsyncMock(return_value=None)
 
     try:
-        resp = await client_admin.post(
+        resp = await client_system_admin.post(
             f"/api/v1/admin/orgs/{uuid4()}/users",
             json={
                 "email": "user@example.com",
@@ -268,9 +311,9 @@ async def test_create_org_user_org_not_found(client_admin):
 
 
 @pytest.mark.anyio
-async def test_create_org_user_weak_password(client_admin):
+async def test_create_org_user_weak_password(client_system_admin):
     """Weak password returns 422."""
-    resp = await client_admin.post(
+    resp = await client_system_admin.post(
         f"/api/v1/admin/orgs/{uuid4()}/users",
         json={
             "email": "user@example.com",
@@ -283,9 +326,9 @@ async def test_create_org_user_weak_password(client_admin):
 
 
 @pytest.mark.anyio
-async def test_create_org_user_invalid_role(client_admin):
+async def test_create_org_user_invalid_role(client_system_admin):
     """Invalid role returns 422."""
-    resp = await client_admin.post(
+    resp = await client_system_admin.post(
         f"/api/v1/admin/orgs/{uuid4()}/users",
         json={
             "email": "user@example.com",

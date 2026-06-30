@@ -25,3 +25,11 @@ async def get_current_user(
         ) from None
 
     return principal
+
+
+async def require_system_admin(
+    current_user: AuthenticatedPrincipal = Depends(get_current_user),
+) -> AuthenticatedPrincipal:
+    if not current_user.is_system_admin:
+        raise HTTPException(status_code=403, detail="System admin role required")
+    return current_user

@@ -46,16 +46,22 @@ async def _ensure_active_transaction(session: AsyncSession) -> str:
     return bind.dialect.name
 
 
-async def set_rls_org(session: AsyncSession, org_id: uuid.UUID) -> None:
+async def set_rls_org(session: AsyncSession, org_id: uuid.UUID | None) -> None:
     """Activate RLS / tenant scoping for *org_id* within the current transaction.
 
     Requires an active transaction — raises RuntimeError otherwise so callers
     cannot accidentally call this outside a BEGIN block and get silent no-ops.
 
+    When *org_id* is ``None`` (system admin with no org claim), RLS is skipped
+    so the operation runs unscoped — the caller must scope manually.
+
     Postgres: calls ``SELECT set_config('app.organisation_id', :oid, true)``.
     Generic backends (MariaDB, SQLite): stores *org_id* in ``session.info``
     for the ``do_orm_execute`` tenant-filter listener to pick up.
     """
+    if org_id is None:
+        return
+
     dialect = await _ensure_active_transaction(session)
 
     if dialect == "postgresql":
@@ -91,6 +97,16 @@ async def set_rls_user_context(session: AsyncSession, user_id: uuid.UUID, org_ro
     else:
         session.info["user_id"] = user_id
         session.info["org_role"] = org_role
+
+
+async def set_rls_org_for_admin(session: AsyncSession, target_org_id: uuid.UUID) -> None:
+    """Set RLS context to a specific org for system admin operations.
+
+    System admins may operate on orgs other than their own. This helper
+    scopes the current transaction to *target_org_id* so that all subsequent
+    queries within the transaction are tenant-filtered to that org.
+    """
+    await set_rls_org(session, target_org_id)
 
 
 def register_rls_reset_hook(engine: AsyncEngine) -> None:
