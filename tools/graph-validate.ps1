@@ -37,8 +37,8 @@ foreach($e in $entries){foreach($d in $e.depends){if(-not$d){continue};if(-not$a
 
 # 4. Validate PRD section refs
 $prdSections=@{}
-if(Test-Path -LiteralPath $prdFile){Get-Content -LiteralPath $prdFile|ForEach-Object{if($_ -match '^### ((\d+\.\d+))'){$prdSections[$Matches[1]]=$true}elseif($_ -match '^## (\d+)\.'){$prdSections[$Matches[1]]=$true}}}
-foreach($e in $entries){if(-not$e.prd){continue};$refs=$e.prd-split','|ForEach-Object{$_.Trim()};foreach($r in $refs){if(-not$prdSections.ContainsKey($r)){$issues+="PRD|$($e.id)|section $r not found in prd.md"}}}
+if(Test-Path -LiteralPath $prdFile){Get-Content -LiteralPath $prdFile|ForEach-Object{if($_ -match '^### ((\d+\.\d+[a-z]?))'){$prdSections[$Matches[1]]=$true}elseif($_ -match '^## (\d+)\.'){$prdSections[$Matches[1]]=$true}}}
+foreach($e in $entries){if(-not$e.prd){continue};$refs=$e.prd-split','|ForEach-Object{$_.Trim().TrimStart('§')};foreach($r in $refs){if(-not$prdSections.ContainsKey($r)){$issues+="PRD|$($e.id)|section $r not found in prd.md"}}}
 
 # 5. Validate code paths exist
 foreach($e in $entries){$c2=Get-Content -Raw -Encoding UTF8 -LiteralPath $e.path;if($c2-match'^code:'){$cs=$c2-split'---'|Select-Object -Index 2;if($cs-match'code:\s*\n((?:\s+- .+\n?)+)'){$lines=$Matches[1]-split'\n'|ForEach-Object{$_-replace'^\s*-\s*',''-replace'"',''};foreach($line in $lines){if(-not$line.Trim()){continue};$r=Join-Path $repoRoot $line.Trim();if(-not(Test-Path -LiteralPath $r)){if(-not(Test-Path -LiteralPath "$r.py")-and-not(Test-Path -LiteralPath "$r.vue")-and-not(Test-Path -LiteralPath "$r.ts")){$issues+="CODE|$($e.id)|$line not found"}}}}}}
