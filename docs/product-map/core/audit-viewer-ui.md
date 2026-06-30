@@ -5,8 +5,91 @@ delivery-tasks: [task-nv11-audit-viewer-ui]
   - backend/tests/bdd/features/audit/event_recording.feature
 code:
   - frontend/src/views/AdminAuditView.vue
+  - backend/src/modulo/api/routes/audit.py
 unit-tests:
 depends-on: [feat-core-audit-trail]
 status: partial
 ---
-# Audit Viewer UI Cursor-paginated audit event viewer with filtering, expandable detail rows, and CSV export. Enterprise-gated feature (requires `audit_viewer` in license key). Recording stays free; only the viewer/export are gated. ## Behaviours ### Viewing - [ ] Cursor-paginated event listing via `GET /api/v1/admin/audit` - [ ] Events ordered newest-first by default - [ ] Default 50 events per page, configurable via API - [ ] Previous / Next page navigation using cursor tokens - [ ] Page indicator: "Page N · M of T total events" - [ ] Expandable row toggles inline detail panel - [ ] Expanded panel shows formatted payload JSON in `<pre>` block - [ ] Expanded panel shows Previous Hash (truncated, mono font) - [ ] Expanded panel shows Event ID (truncated, mono font) - [ ] Expanded panel shows Request ID when present - [ ] Timestamp formatted as locale-aware short date + time (e.g. "Jun 1, 01:23 PM") - [ ] Actor formatted as `usr_` + first 8 hex chars of user UUID - [ ] Resource type displayed with truncated resource ID (`XXXXXXXX...`) - [ ] Missing resource_type renders em-dash - [ ] Event type rendered as coloured badge grouped by category (pipeline=blue, run=amber/green/red, user=purple, team=indigo, schema=cyan, connector=orange, model_backend=pink, sso=slate, settings=gray, api_key=rose, export=teal, fallback=gray) - [ ] Summary column: action noun + resource type + optional name from payload - [ ] Chevron icon rotates on expanded row ### Filtering - [ ] Event type dropdown filter grouped by category (Pipeline, Run, User, Team, Schema, Connector, Model Backend, SSO Provider, Settings, API Key, Export) - [ ] Actor (user_id) text input filter - [ ] From date (date picker) filter — maps to `from_date` query param - [ ] To date (date picker) filter — maps to `to_date` query param - [ ] Target type (entity_type) dropdown filter (Pipeline, Run, User, Team, Schema, Connector, Model Backend, SSO Provider) - [ ] Apply Filters button triggers reload from page 1 - [ ] Reset button clears all filters and reloads from page 1 - [ ] Total event count displayed with active filters - [ ] Filter values persist across pagination ### Export - [ ] Export CSV button in header - [ ] Export respects current active filters - [ ] Export fetches all pages via `GET /api/v1/admin/audit/export` (page_size=1000) - [ ] CSV headers: Timestamp, Event Type, Actor ID, Target Type, Target ID, Summary, Request ID, Previous Hash - [ ] CSV cells quoted and comma-separated - [ ] Downloaded file named `audit-log-YYYY-MM-DD.csv` - [ ] Button shows "Exporting..." with disabled state during export - [ ] Export failure surfaces error message ### States - [ ] Loading spinner (centred, animated) while fetching - [ ] Error state with message and Retry link - [ ] Empty state with "No audit events found" and filter-adjustment hint - [ ] Previous button disabled (opacity-30, cursor-not-allowed) when no `prev_cursor` - [ ] Next button disabled when no `next_cursor` ### Enterprise Gating - [ ] View rendered only when org license includes `audit_viewer` feature flag - [ ] Export gated by same `audit_viewer` enterprise feature ### Edge Cases - [ ] Actor user deleted from DB → `actor_user_id` is null, displays em-dash - [ ] Very long event IDs truncated to first 8 chars in table rows - [ ] Empty payload_json → detail panel does not render "Details" section - [ ] Large payload_json → horizontal scroll in detail `<pre>` block - [ ] No `previous_hash` on first events → detail panel hides hash section - [ ] Filter combinations yielding zero results → empty state shown - [ ] Rapid filter apply + pagination → latest request wins (no stale race) ### Error Handling - [ ] API error during load → error message shown with Retry button - [ ] Export failure → error message shown (does not affect table view) - [ ] Network error → caught and displayed as user-facing message - [ ] Invalid server response → `undefined` guard prevents render crash ### Responsive / Layout - [ ] Filter grid: 5 columns on large, 2 on small, 1 on mobile - [ ] Table scrolls horizontally on narrow viewports (overflow-x-auto) - [ ] All form controls have visible labels - [ ] Container constrained to `max-w-6xl` on wide screens ## Known Gaps - No unit tests for the Vue component (no `*.spec.ts` found for AdminAuditView.vue) - Event type dropdown list duplicates but does not fully match the PRD 8.12 event vocabulary (adds synthetic types like `pipeline.updated`, `run.completed`/`run.failed`/`run.cancelled`, `user.created`/`user.updated`/`user.deactivated`/`user.activated`, `schema.created`/`schema.updated`/`schema.deleted`, `connector.*`, `model_backend.*`, `sso_provider.*`, `settings.updated`, `api_key.*`, `export.csv` — many are not in PRD 8.12 event type table; consider syncing with canonical list) - No integration test covering the full viewer flow (frontend + API + database) - Enterprise gating not implemented in the frontend (no feature-flag wrapper visible in the component) - CSV export uses offset-based pagination (`page`/`page_size`) which may skip or duplicate events if new events are created during export (cursor-based export would be safer) - No chain verification status indicator in the UI (user cannot tell if the chain is intact without calling the verify endpoint separately) 
+
+# Audit Viewer UI
+
+Cursor-paginated audit event viewer with filtering, expandable detail rows,
+CSV/JSONL export, and chain verification.
+
+## Feature Gating
+
+The audit viewer is split into free and enterprise tiers:
+
+- **Free tier:** read-only recent-events view (`GET /api/v1/admin/audit`,
+  max 50 events, no export) and chain verification
+  (`GET /api/v1/admin/audit/verify`). Always available to all orgs —
+  audit capability must be verifiable during evaluation for regulated teams.
+- **Enterprise tier** (requires `audit_viewer` in license key): bulk export
+  (`GET /api/v1/admin/audit/export` as CSV/JSONL) and batch-detail
+  (`POST /api/v1/admin/audit/batch-detail`). Recording stays free on all
+  tiers.
+
+Only the export and batch-detail endpoints are behind
+`require_feature("audit_viewer")`.
+
+## Behaviours
+
+### Viewing (free + enterprise)
+
+- [ ] Cursor-paginated event listing via `GET /api/v1/admin/audit`
+- [ ] Events ordered newest-first by default
+- [ ] Default 50 events per page, configurable via API (max 200)
+- [ ] Previous / Next page navigation using cursor tokens
+- [ ] Page indicator: "Page N · M of T total events"
+- [ ] Expandable row toggles inline detail panel
+- [ ] Expanded panel shows formatted payload JSON in `<pre>` block
+- [ ] Expanded panel shows Previous Hash (truncated, mono font)
+- [ ] Expanded panel shows Event ID (truncated, mono font)
+- [ ] Expanded panel shows Request ID when present
+- [ ] Timestamp formatted as locale-aware short date + time
+- [ ] Actor formatted as `usr_` + first 8 hex chars of user UUID
+- [ ] Resource type displayed with truncated resource ID
+- [ ] Missing resource_type renders em-dash
+- [ ] Event type rendered as coloured badge grouped by category
+- [ ] Summary column: action noun + resource type + optional name from payload
+- [ ] Chevron icon rotates on expanded row
+
+### Filtering (free + enterprise)
+
+- [ ] Event type dropdown filter grouped by category
+- [ ] Actor (user_id) text input filter
+- [ ] From date (date picker) filter
+- [ ] To date (date picker) filter
+- [ ] Target type (entity_type) dropdown filter
+- [ ] Apply Filters button triggers reload from page 1
+- [ ] Reset button clears all filters
+
+### Chain Verification (free)
+
+- [ ] Verify Chain button calls `GET /api/v1/admin/audit/verify`
+- [ ] Success result: green banner with event count
+- [ ] Failure result: red banner with error message
+- [ ] Loading state: button shows "Verifying..." and is disabled
+- [ ] No enterprise license needed — chain verification is always available
+
+### Export (enterprise-gated)
+
+- [ ] CSV export button downloads all events matching current filters
+- [ ] JSONL export button downloads all events matching current filters
+- [ ] Export paginates internally (1000 per page, loops until complete)
+- [ ] Button shows "Exporting..." while in progress
+- [ ] 402 Payment Required returned when `audit_viewer` not in license
+
+### Edge Cases
+
+- [ ] Zero events: empty state with guidance text
+- [ ] Network error: ErrorAlert with retry button
+- [ ] Expired or invalid cursor: silently falls back to first page
+- [ ] Actor user deleted (FK SET NULL): shows "—" for actor
+- [ ] Large payload_json: rendered as formatted JSON in `<pre>`
+
+## Known Gaps
+
+- No event type vocabulary enforcement (any string accepted)
+- Export buttons visible on free tier but return 402 on click (no FeatureGate
+  wrapper in the view)

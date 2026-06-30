@@ -262,10 +262,10 @@ Signed offline by the Modulo private key. Verified on startup using the public k
 **Enterprise feature gate**: the following features require a valid license key with the named flag. Absence of a key, or an expired key, returns `False`:
 - `sso` — OIDC, SAML 2.0, JIT provisioning
 - `team_rbac` — team entity, team-scoped roles, team pipeline visibility
-- `audit_viewer` — AuditEvent viewer UI and export. *Audit event recording itself is always active (free tier)* — only the viewer and export are gated.
+- `audit_viewer` — AuditEvent bulk export and advanced filtering. *Audit event recording is always active (free tier). A read-only recent-events view (max 50 events, no export) and chain verification endpoint are also free.* Only bulk export (CSV/JSONL) and batch-detail are enterprise-gated.
 - `admin_spend_limits` — org and team-level run/spend limit configuration
 
-> **Open question (2026-06-20)**: placing `audit_viewer` behind the enterprise gate may block regulated teams from evaluating the platform, since audit capability is often a prerequisite for any AI-in-SDLC evaluation. Consider whether a read-only last-N-events endpoint stays free. Resolve before V1 pricing page ships.
+> **Resolved (2026-06-30)**: a read-only recent-events endpoint (`GET /api/v1/admin/audit`) with chain verification (`GET /api/v1/admin/audit/verify`) stays free — max 50 events, no export. This gives regulated teams tamper-evidence proof during evaluation without requiring an enterprise license. Bulk export (CSV/JSONL) and batch-detail endpoints remain enterprise-gated.
 
 **`CloudPlanContext`** (V3 SaaS — not yet built): would be injected by the modulo-cloud gateway middleware per-org, enforcing SaaS plan-tier flags and rate limits. Core never knows the plan tier — it only calls the interface.
 
@@ -281,7 +281,7 @@ Named feature flags used by core (exhaustive list as of v0.20):
 *Enterprise tier — requires valid license key:*
 - `sso` — OIDC/SAML authentication
 - `team_rbac` — team entity and team-scoped roles (previously `team_management`)
-- `audit_viewer` — AuditEvent viewer UI and export (recording always active)
+- `audit_viewer` — AuditEvent bulk export and batch detail (read-only recent-events view and chain verification always free; recording always active)
 - `admin_spend_limits` — org/team-level spend and run limit configuration
 - `view_modes` — multiple named UI views with admin-defined feature visibility per view and user/team/role assignment (§8.21)
 
