@@ -26,7 +26,7 @@ class NotionConnector(ConnectorBase):
     Supported query resources:
       "databases" — POST /search (filter value="database"); filters: {"query": "..."}
       "database"  — GET /databases/{database_id}; filters: {"database_id": "..."}
-      "pages"     — POST /databases/{database_id}/query; filters: {"database_id": "...", "filter": {...}, "sorts": [...]}
+      "pages"     — POST /databases/{database_id}/query; filters: {database_id, filter, sorts}
       "page"      — GET /pages/{page_id}; filters: {"page_id": "..."}
       "blocks"    — GET /blocks/{block_id}/children; filters: {"block_id": "..."}
       "users"     — GET /users
