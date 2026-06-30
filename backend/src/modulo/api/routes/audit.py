@@ -19,7 +19,7 @@ from modulo.core.audit_logger import (
 )
 from modulo.db.rls import set_rls_org
 
-router = APIRouter(prefix="/api/v1/admin/audit", tags=["audit"], dependencies=[require_feature("audit_viewer")])
+router = APIRouter(prefix="/api/v1/admin/audit", tags=["audit"])
 
 
 def _require_admin(principal: AuthenticatedPrincipal) -> None:
@@ -76,7 +76,7 @@ async def list_audit_events_endpoint(
     return result
 
 
-@router.post("/batch-detail", response_model=list[dict[str, object]])
+@router.post("/batch-detail", response_model=list[dict[str, object]], dependencies=[require_feature("audit_viewer")])
 async def batch_detail_endpoint(
     body: BatchDetailRequest,
     session: AsyncSession = Depends(get_db_session),
@@ -107,7 +107,7 @@ async def verify_chain_endpoint(
     return result
 
 
-@router.get("/export", response_model=dict[str, object])
+@router.get("/export", response_model=dict[str, object], dependencies=[require_feature("audit_viewer")])
 async def export_chain_endpoint(
     page: int = Query(1, ge=1),
     page_size: int = Query(100, ge=1, le=1000),
