@@ -1,6 +1,6 @@
 # improve-architecture Tracker
 
-Current index: 5
+Current index: 8
 Last updated: 2026-06-30
 
 ## History
@@ -9,3 +9,4 @@ Last updated: 2026-06-30
 - 2026-06-30: feat-core-pipeline-execution → complete, cross-cutting QA: fixed broken frontmatter (missing bdd:), marked 5 behaviours [x] and 1 [ ], added 13 new behaviours from error path audit, created unit test file (discovered missing), added 4 BDD scenarios (empty pipeline, node returns None, runaway protection, output rejection), added 4 new known gaps (retry not implemented, DB connection lost, checkpoint migration, raised OTel verify)
 - 2026-06-30: feat-evals-system → complete, cross-cutting QA: fixed broken YAML (missing bdd:), marked 24 [ ] → [x], added 20 new behaviour checkboxes from error path audit, created test_eval_engine.py (53 unit tests), fixed 3 code bugs (regex invalid pattern, LLM judge non-numeric score, regex flags support), added 3 new known gaps (JMESPath syntax errors, $ref resolution, schema depth limit), created website stub
 - 2026-06-30: feat-auth-mcp-oauth → complete, cross-cutting QA: fixed broken frontmatter (missing bdd:, path mismatch), fixed BDD steps using GET→POST for authorize endpoint, added 10 new unit tests (authorize/token/consume edge cases), added 2 BDD scenarios (unknown client_id, used code), marked 60 behaviours [x], consolidated remaining gaps from 11→13 with updated descriptions
+- 2026-06-30: feat-core-oidc-integration → complete, cross-cutting QA: fixed broken import (jit_provision_account→jit_provision_user) causing ImportError in 14 test files, added bdd: and depends-on: frontmatter keys, added code path oidc_verify.py, added unit-tests references, fixed orphaned ref auth/sso.md→core/oidc-integration.md in _index.md, added feat-core-oidc-integration and feat-core-saml-integration to Auth & Security index, marked 74 behaviours [x], added 11 new behaviour checkboxes from error path audit, consolidated known gaps from 6→8 with updated descriptions (oidc_verify.py exists, BDD file exists), created website docs stub

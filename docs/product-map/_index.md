@@ -30,6 +30,8 @@ status: covered | partial | gap    # auto-updated by graph-validate
 - [feat-auth-jwt-auth](auth/jwt-auth.md) => PRD 7.10
 - [feat-auth-mcp-oauth](auth/mcp-oauth.md) => PRD 6.4
 - [feat-auth-rate-limiting](auth/rate-limiting.md) => PRD 7.18
+- [feat-core-oidc-integration](core/oidc-integration.md) => PRD 9.4, 6.2, 9.2
+- [feat-core-saml-integration](core/saml-integration.md) => PRD 9.4
 
 ### Connectors
 - [feat-connectors-linear](connectors/linear-connector.md) => PRD 8.6
@@ -270,7 +272,7 @@ status: covered | partial | gap    # auto-updated by graph-validate
 - [JWT Auth](auth/jwt-auth.md) — §7.10
 - [API Keys](auth/api-keys.md) — §9.4
 - [RBAC](auth/rbac.md) — §9.2
-- [SSO / OIDC](auth/sso.md) — §9.4
+- [SSO / OIDC](core/oidc-integration.md) — §9.4
 - [Rate Limiting](auth/rate-limiting.md) — §7.18
 
 ### Teams
