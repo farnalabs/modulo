@@ -345,6 +345,17 @@ Self-hosted GitHub Actions runner on Windows. Workflows:
 
 OpenTelemetry-native. Default exporter: stdout JSON. Configurable OTLP endpoint (gRPC or HTTP) for Jaeger, Grafana Tempo, or any OTel-compatible backend. Optional LangSmith exporter. Pre-built Grafana dashboards for pipeline performance, HITL review, and cost tracking.
 
+### Supporting Resources
+
+- [System Requirements](./system-requirements.md) — minimum resources, supported databases
+- [Configuration Reference](./configuration-reference.md) — full environment variable reference
+- [Deployment Guide](./deployment.md) — production deployment instructions
+- [Deployment Journeys](./deployment-journey.md) — three deployment paths
+- [Upgrade Process](./upgrade-process.md) — upgrading existing deployments
+- [Public Launch Checklist](./public-launch-checklist.md) — production readiness verification
+
+---
+
 ## Architecture Decision Records
 
 ADRs at `docs/adr/` document key trade-offs:

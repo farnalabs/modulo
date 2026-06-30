@@ -9,6 +9,9 @@ basic deployment instructions in `docs/deployment.md`.
 - `docs/deployment/k8s.md` — Kubernetes-specific config
 - `docs/security/secret-management.md` — key rotation, leak response
 - `docs/operations/network-egress.md` — data residency verification
+- `docs/system-requirements.md` — hardware and platform requirements
+- `docs/configuration-reference.md` — all env vars reference
+- `docs/upgrade-process.md` — upgrade and rollback procedures
 
 ---
 
@@ -670,3 +673,7 @@ before marking a production deployment as complete.
 | Backup & restore | `docs/operations/backup.md` |
 | Self-hosted admin operations | `docs/operations/self-hosted-admin.md` |
 | Network egress audit | `docs/operations/network-egress.md` |
+| System requirements | `docs/system-requirements.md` |
+| Configuration reference | `docs/configuration-reference.md` |
+| Upgrade process | `docs/upgrade-process.md` |
+| Public launch checklist | `docs/public-launch-checklist.md` |

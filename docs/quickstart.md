@@ -1,12 +1,17 @@
 # Quickstart
 
-Get Modulo up and running with a demo pipeline in under 10 minutes. No external API keys required.
+Welcome to Modulo. Get up and running with a demo pipeline in under 10 minutes. No external API keys required.
+
+Modulo is a self-hosted orchestration layer for agentic SDLC pipelines. You run it on your own infrastructure — there is no hosted SaaS version yet. See [`docs/system-requirements.md`](./system-requirements.md) for supported platforms and minimum resource requirements.
 
 ## Prerequisites
 
-- Docker Desktop (PostgreSQL 16 + Redis 7)
-- Python 3.12+
-- `uv` package manager ([install guide](https://docs.astral.sh/uv/getting-started/installation/))
+| Dependency | Version | Required For |
+|---|---|---|
+| **Docker Desktop** | 24+ | PostgreSQL 16 + Redis 7 (local dev) |
+| **Python** | 3.12+ | Backend runtime |
+| **`uv`** | Latest | Python package manager ([install](https://docs.astral.sh/uv/getting-started/installation/)) |
+| **Node.js** | 20+ | Frontend development (optional) |
 
 ## 1. Start infrastructure
 
@@ -77,4 +82,8 @@ No external API keys are needed — the demo uses `StubModelBackend`.
 
 - Read the [Architecture Guide](./architecture.md) to understand the system design
 - Check the [Deployment Guide](./deployment.md) for production setup
+- Review the [Configuration Reference](./configuration-reference.md) for all available environment variables
+- See [System Requirements](./system-requirements.md) for production hardware and platform requirements
+- Plan your public launch with the [Launch Checklist](./public-launch-checklist.md)
+- Learn the [Upgrade Process](./upgrade-process.md) for existing deployments
 - Browse the [PRD](./prd.md) for full feature specifications
