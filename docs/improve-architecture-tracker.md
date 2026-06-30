@@ -1,6 +1,6 @@
 # improve-architecture Tracker
 
-Current index: 8
+Current index: 11
 Last updated: 2026-06-30
 
 ## History
@@ -12,3 +12,4 @@ Last updated: 2026-06-30
 - 2026-06-30: feat-core-oidc-integration → complete, cross-cutting QA: fixed jit_provision_account→jit_provision_user rename bug, added bdd: frontmatter, fixed orphaned _index.md ref, marked 74 behaviours [x], added 11 new checkboxes from error path audit, added depends-on deps, consolidated gaps from 6→8
 - 2026-06-30: feat-connectors-github → complete, cross-cutting QA: fixed broken frontmatter (missing bdd:, empty unit-tests), corrected OAuth scope names to match code, added 9 unit tests (HTTP error paths, missing filters, health check), marked 80+ behaviours [x]
 - 2026-06-30: feat-teams-team-crud → complete, cross-cutting QA: fixed 3 code bugs (TeamResponse/AdminTeamItem/AdminCreateTeamResponse field mismatch created_by→account_id, update_team duplicate name check, test fixture missing get_plan_context override), added bdd: frontmatter, marked 80+ behaviours [x], added BDD feature file (team_crud.feature, 12 scenarios) + step definitions, added 4 new unit tests (duplicate rename, same-name-allowed, response account_id), consolidated gaps from 8→10 with updated descriptions
+- 2026-06-30: feat-connectors-slack → complete, cross-cutting QA: added 30 unit tests (health check, channels, messages, users, write, error paths), 14 BDD scenarios (cursor pagination, timestamp filters, health check, unsupported resource), 2 code fixes (rate-limit detection, raise_for_status), fixed frontmatter YAML
