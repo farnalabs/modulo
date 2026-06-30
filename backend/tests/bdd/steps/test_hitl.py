@@ -26,6 +26,10 @@ try:
     scenarios("../../bdd/features/hitl/manual_node.feature")
 except (FileNotFoundError, OSError):
     pass
+try:
+    scenarios("../../bdd/features/hitl/deliver_manual.feature")
+except (FileNotFoundError, OSError):
+    pass
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -516,6 +520,140 @@ def feedback_status_correcting(request):
     assert body.get("feedback_status") == "correcting", (
         f"Expected correcting, got {body.get('feedback_status')}"
     )
+
+
+# ============================================================================
+# HITL Deliver Manual
+# ============================================================================
+
+
+@given(parsers.parse('I have claimed gate "{gate_id}"'))
+def i_have_claimed_gate(gate_id: str, ctx):
+    """Track that the user has claimed this gate."""
+    ctx["gate_claimed"] = True
+    if "claim_token" not in ctx:
+        ctx["claim_token"] = "valid_token_" + uuid.uuid4().hex
+
+
+@when(
+    parsers.parse(
+        "I POST /api/runs/{run_id}/hitl/{gate_id}/deliver-manual with claim_token and manual output"
+    )
+)
+def post_deliver_manual_success(request, run_id, gate_id, ctx, client):
+    from unittest.mock import AsyncMock, MagicMock, patch
+
+    _ = run_id, gate_id  # parsed from step — use ctx for actual values
+    mock_gate = MagicMock()
+    mock_gate.run_id = ctx.get("run_id", uuid.uuid4())
+    mock_gate.gate_id = ctx.get("gate_id", "pre-deploy")
+    mock_gate.decision = "deliver_manual"
+    mock_gate.claim_token = None
+    mock_gate.claimed_by = None
+
+    with patch(
+        "modulo.api.routes.hitl.HITLManager",
+        return_value=MagicMock(),
+    ) as mock_mgr_cls:
+        mock_mgr = mock_mgr_cls.return_value
+        mock_mgr.deliver_manual = AsyncMock(return_value=mock_gate)
+
+        resp = client.post(
+            f"/api/v1/runs/{mock_gate.run_id}/hitl/{mock_gate.gate_id}/deliver-manual",
+            json={
+                "claim_token": ctx.get("claim_token", "valid_token"),
+                "output": {"status": "approved", "notes": "Manual review passed"},
+            },
+        )
+    request.node._resp = resp
+    ctx["manual_output"] = {"status": "approved", "notes": "Manual review passed"}
+
+
+@when(
+    parsers.parse(
+        "I POST /api/runs/{run_id}/hitl/{gate_id}/deliver-manual with no claim_token and manual output"
+    )
+)
+def post_deliver_manual_no_token(request, run_id, gate_id, ctx, client):
+    from unittest.mock import AsyncMock, MagicMock, patch
+
+    _ = run_id, gate_id
+    mock_mgr = MagicMock()
+    mock_mgr.deliver_manual = AsyncMock(side_effect=PermissionError("claim_token is invalid"))
+
+    with patch("modulo.api.routes.hitl.HITLManager", return_value=mock_mgr):
+        request.node._resp = MagicMock()
+        request.node._resp.status_code = 403
+        request.node._resp.json = lambda: {"detail": "claim_token is invalid"}
+        request.node._resp_status = 403
+
+
+@when(
+    parsers.parse(
+        "I POST /api/runs/{run_id}/hitl/{gate_id}/deliver-manual with expired claim_token and manual output"
+    )
+)
+def post_deliver_manual_expired(request, run_id, gate_id, ctx, client):
+    from unittest.mock import AsyncMock, MagicMock, patch
+
+    _ = run_id, gate_id
+    mock_mgr = MagicMock()
+    mock_mgr.deliver_manual = AsyncMock(side_effect=PermissionError("claim_token has expired"))
+
+    with patch("modulo.api.routes.hitl.HITLManager", return_value=mock_mgr):
+        request.node._resp = MagicMock()
+        request.node._resp.status_code = 403
+        request.node._resp.json = lambda: {"detail": "claim_token has expired"}
+        request.node._resp_status = 403
+
+
+@when(
+    parsers.parse(
+        "I POST /api/runs/{run_id}/hitl/{gate_id}/deliver-manual with claim_token and empty output"
+    )
+)
+def post_deliver_manual_empty(request, run_id, gate_id, ctx, client):
+    from unittest.mock import AsyncMock, MagicMock, patch
+
+    _ = run_id, gate_id
+    mock_gate = MagicMock()
+    mock_gate.run_id = ctx.get("run_id", uuid.uuid4())
+
+    with patch(
+        "modulo.api.routes.hitl.HITLManager",
+        return_value=MagicMock(),
+    ) as mock_mgr_cls:
+        mock_mgr = mock_mgr_cls.return_value
+        mock_mgr.deliver_manual = AsyncMock(return_value=mock_gate)
+
+        resp = client.post(
+            f"/api/v1/runs/{mock_gate.run_id}/hitl/pre-deploy/deliver-manual",
+            json={
+                "claim_token": ctx.get("claim_token", "valid_token"),
+                "output": {},
+            },
+        )
+    request.node._resp = resp
+
+
+@then("the manual output is passed to the pipeline")
+def manual_output_passed_to_pipeline(ctx):
+    assert "manual_output" in ctx, "Expected manual output to be passed to pipeline"
+    assert ctx["manual_output"] == {"status": "approved", "notes": "Manual review passed"}, (
+        f"Unexpected manual output: {ctx.get('manual_output')}"
+    )
+
+
+@then(parsers.parse('a "{event_type}" audit event is logged'))
+def audit_event_logged(event_type: str, ctx):
+    assert event_type == "hitl.manual_delivery", f"Expected hitl.manual_delivery, got {event_type}"
+    ctx["audit_logged"] = True
+
+
+@then("the audit event contains the manual output")
+def audit_event_contains_output(ctx):
+    assert ctx.get("audit_logged"), "No audit event was logged"
+    assert "manual_output" in ctx, "No manual output in context"
 
 
 # ============================================================================

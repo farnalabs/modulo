@@ -158,6 +158,7 @@ def make_hitl_gate_fn(
                             "manual_output": manual_output,
                         }
                     ],
+                    "output": manual_output,
                 }
             is_rejected = action == "rejected"
             result_status = "rejected" if is_rejected else "approved"

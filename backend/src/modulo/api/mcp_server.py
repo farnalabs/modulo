@@ -494,9 +494,10 @@ async def list_pending_hitl(page: int = 1, page_size: int = 20) -> dict[str, Any
 
 @mcp.tool(
     description=(
-        "Unified HITL gate action: claim, approve, or reject. "
+        "Unified HITL gate action: claim, approve, reject, or deliver_manual. "
         "Step 1: call with action='claim' to get a claim_token. "
-        "Step 2: call with action='approve' or 'reject' + your claim_token. "
+        "Step 2: call with action='approve', 'reject', or 'deliver_manual' + your claim_token. "
+        "'deliver_manual' requires 'output' (a dict) to supply the output directly. "
         "human_only gates return 403 on approve — only a browser-authenticated human can approve."
     ),
 )
@@ -506,6 +507,7 @@ async def review_hitl(
     action: str,
     claim_token: str | None = None,
     reason: str | None = None,
+    output: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     if not await validate_current_auth():
         return _tool_error("Token revoked or expired — re-authenticate")
@@ -517,8 +519,8 @@ async def review_hitl(
     rid = uuid.UUID(run_id)
     mgr = HITLManager()
 
-    if action not in ("claim", "approve", "reject"):
-        return {"error": "invalid_action", "detail": "action must be claim, approve, or reject"}
+    if action not in ("claim", "approve", "reject", "deliver_manual"):
+        return {"error": "invalid_action", "detail": "action must be claim, approve, reject, or deliver_manual"}
 
     try:
         check_tool_scope(_ctx_role.get(None), "review_hitl", action=action)
@@ -529,6 +531,10 @@ async def review_hitl(
         return {"error": "claim_token_required", "detail": "approve requires claim_token"}
     if action == "reject" and claim_token is None:
         return {"error": "claim_token_required", "detail": "reject requires claim_token"}
+    if action == "deliver_manual" and claim_token is None:
+        return {"error": "claim_token_required", "detail": "deliver_manual requires claim_token"}
+    if action == "deliver_manual" and output is None:
+        return {"error": "output_required", "detail": "deliver_manual requires output dict"}
 
     async with _session(org_id) as s:
         # Check human_only for approve action
@@ -587,6 +593,17 @@ async def review_hitl(
                     claim_token=claim_token or "",
                 )
                 return {"status": "approved", "gate_id": gate_id}
+            elif action == "deliver_manual":
+                gate = await mgr.deliver_manual(
+                    s,
+                    run_id=rid,
+                    gate_id=gate_id,
+                    org_id=org_id,
+                    claim_token=claim_token or "",
+                    output=output or {},
+                    actor_id=key_id,
+                )
+                return {"status": "delivered_manual", "gate_id": gate_id}
             else:
                 gate = await mgr.reject(
                     s,
