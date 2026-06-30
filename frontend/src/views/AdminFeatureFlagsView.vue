@@ -243,13 +243,6 @@ const searchQuery = ref('')
 const currentPage = ref(1)
 const pageSize = 10
 
-const tierSections: Record<string, string> = {
-  community: 'Community',
-  team: 'Team',
-  v1: 'V1',
-  v2: 'V2',
-}
-
 const filteredFlags = computed(() => {
   const query = searchQuery.value.toLowerCase().trim()
   return query
@@ -275,7 +268,7 @@ const paginatedGroups = computed(() => {
       added.add(tier)
       groups.push({
         tier,
-        label: tierSections[tier] ?? tier.charAt(0).toUpperCase() + tier.slice(1),
+        label: planStore.getTierLabel(tier),
         flags: [],
       })
     }

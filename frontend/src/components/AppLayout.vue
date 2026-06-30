@@ -83,11 +83,11 @@
             <span
               v-if="planStore.currentTier === 'team'"
               class="badge-plan bg-primary/10 text-primary font-medium"
-            >Team</span>
+            >{{ planStore.getTierLabel(planStore.currentTier) }}</span>
             <span
               v-else
               class="badge-plan"
-            >Community</span>
+            >{{ planStore.getTierLabel(planStore.currentTier) }}</span>
           </router-link>
         </div>
 
@@ -219,11 +219,11 @@
             <span
               v-if="planStore.currentTier === 'team'"
               class="badge-plan bg-primary/10 text-primary font-medium"
-            >Team</span>
+            >{{ planStore.getTierLabel(planStore.currentTier) }}</span>
             <span
               v-else
               class="badge-plan"
-            >Community</span>
+            >{{ planStore.getTierLabel(planStore.currentTier) }}</span>
           </router-link>
         </div>
 

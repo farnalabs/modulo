@@ -38,7 +38,7 @@ const enabled = computed(() => planStore.featureEnabled(props.featureName))
 
 const tooltipText = computed(() => {
   if (props.requiredTier) {
-    return `Available on ${props.requiredTier} plan`
+    return `Available on ${planStore.getTierLabel(props.requiredTier)} plan`
   }
   return 'Available on higher plan tier'
 })

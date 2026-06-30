@@ -30,6 +30,16 @@ interface LicenseStatusResponse {
   org_id: string | null
 }
 
+interface TierInfo {
+  tier_id: string
+  label: string
+  rank: number
+}
+
+interface TiersResponse {
+  tiers: TierInfo[]
+}
+
 export const usePlanStore = defineStore('plan', () => {
   const currentTier = ref('community')
   const features = ref<Record<string, boolean>>({})
@@ -37,11 +47,23 @@ export const usePlanStore = defineStore('plan', () => {
   const error = ref<string | null>(null)
   const expiresAt = ref<string | null>(null)
   const orgName = ref<string | null>(null)
+  const tierLabels = ref<Record<string, string>>({})
+  const tierRanks = ref<Record<string, number>>({})
 
   const isTeam = computed(() => currentTier.value === 'team')
 
   function featureEnabled(name: string): boolean {
     return features.value[name] ?? false
+  }
+
+  function getTierLabel(tierId: string): string {
+    return tierLabels.value[tierId] ?? tierId.charAt(0).toUpperCase() + tierId.slice(1)
+  }
+
+  function isAtMinimumTier(minTier: string): boolean {
+    const currentRank = tierRanks.value[currentTier.value] ?? -1
+    const minRank = tierRanks.value[minTier] ?? -1
+    return currentRank >= minRank
   }
 
   async function fetchPlan() {
@@ -68,6 +90,19 @@ export const usePlanStore = defineStore('plan', () => {
         orgName.value = lic.org_id ?? null
         if (lic.tier) currentTier.value = lic.tier
       }
+
+      const tiersResp = await (api as any).GET('/api/v1/admin/tiers')
+      if (!tiersResp.error && tiersResp.data) {
+        const tiersData = tiersResp.data as TiersResponse
+        const labels: Record<string, string> = {}
+        const ranks: Record<string, number> = {}
+        for (const t of tiersData.tiers) {
+          labels[t.tier_id] = t.label
+          ranks[t.tier_id] = t.rank
+        }
+        tierLabels.value = labels
+        tierRanks.value = ranks
+      }
     } catch (e: unknown) {
       error.value = e instanceof Error ? e.message : String(e)
     } finally {
@@ -75,5 +110,5 @@ export const usePlanStore = defineStore('plan', () => {
     }
   }
 
-  return { currentTier, features, isLoading, error, isTeam, expiresAt, orgName, fetchPlan, featureEnabled }
+  return { currentTier, features, isLoading, error, isTeam, expiresAt, orgName, tierLabels, tierRanks, fetchPlan, featureEnabled, getTierLabel, isAtMinimumTier }
 })
