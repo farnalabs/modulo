@@ -66,6 +66,7 @@ class ConnectorType(StrEnum):
     SONARQUBE = "sonarqube"
     CODECLIMATE = "codeclimate"
     SNYK = "snyk"
+    TRIVY = "trivy"
 
     @property
     def capabilities(self) -> frozenset[Capability]:
@@ -194,6 +195,10 @@ class ConnectorType(StrEnum):
             case ConnectorType.CODECLIMATE:
                 return frozenset({Capability.MONITORING, Capability.OBSERVABILITY})
             case ConnectorType.SNYK:
+                return frozenset({
+                    Capability.READ, Capability.VULNERABILITY_SCANNING, Capability.MONITORING,
+                })
+            case ConnectorType.TRIVY:
                 return frozenset({
                     Capability.READ, Capability.VULNERABILITY_SCANNING, Capability.MONITORING,
                 })
