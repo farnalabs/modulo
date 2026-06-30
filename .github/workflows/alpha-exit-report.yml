@@ -97,6 +97,27 @@ jobs:
             Write-Host "::warning title=BDD Tests::Some BDD scenarios failed — see step output"
           }
 
+      - name: Supplementary — Lint check (ruff)
+        if: ${{ !inputs.skip_bdd }}
+        continue-on-error: true
+        id: lint
+        working-directory: backend
+        run: uv run --no-sync ruff check .
+        env:
+          DATABASE_URL: "postgresql+asyncpg://modulo:modulo@localhost:5432/modulo"
+          SECRET_KEY: "ci-secret-key-for-github-actions-testing-only"
+          FERNET_KEY: "vK-xU7GqHLflg_GqzJ1FqWI7pHWoHSIyukf4wx-tMHI="
+
+      - name: Supplementary — Report lint result
+        if: always() && !inputs.skip_bdd
+        shell: powershell
+        run: |
+          if ("${{ steps.lint.outcome }}" -eq "success") {
+            Write-Host "::notice title=Ruff Lint::ruff check passed"
+          } else {
+            Write-Host "::warning title=Ruff Lint::ruff check found issues"
+          }
+
       - name: Criterion #2 — Cleanup containers
         if: always() && !inputs.skip_bdd
         shell: powershell
@@ -136,6 +157,17 @@ jobs:
           Write-Host "========================================"
           Write-Host "Alpha Exit Verification Complete"
           Write-Host "Report uploaded as artifact: alpha-exit-report"
+          Write-Host ""
+          $bddOk = "${{ steps.bdd.outcome }}" -eq "success" -or "true" -eq "${{ inputs.skip_bdd }}"
+          $lintOk = "${{ steps.lint.outcome }}" -eq "success" -or "true" -eq "${{ inputs.skip_bdd }}"
+          $allMachineOk = $bddOk -and $lintOk
+          if ($allMachineOk) {
+            Write-Host "::notice title=Alpha Exit Gate::Machine checks: PASS — review human criteria"
+          } else {
+            Write-Host "::warning title=Alpha Exit Gate::Machine checks need attention"
+          }
+          Write-Host "  BDD tests: $(if($bddOk){'PASS'}else{'FAIL'})"
+          Write-Host "  Lint check: $(if($lintOk){'PASS'}else{'FAIL'})"
           Write-Host "========================================"
 
   summary:
@@ -149,7 +181,7 @@ jobs:
           $result = "${{ needs.verify.result }}"
           Write-Host "Alpha Exit gate result: $result"
           if ($result -eq "success") {
-            Write-Host "::notice title=Alpha Exit Gate::PASS — manual sign-offs still required"
+            Write-Host "::notice title=Alpha Exit Gate::All machine checks PASS — manual sign-offs still required"
           } else {
-            Write-Host "::warning title=Alpha Exit Gate::Machine checks need attention"
+            Write-Host "::warning title=Alpha Exit Gate::Machine checks need attention — review report"
           }
