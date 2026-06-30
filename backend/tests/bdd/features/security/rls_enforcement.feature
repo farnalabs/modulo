@@ -25,3 +25,12 @@ Feature: Row-Level Security Enforcement
   Scenario: RLS context requires an active transaction
     When RLS context is set outside a transaction
     Then a RuntimeError is raised
+
+  Scenario: set_rls_user_context requires active transaction
+    When set_rls_user_context is called outside a transaction
+    Then a RuntimeError is raised
+
+  Scenario: set_rls_user_context sets user ID and org role
+    Given an active transaction
+    When set_rls_user_context is called with user "alice" and role "operator"
+    Then the RLS user context is set correctly
