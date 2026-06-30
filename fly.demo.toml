@@ -23,6 +23,7 @@ primary_region = 'lhr'
   MODULO_PLUGIN_DISCOVERY = "false"
   MODULO_MAX_LOCAL_CONCURRENCY = "4"
   REDIS_URL = ""
+  CORS_ORIGINS = "https://modulo.run,http://localhost:5173"
 
 [[vm]]
   memory = '1gb'

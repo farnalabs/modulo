@@ -38,6 +38,12 @@ class TestDeploymentInfo:
         assert "python_version" in body
         assert "hostname" in body
         assert "environment" in body
+        assert "git_sha" in body
+        assert "git_branch" in body
+        assert "git_commit_timestamp" in body
+        assert "git_commit_message" in body
+        assert "build_timestamp" in body
+        assert "ci_job_url" in body
 
     def test_version_is_non_empty_string(self, client: TestClient) -> None:
         resp = client.get("/api/v1/deployment")
@@ -63,3 +69,15 @@ class TestDeploymentInfo:
         resp = client.get("/api/v1/deployment")
         body = resp.json()
         assert body["environment"] == "development"
+
+    def test_build_metadata_fields_are_strings(self, client: TestClient) -> None:
+        resp = client.get("/api/v1/deployment")
+        body = resp.json()
+        for field in ("git_sha", "git_branch", "git_commit_timestamp", "git_commit_message", "build_timestamp", "ci_job_url"):
+            assert isinstance(body[field], str), f"{field} should be a string"
+
+    def test_build_metadata_falls_back_to_empty(self, client: TestClient) -> None:
+        resp = client.get("/api/v1/deployment")
+        body = resp.json()
+        assert body["git_sha"] == ""
+        assert body["ci_job_url"] == ""
