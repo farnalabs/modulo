@@ -36,6 +36,7 @@ class ConnectorType(StrEnum):
     SLACK = "slack"
     SHELL = "shell"
     CUSTOM = "custom"
+    SHORTCUT = "shortcut"
 
     @property
     def capabilities(self) -> frozenset[Capability]:
@@ -71,6 +72,8 @@ class ConnectorType(StrEnum):
             case ConnectorType.SLACK:
                 return frozenset({Capability.READ, Capability.WRITE})
             case ConnectorType.SHELL:
+                return frozenset({Capability.READ, Capability.WRITE})
+            case ConnectorType.SHORTCUT:
                 return frozenset({Capability.READ, Capability.WRITE})
             case _:
                 return frozenset()

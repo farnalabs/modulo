@@ -37,6 +37,7 @@ from modulo.connectors.github import GitHubConnector
 from modulo.connectors.gitlab import GitLabConnector
 from modulo.connectors.jira import JiraConnector
 from modulo.connectors.linear import LinearConnector
+from modulo.connectors.shortcut import ShortcutConnector
 from modulo.connectors.slack import SlackConnector
 from modulo.connectors.trello import TrelloConnector
 from modulo.core.pipeline_engine.output_filter import filter_payload_for_injection
@@ -280,6 +281,8 @@ def _build_connector(type_id: str, config: dict[str, Any], creds: dict[str, Any]
             return JiraConnector(instance=instance, creds=creds)
         case "slack":
             return SlackConnector(bot_token=_get_cred(creds, "bot_token", type_id))
+        case "shortcut":
+            return ShortcutConnector(token=_get_cred(creds, "token", type_id))
         case "trello":
             return TrelloConnector(
                 api_key=_get_cred(creds, "api_key", type_id),
