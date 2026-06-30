@@ -32,6 +32,7 @@ class ConnectorType(StrEnum):
     AZURE_REPOS = "azure_repos"
     JIRA = "jira"
     LINEAR = "linear"
+    TRELLO = "trello"
     SLACK = "slack"
     SHELL = "shell"
     CUSTOM = "custom"
@@ -65,6 +66,8 @@ class ConnectorType(StrEnum):
                 return frozenset({Capability.ISSUE_READ, Capability.ISSUE_WRITE, Capability.ISSUE_SEARCH})
             case ConnectorType.LINEAR:
                 return frozenset({Capability.ISSUE_READ, Capability.ISSUE_WRITE, Capability.ISSUE_SEARCH})
+            case ConnectorType.TRELLO:
+                return frozenset({Capability.READ, Capability.WRITE})
             case ConnectorType.SLACK:
                 return frozenset({Capability.READ, Capability.WRITE})
             case ConnectorType.SHELL:
