@@ -46,6 +46,7 @@
             <option v-for="n in nodes" :key="n.id" :value="n.id">{{ n.label || n.node_type || n.id.slice(0, 8) }}</option>
           </select>
           <div v-if="nodesLoading" class="mt-1 text-xs text-muted-foreground">Loading nodes...</div>
+          <p v-if="nodesError" class="mt-1 text-xs text-destructive">{{ nodesError }}</p>
         </div>
       </div>
 
@@ -176,6 +177,8 @@
           <div v-else-if="evalsLoading" class="flex items-center justify-center py-8">
             <div class="h-6 w-6 animate-spin rounded-full border-2 border-primary border-t-transparent" />
           </div>
+
+          <p v-else-if="evalsError" class="text-xs text-destructive">{{ evalsError }}</p>
 
           <div v-else-if="evals.length === 0" class="rounded-lg border bg-card p-6 text-center text-sm text-muted-foreground">
             No evals for this pipeline yet.
@@ -317,6 +320,8 @@ const pipelines = ref<PipelineItem[]>([])
 const selectedPipelineId = ref('')
 const nodes = ref<GraphNode[]>([])
 const nodesLoading = ref(false)
+const nodesError = ref<string | null>(null)
+const evalsError = ref<string | null>(null)
 
 const form = reactive({
   name: '',
@@ -384,12 +389,14 @@ async function loadNodes() {
     nodes.value = []
     return
   }
+  nodesError.value = null
   nodesLoading.value = true
   try {
     const data = await get<GraphResponse>(`/api/v1/pipelines/${selectedPipelineId.value}/graph`)
     nodes.value = data.nodes ?? []
-  } catch {
+  } catch (e) {
     nodes.value = []
+    nodesError.value = 'Failed to load graph nodes. Please try again.'
   } finally {
     nodesLoading.value = false
   }
@@ -400,12 +407,14 @@ async function loadEvals() {
     evals.value = []
     return
   }
+  evalsError.value = null
   evalsLoading.value = true
   try {
     const data = await get<EvalListResponse>(`/api/v1/evals?pipeline_id=${selectedPipelineId.value}`)
     evals.value = data.items ?? []
-  } catch {
+  } catch (e) {
     evals.value = []
+    evalsError.value = 'Failed to load eval definitions. Please try again.'
   } finally {
     evalsLoading.value = false
   }
