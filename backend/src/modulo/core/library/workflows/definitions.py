@@ -600,7 +600,67 @@ CICD_WORKFLOW: dict[str, Any] = {
 }
 
 # ---------------------------------------------------------------------------
-# 12. release-candidate
+# 12. dogfooding-pipeline
+# ---------------------------------------------------------------------------
+DOGFOODING_PIPELINE: dict[str, Any] = {
+    "name": "Dogfooding Pipeline",
+    "description": (
+        "End-to-end dogfooding pipeline where Modulo builds Modulo. Reads a "
+        "GitHub issue, generates a code diff via LLM, validates with tests, "
+        "passes through a human review gate, and creates a PR."
+    ),
+    "version": "1.0.0",
+    "author": "Modulo",
+    "tags": ["dogfooding", "self-hosted", "issue-to-pr", "github", "canonical"],
+    "pipeline_steps": [
+        {
+            "id": "read-issue",
+            "agent": None,
+            "connector_binding": {"type": "source_control", "required": True},
+            "description": "Read a GitHub issue from the configured repository",
+        },
+        {
+            "id": "generate-diff",
+            "agent": "correction-proposer",
+            "depends_on": ["read-issue"],
+            "description": "Generate a code diff to address the issue using an LLM",
+        },
+        {
+            "id": "validate",
+            "agent": "test-generator",
+            "depends_on": ["generate-diff"],
+            "connector_binding": {"type": "ci_runner", "required": False},
+            "description": "Apply the diff, write tests, and validate they pass",
+        },
+        {
+            "id": "review-gate",
+            "agent": "code-reviewer",
+            "depends_on": ["validate"],
+            "description": "Human-in-the-loop review gate before PR creation",
+        },
+        {
+            "id": "create-pr",
+            "agent": None,
+            "depends_on": ["review-gate"],
+            "connector_binding": {"type": "source_control", "required": True},
+            "description": "Create a pull request with title, body, branch, and changes",
+        },
+    ],
+    "default_config": {
+        "repo_owner": "",
+        "repo_name": "",
+        "base_branch": "main",
+        "branch_prefix": "dogfood/",
+        "require_human_approval": True,
+        "auto_create_pr": True,
+        "pr_template": "dogfooding",
+        "test_command": "pytest",
+        "notification_channels": ["slack"],
+    },
+}
+
+# ---------------------------------------------------------------------------
+# 13. release-candidate
 # ---------------------------------------------------------------------------
 RELEASE_CANDIDATE: dict[str, Any] = {
     "name": "Release Candidate",
