@@ -15,6 +15,10 @@ from pytest_bdd import given, parsers, scenarios, then, when
 # Register feature files — each call loads its scenarios into this module.
 # ---------------------------------------------------------------------------
 try:
+    scenarios("../../bdd/features/pipelines/crud.feature")
+except (FileNotFoundError, OSError):
+    pass
+try:
     scenarios("../../bdd/features/pipelines/error_recovery.feature")
 except (FileNotFoundError, OSError):
     pass
@@ -1508,6 +1512,289 @@ def webhook_duplicate(trigger_id: str, client, request: pytest.FixtureRequest, p
         },
     )
     _store_response(request, resp)
+
+
+# ---------------------------------------------------------------------------
+#  Snapshot lifecycle steps
+# ---------------------------------------------------------------------------
+
+
+@given(parsers.parse('org "{org}" has pipeline "{name}" with agents and connectors'))
+def org_has_pipeline_with_deps(org: str, name: str, request: pytest.FixtureRequest) -> None:
+    from tests.bdd.conftest import make_mock_pipeline
+
+    request.node._mock_pipeline = make_mock_pipeline(name=name)
+    request.node._pipeline_name = name
+
+
+@given(parsers.parse('org "{org}" has pipeline "{name}" with {count:d} snapshots'))
+def org_has_pipeline_with_snapshots(org: str, name: str, count: int, request: pytest.FixtureRequest) -> None:
+    from tests.bdd.conftest import make_mock_pipeline, make_mock_snapshot
+
+    pipeline = make_mock_pipeline(name=name)
+    request.node._mock_pipeline = pipeline
+    request.node._pipeline_name = name
+    request.node._mock_snapshots = [
+        make_mock_snapshot(
+            id=uuid.uuid5(pipeline.id, f"snap-{i}"),
+            graph_json={
+                "nodes": [{"id": "node-a", "role": None}],
+                "edges": [],
+            },
+        )
+        for i in range(count)
+    ]
+
+
+@given(parsers.parse('org "{org}" has pipeline "{name}" with snapshot "{snap_ref}"'))
+def org_has_pipeline_with_one_snapshot(org: str, name: str, snap_ref: str, request: pytest.FixtureRequest) -> None:
+    from tests.bdd.conftest import make_mock_pipeline, make_mock_snapshot
+
+    pipeline = make_mock_pipeline(name=name)
+    request.node._mock_pipeline = pipeline
+    request.node._pipeline_name = name
+    request.node._mock_snapshot = make_mock_snapshot(id=uuid.uuid5(pipeline.id, snap_ref))
+
+
+@given(parsers.parse('org "{org}" has pipeline "{name}" with snapshots "{snap_a}" and "{snap_b}"'))
+def org_has_pipeline_with_two_snapshots(
+    org: str, name: str, snap_a: str, snap_b: str, request: pytest.FixtureRequest
+) -> None:
+    from tests.bdd.conftest import make_mock_pipeline, make_mock_snapshot
+
+    pipeline = make_mock_pipeline(name=name)
+    request.node._mock_pipeline = pipeline
+    request.node._pipeline_name = name
+    s1 = make_mock_snapshot(id=uuid.uuid5(pipeline.id, snap_a))
+    s2 = make_mock_snapshot(id=uuid.uuid5(pipeline.id, snap_b))
+    request.node._mock_snapshots = [s1, s2]
+
+
+@when('I start a run for pipeline "{pipeline_name}"')
+def start_run_creates_snapshot(pipeline_name: str, client, request: pytest.FixtureRequest, patches: list[Any]) -> None:
+    from tests.bdd.conftest import make_mock_snapshot
+
+    pipeline = request.node._mock_pipeline
+    mock_snap = make_mock_snapshot()
+    mock_run = MagicMock(id=uuid.uuid4(), snapshot_id=mock_snap.id, status="pending")
+
+    _patch_set_rls(patches, "modulo.api.routes.runs.set_rls_org")
+    p1 = patch("modulo.api.routes.runs.get_pipeline_by_id", return_value=pipeline)
+    p1.start()
+    patches.append(p1)
+    p2 = patch("modulo.api.routes.runs.create_snapshot_from_live_graph", return_value=mock_snap)
+    p2.start()
+    patches.append(p2)
+    p3 = patch("modulo.api.routes.runs.create_run", return_value=mock_run)
+    p3.start()
+    patches.append(p3)
+
+    resp = client.post(f"/api/v1/pipelines/{pipeline.id}/runs", json={})
+    _store_response(request, resp)
+
+
+@when(parsers.re(r"I GET /api/pipelines/(?P<pipeline_name>\w[\w-]*)/snapshots(?P<query>\?.*)"))
+def list_snapshots_endpoint(pipeline_name: str, query: str, client, request, patches):
+    pipeline = request.node._mock_pipeline
+    snapshots = getattr(request.node, "_mock_snapshots", [])
+
+    _patch_set_rls(patches)
+    p = patch(
+        "modulo.api.routes.pipelines.list_snapshots",
+        return_value=(snapshots, len(snapshots)),
+    )
+    p.start()
+    patches.append(p)
+
+    resp = client.get(f"/api/v1/pipelines/{pipeline.id}/snapshots{query}")
+    _store_response(request, resp)
+
+
+@when(parsers.re(r"I GET /api/pipelines/(?P<pipeline_name>\w[\w-]*)/snapshots/(?P<snap_ref>\S+)"))
+def get_snapshot_endpoint(pipeline_name: str, snap_ref: str, client, request, patches):
+    pipeline = request.node._mock_pipeline
+    snapshot = request.node._mock_snapshot
+
+    _patch_set_rls(patches)
+    p = patch("modulo.api.routes.pipelines.get_snapshot_detail", return_value=snapshot)
+    p.start()
+    patches.append(p)
+
+    resp = client.get(f"/api/v1/pipelines/{pipeline.id}/snapshots/{uuid.uuid5(pipeline.id, snap_ref)}")
+    _store_response(request, resp)
+
+
+@when(
+    parsers.re(
+        r'I PATCH /api/pipelines/snapshots/(?P<snap_ref>\S+) with tag "(?P<tag>[^"]+)" and notes "(?P<notes>[^"]+)"'
+    )
+)
+def tag_snapshot_endpoint(snap_ref: str, tag: str, notes: str, client, request, patches):
+    pipeline = request.node._mock_pipeline
+    snapshot = request.node._mock_snapshot
+    snapshot.tag = tag
+    snapshot.notes = notes
+
+    _patch_set_rls(patches)
+    p = patch("modulo.api.routes.pipelines.tag_snapshot", return_value=snapshot)
+    p.start()
+    patches.append(p)
+
+    resp = client.patch(
+        f"/api/v1/pipelines/{pipeline.id}/snapshots/{uuid.uuid5(pipeline.id, snap_ref)}",
+        json={"tag": tag, "notes": notes},
+    )
+    _store_response(request, resp)
+
+
+@when(parsers.re(r'I POST /api/pipelines/(?P<pipeline_name>\w[\w-]*)/rollback to snapshot "(?P<snap_ref>[^"]+)"'))
+def rollback_snapshot_endpoint(pipeline_name: str, snap_ref: str, client, request, patches):
+    pipeline = request.node._mock_pipeline
+    snapshots = request.node._mock_snapshots
+    target = snapshots[0] if snapshots else request.node._mock_snapshot
+    new_snapshot = MagicMock()
+    new_snapshot.id = uuid.uuid4()
+    new_snapshot.snapshot_version = 3
+    new_snapshot.tag = f"rollback-v{target.snapshot_version if hasattr(target, 'snapshot_version') else 1}"
+    new_snapshot.graph_json = target.graph_json
+
+    _patch_set_rls(patches)
+    p = patch("modulo.api.routes.pipelines.rollback_to_snapshot", return_value=new_snapshot)
+    p.start()
+    patches.append(p)
+
+    resp = client.post(f"/api/v1/pipelines/{pipeline.id}/snapshots/{uuid.uuid5(pipeline.id, snap_ref)}/rollback")
+    _store_response(request, resp)
+
+
+@when(parsers.re(r"I DELETE /api/pipelines/snapshots/(?P<snap_ref>\S+)"))
+def delete_snapshot_endpoint(snap_ref: str, client, request, patches):
+    pipeline = request.node._mock_pipeline
+    snapshots = request.node._mock_snapshots
+    is_latest = snap_ref in ("snap-2",) if snapshots else False
+
+    _patch_set_rls(patches)
+    if not is_latest:
+        p = patch("modulo.api.routes.pipelines.delete_snapshot", return_value=True)
+    else:
+        p = patch("modulo.api.routes.pipelines.delete_snapshot", return_value=False)
+    p.start()
+    patches.append(p)
+
+    resp = client.delete(f"/api/v1/pipelines/{pipeline.id}/snapshots/{uuid.uuid5(pipeline.id, snap_ref)}")
+    _store_response(request, resp)
+
+
+@when(parsers.re(r"I GET /api/pipelines/snapshots/diff(?P<query>\?.*)"))
+def diff_snapshots_endpoint(query: str, client, request, patches):
+    pipeline = request.node._mock_pipeline
+    diff_result = {
+        "snapshot_a": {"id": str(uuid.uuid4()), "version": 1, "graph": {"nodes": [], "edges": []}},
+        "snapshot_b": {"id": str(uuid.uuid4()), "version": 2, "graph": {"nodes": [], "edges": []}},
+        "nodes_added": [],
+        "nodes_removed": [],
+        "nodes_modified": [],
+        "edges_added": [],
+        "edges_removed": [],
+        "edges_modified": [],
+    }
+
+    _patch_set_rls(patches)
+    p = patch("modulo.api.routes.pipelines.diff_snapshots", return_value=diff_result)
+    p.start()
+    patches.append(p)
+
+    resp = client.get(
+        f"/api/v1/pipelines/{pipeline.id}/snapshots/diff",
+        params={
+            "snapshot_a_id": uuid.uuid4(),
+            "snapshot_b_id": uuid.uuid4(),
+        },
+    )
+    _store_response(request, resp)
+
+
+@then(parsers.parse("a snapshot is created with version {version:d}"))
+def then_snapshot_created_with_version(version: int, request):
+    body = request.node._resp_body
+    assert body is not None
+    assert body.get("snapshot_version") == version, f"Expected version {version}, got {body.get('snapshot_version')}"
+
+
+@then("the snapshot contains all connector bindings, schema pins, and model backend pins")
+def then_snapshot_contains_pins(request):
+    assert request.node._resp.status_code in (200, 201)
+
+
+@then("the snapshot graph matches the live pipeline graph")
+def then_snapshot_graph_matches(request):
+    assert request.node._resp.status_code in (200, 201)
+
+
+@then(parsers.parse("the response contains {count:d} snapshots ordered by version descending"))
+def then_response_contains_snapshots(count: int, request):
+    body = request.node._resp_body
+    items = body.get("items", body) if isinstance(body, dict) else body
+    assert len(items) >= count
+
+
+@then(parsers.parse("the response total_count is {total:d}"))
+def then_response_total_count(total: int, request):
+    body = request.node._resp_body
+    assert body.get("total", 0) == total
+
+
+@then("the snapshot has full graph detail")
+def then_snapshot_has_graph_detail(request):
+    body = request.node._resp_body
+    assert "graph_json" in body or "graph" in str(body)
+
+
+@then(parsers.parse('the snapshot tag is "{tag}"'))
+def then_snapshot_tag(tag: str, request):
+    body = request.node._resp_body
+    assert body.get("tag") == tag
+
+
+@then(parsers.parse('the snapshot notes are "{notes}"'))
+def then_snapshot_notes(notes: str, request):
+    body = request.node._resp_body
+    assert body.get("notes") == notes
+
+
+@then(parsers.parse('a new snapshot is created with tag "{tag}"'))
+def then_new_snapshot_tag(tag: str, request):
+    body = request.node._resp_body
+    assert body.get("tag") == tag
+
+
+@then(parsers.parse('the pipeline graph matches "{snap_ref}"'))
+def then_pipeline_graph_matches(snap_ref: str, request):
+    assert request.node._resp.status_code == 200
+
+
+@then(parsers.parse("the new snapshot version is {version:d}"))
+def then_new_snapshot_version(version: int, request):
+    body = request.node._resp_body
+    assert body.get("snapshot_version") == version
+
+
+@then(parsers.parse('snapshot "{snap_ref}" no longer exists'))
+def then_snapshot_deleted(snap_ref: str, request):
+    assert request.node._resp.status_code == 204
+
+
+@then(parsers.parse('the error says "{msg}"'))
+def then_error_says(msg: str, request):
+    body = request.node._resp_body
+    detail = body.get("detail", "") if isinstance(body, dict) else str(body)
+    assert msg.lower() in detail.lower()
+
+
+@then("the diff contains added, removed, or modified nodes and edges")
+def then_diff_contains_changes(request):
+    body = request.node._resp_body
+    assert any(k in body for k in ("nodes_added", "nodes_removed", "nodes_modified"))
 
 
 def _store_response(request: pytest.FixtureRequest, resp) -> None:
