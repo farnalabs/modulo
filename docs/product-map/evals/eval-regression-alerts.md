@@ -2,6 +2,7 @@
 id: feat-evals-eval-regression-alerts
 prd: 8.17
 delivery-tasks: [task-nv7-eval-regression-alerts]
+bdd:
   - tests/features/evals/eval_regex.feature
   - tests/features/evals/eval_llm_judge.feature
   - tests/features/evals/eval_block.feature
@@ -14,7 +15,15 @@ code:
 depends-on: [feat-evals-eval-engine]
 status: partial
 ---
-# Eval Regression Alerts Detects significant pass-rate drops for eval definitions by comparing a recent window against a baseline window. Emits alerts via the `GET /api/v1/admin/evals/regressions` endpoint (admin-only). ## Behaviours ### Happy paths - [x] Eval with declining pass rate (drop >= threshold) returns alert with trend="declining"
+# Eval Regression Alerts
+
+Detects significant pass-rate drops for eval definitions by comparing a recent window against a baseline window. Emits alerts via the `GET /api/v1/admin/evals/regressions` endpoint (admin-only).
+
+## Behaviours
+
+### Happy paths
+
+- [x] Eval with declining pass rate (drop >= threshold) returns alert with trend="declining"
 - [x] Eval with improving pass rate (drop <= -threshold) returns alert with trend="improving"
 - [x] Eval with stable pass rate (drop within threshold) returns alert with trend="stable"
 - [x] Alert includes eval_id, eval_name, prev_pass_rate, current_pass_rate, drop_pct, trend, affected_run_ids
