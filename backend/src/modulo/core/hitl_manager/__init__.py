@@ -643,7 +643,7 @@ class HITLManager:
             if existing.decision is not None:
                 raise GateAlreadyDecidedError(run_id, gate_id)
             if existing.claim_token != claim_token:
-                raise ClaimTokenInvalidError
+                raise ClaimTokenInvalidError()
             raise ClaimTokenExpiredError
         gate = await session.get(HitlClaim, gate_id_val, populate_existing=True)
         if gate is None:

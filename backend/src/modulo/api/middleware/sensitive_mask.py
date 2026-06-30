@@ -28,7 +28,7 @@ _log = logging.getLogger(__name__)
 SENSITIVE_VALUE_MASK = "\u2022\u2022\u2022\u2022\u2022\u2022"
 
 _SENSITIVE_KEY_PATTERNS = frozenset({
-    "token", "secret", "api_key", "password", "key", "credential",
+    "token", "secret", "api_key", "password", "passwd", "key", "credential",
 })
 
 

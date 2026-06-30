@@ -180,6 +180,7 @@ class TestSensitiveKeyDetection:
             "API_KEY",
             "client_secret",
             "webhook_secret",
+            "passwd",
         ],
     )
     def test_true_for_sensitive_patterns(self, key: str) -> None:

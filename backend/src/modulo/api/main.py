@@ -79,6 +79,7 @@ from modulo.api.routes.viewmodel import router as viewmodel_router
 from modulo.api.routes.views import router as views_router
 from modulo.api.routes.webhooks import router as webhooks_router
 from modulo.core.graceful_shutdown import ShutdownManager, ShutdownMiddleware
+from modulo.core.hitl_manager.expiry_job import ClaimExpiryJob
 from modulo.core.in_process_scheduler import dispose_scheduler_engine, start_schedulers
 from modulo.core.logging_config import configure_logging
 from modulo.db.session import engine as db_engine
@@ -434,8 +435,14 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
 
     # Start the run retention background loop.
     retention_task = asyncio.create_task(_run_retention_loop())
+
+    # Start the HITL claim expiry background job.
+    _claim_expiry_job = ClaimExpiryJob(db_engine)
+    await _claim_expiry_job.start()
+
     yield
     retention_task.cancel()
+    await _claim_expiry_job.stop()
     for st in _scheduler_tasks:
         st.cancel()
     try:
