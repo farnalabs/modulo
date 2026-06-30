@@ -3838,3 +3838,334 @@ def step_google_docs_file_metadata(ctx):
     assert "id" in rec and "name" in rec and "mimeType" in rec, (
         f"Record missing file metadata: {rec}"
     )
+
+
+# ============================================================================
+# connectors/datadog.feature  —  10 scenarios
+# ============================================================================
+try:
+    scenarios("../../features/connectors/datadog.feature")
+except (FileNotFoundError, OSError):
+    pass
+
+
+@given("a Datadog connector configured with valid credentials")
+def step_datadog_connector_valid(ctx):
+    from unittest.mock import AsyncMock
+
+    mock_connector = AsyncMock()
+    mock_connector.connector_type = "datadog"
+
+    async def mock_health_check():
+        return HealthResult(ok=True, detail="Datadog API key validated")
+
+    async def mock_query(q):
+        from modulo.connectors.base import ConnectorResult
+
+        match q.resource:
+            case "monitors":
+                return ConnectorResult(
+                    records=[
+                        {"id": 1, "name": "CPU Load", "status": "Alert"},
+                        {"id": 2, "name": "Memory Usage", "status": "OK"},
+                    ],
+                    total=2,
+                )
+            case "events":
+                return ConnectorResult(
+                    records=[
+                        {"id": "e1", "title": "Deploy", "text": "v2 deployed"},
+                    ],
+                    total=1,
+                )
+            case "metrics":
+                return ConnectorResult(
+                    records=[
+                        {"id": "m1", "attributes": {"metric": "cpu", "pointlist": [[1700000000, 95.0]]}},
+                    ],
+                    total=1,
+                )
+            case "dashboards":
+                return ConnectorResult(
+                    records=[
+                        {"id": "d1", "attributes": {"title": "System Dashboard"}},
+                        {"id": "d2", "attributes": {"title": "Network Overview"}},
+                    ],
+                    total=2,
+                )
+            case "logs":
+                return ConnectorResult(
+                    records=[
+                        {"id": "log1", "attributes": {"message": "error", "service": "web"}},
+                    ],
+                    total=1,
+                    next_cursor="cursor_next",
+                )
+            case _:
+                raise ValueError(f"Unsupported Datadog resource: {q.resource!r}")
+
+    async def mock_write(payload):
+        match payload.resource:
+            case "event":
+                return {"id": "evt1", "title": payload.data.get("title", ""), "text": payload.data.get("text", "")}
+            case "monitor":
+                return {"id": 42, "name": payload.data.get("name", "Datadog Monitor"), "type": payload.data.get("type", "")}
+            case "monitor_status":
+                return {"id": payload.data.get("monitor_id"), "status": payload.data.get("status", "Muted")}
+            case _:
+                raise ValueError(f"Unsupported Datadog write resource: {payload.resource!r}")
+
+    mock_connector.health_check = mock_health_check
+    mock_connector.query = mock_query
+    mock_connector.write = mock_write
+    ctx["connector"] = mock_connector
+    ctx["connector_type"] = "datadog"
+    ctx["query_error"] = None
+
+
+@given("a Datadog connector configured with invalid credentials")
+def step_datadog_connector_invalid(ctx):
+    from unittest.mock import AsyncMock
+
+    mock_connector = AsyncMock()
+    mock_connector.connector_type = "datadog"
+
+    async def mock_health_check():
+        return HealthResult(ok=False, detail="Invalid Datadog API key")
+
+    mock_connector.health_check = mock_health_check
+    mock_connector.query = mock_connector.health_check
+    ctx["connector"] = mock_connector
+    ctx["connector_type"] = "datadog"
+    ctx["query_error"] = None
+
+
+@when("the connector checks health")
+def step_datadog_health_check(ctx):
+    import asyncio
+
+    try:
+        result = asyncio.new_event_loop().run_until_complete(ctx["connector"].health_check())
+        ctx["health_result"] = result
+    except Exception as exc:
+        ctx["health_result"] = None
+        ctx["query_error"] = str(exc)
+
+
+@when("the connector queries monitors")
+def step_datadog_query_monitors(ctx):
+    from modulo.connectors.base import ConnectorQuery
+
+    q = ConnectorQuery(resource="monitors")
+    import asyncio
+
+    try:
+        result = asyncio.new_event_loop().run_until_complete(ctx["connector"].query(q))
+        ctx["query_result"] = result
+        ctx["query_error"] = None
+    except Exception as exc:
+        ctx["query_result"] = None
+        ctx["query_error"] = str(exc)
+
+
+@when("the connector queries events")
+def step_datadog_query_events(ctx):
+    from modulo.connectors.base import ConnectorQuery
+
+    q = ConnectorQuery(resource="events")
+    import asyncio
+
+    try:
+        result = asyncio.new_event_loop().run_until_complete(ctx["connector"].query(q))
+        ctx["query_result"] = result
+        ctx["query_error"] = None
+    except Exception as exc:
+        ctx["query_result"] = None
+        ctx["query_error"] = str(exc)
+
+
+@when("the connector queries timeseries metrics")
+def step_datadog_query_metrics(ctx):
+    from modulo.connectors.base import ConnectorQuery
+
+    q = ConnectorQuery(resource="metrics")
+    import asyncio
+
+    try:
+        result = asyncio.new_event_loop().run_until_complete(ctx["connector"].query(q))
+        ctx["query_result"] = result
+        ctx["query_error"] = None
+    except Exception as exc:
+        ctx["query_result"] = None
+        ctx["query_error"] = str(exc)
+
+
+@when("the connector queries dashboards")
+def step_datadog_query_dashboards(ctx):
+    from modulo.connectors.base import ConnectorQuery
+
+    q = ConnectorQuery(resource="dashboards")
+    import asyncio
+
+    try:
+        result = asyncio.new_event_loop().run_until_complete(ctx["connector"].query(q))
+        ctx["query_result"] = result
+        ctx["query_error"] = None
+    except Exception as exc:
+        ctx["query_result"] = None
+        ctx["query_error"] = str(exc)
+
+
+@when("the connector searches logs")
+def step_datadog_search_logs(ctx):
+    from modulo.connectors.base import ConnectorQuery
+
+    q = ConnectorQuery(resource="logs")
+    import asyncio
+
+    try:
+        result = asyncio.new_event_loop().run_until_complete(ctx["connector"].query(q))
+        ctx["query_result"] = result
+        ctx["query_error"] = None
+    except Exception as exc:
+        ctx["query_result"] = None
+        ctx["query_error"] = str(exc)
+
+
+@when(
+    parsers.parse(
+        'the connector writes an event with title "{title}" and text "{text}"'
+    )
+)
+def step_datadog_write_event(title, text, ctx):
+    from modulo.connectors.base import ConnectorPayload
+
+    payload = ConnectorPayload(resource="event", data={"title": title, "text": text})
+    import asyncio
+
+    try:
+        result = asyncio.new_event_loop().run_until_complete(ctx["connector"].write(payload))
+        ctx["write_result"] = result
+        ctx["query_error"] = None
+    except Exception as exc:
+        ctx["write_result"] = None
+        ctx["query_error"] = str(exc)
+
+
+@when(
+    parsers.parse(
+        'the connector creates a monitor with type "{monitor_type}"'
+    )
+)
+def step_datadog_create_monitor(monitor_type, ctx):
+    from modulo.connectors.base import ConnectorPayload
+
+    payload = ConnectorPayload(
+        resource="monitor",
+        data={"query": "avg(last_5m):cpu > 90", "type": monitor_type},
+    )
+    import asyncio
+
+    try:
+        result = asyncio.new_event_loop().run_until_complete(ctx["connector"].write(payload))
+        ctx["write_result"] = result
+        ctx["query_error"] = None
+    except Exception as exc:
+        ctx["write_result"] = None
+        ctx["query_error"] = str(exc)
+
+
+@when("the connector mutes a monitor")
+def step_datadog_mute_monitor(ctx):
+    from modulo.connectors.base import ConnectorPayload
+
+    payload = ConnectorPayload(
+        resource="monitor_status",
+        data={"monitor_id": 42, "status": "Muted"},
+    )
+    import asyncio
+
+    try:
+        result = asyncio.new_event_loop().run_until_complete(ctx["connector"].write(payload))
+        ctx["write_result"] = result
+        ctx["query_error"] = None
+    except Exception as exc:
+        ctx["write_result"] = None
+        ctx["query_error"] = str(exc)
+
+
+@then(parsers.parse('the health check returns "{status}"'))
+def step_datadog_health_result(status, ctx):
+    result = ctx.get("health_result")
+    assert result is not None, "No health check result"
+    if status == "healthy":
+        assert result.ok is True, f"Expected healthy, got: {result.detail}"
+    elif status == "unhealthy":
+        assert result.ok is False, f"Expected unhealthy, got: {result.detail}"
+    else:
+        raise ValueError(f"Unknown health status: {status}")
+
+
+@then("the result contains Datadog monitors")
+def step_datadog_result_contains_monitors(ctx):
+    result = ctx.get("query_result")
+    assert result is not None, "No query result"
+    assert len(result.records) > 0, "Expected monitor records"
+    for rec in result.records:
+        assert "id" in rec and "name" in rec, f"Monitor record missing fields: {rec}"
+
+
+@then("the result contains Datadog events")
+def step_datadog_result_contains_events(ctx):
+    result = ctx.get("query_result")
+    assert result is not None, "No query result"
+    assert len(result.records) > 0, "Expected event records"
+    for rec in result.records:
+        assert "id" in rec and "title" in rec, f"Event record missing fields: {rec}"
+
+
+@then("the result contains metric data")
+def step_datadog_result_contains_metrics(ctx):
+    result = ctx.get("query_result")
+    assert result is not None, "No query result"
+    assert len(result.records) > 0, "Expected metric records"
+    assert "attributes" in result.records[0], f"Metric record missing attributes: {result.records[0]}"
+
+
+@then("the result contains dashboards")
+def step_datadog_result_contains_dashboards(ctx):
+    result = ctx.get("query_result")
+    assert result is not None, "No query result"
+    assert len(result.records) > 0, "Expected dashboard records"
+    for rec in result.records:
+        assert "id" in rec and "attributes" in rec, f"Dashboard record missing fields: {rec}"
+
+
+@then("the result contains log events")
+def step_datadog_result_contains_logs(ctx):
+    result = ctx.get("query_result")
+    assert result is not None, "No query result"
+    assert len(result.records) > 0, "Expected log records"
+    for rec in result.records:
+        assert "id" in rec, f"Log record missing id: {rec}"
+
+
+@then("the event is created successfully")
+def step_datadog_event_created(ctx):
+    result = ctx.get("write_result")
+    assert result is not None, "No write result"
+    assert "id" in result, f"Event creation result missing id: {result}"
+
+
+@then("the monitor is created successfully")
+def step_datadog_monitor_created(ctx):
+    result = ctx.get("write_result")
+    assert result is not None, "No write result"
+    assert "id" in result, f"Monitor creation result missing id: {result}"
+
+
+@then("the monitor status is updated")
+def step_datadog_monitor_status_updated(ctx):
+    result = ctx.get("write_result")
+    assert result is not None, "No write result"
+    assert "status" in result, f"Monitor status update result missing status: {result}"
