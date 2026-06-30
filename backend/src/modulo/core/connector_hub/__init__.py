@@ -22,6 +22,7 @@ from opentelemetry.trace import Status, StatusCode
 
 from modulo.connectors.asana import AsanaConnector
 from modulo.connectors.azure_repos import AzureReposConnector
+from modulo.connectors.confluence import ConfluenceConnector
 from modulo.connectors.base import (
     ConnectorACL,
     ConnectorBase,
@@ -294,6 +295,11 @@ def _build_connector(type_id: str, config: dict[str, Any], creds: dict[str, Any]
             return AsanaConnector(personal_access_token=_get_cred(creds, "personal_access_token", type_id))
         case "monday":
             return MondayConnector(api_key=_get_cred(creds, "api_key", type_id))
+        case "confluence":
+            instance = config.get("instance", "")
+            if not instance:
+                raise ValueError("ConfluenceConnector requires 'instance' in config_json")
+            return ConfluenceConnector(instance=instance, creds=creds)
         case _:
             registry = get_plugin_registry()
             if registry.has_connector_type(type_id):
