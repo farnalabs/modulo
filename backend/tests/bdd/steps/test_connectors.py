@@ -411,7 +411,7 @@ except (FileNotFoundError, OSError):
 
 @given("a GitHub connector with valid token")
 def step_github_connector(ctx):
-    from unittest.mock import MagicMock, AsyncMock
+    from unittest.mock import AsyncMock
 
     mock_connector = AsyncMock()
     mock_connector.connector_type = "github"
@@ -4271,3 +4271,107 @@ def step_datadog_monitor_status_updated(ctx):
     result = ctx.get("write_result")
     assert result is not None, "No write result"
     assert "status" in result, f"Monitor status update result missing status: {result}"
+
+
+# ============================================================================
+# connectors/connector_decrypt_error.feature  —  2 scenarios
+# ============================================================================
+try:
+    scenarios("../../features/connectors/connector_decrypt_error.feature")
+except (FileNotFoundError, OSError):
+    pass
+
+
+@given("a connector instance with no secret in the backend")
+def step_decrypt_error_missing_secret(ctx):
+    import uuid
+
+    from cryptography.fernet import Fernet
+
+    key = Fernet.generate_key().decode()
+    ctx["fernet_key"] = key
+    ctx["connector_id"] = uuid.uuid4()
+    ctx["connector_type_id"] = "filesystem"
+    ctx["config_json"] = {"base_path": "/tmp"}
+    ctx["decrypt_error_expected"] = True
+
+
+@given("a connector instance with malformed JSON in the stored secret")
+def step_decrypt_error_invalid_json(ctx):
+    import uuid
+
+    from cryptography.fernet import Fernet
+
+    key = Fernet.generate_key().decode()
+    ctx["fernet_key"] = key
+    ctx["connector_id"] = uuid.uuid4()
+    ctx["connector_type_id"] = "filesystem"
+    ctx["config_json"] = {"base_path": "/tmp"}
+    ctx["decrypt_error_expected"] = True
+    ctx["malformed_json"] = True
+
+
+@when("I initialise the connector hub with that instance")
+async def step_initialise_with_instance(ctx):
+    from unittest.mock import patch
+
+    from cryptography.fernet import Fernet
+
+    from modulo.core.connector_hub import ConnectorDecryptError, ConnectorHub
+    from modulo.core.secrets_backend import create_secrets_backend
+
+    key = ctx["fernet_key"]
+    connector_id = ctx["connector_id"]
+    backend = create_secrets_backend(fernet_key=key, backend_name="fernet")
+
+    # Build a fake ConnectorInstance
+    from dataclasses import dataclass
+
+    @dataclass
+    class _FakeCI:
+        id: object
+        connector_type_id: str
+        config_json: dict
+        credentials_ciphertext: bytes
+        visibility: str = "org"
+        allowed_operations: object = None
+
+    if ctx.get("malformed_json"):
+        # Valid Fernet ciphertext but invalid JSON content
+        ciphertext = Fernet(key.encode()).encrypt(b"not-json")
+    else:
+        ciphertext = b""
+
+    ci = _FakeCI(
+        id=connector_id,
+        connector_type_id=ctx["connector_type_id"],
+        config_json=ctx["config_json"],
+        credentials_ciphertext=ciphertext,
+    )
+
+    def _raise_keyerror(*args, **kwargs):
+        raise KeyError(str(connector_id))
+
+    side_effect = _raise_keyerror if not ctx.get("malformed_json") else '{"valid_json": true}'
+
+    hub = ConnectorHub(secrets_backend=backend)
+    with patch.object(backend, "get_secret", side_effect=side_effect):
+        try:
+            await hub.initialise([ci])
+            ctx["decrypt_error_raised"] = False
+        except ConnectorDecryptError as exc:
+            ctx["decrypt_error_raised"] = True
+            ctx["decrypt_error_connector_id"] = exc.connector_id
+        except Exception:
+            ctx["decrypt_error_raised"] = False
+
+
+@then("a ConnectorDecryptError is raised with the connector ID")
+def step_decrypt_error_raised(ctx):
+    assert ctx.get("decrypt_error_raised") is True, (
+        "Expected ConnectorDecryptError but none was raised"
+    )
+    assert ctx["decrypt_error_connector_id"] == ctx["connector_id"], (
+        f"ConnectorDecryptError connector_id mismatch: "
+        f"{ctx['decrypt_error_connector_id']} != {ctx['connector_id']}"
+    )
