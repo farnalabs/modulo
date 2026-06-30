@@ -2831,3 +2831,197 @@ def step_shortcut_story_fields(ctx):
     assert "id" in rec and "name" in rec, (
         f"Record missing story fields: {rec}"
     )
+
+
+# ============================================================================
+# connectors/notion_connector.feature  —  9 scenarios
+# ============================================================================
+try:
+    scenarios("../features/connectors/notion_connector.feature")
+except (FileNotFoundError, OSError):
+    pass
+
+
+@given("a Notion connector with valid token")
+def step_notion_connector(ctx):
+    from unittest.mock import AsyncMock
+
+    mock_connector = AsyncMock()
+    mock_connector.connector_type = "notion"
+
+    async def mock_health_check():
+        return HealthResult(ok=True, detail="2 users accessible")
+
+    async def mock_query(q):
+        from modulo.connectors.base import ConnectorResult
+
+        match q.resource:
+            case "databases":
+                return ConnectorResult(
+                    records=[
+                        {"id": "db1", "title": [{"plain_text": "Project Tracker"}], "object": "database"},
+                        {"id": "db2", "title": [{"plain_text": "Bug Tracker"}], "object": "database"},
+                    ],
+                    total=2,
+                )
+            case "database":
+                database_id = q.filters.get("database_id", "")
+                if not database_id:
+                    raise ValueError("Notion database query requires 'database_id' filter")
+                return ConnectorResult(
+                    records=[{"id": database_id, "title": [{"plain_text": "Project Tracker"}], "object": "database"}]
+                )
+            case "pages":
+                database_id = q.filters.get("database_id", "")
+                if not database_id:
+                    raise ValueError("Notion pages query requires 'database_id' filter")
+                return ConnectorResult(
+                    records=[
+                        {"id": "p1", "object": "page", "properties": {"Name": {"title": [{"plain_text": "Task 1"}]}}},
+                        {"id": "p2", "object": "page", "properties": {"Name": {"title": [{"plain_text": "Task 2"}]}}},
+                    ],
+                    total=2,
+                )
+            case "page":
+                page_id = q.filters.get("page_id", "")
+                if not page_id:
+                    raise ValueError("Notion page query requires 'page_id' filter")
+                return ConnectorResult(
+                    records=[{"id": page_id, "object": "page", "properties": {"title": {"title": [{"plain_text": "Hello"}]}}}]
+                )
+            case "users":
+                return ConnectorResult(
+                    records=[
+                        {"id": "u1", "name": "Alice", "type": "person"},
+                        {"id": "u2", "name": "Bob", "type": "bot"},
+                    ],
+                    total=2,
+                )
+            case _:
+                raise ValueError(f"Unsupported Notion resource: {q.resource!r}")
+
+    async def mock_write(payload):
+        match payload.resource:
+            case "page":
+                return {"id": "p_new", "object": "page", "url": "https://notion.so/p_new"}
+            case _:
+                raise ValueError(f"Unsupported Notion write resource: {payload.resource!r}")
+
+    mock_connector.health_check = mock_health_check
+    mock_connector.query = mock_query
+    mock_connector.write = mock_write
+    ctx["connector"] = mock_connector
+    ctx["query_error"] = None
+
+
+@given("the Notion API returns 401 Unauthorized")
+def step_notion_health_401(ctx):
+    async def mock_health():
+        return HealthResult(ok=False, detail="HTTP 401: Unauthorized")
+    ctx["connector"].health_check = mock_health
+
+
+@when(
+    parsers.parse('I query resource "{resource}" with database_id "{db_id}"')
+)
+def step_notion_query_with_database_id(resource, db_id, ctx):
+    from modulo.connectors.base import ConnectorQuery
+
+    q = ConnectorQuery(resource=resource, filters={"database_id": db_id})
+    import asyncio
+    try:
+        result = asyncio.new_event_loop().run_until_complete(ctx["connector"].query(q))
+        ctx["query_result"] = result
+        ctx["query_error"] = None
+    except Exception as exc:
+        ctx["query_result"] = None
+        ctx["query_error"] = str(exc)
+
+
+@when(
+    parsers.parse('I query resource "{resource}" with page_id "{page_id}"')
+)
+def step_notion_query_with_page_id(resource, page_id, ctx):
+    from modulo.connectors.base import ConnectorQuery
+
+    q = ConnectorQuery(resource=resource, filters={"page_id": page_id})
+    import asyncio
+    try:
+        result = asyncio.new_event_loop().run_until_complete(ctx["connector"].query(q))
+        ctx["query_result"] = result
+        ctx["query_error"] = None
+    except Exception as exc:
+        ctx["query_result"] = None
+        ctx["query_error"] = str(exc)
+
+
+@when(
+    parsers.parse('I query resource "{resource}" without database_id filter')
+)
+def step_notion_query_without_database_id(resource, ctx):
+    from modulo.connectors.base import ConnectorQuery
+
+    q = ConnectorQuery(resource=resource, filters={})
+    import asyncio
+    try:
+        asyncio.new_event_loop().run_until_complete(ctx["connector"].query(q))
+        ctx["query_result"] = "unexpected_success"
+        ctx["query_error"] = None
+    except Exception as exc:
+        ctx["query_result"] = None
+        ctx["query_error"] = str(exc)
+
+
+@when(
+    parsers.parse(
+        'I write Notion resource "{resource}" with database_id "{db_id}"'
+        ' and title "{title}"'
+    )
+)
+def step_notion_write_page(resource, db_id, title, ctx):
+    from modulo.connectors.base import ConnectorPayload
+
+    payload = ConnectorPayload(
+        resource=resource,
+        data={
+            "parent": {"database_id": db_id},
+            "properties": {"Name": {"title": [{"text": {"content": title}}]}},
+        },
+    )
+    import asyncio
+    try:
+        result = asyncio.new_event_loop().run_until_complete(ctx["connector"].write(payload))
+        ctx["write_result"] = result
+        ctx["query_error"] = None
+    except Exception as exc:
+        ctx["write_result"] = None
+        ctx["query_error"] = str(exc)
+
+
+@then("the records contain database metadata")
+def step_notion_database_metadata(ctx):
+    result = ctx["query_result"]
+    for rec in result.records:
+        assert "id" in rec and "object" in rec, (
+            f"Record missing database metadata: {rec}"
+        )
+
+
+@then("the record contains database fields")
+def step_notion_database_fields(ctx):
+    result = ctx["query_result"]
+    assert len(result.records) > 0
+    rec = result.records[0]
+    assert "id" in rec and "title" in rec, (
+        f"Record missing database fields: {rec}"
+    )
+
+
+@then("the record contains Notion page fields")
+def step_notion_page_fields(ctx):
+    result = ctx["query_result"]
+    assert len(result.records) > 0
+    rec = result.records[0]
+    assert "id" in rec and "properties" in rec, (
+        f"Record missing Notion page fields: {rec}"
+    )
