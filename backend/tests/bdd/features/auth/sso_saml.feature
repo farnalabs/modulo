@@ -1,7 +1,7 @@
 Feature: SSO SAML 2.0 Integration
   As a user
   I want to log in via SAML 2.0 identity providers
-  So that I can access Modulo using enterprise SSO with JIT provisioning
+  So that I can access Modulo using Team SSO with JIT provisioning
 
   Background:
     Given SAML 2.0 is enabled with provider "https://idp.example.com"
@@ -42,8 +42,8 @@ Feature: SSO SAML 2.0 Integration
     Then the response status is 307
     And the user is added to team "team-1" with role "admin"
 
-  Scenario: Enterprise gate blocks SAML on free tier
-    Given I do not have an enterprise license
+  Scenario: Team gate blocks SAML on Community tier
+    Given I do not have a Team license
     When I request the SAML SP metadata endpoint
     Then the response status is 402
     And the error detail mentions "sso"

@@ -34,8 +34,8 @@ Feature: SSO OIDC Integration
     When the OIDC callback returns without code or state
     Then the response status is 400
 
-  Scenario: Enterprise gate blocks OIDC on free tier
-    Given I do not have an enterprise license
+  Scenario: Team gate blocks OIDC on Community tier
+    Given I do not have a Team license
     When I initiate OIDC login with "google"
     Then the response status is 402
     And the error detail mentions "sso"

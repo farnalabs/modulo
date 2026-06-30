@@ -6,11 +6,11 @@ Feature: License Management
   Background:
     Given I am authenticated as an admin in org "acme"
 
-  Scenario: Upload valid enterprise license
-    Given I have a signed enterprise license key
+  Scenario: Upload valid Team license
+    Given I have a signed Team license key
     When I POST the license key to /api/v1/admin/license
     Then the response status is 200
-    And the response contains tier "enterprise"
+    And the response contains tier "team"
     And the response contains features "sso, team_rbac, audit_viewer, admin_spend_limits"
 
   Scenario: Invalid signature rejected
@@ -25,32 +25,32 @@ Feature: License Management
     Then the response status is 422
     And the error detail mentions "expired"
 
-  Scenario: Free tier when no license uploaded
+  Scenario: Community tier when no license uploaded
     Given I do not have a license
     When I GET /api/v1/admin/license
     Then the response status is 200
-    And the response shows free tier
+    And the response shows community tier
     And the response has_license is false
 
   Scenario: License status displayed after upload
-    Given I have stored a valid enterprise license
+    Given I have stored a valid Team license
     When I GET /api/v1/admin/license
     Then the response status is 200
     And the response has_license is true
-    And the response contains tier "enterprise"
+    And the response contains tier "team"
     And the response contains org_id "acme-org"
 
-  Scenario: Enterprise features unlocked after license upload
-    Given I have stored a valid enterprise license
+  Scenario: Team features unlocked after license upload
+    Given I have stored a valid Team license
     When I GET /api/v1/admin/license
     Then the response features include "sso"
     And the response features include "team_rbac"
 
   Scenario: License badge data returned by API
-    Given I have stored a valid enterprise license with a known expiry
+    Given I have stored a valid Team license with a known expiry
     When I GET /api/v1/admin/license
     Then the response status is 200
-    And the response contains tier "enterprise"
+    And the response contains tier "team"
     And the response contains an expires_at date
     And the response has_license is true
 
