@@ -1,11 +1,11 @@
 Feature: SCIM 2.0 Provisioning
-  As an enterprise IdP administrator
+  As a Team IdP administrator
   I want to provision users and groups via SCIM 2.0
   So that team membership is synced automatically from the identity provider
 
   Background:
     Given I am authenticated as a SCIM client for org "acme"
-    And the enterprise license is valid
+    And the Team license is valid
 
   Scenario: Create a SCIM user provisions a new Modulo user
     When I POST /scim/v2/Users with SCIM user "jane@example.com"
@@ -68,7 +68,7 @@ Feature: SCIM 2.0 Provisioning
     When I POST /scim/v2/Users with SCIM user "attacker@example.com" and no auth token
     Then the response status is 401
 
-  Scenario: Enterprise license gate blocks SCIM without valid license
-    Given I do not have an enterprise license
+  Scenario: Team license gate blocks SCIM without valid license
+    Given I do not have a Team license
     When I GET /scim/v2/Users
     Then the response status is 402

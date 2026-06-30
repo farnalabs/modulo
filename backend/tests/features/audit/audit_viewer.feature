@@ -54,7 +54,7 @@ Feature: Audit Viewer
     And the response has a page field of 1
     And the response has a page_size field of 50
 
-  Scenario: Enterprise gate blocks non-admin
+  Scenario: Team gate blocks non-admin
     Given the audit_viewer feature is disabled
     When I GET /api/v1/admin/audit
     Then the response status is 402

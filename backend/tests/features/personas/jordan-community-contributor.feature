@@ -75,8 +75,8 @@ Feature: Jordan — Community Contributor / Library Author
     Then my "changelog-generator" pipeline starts
     And the pipeline posts release notes to my issue tracker
 
-  @goal-jordan-no-enterprise-friction
-  Scenario: Jordan uses the community library without enterprise setup
+  @goal-jordan-no-team-friction
+  Scenario: Jordan uses the community library without Team setup
     Given I am a solo developer using Community edition
     When I browse, copy, and contribute library primitives
     Then I can do all of this without SSO, team setup, or a licence key

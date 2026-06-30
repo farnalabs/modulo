@@ -5,7 +5,7 @@ Feature: System Admin — Configuration Management
 
   Scenario: System admin sets a config value
     Given I am authenticated as a system admin
-    When I set system config "default_plan" to "enterprise"
+    When I set system config "default_plan" to "team"
     Then the config value is saved
 
   Scenario: System admin reads config values
