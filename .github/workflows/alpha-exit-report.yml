@@ -1,0 +1,155 @@
+name: Alpha Exit Verification
+
+on:
+  workflow_dispatch:
+    inputs:
+      skip_bdd:
+        description: "Skip BDD test run (use cached results)"
+        required: false
+        default: false
+        type: boolean
+
+concurrency:
+  group: alpha-exit-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    runs-on: self-hosted
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: astral-sh/setup-uv@v7
+        with:
+          python-version: "3.12.4"
+
+      - name: Criterion #2 — Start Postgres
+        if: ${{ !inputs.skip_bdd }}
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Continue'
+          docker rm -f modulo-alpha-pg 2>$null
+          docker run -d --name modulo-alpha-pg `
+            -e POSTGRES_USER=modulo `
+            -e POSTGRES_PASSWORD=modulo `
+            -e POSTGRES_DB=modulo `
+            -p 5432:5432 `
+            postgres:16-alpine
+          Write-Host "Waiting for Postgres..."
+          for ($i=0; $i -lt 60; $i++) {
+            $ok = docker exec modulo-alpha-pg pg_isready -U modulo 2>$null
+            if ($?) { Write-Host "Postgres ready"; break }
+            Start-Sleep -Seconds 2
+          }
+
+      - name: Criterion #2 — Start Redis
+        if: ${{ !inputs.skip_bdd }}
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Continue'
+          docker rm -f modulo-alpha-redis 2>$null
+          docker run -d --name modulo-alpha-redis `
+            -p 6379:6379 `
+            redis:7-alpine
+          Write-Host "Waiting for Redis..."
+          for ($i=0; $i -lt 30; $i++) {
+            $ok = docker exec modulo-alpha-redis redis-cli ping 2>$null
+            if ($?) { Write-Host "Redis ready"; break }
+            Start-Sleep -Seconds 2
+          }
+
+      - name: Criterion #2 — Install backend deps
+        if: ${{ !inputs.skip_bdd }}
+        working-directory: backend
+        run: uv sync --frozen
+
+      - name: Criterion #2 — Run migrations
+        if: ${{ !inputs.skip_bdd }}
+        working-directory: backend
+        run: uv run --no-sync alembic upgrade heads
+        env:
+          DATABASE_URL: "postgresql+asyncpg://modulo:modulo@localhost:5432/modulo"
+          SECRET_KEY: "ci-secret-key-for-github-actions-testing-only"
+          FERNET_KEY: "vK-xU7GqHLflg_GqzJ1FqWI7pHWoHSIyukf4wx-tMHI="
+
+      - name: Criterion #2 — Run BDD tests
+        if: ${{ !inputs.skip_bdd }}
+        id: bdd
+        continue-on-error: true
+        working-directory: backend
+        run: uv run --no-sync pytest tests/bdd/ -x --tb=short -q
+        env:
+          DATABASE_URL: "postgresql+asyncpg://modulo:modulo@localhost:5432/modulo"
+          SECRET_KEY: "ci-secret-key-for-github-actions-testing-only"
+          FERNET_KEY: "vK-xU7GqHLflg_GqzJ1FqWI7pHWoHSIyukf4wx-tMHI="
+
+      - name: Criterion #2 — Report BDD result
+        if: always() && !inputs.skip_bdd
+        shell: powershell
+        run: |
+          if ("${{ steps.bdd.outcome }}" -eq "success") {
+            Write-Host "::notice title=BDD Tests::All happy-path BDD scenarios green"
+          } else {
+            Write-Host "::warning title=BDD Tests::Some BDD scenarios failed — see step output"
+          }
+
+      - name: Criterion #2 — Cleanup containers
+        if: always() && !inputs.skip_bdd
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Continue'
+          docker rm -f modulo-alpha-pg 2>$null
+          docker rm -f modulo-alpha-redis 2>$null
+
+      - name: Run verification script
+        shell: powershell
+        run: |
+          $script = Join-Path $env:GITHUB_WORKSPACE "scripts\verify-alpha-exit.ps1"
+          & $script
+          $exitCode = $LASTEXITCODE
+          Write-Host "Verification exit code: $exitCode"
+          if ($exitCode -eq 0) {
+            Write-Host "::notice title=Alpha Exit::All machine-verifiable criteria PASS"
+          } else {
+            Write-Host "::warning title=Alpha Exit::Machine-verifiable criteria FAIL — see report"
+          }
+          exit $exitCode
+        env:
+          CI: "true"
+
+      - name: Upload verification report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: alpha-exit-report
+          path: alpha-exit-report.txt
+          retention-days: 90
+
+      - name: Summary
+        if: always()
+        shell: powershell
+        run: |
+          Write-Host "========================================"
+          Write-Host "Alpha Exit Verification Complete"
+          Write-Host "Report uploaded as artifact: alpha-exit-report"
+          Write-Host "========================================"
+
+  summary:
+    needs: verify
+    if: always()
+    runs-on: self-hosted
+    steps:
+      - name: Print gate status
+        shell: powershell
+        run: |
+          $result = "${{ needs.verify.result }}"
+          Write-Host "Alpha Exit gate result: $result"
+          if ($result -eq "success") {
+            Write-Host "::notice title=Alpha Exit Gate::PASS — manual sign-offs still required"
+          } else {
+            Write-Host "::warning title=Alpha Exit Gate::Machine checks need attention"
+          }
