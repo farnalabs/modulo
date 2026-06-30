@@ -1632,3 +1632,372 @@ def step_trello_card_fields(ctx):
     assert "id" in rec and "name" in rec, (
         f"Record missing card fields: {rec}"
     )
+
+
+# ============================================================================
+# connectors/shortcut.feature  —  10 scenarios
+# ============================================================================
+try:
+    scenarios("../../features/connectors/shortcut.feature")
+except (FileNotFoundError, OSError):
+    pass
+
+
+@given("a Shortcut connector with valid API token")
+def step_shortcut_connector(ctx):
+    from unittest.mock import AsyncMock
+
+    mock_connector = AsyncMock()
+    mock_connector.connector_type = "shortcut"
+
+    async def mock_health_check():
+        return HealthResult(ok=True, detail="testuser")
+
+    async def mock_query(q):
+        from modulo.connectors.base import ConnectorResult
+
+        match q.resource:
+            case "stories":
+                return ConnectorResult(
+                    records=[
+                        {"id": 1, "name": "Story One", "story_type": "feature"},
+                        {"id": 2, "name": "Story Two", "story_type": "bug"},
+                    ],
+                    total=2,
+                )
+            case "story":
+                story_id = q.filters.get("story_id", "")
+                if not story_id:
+                    raise ValueError("Shortcut story query requires 'story_id' filter")
+                return ConnectorResult(
+                    records=[{"id": int(story_id), "name": "Single Story", "description": "A test story"}]
+                )
+            case "projects":
+                return ConnectorResult(
+                    records=[
+                        {"id": 1, "name": "Project Alpha"},
+                        {"id": 2, "name": "Project Beta"},
+                    ],
+                    total=2,
+                )
+            case "project":
+                project_id = q.filters.get("project_id", "")
+                if not project_id:
+                    raise ValueError("Shortcut project query requires 'project_id' filter")
+                return ConnectorResult(
+                    records=[{"id": int(project_id), "name": "Single Project"}]
+                )
+            case "epics":
+                return ConnectorResult(
+                    records=[
+                        {"id": 1, "name": "Epic One"},
+                        {"id": 2, "name": "Epic Two"},
+                    ],
+                    total=2,
+                )
+            case "epic":
+                epic_id = q.filters.get("epic_id", "")
+                if not epic_id:
+                    raise ValueError("Shortcut epic query requires 'epic_id' filter")
+                return ConnectorResult(
+                    records=[{"id": int(epic_id), "name": "Single Epic"}]
+                )
+            case "workflows":
+                return ConnectorResult(
+                    records=[
+                        {"id": 1, "name": "Default Workflow"},
+                        {"id": 2, "name": "Custom Workflow"},
+                    ],
+                    total=2,
+                )
+            case "members":
+                return ConnectorResult(
+                    records=[
+                        {"id": "u1", "mention_name": "alice"},
+                        {"id": "u2", "mention_name": "bob"},
+                    ],
+                    total=2,
+                )
+            case "teams":
+                return ConnectorResult(
+                    records=[
+                        {"id": "t1", "name": "Engineering"},
+                        {"id": "t2", "name": "Design"},
+                    ],
+                    total=2,
+                )
+            case _:
+                raise ValueError(f"Unsupported Shortcut resource: {q.resource!r}")
+
+    async def mock_write(payload):
+        match payload.resource:
+            case "story":
+                return {
+                    "id": 1,
+                    "name": payload.data.get("name", ""),
+                    "story_type": "feature",
+                    "app_url": "https://shortcut.com/story/1",
+                }
+            case "story_update":
+                story_id = payload.data.get("id", "")
+                if not story_id:
+                    raise ValueError("Shortcut story_update requires 'id' in data")
+                return {"id": int(story_id), "name": payload.data.get("name", "Updated Name")}
+            case "story_comment":
+                story_id = payload.data.get("story_id", "")
+                text = payload.data.get("text", "")
+                if not story_id or not text:
+                    raise ValueError("story_comment requires 'story_id' and 'text' in data")
+                return {"id": "c1", "text": text, "story_id": int(story_id)}
+            case "epic":
+                return {
+                    "id": 1,
+                    "name": payload.data.get("name", ""),
+                    "app_url": "https://shortcut.com/epic/1",
+                }
+            case _:
+                raise ValueError(f"Unsupported Shortcut write resource: {payload.resource!r}")
+
+    mock_connector.health_check = mock_health_check
+    mock_connector.query = mock_query
+    mock_connector.write = mock_write
+    ctx["connector"] = mock_connector
+    ctx["query_error"] = None
+
+
+@given("the Shortcut API returns a valid member profile")
+def step_shortcut_health_valid(ctx):
+    async def mock_health():
+        return HealthResult(ok=True, detail="testuser")
+    ctx["connector"].health_check = mock_health
+
+
+@given("the Shortcut API returns 401 Unauthorized")
+def step_shortcut_health_401(ctx):
+    async def mock_health():
+        return HealthResult(ok=False, detail="HTTP 401: Unauthorized")
+    ctx["connector"].health_check = mock_health
+
+
+@given("the Shortcut API returns available stories")
+def step_shortcut_stories_available(ctx):
+    connector = ctx["connector"]
+
+    async def mock_query(q):
+        from modulo.connectors.base import ConnectorResult
+        if q.resource == "stories":
+            return ConnectorResult(
+                records=[
+                    {"id": 1, "name": "Story One", "story_type": "feature"},
+                    {"id": 2, "name": "Story Two", "story_type": "bug"},
+                ],
+                total=2,
+            )
+        raise ValueError(f"Unsupported Shortcut resource: {q.resource!r}")
+
+    connector.query = mock_query
+
+
+@given("the Shortcut API returns a single story")
+def step_shortcut_single_story(ctx):
+    connector = ctx["connector"]
+
+    async def mock_query(q):
+        from modulo.connectors.base import ConnectorResult
+        if q.resource == "story":
+            return ConnectorResult(
+                records=[{"id": int(q.filters.get("story_id", "0")), "name": "Single Story", "description": "A test story"}]
+            )
+        raise ValueError(f"Unsupported Shortcut resource: {q.resource!r}")
+
+    connector.query = mock_query
+
+
+@given("the Shortcut API returns available projects")
+def step_shortcut_projects_available(ctx):
+    connector = ctx["connector"]
+
+    async def mock_query(q):
+        from modulo.connectors.base import ConnectorResult
+        if q.resource == "projects":
+            return ConnectorResult(
+                records=[
+                    {"id": 1, "name": "Project Alpha"},
+                    {"id": 2, "name": "Project Beta"},
+                ],
+                total=2,
+            )
+        raise ValueError(f"Unsupported Shortcut resource: {q.resource!r}")
+
+    connector.query = mock_query
+
+
+@given("the Shortcut API returns available epics")
+def step_shortcut_epics_available(ctx):
+    connector = ctx["connector"]
+
+    async def mock_query(q):
+        from modulo.connectors.base import ConnectorResult
+        if q.resource == "epics":
+            return ConnectorResult(
+                records=[
+                    {"id": 1, "name": "Epic One"},
+                    {"id": 2, "name": "Epic Two"},
+                ],
+                total=2,
+            )
+        raise ValueError(f"Unsupported Shortcut resource: {q.resource!r}")
+
+    connector.query = mock_query
+
+
+@given("the Shortcut API accepts story creation")
+def step_shortcut_accepts_create(ctx):
+    connector = ctx["connector"]
+
+    async def mock_write(payload):
+        if payload.resource == "story":
+            return {
+                "id": 1,
+                "name": payload.data.get("name", ""),
+                "story_type": "feature",
+                "app_url": "https://shortcut.com/story/1",
+            }
+        raise ValueError(f"Unsupported Shortcut write: {payload.resource!r}")
+
+    connector.write = mock_write
+
+
+@given("the Shortcut API accepts story updates")
+def step_shortcut_accepts_updates(ctx):
+    connector = ctx["connector"]
+
+    async def mock_write(payload):
+        if payload.resource == "story_update":
+            return {"id": int(payload.data.get("id", "0")), "name": payload.data.get("name", "Updated Name")}
+        raise ValueError(f"Unsupported Shortcut write: {payload.resource!r}")
+
+    connector.write = mock_write
+
+
+@given("the Shortcut API accepts story comments")
+def step_shortcut_accepts_comments(ctx):
+    connector = ctx["connector"]
+
+    async def mock_write(payload):
+        if payload.resource == "story_comment":
+            return {"id": "c1", "text": payload.data.get("text", ""), "story_id": int(payload.data.get("story_id", "0"))}
+        raise ValueError(f"Unsupported Shortcut write: {payload.resource!r}")
+
+    connector.write = mock_write
+
+
+@given("the Shortcut connector is configured")
+def step_shortcut_configured(ctx):
+    pass
+
+
+@when(
+    parsers.parse('I query resource "{resource}" with story_id "{story_id}"')
+)
+def step_shortcut_query_with_story_id(resource, story_id, ctx):
+    from modulo.connectors.base import ConnectorQuery
+
+    q = ConnectorQuery(resource=resource, filters={"story_id": story_id})
+    import asyncio
+
+    try:
+        result = asyncio.new_event_loop().run_until_complete(ctx["connector"].query(q))
+        ctx["query_result"] = result
+        ctx["query_error"] = None
+    except Exception as exc:
+        ctx["query_result"] = None
+        ctx["query_error"] = str(exc)
+
+
+@when(
+    parsers.parse(
+        'I write resource "{resource}" with name "{name}" and project_id "{project_id}"'
+    )
+)
+def step_shortcut_create_story(resource, name, project_id, ctx):
+    from modulo.connectors.base import ConnectorPayload
+
+    payload = ConnectorPayload(
+        resource=resource,
+        data={"name": name, "project_id": int(project_id)},
+    )
+    import asyncio
+
+    try:
+        result = asyncio.new_event_loop().run_until_complete(ctx["connector"].write(payload))
+        ctx["write_result"] = result
+        ctx["query_error"] = None
+    except Exception as exc:
+        ctx["write_result"] = None
+        ctx["query_error"] = str(exc)
+
+
+@when(
+    parsers.parse(
+        'I write resource "{resource}" for story "{story_id}" with new name "{name}"'
+    )
+)
+def step_shortcut_update_story(resource, story_id, name, ctx):
+    from modulo.connectors.base import ConnectorPayload
+
+    payload = ConnectorPayload(
+        resource=resource,
+        data={"id": story_id, "name": name},
+    )
+    import asyncio
+
+    try:
+        result = asyncio.new_event_loop().run_until_complete(ctx["connector"].write(payload))
+        ctx["write_result"] = result
+        ctx["query_error"] = None
+    except Exception as exc:
+        ctx["write_result"] = None
+        ctx["query_error"] = str(exc)
+
+
+@when(
+    parsers.parse(
+        'I write resource "{resource}" for story "{story_id}" with text "{text}"'
+    )
+)
+def step_shortcut_add_comment(resource, story_id, text, ctx):
+    from modulo.connectors.base import ConnectorPayload
+
+    payload = ConnectorPayload(
+        resource=resource,
+        data={"story_id": story_id, "text": text},
+    )
+    import asyncio
+
+    try:
+        result = asyncio.new_event_loop().run_until_complete(ctx["connector"].write(payload))
+        ctx["write_result"] = result
+        ctx["query_error"] = None
+    except Exception as exc:
+        ctx["write_result"] = None
+        ctx["query_error"] = str(exc)
+
+
+@then("the records contain story metadata")
+def step_shortcut_story_metadata(ctx):
+    result = ctx["query_result"]
+    for rec in result.records:
+        assert "id" in rec and "name" in rec, (
+            f"Record missing story metadata: {rec}"
+        )
+
+
+@then("the record contains story fields")
+def step_shortcut_story_fields(ctx):
+    result = ctx["query_result"]
+    assert len(result.records) > 0
+    rec = result.records[0]
+    assert "id" in rec and "name" in rec, (
+        f"Record missing story fields: {rec}"
+    )
