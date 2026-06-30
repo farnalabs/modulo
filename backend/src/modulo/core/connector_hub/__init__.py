@@ -56,6 +56,7 @@ from modulo.connectors.npm import NpmConnector
 from modulo.connectors.onepassword import OnePasswordConnector
 from modulo.connectors.opsgenie import OpsgenieConnector
 from modulo.connectors.pagerduty import PagerDutyConnector
+from modulo.connectors.pypi import PyPIConnector
 from modulo.connectors.sentry import SentryConnector
 from modulo.connectors.sharepoint import SharePointConnector
 from modulo.connectors.shortcut import ShortcutConnector
@@ -330,6 +331,9 @@ def _build_connector(type_id: str, config: dict[str, Any], creds: dict[str, Any]
         case "npm":
             token = creds.get("token", "")
             return NpmConnector(token=token)
+        case "pypi":
+            token = creds.get("token", "")
+            return PyPIConnector(token=token)
         case "dropbox_paper":
             return DropboxPaperConnector(token=_get_cred(creds, "token", type_id))
         case "buildkite":
