@@ -47,7 +47,7 @@ from typing import Any
 import jmespath
 from langgraph.errors import NodeInterrupt
 
-from modulo.core.eval_engine import EvalDefinition, EvalEngine
+from modulo.core.eval_engine import EvalDefinition, EvalEngine, EvalResult
 from modulo.core.pipeline_engine.decorator import cancellable_node
 from modulo.core.pipeline_engine.input_truncation import truncate_input
 from modulo.core.run_context.autonomy import (
@@ -72,6 +72,29 @@ def _is_truthy(value: Any) -> bool:
     if isinstance(value, str):
         return len(value) > 0
     return True
+
+
+def _evaluate_eval_condition(score: float, threshold: float, operator: str) -> bool:
+    """Evaluate an eval-reference condition using the given operator.
+    
+    Returns True when the condition is satisfied (meaning the gate should fire/interrupt).
+    Returns False when the condition is not satisfied (gate should be skipped).
+    """
+    match operator:
+        case "lt":
+            return score < threshold
+        case "gt":
+            return score > threshold
+        case "lte":
+            return score <= threshold
+        case "gte":
+            return score >= threshold
+        case "eq":
+            return score == threshold
+        case "neq":
+            return score != threshold
+        case _:
+            return False
 
 
 def make_node_fn(
@@ -140,6 +163,7 @@ def make_hitl_gate_fn(
     gate_id: str = hitl_gate_config.get("gate_id", "gate")
     human_only: bool = hitl_gate_config.get("human_only", False)
     condition_expr: str | None = hitl_gate_config.get("condition")
+    eval_condition_raw: dict[str, Any] | None = hitl_gate_config.get("eval_condition")
 
     async def _hitl_gate(state: dict[str, Any]) -> dict[str, Any]:
         # --- Resume check — always first so condition/evals aren't re-evaluated. ---
@@ -197,11 +221,57 @@ def make_hitl_gate_fn(
                 }
 
         # --- Eval-before-interrupt (§8.17) — run node-scoped evals. ---
+        eval_results_by_name: dict[str, EvalResult] = {}
         if eval_definitions:
             engine = EvalEngine()
             for eval_def in eval_definitions:
-                engine.evaluate(state, eval_def)
+                result = engine.evaluate(state, eval_def)
+                eval_results_by_name[eval_def.name] = result
+                _log.info(
+                    "hitl_gate.eval_result",
+                    extra={
+                        "gate_id": gate_id,
+                        "eval_name": eval_def.name,
+                        "eval_id": str(eval_def.id),
+                        "passed": result.passed,
+                        "score": result.score,
+                        "detail": result.detail,
+                    },
+                )
             # If any block eval failed, EvalBlockedError was raised above.
+
+        # --- Eval-reference condition check (§8.17 v1) — evaluate condition
+        # against captured eval results. ---
+        if eval_condition_raw is not None and eval_results_by_name:
+            eval_name: str = eval_condition_raw.get("eval_name", "")
+            threshold: float = eval_condition_raw.get("threshold", 0.0)
+            operator: str = eval_condition_raw.get("operator", "lt")
+            matched_result = eval_results_by_name.get(eval_name)
+            if matched_result is not None:
+                score: float = matched_result.score or 0.0
+                condition_true: bool = _evaluate_eval_condition(score, threshold, operator)
+                _log.info(
+                    "hitl_gate.eval_condition",
+                    extra={
+                        "gate_id": gate_id,
+                        "eval_name": eval_name,
+                        "score": score,
+                        "threshold": threshold,
+                        "operator": operator,
+                        "condition_true": condition_true,
+                    },
+                )
+                if not condition_true:
+                    return {
+                        "artifacts": [
+                            {
+                                "node_id": gate_id,
+                                "status": "condition_skipped",
+                                "condition": eval_condition_raw,
+                                "condition_result": False,
+                            }
+                        ],
+                    }
 
         # Determine effective autonomy level from run_context.
         run_context: dict[str, Any] = state.get("run_context") or {}

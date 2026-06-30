@@ -150,6 +150,23 @@ class PipelineGraphNode(BaseModel):
         return self
 
 
+class EvalCondition(BaseModel):
+    eval_name: str = Field(
+        min_length=1, max_length=255,
+        description="Name of the eval definition to reference.",
+    )
+    threshold: float = Field(
+        ge=0.0, le=1.0,
+        description="Score threshold for the condition.",
+    )
+    operator: str = Field(
+        pattern="^(lt|gt|lte|gte|eq|neq)$",
+        description="Comparison operator: lt (score < threshold), gt (score > threshold), "
+        "lte (score <= threshold), gte (score >= threshold), eq (score == threshold), "
+        "neq (score != threshold).",
+    )
+
+
 class HitlGateConfig(BaseModel):
     label: str = Field(min_length=1, max_length=255)
     description: str = Field(max_length=2000)
@@ -162,6 +179,13 @@ class HitlGateConfig(BaseModel):
         max_length=500,
         description="JMESPath expression evaluated against the upstream node output. "
         "If it returns true, gate activates. If false/empty/null, gate is skipped.",
+    )
+    eval_condition: EvalCondition | None = Field(
+        default=None,
+        description="Eval-reference condition: references an eval definition by name "
+        "with threshold and operator. Evaluated after eval-before-interrupt runs. "
+        "If the condition evaluates to true (e.g., score < threshold with operator lt), "
+        "the gate fires. If false, execution continues without interrupting.",
     )
 
 

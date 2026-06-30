@@ -15,6 +15,7 @@
           :default-edge-options="{ type: 'smoothstep', animated: false, style: { stroke: '#888' } }"
           fit-view-on-init
           @node-click="onNodeClick"
+          @edge-click="onEdgeClick"
           @pane-click="onPaneClick"
         >
           <Background :gap="20" :size="1" />
@@ -31,10 +32,16 @@
               <div class="text-sm font-semibold">{{ nodeProps.data.label }}</div>
             </div>
           </template>
+          <template #edge-default="edgeProps">
+            <div v-if="edgeProps.data?.hitl_gate_config" class="absolute -translate-y-4 translate-x-2">
+              <span class="rounded bg-warning/20 px-1.5 py-0.5 text-[10px] font-medium text-warning">HITL</span>
+            </div>
+          </template>
         </VueFlow>
       </div>
 
-      <aside v-if="selectedNodeData" class="w-96 overflow-y-auto border-l bg-card p-4">
+      <!-- Node Properties Panel -->
+      <aside v-if="selectedNodeData && !selectedEdgeData" class="w-96 overflow-y-auto border-l bg-card p-4">
         <h2 class="mb-4 text-lg font-semibold">Node Properties</h2>
         <dl class="space-y-3 text-sm">
           <div>
@@ -88,6 +95,184 @@
           >
             Revert to Manual
           </button>
+        </div>
+      </aside>
+
+      <!-- Edge Properties Panel (with HITL gate config) -->
+      <aside v-if="selectedEdgeData" class="w-96 overflow-y-auto border-l bg-card p-4">
+        <h2 class="mb-4 text-lg font-semibold">Edge Properties</h2>
+        <dl class="space-y-3 text-sm">
+          <div>
+            <dt class="text-muted-foreground">Source</dt>
+            <dd class="font-mono text-xs">{{ selectedEdgeData.source_node_id }}</dd>
+          </div>
+          <div>
+            <dt class="text-muted-foreground">Target</dt>
+            <dd class="font-mono text-xs">{{ selectedEdgeData.target_node_id }}</dd>
+          </div>
+          <div>
+            <dt class="text-muted-foreground">Type</dt>
+            <dd>
+              <select
+                v-model="edgeForm.edge_type"
+                class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm"
+              >
+                <option value="normal">Normal</option>
+                <option value="reject">Reject</option>
+                <option value="conditional">Conditional</option>
+              </select>
+            </dd>
+          </div>
+          <div>
+            <dt class="text-muted-foreground">Condition Expression</dt>
+            <dd>
+              <input
+                v-model="edgeForm.condition_expression"
+                class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm font-mono"
+                placeholder="JMESPath expression (e.g. score > `0.5`)"
+                :disabled="edgeForm.edge_type !== 'conditional'"
+              />
+            </dd>
+          </div>
+        </dl>
+
+        <hr class="my-4 border-t" />
+
+        <div class="flex items-center justify-between">
+          <h3 class="text-sm font-semibold">HITL Gate</h3>
+          <label class="inline-flex cursor-pointer items-center">
+            <input
+              v-model="edgeForm.hitl_enabled"
+              type="checkbox"
+              class="h-4 w-4 rounded border-gray-300 text-primary focus:ring-primary"
+            />
+            <span class="ml-2 text-xs text-muted-foreground">Enabled</span>
+          </label>
+        </div>
+
+        <div v-if="edgeForm.hitl_enabled" class="mt-4 space-y-4">
+          <div>
+            <label class="mb-1 block text-xs font-medium text-muted-foreground">Label</label>
+            <input
+              v-model="edgeForm.label"
+              class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm"
+              placeholder="e.g. Review before deploy"
+            />
+          </div>
+          <div>
+            <label class="mb-1 block text-xs font-medium text-muted-foreground">Description</label>
+            <textarea
+              v-model="edgeForm.description"
+              class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm"
+              placeholder="Describe what the reviewer should check"
+              rows="2"
+            />
+          </div>
+          <div>
+            <label class="mb-1 block text-xs font-medium text-muted-foreground">Claim Expiry (minutes)</label>
+            <input
+              v-model.number="edgeForm.claim_expiry_minutes"
+              type="number"
+              min="1"
+              max="1440"
+              class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm"
+            />
+          </div>
+          <div class="flex items-center gap-2">
+            <input
+              v-model="edgeForm.human_only"
+              type="checkbox"
+              class="h-4 w-4 rounded border-gray-300 text-primary focus:ring-primary"
+            />
+            <label class="text-xs text-muted-foreground">Human only (block LLM auto-approval)</label>
+          </div>
+
+          <hr class="border-t" />
+
+          <div>
+            <label class="mb-1 block text-xs font-medium text-muted-foreground">Condition Type</label>
+            <select
+              v-model="edgeForm.condition_type"
+              class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm"
+            >
+              <option value="none">None (always gate)</option>
+              <option value="jmespath">JMESPath Expression</option>
+              <option value="eval">Eval Reference</option>
+            </select>
+          </div>
+
+          <div v-if="edgeForm.condition_type === 'jmespath'">
+            <label class="mb-1 block text-xs font-medium text-muted-foreground">JMESPath Condition</label>
+            <input
+              v-model="edgeForm.condition"
+              class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm font-mono"
+              placeholder="e.g. score > `0.5`"
+            />
+            <p class="mt-1 text-[10px] text-muted-foreground">
+              Evaluated against pipeline state. If truthy, gate activates.
+            </p>
+          </div>
+
+          <div v-if="edgeForm.condition_type === 'eval'" class="space-y-3">
+            <div>
+              <label class="mb-1 block text-xs font-medium text-muted-foreground">Eval Name</label>
+              <input
+                v-model="edgeForm.eval_name"
+                class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm font-mono"
+                placeholder="e.g. quality-check"
+              />
+            </div>
+            <div class="flex gap-2">
+              <div class="flex-1">
+                <label class="mb-1 block text-xs font-medium text-muted-foreground">Threshold</label>
+                <input
+                  v-model.number="edgeForm.eval_threshold"
+                  type="number"
+                  min="0"
+                  max="1"
+                  step="0.01"
+                  class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm"
+                />
+              </div>
+              <div class="flex-1">
+                <label class="mb-1 block text-xs font-medium text-muted-foreground">Operator</label>
+                <select
+                  v-model="edgeForm.eval_operator"
+                  class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm"
+                >
+                  <option value="lt">lt (score &lt; threshold)</option>
+                  <option value="gt">gt (score &gt; threshold)</option>
+                  <option value="lte">lte (score &le; threshold)</option>
+                  <option value="gte">gte (score &ge; threshold)</option>
+                  <option value="eq">eq (score == threshold)</option>
+                  <option value="neq">neq (score != threshold)</option>
+                </select>
+              </div>
+            </div>
+            <p class="mt-1 text-[10px] text-muted-foreground">
+              If condition is true, gate fires. If false, gate is skipped.
+            </p>
+          </div>
+
+          <div class="flex gap-2 pt-2">
+            <button
+              data-testid="pipeline-editor-save-edge"
+              class="flex-1 rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
+              :disabled="savingEdge"
+              @click="saveEdgeConfig"
+            >
+              {{ savingEdge ? 'Saving...' : 'Save Edge' }}
+            </button>
+            <button
+              class="rounded-lg border border-input bg-background px-4 py-2 text-sm hover:bg-accent"
+              @click="selectedEdgeData = null"
+            >
+              Close
+            </button>
+          </div>
+          <div v-if="edgeSaveError" class="rounded-lg border border-destructive/50 bg-destructive/10 p-3 text-sm text-destructive">
+            {{ edgeSaveError }}
+          </div>
         </div>
       </aside>
     </template>
@@ -212,7 +397,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, reactive, onMounted } from 'vue'
 import { useRoute } from 'vue-router'
 import { VueFlow } from '@vue-flow/core'
 import { Background } from '@vue-flow/background'
@@ -221,7 +406,7 @@ import '@vue-flow/core/dist/style.css'
 import '@vue-flow/core/dist/theme-default.css'
 import { useApi } from '../composables/useApi'
 
-const { get, post } = useApi()
+const { get, post, patch } = useApi()
 const route = useRoute()
 const pipelineId = route.params.id as string
 
@@ -234,6 +419,7 @@ const flowNodes = ref<any[]>([])
 const flowEdges = ref<any[]>([])
 
 const selectedNodeData = ref<any | null>(null)
+const selectedEdgeData = ref<any | null>(null)
 const nodeTypes = { agent: 'agent', manual: 'manual' }
 
 const agents = ref<any[]>([])
@@ -250,6 +436,26 @@ const revertSnapshotId = ref<string>('')
 const convertError = ref<string | null>(null)
 const revertError = ref<string | null>(null)
 const revertLoading = ref(false)
+
+const savingEdge = ref(false)
+const edgeSaveError = ref<string | null>(null)
+
+const defaultEdgeForm = {
+  edge_type: 'normal',
+  condition_expression: '',
+  hitl_enabled: false,
+  label: '',
+  description: '',
+  claim_expiry_minutes: 15,
+  human_only: false,
+  condition_type: 'none',
+  condition: '',
+  eval_name: '',
+  eval_threshold: 0.8,
+  eval_operator: 'lt',
+}
+
+const edgeForm = reactive({ ...defaultEdgeForm })
 
 const selectedAgent = computed(() => agents.value.find(a => a.id === pickerAgentId.value) || null)
 
@@ -289,6 +495,11 @@ function convertBackendEdge(e: any, i: number): any {
     source: e.source_node_id,
     target: e.target_node_id,
     type: 'smoothstep',
+    data: {
+      hitl_gate_config: e.hitl_gate_config || null,
+      edge_type: e.edge_type || 'normal',
+      condition_expression: e.condition_expression || null,
+    },
   }
 }
 
@@ -324,14 +535,140 @@ async function loadCatalog() {
 }
 
 function onNodeClick(event: any) {
+  selectedEdgeData.value = null
   const node = event.node
   if (!node) return
   const backendNode = rawNodes.value.find((n: any) => n.id === node.id)
   selectedNodeData.value = backendNode || null
 }
 
+function onEdgeClick(event: any) {
+  selectedNodeData.value = null
+  const edge = event.edge
+  if (!edge) return
+  const backendEdge = rawEdges.value.find((e: any) => e.id === edge.id)
+  if (backendEdge) {
+    selectedEdgeData.value = backendEdge
+    populateEdgeForm(backendEdge)
+  }
+}
+
+function populateEdgeForm(edge: any) {
+  edgeForm.edge_type = edge.edge_type || 'normal'
+  edgeForm.condition_expression = edge.condition_expression || ''
+  const hc = edge.hitl_gate_config
+  if (hc) {
+    edgeForm.hitl_enabled = true
+    edgeForm.label = hc.label || ''
+    edgeForm.description = hc.description || ''
+    edgeForm.claim_expiry_minutes = hc.claim_expiry_minutes || 15
+    edgeForm.human_only = hc.human_only || false
+    if (hc.condition) {
+      edgeForm.condition_type = 'jmespath'
+      edgeForm.condition = hc.condition
+      edgeForm.eval_name = ''
+      edgeForm.eval_threshold = 0.8
+      edgeForm.eval_operator = 'lt'
+    } else if (hc.eval_condition) {
+      edgeForm.condition_type = 'eval'
+      edgeForm.eval_name = hc.eval_condition.eval_name || ''
+      edgeForm.eval_threshold = hc.eval_condition.threshold ?? 0.8
+      edgeForm.eval_operator = hc.eval_condition.operator || 'lt'
+      edgeForm.condition = ''
+    } else {
+      edgeForm.condition_type = 'none'
+      edgeForm.condition = ''
+      edgeForm.eval_name = ''
+      edgeForm.eval_threshold = 0.8
+      edgeForm.eval_operator = 'lt'
+    }
+  } else {
+    Object.assign(edgeForm, { ...defaultEdgeForm })
+  }
+}
+
+function buildHitlGateConfig(): any {
+  if (!edgeForm.hitl_enabled) return null
+  const config: any = {
+    label: edgeForm.label || 'Review Gate',
+    description: edgeForm.description || '',
+    reject_target: selectedEdgeData.value?.hitl_gate_config?.reject_target || null,
+    claim_expiry_minutes: edgeForm.claim_expiry_minutes || 15,
+    human_only: edgeForm.human_only || false,
+    required_team_id: selectedEdgeData.value?.hitl_gate_config?.required_team_id || null,
+  }
+  if (edgeForm.condition_type === 'jmespath' && edgeForm.condition) {
+    config.condition = edgeForm.condition
+  }
+  if (edgeForm.condition_type === 'eval' && edgeForm.eval_name) {
+    config.eval_condition = {
+      eval_name: edgeForm.eval_name,
+      threshold: edgeForm.eval_threshold,
+      operator: edgeForm.eval_operator,
+    }
+  }
+  return config
+}
+
+async function saveEdgeConfig() {
+  if (!selectedEdgeData.value) return
+  savingEdge.value = true
+  edgeSaveError.value = null
+
+  // Build updated edge list with the modified edge.
+  const updatedEdges = rawEdges.value.map((e: any) => {
+    if (e.id === selectedEdgeData.value.id) {
+      return {
+        id: e.id,
+        source_node_id: e.source_node_id,
+        target_node_id: e.target_node_id,
+        edge_type: edgeForm.edge_type,
+        condition_expression: edgeForm.condition_expression || null,
+        hitl_gate_config: buildHitlGateConfig(),
+      }
+    }
+    return {
+      id: e.id,
+      source_node_id: e.source_node_id,
+      target_node_id: e.target_node_id,
+      edge_type: e.edge_type || 'normal',
+      condition_expression: e.condition_expression || null,
+      hitl_gate_config: e.hitl_gate_config || null,
+    }
+  })
+
+  try {
+    await patch(`/api/v1/pipelines/${pipelineId}/graph`, {
+      nodes: rawNodes.value.map((n: any) => ({
+        id: n.id,
+        node_type: n.node_type || 'agent',
+        label: n.label || null,
+        agent_id: n.agent_id || null,
+        connector_binding: n.connector_binding || null,
+        output_schema_id: n.output_schema_id || null,
+        model_backend_id: n.model_backend_id || null,
+        role: n.role || null,
+        timeout_seconds: n.timeout_seconds || null,
+        position: n.position || null,
+      })),
+      edges: updatedEdges,
+    })
+    await loadGraph()
+    const updatedEdge = rawEdges.value.find((e: any) => e.id === selectedEdgeData.value.id)
+    if (updatedEdge) {
+      selectedEdgeData.value = updatedEdge
+      populateEdgeForm(updatedEdge)
+    }
+  } catch (e: unknown) {
+    edgeSaveError.value = e instanceof Error ? e.message : String(e)
+  } finally {
+    savingEdge.value = false
+  }
+}
+
 function onPaneClick() {
   selectedNodeData.value = null
+  selectedEdgeData.value = null
 }
 
 function openAgentPicker() {
