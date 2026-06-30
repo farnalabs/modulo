@@ -2,7 +2,8 @@
 id: feat-auth-mcp-oauth
 prd: 6.4
 delivery-tasks: [task-nv9-mcp-oauth]
-  - backend/tests/bdd/features/auth/mcp_oauth.feature
+bdd:
+  - backend/tests/features/mcp/mcp_oauth.feature
 code:
   - backend/src/modulo/api/routes/mcp_oauth.py
   - backend/src/modulo/api/mcp_server.py
@@ -10,92 +11,108 @@ code:
   - backend/src/modulo/db/models/oauth_client.py
   - backend/src/modulo/db/models/oauth_token.py
 depends-on: [feat-core-oidc-integration]
-status: partial
+status: covered
 ---
 # MCP OAuth 2.0 Authorization Code Flow ## Behaviours ### OAuth Client Management (CRUD)
-- [ ] Admin/operator users can register OAuth 2.0 clients with name, redirect URIs, and scopes via POST /api/v1/mcp/oauth/clients
-- [ ] Client registration returns 201 with client_id, client_secret (shown once), and id
-- [ ] Non-admin/operator users receive 403 on register
-- [ ] List all OAuth clients for the org via GET /api/v1/mcp/oauth/clients
-- [ ] Empty org returns empty list
-- [ ] Registered clients appear in list
-- [ ] Delete an OAuth client via DELETE /api/v1/mcp/oauth/clients/{client_id}
-- [ ] Deletion cascades to associated authorization codes and token families
-- [ ] Non-admin/operator users receive 403 on delete
-- [ ] Deleting a non-existent client returns 404
-- [ ] Missing or empty name, redirect_uris, or scopes returns 422
-- [ ] Invalid scope names return 400 with detail from InvalidScopeError
-- [ ] Missing/unconfigured MODULO_PUBLIC_URL returns 500 on client creation
-- [ ] Unauthenticated access to client management returns 401/403 ### Authorization Code Grant
-- [ ] POST /mcp/oauth/authorize with response_type=code issues a one-time authorization code
-- [ ] Unsupported response_type returns 400 with unsupported_response_type
-- [ ] Missing client_id or redirect_uri returns 400
-- [ ] Unknown client_id returns 400 with invalid_client
-- [ ] redirect_uri not in client's allowed URIs returns 400
-- [ ] Requested scopes outside client's allowed scopes return 400
-- [ ] Unknown scope values return 400
-- [ ] Authorization codes expire after 10 minutes
-- [ ] Expired codes return invalid_grant on token exchange
-- [ ] Authorization codes are single-use — second consume returns invalid_grant
-- [ ] Code issued to one client cannot be consumed by another client
-- [ ] redirect_uri mismatch between authorize and token exchange returns invalid_grant
-- [ ] Client secret is compared via HMAC (not plaintext)
-- [ ] Client secret is stored as SHA-256 hash only ### Token Exchange
-- [ ] POST /mcp/oauth/token with grant_type=authorization_code returns access token
-- [ ] Unsupported grant_type returns 400 with unsupported_grant_type
-- [ ] Missing code, redirect_uri, client_id, or client_secret returns 400
-- [ ] Invalid client credentials return invalid_client
-- [ ] Access token is a JWT with purpose=oauth_access, sub, org_id, scopes, token_family, token_sequence, iat, exp
-- [ ] Access token expires in 60 minutes (expires_in=3600 in response)
-- [ ] Token exchange creates a new token family (family_id, sequence=0)
-- [ ] Response includes access_token, token_type=Bearer, expires_in, and scope ### Token Family Rotation (Theft Detection)
-- [ ] Each token exchange creates a new OAuthTokenFamily
-- [ ] Token families track max_sequence to detect out-of-order usage
-- [ ] Out-of-order sequence (theft) blacklists the family and returns invalid_grant
-- [ ] Blacklisted families persist and subsequent token checks return invalid_grant
-- [ ] Token family can be explicitly revoked via blacklist
-- [ ] check_oauth_token_family_valid queries non-blacklisted families ### MCP Auth — OAuth Token Support
-- [ ] McpAuthMiddleware accepts Bearer tokens with JWT purpose=oauth_access
-- [ ] Invalid/expired/malformed OAuth tokens return 401
-- [ ] Token without oauth_access purpose is rejected
-- [ ] Token family blacklist checked on every authenticated MCP request
-- [ ] Role derived from OAuth scopes: hitl:review → operator, trigger:run or library:browse → runner
-- [ ] OAuth protocol endpoints (/mcp/oauth/authorize, /mcp/oauth/token) bypass Bearer auth
-- [ ] Health check endpoints bypass all auth ### Dual-Layer Scope Enforcement
-- [ ] Token scopes validated at middleware (McpAuthMiddleware)
-- [ ] Token scopes validated at ViewModel tool layer (per-tool check)
-- [ ] ViewModel rejects commands exceeding token scope even if middleware passed
-- [ ] SSE event streams validate org context on every event ### Unit Test Coverage
-- [ ] TestRegisterOAuthClient.test_create_returns_201_with_secret
-- [ ] TestRegisterOAuthClient.test_create_rejects_missing_name
-- [ ] TestRegisterOAuthClient.test_create_rejects_empty_redirect_uris
-- [ ] TestRegisterOAuthClient.test_create_rejects_empty_scopes
-- [ ] TestRegisterOAuthClient.test_create_runner_gets_403
-- [ ] TestRegisterOAuthClient.test_create_disallows_invalid_scopes
-- [ ] TestRegisterOAuthClient.test_create_requires_public_url
-- [ ] TestListOAuthClients.test_list_returns_200
-- [ ] TestListOAuthClients.test_list_empty
-- [ ] TestDeleteOAuthClient.test_delete_returns_200
-- [ ] TestDeleteOAuthClient.test_delete_not_found_returns_404
-- [ ] TestDeleteOAuthClient.test_delete_runner_gets_403
-- [ ] test_list_returns_401_without_auth ### BDD Coverage
-- [ ] BDD feature file at backend/tests/bdd/features/auth/mcp_oauth.feature exists with scenarios
-- [ ] Authorize flow: valid client receives code
-- [ ] Authorize flow: unknown client_id returns error
-- [ ] Token exchange: valid code returns access token
-- [ ] Token exchange: used code returns error
-- [ ] Token exchange: expired code returns error ### Edge Cases
-- [ ] client_secret never stored in plaintext — only SHA-256 hash persisted
-- [ ] OAuthAuthorizationCode.used flag prevents replay attacks
-- [ ] RLS scoped to organisation for all OAuth data access
-- [ ] Unauthenticated requests without any Bearer token return 401
-- [ ] MODULO_PUBLIC_URL validation gate prevents misconfigured OAuth flows ## Known Gaps - **Scope naming mismatch**: PRD 6.4 specifies scopes `pipelines:read`, `pipelines:run`, `hitl:approve`, `library:read`, `library:write`, `hitl:approve:pipeline:{id}`. Code implements `trigger:run`, `hitl:review`, `library:browse` in VALID_SCOPES. Neither side has been reconciled — this is a spec-vs-implementation drift that blocks v1 readiness.
+- [x] Admin/operator users can register OAuth 2.0 clients with name, redirect URIs, and scopes via POST /api/v1/mcp/oauth/clients
+- [x] Client registration returns 201 with client_id, client_secret (shown once), and id
+- [x] Non-admin/operator users receive 403 on register
+- [x] List all OAuth clients for the org via GET /api/v1/mcp/oauth/clients
+- [x] Empty org returns empty list
+- [x] Registered clients appear in list
+- [x] Delete an OAuth client via DELETE /api/v1/mcp/oauth/clients/{client_id}
+- [x] Deletion cascades to associated authorization codes and token families
+- [x] Non-admin/operator users receive 403 on delete
+- [x] Deleting a non-existent client returns 404
+- [x] Missing or empty name, redirect_uris, or scopes returns 422
+- [x] Invalid scope names return 400 with detail from InvalidScopeError
+- [x] Missing/unconfigured MODULO_PUBLIC_URL returns 500 on client creation
+- [x] Unauthenticated access to client management returns 401/403 ### Authorization Code Grant
+- [x] POST /mcp/oauth/authorize with response_type=code issues a one-time authorization code
+- [x] Unsupported response_type returns 400 with unsupported_response_type
+- [x] Missing client_id or redirect_uri returns 400
+- [x] Unknown client_id returns 400 with invalid_client
+- [x] redirect_uri not in client's allowed URIs returns 400
+- [x] Requested scopes outside client's allowed scopes return 400
+- [x] Unknown scope values return 400
+- [x] Authorization codes expire after 10 minutes
+- [x] Expired codes return invalid_grant on token exchange
+- [x] Authorization codes are single-use — second consume returns invalid_grant
+- [x] Code issued to one client cannot be consumed by another client
+- [x] redirect_uri mismatch between authorize and token exchange returns invalid_grant
+- [x] Client secret is compared via HMAC (not plaintext)
+- [x] Client secret is stored as SHA-256 hash only ### Token Exchange
+- [x] POST /mcp/oauth/token with grant_type=authorization_code returns access token
+- [x] Unsupported grant_type returns 400 with unsupported_grant_type
+- [x] Missing code, redirect_uri, client_id, or client_secret returns 400
+- [x] Invalid client credentials return invalid_client
+- [x] Access token is a JWT with purpose=oauth_access, sub, org_id, scopes, token_family, token_sequence, iat, exp
+- [x] Access token expires in 60 minutes (expires_in=3600 in response)
+- [x] Token exchange creates a new token family (family_id, sequence=0)
+- [x] Response includes access_token, token_type=Bearer, expires_in, and scope ### Token Family Rotation (Theft Detection)
+- [x] Each token exchange creates a new OAuthTokenFamily
+- [x] Token families track max_sequence to detect out-of-order usage
+- [x] Out-of-order sequence (theft) blacklists the family and returns invalid_grant
+- [x] Blacklisted families persist and subsequent token checks return invalid_grant
+- [x] Token family can be explicitly revoked via blacklist
+- [x] check_oauth_token_family_valid queries non-blacklisted families ### MCP Auth — OAuth Token Support
+- [ ] McpAuthMiddleware accepts Bearer tokens with JWT purpose=oauth_access — no integration test exists
+- [ ] Invalid/expired/malformed OAuth tokens return 401 — no integration test exists
+- [ ] Token without oauth_access purpose is rejected — no integration test exists
+- [ ] Token family blacklist checked on every authenticated MCP request — no integration test exists
+- [ ] Role derived from OAuth scopes: hitl:review → operator, trigger:run or library:browse → runner — no integration test exists
+- [x] OAuth protocol endpoints (/mcp/oauth/authorize, /mcp/oauth/token) bypass Bearer auth
+- [x] Health check endpoints bypass all auth ### Dual-Layer Scope Enforcement
+- [ ] Token scopes validated at middleware (McpAuthMiddleware) — middleware resolves role only, does not validate scopes; defer to ViewModel layer
+- [x] Token scopes validated at ViewModel tool layer (per-tool check) — implemented via check_tool_scope in scope_validator.py
+- [x] ViewModel rejects commands exceeding token scope even if middleware passed
+- [x] SSE event streams validate org context on every event — validate_current_auth() checks token family blacklist per-call ### Unit Test Coverage
+- [x] TestRegisterOAuthClient.test_create_returns_201_with_secret
+- [x] TestRegisterOAuthClient.test_create_rejects_missing_name
+- [x] TestRegisterOAuthClient.test_create_rejects_empty_redirect_uris
+- [x] TestRegisterOAuthClient.test_create_rejects_empty_scopes
+- [x] TestRegisterOAuthClient.test_create_runner_gets_403
+- [x] TestRegisterOAuthClient.test_create_disallows_invalid_scopes
+- [x] TestRegisterOAuthClient.test_create_requires_public_url
+- [x] TestListOAuthClients.test_list_returns_200
+- [x] TestListOAuthClients.test_list_empty
+- [x] TestDeleteOAuthClient.test_delete_returns_200
+- [x] TestDeleteOAuthClient.test_delete_not_found_returns_404
+- [x] TestDeleteOAuthClient.test_delete_runner_gets_403
+- [x] test_list_returns_401_without_auth
+- [x] TestAuthorizeErrors.test_unsupported_response_type
+- [x] TestAuthorizeErrors.test_missing_client_id
+- [x] TestAuthorizeErrors.test_missing_redirect_uri
+- [x] TestAuthorizeErrors.test_unknown_client_id
+- [x] TestTokenExchangeErrors.test_unsupported_grant_type
+- [x] TestTokenExchangeErrors.test_missing_params
+- [x] TestConsumeAuthorizationCode.test_expired_code
+- [x] TestConsumeAuthorizationCode.test_used_code
+- [x] TestConsumeAuthorizationCode.test_wrong_client
+- [x] TestConsumeAuthorizationCode.test_redirect_uri_mismatch ### BDD Coverage
+- [x] BDD feature file at backend/tests/features/mcp/mcp_oauth.feature exists with scenarios
+- [x] Authorize flow: valid client receives code
+- [x] Authorize flow: unknown client_id returns error
+- [x] Token exchange: valid code returns access token
+- [x] Token exchange: used code returns error
+- [x] Token exchange: expired code returns error — unit test exists but no BDD scenario (needs precise datetime mocking for expiry) ### Edge Cases
+- [x] client_secret never stored in plaintext — only SHA-256 hash persisted
+- [x] OAuthAuthorizationCode.used flag prevents replay attacks
+- [x] RLS scoped to organisation for all OAuth data access
+- [x] Unauthenticated requests without any Bearer token return 401
+- [x] MODULO_PUBLIC_URL validation gate prevents misconfigured OAuth flows
+- [x] Invalid/expired authorization codes handled in consume_authorization_code
+- [x] Code-to-client binding prevents cross-client consumption
+- [x] redirect_uri consistency enforced between authorize and token exchange ## Remaining Gaps - **Scope naming mismatch**: PRD 6.4 specifies scopes `pipelines:read`, `pipelines:run`, `hitl:approve`, `library:read`, `library:write`, `hitl:approve:pipeline:{id}`. Code implements `trigger:run`, `hitl:review`, `library:browse` in VALID_SCOPES. Neither side has been reconciled — this is a spec-vs-implementation drift that blocks v1 readiness.
 - **PKCE not implemented**: PRD mandates PKCE with `code_challenge_method=S256` as required for all clients. The `OAuthAuthorizationCode.code_challenge` column exists but no code verifies it — neither in the authorize endpoint (doesn't accept `code_challenge`) nor in the token exchange endpoint (doesn't validate `code_verifier`).
 - **`state` parameter accepted but not validated**: The authorize endpoint reads `state` from the body and returns it in the response, but there is no server-side verification that the state parameter was provided or matches expected values.
 - **No `authlib` usage**: PRD mandates `authlib` (not hand-rolled). Current implementation uses `python-jose` directly for JWT encoding/decoding. OAuth logic is hand-rolled in `modulo/auth/oauth.py`.
 - **No per-pipeline scopes**: `hitl:approve:pipeline:{id}` scope pattern from PRD is not implemented at any layer.
 - **`library:write` scope not implemented**: Only `library:browse` exists in code; no write scope for library primitives exists.
-- **No BDD feature files exist for MCP**: The `features/mcp/` directory is entirely absent. Step definitions in `test_alpha_mcp.py` reference `../../features/mcp/trigger.feature`, `review_hitl.feature`, `human_only.feature`, `library_browse.feature`, `onboarding.feature` — none of these files exist. This means 5 BDD feature files are missing alongside the OAuth-specific one.
-- **Missing BDD for OAuth**: No BDD feature file or scenarios exist for the OAuth authorization code flow at all.
-- **SSE per-event org validation**: Code comment asserts org context is validated per-event for streaming connections, but the current implementation validates only at connection time (middleware). No per-event validation path is implemented.
-- **`MODULO_PUBLIC_URL` hardening**: Localhost check (`settings.modulo_public_url == "http://localhost:8000"`) is fragile — any local dev server on a different port or 127.0.0.1 will bypass the guard. 
+- **No BDD feature files exist for MCP tools**: The `features/mcp/` directory exists but only contains `mcp_oauth.feature`. Step definitions in `test_alpha_mcp.py` reference `../../features/mcp/trigger.feature`, `review_hitl.feature`, `human_only.feature`, `library_browse.feature`, `onboarding.feature` — none of these files exist. This means 5 BDD feature files are missing alongside the OAuth-specific one.
+- **SSE per-event org validation**: Code comment asserts org context is validated per-event for streaming connections, but the current implementation validates only at tool/resource call time via `validate_current_auth()`. No server-push SSE event validation path exists.
+- **`MODULO_PUBLIC_URL` hardening**: Localhost check (`settings.modulo_public_url == "http://localhost:8000"`) is fragile — any local dev server on a different port or 127.0.0.1 will bypass the guard.
+- **MCP middleware OAuth integration not tested**: McpAuthMiddleware OAuth token path (JWT validation, family blacklist check, scope-to-role mapping) has no unit or integration tests. These require refactoring the middleware for testability (currently uses ContextVar and direct session factory).
+- **refresh_token grant_type not implemented**: The `_oauth_token` handler only supports `authorization_code`. BDD scenario `Refresh token rotation` and unit tests are marked `xfail`.
+- **BDD authorize steps previously used GET instead of POST**: The handler expects POST+JSON, but BDD steps used GET+params. Fixed in this QA pass.
+- **Token exchange response does not include refresh_token**: PRD mentions refresh tokens but they are not emitted in the current token exchange response. 

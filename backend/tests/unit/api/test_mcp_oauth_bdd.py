@@ -370,6 +370,281 @@ class TestRedirectUriValidation:
 
 
 # ---------------------------------------------------------------------------
+# Authorize endpoint — edge cases
+# ---------------------------------------------------------------------------
+
+
+class TestAuthorizeErrors:
+    """Test error handling in _oauth_authorize handler."""
+
+    @staticmethod
+    def _make_request(body: dict) -> object:
+        body_bytes = json_module.dumps(body).encode()
+        received = [False]
+
+        async def receive() -> dict:
+            if received[0]:
+                return {"type": "http.disconnect"}
+            received[0] = True
+            return {"type": "http.request", "body": body_bytes, "more_body": False}
+
+        from starlette.requests import Request
+
+        scope = {
+            "type": "http",
+            "method": "POST",
+            "path": "/mcp/oauth/authorize",
+            "headers": [(b"content-type", b"application/json")],
+            "query_string": b"",
+            "client": ("127.0.0.1", 50000),
+            "server": ("testserver", 80),
+            "scheme": "http",
+        }
+        return Request(scope, receive=receive)
+
+    def test_unsupported_response_type(self) -> None:
+        with (
+            patch("modulo.api.mcp_server._get_session_factory") as mock_sf,
+            patch("modulo.api.mcp_server.get_settings", return_value=_make_settings()),
+        ):
+            mock_sf.return_value = _make_mock_session_factory()
+            from modulo.api.mcp_server import _oauth_authorize
+
+            request = self._make_request({
+                "response_type": "token",
+                "client_id": "oauth_client_1",
+                "redirect_uri": "https://app.example.com/callback",
+            })
+            response = asyncio.run(_oauth_authorize(request))
+
+        assert response.status_code == 400
+        data = json_module.loads(response.body)
+        assert data["error"] == "unsupported_response_type"
+
+    def test_missing_client_id(self) -> None:
+        with (
+            patch("modulo.api.mcp_server._get_session_factory") as mock_sf,
+            patch("modulo.api.mcp_server.get_settings", return_value=_make_settings()),
+        ):
+            mock_sf.return_value = _make_mock_session_factory()
+            from modulo.api.mcp_server import _oauth_authorize
+
+            request = self._make_request({
+                "response_type": "code",
+                "client_id": "",
+                "redirect_uri": "",
+            })
+            response = asyncio.run(_oauth_authorize(request))
+
+        assert response.status_code == 400
+        data = json_module.loads(response.body)
+        assert "client_id" in data.get("detail", "")
+
+    def test_missing_redirect_uri(self) -> None:
+        with (
+            patch("modulo.api.mcp_server._get_session_factory") as mock_sf,
+            patch("modulo.api.mcp_server.get_settings", return_value=_make_settings()),
+        ):
+            mock_sf.return_value = _make_mock_session_factory()
+            from modulo.api.mcp_server import _oauth_authorize
+
+            request = self._make_request({
+                "response_type": "code",
+                "client_id": "oauth_client_1",
+                "redirect_uri": "",
+            })
+            response = asyncio.run(_oauth_authorize(request))
+
+        assert response.status_code == 400
+        data = json_module.loads(response.body)
+        assert "redirect_uri" in data.get("detail", "")
+
+    def test_unknown_client_id(self) -> None:
+        with (
+            patch("modulo.api.mcp_server._get_session_factory") as mock_sf,
+            patch("modulo.api.mcp_server.get_settings", return_value=_make_settings()),
+            patch("modulo.auth.oauth.get_oauth_client_by_client_id", return_value=None),
+        ):
+            mock_sf.return_value = _make_mock_session_factory()
+            from modulo.api.mcp_server import _oauth_authorize
+
+            request = self._make_request({
+                "response_type": "code",
+                "client_id": "nonexistent_client",
+                "redirect_uri": "https://app.example.com/callback",
+            })
+            response = asyncio.run(_oauth_authorize(request))
+
+        assert response.status_code == 400
+        data = json_module.loads(response.body)
+        assert data["error"] == "invalid_client"
+
+
+# ---------------------------------------------------------------------------
+# Token exchange — edge cases
+# ---------------------------------------------------------------------------
+
+
+class TestTokenExchangeErrors:
+    ENDPOINT = "/mcp/oauth/token"
+
+    def test_unsupported_grant_type(self, admin_client: TestClient) -> None:
+        with (
+            patch.object(RateLimiterRegistry, "check", AsyncMock(return_value=True)),
+            patch("modulo.api.mcp_server._get_session_factory") as mock_sf,
+            patch("modulo.settings.get_settings", return_value=_make_settings()),
+        ):
+            mock_sf.return_value = _make_mock_session_factory()
+            resp = admin_client.post(
+                self.ENDPOINT,
+                json={
+                    "grant_type": "client_credentials",
+                    "client_id": "oauth_client_1",
+                    "client_secret": "secret",
+                },
+            )
+
+        assert resp.status_code == 400
+        data = resp.json()
+        assert data["error"] == "unsupported_grant_type"
+
+    def test_missing_params(self, admin_client: TestClient) -> None:
+        with (
+            patch.object(RateLimiterRegistry, "check", AsyncMock(return_value=True)),
+            patch("modulo.api.mcp_server._get_session_factory") as mock_sf,
+            patch("modulo.settings.get_settings", return_value=_make_settings()),
+        ):
+            mock_sf.return_value = _make_mock_session_factory()
+            resp = admin_client.post(
+                self.ENDPOINT,
+                json={
+                    "grant_type": "authorization_code",
+                    "code": "",
+                    "redirect_uri": "",
+                    "client_id": "",
+                    "client_secret": "",
+                },
+            )
+
+        assert resp.status_code == 400
+        data = resp.json()
+        assert "Missing required parameters" in data.get("detail", "")
+
+
+# ---------------------------------------------------------------------------
+# consume_authorization_code unit tests
+# ---------------------------------------------------------------------------
+
+
+class TestConsumeAuthorizationCode:
+    """Test the consume_authorization_code function directly."""
+
+    @pytest.mark.asyncio
+    async def test_expired_code(self) -> None:
+        from datetime import UTC, datetime, timedelta
+
+        from modulo.auth.oauth import consume_authorization_code
+
+        mock_session = _make_mock_session()
+        expired_code = _make_mock_auth_code(
+            client_id="oauth_client_1",
+            used=False,
+        )
+        expired_code.expires_at = datetime.now(UTC) - timedelta(minutes=1)
+
+        execute_result = MagicMock()
+        execute_result.scalar_one_or_none = MagicMock(return_value=expired_code)
+        mock_session.execute = AsyncMock(return_value=execute_result)
+
+        with patch("modulo.auth.oauth.validate_client_secret"):
+            with pytest.raises(Exception) as exc:
+                await consume_authorization_code(
+                    mock_session,
+                    code="expired_code",
+                    client_id="oauth_client_1",
+                    redirect_uri="https://app.example.com/callback",
+                    client_secret="correct_secret",
+                )
+            assert "invalid_grant" in str(exc.value).lower() or "expired" in str(exc.value).lower()
+
+    @pytest.mark.asyncio
+    async def test_used_code(self) -> None:
+        from modulo.auth.oauth import consume_authorization_code
+
+        mock_session = _make_mock_session()
+        used_code = _make_mock_auth_code(
+            client_id="oauth_client_1",
+            used=True,
+        )
+
+        execute_result = MagicMock()
+        execute_result.scalar_one_or_none = MagicMock(return_value=used_code)
+        mock_session.execute = AsyncMock(return_value=execute_result)
+
+        with patch("modulo.auth.oauth.validate_client_secret"):
+            with pytest.raises(Exception) as exc:
+                await consume_authorization_code(
+                    mock_session,
+                    code="used_code",
+                    client_id="oauth_client_1",
+                    redirect_uri="https://app.example.com/callback",
+                    client_secret="correct_secret",
+                )
+            assert "invalid_grant" in str(exc.value).lower() or "used" in str(exc.value).lower()
+
+    @pytest.mark.asyncio
+    async def test_wrong_client(self) -> None:
+        from modulo.auth.oauth import consume_authorization_code
+
+        mock_session = _make_mock_session()
+        wrong_client_code = _make_mock_auth_code(
+            client_id="other_client",
+            used=False,
+        )
+
+        execute_result = MagicMock()
+        execute_result.scalar_one_or_none = MagicMock(return_value=wrong_client_code)
+        mock_session.execute = AsyncMock(return_value=execute_result)
+
+        with patch("modulo.auth.oauth.validate_client_secret"):
+            with pytest.raises(Exception) as exc:
+                await consume_authorization_code(
+                    mock_session,
+                    code="code_for_other",
+                    client_id="oauth_client_1",
+                    redirect_uri="https://app.example.com/callback",
+                    client_secret="correct_secret",
+                )
+            assert "invalid_grant" in str(exc.value).lower()
+
+    @pytest.mark.asyncio
+    async def test_redirect_uri_mismatch(self) -> None:
+        from modulo.auth.oauth import consume_authorization_code
+
+        mock_session = _make_mock_session()
+        code = _make_mock_auth_code(
+            client_id="oauth_client_1",
+            redirect_uri="https://app.example.com/callback",
+            used=False,
+        )
+
+        execute_result = MagicMock()
+        execute_result.scalar_one_or_none = MagicMock(return_value=code)
+        mock_session.execute = AsyncMock(return_value=execute_result)
+
+        with patch("modulo.auth.oauth.validate_client_secret"):
+            with pytest.raises(Exception) as exc:
+                await consume_authorization_code(
+                    mock_session,
+                    code="mismatch_code",
+                    client_id="oauth_client_1",
+                    redirect_uri="https://evil.com/phish",
+                    client_secret="correct_secret",
+                )
+            assert "invalid_grant" in str(exc.value).lower() or "mismatch" in str(exc.value).lower()
+
+
+# ---------------------------------------------------------------------------
 # Scenario: Refresh token rotation
 # ---------------------------------------------------------------------------
 
