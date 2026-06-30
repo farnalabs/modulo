@@ -27,6 +27,10 @@ _log = logging.getLogger(__name__)
 
 SENSITIVE_VALUE_MASK = "\u2022\u2022\u2022\u2022\u2022\u2022"
 
+_SENSITIVE_ENV_KEYS: frozenset[str] = frozenset({
+    "MODULO_USERS",
+})
+
 _SENSITIVE_KEY_PATTERNS = frozenset({
     "token", "secret", "api_key", "password", "passwd", "key", "credential",
 })
@@ -35,6 +39,10 @@ _SENSITIVE_KEY_PATTERNS = frozenset({
 def is_sensitive_key(key: str) -> bool:
     key_lower = key.lower().replace("-", "_").replace(" ", "_")
     return any(pattern in key_lower for pattern in _SENSITIVE_KEY_PATTERNS)
+
+
+def is_sensitive_env_key(key: str) -> bool:
+    return key in _SENSITIVE_ENV_KEYS or is_sensitive_key(key)
 
 
 def mask_sensitive_value(value: str) -> str:
