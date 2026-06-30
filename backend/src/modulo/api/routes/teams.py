@@ -48,7 +48,7 @@ class TeamResponse(BaseModel):
     id: str
     name: str
     description: str | None
-    created_by: str
+    account_id: str
     created_at: str
 
 
@@ -182,11 +182,20 @@ async def update_team_endpoint(
 ) -> TeamResponse:
     _require_admin(current_user)
 
-    updates = {k: v for k, v in body.model_dump().items() if v is not None}
+    updates = {k: v for k, v in body.model_dump(exclude_unset=True).items() if v is not None}
 
     async with session.begin():
         await set_rls_org(session, current_user.organisation_id)
         await set_rls_user_context(session, current_user.account_id, current_user.org_role)
+
+        if "name" in updates:
+            existing = await get_team_by_name(session, current_user.organisation_id, updates["name"])
+            if existing is not None and existing.id != team_id:
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail="A team with this name already exists in your organisation",
+                )
+
         team = await update_team(session, team_id, updates)
 
     if team is None:

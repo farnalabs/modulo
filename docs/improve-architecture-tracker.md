@@ -1,6 +1,6 @@
 # improve-architecture Tracker
 
-Current index: 5
+Current index: 8
 Last updated: 2026-06-30
 
 ## History
@@ -9,3 +9,4 @@ Last updated: 2026-06-30
 - 2026-06-30: feat-core-pipeline-execution → complete, cross-cutting QA: fixed broken frontmatter (missing bdd:), marked 5 behaviours [x] and 1 [ ], added 13 new behaviours from error path audit, created unit test file (discovered missing), added 4 BDD scenarios (empty pipeline, node returns None, runaway protection, output rejection), added 4 new known gaps (retry not implemented, DB connection lost, checkpoint migration, raised OTel verify)
 - 2026-06-30: feat-evals-system → complete, cross-cutting QA: fixed broken YAML (missing bdd:), marked 24 [ ] → [x], added 20 new behaviour checkboxes from error path audit, created test_eval_engine.py (53 unit tests), fixed 3 code bugs (regex invalid pattern, LLM judge non-numeric score, regex flags support), added 3 new known gaps (JMESPath syntax errors, $ref resolution, schema depth limit), created website stub
 - 2026-06-30: feat-auth-mcp-oauth → complete, cross-cutting QA: fixed broken frontmatter (missing bdd:, path mismatch), fixed BDD steps using GET→POST for authorize endpoint, added 10 new unit tests (authorize/token/consume edge cases), added 2 BDD scenarios (unknown client_id, used code), marked 60 behaviours [x], consolidated remaining gaps from 11→13 with updated descriptions
+- 2026-06-30: feat-teams-team-crud → complete, cross-cutting QA: fixed 3 code bugs (TeamResponse/AdminTeamItem/AdminCreateTeamResponse field mismatch created_by→account_id, update_team duplicate name check, test fixture missing get_plan_context override), added bdd: frontmatter, marked 80+ behaviours [x], added BDD feature file (team_crud.feature, 12 scenarios) + step definitions, added 4 new unit tests (duplicate rename, same-name-allowed, response account_id), consolidated gaps from 8→10 with updated descriptions
