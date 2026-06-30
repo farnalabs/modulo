@@ -22,7 +22,18 @@ jobs:
       - name: Deploy to staging
         working-directory: Development/Product
         shell: powershell
-        run: fly deploy --app staging-modulo --config fly.staging.toml --strategy immediate
+        run: |
+          $gitSha = git rev-parse HEAD
+          $gitBranch = git rev-parse --abbrev-ref HEAD
+          $gitCommitTimestamp = git log -1 --format=%cI
+          $gitCommitMessage = git log -1 --format=%s
+          $buildTimestamp = (Get-Date -Format "yyyy-MM-ddTHH:mm:ssZ")
+          fly deploy --app staging-modulo --config fly.staging.toml --strategy immediate `
+            --build-arg "GIT_SHA=$gitSha" `
+            --build-arg "GIT_BRANCH=$gitBranch" `
+            --build-arg "GIT_COMMIT_TIMESTAMP=$gitCommitTimestamp" `
+            --build-arg "GIT_COMMIT_MESSAGE=$gitCommitMessage" `
+            --build-arg "BUILD_TIMESTAMP=$buildTimestamp"
 
       - name: Wait for healthz
         shell: powershell

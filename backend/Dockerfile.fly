@@ -1,3 +1,12 @@
+# Global build-arg declarations — required for --build-arg from fly deploy to
+# be accepted without warnings.  Re-declared inside each stage that needs them.
+ARG GIT_SHA
+ARG GIT_BRANCH
+ARG GIT_COMMIT_TIMESTAMP
+ARG GIT_COMMIT_MESSAGE
+ARG BUILD_TIMESTAMP
+ARG CI_JOB_URL
+
 # =============================================================================
 # Stage 1: Build frontend SPA
 # =============================================================================
@@ -14,8 +23,11 @@ COPY frontend/ ./
 RUN VITE_AUTO_LOGIN_USERNAME=${VITE_AUTO_LOGIN_USERNAME} VITE_AUTO_LOGIN_PASSWORD=${VITE_AUTO_LOGIN_PASSWORD} npm run build
 
 # =============================================================================
-# Build-time metadata injected by deploy.ps1
+# Stage 2: Backend + nginx for static serving
 # =============================================================================
+FROM python:3.12-slim
+
+# Re-declare inside stage so the value is available to ENV instructions.
 ARG GIT_SHA
 ARG GIT_BRANCH
 ARG GIT_COMMIT_TIMESTAMP
@@ -23,18 +35,12 @@ ARG GIT_COMMIT_MESSAGE
 ARG BUILD_TIMESTAMP
 ARG CI_JOB_URL
 
-# Persist build args as runtime env vars so /api/v1/deployment can serve them.
 ENV GIT_SHA=$GIT_SHA
 ENV GIT_BRANCH=$GIT_BRANCH
 ENV GIT_COMMIT_TIMESTAMP=$GIT_COMMIT_TIMESTAMP
 ENV GIT_COMMIT_MESSAGE=$GIT_COMMIT_MESSAGE
 ENV BUILD_TIMESTAMP=$BUILD_TIMESTAMP
 ENV CI_JOB_URL=$CI_JOB_URL
-
-# =============================================================================
-# Stage 2: Backend + nginx for static serving
-# =============================================================================
-FROM python:3.12-slim
 
 # Install nginx + uv
 RUN apt-get update && apt-get install -y --no-install-recommends nginx && \
