@@ -59,15 +59,15 @@
       </div>
     </div>
 
-    <div v-if="wouldActivate.length > 0" class="card p-4 border-warning/30">
+    <div v-if="filteredWouldActivate.length > 0" class="card p-4 border-warning/30">
       <h2 class="mb-2 text-sm font-semibold text-warning">Would activate with a license key</h2>
       <p class="mb-3 text-sm text-warning/80">
-        The following {{ wouldActivate.length }} feature{{ wouldActivate.length === 1 ? '' : 's' }} would become available
+        The following {{ filteredWouldActivate.length }} feature{{ filteredWouldActivate.length === 1 ? '' : 's' }} would become available
         if an enterprise license key were configured.
       </p>
       <div class="flex flex-wrap gap-2">
         <span
-          v-for="flag in wouldActivate"
+              v-for="flag in filteredWouldActivate"
           :key="flag.name"
           class="badge badge-status-warning"
         >
@@ -87,85 +87,112 @@
       <LoadingSpinner v-if="loading" />
       <ErrorAlert v-else-if="error" :message="error" :on-retry="loadFlags" />
       <template v-else>
-        <TooltipProvider>
-          <div
-            v-for="section in groupedFlags"
-            :key="section.tier"
-            class="card mb-6 overflow-hidden"
-          >
-            <div class="border-b bg-muted/30 px-4 py-2">
-              <h3 class="text-sm font-semibold uppercase tracking-wider text-muted-foreground">
-                {{ section.label }}
-                <span class="ml-2 text-xs font-normal opacity-60">({{ section.flags.length }})</span>
-              </h3>
-            </div>
-            <table class="w-full" v-if="section.flags.length > 0">
-              <thead>
-                <tr class="border-b bg-muted/10 text-left text-xs font-medium uppercase text-muted-foreground">
-                  <th class="px-4 py-3 w-12"></th>
-                  <th class="px-4 py-3">Flag</th>
-                  <th class="px-4 py-3">Status</th>
-                  <th class="px-4 py-3">Description</th>
-                </tr>
-              </thead>
-              <tbody class="divide-y divide-border">
-                <tr
-                  v-for="flag in section.flags"
-                  :key="flag.name"
-                  class="transition-colors hover:bg-muted/20"
-                >
-                  <td class="px-4 py-3">
-                    <span
-                      class="inline-flex h-5 w-9 shrink-0 cursor-default items-center rounded-full transition-colors"
-                      :class="flag.currently_active ? 'bg-primary' : 'bg-input'"
-                    >
+        <div v-if="!hasResults && searchQuery" class="flex flex-col items-center justify-center py-16">
+          <p class="text-lg font-medium text-muted-foreground">No feature flags match your search.</p>
+        </div>
+        <template v-else>
+          <TooltipProvider>
+            <div
+              v-for="section in paginatedGroups"
+              :key="section.tier"
+              class="card mb-6 overflow-hidden"
+            >
+              <div class="border-b bg-muted/30 px-4 py-2">
+                <h3 class="text-sm font-semibold uppercase tracking-wider text-muted-foreground">
+                  {{ section.label }}
+                  <span class="ml-2 text-xs font-normal opacity-60">({{ section.flags.length }})</span>
+                </h3>
+              </div>
+              <table class="w-full" v-if="section.flags.length > 0">
+                <thead>
+                  <tr class="border-b bg-muted/10 text-left text-xs font-medium uppercase text-muted-foreground">
+                    <th class="px-4 py-3 w-12"></th>
+                    <th class="px-4 py-3">Flag</th>
+                    <th class="px-4 py-3">Status</th>
+                    <th class="px-4 py-3">Description</th>
+                  </tr>
+                </thead>
+                <tbody class="divide-y divide-border">
+                  <tr
+                    v-for="flag in section.flags"
+                    :key="flag.name"
+                    class="transition-colors hover:bg-muted/20"
+                  >
+                    <td class="px-4 py-3">
                       <span
-                        class="inline-block h-4 w-4 rounded-full bg-background shadow-sm transition-transform"
-                        :class="flag.currently_active ? 'translate-x-[18px]' : 'translate-x-0.5'"
-                      />
-                    </span>
-                  </td>
-                  <td class="px-4 py-3">
-                    <Tooltip :delay-duration="300">
-                      <TooltipTrigger as-child>
-                        <span class="font-mono text-sm font-medium cursor-help underline decoration-dotted decoration-muted-foreground/40 underline-offset-2">
-                          {{ flag.name }}
-                        </span>
-                      </TooltipTrigger>
-                      <TooltipContent side="top" class="max-w-xs">
-                        <p>{{ flag.description }}</p>
-                        <p v-if="flag.depends_on" class="mt-1 text-xs opacity-70">
-                          Depends on: {{ flag.depends_on.join(', ') }}
-                        </p>
-                      </TooltipContent>
-                    </Tooltip>
-                  </td>
-                  <td class="px-4 py-3">
-                    <span :class="flag.currently_active ? 'badge badge-status-success' : 'badge badge-status-muted'">
-                      {{ flag.currently_active ? 'Active' : 'Inactive' }}
-                    </span>
-                  </td>
-                  <td class="px-4 py-3 text-sm text-muted-foreground">{{ flag.description }}</td>
-                </tr>
-              </tbody>
-            </table>
-            <div v-else class="px-4 py-6 text-center text-sm text-muted-foreground">
-              No flags match your search in this tier.
+                        class="inline-flex h-5 w-9 shrink-0 cursor-pointer items-center rounded-full transition-colors" @click.stop="toggleFlag(flag)"
+                        :class="flag.currently_active ? 'bg-primary' : 'bg-input'"
+                      >
+                        <span
+                          class="inline-block h-4 w-4 rounded-full bg-background shadow-sm transition-transform"
+                          :class="flag.currently_active ? 'translate-x-[18px]' : 'translate-x-0.5'"
+                        />
+                      </span>
+                    </td>
+                    <td class="px-4 py-3">
+                      <Tooltip :delay-duration="300">
+                        <TooltipTrigger as-child>
+                          <span class="font-mono text-sm font-medium cursor-help underline decoration-dotted decoration-muted-foreground/40 underline-offset-2">
+                            {{ flag.name }}
+                          </span>
+                        </TooltipTrigger>
+                        <TooltipContent side="top" class="max-w-xs">
+                          <p>{{ flag.description }}</p>
+                          <p v-if="flag.depends_on" class="mt-1 text-xs opacity-70">
+                            Depends on: {{ flag.depends_on.join(', ') }}
+                          </p>
+                        </TooltipContent>
+                      </Tooltip>
+                    </td>
+                    <td class="px-4 py-3">
+                      <span :class="flag.currently_active ? 'badge badge-status-success' : 'badge badge-status-muted'">
+                        {{ flag.currently_active ? 'Active' : 'Inactive' }}
+                      </span>
+                    </td>
+                    <td class="px-4 py-3 text-sm text-muted-foreground">{{ flag.description }}</td>
+                  </tr>
+                </tbody>
+              </table>
+              <div v-else class="px-4 py-6 text-center text-sm text-muted-foreground">
+                No flags in this tier.
+              </div>
+            </div>
+          </TooltipProvider>
+          <div v-if="totalPages > 1" class="flex items-center justify-center gap-4 py-4">
+            <span class="text-sm text-muted-foreground">Page {{ currentPage }} of {{ totalPages }}</span>
+            <div class="flex gap-2">
+              <Button
+                variant="outline"
+                size="sm"
+                :disabled="currentPage <= 1"
+                @click="currentPage = Math.max(1, currentPage - 1)"
+              >
+                Previous
+              </Button>
+              <Button
+                variant="outline"
+                size="sm"
+                :disabled="currentPage >= totalPages"
+                @click="currentPage = Math.min(totalPages, currentPage + 1)"
+              >
+                Next
+              </Button>
             </div>
           </div>
-        </TooltipProvider>
+        </template>
       </template>
     </div>
   </div>
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, onMounted, watch } from 'vue'
 import { api } from '../lib/api/client'
 import { usePlanStore } from '../stores/planStore'
 import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
 import Input from '../components/ui/input/Input.vue'
+import { Button } from '../components/ui/button'
 import {
   TooltipProvider,
   Tooltip,
@@ -213,25 +240,36 @@ const wouldActivate = ref<FlagItem[]>([])
 const loading = ref(true)
 const error = ref<string | null>(null)
 const searchQuery = ref('')
+const currentPage = ref(1)
+const pageSize = 10
 
 const tierSections: Record<string, string> = {
   free: 'Free',
   enterprise: 'Enterprise',
+  v1: 'V1',
+  v2: 'V2',
 }
 
-const groupedFlags = computed(() => {
+const filteredFlags = computed(() => {
   const query = searchQuery.value.toLowerCase().trim()
-  const filtered = query
+  return query
     ? flags.value.filter(f =>
         f.name.toLowerCase().includes(query) ||
         f.description.toLowerCase().includes(query)
       )
     : flags.value
+})
+
+const totalPages = computed(() => Math.max(1, Math.ceil(filteredFlags.value.length / pageSize)))
+
+const paginatedGroups = computed(() => {
+  const start = (currentPage.value - 1) * pageSize
+  const page = filteredFlags.value.slice(start, start + pageSize)
 
   const groups: FlagGroup[] = []
   const added = new Set<string>()
 
-  for (const flag of filtered) {
+  for (const flag of page) {
     const tier = flag.tier
     if (!added.has(tier)) {
       added.add(tier)
@@ -253,15 +291,20 @@ const groupedFlags = computed(() => {
   return groups
 })
 
-function tierBadgeClass(tier: string): string {
-  switch (tier) {
-    case 'free': return 'badge badge-status-success'
-    case 'enterprise': return 'badge badge-context-purple'
-    case 'v1': return 'badge badge-context-teal'
-    case 'v2': return 'badge badge-context-blue'
-    default: return 'badge badge-context-slate'
-  }
-}
+const filteredWouldActivate = computed(() => {
+  const query = searchQuery.value.toLowerCase().trim()
+  if (!query) return wouldActivate.value
+  return wouldActivate.value.filter(f =>
+    f.name.toLowerCase().includes(query) ||
+    f.description.toLowerCase().includes(query)
+  )
+})
+
+const hasResults = computed(() => filteredFlags.value.length > 0)
+
+watch(searchQuery, () => {
+  currentPage.value = 1
+})
 
 function formatDate(dateStr: string): string {
   const d = new Date(dateStr)
@@ -286,6 +329,19 @@ async function loadFlags() {
   } finally {
     loading.value = false
   }
+}
+
+async function toggleFlag(flag: FlagItem) {
+  const enabled = !flag.currently_active
+  const { error: err } = await (api as any).PUT('/api/v1/admin/feature-flags/{flag_name}', {
+    params: { path: { flag_name: flag.name } },
+    body: { enabled },
+  })
+  if (err) {
+    error.value = `Failed to toggle flag: ${err}`
+    return
+  }
+  await loadFlags()
 }
 
 onMounted(() => {
