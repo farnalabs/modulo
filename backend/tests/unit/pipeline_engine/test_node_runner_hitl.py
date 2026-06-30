@@ -620,6 +620,51 @@ async def test_resume_skips_condition_and_eval():
 
 
 # ---------------------------------------------------------------------------
+# HITL gate node — deliver_manual
+# ---------------------------------------------------------------------------
+
+
+async def test_hitl_gate_resume_with_deliver_manual():
+    """deliver_manual returns manual_output in state and correct result."""
+    gate_config = {"gate_id": "review-step"}
+    node_fn = make_hitl_gate_fn(gate_config)
+
+    manual_output = {"summary": "Manually provided", "approved": True}
+    result = await node_fn(
+        {
+            "artifacts": [],
+            "_hitl_decision": {"action": "deliver_manual", "output": manual_output},
+        }
+    )
+
+    assert len(result["artifacts"]) == 1
+    assert result["artifacts"][0]["result"] == "delivered_manual"
+    assert result["artifacts"][0]["manual_output"] == manual_output
+    assert result["output"] == manual_output
+    assert result["artifacts"][0]["human_data"] == {
+        "action": "deliver_manual",
+        "output": manual_output,
+    }
+
+
+async def test_hitl_gate_resume_with_deliver_manual_empty_output():
+    """deliver_manual with empty output returns empty dict, not a crash."""
+    gate_config = {"gate_id": "review-step"}
+    node_fn = make_hitl_gate_fn(gate_config)
+
+    result = await node_fn(
+        {
+            "artifacts": [],
+            "_hitl_decision": {"action": "deliver_manual", "output": {}},
+        }
+    )
+
+    assert result["artifacts"][0]["result"] == "delivered_manual"
+    assert result["output"] == {}
+    assert result["artifacts"][0]["manual_output"] == {}
+
+
+# ---------------------------------------------------------------------------
 # HITL gate node — modify-then-approve
 # ---------------------------------------------------------------------------
 
