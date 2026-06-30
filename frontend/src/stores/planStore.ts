@@ -1,6 +1,7 @@
 import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
 import { api } from '../lib/api/client'
+import { formatApiError } from '../lib/api/formatError'
 
 interface FlagItem {
   name: string
@@ -72,7 +73,7 @@ export const usePlanStore = defineStore('plan', () => {
     try {
       const { data, error: err } = await (api as any).GET('/api/v1/admin/feature-flags')
       if (err) {
-        error.value = String(err)
+        error.value = formatApiError(err)
       } else if (data) {
         const resp = data as FlagsResponse
         currentTier.value = resp.license.tier
@@ -104,7 +105,7 @@ export const usePlanStore = defineStore('plan', () => {
         tierRanks.value = ranks
       }
     } catch (e: unknown) {
-      error.value = e instanceof Error ? e.message : String(e)
+      error.value = formatApiError(e)
     } finally {
       isLoading.value = false
     }
