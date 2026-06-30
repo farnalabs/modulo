@@ -45,6 +45,7 @@ from modulo.db.models.org_membership import OrgMembership
 from modulo.db.models.eval_definition import EvalDefinition
 from modulo.db.models.eval_result import EvalResult
 from modulo.db.models.pipeline import Pipeline
+from modulo.db.models.organisation import Organisation
 from modulo.db.models.run import Run
 from modulo.db.models.team import Team
 from modulo.db.rls import set_rls_org, set_rls_user_context
@@ -1974,7 +1975,7 @@ async def admin_get_retention(
     async with session.begin():
         await set_rls_org(session, current_user.organisation_id)
         result = await session.execute(
-            select(Run.settings_json).where(Run.organisation_id == current_user.organisation_id).limit(1)
+            select(Organisation.settings_json).where(Organisation.id == current_user.organisation_id).limit(1)
         )
         row = result.scalar_one_or_none()
     retention_days = 90
