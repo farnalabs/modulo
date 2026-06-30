@@ -9,8 +9,8 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 from modulo.db.models.base import OrgScoped
 
 if TYPE_CHECKING:
+    from modulo.db.models.account import Account
     from modulo.db.models.organisation import Organisation
-    from modulo.db.models.user import User
 
 
 class Pipeline(OrgScoped):
@@ -52,6 +52,6 @@ class Pipeline(OrgScoped):
         server_default=text("'[]'"),
     )
     default_feedback_handler: Mapped[str | None] = mapped_column(String(50))
-    created_by: Mapped[uuid.UUID] = mapped_column(Uuid(), ForeignKey("users.id", ondelete="RESTRICT"), nullable=False)
+    account_id: Mapped[uuid.UUID] = mapped_column(Uuid(), ForeignKey("accounts.id", ondelete="RESTRICT"), nullable=False)
     organisation: Mapped[Organisation] = relationship()
-    creator: Mapped[User] = relationship()
+    creator: Mapped[Account] = relationship()

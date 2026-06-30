@@ -13,7 +13,7 @@ from alembic import op
 revision: str = "0045_saved_views"
 down_revision: str | None = "0044_library_auto_update"
 branch_labels: str | Sequence[str] | None = None
-depends_on: str | Sequence[str] | None = None
+depends_on: str | Sequence[str] | None = "0045_account_org_membership"
 
 
 def upgrade() -> None:
@@ -28,7 +28,7 @@ def upgrade() -> None:
         sa.Column("columns", sa.JSON(), nullable=True),
         sa.Column("sort_by", sa.String(100), nullable=True),
         sa.Column("sort_order", sa.String(10), nullable=False, server_default="desc"),
-        sa.Column("created_by", sa.Uuid(), sa.ForeignKey("users.id"), nullable=False),
+        sa.Column("created_by", sa.Uuid(), sa.ForeignKey("accounts.id"), nullable=False),
         sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.text("now()"), nullable=False),
         sa.Column("updated_at", sa.DateTime(timezone=True), server_default=sa.text("now()"), nullable=False),
         sa.CheckConstraint("view_type IN ('run_list', 'pipeline_list', 'audit_log')", name="ck_saved_views_type"),

@@ -14,8 +14,8 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 from modulo.db.models.base import OrgScoped
 
 if TYPE_CHECKING:
+    from modulo.db.models.account import Account
     from modulo.db.models.pipeline import Pipeline
-    from modulo.db.models.user import User
 
 
 class Node(OrgScoped):
@@ -46,9 +46,9 @@ class Node(OrgScoped):
     timeout_seconds: Mapped[int | None] = mapped_column(Integer, nullable=True)
     retry_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
     retry_delay_seconds: Mapped[int | None] = mapped_column(Integer, nullable=True)
-    created_by: Mapped[uuid.UUID] = mapped_column(
+    account_id: Mapped[uuid.UUID] = mapped_column(
         Uuid(),
-        ForeignKey("users.id", ondelete="RESTRICT"),
+        ForeignKey("accounts.id", ondelete="RESTRICT"),
         nullable=False,
     )
 
@@ -66,4 +66,4 @@ class Node(OrgScoped):
         lazy="selectin",
     )
     pipeline: Mapped[Pipeline] = relationship()
-    creator: Mapped[User] = relationship()
+    creator: Mapped[Account] = relationship()

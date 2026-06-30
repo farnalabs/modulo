@@ -43,6 +43,7 @@ class LoginResponse(BaseModel):
     access_token: str
     refresh_token: str
     token_type: str = "bearer"
+    requires_bootstrap: bool = False
 
 
 class RefreshRequest(BaseModel):
@@ -136,7 +137,12 @@ async def login(
         token_family=str(family.family_id),
         token_sequence=0,
     )
-    content = LoginResponse(access_token=access_token, refresh_token=refresh_token).model_dump()
+    requires_bootstrap = not memberships and account.is_system_admin
+    content = LoginResponse(
+        access_token=access_token,
+        refresh_token=refresh_token,
+        requires_bootstrap=requires_bootstrap,
+    ).model_dump()
     response = JSONResponse(content=content)
     _set_auth_cookies(response, access_token, settings)
     return response

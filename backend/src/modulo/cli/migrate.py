@@ -20,21 +20,22 @@ from sqlalchemy import select
 from tqdm import tqdm  # type: ignore[import-untyped]
 
 from modulo.auth.jwt import decode_principal
+from modulo.db.crud.account import get_account_by_id
+from modulo.db.crud.org_membership import get_membership_by_account_and_org
 from modulo.db.crud.organisation import get_organisation
-from modulo.db.crud.user import get_user_by_id
+from modulo.db.models.account import Account
 from modulo.db.models.audit_event import AuditEvent
 from modulo.db.models.connector_instance import ConnectorInstance
 from modulo.db.models.library_primitive import LibraryPrimitive
 from modulo.db.models.model_backend import ModelBackend
 from modulo.db.models.pipeline import Pipeline
 from modulo.db.models.run import Run
-from modulo.db.models.user import User
 from modulo.db.session import AsyncSessionLocal
 from modulo.settings import get_settings
 
 ConflictStrategy = Literal["skip", "overwrite", "merge"]
 _EXPORT_TABLES = (
-    "users",
+    "accounts",
     "pipelines",
     "runs",
     "audit_events",
@@ -44,7 +45,7 @@ _EXPORT_TABLES = (
 )
 
 _MODEL_MAP: dict[str, type] = {
-    "users": User,
+    "accounts": Account,
     "pipelines": Pipeline,
     "runs": Run,
     "audit_events": AuditEvent,
@@ -76,13 +77,14 @@ def _resolve_admin_auth(token: str | None) -> str | None:
 async def _verify_admin_access(session: Any, org_id: uuid.UUID, admin_user_id: str) -> None:
     if admin_user_id == "__admin_secret__":
         return
-    user = await get_user_by_id(session, uuid.UUID(admin_user_id))
-    if user is None:
-        raise click.ClickException("Admin user not found in database")
-    if user.organisation_id != org_id:
-        raise click.ClickException("Admin user does not belong to the target organisation")
-    if user.org_role != "admin":
-        raise click.ClickException("User is not an org admin")
+    account = await get_account_by_id(session, uuid.UUID(admin_user_id))
+    if account is None:
+        raise click.ClickException("Admin account not found in database")
+    membership = await get_membership_by_account_and_org(session, account.id, org_id)
+    if membership is None:
+        raise click.ClickException("Admin account does not belong to the target organisation")
+    if membership.role not in ("admin", "owner"):
+        raise click.ClickException("Account does not have admin-level access")
 
 
 # ── Serialisation helpers ─────────────────────────────────────────────────────
@@ -127,10 +129,13 @@ async def _collect_org_data(
     if pipelines_only:
         tables_to_fetch = [(n, m) for n, m in tables_to_fetch if n == "pipelines"]
     elif users_only:
-        tables_to_fetch = [(n, m) for n, m in tables_to_fetch if n == "users"]
+        tables_to_fetch = [(n, m) for n, m in tables_to_fetch if n == "accounts"]
 
     for name, model_cls in tqdm(tables_to_fetch, desc="Exporting tables", unit="table"):
-        rows = (await session.execute(select(model_cls).where(model_cls.organisation_id == org_id))).scalars().all()
+        query = select(model_cls)
+        if hasattr(model_cls, "organisation_id"):
+            query = query.where(model_cls.organisation_id == org_id)
+        rows = (await session.execute(query)).scalars().all()
         bundle[name] = [_serialise_row(r) for r in rows]
 
     bundle["exported_at"] = datetime.now(UTC).isoformat()
@@ -222,7 +227,7 @@ async def _import_org_data(
     if pipelines_only:
         tables_to_import = [(n, r) for n, r in tables_to_import if n == "pipelines"]
     elif users_only:
-        tables_to_import = [(n, r) for n, r in tables_to_import if n == "users"]
+        tables_to_import = [(n, r) for n, r in tables_to_import if n == "accounts"]
 
     for table_name, recs in tqdm(tables_to_import, desc="Importing tables", unit="table"):
         model_cls = _MODEL_MAP.get(table_name)
@@ -269,7 +274,8 @@ async def _import_org_data(
 
                 if existing is None:
                     row_data.pop("id", None)
-                    row_data["organisation_id"] = org_id
+                    if hasattr(model_cls, "organisation_id"):
+                        row_data["organisation_id"] = org_id
                     session.add(model_cls(**row_data))
                     counts["created"] += 1
 

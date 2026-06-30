@@ -1,5 +1,11 @@
-import { createRouter, createWebHistory } from 'vue-router'
+import { createRouter, createWebHistory, type RouteMeta } from 'vue-router'
 import { getAccessToken } from '../lib/api/client'
+
+declare module 'vue-router' {
+  interface RouteMeta {
+    requiresSystemAdmin?: boolean
+  }
+}
 
 import DashboardView from '../views/DashboardView.vue'
 import LoginView from '../views/LoginView.vue'
@@ -272,11 +278,13 @@ const router = createRouter({
       path: '/admin/system/orgs',
       name: 'admin-system-orgs',
       component: AdminSystemOrgsView,
+      meta: { requiresSystemAdmin: true },
     },
     {
       path: '/admin/system/config',
       name: 'admin-system-config',
       component: AdminSystemConfigView,
+      meta: { requiresSystemAdmin: true },
     },
     {
       path: '/stages',
@@ -311,6 +319,18 @@ router.beforeEach((to) => {
   }
   if (to.name !== 'login' && !getAccessToken()) {
     return { name: 'login' }
+  }
+  if (to.meta?.requiresSystemAdmin) {
+    const token = getAccessToken()
+    if (!token) return { name: 'login' }
+    try {
+      const payload = JSON.parse(atob(token.split('.')[1]))
+      if (payload.is_system_admin !== true) {
+        return { name: 'dashboard' }
+      }
+    } catch {
+      return { name: 'dashboard' }
+    }
   }
 })
 

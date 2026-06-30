@@ -40,7 +40,6 @@ from modulo.db.models.team_membership import TeamMembership
 from modulo.db.models.token_family import TokenFamily
 from modulo.db.models.trigger import Trigger
 from modulo.db.models.trigger_event import TriggerEvent
-from modulo.db.models.user import User
 from modulo.db.models.variant_group import VariantGroup
 from modulo.db.models.view import SavedView
 from modulo.db.models.webhook import WebhookDedupHash, WebhookPayload
@@ -95,7 +94,6 @@ __all__ = [
     "TokenFamily",
     "Trigger",
     "TriggerEvent",
-    "User",
     "VariantGroup",
     "WebhookDedupHash",
     "WebhookPayload",
