@@ -14,11 +14,20 @@
       </button>
     </div>
 
-    <div v-if="error" class="rounded-lg border border-destructive/50 bg-destructive/10 p-4 text-destructive text-sm">
+    <LoadingSpinner v-if="loading" />
+
+    <div v-else-if="error" class="rounded-lg border border-destructive/50 bg-destructive/10 p-4 text-destructive text-sm">
       {{ error }}
     </div>
 
-    <div class="card overflow-hidden">
+    <div v-else-if="users.length === 0" class="card p-8 text-center">
+      <p class="text-lg font-medium">No users found</p>
+      <p class="mt-1 text-sm text-muted-foreground">
+        Users will appear here once they are created or sign up.
+      </p>
+    </div>
+
+    <div v-else class="card overflow-hidden">
       <table class="w-full text-sm">
         <thead>
           <tr class="border-b bg-muted/30">
@@ -154,6 +163,7 @@
 <script setup lang="ts">
 import { ref, onMounted } from 'vue'
 import { useApi } from '../composables/useApi'
+import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
 
 interface UserItem {
   id: string
@@ -176,6 +186,7 @@ interface UserListResponse {
 const { get, put: httpPut, post } = useApi()
 
 const users = ref<UserItem[]>([])
+const loading = ref(true)
 const error = ref('')
 const page = ref(1)
 const pageSize = ref(50)
@@ -189,6 +200,7 @@ function initialOf(name: string): string {
 }
 
 async function loadUsers() {
+  loading.value = true
   error.value = ''
   try {
     const data = await get<UserListResponse>(`/api/v1/admin/users?page=${page.value}&page_size=${pageSize.value}`)
@@ -196,6 +208,8 @@ async function loadUsers() {
     total.value = data.total
   } catch (e) {
     error.value = e instanceof Error ? e.message : 'Failed to load users'
+  } finally {
+    loading.value = false
   }
 }
 
