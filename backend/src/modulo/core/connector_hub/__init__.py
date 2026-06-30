@@ -22,7 +22,6 @@ from opentelemetry.trace import Status, StatusCode
 
 from modulo.connectors.asana import AsanaConnector
 from modulo.connectors.azure_repos import AzureReposConnector
-from modulo.connectors.buildkite import BuildkiteConnector
 from modulo.connectors.base import (
     ConnectorACL,
     ConnectorBase,
@@ -32,6 +31,7 @@ from modulo.connectors.base import (
     ConnectorType,
     HealthResult,
 )
+from modulo.connectors.buildkite import BuildkiteConnector
 from modulo.connectors.ci_runner import GitHubActionsCIRunner, GitLabCIRunner
 from modulo.connectors.circleci import CircleCIConnector
 from modulo.connectors.confluence import ConfluenceConnector
@@ -48,6 +48,7 @@ from modulo.connectors.notion import NotionConnector
 from modulo.connectors.sharepoint import SharePointConnector
 from modulo.connectors.shortcut import ShortcutConnector
 from modulo.connectors.slack import SlackConnector
+from modulo.connectors.teamcity import TeamCityConnector
 from modulo.connectors.trello import TrelloConnector
 from modulo.connectors.youtrack import YouTrackConnector
 from modulo.core.pipeline_engine.output_filter import filter_payload_for_injection
@@ -328,6 +329,11 @@ def _build_connector(type_id: str, config: dict[str, Any], creds: dict[str, Any]
             if not instance:
                 raise ValueError("ConfluenceConnector requires 'instance' in config_json")
             return ConfluenceConnector(instance=instance, creds=creds)
+        case "teamcity":
+            return TeamCityConnector(
+                token=_get_cred(creds, "token", type_id),
+                base_url=config.get("base_url", "http://localhost:8111"),
+            )
         case _:
             registry = get_plugin_registry()
             if registry.has_connector_type(type_id):
