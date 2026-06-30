@@ -65,6 +65,7 @@ status: covered | partial | gap    # auto-updated by graph-validate
 - [feat-core-runtime-provider-core](core/runtime-provider-core.md) => PRD 6.2
 - [feat-core-schema-inference-ui](core/schema-inference-ui.md) => PRD 8.16
 - [feat-core-schema-system](core/schema-system.md) => PRD 8.3
+- [feat-library-schemas](library/library-schemas.md) => PRD 8.3
 - [feat-core-schema-inference](core/schema-inference.md) => PRD 8.16
 - [feat-core-contribute-primitive](core/contribute-primitive.md) => PRD 8.14
 - [feat-core-backup-restore](core/backup-restore.md) => PRD 6.2
@@ -184,6 +185,7 @@ status: covered | partial | gap    # auto-updated by graph-validate
 - [feat-core-backup-restore](core/backup-restore.md) => PRD delivery-tasks: [task-nv12-backup-restore]
 - [feat-core-contribution-update](core/contribution-update.md) => PRD delivery-tasks: [task-nv8-contribution-update]
 - [feat-library-auto-update](library/auto-update.md) => PRD delivery-tasks: [task-prd-community-library-no-auto-update]
+- [feat-library-schemas](library/library-schemas.md) => PRD 8.3
 - [feat-core-contribution-provenance](core/contribution-provenance.md) => PRD delivery-tasks: [task-nv8-contribution-provenance]
 - [feat-core-audit-viewer-ui](core/audit-viewer-ui.md) => PRD delivery-tasks: [task-nv11-audit-viewer-ui]
 - [feat-core-api-versioning](core/api-versioning.md) => PRD delivery-tasks: [task-nv12-api-versioning]
