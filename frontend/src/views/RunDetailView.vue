@@ -70,7 +70,8 @@
               <th class="pb-2 pr-4 font-medium">Output Tokens</th>
               <th class="pb-2 pr-4 font-medium">Cost</th>
               <th class="pb-2 pr-4 font-medium">Trace ID</th>
-              <th class="pb-2 font-medium">IO</th>
+              <th class="pb-2 pr-4 font-medium">IO</th>
+              <th class="pb-2 font-medium">Prompt</th>
             </tr>
           </thead>
           <tbody>
@@ -109,6 +110,25 @@
                 </button>
                 <span v-else class="text-muted-foreground">—</span>
               </td>
+              <td class="py-3">
+                <button
+                  v-if="revealedPrompts[node.name]?.prompt"
+                  data-testid="run-detail-show-prompt"
+                  class="inline-flex items-center gap-1 rounded-md px-2 py-1 text-xs font-medium text-primary hover:bg-primary/10"
+                  @click="showPrompt(node.name)"
+                >
+                  View
+                </button>
+                <button
+                  v-else-if="revealedPrompts[node.name] === undefined"
+                  data-testid="run-detail-reveal-prompt"
+                  class="inline-flex items-center gap-1 rounded-md px-2 py-1 text-xs font-medium text-muted-foreground hover:text-primary"
+                  @click="revealPrompt(node.name)"
+                >
+                  [Prompt hidden — click to reveal]
+                </button>
+                <span v-else class="text-xs text-muted-foreground">—</span>
+              </td>
             </tr>
 
             <!-- Expandable IO rows -->
@@ -117,7 +137,7 @@
               :key="'io-' + node.name"
               v-show="expandedNodes.has(node.name)"
             >
-              <td colspan="8" class="space-y-3 px-0 pb-4 pt-1">
+              <td colspan="9" class="space-y-3 px-0 pb-4 pt-1">
                 <div class="rounded-lg border bg-muted p-4">
                   <h4 class="mb-2 text-xs font-semibold text-muted-foreground">Input</h4>
                   <pre class="max-h-48 overflow-auto rounded bg-background p-3 text-xs leading-relaxed"><code>{{ node.io?.input ? formatJson(node.io.input) : '—' }}</code></pre>
@@ -142,6 +162,34 @@
           {{ totalTokens.toLocaleString() }} total tokens
         </p>
       </section>
+
+      <!-- Prompt Reveal Dialog -->
+      <Dialog v-if="selectedPrompt" :open="!!selectedPrompt" @update:open="closePromptDialog">
+        <DialogContent class="max-w-3xl">
+          <DialogHeader>
+            <DialogTitle>
+              Prompt — {{ selectedPrompt.nodeName }}
+              <span v-if="selectedPrompt.tokenCount != null" class="ml-2 text-sm font-normal text-muted-foreground">
+                ~{{ selectedPrompt.tokenCount.toLocaleString() }} tokens
+              </span>
+            </DialogTitle>
+            <DialogDescription class="sr-only">
+              Rendered prompt sent to the LLM for this node.
+            </DialogDescription>
+          </DialogHeader>
+          <div class="max-h-[60vh] overflow-auto rounded-lg border bg-muted p-4">
+            <pre class="whitespace-pre-wrap text-xs leading-relaxed"><code>{{ selectedPrompt.prompt }}</code></pre>
+          </div>
+          <DialogFooter>
+            <Button
+              data-testid="run-detail-copy-prompt"
+              @click="copyPromptText"
+            >
+              {{ promptCopied ? 'Copied!' : 'Copy Prompt' }}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </template>
   </div>
 </template>
@@ -153,6 +201,13 @@ import { api } from '../lib/api/client'
 import type { components } from '../lib/api/client'
 import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
+import Dialog from '../components/ui/dialog/Dialog.vue'
+import DialogContent from '../components/ui/dialog/DialogContent.vue'
+import DialogHeader from '../components/ui/dialog/DialogHeader.vue'
+import DialogTitle from '../components/ui/dialog/DialogTitle.vue'
+import DialogDescription from '../components/ui/dialog/DialogDescription.vue'
+import DialogFooter from '../components/ui/dialog/DialogFooter.vue'
+import Button from '../components/ui/button/Button.vue'
 
 type RunResponse = components['schemas']['RunResponse']
 type RunIOResponse = components['schemas']['RunIOResponse']
@@ -183,6 +238,10 @@ const runIO = ref<RunIOResponse | null>(null)
 const expandedNodes = ref(new Set<string>())
 const copied = ref(false)
 const shareCopied = ref(false)
+const promptCopied = ref(false)
+const promptLoading = ref(new Set<string>())
+const revealedPrompts = ref<Record<string, null | { prompt: string; messages: { role: string; content: string }[]; tokenCount: number; promptAlwaysVisible: boolean }>>({})
+const selectedPrompt = ref<{ nodeName: string; prompt: string; tokenCount: number | null } | null>(null)
 
 const shareSummary = computed(() => {
   const r = run.value
@@ -230,6 +289,63 @@ async function copyText(text: string) {
     await navigator.clipboard.writeText(text)
     copied.value = true
     setTimeout(() => { copied.value = false }, 2000)
+  } catch {
+    // clipboard not available
+  }
+}
+
+async function revealPrompt(nodeName: string) {
+  if (promptLoading.value.has(nodeName)) return
+  const runId = route.params.id as string
+  if (!runId) return
+
+  promptLoading.value = new Set([...promptLoading.value, nodeName])
+  try {
+    const { data, error: err } = await api.POST(
+      '/api/v1/runs/{run_id}/nodes/{node_id}/prompt/reveal',
+      {
+        params: { path: { run_id: runId, node_id: nodeName } },
+      },
+    )
+    if (err || !data) {
+      revealedPrompts.value = { ...revealedPrompts.value, [nodeName]: null }
+      return
+    }
+    const d = data as components['schemas']['PromptRevealResponse']
+    const revealed = {
+      prompt: d.prompt,
+      messages: d.messages,
+      tokenCount: d.token_count,
+      promptAlwaysVisible: d.prompt_always_visible,
+    }
+    revealedPrompts.value = { ...revealedPrompts.value, [nodeName]: revealed }
+  } finally {
+    const s = new Set(promptLoading.value)
+    s.delete(nodeName)
+    promptLoading.value = s
+  }
+}
+
+function showPrompt(nodeName: string) {
+  const entry = revealedPrompts.value[nodeName]
+  if (!entry) return
+  selectedPrompt.value = {
+    nodeName,
+    prompt: entry.prompt,
+    tokenCount: entry.tokenCount,
+  }
+}
+
+function closePromptDialog() {
+  selectedPrompt.value = null
+}
+
+async function copyPromptText() {
+  if (!selectedPrompt.value?.prompt) return
+  try {
+    await navigator.clipboard.writeText(selectedPrompt.value.prompt)
+    promptCopied.value = true
+    setTimeout(() => { promptCopied.value = false }, 2000)
   } catch {
     // clipboard not available
   }
