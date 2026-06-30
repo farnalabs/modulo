@@ -1,14 +1,4 @@
-"""Canonical library primitives shipped with Modulo.
-
-Each module defines the content_json for a LibraryPrimitive entry,
-including prompts, schemas, and metadata needed to instantiate the
-primitive in a pipeline.
-
-Primitives are made available as library entries via seeding or
-manual import.  See individual modules for usage.
-"""
-
-from modulo.core.library.agents import (
+from modulo.core.library.agents.definitions import (
     CHANGELOG_AGGREGATOR,
     CHANGELOG_WRITER,
     CODE_REVIEWER,
@@ -31,13 +21,11 @@ from modulo.core.library.agents import (
     TICKET_TRIAGER,
     TICKET_WRITER,
 )
-from modulo.core.library.complexity_reviewer import COMPLEXITY_REVIEWER
 
 __all__ = [
     "CHANGELOG_AGGREGATOR",
     "CHANGELOG_WRITER",
     "CODE_REVIEWER",
-    "COMPLEXITY_REVIEWER",
     "COMPLIANCE_CHECKER",
     "CORRECTION_PROPOSER",
     "DEPENDENCY_ANALYZER",
