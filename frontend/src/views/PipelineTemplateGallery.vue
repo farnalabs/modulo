@@ -49,8 +49,8 @@
 
       <div v-else-if="templates.length === 0" class="text-center py-16">
         <svg xmlns="http://www.w3.org/2000/svg" width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1" class="mx-auto mb-4 text-muted-foreground/40"><polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/></svg>
-        <p class="text-lg font-medium text-foreground">No templates match your search</p>
-        <p v-if="search" class="text-sm text-muted-foreground mt-1">Try a different search term or clear the filter.</p>
+        <p class="text-lg font-medium text-foreground">{{ search || category ? 'No templates match your search' : 'No templates available' }}</p>
+        <p class="text-sm text-muted-foreground mt-1">{{ search || category ? 'Try a different search term or clear the filter.' : 'Check back later for new templates.' }}</p>
       </div>
 
       <div v-else class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
