@@ -1,6 +1,6 @@
 """SentryConnector — async Sentry API connector (v0)."""
 
-from typing import Any, cast
+from typing import Any
 
 import httpx
 
@@ -78,12 +78,16 @@ class SentryConnector(ConnectorBase):
     async def _list_issues(self, c: httpx.AsyncClient, q: ConnectorQuery) -> ConnectorResult:
         org = self._organization
         project = q.filters.get("project", "")
+        if not project:
+            raise ValueError("Sentry issues query requires 'project' in filters")
         params: dict[str, Any] = {}
         for key in ("query", "status", "statsPeriod", "sort", "environment"):
             if key in q.filters:
                 params[key] = q.filters[key]
         if q.limit:
             params["limit"] = q.limit
+        if q.cursor:
+            params["cursor"] = q.cursor
         resp = await c.get(f"/projects/{org}/{project}/issues/", params=params)
         resp.raise_for_status()
         data: list[dict[str, Any]] = resp.json()
@@ -92,12 +96,16 @@ class SentryConnector(ConnectorBase):
     async def _list_events(self, c: httpx.AsyncClient, q: ConnectorQuery) -> ConnectorResult:
         org = self._organization
         project = q.filters.get("project", "")
+        if not project:
+            raise ValueError("Sentry events query requires 'project' in filters")
         params: dict[str, Any] = {}
         for key in ("query", "statsPeriod", "environment", "sort"):
             if key in q.filters:
                 params[key] = q.filters[key]
         if q.limit:
             params["limit"] = q.limit
+        if q.cursor:
+            params["cursor"] = q.cursor
         resp = await c.get(f"/projects/{org}/{project}/events/", params=params)
         resp.raise_for_status()
         data: list[dict[str, Any]] = resp.json()
@@ -107,6 +115,8 @@ class SentryConnector(ConnectorBase):
         params: dict[str, Any] = {}
         if q.limit:
             params["limit"] = q.limit
+        if q.cursor:
+            params["cursor"] = q.cursor
         resp = await c.get("/projects/", params=params)
         resp.raise_for_status()
         data: list[dict[str, Any]] = resp.json()
@@ -120,6 +130,8 @@ class SentryConnector(ConnectorBase):
                 params[key] = q.filters[key]
         if q.limit:
             params["limit"] = q.limit
+        if q.cursor:
+            params["cursor"] = q.cursor
         resp = await c.get(f"/organizations/{org}/releases/", params=params)
         resp.raise_for_status()
         data: list[dict[str, Any]] = resp.json()
@@ -130,6 +142,8 @@ class SentryConnector(ConnectorBase):
         params: dict[str, Any] = {}
         if q.limit:
             params["limit"] = q.limit
+        if q.cursor:
+            params["cursor"] = q.cursor
         resp = await c.get(f"/organizations/{org}/teams/", params=params)
         resp.raise_for_status()
         data: list[dict[str, Any]] = resp.json()
@@ -142,6 +156,8 @@ class SentryConnector(ConnectorBase):
         params: dict[str, Any] = {}
         if q.limit:
             params["limit"] = q.limit
+        if q.cursor:
+            params["cursor"] = q.cursor
         resp = await c.get(f"/issues/{issue_id}/events/", params=params)
         resp.raise_for_status()
         data: list[dict[str, Any]] = resp.json()

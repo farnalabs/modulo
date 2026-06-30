@@ -148,7 +148,10 @@ class ConnectorType(StrEnum):
             case ConnectorType.DATADOG:
                 return frozenset({Capability.MONITORING, Capability.OBSERVABILITY, Capability.READ, Capability.WRITE})
             case ConnectorType.SENTRY:
-                return frozenset({Capability.MONITORING, Capability.INCIDENT_MANAGEMENT, Capability.READ, Capability.WRITE})
+                return frozenset({
+                    Capability.MONITORING, Capability.INCIDENT_MANAGEMENT,
+                    Capability.READ, Capability.WRITE,
+                })
             case _:
                 return frozenset()
 
