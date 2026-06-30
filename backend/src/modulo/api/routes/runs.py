@@ -373,6 +373,9 @@ async def get_run_io_endpoint(
     if result is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Run not found")
 
+    if result.get("outputs_json"):
+        result["outputs_json"] = _mask_output_value(result["outputs_json"])
+
     resp = RunIOResponse(**result)
     resp.fixture_map = resp.build_fixture_map()
     return resp
@@ -404,7 +407,9 @@ async def export_run_fixture(
 
     graph_json = snapshot.graph_json if snapshot else {}
 
-    fixture_map = _build_fixture_map(run.input_payload, run.outputs_json)
+    masked_input = _mask_output_value(run.input_payload) if run.input_payload else None
+    masked_outputs = _mask_output_value(run.outputs_json) if run.outputs_json else None
+    fixture_map = _build_fixture_map(masked_input, masked_outputs)
     short_id = str(run.id).split("-")[0]
 
     return FixtureExportResponse(
@@ -413,8 +418,8 @@ async def export_run_fixture(
         pipeline_id=run.pipeline_id,
         status=run.status,
         snapshot_graph_json=graph_json,
-        input_payload=run.input_payload,
-        outputs_json=run.outputs_json,
+        input_payload=masked_input,
+        outputs_json=masked_outputs,
         fixture_map=fixture_map,
     )
 
@@ -715,6 +720,7 @@ def _mask_prompt_text(text: str) -> str:
         (r'(token["\']?\s*[:=]\s*["\']?)[^"\'}\s,]+', r'\1' + "\u2022\u2022\u2022\u2022\u2022\u2022"),
         (r'(password["\']?\s*[:=]\s*["\']?)[^"\'}\s,]+', r'\1' + "\u2022\u2022\u2022\u2022\u2022\u2022"),
         (r'(credential["\']?\s*[:=]\s*["\']?)[^"\'}\s,]+', r'\1' + "\u2022\u2022\u2022\u2022\u2022\u2022"),
+        (r'(passwd["\']?\s*[:=]\s*["\']?)[^"\'}\s,]+', r'\1' + "\u2022\u2022\u2022\u2022\u2022\u2022"),
     ]
     for pattern, replacement in patterns:
         masked = re.sub(pattern, replacement, masked, flags=re.IGNORECASE)

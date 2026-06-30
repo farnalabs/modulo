@@ -113,6 +113,8 @@ class TestIsSensitiveKey:
             "access_token",
             "api_key_openai",
             "auth_token",
+            "passwd",
+            "db_passwd",
         ],
     )
     def test_returns_true_for_sensitive_keys(self, key: str) -> None:
