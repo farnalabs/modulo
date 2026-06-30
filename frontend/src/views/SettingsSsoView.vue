@@ -16,7 +16,7 @@
 
     <LoadingSpinner v-if="loading" />
 
-    <ErrorAlert v-else-if="error" :message="error" :on-retry="loadProviders" />
+    <ErrorAlert v-else-if="error" :message="error" :on-retry="loadProviders" :retryable="errorRetryable" />
 
     <template v-else>
       <div v-if="formMode === 'add'" class="card p-6">
@@ -218,6 +218,7 @@ function emptyForm(): SsoFormState {
 const providers = ref<SsoProviderResponse[]>([])
 const loading = ref(true)
 const error = ref<string | null>(null)
+const errorRetryable = ref(true)
 
 const formMode = ref<'add' | 'edit' | null>(null)
 const formData = reactive<SsoFormState>(emptyForm())
@@ -241,12 +242,16 @@ function onFormUpdate(updated: SsoFormState) {
 async function loadProviders() {
   loading.value = true
   error.value = null
+  errorRetryable.value = true
   try {
-    const { data, error: err } = await api.GET('/api/v1/admin/sso/providers')
-    if (err) {
-      error.value = `Failed to load providers: ${formatError(err)}`
-    } else if (data) {
-      providers.value = (Array.isArray(data) ? data : (data as any)?.items ?? [])
+    const resp = await api.GET('/api/v1/admin/sso/providers')
+    if (resp.error) {
+      error.value = `Failed to load providers: ${formatError(resp.error)}`
+      if (resp.response?.status && resp.response.status >= 400 && resp.response.status < 500) {
+        errorRetryable.value = false
+      }
+    } else if (resp.data) {
+      providers.value = (Array.isArray(resp.data) ? resp.data : (resp.data as any)?.items ?? [])
     }
   } catch (e: unknown) {
     error.value = `Failed to load providers: ${e instanceof Error ? e.message : String(e)}`
