@@ -45,6 +45,7 @@ class ConnectorType(StrEnum):
     CONFLUENCE = "confluence"
     DROPBOX_PAPER = "dropbox_paper"
     CIRCLECI = "circleci"
+    JENKINS = "jenkins"
 
     @property
     def capabilities(self) -> frozenset[Capability]:
@@ -92,6 +93,15 @@ class ConnectorType(StrEnum):
             case ConnectorType.DROPBOX_PAPER:
                 return frozenset({Capability.READ, Capability.WRITE})
             case ConnectorType.CIRCLECI:
+                return frozenset(
+                    {
+                        Capability.TRIGGER_RUN,
+                        Capability.GET_RUN_STATUS,
+                        Capability.GET_RUN_LOGS,
+                        Capability.LIST_RUNS,
+                    }
+                )
+            case ConnectorType.JENKINS:
                 return frozenset(
                     {
                         Capability.TRIGGER_RUN,
