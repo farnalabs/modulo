@@ -705,3 +705,120 @@ class TestIntegrationWithExistingMigration:
         assert "full_name" not in result
         assert "count" in result
         assert result["count"] == 42
+
+
+# ---------------------------------------------------------------------------
+# Dry-run / describe-chain
+# ---------------------------------------------------------------------------
+
+
+class TestDryRun:
+    """Dry-run mode on MigrationRegistry."""
+
+    def test_describe_chain_returns_step_descriptions(self) -> None:
+        registry = MigrationRegistry()
+        registry.register("1.0.0", "2.0.0", rename_field("full_name", "display_name"), "Rename full_name")
+        registry.register("2.0.0", "3.0.0", convert_field("count", int), "Convert count to int")
+
+        steps = registry.describe_chain("1.0.0", "3.0.0")
+        assert len(steps) == 2
+        assert steps[0]["source_version"] == "1.0.0"
+        assert steps[0]["target_version"] == "2.0.0"
+        assert steps[0]["description"] == "Rename full_name"
+        assert steps[1]["source_version"] == "2.0.0"
+        assert steps[1]["target_version"] == "3.0.0"
+        assert steps[1]["description"] == "Convert count to int"
+
+    def test_describe_chain_same_version_empty(self) -> None:
+        registry = MigrationRegistry()
+        assert registry.describe_chain("1.0.0", "1.0.0") == []
+
+    def test_describe_chain_missing_raises(self) -> None:
+        registry = MigrationRegistry()
+        registry.register("1.0.0", "2.0.0", lambda d: d)
+        with pytest.raises(MissingMigrationError):
+            registry.describe_chain("1.0.0", "3.0.0")
+
+    def test_dry_run_returns_per_step_diff(self) -> None:
+        registry = MigrationRegistry()
+        registry.register("1.0.0", "2.0.0", rename_field("full_name", "display_name"))
+        registry.register("2.0.0", "3.0.0", convert_field("count", int))
+
+        data = {"full_name": "Alice", "count": "42", "email": "a@b.com"}
+        steps = registry.dry_run(data, "1.0.0", "3.0.0")
+
+        assert len(steps) == 2
+
+        # Step 1: rename full_name -> display_name
+        assert steps[0]["source_version"] == "1.0.0"
+        assert steps[0]["target_version"] == "2.0.0"
+        assert "display_name" in steps[0]["added_fields"]
+        assert "full_name" in steps[0]["removed_fields"]
+        assert "count" not in steps[0]["added_fields"]
+        assert steps[0]["changed_fields"] == {}
+
+        # Step 2: convert count to int
+        assert steps[1]["source_version"] == "2.0.0"
+        assert steps[1]["target_version"] == "3.0.0"
+        assert "count" in steps[1]["changed_fields"]
+        assert steps[1]["changed_fields"]["count"]["old"] == "42"
+        assert steps[1]["changed_fields"]["count"]["new"] == 42
+        assert steps[1]["added_fields"] == []
+        assert steps[1]["removed_fields"] == []
+
+    def test_dry_run_does_not_mutate_original(self) -> None:
+        registry = MigrationRegistry()
+        registry.register("1.0.0", "2.0.0", rename_field("full_name", "display_name"))
+
+        data = {"full_name": "Alice"}
+        original = deepcopy(data)
+        steps = registry.dry_run(data, "1.0.0", "2.0.0")
+        assert data == original
+        assert len(steps) == 1
+
+    def test_dry_run_same_version_returns_empty(self) -> None:
+        registry = MigrationRegistry()
+        data = {"name": "Alice"}
+        steps = registry.dry_run(data, "1.0.0", "1.0.0")
+        assert steps == []
+
+    def test_dry_run_missing_chain_raises(self) -> None:
+        registry = MigrationRegistry()
+        data = {"name": "Alice"}
+        with pytest.raises(MissingMigrationError):
+            registry.dry_run(data, "1.0.0", "3.0.0")
+
+    def test_dry_run_set_default_appears_as_addition(self) -> None:
+        registry = MigrationRegistry()
+        registry.register("1.0.0", "2.0.0", set_default("middle_name", ""))
+
+        data = {"first_name": "Alice"}
+        steps = registry.dry_run(data, "1.0.0", "2.0.0")
+        assert len(steps) == 1
+        assert "middle_name" in steps[0]["added_fields"]
+        assert "first_name" not in steps[0]["added_fields"]
+        assert steps[0]["removed_fields"] == []
+
+    def test_dry_run_remove_field_appears_as_removal(self) -> None:
+        registry = MigrationRegistry()
+        registry.register("1.0.0", "2.0.0", remove_field("legacy"))
+
+        data = {"name": "Alice", "legacy": "old"}
+        steps = registry.dry_run(data, "1.0.0", "2.0.0")
+        assert len(steps) == 1
+        assert "legacy" in steps[0]["removed_fields"]
+        assert "name" not in steps[0]["removed_fields"]
+
+    def test_dry_run_uses_description_from_registration(self) -> None:
+        registry = MigrationRegistry()
+        registry.register("1.0.0", "2.0.0", rename_field("a", "b"), "Rename field a to b")
+
+        steps = registry.dry_run({"a": 1}, "1.0.0", "2.0.0")
+        assert steps[0]["description"] == "Rename field a to b"
+
+    def test_dry_run_falls_back_to_function_name(self) -> None:
+        registry = MigrationRegistry()
+        registry.register("1.0.0", "2.0.0", rename_field("a", "b"))
+
+        steps = registry.dry_run({"a": 1}, "1.0.0", "2.0.0")
+        assert "rename_a_to_b" in steps[0]["description"]

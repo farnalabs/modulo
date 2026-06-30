@@ -2,6 +2,7 @@
 
 import json
 import uuid
+from copy import deepcopy
 from datetime import datetime
 from typing import Any
 
@@ -474,12 +475,16 @@ async def migrate_data_endpoint(
     body: SchemaMigrationRequest,
     session: AsyncSession = Depends(get_db_session),
     principal: AuthenticatedPrincipal = Depends(get_current_user),
+    dry_run: bool = Query(False, description="If true, preview the migration plan without applying it"),
 ) -> SchemaMigrationResponse:
     """Migrate data from one schema version to another.
 
     Accepts *from_schema_id* and *to_schema_id* (Schema UUIDs),
     fetches the latest version of each, computes a migration plan,
     and applies it to *data*.
+
+    Pass ``dry_run=true`` to preview the migration plan without
+    applying any transformations.
     """
     async with session.begin():
         await set_rls_org(session, principal.organisation_id)
@@ -498,16 +503,25 @@ async def migrate_data_endpoint(
             raise HTTPException(status_code=404, detail="Target schema has no versions")
 
     plan = create_migration(from_sv.definition_json, to_sv.definition_json)
+    plan_dict = {
+        "field_additions": plan.field_additions,
+        "field_removals": plan.field_removals,
+        "type_changes": {k: {"old_type": v.old_type, "new_type": v.new_type} for k, v in plan.type_changes.items()},
+        "renames": plan.renames,
+    }
+
+    if dry_run:
+        plan_dict["dry_run"] = True
+        return SchemaMigrationResponse(
+            migrated_data=deepcopy(body.data),
+            plan=plan_dict,
+        )
+
     migrated = apply_migration(body.data, plan)
 
     return SchemaMigrationResponse(
         migrated_data=migrated,
-        plan={
-            "field_additions": plan.field_additions,
-            "field_removals": plan.field_removals,
-            "type_changes": {k: {"old_type": v.old_type, "new_type": v.new_type} for k, v in plan.type_changes.items()},
-            "renames": plan.renames,
-        },
+        plan=plan_dict,
     )
 
 
