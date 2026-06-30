@@ -61,6 +61,7 @@ from modulo.core.library.integrations import (
 from modulo.core.library.workflows import (
     ADR_WORKFLOW,
     CICD_WORKFLOW,
+    DOGFOODING_PIPELINE,
     FEATURE_PROPOSAL,
     FULL_SDLC,
     INCIDENT_TO_DEPLOY,
@@ -91,6 +92,7 @@ __all__ = [
     "DISCORD_INTEGRATION",
     "DOCKER_INTEGRATION",
     "DOC_GENERATOR",
+    "DOGFOODING_PIPELINE",
     "ELASTIC_INTEGRATION",
     "EVAL_PROPOSAL_WRITER",
     "FEATURE_PROPOSAL",
