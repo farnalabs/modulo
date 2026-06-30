@@ -52,6 +52,7 @@ from modulo.connectors.linear import LinearConnector
 from modulo.connectors.microsoft_teams import MicrosoftTeamsConnector
 from modulo.connectors.monday import MondayConnector
 from modulo.connectors.notion import NotionConnector
+from modulo.connectors.onepassword import OnePasswordConnector
 from modulo.connectors.opsgenie import OpsgenieConnector
 from modulo.connectors.pagerduty import PagerDutyConnector
 from modulo.connectors.sentry import SentryConnector
@@ -385,6 +386,11 @@ def _build_connector(type_id: str, config: dict[str, Any], creds: dict[str, Any]
             return MicrosoftTeamsConnector(token=_get_cred(creds, "token", type_id))
         case "discord":
             return DiscordConnector(token=_get_cred(creds, "token", type_id))
+        case "onepassword":
+            return OnePasswordConnector(
+                token=_get_cred(creds, "token", type_id),
+                base_url=config.get("base_url", "http://localhost:8080"),
+            )
         case "opsgenie":
             return OpsgenieConnector(api_key=_get_cred(creds, "api_key", type_id))
         case "sonarqube":
