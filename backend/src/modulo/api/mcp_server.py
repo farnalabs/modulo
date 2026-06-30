@@ -353,6 +353,55 @@ async def create_pipeline(
         return _tool_error("Failed to create pipeline")
 
 
+@mcp.tool(description="Set or replace the graph (nodes + edges) of an existing pipeline. Pass nodes as a list of dicts with id, node_type, agent_id, position (x, y), and edges as a list of dicts with id, source_node_id, target_node_id, edge_type. Returns the updated graph.")
+async def update_pipeline_graph(
+    pipeline_id: str,
+    nodes: list[dict[str, Any]],
+    edges: list[dict[str, Any]],
+) -> dict[str, Any]:
+    try:
+        if not await validate_current_auth():
+            return _tool_error("Token revoked or expired — re-authenticate")
+        check_tool_scope(_ctx_role.get(None), "update_pipeline_graph")
+        from modulo.db.crud.pipeline import replace_pipeline_graph
+
+        org_id = _ctx_org_id.get(_PLACEHOLDER_ORG_ID)
+        pid = uuid.UUID(pipeline_id)
+
+        async with _session(org_id) as s:
+            result = await replace_pipeline_graph(
+                s,
+                pipeline_id=pid,
+                org_id=org_id,
+                nodes=nodes,
+                edges=edges,
+            )
+            if result is None:
+                return {"error": "pipeline_not_found", "pipeline_id": pipeline_id}
+            updated_nodes, updated_edges = result
+
+        return {
+            "pipeline_id": pipeline_id,
+            "nodes": updated_nodes,
+            "edges": [
+                {
+                    "id": str(e.id),
+                    "source_node_id": str(e.source_node_id),
+                    "target_node_id": str(e.target_node_id),
+                    "edge_type": e.edge_type,
+                }
+                for e in updated_edges
+            ],
+            "node_count": len(updated_nodes),
+            "edge_count": len(updated_edges),
+        }
+    except MCPAuthorizationError as exc:
+        return {"error": "insufficient_scope", "detail": exc.message}
+    except Exception:
+        _log.exception("update_pipeline_graph failed")
+        return _tool_error("Failed to update pipeline graph")
+
+
 @mcp.tool(description="Fire a pipeline run and return immediately with run_id. Poll get_run_status to track progress.")
 async def trigger_pipeline(
     pipeline_id: str,

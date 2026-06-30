@@ -31,6 +31,7 @@ TOOL_SCOPE_REQUIREMENTS: dict[str, str] = {
     "get_run_output": "runner",
     "get_trigger_events": "runner",
     "create_pipeline": "operator",
+    "update_pipeline_graph": "operator",
 }
 
 
