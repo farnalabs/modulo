@@ -15,6 +15,8 @@ from modulo.connectors.base import (
 
 _SLACK_API = "https://slack.com/api"
 
+_RATE_LIMITED_STATUS = 429
+
 
 class SlackConnector(ConnectorBase):
     def __init__(self, bot_token: str) -> None:
@@ -34,10 +36,16 @@ class SlackConnector(ConnectorBase):
         try:
             async with self._client() as c:
                 resp = await c.get("/api.test", timeout=10)
+                if resp.status_code == _RATE_LIMITED_STATUS:
+                    retry_after = resp.headers.get("Retry-After", "unknown")
+                    return HealthResult(ok=False, detail=f"Rate limited; retry after {retry_after}s")
+                resp.raise_for_status()
                 body = resp.json()
                 if body.get("ok"):
                     return HealthResult(ok=True)
                 return HealthResult(ok=False, detail=body.get("error", "unknown"))
+        except httpx.HTTPStatusError as e:
+            return HealthResult(ok=False, detail=f"HTTP {e.response.status_code}: {e.response.text[:200]}")
         except Exception as e:
             return HealthResult(ok=False, detail=str(e))
 
@@ -66,6 +74,10 @@ class SlackConnector(ConnectorBase):
         if q.cursor:
             params["cursor"] = q.cursor
         resp = await c.get("/conversations.list", params=params)
+        if resp.status_code == _RATE_LIMITED_STATUS:
+            retry_after = resp.headers.get("Retry-After", "unknown")
+            raise ValueError(f"Rate limited by Slack API; retry after {retry_after}s")
+        resp.raise_for_status()
         body = resp.json()
         if not body.get("ok"):
             raise ValueError(f"Slack API error in conversations.list: {body.get('error', 'unknown')}")
@@ -84,6 +96,10 @@ class SlackConnector(ConnectorBase):
         if q.filters.get("latest"):
             params["latest"] = q.filters["latest"]
         resp = await c.get("/conversations.history", params=params)
+        if resp.status_code == _RATE_LIMITED_STATUS:
+            retry_after = resp.headers.get("Retry-After", "unknown")
+            raise ValueError(f"Rate limited by Slack API; retry after {retry_after}s")
+        resp.raise_for_status()
         body = resp.json()
         if not body.get("ok"):
             raise ValueError(f"Slack API error in conversations.history: {body.get('error', 'unknown')}")
@@ -97,6 +113,10 @@ class SlackConnector(ConnectorBase):
         if q.cursor:
             params["cursor"] = q.cursor
         resp = await c.get("/users.list", params=params)
+        if resp.status_code == _RATE_LIMITED_STATUS:
+            retry_after = resp.headers.get("Retry-After", "unknown")
+            raise ValueError(f"Rate limited by Slack API; retry after {retry_after}s")
+        resp.raise_for_status()
         body = resp.json()
         if not body.get("ok"):
             raise ValueError(f"Slack API error in users.list: {body.get('error', 'unknown')}")
@@ -111,6 +131,10 @@ class SlackConnector(ConnectorBase):
             raise ValueError("Missing 'channel' in message payload")
         body_data = {k: v for k, v in data.items() if k != "channel"}
         resp = await c.post("/chat.postMessage", json={"channel": channel, **body_data})
+        if resp.status_code == _RATE_LIMITED_STATUS:
+            retry_after = resp.headers.get("Retry-After", "unknown")
+            raise ValueError(f"Rate limited by Slack API; retry after {retry_after}s")
+        resp.raise_for_status()
         body: dict[str, Any] = resp.json()
         if not body.get("ok"):
             raise ValueError(f"Slack API error: {body.get('error', 'unknown')}")
