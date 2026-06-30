@@ -1,10 +1,11 @@
 """POST /api/v1/runs — manual pipeline trigger and run lifecycle endpoints."""
 
+import difflib
 import json
 import logging
 import uuid
 from decimal import Decimal
-from typing import Any
+from typing import Any, Literal
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, status
 from pydantic import BaseModel, Field
@@ -933,4 +934,165 @@ async def reveal_node_prompt(
         prompt=full_prompt,
         messages=masked_messages,
         token_count=token_count,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Node output diff across runs (task-agent-output-diff)
+# ---------------------------------------------------------------------------
+
+
+class NodeOutputDiffLine(BaseModel):
+    type: Literal["unchanged", "removed", "added"]
+    content: str
+    line_a: int | None = None
+    line_b: int | None = None
+
+
+class NodeOutputDiffRequest(BaseModel):
+    run_id_a: uuid.UUID
+    node_id_a: str
+    run_id_b: uuid.UUID
+    node_id_b: str
+
+
+class NodeOutputDiffResponse(BaseModel):
+    run_id_a: uuid.UUID
+    run_id_b: uuid.UUID
+    node_output_a: Any = None
+    node_output_b: Any = None
+    diff_lines: list[NodeOutputDiffLine]
+    has_diff: bool
+
+
+@router.post("/diff", response_model=NodeOutputDiffResponse)
+async def diff_node_output(
+    body: NodeOutputDiffRequest,
+    session: AsyncSession = Depends(get_db_session),
+    principal: AuthenticatedPrincipal = Depends(get_current_user),
+) -> NodeOutputDiffResponse:
+    """Diff a specific node's output across two runs.
+
+    Accepts two (run_id, node_id) pairs, fetches each node's output,
+    applies sensitive masking, and returns a structured line-level diff
+    using difflib.SequenceMatcher.
+    """
+    async with session.begin():
+        await set_rls_org(session, principal.organisation_id)
+        run_a = await get_run(session, body.run_id_a)
+        run_b = await get_run(session, body.run_id_b)
+
+    if run_a is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Run {body.run_id_a} not found",
+        )
+    if run_b is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Run {body.run_id_b} not found",
+        )
+
+    outputs_a = run_a.outputs_json or {}
+    outputs_b = run_b.outputs_json or {}
+
+    node_output_a = outputs_a.get(body.node_id_a)
+    node_output_b = outputs_b.get(body.node_id_b)
+
+    if node_output_a is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Node {body.node_id_a} not found in run {body.run_id_a} outputs",
+        )
+    if node_output_b is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Node {body.node_id_b} not found in run {body.run_id_b} outputs",
+        )
+
+    masked_a = _mask_output_value(node_output_a)
+    masked_b = _mask_output_value(node_output_b)
+
+    text_a = json.dumps(masked_a, indent=2)
+    text_b = json.dumps(masked_b, indent=2)
+
+    lines_a = text_a.splitlines(keepends=True)
+    lines_b = text_b.splitlines(keepends=True)
+
+    differ = difflib.SequenceMatcher(None, lines_a, lines_b)
+    diff_lines: list[NodeOutputDiffLine] = []
+    line_a = 1
+    line_b = 1
+
+    for op, i1, i2, j1, j2 in differ.get_opcodes():
+        if op == "equal":
+            for _ in range(i2 - i1):
+                diff_lines.append(
+                    NodeOutputDiffLine(
+                        type="unchanged",
+                        content=lines_a[i1].rstrip("\n"),
+                        line_a=line_a,
+                        line_b=line_b,
+                    )
+                )
+                line_a += 1
+                line_b += 1
+            i1, j1 = i2, j2
+        elif op == "replace":
+            for _ in range(i2 - i1):
+                diff_lines.append(
+                    NodeOutputDiffLine(
+                        type="removed",
+                        content=lines_a[i1].rstrip("\n"),
+                        line_a=line_a,
+                        line_b=None,
+                    )
+                )
+                line_a += 1
+                i1 += 1
+            for _ in range(j2 - j1):
+                diff_lines.append(
+                    NodeOutputDiffLine(
+                        type="added",
+                        content=lines_b[j1].rstrip("\n"),
+                        line_a=None,
+                        line_b=line_b,
+                    )
+                )
+                line_b += 1
+                j1 += 1
+        elif op == "delete":
+            for _ in range(i2 - i1):
+                diff_lines.append(
+                    NodeOutputDiffLine(
+                        type="removed",
+                        content=lines_a[i1].rstrip("\n"),
+                        line_a=line_a,
+                        line_b=None,
+                    )
+                )
+                line_a += 1
+                i1 += 1
+        elif op == "insert":
+            for _ in range(j2 - j1):
+                diff_lines.append(
+                    NodeOutputDiffLine(
+                        type="added",
+                        content=lines_b[j1].rstrip("\n"),
+                        line_a=None,
+                        line_b=line_b,
+                    )
+                )
+                line_b += 1
+                j1 += 1
+
+    has_diff = any(d.type != "unchanged" for d in diff_lines)
+
+    return NodeOutputDiffResponse(
+        run_id_a=body.run_id_a,
+        run_id_b=body.run_id_b,
+        node_output_a=masked_a,
+        node_output_b=masked_b,
+        diff_lines=diff_lines,
+        has_diff=has_diff,
     )

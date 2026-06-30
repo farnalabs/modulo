@@ -817,6 +817,22 @@ export interface paths {
       }
     }
   }
+  '/api/v1/runs/diff': {
+    post: {
+      requestBody: {
+        content: {
+          'application/json': components['schemas']['NodeOutputDiffRequest']
+        }
+      }
+      responses: {
+        200: {
+          content: {
+            'application/json': components['schemas']['NodeOutputDiffResponse']
+          }
+        }
+      }
+    }
+  }
   '/api/v1/runs/{run_id}': {
     get: {
       parameters: {
@@ -1476,6 +1492,26 @@ export interface components {
       total: number
       page: number
       page_size: number
+    }
+    NodeOutputDiffRequest: {
+      run_id_a: string
+      node_id_a: string
+      run_id_b: string
+      node_id_b: string
+    }
+    NodeOutputDiffLine: {
+      type: 'unchanged' | 'removed' | 'added'
+      content: string
+      line_a: number | null
+      line_b: number | null
+    }
+    NodeOutputDiffResponse: {
+      run_id_a: string
+      run_id_b: string
+      node_output_a: Record<string, unknown> | null
+      node_output_b: Record<string, unknown> | null
+      diff_lines: components['schemas']['NodeOutputDiffLine'][]
+      has_diff: boolean
     }
     RateLimitRuleResponse: {
       path_prefix: string

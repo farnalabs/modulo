@@ -570,3 +570,137 @@ async def test_run_in_background_marks_run_failed_on_executor_error() -> None:
 
         mock_rls.assert_awaited_once_with(mock_session, org_id)
         mock_update.assert_awaited_once_with(mock_session, run_id, "failed", error_code="internal_error")
+
+
+# ---------------------------------------------------------------------------
+# POST /api/v1/runs/diff — node output diff across runs (task-agent-output-diff)
+# ---------------------------------------------------------------------------
+
+
+def test_diff_node_output_success(client: TestClient) -> None:
+    run_id_a = uuid.uuid4()
+    run_id_b = uuid.uuid4()
+
+    run_a = _make_run(status="complete")
+    run_a.id = run_id_a
+    run_a.outputs_json = {"coder": {"result": "hello"}}
+
+    run_b = _make_run(status="complete")
+    run_b.id = run_id_b
+    run_b.outputs_json = {"coder": {"result": "world"}}
+
+    with (
+        patch("modulo.api.routes.runs.get_run") as mock_get_run,
+        patch("modulo.api.routes.runs.set_rls_org"),
+    ):
+        mock_get_run.side_effect = [run_a, run_b]
+        resp = client.post(
+            "/api/v1/runs/diff",
+            json={
+                "run_id_a": str(run_id_a),
+                "node_id_a": "coder",
+                "run_id_b": str(run_id_b),
+                "node_id_b": "coder",
+            },
+        )
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["has_diff"] is True
+    assert body["run_id_a"] == str(run_id_a)
+    assert body["run_id_b"] == str(run_id_b)
+    assert body["node_output_a"] == {"result": "hello"}
+    assert body["node_output_b"] == {"result": "world"}
+    types = [l["type"] for l in body["diff_lines"]]
+    assert "added" in types
+    assert "removed" in types
+    assert "unchanged" in types
+
+
+def test_diff_node_output_identical(client: TestClient) -> None:
+    run_id_a = uuid.uuid4()
+    run_id_b = uuid.uuid4()
+
+    run_a = _make_run(status="complete")
+    run_a.id = run_id_a
+    run_a.outputs_json = {"coder": {"result": "hello"}}
+
+    run_b = _make_run(status="complete")
+    run_b.id = run_id_b
+    run_b.outputs_json = {"coder": {"result": "hello"}}
+
+    with (
+        patch("modulo.api.routes.runs.get_run") as mock_get_run,
+        patch("modulo.api.routes.runs.set_rls_org"),
+    ):
+        mock_get_run.side_effect = [run_a, run_b]
+        resp = client.post(
+            "/api/v1/runs/diff",
+            json={
+                "run_id_a": str(run_id_a),
+                "node_id_a": "coder",
+                "run_id_b": str(run_id_b),
+                "node_id_b": "coder",
+            },
+        )
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["has_diff"] is False
+    for line in body["diff_lines"]:
+        assert line["type"] == "unchanged"
+
+
+def test_diff_node_output_run_not_found(client: TestClient) -> None:
+    run_b = _make_run(status="complete")
+    run_b.id = uuid.uuid4()
+    run_b.outputs_json = {"coder": {"result": "world"}}
+
+    with (
+        patch("modulo.api.routes.runs.get_run") as mock_get_run,
+        patch("modulo.api.routes.runs.set_rls_org"),
+    ):
+        mock_get_run.side_effect = [None, run_b]
+        resp = client.post(
+            "/api/v1/runs/diff",
+            json={
+                "run_id_a": str(uuid.uuid4()),
+                "node_id_a": "coder",
+                "run_id_b": str(run_b.id),
+                "node_id_b": "coder",
+            },
+        )
+
+    assert resp.status_code == 404
+    assert "not found" in resp.json()["detail"].lower()
+
+
+def test_diff_node_output_node_not_found(client: TestClient) -> None:
+    run_id_a = uuid.uuid4()
+    run_id_b = uuid.uuid4()
+
+    run_a = _make_run(status="complete")
+    run_a.id = run_id_a
+    run_a.outputs_json = {"other-node": "value"}
+
+    run_b = _make_run(status="complete")
+    run_b.id = run_id_b
+    run_b.outputs_json = {"coder": {"result": "world"}}
+
+    with (
+        patch("modulo.api.routes.runs.get_run") as mock_get_run,
+        patch("modulo.api.routes.runs.set_rls_org"),
+    ):
+        mock_get_run.side_effect = [run_a, run_b]
+        resp = client.post(
+            "/api/v1/runs/diff",
+            json={
+                "run_id_a": str(run_id_a),
+                "node_id_a": "coder",
+                "run_id_b": str(run_id_b),
+                "node_id_b": "coder",
+            },
+        )
+
+    assert resp.status_code == 404
+    assert "coder" in resp.json()["detail"]
