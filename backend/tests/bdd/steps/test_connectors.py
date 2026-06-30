@@ -2831,3 +2831,226 @@ def step_shortcut_story_fields(ctx):
     assert "id" in rec and "name" in rec, (
         f"Record missing story fields: {rec}"
     )
+
+
+# ============================================================================
+# connectors/youtrack_connector.feature  —  8 scenarios
+# ============================================================================
+try:
+    scenarios("../features/connectors/youtrack_connector.feature")
+except (FileNotFoundError, OSError):
+    pass
+
+
+@given("a YouTrack connector with valid credentials")
+def step_youtrack_connector(ctx):
+    from unittest.mock import AsyncMock
+
+    mock_connector = AsyncMock()
+    mock_connector.connector_type = "youtrack"
+
+    async def mock_query(q):
+        from modulo.connectors.base import ConnectorResult
+
+        match q.resource:
+            case "issues":
+                query_filter = q.filters.get("query", "")
+                records = [
+                    {"id": "1-1", "idReadable": "PRJ-1", "summary": "Bug found"},
+                ] if query_filter else [
+                    {"id": "1-1", "idReadable": "PRJ-1", "summary": "First issue"},
+                    {"id": "1-2", "idReadable": "PRJ-2", "summary": "Second issue"},
+                ]
+                return ConnectorResult(records=records, total=len(records))
+            case "issue":
+                issue_id = q.filters.get("issue_id", "")
+                if not issue_id:
+                    raise ValueError("YouTrack issue query requires 'issue_id' filter")
+                return ConnectorResult(
+                    records=[{"id": "1-1", "idReadable": issue_id, "summary": "Test issue"}]
+                )
+            case "projects":
+                return ConnectorResult(
+                    records=[
+                        {"id": "p1", "name": "Project Alpha", "shortName": "PA"},
+                        {"id": "p2", "name": "Project Beta", "shortName": "PB"},
+                    ],
+                    total=2,
+                )
+            case "users":
+                return ConnectorResult(
+                    records=[
+                        {"id": "u1", "name": "Alice", "login": "alice"},
+                        {"id": "u2", "name": "Bob", "login": "bob"},
+                    ],
+                    total=2,
+                )
+            case _:
+                raise ValueError(f"Unsupported YouTrack resource: {q.resource!r}")
+
+    async def mock_write(payload):
+        match payload.resource:
+            case "issue":
+                return {"id": "1-10", "idReadable": "PRJ-50", "summary": payload.data.get("summary", "")}
+            case "issue_update":
+                issue_id = payload.data.get("id", "")
+                if not issue_id:
+                    raise ValueError("Missing 'id' in issue_update payload")
+                return {"id": issue_id, "idReadable": "PRJ-42", "summary": payload.data.get("summary", "Updated")}
+            case "comment":
+                issue_id = payload.data.get("issue_id", "")
+                text = payload.data.get("text", "")
+                if not issue_id or not text:
+                    raise ValueError("comment requires 'issue_id' and 'text' in data")
+                return {"id": "c1", "text": text}
+            case _:
+                raise ValueError(f"Unsupported YouTrack write: {payload.resource!r}")
+
+    mock_connector.query = mock_query
+    mock_connector.write = mock_write
+    ctx["connector"] = mock_connector
+    ctx["query_error"] = None
+
+
+@when(
+    parsers.parse('I query YouTrack resource "{resource}"')
+)
+def step_youtrack_query_resource(resource, ctx):
+    from modulo.connectors.base import ConnectorQuery
+
+    q = ConnectorQuery(resource=resource)
+    import asyncio
+
+    try:
+        result = asyncio.new_event_loop().run_until_complete(ctx["connector"].query(q))
+        ctx["query_result"] = result
+        ctx["query_error"] = None
+    except Exception as exc:
+        ctx["query_result"] = None
+        ctx["query_error"] = str(exc)
+
+
+@when(
+    parsers.parse('I query YouTrack resource "{resource}" with query "{query_text}"')
+)
+def step_youtrack_query_issues(resource, query_text, ctx):
+    from modulo.connectors.base import ConnectorQuery
+
+    q = ConnectorQuery(resource=resource, filters={"query": query_text})
+    import asyncio
+
+    try:
+        result = asyncio.new_event_loop().run_until_complete(ctx["connector"].query(q))
+        ctx["query_result"] = result
+        ctx["query_error"] = None
+    except Exception as exc:
+        ctx["query_result"] = None
+        ctx["query_error"] = str(exc)
+
+
+@when(
+    parsers.parse('I query YouTrack resource "{resource}" with issue_id "{issue_id}"')
+)
+def step_youtrack_query_issue(resource, issue_id, ctx):
+    from modulo.connectors.base import ConnectorQuery
+
+    q = ConnectorQuery(resource=resource, filters={"issue_id": issue_id})
+    import asyncio
+
+    try:
+        result = asyncio.new_event_loop().run_until_complete(ctx["connector"].query(q))
+        ctx["query_result"] = result
+        ctx["query_error"] = None
+    except Exception as exc:
+        ctx["query_result"] = None
+        ctx["query_error"] = str(exc)
+
+
+@when(
+    parsers.parse('I query YouTrack resource "{resource}" without issue_id')
+)
+def step_youtrack_query_without_id(resource, ctx):
+    from modulo.connectors.base import ConnectorQuery
+
+    q = ConnectorQuery(resource=resource, filters={})
+    import asyncio
+
+    try:
+        asyncio.new_event_loop().run_until_complete(ctx["connector"].query(q))
+        ctx["query_result"] = "unexpected_success"
+        ctx["query_error"] = None
+    except Exception as exc:
+        ctx["query_result"] = None
+        ctx["query_error"] = str(exc)
+
+
+@when(
+    parsers.parse(
+        'I write YouTrack resource "{resource}" with summary "{summary}"'
+        ' and project "{project}"'
+    )
+)
+def step_youtrack_write_issue(resource, summary, project, ctx):
+    from modulo.connectors.base import ConnectorPayload
+
+    payload = ConnectorPayload(
+        resource=resource,
+        data={"summary": summary, "project": {"id": project}},
+    )
+    import asyncio
+
+    try:
+        result = asyncio.new_event_loop().run_until_complete(ctx["connector"].write(payload))
+        ctx["write_result"] = result
+        ctx["query_error"] = None
+    except Exception as exc:
+        ctx["write_result"] = None
+        ctx["query_error"] = str(exc)
+
+
+@when(
+    parsers.parse(
+        'I write YouTrack resource "{resource}" with issue_id "{issue_id}"'
+        ' and updated fields'
+    )
+)
+def step_youtrack_update_issue(resource, issue_id, ctx):
+    from modulo.connectors.base import ConnectorPayload
+
+    payload = ConnectorPayload(
+        resource=resource,
+        data={"id": issue_id, "summary": "Updated summary"},
+    )
+    import asyncio
+
+    try:
+        result = asyncio.new_event_loop().run_until_complete(ctx["connector"].write(payload))
+        ctx["write_result"] = result
+        ctx["query_error"] = None
+    except Exception as exc:
+        ctx["write_result"] = None
+        ctx["query_error"] = str(exc)
+
+
+@when(
+    parsers.parse(
+        'I write YouTrack resource "{resource}" with issue_id "{issue_id}"'
+        ' and text "{text}"'
+    )
+)
+def step_youtrack_write_comment(resource, issue_id, text, ctx):
+    from modulo.connectors.base import ConnectorPayload
+
+    payload = ConnectorPayload(
+        resource=resource,
+        data={"issue_id": issue_id, "text": text},
+    )
+    import asyncio
+
+    try:
+        result = asyncio.new_event_loop().run_until_complete(ctx["connector"].write(payload))
+        ctx["write_result"] = result
+        ctx["query_error"] = None
+    except Exception as exc:
+        ctx["write_result"] = None
+        ctx["query_error"] = str(exc)
