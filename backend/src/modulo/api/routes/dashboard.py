@@ -501,3 +501,39 @@ async def dashboard_trends(
         "correlation": correlation,
         "feedback_volume": feedback_volume,
     }
+
+
+@router.get("/daily-run-counts")
+async def daily_run_counts(
+    days: int = Query(30, ge=1, le=365),
+    session: AsyncSession = Depends(get_db_session),
+    principal: AuthenticatedPrincipal = Depends(get_current_user),
+) -> dict[str, Any]:
+    """Return daily run counts for the last N days, grouped by status."""
+    async with session.begin():
+        await set_rls_org(session, principal.organisation_id)
+
+        cutoff = datetime.now(UTC) - timedelta(days=days)
+
+        result = await session.execute(
+            select(
+                func.date_trunc("day", Run.created_at).label("day"),
+                Run.status,
+                func.count().label("count"),
+            )
+            .where(
+                Run.organisation_id == principal.organisation_id,
+                Run.created_at >= cutoff,
+            )
+            .group_by("day", Run.status)
+            .order_by("day")
+        )
+
+    daily: dict[str, dict[str, int]] = {}
+    for row in result:
+        day = row.day.isoformat()
+        if day not in daily:
+            daily[day] = {}
+        daily[day][row.status] = row.count
+
+    return {"daily_counts": daily, "days": days}

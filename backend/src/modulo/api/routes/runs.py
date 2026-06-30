@@ -313,28 +313,49 @@ class RunIOResponse(BaseModel):
     fixture_map: dict[str, str] | None = None
 
     def build_fixture_map(self) -> dict[str, str]:
-        """Generate a StubModelBackend fixture_map from run IO.
+        return _build_fixture_map(self.input_payload, self.outputs_json)
 
-        If outputs_json is structured per-node, each node's input->output
-        mapping becomes a fixture_map entry.  Otherwise, a single entry maps
-        the full input_payload to the serialised outputs.
-        """
-        fixture: dict[str, str] = {}
-        inp = self.input_payload or {}
-        out = self.outputs_json or {}
 
-        if isinstance(out, dict) and any(isinstance(v, dict) and "input" in v and "output" in v for v in out.values()):
-            for _node_id, node_io in out.items():
-                if isinstance(node_io, dict):
-                    node_input = node_io.get("input", str(inp))
-                    node_output = node_io.get("output", "")
-                    key = " ".join(str(node_input).split())
-                    fixture[key] = str(node_output)
-        else:
-            key = " ".join(str(inp).split())
-            fixture[key] = str(out)
+def _build_fixture_map(
+    input_payload: dict[str, Any] | None,
+    outputs_json: dict[str, Any] | None,
+) -> dict[str, str]:
+    """Generate a StubModelBackend fixture_map from run IO.
 
-        return fixture
+    If outputs_json is structured per-node (each value a dict with
+    ``input`` and ``output`` keys), each node's mapping becomes a
+    fixture_map entry.  Otherwise a single entry maps the full
+    input_payload to the serialised outputs.
+    """
+    fixture: dict[str, str] = {}
+    inp = input_payload or {}
+    out = outputs_json or {}
+
+    if isinstance(out, dict) and any(
+        isinstance(v, dict) and "input" in v and "output" in v for v in out.values()
+    ):
+        for _node_id, node_io in out.items():
+            if isinstance(node_io, dict):
+                node_input = node_io.get("input", str(inp))
+                node_output = node_io.get("output", "")
+                key = " ".join(str(node_input).split())
+                fixture[key] = str(node_output)
+    else:
+        key = " ".join(str(inp).split())
+        fixture[key] = str(out)
+
+    return fixture
+
+
+class FixtureExportResponse(BaseModel):
+    fixture_name: str
+    run_id: uuid.UUID
+    pipeline_id: uuid.UUID
+    status: str
+    snapshot_graph_json: dict[str, Any] = {}
+    input_payload: dict[str, Any] | None = None
+    outputs_json: dict[str, Any] | None = None
+    fixture_map: dict[str, str]
 
 
 @router.get("/{run_id}/io", response_model=RunIOResponse)
@@ -354,6 +375,47 @@ async def get_run_io_endpoint(
     resp = RunIOResponse(**result)
     resp.fixture_map = resp.build_fixture_map()
     return resp
+
+
+@router.get("/{run_id}/export-fixture", response_model=FixtureExportResponse)
+async def export_run_fixture(
+    run_id: uuid.UUID,
+    session: AsyncSession = Depends(get_db_session),
+    principal: AuthenticatedPrincipal = Depends(get_current_user),
+) -> FixtureExportResponse:
+    """Export run IO data as a StubModelBackend-compatible fixture.
+
+    Returns the input payload, per-node outputs, snapshot graph, and
+    a ``fixture_map`` that can be loaded directly into
+    ``StubModelBackend(fixture_map=...)`` for regression testing.
+    """
+    async with session.begin():
+        await set_rls_org(session, principal.organisation_id)
+        run = await get_run(session, run_id)
+        if run is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Run not found")
+
+        from modulo.db.models.pipeline_snapshot import PipelineSnapshot as SnapModel
+        snap_result = await session.execute(
+            select(SnapModel).where(SnapModel.id == run.snapshot_id)
+        )
+        snapshot = snap_result.scalar_one_or_none()
+
+    graph_json = snapshot.graph_json if snapshot else {}
+
+    fixture_map = _build_fixture_map(run.input_payload, run.outputs_json)
+    short_id = str(run.id).split("-")[0]
+
+    return FixtureExportResponse(
+        fixture_name=f"run_{short_id}_io",
+        run_id=run.id,
+        pipeline_id=run.pipeline_id,
+        status=run.status,
+        snapshot_graph_json=graph_json,
+        input_payload=run.input_payload,
+        outputs_json=run.outputs_json,
+        fixture_map=fixture_map,
+    )
 
 
 # ---------------------------------------------------------------------------

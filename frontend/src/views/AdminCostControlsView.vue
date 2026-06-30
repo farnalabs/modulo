@@ -1,0 +1,494 @@
+<template>
+  <div data-theme="agent" class="mx-auto max-w-6xl space-y-6 p-6">
+    <header>
+      <h1 class="text-3xl font-bold tracking-tight">Cost Controls</h1>
+      <p class="mt-1 text-muted-foreground">Budget overview, team budgets, alert thresholds, and billing settings</p>
+    </header>
+
+    <FeatureGate feature-name="admin_cost_controls" required-tier="enterprise">
+      <template #locked="{ tooltip }">
+        <div class="mb-4 flex items-center gap-2 rounded-lg border border-warning/30 bg-warning/5 p-4 text-sm text-warning">
+          <LockIcon :locked="true" :tooltip="tooltip" />
+          <span>Cost controls are not available on your current plan.</span>
+        </div>
+      </template>
+
+      <LoadingSpinner v-if="loading" />
+
+      <ErrorAlert v-else-if="loadError" :message="loadError" :on-retry="loadAll" />
+
+      <template v-else>
+        <Card>
+          <CardHeader>
+            <CardTitle>Budget Overview</CardTitle>
+            <CardDescription>Current billing period spend vs. budget</CardDescription>
+          </CardHeader>
+          <CardContent>
+            <LoadingSpinner v-if="costsLoading" />
+            <div v-else-if="costsError" class="text-sm text-destructive">{{ costsError }}</div>
+            <div v-else class="space-y-4">
+              <div class="grid grid-cols-1 gap-4 sm:grid-cols-3">
+                <div class="rounded-lg border bg-muted p-4">
+                  <p class="text-xs font-medium text-muted-foreground">Total Spend</p>
+                  <p class="mt-1 text-2xl font-bold" data-testid="cc-total-spend">{{ currencySymbol }}{{ totalSpend.toFixed(2) }}</p>
+                </div>
+                <div class="rounded-lg border bg-muted p-4">
+                  <p class="text-xs font-medium text-muted-foreground">Budget</p>
+                  <p class="mt-1 text-2xl font-bold" data-testid="cc-budget">{{ currencySymbol }}{{ settings.budget.toFixed(2) }}</p>
+                </div>
+                <div class="rounded-lg border bg-muted p-4">
+                  <p class="text-xs font-medium text-muted-foreground">Remaining</p>
+                  <p class="mt-1 text-2xl font-bold" :class="remainingClass" data-testid="cc-remaining">{{ currencySymbol }}{{ remainingBudget.toFixed(2) }}</p>
+                </div>
+              </div>
+              <div>
+                <div class="mb-1 flex items-center justify-between text-xs text-muted-foreground">
+                  <span>{{ percentUsed.toFixed(1) }}% used</span>
+                  <span>{{ currencySymbol }}{{ totalSpend.toFixed(2) }} / {{ currencySymbol }}{{ settings.budget.toFixed(2) }}</span>
+                </div>
+                <div class="h-2.5 w-full overflow-hidden rounded-full bg-muted">
+                  <div
+                    class="h-full rounded-full transition-all duration-500"
+                    :class="progressBarClass"
+                    :style="{ width: Math.min(percentUsed, 100) + '%' }"
+                    data-testid="cc-progress-bar"
+                  />
+                </div>
+              </div>
+            </div>
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader>
+            <CardTitle>Team Budgets</CardTitle>
+            <CardDescription>Set per-team budget caps for the current billing period</CardDescription>
+          </CardHeader>
+          <CardContent>
+            <div v-if="teams.length === 0" class="py-4 text-center text-sm text-muted-foreground">
+              No teams found.
+            </div>
+            <table v-else class="w-full text-sm">
+              <thead>
+                <tr class="border-b text-left text-muted-foreground">
+                  <th class="pb-2 font-medium">Team</th>
+                  <th class="pb-2 font-medium">Budget ({{ settings.currency }})</th>
+                  <th class="pb-2 font-medium">Spend</th>
+                  <th class="pb-2 font-medium" />
+                </tr>
+              </thead>
+              <tbody>
+                <tr v-for="team in teams" :key="team.id" class="border-b last:border-b-0">
+                  <td class="py-3 font-medium">{{ team.name }}</td>
+                  <td class="py-3">
+                    <Input
+                      :model-value="team.editingBudget ?? undefined" @update:model-value="(v: any) => team.editingBudget = v === '' ? null : Number(v)"
+                      type="number"
+                      min="0"
+                      step="0.01"
+                      placeholder="No budget"
+                      class="max-w-40"
+                      :data-testid="'cc-team-budget-' + team.id"
+                    />
+                    <p v-if="team.saveError" class="mt-1 text-xs text-destructive">{{ team.saveError }}</p>
+                  </td>
+                  <td class="py-3 text-sm text-muted-foreground">
+                    {{ currencySymbol }}{{ teamCostMap[team.id]?.toFixed(2) ?? '0.00' }}
+                  </td>
+                  <td class="py-3 text-right">
+                    <Button size="sm" :disabled="team.saving" :data-testid="'cc-team-save-' + team.id" @click="saveTeamBudget(team)">
+                      {{ team.saving ? 'Saving...' : 'Save' }}
+                    </Button>
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader>
+            <CardTitle>Alert Thresholds</CardTitle>
+            <CardDescription>Receive notifications when spend reaches these thresholds</CardDescription>
+          </CardHeader>
+          <CardContent>
+            <div class="space-y-3">
+              <label class="flex items-center gap-3 rounded-lg border p-3" data-testid="cc-threshold-50">
+                <input type="checkbox" :checked="settings.alertThresholds.includes(50)" @change="toggleThreshold(50)" class="h-4 w-4 rounded border-muted-foreground" />
+                <div>
+                  <p class="text-sm font-medium">50% — Caution</p>
+                  <p class="text-xs text-muted-foreground">Notify when half the budget is consumed</p>
+                </div>
+              </label>
+              <label class="flex items-center gap-3 rounded-lg border p-3" data-testid="cc-threshold-75">
+                <input type="checkbox" :checked="settings.alertThresholds.includes(75)" @change="toggleThreshold(75)" class="h-4 w-4 rounded border-muted-foreground" />
+                <div>
+                  <p class="text-sm font-medium">75% — Warning</p>
+                  <p class="text-xs text-muted-foreground">Notify when three-quarters of the budget is consumed</p>
+                </div>
+              </label>
+              <label class="flex items-center gap-3 rounded-lg border p-3" data-testid="cc-threshold-90">
+                <input type="checkbox" :checked="settings.alertThresholds.includes(90)" @change="toggleThreshold(90)" class="h-4 w-4 rounded border-muted-foreground" />
+                <div>
+                  <p class="text-sm font-medium">90% — Critical</p>
+                  <p class="text-xs text-muted-foreground">Notify when budget is nearly exhausted</p>
+                </div>
+              </label>
+              <label class="flex items-center gap-3 rounded-lg border p-3" data-testid="cc-threshold-100">
+                <input type="checkbox" :checked="settings.alertThresholds.includes(100)" @change="toggleThreshold(100)" class="h-4 w-4 rounded border-muted-foreground" />
+                <div>
+                  <p class="text-sm font-medium">100% — Exceeded</p>
+                  <p class="text-xs text-muted-foreground">Notify when the budget has been exceeded</p>
+                </div>
+              </label>
+              <p v-if="thresholdSaveError" class="text-xs text-destructive">{{ thresholdSaveError }}</p>
+            </div>
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader>
+            <CardTitle>Circuit Breaker</CardTitle>
+            <CardDescription>Automatically stop agent runs when budget is exceeded</CardDescription>
+          </CardHeader>
+          <CardContent>
+            <div class="flex items-center justify-between rounded-lg border p-4">
+              <div>
+                <p class="text-sm font-medium">Auto-stop on budget exceeded</p>
+                <p class="text-xs text-muted-foreground">
+                  When enabled, all agent runs will be paused once the budget is exceeded
+                </p>
+              </div>
+              <label class="relative inline-flex cursor-pointer items-center" data-testid="cc-circuit-breaker">
+                <input type="checkbox" class="peer sr-only" :checked="settings.circuitBreakerEnabled" @change="toggleCircuitBreaker" />
+                <div class="peer h-6 w-11 rounded-full bg-muted-foreground/30 after:absolute after:start-[2px] after:top-[2px] after:h-5 after:w-5 after:rounded-full after:border after:border-muted after:bg-background after:transition-all peer-checked:bg-primary peer-checked:after:translate-x-full" />
+              </label>
+            </div>
+            <p v-if="circuitBreakerSaveError" class="mt-2 text-xs text-destructive">{{ circuitBreakerSaveError }}</p>
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader>
+            <CardTitle>Billing Settings</CardTitle>
+            <CardDescription>Configure currency and billing period for cost tracking</CardDescription>
+          </CardHeader>
+          <CardContent>
+            <div class="grid grid-cols-1 gap-6 sm:grid-cols-2">
+              <div>
+                <label class="mb-1.5 block text-xs font-medium text-muted-foreground">Currency</label>
+                <select
+                  :value="settings.currency"
+                  @change="onCurrencyChange"
+                  class="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm"
+                  data-testid="cc-currency"
+                >
+                  <option value="USD">USD ($)</option>
+                  <option value="EUR">EUR (€)</option>
+                  <option value="GBP">GBP (£)</option>
+                </select>
+                <p v-if="currencySaveError" class="mt-1 text-xs text-destructive">{{ currencySaveError }}</p>
+              </div>
+              <div>
+                <label class="mb-1.5 block text-xs font-medium text-muted-foreground">Billing Period</label>
+                <select
+                  :value="settings.billingPeriod"
+                  @change="onBillingPeriodChange"
+                  class="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm"
+                  data-testid="cc-billing-period"
+                >
+                  <option value="monthly">Monthly</option>
+                  <option value="quarterly">Quarterly</option>
+                  <option value="annual">Annual</option>
+                </select>
+                <p v-if="periodSaveError" class="mt-1 text-xs text-destructive">{{ periodSaveError }}</p>
+              </div>
+            </div>
+            <div class="mt-6">
+              <label class="mb-1.5 block text-xs font-medium text-muted-foreground">Monthly Budget ({{ settings.currency }})</label>
+              <div class="flex items-end gap-3">
+                <div class="flex-1">
+                  <Input
+                    :model-value="settings.budget"
+                    @update:model-value="(v: any) => settings.budget = v === '' ? 0 : Number(v)"
+                    type="number"
+                    min="0"
+                    step="0.01"
+                    placeholder="0.00"
+                    data-testid="cc-budget-input"
+                  />
+                </div>
+                <Button :disabled="savingBudget" data-testid="cc-budget-save" @click="saveBudget">
+                  {{ savingBudget ? 'Saving...' : 'Save' }}
+                </Button>
+              </div>
+              <p v-if="budgetSaveError" class="mt-2 text-xs text-destructive">{{ budgetSaveError }}</p>
+              <p v-if="budgetSaveSuccess" class="mt-2 text-xs text-success">Budget updated.</p>
+            </div>
+          </CardContent>
+        </Card>
+      </template>
+    </FeatureGate>
+  </div>
+</template>
+
+<script setup lang="ts">
+import { ref, computed, onMounted } from 'vue'
+import { api } from '../lib/api/client'
+import { usePlanStore } from '../stores/planStore'
+import FeatureGate from '../components/FeatureGate.vue'
+import LockIcon from '../components/LockIcon.vue'
+import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
+import ErrorAlert from '../components/shared/ErrorAlert.vue'
+import { Card, CardHeader, CardTitle, CardDescription, CardContent } from '../components/ui/card'
+import { Input } from '../components/ui/input'
+import { Button } from '../components/ui/button'
+
+const planStore = usePlanStore()
+
+interface TeamCostItem {
+  team_id: string
+  team_name: string
+  cost_usd: number
+  limit_usd: number | null
+}
+
+interface CostReportData {
+  org_total_usd: number
+  teams: TeamCostItem[]
+}
+
+interface TeamLimitData {
+  id: string
+  name: string
+  daily_limit_usd: number | null
+}
+
+interface SpendLimitResponse {
+  org_daily_limit_usd: number | null
+  teams: TeamLimitData[]
+}
+
+interface ControlsSettings {
+  budget: number
+  currency: 'USD' | 'EUR' | 'GBP'
+  billingPeriod: 'monthly' | 'quarterly' | 'annual'
+  alertThresholds: number[]
+  circuitBreakerEnabled: boolean
+}
+
+interface TeamBudgetRow {
+  id: string
+  name: string
+  editingBudget: number | null
+  saving: boolean
+  saveError: string | null
+}
+
+const loading = ref(true)
+const loadError = ref<string | null>(null)
+
+const costsLoading = ref(true)
+const costsError = ref<string | null>(null)
+const totalSpend = ref(0)
+const teamCostMap = ref<Record<string, number>>({})
+
+const teams = ref<TeamBudgetRow[]>([])
+
+const settings = ref<ControlsSettings>({
+  budget: 0,
+  currency: 'USD',
+  billingPeriod: 'monthly',
+  alertThresholds: [50, 75, 90],
+  circuitBreakerEnabled: false,
+})
+
+const savingBudget = ref(false)
+const budgetSaveError = ref<string | null>(null)
+const budgetSaveSuccess = ref(false)
+
+const thresholdSaveError = ref<string | null>(null)
+const circuitBreakerSaveError = ref<string | null>(null)
+const currencySaveError = ref<string | null>(null)
+const periodSaveError = ref<string | null>(null)
+
+const currencyMap: Record<string, string> = {
+  USD: '$',
+  EUR: '€',
+  GBP: '£',
+}
+
+const currencySymbol = computed(() => currencyMap[settings.value.currency] ?? '$')
+
+const remainingBudget = computed(() => Math.max(0, settings.value.budget - totalSpend.value))
+const percentUsed = computed(() => {
+  if (settings.value.budget <= 0) return 0
+  return (totalSpend.value / settings.value.budget) * 100
+})
+
+const remainingClass = computed(() => {
+  if (settings.value.budget <= 0) return ''
+  const pct = percentUsed.value
+  if (pct >= 100) return 'text-destructive'
+  if (pct >= 90) return 'text-warning'
+  return 'text-success'
+})
+
+const progressBarClass = computed(() => {
+  const pct = percentUsed.value
+  if (pct >= 100) return 'bg-destructive'
+  if (pct >= 90) return 'bg-warning'
+  if (pct >= 75) return 'bg-amber-500'
+  return 'bg-primary'
+})
+
+async function loadAll() {
+  loading.value = true
+  loadError.value = null
+  await Promise.all([loadCosts(), loadLimits(), loadSettings()])
+  loading.value = false
+}
+
+async function loadCosts() {
+  costsLoading.value = true
+  costsError.value = null
+  try {
+    const { data, error: err } = await (api as any).GET('/api/v1/admin/costs')
+    if (err) {
+      costsError.value = `Failed to load costs: ${err}`
+    } else if (data) {
+      const resp = data as CostReportData
+      totalSpend.value = resp.org_total_usd ?? 0
+      const map: Record<string, number> = {}
+      for (const tc of resp.teams ?? []) {
+        map[tc.team_id] = tc.cost_usd
+      }
+      teamCostMap.value = map
+    }
+  } catch (e: unknown) {
+    costsError.value = `Failed to load costs: ${e instanceof Error ? e.message : String(e)}`
+  } finally {
+    costsLoading.value = false
+  }
+}
+
+async function loadLimits() {
+  try {
+    const { data, error: err } = await (api as any).GET('/api/v1/admin/costs/limits')
+    if (err) {
+      return
+    } else if (data) {
+      const resp = data as SpendLimitResponse
+      teams.value = (resp.teams ?? []).map((t) => ({
+        id: t.id,
+        name: t.name,
+        editingBudget: t.daily_limit_usd,
+        saving: false,
+        saveError: null,
+      }))
+    }
+  } catch {
+    // non-fatal
+  }
+}
+
+async function loadSettings() {
+  try {
+    const { data, error: err } = await (api as any).GET('/api/v1/admin/costs/controls')
+    if (err) {
+      // endpoint may not exist yet — use defaults
+      return
+    } else if (data) {
+      settings.value = { ...settings.value, ...data }
+    }
+  } catch {
+    // use defaults
+  }
+}
+
+async function saveTeamBudget(team: TeamBudgetRow) {
+  team.saving = true
+  team.saveError = null
+  try {
+    const { error: err } = await (api as any).PUT(`/api/v1/admin/costs/limits/teams/${team.id}`, {
+      body: { daily_limit_usd: team.editingBudget },
+    })
+    if (err) {
+      team.saveError = `Failed to save: ${err}`
+    }
+  } catch (e: unknown) {
+    team.saveError = `Failed to save: ${e instanceof Error ? e.message : String(e)}`
+  } finally {
+    team.saving = false
+  }
+}
+
+async function saveBudget() {
+  savingBudget.value = true
+  budgetSaveError.value = null
+  budgetSaveSuccess.value = false
+  try {
+    const { error: err } = await (api as any).PUT('/api/v1/admin/costs/controls', {
+      body: { budget: settings.value.budget },
+    })
+    if (err) {
+      budgetSaveError.value = `Failed to save: ${err}`
+    } else {
+      budgetSaveSuccess.value = true
+    }
+  } catch (e: unknown) {
+    budgetSaveError.value = `Failed to save: ${e instanceof Error ? e.message : String(e)}`
+  } finally {
+    savingBudget.value = false
+  }
+}
+
+function toggleThreshold(threshold: number) {
+  const idx = settings.value.alertThresholds.indexOf(threshold)
+  if (idx >= 0) {
+    settings.value.alertThresholds.splice(idx, 1)
+  } else {
+    settings.value.alertThresholds.push(threshold)
+    settings.value.alertThresholds.sort((a, b) => a - b)
+  }
+  thresholdSaveError.value = null
+  saveSettingsField({ alertThresholds: settings.value.alertThresholds })
+}
+
+function toggleCircuitBreaker() {
+  settings.value.circuitBreakerEnabled = !settings.value.circuitBreakerEnabled
+  circuitBreakerSaveError.value = null
+  saveSettingsField({ circuitBreakerEnabled: settings.value.circuitBreakerEnabled })
+}
+
+function onCurrencyChange(e: Event) {
+  const target = e.target as HTMLSelectElement
+  settings.value.currency = target.value as 'USD' | 'EUR' | 'GBP'
+  currencySaveError.value = null
+  saveSettingsField({ currency: settings.value.currency })
+}
+
+function onBillingPeriodChange(e: Event) {
+  const target = e.target as HTMLSelectElement
+  settings.value.billingPeriod = target.value as 'monthly' | 'quarterly' | 'annual'
+  periodSaveError.value = null
+  saveSettingsField({ billingPeriod: settings.value.billingPeriod })
+}
+
+let saveSettingsTimeout: ReturnType<typeof setTimeout> | null = null
+async function saveSettingsField(field: Partial<ControlsSettings>) {
+  if (saveSettingsTimeout) clearTimeout(saveSettingsTimeout)
+  saveSettingsTimeout = setTimeout(async () => {
+    try {
+      await (api as any).PUT('/api/v1/admin/costs/controls', { body: field })
+    } catch {
+      // Background save — errors shown inline
+    }
+  }, 500)
+}
+
+onMounted(() => {
+  planStore.fetchPlan()
+  loadAll()
+})
+</script>
