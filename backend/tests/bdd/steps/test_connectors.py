@@ -2069,22 +2069,25 @@ def step_trello_card_fields(ctx):
 
 
 # ============================================================================
-<<<<<<< HEAD
+
+# ============================================================================
 # connectors/asana.feature  —  11 scenarios
 # ============================================================================
 try:
     scenarios("../../features/connectors/asana.feature")
-=======
-# connectors/shortcut.feature  —  10 scenarios
-# ============================================================================
-try:
-    scenarios("../../features/connectors/shortcut.feature")
->>>>>>> task-shortcut-connector
 except (FileNotFoundError, OSError):
     pass
 
 
-<<<<<<< HEAD
+# ============================================================================
+# connectors/shortcut.feature  —  10 scenarios
+# ============================================================================
+try:
+    scenarios("../../features/connectors/shortcut.feature")
+except (FileNotFoundError, OSError):
+    pass
+
+
 @given("an Asana connector with valid Personal Access Token")
 def step_asana_connector(ctx):
     from unittest.mock import AsyncMock
@@ -2094,23 +2097,11 @@ def step_asana_connector(ctx):
 
     async def mock_health_check():
         return HealthResult(ok=True, detail="Test User")
-=======
-@given("a Shortcut connector with valid API token")
-def step_shortcut_connector(ctx):
-    from unittest.mock import AsyncMock
-
-    mock_connector = AsyncMock()
-    mock_connector.connector_type = "shortcut"
-
-    async def mock_health_check():
-        return HealthResult(ok=True, detail="testuser")
->>>>>>> task-shortcut-connector
 
     async def mock_query(q):
         from modulo.connectors.base import ConnectorResult
 
         match q.resource:
-<<<<<<< HEAD
             case "workspaces":
                 return ConnectorResult(
                     records=[
@@ -2127,35 +2118,12 @@ def step_shortcut_connector(ctx):
                     records=[
                         {"gid": "p1", "name": "Project Alpha", "workspace": {"gid": workspace}},
                         {"gid": "p2", "name": "Project Beta", "workspace": {"gid": workspace}},
-=======
-            case "stories":
-                return ConnectorResult(
-                    records=[
-                        {"id": 1, "name": "Story One", "story_type": "feature"},
-                        {"id": 2, "name": "Story Two", "story_type": "bug"},
-                    ],
-                    total=2,
-                )
-            case "story":
-                story_id = q.filters.get("story_id", "")
-                if not story_id:
-                    raise ValueError("Shortcut story query requires 'story_id' filter")
-                return ConnectorResult(
-                    records=[{"id": int(story_id), "name": "Single Story", "description": "A test story"}]
-                )
-            case "projects":
-                return ConnectorResult(
-                    records=[
-                        {"id": 1, "name": "Project Alpha"},
-                        {"id": 2, "name": "Project Beta"},
->>>>>>> task-shortcut-connector
                     ],
                     total=2,
                 )
             case "project":
                 project_id = q.filters.get("project_id", "")
                 if not project_id:
-<<<<<<< HEAD
                     raise ValueError("Asana project query requires 'project_id' filter")
                 return ConnectorResult(
                     records=[{"gid": project_id, "name": "Project Alpha", "notes": "A project"}]
@@ -2187,53 +2155,10 @@ def step_shortcut_connector(ctx):
                     records=[
                         {"gid": "u1", "name": "Alice"},
                         {"gid": "u2", "name": "Bob"},
-=======
-                    raise ValueError("Shortcut project query requires 'project_id' filter")
-                return ConnectorResult(
-                    records=[{"id": int(project_id), "name": "Single Project"}]
-                )
-            case "epics":
-                return ConnectorResult(
-                    records=[
-                        {"id": 1, "name": "Epic One"},
-                        {"id": 2, "name": "Epic Two"},
-                    ],
-                    total=2,
-                )
-            case "epic":
-                epic_id = q.filters.get("epic_id", "")
-                if not epic_id:
-                    raise ValueError("Shortcut epic query requires 'epic_id' filter")
-                return ConnectorResult(
-                    records=[{"id": int(epic_id), "name": "Single Epic"}]
-                )
-            case "workflows":
-                return ConnectorResult(
-                    records=[
-                        {"id": 1, "name": "Default Workflow"},
-                        {"id": 2, "name": "Custom Workflow"},
-                    ],
-                    total=2,
-                )
-            case "members":
-                return ConnectorResult(
-                    records=[
-                        {"id": "u1", "mention_name": "alice"},
-                        {"id": "u2", "mention_name": "bob"},
-                    ],
-                    total=2,
-                )
-            case "teams":
-                return ConnectorResult(
-                    records=[
-                        {"id": "t1", "name": "Engineering"},
-                        {"id": "t2", "name": "Design"},
->>>>>>> task-shortcut-connector
                     ],
                     total=2,
                 )
             case _:
-<<<<<<< HEAD
                 raise ValueError(f"Unsupported Asana resource: {q.resource!r}")
 
     async def mock_write(payload):
@@ -2278,7 +2203,98 @@ def step_shortcut_connector(ctx):
                 }
             case _:
                 raise ValueError(f"Unsupported Asana write resource: {payload.resource!r}")
-=======
+
+    mock_connector.health_check = mock_health_check
+    mock_connector.query = mock_query
+    mock_connector.write = mock_write
+    ctx["connector"] = mock_connector
+    ctx["query_error"] = None
+
+
+@given("a Shortcut connector with valid API token")
+def step_shortcut_connector(ctx):
+    from unittest.mock import AsyncMock
+
+    mock_connector = AsyncMock()
+    mock_connector.connector_type = "shortcut"
+
+    async def mock_health_check():
+        return HealthResult(ok=True, detail="testuser")
+
+    async def mock_query(q):
+        from modulo.connectors.base import ConnectorResult
+
+        match q.resource:
+            case "stories":
+                return ConnectorResult(
+                    records=[
+                        {"id": 1, "name": "Story One", "story_type": "feature"},
+                        {"id": 2, "name": "Story Two", "story_type": "bug"},
+                    ],
+                    total=2,
+                )
+            case "story":
+                story_id = q.filters.get("story_id", "")
+                if not story_id:
+                    raise ValueError("Shortcut story query requires 'story_id' filter")
+                return ConnectorResult(
+                    records=[{"id": int(story_id), "name": "Single Story", "description": "A test story"}]
+                )
+            case "projects":
+                return ConnectorResult(
+                    records=[
+                        {"id": 1, "name": "Project Alpha"},
+                        {"id": 2, "name": "Project Beta"},
+                    ],
+                    total=2,
+                )
+            case "project":
+                project_id = q.filters.get("project_id", "")
+                if not project_id:
+                    raise ValueError("Shortcut project query requires 'project_id' filter")
+                return ConnectorResult(
+                    records=[{"id": int(project_id), "name": "Single Project"}]
+                )
+            case "epics":
+                return ConnectorResult(
+                    records=[
+                        {"id": 1, "name": "Epic One"},
+                        {"id": 2, "name": "Epic Two"},
+                    ],
+                    total=2,
+                )
+            case "epic":
+                epic_id = q.filters.get("epic_id", "")
+                if not epic_id:
+                    raise ValueError("Shortcut epic query requires 'epic_id' filter")
+                return ConnectorResult(
+                    records=[{"id": int(epic_id), "name": "Single Epic"}]
+                )
+            case "workflows":
+                return ConnectorResult(
+                    records=[
+                        {"id": 1, "name": "Default Workflow"},
+                        {"id": 2, "name": "Custom Workflow"},
+                    ],
+                    total=2,
+                )
+            case "members":
+                return ConnectorResult(
+                    records=[
+                        {"id": "u1", "mention_name": "alice"},
+                        {"id": "u2", "mention_name": "bob"},
+                    ],
+                    total=2,
+                )
+            case "teams":
+                return ConnectorResult(
+                    records=[
+                        {"id": "t1", "name": "Engineering"},
+                        {"id": "t2", "name": "Design"},
+                    ],
+                    total=2,
+                )
+            case _:
                 raise ValueError(f"Unsupported Shortcut resource: {q.resource!r}")
 
     async def mock_write(payload):
@@ -2309,7 +2325,6 @@ def step_shortcut_connector(ctx):
                 }
             case _:
                 raise ValueError(f"Unsupported Shortcut write resource: {payload.resource!r}")
->>>>>>> task-shortcut-connector
 
     mock_connector.health_check = mock_health_check
     mock_connector.query = mock_query
@@ -2318,7 +2333,6 @@ def step_shortcut_connector(ctx):
     ctx["query_error"] = None
 
 
-<<<<<<< HEAD
 @given("the Asana API returns a valid user profile")
 def step_asana_health_valid(ctx):
     async def mock_health():
@@ -2328,7 +2342,11 @@ def step_asana_health_valid(ctx):
 
 @given("the Asana API returns 401 Unauthorized")
 def step_asana_health_401(ctx):
-=======
+    async def mock_health():
+        return HealthResult(ok=False, detail="HTTP 401: Unauthorized")
+    ctx["connector"].health_check = mock_health
+
+
 @given("the Shortcut API returns a valid member profile")
 def step_shortcut_health_valid(ctx):
     async def mock_health():
@@ -2338,24 +2356,17 @@ def step_shortcut_health_valid(ctx):
 
 @given("the Shortcut API returns 401 Unauthorized")
 def step_shortcut_health_401(ctx):
->>>>>>> task-shortcut-connector
     async def mock_health():
         return HealthResult(ok=False, detail="HTTP 401: Unauthorized")
     ctx["connector"].health_check = mock_health
 
 
-<<<<<<< HEAD
 @given("the Asana API returns available workspaces")
 def step_asana_workspaces_available(ctx):
-=======
-@given("the Shortcut API returns available stories")
-def step_shortcut_stories_available(ctx):
->>>>>>> task-shortcut-connector
     connector = ctx["connector"]
 
     async def mock_query(q):
         from modulo.connectors.base import ConnectorResult
-<<<<<<< HEAD
         if q.resource == "workspaces":
             return ConnectorResult(
                 records=[
@@ -2365,7 +2376,16 @@ def step_shortcut_stories_available(ctx):
                 total=2,
             )
         raise ValueError(f"Unsupported Asana resource: {q.resource!r}")
-=======
+
+    connector.query = mock_query
+
+
+@given("the Shortcut API returns available stories")
+def step_shortcut_stories_available(ctx):
+    connector = ctx["connector"]
+
+    async def mock_query(q):
+        from modulo.connectors.base import ConnectorResult
         if q.resource == "stories":
             return ConnectorResult(
                 records=[
@@ -2375,15 +2395,29 @@ def step_shortcut_stories_available(ctx):
                 total=2,
             )
         raise ValueError(f"Unsupported Shortcut resource: {q.resource!r}")
->>>>>>> task-shortcut-connector
 
     connector.query = mock_query
 
 
-<<<<<<< HEAD
 @given("the Asana API returns projects for a workspace")
 def step_asana_projects_available(ctx):
-=======
+    connector = ctx["connector"]
+
+    async def mock_query(q):
+        from modulo.connectors.base import ConnectorResult
+        if q.resource == "projects":
+            return ConnectorResult(
+                records=[
+                    {"gid": "p1", "name": "Project Alpha", "workspace": {"gid": q.filters.get("workspace", "")}},
+                    {"gid": "p2", "name": "Project Beta", "workspace": {"gid": q.filters.get("workspace", "")}},
+                ],
+                total=2,
+            )
+        raise ValueError(f"Unsupported Asana resource: {q.resource!r}")
+
+    connector.query = mock_query
+
+
 @given("the Shortcut API returns a single story")
 def step_shortcut_single_story(ctx):
     connector = ctx["connector"]
@@ -2401,7 +2435,6 @@ def step_shortcut_single_story(ctx):
 
 @given("the Shortcut API returns available projects")
 def step_shortcut_projects_available(ctx):
->>>>>>> task-shortcut-connector
     connector = ctx["connector"]
 
     async def mock_query(q):
@@ -2409,37 +2442,22 @@ def step_shortcut_projects_available(ctx):
         if q.resource == "projects":
             return ConnectorResult(
                 records=[
-<<<<<<< HEAD
-                    {"gid": "p1", "name": "Project Alpha", "workspace": {"gid": q.filters.get("workspace", "")}},
-                    {"gid": "p2", "name": "Project Beta", "workspace": {"gid": q.filters.get("workspace", "")}},
-                ],
-                total=2,
-            )
-        raise ValueError(f"Unsupported Asana resource: {q.resource!r}")
-=======
                     {"id": 1, "name": "Project Alpha"},
                     {"id": 2, "name": "Project Beta"},
                 ],
                 total=2,
             )
         raise ValueError(f"Unsupported Shortcut resource: {q.resource!r}")
->>>>>>> task-shortcut-connector
 
     connector.query = mock_query
 
 
-<<<<<<< HEAD
 @given("the Asana API returns a single project")
 def step_asana_single_project(ctx):
-=======
-@given("the Shortcut API returns available epics")
-def step_shortcut_epics_available(ctx):
->>>>>>> task-shortcut-connector
     connector = ctx["connector"]
 
     async def mock_query(q):
         from modulo.connectors.base import ConnectorResult
-<<<<<<< HEAD
         if q.resource == "project":
             return ConnectorResult(
                 records=[{"gid": q.filters.get("project_id", ""), "name": "Project Alpha", "notes": "A project"}]
@@ -2464,7 +2482,16 @@ def step_asana_tasks_available(ctx):
                 total=2,
             )
         raise ValueError(f"Unsupported Asana resource: {q.resource!r}")
-=======
+
+    connector.query = mock_query
+
+
+@given("the Shortcut API returns available epics")
+def step_shortcut_epics_available(ctx):
+    connector = ctx["connector"]
+
+    async def mock_query(q):
+        from modulo.connectors.base import ConnectorResult
         if q.resource == "epics":
             return ConnectorResult(
                 records=[
@@ -2474,12 +2501,10 @@ def step_asana_tasks_available(ctx):
                 total=2,
             )
         raise ValueError(f"Unsupported Shortcut resource: {q.resource!r}")
->>>>>>> task-shortcut-connector
 
     connector.query = mock_query
 
 
-<<<<<<< HEAD
 @given("the Asana API returns sections for a project")
 def step_asana_sections_available(ctx):
     connector = ctx["connector"]
@@ -2512,7 +2537,10 @@ def step_asana_accepts_task_create(ctx):
                 "resource_type": "task",
             }
         raise ValueError(f"Unsupported Asana write: {payload.resource!r}")
-=======
+
+    connector.write = mock_write
+
+
 @given("the Shortcut API accepts story creation")
 def step_shortcut_accepts_create(ctx):
     connector = ctx["connector"]
@@ -2526,12 +2554,10 @@ def step_shortcut_accepts_create(ctx):
                 "app_url": "https://shortcut.com/story/1",
             }
         raise ValueError(f"Unsupported Shortcut write: {payload.resource!r}")
->>>>>>> task-shortcut-connector
 
     connector.write = mock_write
 
 
-<<<<<<< HEAD
 @given("the Asana API accepts comments")
 def step_asana_accepts_comments(ctx):
     connector = ctx["connector"]
@@ -2544,7 +2570,10 @@ def step_asana_accepts_comments(ctx):
                 "resource_type": "story",
             }
         raise ValueError(f"Unsupported Asana write: {payload.resource!r}")
-=======
+
+    connector.write = mock_write
+
+
 @given("the Shortcut API accepts story updates")
 def step_shortcut_accepts_updates(ctx):
     connector = ctx["connector"]
@@ -2553,15 +2582,10 @@ def step_shortcut_accepts_updates(ctx):
         if payload.resource == "story_update":
             return {"id": int(payload.data.get("id", "0")), "name": payload.data.get("name", "Updated Name")}
         raise ValueError(f"Unsupported Shortcut write: {payload.resource!r}")
->>>>>>> task-shortcut-connector
 
     connector.write = mock_write
 
 
-<<<<<<< HEAD
-@given("the Asana connector is configured")
-def step_asana_configured(ctx):
-=======
 @given("the Shortcut API accepts story comments")
 def step_shortcut_accepts_comments(ctx):
     connector = ctx["connector"]
@@ -2574,14 +2598,17 @@ def step_shortcut_accepts_comments(ctx):
     connector.write = mock_write
 
 
+@given("the Asana connector is configured")
+def step_asana_configured(ctx):
+    pass
+
+
 @given("the Shortcut connector is configured")
 def step_shortcut_configured(ctx):
->>>>>>> task-shortcut-connector
     pass
 
 
 @when(
-<<<<<<< HEAD
     parsers.parse('I query resource "{resource}" with workspace "{workspace}"')
 )
 def step_asana_query_with_workspace(resource, workspace, ctx):
@@ -2606,14 +2633,24 @@ def step_asana_query_with_project_id(resource, project_id, ctx):
     from modulo.connectors.base import ConnectorQuery
 
     q = ConnectorQuery(resource=resource, filters={"project_id": project_id})
-=======
+    import asyncio
+
+    try:
+        result = asyncio.new_event_loop().run_until_complete(ctx["connector"].query(q))
+        ctx["query_result"] = result
+        ctx["query_error"] = None
+    except Exception as exc:
+        ctx["query_result"] = None
+        ctx["query_error"] = str(exc)
+
+
+@when(
     parsers.parse('I query resource "{resource}" with story_id "{story_id}"')
 )
 def step_shortcut_query_with_story_id(resource, story_id, ctx):
     from modulo.connectors.base import ConnectorQuery
 
     q = ConnectorQuery(resource=resource, filters={"story_id": story_id})
->>>>>>> task-shortcut-connector
     import asyncio
 
     try:
@@ -2627,26 +2664,15 @@ def step_shortcut_query_with_story_id(resource, story_id, ctx):
 
 @when(
     parsers.parse(
-<<<<<<< HEAD
         'I write resource "{resource}" with name "{name}" and project "{project}"'
     )
 )
 def step_asana_create_task(resource, name, project, ctx):
-=======
-        'I write resource "{resource}" with name "{name}" and project_id "{project_id}"'
-    )
-)
-def step_shortcut_create_story(resource, name, project_id, ctx):
->>>>>>> task-shortcut-connector
     from modulo.connectors.base import ConnectorPayload
 
     payload = ConnectorPayload(
         resource=resource,
-<<<<<<< HEAD
         data={"name": name, "projects": [project]},
-=======
-        data={"name": name, "project_id": int(project_id)},
->>>>>>> task-shortcut-connector
     )
     import asyncio
 
@@ -2661,26 +2687,15 @@ def step_shortcut_create_story(resource, name, project_id, ctx):
 
 @when(
     parsers.parse(
-<<<<<<< HEAD
-        'I write resource "{resource}" for task "{task_id}" with text "{text}"'
+        'I write resource "{resource}" with name "{name}" and project_id "{project_id}"'
     )
 )
-def step_asana_add_comment(resource, task_id, text, ctx):
-=======
-        'I write resource "{resource}" for story "{story_id}" with new name "{name}"'
-    )
-)
-def step_shortcut_update_story(resource, story_id, name, ctx):
->>>>>>> task-shortcut-connector
+def step_shortcut_create_story(resource, name, project_id, ctx):
     from modulo.connectors.base import ConnectorPayload
 
     payload = ConnectorPayload(
         resource=resource,
-<<<<<<< HEAD
-        data={"task_id": task_id, "text": text},
-=======
-        data={"id": story_id, "name": name},
->>>>>>> task-shortcut-connector
+        data={"name": name, "project_id": int(project_id)},
     )
     import asyncio
 
@@ -2693,7 +2708,52 @@ def step_shortcut_update_story(resource, story_id, name, ctx):
         ctx["query_error"] = str(exc)
 
 
-<<<<<<< HEAD
+@when(
+    parsers.parse(
+        'I write resource "{resource}" for task "{task_id}" with text "{text}"'
+    )
+)
+def step_asana_add_comment(resource, task_id, text, ctx):
+    from modulo.connectors.base import ConnectorPayload
+
+    payload = ConnectorPayload(
+        resource=resource,
+        data={"task_id": task_id, "text": text},
+    )
+    import asyncio
+
+    try:
+        result = asyncio.new_event_loop().run_until_complete(ctx["connector"].write(payload))
+        ctx["write_result"] = result
+        ctx["query_error"] = None
+    except Exception as exc:
+        ctx["write_result"] = None
+        ctx["query_error"] = str(exc)
+
+
+@when(
+    parsers.parse(
+        'I write resource "{resource}" for story "{story_id}" with new name "{name}"'
+    )
+)
+def step_shortcut_update_story(resource, story_id, name, ctx):
+    from modulo.connectors.base import ConnectorPayload
+
+    payload = ConnectorPayload(
+        resource=resource,
+        data={"id": story_id, "name": name},
+    )
+    import asyncio
+
+    try:
+        result = asyncio.new_event_loop().run_until_complete(ctx["connector"].write(payload))
+        ctx["write_result"] = result
+        ctx["query_error"] = None
+    except Exception as exc:
+        ctx["write_result"] = None
+        ctx["query_error"] = str(exc)
+
+
 @then("the records contain workspace metadata")
 def step_asana_workspace_metadata(ctx):
     result = ctx["query_result"]
@@ -2729,7 +2789,8 @@ def step_asana_section_metadata(ctx):
         assert "gid" in rec and "name" in rec, (
             f"Record missing section metadata: {rec}"
         )
-=======
+
+
 @when(
     parsers.parse(
         'I write resource "{resource}" for story "{story_id}" with text "{text}"'
@@ -2770,4 +2831,3 @@ def step_shortcut_story_fields(ctx):
     assert "id" in rec and "name" in rec, (
         f"Record missing story fields: {rec}"
     )
->>>>>>> task-shortcut-connector
