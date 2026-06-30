@@ -2,6 +2,7 @@
 id: feat-connectors-hub
 prd: 8.6
 delivery-tasks: []
+bdd:
   - backend/tests/bdd/features/connectors/connector_health.feature
   - backend/tests/bdd/features/connectors/github_connector.feature
   - backend/tests/bdd/features/connectors/jira_connector.feature
@@ -132,7 +133,7 @@ connector object for a single pipeline run. Every connector operation is wrapped
 
 - [x] `ConnectorType.GITLAB` with capabilities: `read`, `write`, `git_push`, `create_pr`
 - [x] Built-in connector type in `ConnectorType` enum and `_build_connector` switch
-- [x] Missing: comprehensive BDD scenarios — `github_connector.feature` is a placeholder
+- [x] Missing: comprehensive BDD scenarios — no GitLab-specific feature file exists
 
 ### Jira Connector
 
@@ -211,8 +212,7 @@ connector object for a single pipeline run. Every connector operation is wrapped
 
 ## Known Gaps
 
-- **BDD scenarios are placeholders** for 4 of 6 feature files: `github_connector.feature`, `jira_connector.feature`, `linear_connector.feature`, `slack_connector.feature` — all are TODO stubs with no real scenarios
-- **`schema_inference.feature`** is also a placeholder — no scenarios for connector sampling through the hub
+- **BDD scenarios are placeholders** for 5 of 6 feature files: `github_connector.feature`, `jira_connector.feature`, `linear_connector.feature`, `slack_connector.feature`, `schema_inference.feature` — all are TODO stubs with no real scenarios
 - **No BDD scenarios** for error-specific paths: `ConnectorDecryptError`, `ConnectorNotFoundError`, path traversal, missing config fields, unsupported resources
 - **`ConnectorACL` is constructed but never called** in the connector operation flow — the ACL `check()` method exists but is not invoked before `query()` or `write()` on the hub-returned connector
 - **Shell connector** in hub context passes `runtime_provider=None` — the connector cannot actually execute commands without a real provider; this is a partial initialisation
