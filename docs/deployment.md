@@ -248,6 +248,18 @@ CORS_MAX_AGE=3600
 
 ---
 
+## Configuration
+
+For the full environment variable reference, see [`docs/configuration-reference.md`](./configuration-reference.md).
+
+For system requirements (minimum resources, supported databases), see [`docs/system-requirements.md`](./system-requirements.md).
+
+For upgrade procedures on existing deployments, see [`docs/upgrade-process.md`](./upgrade-process.md).
+
+For the production launch checklist, see [`docs/public-launch-checklist.md`](./public-launch-checklist.md).
+
+---
+
 ## Environment variable reference
 
 | Variable | Required | Default | Description |

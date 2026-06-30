@@ -208,3 +208,10 @@ you want to offer Modulo as a service to external teams.
 Every user starts at the top. Most will be well served by the middle tier
 (Fly.io + optional E2B). Only regulated enterprises with existing infra
 need the bottom tier. The code and config are identical across all three.
+
+### Supporting resources
+
+- [System Requirements](./system-requirements.md) — minimum resources, supported databases
+- [Configuration Reference](./configuration-reference.md) — all environment variables
+- [Upgrade Process](./upgrade-process.md) — upgrading existing deployments
+- [Public Launch Checklist](./public-launch-checklist.md) — production readiness verification

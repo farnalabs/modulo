@@ -91,7 +91,7 @@ Common issues, their causes, and resolutions.
 - **SQLite mode**: No RLS enforcement, no advisory locks, no flood protection. Development only — not for production.
 - **Claim tokens**: Single-use with a 15-minute TTL. Expired tokens cannot be refreshed — re-claim the gate.
 - **WebSocket ring buffer**: Limited to 100 events per run. Older events are not available for reconnect replay.
-- **Postgres required for production**: SQLite is development-only. Postgres is the only supported production database.
+- **Postgres required for production**: SQLite is development-only. Postgres is the only supported production database. See [`docs/system-requirements.md`](./system-requirements.md).
 - **File upload limit**: Webhook payloads are limited to 10 MB.
 - **Concurrent runs**: Hard limit enforced by `max_concurrent_runs` config. Excess runs receive a 429 response.
 - **API key scoping**: Keys are scoped to `operator` and `runner` roles only. Admin operations require JWT auth.

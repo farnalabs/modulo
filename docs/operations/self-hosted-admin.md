@@ -11,6 +11,9 @@ provides.
 - `docs/security/secret-management.md` — key management and rotation
 - `docs/operations/backup.md` — backup/restore procedures
 - `docs/operations/admin-bypass.md` — LangGraph checkpoint bypass procedures
+- `docs/configuration-reference.md` — all env vars reference
+- `docs/system-requirements.md` — hardware and platform requirements
+- `docs/upgrade-process.md` — upgrade and rollback procedures
 
 ---
 
@@ -368,3 +371,7 @@ Emergency situation
 | Deployment security hardening | `docs/deployment-security.md` |
 | Deployment basics | `docs/deployment.md` |
 | Admin bypass audit log | `docs/operations/admin-bypass.md` §6 |
+| System requirements | `docs/system-requirements.md` |
+| Configuration reference | `docs/configuration-reference.md` |
+| Upgrade process | `docs/upgrade-process.md` |
+| Public launch checklist | `docs/public-launch-checklist.md` |
