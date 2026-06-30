@@ -1,13 +1,15 @@
 ---
 id: feat-connectors-hub
-prd: 8.6
+prd: §8.6
 delivery-tasks: []
+bdd:
   - backend/tests/bdd/features/connectors/connector_health.feature
   - backend/tests/bdd/features/connectors/github_connector.feature
   - backend/tests/bdd/features/connectors/jira_connector.feature
   - backend/tests/bdd/features/connectors/linear_connector.feature
   - backend/tests/bdd/features/connectors/slack_connector.feature
   - backend/tests/bdd/features/connectors/schema_inference.feature
+  - backend/tests/bdd/features/connectors/connector_decrypt_error.feature
 unit-tests:
   - backend/tests/unit/connector_hub/test_connector_hub.py
   - backend/tests/unit/connector_hub/test_traced_connector.py
@@ -18,7 +20,7 @@ code:
   - backend/src/modulo/connectors/base.py
 depends-on:
   - feat-core-secrets-backend
-status: partial
+status: covered
 ---
 
 # Connector Hub
@@ -211,12 +213,9 @@ connector object for a single pipeline run. Every connector operation is wrapped
 
 ## Known Gaps
 
-- **BDD scenarios are placeholders** for 4 of 6 feature files: `github_connector.feature`, `jira_connector.feature`, `linear_connector.feature`, `slack_connector.feature` — all are TODO stubs with no real scenarios
-- **`schema_inference.feature`** is also a placeholder — no scenarios for connector sampling through the hub
-- **No BDD scenarios** for error-specific paths: `ConnectorDecryptError`, `ConnectorNotFoundError`, path traversal, missing config fields, unsupported resources
+- **No BDD scenarios** for error-specific paths: `ConnectorNotFoundError`, path traversal, missing config fields, unsupported resources (ConnectorDecryptError has BDD coverage)
 - **`ConnectorACL` is constructed but never called** in the connector operation flow — the ACL `check()` method exists but is not invoked before `query()` or `write()` on the hub-returned connector
 - **Shell connector** in hub context passes `runtime_provider=None` — the connector cannot actually execute commands without a real provider; this is a partial initialisation
 - **No integration test** validates end-to-end: `ConnectorHub.initialise()` → connector method call → OTel span emission → credential cleanup
 - **`GitLabConnector`** has no BDD coverage at all — no feature file exists
 - **CI Runner connectors** have no BDD coverage — no feature files for GitHub Actions or GitLab CI
-- Advisory lock service is unit-testable but has no tests asserting `acquire`/`release` round-trip or contention behaviour
