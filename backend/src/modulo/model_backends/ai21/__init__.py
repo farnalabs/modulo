@@ -6,7 +6,7 @@ from typing import Any
 from langchain_core.messages import BaseMessage
 from langchain_openai import ChatOpenAI
 
-from modulo.model_backends.base import ModelBackendBase
+from modulo.model_backends.base import HealthResult, ModelBackendBase, _openai_compatible_health_check
 
 AI21_BASE_URL = "https://api.ai21.com/studio/v1"
 
@@ -27,6 +27,7 @@ class Ai21Backend(ModelBackendBase):
             **default_params,
         )
         self._backend_id = f"ai21/{model_id}"
+        self._api_key = api_key
 
     @property
     def backend_id(self) -> str:
@@ -34,6 +35,12 @@ class Ai21Backend(ModelBackendBase):
 
     def __repr__(self) -> str:
         return f"Ai21Backend(model_id={self._backend_id!r})"
+
+    async def health_check(self) -> HealthResult:
+        return await _openai_compatible_health_check(
+            base_url=AI21_BASE_URL,
+            api_key=self._api_key,
+        )
 
     async def invoke(self, messages: list[BaseMessage], **kwargs: Any) -> BaseMessage:
         return await self._model.ainvoke(messages, **kwargs)

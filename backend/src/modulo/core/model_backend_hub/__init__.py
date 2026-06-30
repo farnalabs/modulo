@@ -9,14 +9,11 @@ Usage:
     # After __aexit__: all backend references discarded, API keys gone.
 """
 
-import asyncio
 import json
 import uuid
 from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass
 from typing import Any
-
-from langchain_core.messages import HumanMessage
 
 from modulo.core.plugin_registry import get_plugin_registry
 from modulo.core.secrets_backend import SecretsBackend
@@ -198,23 +195,15 @@ class ModelBackendHub:
                 )
         raise BackendUnavailableError(backend_id)
 
-    CONNECTOR_TIMEOUT: float = 60.0
-
     async def health_check(self, backend_id: uuid.UUID) -> HealthResult:
-        """Check backend health with a minimal ping; update health state."""
+        """Check backend health via the backend's own lightweight health check."""
         if backend_id not in self._backends:
             return HealthResult(ok=False, detail="Backend not registered")
         backend = self._backends[backend_id]
         try:
-            await asyncio.wait_for(
-                backend.invoke([HumanMessage(content="ping")], max_tokens=1),
-                timeout=self.CONNECTOR_TIMEOUT,
-            )
-            self._healthy[backend_id] = True
-            return HealthResult(ok=True)
-        except TimeoutError:
-            self._healthy[backend_id] = False
-            return HealthResult(ok=False, detail="Health check timed out")
+            result = await backend.health_check()
+            self._healthy[backend_id] = result.ok
+            return result
         except Exception as exc:
             self._healthy[backend_id] = False
             return HealthResult(ok=False, detail=str(exc)[:500])
@@ -265,6 +254,8 @@ def _build_backend(
             )
         case "openai":
             return OpenAIBackend(api_key=creds["api_key"], model_id=model_id, **default_params)
+        case "openrouter":
+            return OpenRouterBackend(api_key=creds["api_key"], model_id=model_id, **default_params)
         case "lm_studio":
             base_url = creds.get("base_url", "http://localhost:1234/v1")
             return LmStudioBackend(

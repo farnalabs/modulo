@@ -17,7 +17,7 @@ from modulo.core.model_backend_hub import (
     ModelBackendHub,
 )
 from modulo.core.secrets_backend import create_secrets_backend
-from modulo.model_backends.base import ModelBackendBase
+from modulo.model_backends.base import HealthResult, ModelBackendBase
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -40,6 +40,11 @@ class _FakeBackend(ModelBackendBase):
     @property
     def backend_id(self) -> str:
         return self._bid
+
+    async def health_check(self) -> HealthResult:
+        if self._fail:
+            return HealthResult(ok=False, detail="Backend unavailable")
+        return HealthResult(ok=True)
 
     async def invoke(self, messages: list[BaseMessage], **kwargs: Any) -> BaseMessage:
         if self._fail:
@@ -286,6 +291,9 @@ async def test_initialise_plugin_fallback_backend():
         @property
         def backend_id(self) -> str:
             return f"plugin/{self._mid}"
+
+        async def health_check(self) -> HealthResult:
+            return HealthResult(ok=True)
 
         async def invoke(self, messages: list, **kwargs: Any) -> Any:
             from langchain_core.messages import AIMessage

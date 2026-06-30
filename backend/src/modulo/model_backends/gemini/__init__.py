@@ -3,10 +3,11 @@
 from collections.abc import AsyncIterator
 from typing import Any
 
+import httpx
 from langchain_core.messages import BaseMessage
 from langchain_google_genai import ChatGoogleGenerativeAI
 
-from modulo.model_backends.base import ModelBackendBase
+from modulo.model_backends.base import HealthResult, ModelBackendBase
 
 GEMINI_BASE_URL = "https://generativelanguage.googleapis.com/v1beta"
 
@@ -21,6 +22,7 @@ class GeminiBackend(ModelBackendBase):
             **default_params,
         )
         self._backend_id = f"gemini/{model_id}"
+        self._api_key = api_key
 
     @property
     def backend_id(self) -> str:
@@ -28,6 +30,21 @@ class GeminiBackend(ModelBackendBase):
 
     def __repr__(self) -> str:
         return f"GeminiBackend(model_id={self._backend_id!r})"
+
+    async def health_check(self) -> HealthResult:
+        try:
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                response = await client.get(
+                    f"{GEMINI_BASE_URL}/models",
+                    params={"key": self._api_key},
+                )
+                if response.is_success:
+                    return HealthResult(ok=True)
+                return HealthResult(ok=False, detail=response.text[:500])
+        except httpx.TimeoutException:
+            return HealthResult(ok=False, detail="Health check timed out")
+        except Exception as exc:
+            return HealthResult(ok=False, detail=str(exc)[:500])
 
     async def invoke(self, messages: list[BaseMessage], **kwargs: Any) -> BaseMessage:
         return await self._model.ainvoke(messages, **kwargs)
