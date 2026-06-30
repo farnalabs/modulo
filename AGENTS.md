@@ -446,6 +446,7 @@ Wait-Process -Name "uv" -ErrorAction SilentlyContinue  # doesn't block; just con
 - Dynamic TypedDicts for LangGraph state → use `dict[str, Any]`
 - Commit `.env` files or any file containing secrets
 - Implement admin API keys — only `operator` and `runner` roles
+- Treat a task as "blocked" because it needs both frontend + backend changes — fix both sides in the same session. The worktree + subagent workflow supports cross-cutting fixes. Agents are expected to be comfortable fixing Python and TypeScript/Vue in the same task.
 
 ## Lessons Learned
 
