@@ -47,6 +47,7 @@ from modulo.connectors.jira import JiraConnector
 from modulo.connectors.linear import LinearConnector
 from modulo.connectors.monday import MondayConnector
 from modulo.connectors.notion import NotionConnector
+from modulo.connectors.pagerduty import PagerDutyConnector
 from modulo.connectors.sentry import SentryConnector
 from modulo.connectors.sharepoint import SharePointConnector
 from modulo.connectors.shortcut import ShortcutConnector
@@ -359,6 +360,8 @@ def _build_connector(type_id: str, config: dict[str, Any], creds: dict[str, Any]
                 organization=config.get("organization", ""),
                 base_url=config.get("base_url", "https://sentry.io"),
             )
+        case "pagerduty":
+            return PagerDutyConnector(token=_get_cred(creds, "token", type_id))
         case _:
             registry = get_plugin_registry()
             if registry.has_connector_type(type_id):
