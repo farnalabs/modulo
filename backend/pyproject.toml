@@ -40,6 +40,7 @@ dependencies = [
     # Required by langgraph>=1.0.10
     "langchain-core>=1.2.31",
     "langchain-anthropic>=1.4.0",
+    "langchain-cohere>=0.3.0",
     # PYSEC-2026-76 / CVE-2026-41488: SSRF via TOCTOU in _url_to_size()
     "langchain-openai>=1.1.14",
     # Database

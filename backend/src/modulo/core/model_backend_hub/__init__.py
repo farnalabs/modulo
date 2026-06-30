@@ -24,6 +24,7 @@ from modulo.model_backends.ai21 import Ai21Backend
 from modulo.model_backends.anthropic import AnthropicBackend
 from modulo.model_backends.azure_openai import AzureOpenAIBackend
 from modulo.model_backends.base import ModelBackendBase
+from modulo.model_backends.cohere import CohereBackend
 from modulo.model_backends.deepseek import DeepSeekBackend
 from modulo.model_backends.fireworks import FireworksBackend
 from modulo.model_backends.grok import GrokBackend
@@ -34,12 +35,12 @@ from modulo.model_backends.lm_studio import LmStudioBackend
 from modulo.model_backends.localai import LocalAIBackend
 from modulo.model_backends.ollama import OllamaBackend
 from modulo.model_backends.openai import OpenAIBackend
-from modulo.model_backends.tgi import TgiBackend
+from modulo.model_backends.openrouter import OpenRouterBackend
 from modulo.model_backends.perplexity import PerplexityBackend
 from modulo.model_backends.qwen import QwenBackend
+from modulo.model_backends.tgi import TgiBackend
 from modulo.model_backends.togetherai import TogetherAIBackend
 from modulo.model_backends.vllm import VllmBackend
-from modulo.model_backends.openrouter import OpenRouterBackend
 
 
 @dataclass
@@ -235,6 +236,8 @@ def _build_backend(
             return Ai21Backend(api_key=creds["api_key"], model_id=model_id, **default_params)
         case "anthropic":
             return AnthropicBackend(api_key=creds["api_key"], model_id=model_id, **default_params)
+        case "cohere":
+            return CohereBackend(api_key=creds["api_key"], model_id=model_id, **default_params)
         case "azure_openai":
             azure_endpoint = creds.get("azure_endpoint", "")
             if not azure_endpoint:
