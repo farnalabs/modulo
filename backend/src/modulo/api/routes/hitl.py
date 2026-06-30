@@ -478,7 +478,7 @@ def _gate_to_response(g: HitlClaim) -> GateResponse:
         run_id=g.run_id,
         gate_id=g.gate_id,
         pipeline_id=g.pipeline_id,
-        claimed_by=g.claimed_by,
+        claimed_by=g.account_id,
         claimed_at=g.claimed_at.isoformat() if g.claimed_at else None,
         expires_at=g.expires_at.isoformat() if g.expires_at else None,
         decision=g.decision,

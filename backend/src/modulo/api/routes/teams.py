@@ -105,7 +105,7 @@ async def list_teams_endpoint(
                 id=str(t.id),
                 name=t.name,
                 description=t.description,
-                created_by=str(t.created_by),
+                created_by=str(t.account_id),
                 created_at=t.created_at.isoformat(),
             )
             for t in result.items
@@ -145,7 +145,7 @@ async def create_team_endpoint(
         id=str(team.id),
         name=team.name,
         description=team.description,
-        created_by=str(team.created_by),
+        created_by=str(team.account_id),
         created_at=team.created_at.isoformat(),
     )
 
@@ -168,7 +168,7 @@ async def get_team_endpoint(
         id=str(team.id),
         name=team.name,
         description=team.description,
-        created_by=str(team.created_by),
+        created_by=str(team.account_id),
         created_at=team.created_at.isoformat(),
     )
 
@@ -196,7 +196,7 @@ async def update_team_endpoint(
         id=str(team.id),
         name=team.name,
         description=team.description,
-        created_by=str(team.created_by),
+        created_by=str(team.account_id),
         created_at=team.created_at.isoformat(),
     )
 

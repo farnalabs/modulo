@@ -254,7 +254,7 @@ class FeedbackManager:
             snapshot_id=original_run.snapshot_id,
             trigger_type="correction",
             input_payload=input_payload,
-            created_by=record.rejected_by,
+            created_by=record.account_id,
             parent_run_id=record.run_id,
         )
 

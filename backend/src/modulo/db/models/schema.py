@@ -15,7 +15,7 @@ class Schema(OrgScoped):
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     description: Mapped[str | None] = mapped_column(String(2000))
     abstract_name: Mapped[str | None] = mapped_column(String(255))
-    created_by: Mapped[uuid.UUID] = mapped_column(Uuid(), ForeignKey("users.id", ondelete="RESTRICT"), nullable=False)
+    account_id: Mapped[uuid.UUID] = mapped_column(Uuid(), ForeignKey("accounts.id", ondelete="RESTRICT"), nullable=False)
     deprecated: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="false")
     deprecated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
@@ -40,4 +40,4 @@ class SchemaVersion(OrgScoped):
     definition_json: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
     published: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="false")
     deprecated: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="false")
-    created_by: Mapped[uuid.UUID] = mapped_column(Uuid(), ForeignKey("users.id", ondelete="RESTRICT"), nullable=False)
+    account_id: Mapped[uuid.UUID] = mapped_column(Uuid(), ForeignKey("accounts.id", ondelete="RESTRICT"), nullable=False)

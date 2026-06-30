@@ -67,7 +67,7 @@ async def list_triggers(
                 "cron_timezone": r.cron_timezone,
                 "last_fired_at": r.last_fired_at.isoformat() if r.last_fired_at else None,
                 "next_fire_at": r.next_fire_at.isoformat() if r.next_fire_at else None,
-                "created_by": str(r.created_by),
+                "created_by": str(r.account_id),
             }
             for r in rows
         ],
@@ -716,7 +716,7 @@ async def list_pipeline_triggers(
                 "cron_timezone": r.cron_timezone,
                 "last_fired_at": r.last_fired_at.isoformat() if r.last_fired_at else None,
                 "next_fire_at": r.next_fire_at.isoformat() if r.next_fire_at else None,
-                "created_by": str(r.created_by),
+                "created_by": str(r.account_id),
                 "created_at": r.created_at.isoformat() if r.created_at else None,
             }
             for r in rows

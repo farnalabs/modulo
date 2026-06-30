@@ -182,7 +182,7 @@ class HITLManager:
             raise GateNotFoundError(run_id, gate_id)
         if gate_check.decision is not None:
             raise GateAlreadyDecidedError(run_id, gate_id)
-        if gate_check.claimed_by is not None:
+        if gate_check.account_id is not None:
             raise AlreadyClaimedError(run_id, gate_id)
         if gate_check.required_team_id is not None:
             tm_result = await session.execute(
@@ -219,11 +219,11 @@ class HITLManager:
                 HitlClaim.run_id == run_id,
                 HitlClaim.gate_id == gate_id,
                 HitlClaim.organisation_id == org_id,
-                HitlClaim.claimed_by.is_(None),
+                HitlClaim.account_id.is_(None),
                 HitlClaim.decision.is_(None),
             )
             .values(
-                claimed_by=claimant_id,
+                account_id=claimant_id,
                 claimed_at=now,
                 claim_token=token,
                 expires_at=now + timedelta(minutes=expiry_minutes),
@@ -486,10 +486,10 @@ class HITLManager:
             .where(
                 HitlClaim.organisation_id == org_id,
                 HitlClaim.expires_at < now,
-                HitlClaim.claimed_by.is_not(None),
+                HitlClaim.account_id.is_not(None),
                 HitlClaim.decision.is_(None),
             )
-            .values(claimed_by=None, claimed_at=None, claim_token=None, expires_at=None)
+            .values(account_id=None, claimed_at=None, claim_token=None, expires_at=None)
             .returning(HitlClaim.run_id, HitlClaim.gate_id)
         )
         rows = (await session.execute(stmt)).all()
@@ -518,7 +518,7 @@ class HITLManager:
         result = await session.execute(
             select(HitlClaim).where(
                 HitlClaim.organisation_id == org_id,
-                HitlClaim.claimed_by.is_(None),
+                HitlClaim.account_id.is_(None),
                 HitlClaim.decision.is_(None),
             )
         )
@@ -540,7 +540,7 @@ class HITLManager:
         result = await session.execute(
             select(HitlClaim).where(
                 HitlClaim.organisation_id == org_id,
-                HitlClaim.claimed_by.is_not(None),
+                HitlClaim.account_id.is_not(None),
                 HitlClaim.decision.is_(None),
                 HitlClaim.claimed_at.is_not(None),
                 HitlClaim.claimed_at < now - threshold,
@@ -551,7 +551,7 @@ class HITLManager:
             {
                 "run_id": g.run_id,
                 "gate_id": g.gate_id,
-                "claimed_by": g.claimed_by,
+                "claimed_by": g.account_id,
                 "claimed_at": g.claimed_at,
                 "minutes_overdue": int((now - g.claimed_at).total_seconds() / 60),
             }

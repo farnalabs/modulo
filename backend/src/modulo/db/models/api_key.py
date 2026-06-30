@@ -19,7 +19,7 @@ class OrgApiKey(OrgScoped):
     hashed_secret: Mapped[str] = mapped_column(String(64), nullable=False)
     role: Mapped[str] = mapped_column(String(20), nullable=False)
     team_id: Mapped[uuid.UUID | None] = mapped_column(Uuid(), ForeignKey("teams.id", ondelete="CASCADE"))
-    created_by: Mapped[uuid.UUID] = mapped_column(Uuid(), ForeignKey("users.id", ondelete="RESTRICT"), nullable=False)
+    account_id: Mapped[uuid.UUID] = mapped_column(Uuid(), ForeignKey("accounts.id", ondelete="RESTRICT"), nullable=False)
     last_used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))

@@ -604,7 +604,7 @@ async def observe_run_node(
         run_id=run_id,
         node_id=node_id,
         human_observed_at=obs.human_observed_at.isoformat() if obs.human_observed_at else None,
-        human_observed_by=str(obs.human_observed_by) if obs.human_observed_by else None,
+        human_observed_by=str(obs.account_id) if obs.account_id else None,
     )
 
 

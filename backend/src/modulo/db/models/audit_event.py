@@ -11,7 +11,7 @@ class AuditEvent(OrgScoped):
     __tablename__ = "audit_events"
 
     event_type: Mapped[str] = mapped_column(String(100), nullable=False, index=True)
-    actor_user_id: Mapped[uuid.UUID | None] = mapped_column(Uuid(), ForeignKey("users.id", ondelete="SET NULL"))
+    account_id: Mapped[uuid.UUID | None] = mapped_column(Uuid(), ForeignKey("accounts.id", ondelete="SET NULL"))
     resource_type: Mapped[str | None] = mapped_column(String(100))
     resource_id: Mapped[uuid.UUID | None] = mapped_column(Uuid())
     payload_json: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False, default=dict)

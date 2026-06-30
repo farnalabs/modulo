@@ -431,7 +431,7 @@ async def admin_create_team(
         id=str(team.id),
         name=team.name,
         description=team.description,
-        created_by=str(team.created_by),
+        created_by=str(team.account_id),
         created_at=team.created_at.isoformat(),
     )
 
@@ -756,7 +756,7 @@ async def admin_deactivate_user(
         active_keys = (
             await session.execute(
                 select(OrgApiKey).where(
-                    OrgApiKey.created_by == user_id,
+                    OrgApiKey.account_id == user_id,
                     OrgApiKey.revoked_at.is_(None),
                 )
             )
@@ -877,7 +877,7 @@ async def admin_list_teams(
                 id=str(t.id),
                 name=t.name,
                 description=t.description,
-                created_by=str(t.created_by),
+                created_by=str(t.account_id),
                 member_count=member_counts.get(t.id, 0),
                 created_at=t.created_at.isoformat(),
             )
@@ -919,7 +919,7 @@ async def admin_update_team(
         id=str(team.id),
         name=team.name,
         description=team.description,
-        created_by=str(team.created_by),
+        created_by=str(team.account_id),
         created_at=team.created_at.isoformat(),
     )
 

@@ -25,7 +25,7 @@ async def create_pipeline(
     *,
     org_id: uuid.UUID,
     name: str,
-    created_by: uuid.UUID,
+    account_id: uuid.UUID,
     description: str | None = None,
     visibility: str = "org",
     owner_team_id: uuid.UUID | None = None,
@@ -38,7 +38,7 @@ async def create_pipeline(
     pipeline = Pipeline(
         organisation_id=org_id,
         name=name,
-        created_by=created_by,
+        created_by=account_id,
         description=description,
         visibility=visibility,
         owner_team_id=owner_team_id,
@@ -156,7 +156,7 @@ async def clone_pipeline(
     *,
     org_id: uuid.UUID,
     pipeline_id: uuid.UUID,
-    created_by: uuid.UUID,
+    account_id: uuid.UUID,
     new_name: str | None = None,
 ) -> Pipeline | None:
     """Deep-copy a pipeline and its graph (nodes + first-class edges).
@@ -176,7 +176,7 @@ async def clone_pipeline(
     cloned = Pipeline(
         organisation_id=org_id,
         name=name,
-        created_by=created_by,
+        created_by=account_id,
         description=source.description,
         visibility=source.visibility,
         owner_team_id=source.owner_team_id,

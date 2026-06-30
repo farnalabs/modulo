@@ -14,13 +14,13 @@ async def create_team(
     *,
     org_id: uuid.UUID,
     name: str,
-    created_by: uuid.UUID,
+    account_id: uuid.UUID,
     description: str | None = None,
 ) -> Team:
     team = Team(
         organisation_id=org_id,
         name=name,
-        created_by=created_by,
+        created_by=account_id,
         description=description,
     )
     session.add(team)

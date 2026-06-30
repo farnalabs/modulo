@@ -157,7 +157,7 @@ async def run_variant_weighted(
     org_id: uuid.UUID,
     group: VariantGroup,
     input_payload: dict[str, Any] | None = None,
-    created_by: uuid.UUID | None = None,
+    account_id: uuid.UUID | None = None,
     trigger_type: str = "manual",
 ) -> dict[str, Any] | None:
     """Select a variant, merge its run_context_overrides, and create a run.
@@ -188,7 +188,7 @@ async def run_variant_weighted(
         else variant["snapshot_id"],
         trigger_type=trigger_type,
         input_payload=merged_payload,
-        created_by=created_by,
+        created_by=account_id,
     )
 
     await increment_run_count(session, group.id)

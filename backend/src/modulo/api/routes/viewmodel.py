@@ -333,7 +333,7 @@ async def viewmodel_list_views(
 
 def _enrich_view(view: SavedView, user_id: uuid.UUID) -> ViewInfo:
     info = ViewInfo.model_validate(view)
-    info.created_by_me = view.created_by == user_id
+    info.created_by_me = view.account_id == user_id
     return info
 
 

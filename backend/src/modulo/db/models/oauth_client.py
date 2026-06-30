@@ -21,6 +21,6 @@ class OAuthClient(OrgScoped):
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     scopes: Mapped[str] = mapped_column(Text, nullable=False, comment="Space-separated scope values")
     redirect_uris: Mapped[str] = mapped_column(Text, nullable=False, comment="Space-separated allowed redirect URIs")
-    created_by: Mapped[uuid.UUID | None] = mapped_column(
-        Uuid(), ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    account_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid(), ForeignKey("accounts.id", ondelete="SET NULL"), nullable=True
     )

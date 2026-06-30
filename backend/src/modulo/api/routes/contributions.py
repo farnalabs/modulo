@@ -229,7 +229,7 @@ async def list_contribution_versions_endpoint(
                 contribution_status=v.contribution_status,
                 name=v.name,
                 slug=v.slug,
-                created_by=v.created_by.hex if v.created_by else None,
+                created_by=v.account_id.hex if v.account_id else None,
             )
             for v in versions
         ],
