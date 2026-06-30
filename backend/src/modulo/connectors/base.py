@@ -25,7 +25,9 @@ class Capability(StrEnum):
 class ConnectorType(StrEnum):
     FILESYSTEM = "filesystem"
     GITHUB = "github"
+    BITBUCKET = "bitbucket"
     CI_RUNNER = "ci-runner"
+    GITEA = "gitea"
     GITLAB = "gitlab"
     JIRA = "jira"
     LINEAR = "linear"
@@ -41,6 +43,8 @@ class ConnectorType(StrEnum):
                 return frozenset({Capability.READ, Capability.WRITE})
             case ConnectorType.GITHUB:
                 return frozenset({Capability.READ, Capability.WRITE, Capability.GIT_PUSH, Capability.CREATE_PR})
+            case ConnectorType.BITBUCKET:
+                return frozenset({Capability.READ, Capability.WRITE, Capability.GIT_PUSH, Capability.CREATE_PR})
             case ConnectorType.CI_RUNNER:
                 return frozenset(
                     {
@@ -50,6 +54,8 @@ class ConnectorType(StrEnum):
                         Capability.LIST_RUNS,
                     }
                 )
+            case ConnectorType.GITEA:
+                return frozenset({Capability.READ, Capability.WRITE, Capability.GIT_PUSH, Capability.CREATE_PR})
             case ConnectorType.GITLAB:
                 return frozenset({Capability.READ, Capability.WRITE, Capability.GIT_PUSH, Capability.CREATE_PR})
             case ConnectorType.JIRA:
