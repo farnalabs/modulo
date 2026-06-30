@@ -47,6 +47,7 @@ from modulo.connectors.jira import JiraConnector
 from modulo.connectors.linear import LinearConnector
 from modulo.connectors.monday import MondayConnector
 from modulo.connectors.notion import NotionConnector
+from modulo.connectors.sentry import SentryConnector
 from modulo.connectors.sharepoint import SharePointConnector
 from modulo.connectors.shortcut import ShortcutConnector
 from modulo.connectors.slack import SlackConnector
@@ -351,6 +352,12 @@ def _build_connector(type_id: str, config: dict[str, Any], creds: dict[str, Any]
                 api_key=_get_cred(creds, "api_key", type_id),
                 app_key=_get_cred(creds, "app_key", type_id),
                 site=config.get("site", "us"),
+            )
+        case "sentry":
+            return SentryConnector(
+                token=_get_cred(creds, "token", type_id),
+                organization=config.get("organization", ""),
+                base_url=config.get("base_url", "https://sentry.io"),
             )
         case _:
             registry = get_plugin_registry()
