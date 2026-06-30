@@ -45,6 +45,7 @@ dependencies = [
     "langchain-openai>=1.1.14",
     "langchain-aws>=0.2.0",
     "langchain-google-genai>=4.2.6",
+    "langchain-mistralai>=0.2.0",
     # Database
     "sqlalchemy[asyncio]>=2.0.30",
     "alembic>=1.13.0",
