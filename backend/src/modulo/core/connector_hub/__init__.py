@@ -44,6 +44,7 @@ from modulo.connectors.notion import NotionConnector
 from modulo.connectors.shortcut import ShortcutConnector
 from modulo.connectors.slack import SlackConnector
 from modulo.connectors.trello import TrelloConnector
+from modulo.connectors.sharepoint import SharePointConnector
 from modulo.connectors.youtrack import YouTrackConnector
 from modulo.core.pipeline_engine.output_filter import filter_payload_for_injection
 from modulo.core.plugin_registry import get_plugin_registry
@@ -286,6 +287,8 @@ def _build_connector(type_id: str, config: dict[str, Any], creds: dict[str, Any]
             return JiraConnector(instance=instance, creds=creds)
         case "slack":
             return SlackConnector(bot_token=_get_cred(creds, "bot_token", type_id))
+        case "sharepoint":
+            return SharePointConnector(token=_get_cred(creds, "token", type_id))
         case "shortcut":
             return ShortcutConnector(token=_get_cred(creds, "token", type_id))
         case "trello":

@@ -36,6 +36,7 @@ class ConnectorType(StrEnum):
     ASANA = "asana"
     SLACK = "slack"
     SHELL = "shell"
+    SHAREPOINT = "sharepoint"
     MONDAY = "monday"
     CUSTOM = "custom"
     SHORTCUT = "shortcut"
@@ -87,6 +88,7 @@ class ConnectorType(StrEnum):
             case ConnectorType.YOUTRACK:
             case ConnectorType.NOTION:
             case ConnectorType.CONFLUENCE:
+            case ConnectorType.SHAREPOINT:
                 return frozenset({Capability.READ, Capability.WRITE})
             case _:
                 return frozenset()
