@@ -326,7 +326,7 @@ def refresh_token_seq0(request: Any, ctx: dict[str, Any]) -> None:
         "alice",
         _VALID_32,
         organisation_id=str(_ORG_ID),
-        user_id=str(_USER_ID),
+        account_id=str(_USER_ID),
         org_role="admin",
         token_family=family_id,
         token_sequence=0,

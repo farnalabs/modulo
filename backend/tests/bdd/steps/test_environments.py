@@ -467,7 +467,7 @@ def authenticate_as_org(org: str, ctx, request):
         app.dependency_overrides[get_current_user] = lambda: AuthenticatedPrincipal(
             username="otheruser",
             organisation_id=_ALT_ORG_ID,
-            user_id=uuid.uuid4(),
+            account_id=uuid.uuid4(),
             org_role="viewer",
         )
         ctx["alt_org"] = True

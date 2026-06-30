@@ -91,7 +91,7 @@ def _use_admin_auth(request: Any) -> None:
     _app.dependency_overrides[_get_current_user] = lambda: _Principal(
         username="admin",
         organisation_id=_ORG_ID,
-        user_id=uuid.UUID("00000000-0000-0000-0000-000000000002"),
+        account_id=uuid.UUID("00000000-0000-0000-0000-000000000002"),
         org_role="admin",
     )
 
@@ -105,7 +105,7 @@ def _use_viewer_auth() -> None:
     _app.dependency_overrides[_get_current_user] = lambda: _Principal(
         username="viewer",
         organisation_id=_ORG_ID,
-        user_id=uuid.uuid4(),
+        account_id=uuid.uuid4(),
         org_role="viewer",
     )
 # ===========================================================================

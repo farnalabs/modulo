@@ -1,3 +1,4 @@
+from modulo.db.models.account import Account
 from modulo.db.models.agent import Agent
 from modulo.db.models.api_key import OrgApiKey
 from modulo.db.models.audit_event import AuditChainHead, AuditEvent
@@ -18,6 +19,7 @@ from modulo.db.models.notification_delivery import NotificationDeliveryLog
 from modulo.db.models.notification_endpoint import NotificationEndpoint
 from modulo.db.models.oauth_client import OAuthClient
 from modulo.db.models.oauth_token import OAuthAuthorizationCode, OAuthTokenFamily
+from modulo.db.models.org_membership import OrgMembership
 from modulo.db.models.organisation import Organisation
 from modulo.db.models.pipeline import Pipeline
 from modulo.db.models.pipeline_edge import PipelineEdge
@@ -44,6 +46,7 @@ from modulo.db.models.webhook import WebhookDedupHash, WebhookPayload
 from modulo.db.models.workspace_lease import WorkspaceLease
 
 __all__ = [
+    "Account",
     "Agent",
     "AuditChainHead",
     "AuditEvent",
@@ -66,6 +69,7 @@ __all__ = [
     "OAuthTokenFamily",
     "OrgApiKey",
     "OrgDailyRunCount",
+    "OrgMembership",
     "OrgScoped",
     "Organisation",
     "Pipeline",

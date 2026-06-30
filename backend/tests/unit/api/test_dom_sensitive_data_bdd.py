@@ -69,7 +69,7 @@ def client() -> Generator[TestClient, None, None]:
     app.dependency_overrides[get_db_session] = override_session
     app.dependency_overrides[_get_engine] = lambda: MagicMock()
     app.dependency_overrides[get_current_user] = lambda: AuthenticatedPrincipal(
-        username="admin", organisation_id=_ORG_ID, user_id=_USER_ID, org_role="admin"
+        username="admin", organisation_id=_ORG_ID, account_id=_USER_ID, org_role="admin"
     )
     yield TestClient(app)
     app.dependency_overrides.clear()
@@ -95,7 +95,7 @@ def viewer_client() -> Generator[TestClient, None, None]:
     app.dependency_overrides[get_db_session] = override_session
     app.dependency_overrides[_get_engine] = lambda: MagicMock()
     app.dependency_overrides[get_current_user] = lambda: AuthenticatedPrincipal(
-        username="viewer", organisation_id=_ORG_ID, user_id=_USER_ID, org_role="viewer"
+        username="viewer", organisation_id=_ORG_ID, account_id=_USER_ID, org_role="viewer"
     )
     yield TestClient(app)
     app.dependency_overrides.clear()
@@ -320,7 +320,7 @@ class TestNonAdminReveal:
         app.dependency_overrides[get_current_user] = lambda: AuthenticatedPrincipal(
             username="viewer",
             organisation_id=_ORG_ID,
-            user_id=_USER_ID,
+            account_id=_USER_ID,
             org_role="viewer",
         )
 
@@ -336,7 +336,7 @@ class TestNonAdminReveal:
         app.dependency_overrides[get_current_user] = lambda: AuthenticatedPrincipal(
             username="admin",
             organisation_id=_ORG_ID,
-            user_id=_USER_ID,
+            account_id=_USER_ID,
             org_role="admin",
         )
 

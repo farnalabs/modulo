@@ -3,6 +3,7 @@ from modulo.db.models import Base
 
 def test_initial_schema_contains_required_tables() -> None:
     required = {
+        "accounts",
         "agents",
         "audit_chain_heads",
         "audit_events",
@@ -14,9 +15,13 @@ def test_initial_schema_contains_required_tables() -> None:
         "hitl_claims",
         "library_primitives",
         "model_backends",
+        "node_categories",
+        "node_observations",
+        "nodes",
         "notification_delivery_log",
         "notification_endpoints",
         "oauth_authorization_codes",
+        "org_memberships",
         "oauth_clients",
         "oauth_token_families",
         "org_api_keys",
@@ -25,9 +30,11 @@ def test_initial_schema_contains_required_tables() -> None:
         "pipeline_edges",
         "pipeline_snapshots",
         "pipelines",
+        "primitive_abuse_reports",
         "primitive_ratings",
         "publishers",
         "runs",
+        "saved_views",
         "scheduled_reports",
         "schema_versions",
         "schemas",
@@ -52,7 +59,7 @@ def test_initial_schema_contains_required_tables() -> None:
 
 def test_all_resource_tables_are_organisation_scoped() -> None:
     for name, table in Base.metadata.tables.items():
-        if name != "organisations":
+        if name not in ("organisations", "accounts"):
             assert "organisation_id" in table.c, f"{name} is missing organisation_id"
 
 

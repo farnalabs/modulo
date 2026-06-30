@@ -87,7 +87,7 @@ def client() -> Generator[TestClient, None, None]:
     app.dependency_overrides[get_current_user] = lambda: AuthenticatedPrincipal(
         username="testuser",
         organisation_id=_ORG_ID,
-        user_id=_USER_ID,
+        account_id=_USER_ID,
         org_role="admin",
     )
     yield TestClient(app)
@@ -346,7 +346,7 @@ def test_delivery_log_requires_auth(client: TestClient) -> None:
     client.app.dependency_overrides[get_current_user] = lambda: AuthenticatedPrincipal(
         username="testuser",
         organisation_id=_ORG_ID,
-        user_id=_USER_ID,
+        account_id=_USER_ID,
         org_role="admin",
     )
     assert resp.status_code in (401, 403)
@@ -356,14 +356,14 @@ def test_delivery_log_requires_admin_role(client: TestClient) -> None:
     client.app.dependency_overrides[get_current_user] = lambda: AuthenticatedPrincipal(
         username="testuser",
         organisation_id=_ORG_ID,
-        user_id=_USER_ID,
+        account_id=_USER_ID,
         org_role="operator",
     )
     resp = client.get(f"/api/v1/admin/notifications/{_WEBHOOK_ID}/deliveries")
     client.app.dependency_overrides[get_current_user] = lambda: AuthenticatedPrincipal(
         username="testuser",
         organisation_id=_ORG_ID,
-        user_id=_USER_ID,
+        account_id=_USER_ID,
         org_role="admin",
     )
     assert resp.status_code == 403
