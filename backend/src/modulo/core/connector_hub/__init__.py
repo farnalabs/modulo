@@ -40,6 +40,7 @@ from modulo.connectors.datadog import DatadogConnector
 from modulo.connectors.dropbox_paper import DropboxPaperConnector
 from modulo.connectors.filesystem import FilesystemConnector
 from modulo.connectors.gitea import GiteaConnector
+from modulo.connectors.grafana import GrafanaConnector
 from modulo.connectors.github import GitHubConnector
 from modulo.connectors.gitlab import GitLabConnector
 from modulo.connectors.jenkins import JenkinsConnector
@@ -362,6 +363,8 @@ def _build_connector(type_id: str, config: dict[str, Any], creds: dict[str, Any]
             )
         case "pagerduty":
             return PagerDutyConnector(token=_get_cred(creds, "token", type_id))
+        case "grafana":
+            return GrafanaConnector(token=_get_cred(creds, "token", type_id), base_url=config.get("base_url", "http://localhost:3000"))
         case _:
             registry = get_plugin_registry()
             if registry.has_connector_type(type_id):
