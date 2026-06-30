@@ -25,9 +25,18 @@ class AuthenticatedPrincipal:
     """Identity and tenant claims from a verified access token."""
 
     username: str
-    organisation_id: uuid.UUID
-    user_id: uuid.UUID
-    org_role: str
+    organisation_id: uuid.UUID | None
+    account_id: uuid.UUID
+    org_role: str | None
+    is_system_admin: bool = False
+
+    @property
+    def user_id(self) -> uuid.UUID:
+        return self.account_id
+
+
+def _resolve_account_id(*, account_id: str = "", user_id: str = "") -> str:
+    return account_id or user_id
 
 
 def create_access_token(
@@ -35,16 +44,20 @@ def create_access_token(
     secret_key: str,
     *,
     organisation_id: str,
-    user_id: str,
+    account_id: str = "",
     org_role: str,
+    is_system_admin: bool = False,
+    user_id: str = "",
 ) -> str:
     """1-hour access token."""
+    resolved_account_id = _resolve_account_id(account_id=account_id, user_id=user_id)
     now = datetime.now(UTC)
     claims = {
         "sub": subject,
         "org_id": organisation_id,
-        "user_id": user_id,
+        "account_id": resolved_account_id,
         "org_role": org_role,
+        "is_system_admin": is_system_admin,
         "iat": now,
         "exp": now + timedelta(minutes=_ACCESS_TOKEN_MINUTES),
     }
@@ -56,18 +69,22 @@ def create_refresh_token(
     secret_key: str,
     *,
     organisation_id: str,
-    user_id: str,
+    account_id: str = "",
     org_role: str,
+    is_system_admin: bool = False,
     token_family: str,
     token_sequence: int,
+    user_id: str = "",
 ) -> str:
     """24-hour refresh token with family+sequence for rotation detection."""
+    resolved_account_id = _resolve_account_id(account_id=account_id, user_id=user_id)
     now = datetime.now(UTC)
     claims = {
         "sub": subject,
         "org_id": organisation_id,
-        "user_id": user_id,
+        "account_id": resolved_account_id,
         "org_role": org_role,
+        "is_system_admin": is_system_admin,
         "purpose": "refresh",
         "token_family": token_family,
         "token_sequence": token_sequence,
@@ -83,9 +100,10 @@ def refresh_access_token(refresh_token: str, secret_key: str) -> str:
     return create_access_token(
         principal.username,
         secret_key,
-        organisation_id=str(principal.organisation_id),
-        user_id=str(principal.user_id),
-        org_role=principal.org_role,
+        organisation_id=str(principal.organisation_id) if principal.organisation_id else "",
+        account_id=str(principal.account_id),
+        org_role=principal.org_role or "",
+        is_system_admin=principal.is_system_admin,
     )
 
 
@@ -94,30 +112,36 @@ def decode_principal(token: str, secret_key: str, allowed_purposes: list[str] | 
     payload: dict[str, object] = jwt.decode(token, secret_key, algorithms=[_ALGORITHM])
     sub = payload.get("sub")
     org_id = payload.get("org_id")
-    user_id = payload.get("user_id")
+    account_id = payload.get("account_id") or payload.get("user_id")
     org_role = payload.get("org_role")
+    is_system_admin = payload.get("is_system_admin", False)
     if not isinstance(sub, str) or not sub:
         raise JWTError("Token missing or invalid 'sub' claim")
-    if not isinstance(org_id, str):
-        raise JWTError("Token missing or invalid 'org_id' claim")
-    if not isinstance(user_id, str):
-        raise JWTError("Token missing or invalid 'user_id' claim")
-    if not isinstance(org_role, str) or not org_role:
-        raise JWTError("Token missing or invalid 'org_role' claim")
+    if not isinstance(account_id, str):
+        raise JWTError("Token missing or invalid 'account_id' claim")
+    if not isinstance(is_system_admin, bool):
+        is_system_admin = False
     if allowed_purposes is not None:
         purpose = payload.get("purpose")
         if not isinstance(purpose, str) or purpose not in allowed_purposes:
             raise JWTError(f"Token purpose '{purpose}' not in allowed list: {allowed_purposes}")
     try:
-        parsed_org_id = uuid.UUID(org_id)
-        parsed_user_id = uuid.UUID(user_id)
+        parsed_account_id = uuid.UUID(account_id)
     except ValueError as exc:
         raise JWTError("Token contains a malformed identity UUID") from exc
+    parsed_org_id: uuid.UUID | None = None
+    if isinstance(org_id, str) and org_id:
+        try:
+            parsed_org_id = uuid.UUID(org_id)
+        except ValueError:
+            pass
+    parsed_org_role: str | None = org_role if isinstance(org_role, str) and org_role else None
     return AuthenticatedPrincipal(
         username=sub,
         organisation_id=parsed_org_id,
-        user_id=parsed_user_id,
-        org_role=org_role,
+        account_id=parsed_account_id,
+        org_role=parsed_org_role,
+        is_system_admin=is_system_admin,
     )
 
 
@@ -126,16 +150,20 @@ def create_ws_token(
     secret_key: str,
     *,
     organisation_id: str,
-    user_id: str,
+    account_id: str = "",
     org_role: str,
+    is_system_admin: bool = False,
+    user_id: str = "",
 ) -> str:
     """Short-lived JWT for WebSocket authentication (15 minute TTL)."""
+    resolved_account_id = _resolve_account_id(account_id=account_id, user_id=user_id)
     now = datetime.now(UTC)
     claims = {
         "sub": subject,
         "org_id": organisation_id,
-        "user_id": user_id,
+        "account_id": resolved_account_id,
         "org_role": org_role,
+        "is_system_admin": is_system_admin,
         "purpose": "ws",
         "iat": now,
         "exp": now + timedelta(minutes=_WS_TOKEN_MINUTES),

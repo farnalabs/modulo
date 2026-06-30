@@ -107,7 +107,7 @@ def _setup_client(ctx: dict[str, Any]) -> None:
     _app.dependency_overrides[get_current_user] = lambda: AuthenticatedPrincipal(
         username="admin" if is_admin else "operator",
         organisation_id="00000000-0000-0000-0000-000000000001",
-        user_id="00000000-0000-0000-0000-000000000002",
+        account_id="00000000-0000-0000-0000-000000000002",
         org_role="admin" if is_admin else "operator",
     )
 

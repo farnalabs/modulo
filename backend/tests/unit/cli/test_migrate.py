@@ -165,7 +165,7 @@ class TestAuth:
         mock_decode.return_value = AuthenticatedPrincipal(
             username="admin",
             organisation_id=uuid.UUID("00000000-0000-0000-0000-000000000001"),
-            user_id=uuid.UUID("00000000-0000-0000-0000-000000000002"),
+            account_id=uuid.UUID("00000000-0000-0000-0000-000000000002"),
             org_role="admin",
         )
         runner = CliRunner()
@@ -197,7 +197,7 @@ class TestExportOrg:
         mock_decode.return_value = AuthenticatedPrincipal(
             username="admin",
             organisation_id=org_id,
-            user_id=admin_user_id,
+            account_id=admin_user_id,
             org_role="admin",
         )
         mock_admin = MagicMock()
@@ -261,7 +261,7 @@ class TestExportOrg:
         mock_decode.return_value = AuthenticatedPrincipal(
             username="admin",
             organisation_id=org_id,
-            user_id=admin_user_id,
+            account_id=admin_user_id,
             org_role="admin",
         )
         mock_admin = MagicMock()
@@ -313,7 +313,7 @@ class TestImportOrg:
         mock_decode.return_value = AuthenticatedPrincipal(
             username="admin",
             organisation_id=org_id,
-            user_id=admin_user_id,
+            account_id=admin_user_id,
             org_role="admin",
         )
         mock_admin = MagicMock()
@@ -365,7 +365,7 @@ class TestImportOrg:
         mock_decode.return_value = AuthenticatedPrincipal(
             username="admin",
             organisation_id=org_id,
-            user_id=admin_user_id,
+            account_id=admin_user_id,
             org_role="admin",
         )
         mock_admin = MagicMock()
@@ -412,7 +412,7 @@ class TestVerifyExportCmd:
         mock_decode.return_value = AuthenticatedPrincipal(
             username="admin",
             organisation_id=uuid.UUID("00000000-0000-0000-0000-000000000001"),
-            user_id=uuid.UUID("00000000-0000-0000-0000-000000000002"),
+            account_id=uuid.UUID("00000000-0000-0000-0000-000000000002"),
             org_role="admin",
         )
         mock_verify.return_value = True
@@ -442,7 +442,7 @@ class TestVerifyExportCmd:
         mock_decode.return_value = AuthenticatedPrincipal(
             username="admin",
             organisation_id=uuid.UUID("00000000-0000-0000-0000-000000000001"),
-            user_id=uuid.UUID("00000000-0000-0000-0000-000000000002"),
+            account_id=uuid.UUID("00000000-0000-0000-0000-000000000002"),
             org_role="admin",
         )
         mock_verify.return_value = False
@@ -489,7 +489,7 @@ class TestFlags:
         mock_decode.return_value = AuthenticatedPrincipal(
             username="admin",
             organisation_id=org_id,
-            user_id=admin_user_id,
+            account_id=admin_user_id,
             org_role="admin",
         )
         mock_admin = MagicMock()
@@ -550,7 +550,7 @@ class TestFlags:
         mock_decode.return_value = AuthenticatedPrincipal(
             username="admin",
             organisation_id=org_id,
-            user_id=admin_user_id,
+            account_id=admin_user_id,
             org_role="admin",
         )
         mock_admin = MagicMock()

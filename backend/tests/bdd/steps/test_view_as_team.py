@@ -132,7 +132,7 @@ def get_viewmodel_with_view_as_team(
     app.dependency_overrides[get_current_user] = lambda: AuthenticatedPrincipal(
         username="admin",
         organisation_id=ORG_ID,
-        user_id=uuid.uuid4(),
+        account_id=uuid.uuid4(),
         org_role="admin",
     )
 
@@ -177,7 +177,7 @@ def get_viewmodel_without_view_as_team(
     app.dependency_overrides[get_current_user] = lambda: AuthenticatedPrincipal(
         username="admin",
         organisation_id=ORG_ID,
-        user_id=uuid.uuid4(),
+        account_id=uuid.uuid4(),
         org_role="admin",
     )
 

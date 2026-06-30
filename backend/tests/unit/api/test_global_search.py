@@ -18,13 +18,13 @@ USER_ID = uuid.uuid4()
 ADMIN_PRINCIPAL = AuthenticatedPrincipal(
     username="admin",
     organisation_id=ORG_ID,
-    user_id=USER_ID,
+    account_id=USER_ID,
     org_role="admin",
 )
 VIEWER_PRINCIPAL = AuthenticatedPrincipal(
     username="viewer",
     organisation_id=ORG_ID,
-    user_id=USER_ID,
+    account_id=USER_ID,
     org_role="viewer",
 )
 
@@ -141,7 +141,7 @@ class TestGlobalSearchAuth:
         principal = AuthenticatedPrincipal(
             username="operator",
             organisation_id=ORG_ID,
-            user_id=USER_ID,
+            account_id=USER_ID,
             org_role="operator",
         )
         app = _make_app(mock_db)

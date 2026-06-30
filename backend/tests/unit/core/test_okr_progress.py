@@ -458,7 +458,7 @@ class TestOkrProgressEndpoint:
         app.dependency_overrides[get_current_user] = lambda: AuthenticatedPrincipal(
             username="admin",
             organisation_id=_ORG_ID,
-            user_id=_USER_ID,
+            account_id=_USER_ID,
             org_role="admin",
         )
         yield TestClient(app)
@@ -544,7 +544,7 @@ class TestOkrProgressEndpoint:
         app.dependency_overrides[get_current_user] = lambda: AuthenticatedPrincipal(
             username="admin",
             organisation_id=_ORG_ID,
-            user_id=_USER_ID,
+            account_id=_USER_ID,
             org_role="admin",
         )
         resp = TestClient(app).get(self.URL + "?target_date=2026-09-30")
@@ -566,7 +566,7 @@ class TestOkrProgressEndpoint:
         app.dependency_overrides[get_current_user] = lambda: AuthenticatedPrincipal(
             username="admin",
             organisation_id=_ORG_ID,
-            user_id=_USER_ID,
+            account_id=_USER_ID,
             org_role="admin",
         )
         resp = TestClient(app).get("/api/v1/admin/evals/okr-progress/missing-suite")
@@ -599,7 +599,7 @@ class TestOkrProgressEndpoint:
         app.dependency_overrides[get_current_user] = lambda: AuthenticatedPrincipal(
             username="admin",
             organisation_id=_ORG_ID,
-            user_id=_USER_ID,
+            account_id=_USER_ID,
             org_role="admin",
         )
         resp = TestClient(app).get(self.URL)

@@ -12,7 +12,7 @@ import re
 
 import bcrypt as _bcrypt_lib
 
-from modulo.db.models.user import User
+from modulo.db.models.account import Account
 
 _MIN_ENTROPY_BITS = 30
 
@@ -30,18 +30,18 @@ def verify_password(password: str, password_hash: str) -> bool:
         return False
 
 
-def authenticate_db_user(password: str, user: User | None) -> bool:
-    """Authenticate a user against a DB User record.
+def authenticate_db_user(password: str, account: Account | None) -> bool:
+    """Authenticate a user against an Account record.
 
-    Returns False if the user is None, inactive, or password is wrong.
+    Returns False if the account is None, inactive, or password is wrong.
     """
-    if user is None:
+    if account is None:
         return False
-    if not user.active:
+    if not account.active:
         return False
-    if not user.password_hash:
+    if not account.password_hash:
         return False
-    return verify_password(password, user.password_hash)
+    return verify_password(password, account.password_hash)
 
 
 def password_entropy_bits(password: str) -> float:

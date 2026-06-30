@@ -309,7 +309,7 @@ class TestRegressionAlertsEndpoint:
         app.dependency_overrides[get_current_user] = lambda: AuthenticatedPrincipal(
             username="admin",
             organisation_id=_ORG_ID,
-            user_id=_USER_ID,
+            account_id=_USER_ID,
             org_role="admin",
         )
         yield TestClient(app)
@@ -387,7 +387,7 @@ class TestRegressionAlertsEndpoint:
         app.dependency_overrides[get_current_user] = lambda: AuthenticatedPrincipal(
             username="admin",
             organisation_id=_ORG_ID,
-            user_id=_USER_ID,
+            account_id=_USER_ID,
             org_role="admin",
         )
         resp = TestClient(app).get(self.URL + "?days=14&threshold=0.10")
@@ -411,7 +411,7 @@ class TestRegressionAlertsEndpoint:
         app.dependency_overrides[get_current_user] = lambda: AuthenticatedPrincipal(
             username="admin",
             organisation_id=_ORG_ID,
-            user_id=_USER_ID,
+            account_id=_USER_ID,
             org_role="admin",
         )
         resp = TestClient(app).get(self.URL)
