@@ -270,7 +270,7 @@ mcp = FastMCP(
     name="Modulo",
     instructions=(
         "Modulo is governed orchestration for your agentic SDLC. "
-        "Use trigger_pipeline to fire runs, get_run_status to track them, "
+        "Use create_pipeline to define new pipelines, trigger_pipeline to fire runs, get_run_status to track them, "
         "get_run_output to inspect node outputs, "
         "and review_hitl to handle human-in-the-loop gates."
     ),
@@ -305,6 +305,52 @@ async def list_pipelines_tool(page: int = 1, page_size: int = 20) -> dict[str, A
     except Exception:
         _log.exception("list_pipelines_tool failed")
         return _tool_error("Failed to list pipelines")
+
+
+@mcp.tool(description="Create a new pipeline in the organisation. Returns the created pipeline details.")
+async def create_pipeline(
+    name: str,
+    description: str | None = None,
+    visibility: str = "org",
+    max_concurrent_runs: int = 5,
+    lock_wait_timeout_seconds: int = 300,
+    node_timeout_seconds: int = 300,
+    default_autonomy_level: str = "manual_approval",
+) -> dict[str, Any]:
+    try:
+        if not await validate_current_auth():
+            return _tool_error("Token revoked or expired — re-authenticate")
+        from modulo.db.crud.pipeline import create_pipeline
+
+        org_id = _ctx_org_id.get(_PLACEHOLDER_ORG_ID)
+        account_id = _ctx_user_id.get(uuid.UUID(int=0))
+
+        async with _session(org_id) as s:
+            pipeline = await create_pipeline(
+                s,
+                org_id=org_id,
+                name=name,
+                account_id=account_id,
+                description=description,
+                visibility=visibility,
+                max_concurrent_runs=max_concurrent_runs,
+                lock_wait_timeout_seconds=lock_wait_timeout_seconds,
+                node_timeout_seconds=node_timeout_seconds,
+                default_autonomy_level=default_autonomy_level,
+            )
+
+        return {
+            "id": str(pipeline.id),
+            "name": pipeline.name,
+            "description": pipeline.description,
+            "visibility": pipeline.visibility,
+            "max_concurrent_runs": pipeline.max_concurrent_runs,
+            "default_autonomy_level": pipeline.default_autonomy_level,
+            "created_at": pipeline.created_at.isoformat() if pipeline.created_at else None,
+        }
+    except Exception:
+        _log.exception("create_pipeline failed")
+        return _tool_error("Failed to create pipeline")
 
 
 @mcp.tool(description="Fire a pipeline run and return immediately with run_id. Poll get_run_status to track progress.")
