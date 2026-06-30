@@ -215,7 +215,7 @@
               <p class="text-xs text-muted-foreground">{{ formatTimestamp(run.created_at) }}</p>
             </div>
             <div class="flex items-center gap-2 ml-3">
-              <span :class="statusBadgeClass(run.status)" class="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium">
+              <span :class="statusBadgeClass(run.status)" class="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium capitalize">
                 {{ run.status }}
               </span>
               <span class="text-xs text-muted-foreground hidden sm:inline">{{ run.trigger_type }}</span>

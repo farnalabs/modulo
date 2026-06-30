@@ -8,7 +8,7 @@
         <div>
           <div class="flex items-center gap-3">
             <h1 class="text-3xl font-bold tracking-tight">Run Detail</h1>
-            <span :class="statusBadgeClass">{{ run.status }}</span>
+            <span :class="statusBadgeClass" class="capitalize">{{ run.status }}</span>
           </div>
           <p class="mt-1 text-sm text-muted-foreground">
             Pipeline: <span class="font-medium text-foreground">{{ run.pipeline_id }}</span>

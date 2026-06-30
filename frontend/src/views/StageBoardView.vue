@@ -128,7 +128,7 @@
                 <div class="flex items-center justify-between">
                   <span class="text-sm font-medium truncate flex-1">{{ pipeline.name }}</span>
                   <span
-                    class="ml-2 inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium"
+                    class="ml-2 inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium capitalize"
                     :class="statusBadgeClass(pipeline.status || 'idle')"
                   >
                     {{ pipeline.status || 'idle' }}
@@ -329,7 +329,7 @@
             <dt class="text-muted-foreground">Status</dt>
             <dd>
               <span
-                class="inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium"
+                class="inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium capitalize"
                 :class="statusBadgeClass(selectedPipeline.status || 'idle')"
               >
                 {{ selectedPipeline.status || 'idle' }}
