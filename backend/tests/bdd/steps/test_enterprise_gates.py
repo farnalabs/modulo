@@ -1,4 +1,4 @@
-"""Step definitions for enterprise gate enforcement: SSO, RBAC, audit, spend limits."""
+"""Step definitions for Team gate enforcement: SSO, RBAC, audit, spend limits."""
 
 import uuid
 from typing import Any
@@ -60,15 +60,15 @@ def _setup_client(license_key: str, client: Any, ctx: dict[str, Any]) -> None:
     from modulo.api.main import app as _app
     from modulo.auth.dependencies import get_current_user
     from modulo.auth.jwt import AuthenticatedPrincipal
-    from modulo.core.feature_flags import FreeTier, LicenseData, LicenseKeyTier
+    from modulo.core.feature_flags import CommunityTier, LicenseData, LicenseKeyTier
     from modulo.settings import Settings, get_settings
 
     if license_key == "":
-        _plan = FreeTier()
+        _plan = CommunityTier()
     else:
         _plan = LicenseKeyTier(
             LicenseData(
-                tier="enterprise",
+                tier="team",
                 features=["sso", "team_rbac", "audit_viewer", "admin_spend_limits"],
                 expires_at="",
                 org_id="",
@@ -107,18 +107,18 @@ def _setup_client(license_key: str, client: Any, ctx: dict[str, Any]) -> None:
     clear_license()
 
 
-@given(parsers.parse("I do not have an enterprise license"))
-def no_enterprise_license(ctx: dict[str, Any]) -> None:
+@given(parsers.parse("I do not have a team license"))
+def no_team_license(ctx: dict[str, Any]) -> None:
     ctx["license_key"] = ""
 
 
-@given(parsers.parse("I have a valid enterprise license"))
-def valid_enterprise_license(ctx: dict[str, Any]) -> None:
+@given(parsers.parse("I have a valid team license"))
+def valid_team_license(ctx: dict[str, Any]) -> None:
     ctx["license_key"] = "valid-license-key"
 
 
-@given(parsers.parse("I have an expired enterprise license"))
-def expired_enterprise_license(ctx: dict[str, Any]) -> None:
+@given(parsers.parse("I have an expired team license"))
+def expired_team_license(ctx: dict[str, Any]) -> None:
     ctx["license_key"] = ""
     from modulo.core.license import clear_license
     clear_license()

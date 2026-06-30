@@ -1,7 +1,7 @@
 """SCIM 2.0 provisioning endpoints.
 
 Requires MODULO_SCIM_TOKEN env var for auth and MODULO_LICENSE_KEY for
-enterprise gating. Maps SCIM Users → internal User, SCIM Groups → internal
+Team gating. Maps SCIM Users → internal User, SCIM Groups → internal
 Team + TeamMembership.
 """
 
@@ -50,7 +50,7 @@ def _license_gate(settings: Settings) -> None:
     if not settings.modulo_license_key:
         raise HTTPException(
             status_code=status.HTTP_402_PAYMENT_REQUIRED,
-            detail="SCIM provisioning requires an enterprise license",
+            detail="SCIM provisioning requires a Team license",
         )
 
 
@@ -166,10 +166,10 @@ class ScimListResponse(BaseModel):
     Resources: list[dict[str, object]]
 
 
-# ── Enterprise license gate ──────────────────────────────────────────
+# ── Team license gate ──────────────────────────────────────────
 
 
-def _require_enterprise(
+def _require_team(
     settings: Settings = Depends(get_settings),
 ) -> Settings:
     _license_gate(settings)
@@ -181,7 +181,7 @@ def _require_enterprise(
 
 @router.get("/ServiceProviderConfig")
 async def get_service_provider_config(
-    settings: Settings = Depends(_require_enterprise),
+    settings: Settings = Depends(_require_team),
     principal: ScimPrincipal = Depends(get_scim_principal),
 ) -> dict[str, object]:
     return {
@@ -212,7 +212,7 @@ async def list_users(
     filter: str | None = Query(None),
     startIndex: int = Query(1, ge=1),
     count: int = Query(20, ge=1, le=100),
-    settings: Settings = Depends(_require_enterprise),
+    settings: Settings = Depends(_require_team),
     principal: ScimPrincipal = Depends(get_scim_principal),
     session: AsyncSession = Depends(get_db_session),
 ) -> ScimListResponse:
@@ -239,7 +239,7 @@ async def list_users(
 @router.post("/Users", status_code=status.HTTP_201_CREATED)
 async def create_user(
     body: ScimUserRequest,
-    settings: Settings = Depends(_require_enterprise),
+    settings: Settings = Depends(_require_team),
     principal: ScimPrincipal = Depends(get_scim_principal),
     session: AsyncSession = Depends(get_db_session),
 ) -> dict[str, object]:
@@ -280,7 +280,7 @@ async def create_user(
 @router.get("/Users/{user_id}")
 async def get_user(
     user_id: uuid.UUID,
-    settings: Settings = Depends(_require_enterprise),
+    settings: Settings = Depends(_require_team),
     principal: ScimPrincipal = Depends(get_scim_principal),
     session: AsyncSession = Depends(get_db_session),
 ) -> dict[str, object]:
@@ -298,7 +298,7 @@ async def get_user(
 async def replace_user(
     user_id: uuid.UUID,
     body: ScimUserRequest,
-    settings: Settings = Depends(_require_enterprise),
+    settings: Settings = Depends(_require_team),
     principal: ScimPrincipal = Depends(get_scim_principal),
     session: AsyncSession = Depends(get_db_session),
 ) -> dict[str, object]:
@@ -324,7 +324,7 @@ async def replace_user(
 async def patch_user(
     user_id: uuid.UUID,
     body: ScimPatchRequest,
-    settings: Settings = Depends(_require_enterprise),
+    settings: Settings = Depends(_require_team),
     principal: ScimPrincipal = Depends(get_scim_principal),
     session: AsyncSession = Depends(get_db_session),
 ) -> dict[str, object]:
@@ -369,7 +369,7 @@ async def delete_user(
     user_id: uuid.UUID,
     principal: ScimPrincipal = Depends(get_scim_principal),
     session: AsyncSession = Depends(get_db_session),
-    settings: Settings = Depends(_require_enterprise),
+    settings: Settings = Depends(_require_team),
 ) -> None:
     async with session.begin():
         await set_rls_org(session, principal.organisation_id)
@@ -387,7 +387,7 @@ async def list_groups(
     filter: str | None = Query(None),
     startIndex: int = Query(1, ge=1),
     count: int = Query(20, ge=1, le=100),
-    settings: Settings = Depends(_require_enterprise),
+    settings: Settings = Depends(_require_team),
     principal: ScimPrincipal = Depends(get_scim_principal),
     session: AsyncSession = Depends(get_db_session),
 ) -> ScimListResponse:
@@ -427,7 +427,7 @@ async def list_groups(
 @router.post("/Groups", status_code=status.HTTP_201_CREATED)
 async def create_group(
     body: ScimGroupRequest,
-    settings: Settings = Depends(_require_enterprise),
+    settings: Settings = Depends(_require_team),
     principal: ScimPrincipal = Depends(get_scim_principal),
     session: AsyncSession = Depends(get_db_session),
 ) -> dict[str, object]:
@@ -494,7 +494,7 @@ async def create_group(
 @router.get("/Groups/{group_id}")
 async def get_group(
     group_id: uuid.UUID,
-    settings: Settings = Depends(_require_enterprise),
+    settings: Settings = Depends(_require_team),
     principal: ScimPrincipal = Depends(get_scim_principal),
     session: AsyncSession = Depends(get_db_session),
 ) -> dict[str, object]:
@@ -522,7 +522,7 @@ async def get_group(
 async def replace_group(
     group_id: uuid.UUID,
     body: ScimGroupRequest,
-    settings: Settings = Depends(_require_enterprise),
+    settings: Settings = Depends(_require_team),
     principal: ScimPrincipal = Depends(get_scim_principal),
     session: AsyncSession = Depends(get_db_session),
 ) -> dict[str, object]:
@@ -569,7 +569,7 @@ async def replace_group(
 async def patch_group(
     group_id: uuid.UUID,
     body: ScimPatchRequest,
-    settings: Settings = Depends(_require_enterprise),
+    settings: Settings = Depends(_require_team),
     principal: ScimPrincipal = Depends(get_scim_principal),
     session: AsyncSession = Depends(get_db_session),
 ) -> dict[str, object]:
@@ -665,7 +665,7 @@ async def delete_group(
     group_id: uuid.UUID,
     principal: ScimPrincipal = Depends(get_scim_principal),
     session: AsyncSession = Depends(get_db_session),
-    settings: Settings = Depends(_require_enterprise),
+    settings: Settings = Depends(_require_team),
 ) -> None:
     async with session.begin():
         await set_rls_org(session, principal.organisation_id)

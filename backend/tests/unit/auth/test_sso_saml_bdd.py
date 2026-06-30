@@ -12,7 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.api.dependencies import _get_engine, get_db_session, get_plan_context
 from modulo.api.routes.sso import router as sso_router
-from modulo.core.feature_flags import FreeTier, LicenseData, LicenseKeyTier
+from modulo.core.feature_flags import CommunityTier, LicenseData, LicenseKeyTier
 from modulo.settings import Settings, get_settings
 
 _VALID_32 = "a" * 32
@@ -113,7 +113,7 @@ def client() -> Generator[TestClient, None, None]:
     _app.dependency_overrides[_get_engine] = lambda: MagicMock()
     _app.dependency_overrides[get_plan_context] = lambda: LicenseKeyTier(
         LicenseData(
-            tier="enterprise",
+            tier="team",
             features=["sso"],
             expires_at="",
             org_id="",
@@ -146,7 +146,7 @@ class TestSpMetadata:
 
     def test_metadata_requires_license(self, client: TestClient) -> None:
         _app.dependency_overrides[get_settings] = lambda: _saml_settings(license_key="")
-        _app.dependency_overrides[get_plan_context] = lambda: FreeTier()
+        _app.dependency_overrides[get_plan_context] = lambda: CommunityTier()
         get_settings.cache_clear()
 
         resp = client.get("/api/v1/auth/saml/metadata")
@@ -400,7 +400,7 @@ class TestAcsGroupMapping:
 class TestEnterpriseGate:
     def test_saml_acs_blocked_without_license(self, client: TestClient) -> None:
         _app.dependency_overrides[get_settings] = lambda: _saml_settings(license_key="")
-        _app.dependency_overrides[get_plan_context] = lambda: FreeTier()
+        _app.dependency_overrides[get_plan_context] = lambda: CommunityTier()
         get_settings.cache_clear()
 
         resp = client.post(
@@ -414,7 +414,7 @@ class TestEnterpriseGate:
 
     def test_saml_login_blocked_without_license(self, client: TestClient) -> None:
         _app.dependency_overrides[get_settings] = lambda: _saml_settings(license_key="")
-        _app.dependency_overrides[get_plan_context] = lambda: FreeTier()
+        _app.dependency_overrides[get_plan_context] = lambda: CommunityTier()
         get_settings.cache_clear()
 
         resp = client.get("/api/v1/auth/saml/login", follow_redirects=False)
@@ -440,7 +440,7 @@ class TestSamlLoginRedirect:
 
     def test_login_requires_license(self, client: TestClient) -> None:
         _app.dependency_overrides[get_settings] = lambda: _saml_settings(license_key="")
-        _app.dependency_overrides[get_plan_context] = lambda: FreeTier()
+        _app.dependency_overrides[get_plan_context] = lambda: CommunityTier()
         get_settings.cache_clear()
 
         resp = client.get("/api/v1/auth/saml/login", follow_redirects=False)
@@ -458,7 +458,7 @@ class TestSamlLoginRedirect:
             modulo_public_url="http://localhost:8000",
         )
         _app.dependency_overrides[get_plan_context] = lambda: LicenseKeyTier(
-            LicenseData(tier="enterprise", features=["sso"], expires_at="", org_id="", raw_payload={}, raw_key="k")
+            LicenseData(tier="team", features=["sso"], expires_at="", org_id="", raw_payload={}, raw_key="k")
         )
         get_settings.cache_clear()
 

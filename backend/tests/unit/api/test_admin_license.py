@@ -53,7 +53,7 @@ def _sign_license_payload(payload: dict, private_key: str = _TEST_PRIV) -> str:
 
 def _make_valid_payload(**overrides: object) -> dict:
     payload: dict[str, object] = {
-        "tier": "enterprise",
+        "tier": "team",
         "features": ["sso", "team_rbac", "audit_viewer"],
         "expires_at": (datetime.now(UTC) + timedelta(days=365)).isoformat(),
         "org_id": "test-org",
@@ -120,7 +120,7 @@ class TestParseAndVerify:
         result = parse_and_verify(key)
         assert result.valid is True
         assert result.license_data is not None
-        assert result.license_data.tier == "enterprise"
+        assert result.license_data.tier == "team"
         assert "sso" in result.license_data.features
         assert result.license_data.org_id == "test-org"
 
@@ -129,7 +129,7 @@ class TestParseAndVerify:
         key = _sign_license_payload(payload)
         parts = key.split(".")
         tampered_payload_b64 = base64.urlsafe_b64encode(
-            json.dumps({"tier": "free"}, separators=(",", ":"), sort_keys=True).encode()
+            json.dumps({"tier": "community"}, separators=(",", ":"), sort_keys=True).encode()
         ).decode().rstrip("=")
         tampered_key = f"{tampered_payload_b64}.{parts[1]}"
         result = parse_and_verify(tampered_key)
@@ -163,9 +163,9 @@ class TestParseAndVerify:
         assert result.valid is False
         assert "Signature" in (result.error or "")
 
-    def test_accepts_free_tier_no_expiry(self) -> None:
+    def test_accepts_community_tier_no_expiry(self) -> None:
         payload = {
-            "tier": "free",
+            "tier": "community",
             "features": [],
             "org_id": "test-org",
         }
@@ -173,7 +173,7 @@ class TestParseAndVerify:
         result = parse_and_verify(key)
         assert result.valid is True
         assert result.license_data is not None
-        assert result.license_data.tier == "free"
+        assert result.license_data.tier == "community"
         assert result.license_data.expires_at == ""
 
 
@@ -187,7 +187,7 @@ class TestStoreAndGetLicense:
         store_license(key, result.license_data)
         stored = get_license()
         assert stored is not None
-        assert stored.tier == "enterprise"
+        assert stored.tier == "team"
         assert stored.org_id == "test-org"
 
     def test_clear_license(self) -> None:
@@ -212,7 +212,7 @@ class TestGetLicense:
         assert resp.status_code == 200
         data = resp.json()
         assert data["has_license"] is False
-        assert data["tier"] == "free"
+        assert data["tier"] == "community"
         assert data["features"] == []
 
     def test_returns_license_when_set(self, client: TestClient) -> None:
@@ -226,7 +226,7 @@ class TestGetLicense:
         assert resp.status_code == 200
         data = resp.json()
         assert data["has_license"] is True
-        assert data["tier"] == "enterprise"
+        assert data["tier"] == "team"
         assert "sso" in data["features"]
         assert data["org_id"] == "test-org"
 
@@ -249,7 +249,7 @@ class TestUploadLicense:
         assert resp.status_code == 200
         data = resp.json()
         assert data["status"] == "ok"
-        assert data["tier"] == "enterprise"
+        assert data["tier"] == "team"
         assert "sso" in data["features"]
         assert data["org_id"] == "test-org"
 
@@ -263,7 +263,7 @@ class TestUploadLicense:
         assert resp2.status_code == 200
         data2 = resp2.json()
         assert data2["has_license"] is True
-        assert data2["tier"] == "enterprise"
+        assert data2["tier"] == "team"
 
     def test_rejects_invalid_signature(self, client: TestClient) -> None:
         payload = _make_valid_payload()

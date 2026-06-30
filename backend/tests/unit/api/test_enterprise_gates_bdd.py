@@ -1,8 +1,8 @@
-"""BDD-derived unit tests for enterprise gate enforcement across all 4 gated features.
+"""BDD-derived unit tests for Team gate enforcement across all 4 gated features.
 
 Tests mirror the Gherkin scenarios in enterprise_gates.feature but run as plain
 pytest unit tests (no pytest-bdd dependency), verifying that require_feature()
-returns 402 for each gated feature and 200 for free-tier and licensed requests.
+returns 402 for each gated feature and 200 for Community-tier and licensed requests.
 """
 
 import uuid
@@ -54,7 +54,7 @@ def _make_mock_session() -> AsyncMock:
 
 @pytest.fixture()
 def free_client() -> Generator[TestClient, None, None]:
-    """Client with no license key — all enterprise features disabled."""
+    """Client with no license key — all team features disabled."""
     mock_session = _make_mock_session()
 
     async def override_session() -> AsyncGenerator[AsyncMock, None]:
@@ -75,7 +75,7 @@ def free_client() -> Generator[TestClient, None, None]:
 
 @pytest.fixture()
 def licensed_client() -> Generator[TestClient, None, None]:
-    """Client with a valid license key — all enterprise features enabled."""
+    """Client with a valid license key — all team features enabled."""
     mock_session = _make_mock_session()
 
     async def override_session() -> AsyncGenerator[AsyncMock, None]:
@@ -98,7 +98,7 @@ def licensed_client() -> Generator[TestClient, None, None]:
 
 
 class TestSsoGating:
-    """SSO endpoints return 402 when no enterprise license is present."""
+    """SSO endpoints return 402 when no team license is present."""
 
     def test_list_providers_returns_402_on_free(self, free_client: TestClient) -> None:
         resp = free_client.get("/api/v1/admin/sso/providers")
@@ -130,7 +130,7 @@ class TestSsoGating:
 
 
 class TestTeamRbacGating:
-    """Team RBAC endpoints return 402 when no enterprise license is present."""
+    """Team RBAC endpoints return 402 when no team license is present."""
 
     def test_list_teams_returns_402_on_free(self, free_client: TestClient) -> None:
         resp = free_client.get("/api/v1/teams")
@@ -157,7 +157,7 @@ class TestTeamRbacGating:
 
 
 class TestAuditGating:
-    """Audit viewer endpoints return 402 when no enterprise license is present."""
+    """Audit viewer endpoints return 402 when no team license is present."""
 
     def test_list_audit_returns_402_on_free(self, free_client: TestClient) -> None:
         resp = free_client.get("/api/v1/admin/audit")
@@ -174,7 +174,7 @@ class TestAuditGating:
 
 
 class TestSpendLimitsGating:
-    """Spend limit endpoints return 402 when no enterprise license is present."""
+    """Spend limit endpoints return 402 when no team license is present."""
 
     def test_get_limits_returns_402_on_free(self, free_client: TestClient) -> None:
         resp = free_client.get("/api/v1/admin/costs/limits")
@@ -197,11 +197,11 @@ class TestSpendLimitsGating:
             assert resp.status_code == 200
 
 
-# ── Free tier features are accessible without a license ───────────────────
+# ── Community tier features are accessible without a license ─────────────
 
 
-class TestFreeTierAccess:
-    """Free tier features remain accessible without any enterprise license."""
+class TestCommunityTierAccess:
+    """Community tier features remain accessible without any license."""
 
     def test_list_pipelines_succeeds_on_free(self, free_client: TestClient) -> None:
         page_result = MagicMock(items=[], total=0, page=1, page_size=20, next_cursor=None, has_more=False)

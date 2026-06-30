@@ -19,72 +19,72 @@ class FeatureFlag:
 
 
 _KNOWN_FLAGS: list[FeatureFlag] = [
-    # ── Free tier ──────────────────────────────────────────────────────
+    # ── Community tier ─────────────────────────────────────────────────
     FeatureFlag(
         name="parallel_branches",
         description="Run branching logic in parallel within a pipeline",
-        tier="free",
+        tier="community",
     ),
     FeatureFlag(
         name="eval_system",
         description="Built-in eval runner for LLM output quality gates",
-        tier="free",
+        tier="community",
     ),
     FeatureFlag(
         name="webhook_trigger",
         description="Trigger pipelines via incoming webhooks",
-        tier="free",
+        tier="community",
     ),
     FeatureFlag(
         name="cron_trigger",
         description="Schedule pipeline runs on a cron expression",
-        tier="free",
+        tier="community",
     ),
     FeatureFlag(
         name="mcp_server",
         description="Expose pipelines as MCP tools",
-        tier="free",
+        tier="community",
     ),
     FeatureFlag(
         name="community_library",
         description="Browse and import community-contributed pipeline primitives",
-        tier="free",
+        tier="community",
     ),
     FeatureFlag(
         name="saved_views",
         description="Persistent saved views for run and pipeline lists",
-        tier="free",
+        tier="community",
     ),
-    # ── Enterprise tier ────────────────────────────────────────────────
+    # ── Team tier ──────────────────────────────────────────────────────
     FeatureFlag(
         name="sso",
         description="Single sign-on via OIDC / SAML 2.0 providers",
-        tier="enterprise",
+        tier="team",
     ),
     FeatureFlag(
         name="team_rbac",
         description="Team-level role-based access control",
-        tier="enterprise",
+        tier="team",
     ),
     FeatureFlag(
         name="audit_viewer",
         description="Tamper-evident audit log viewer",
-        tier="enterprise",
+        tier="team",
     ),
     FeatureFlag(
         name="admin_spend_limits",
         description="Per-organisation daily spend limits and budgets",
-        tier="enterprise",
+        tier="team",
     ),
     FeatureFlag(
         name="observability",
         description="OpenTelemetry export and LangSmith integration settings",
-        tier="enterprise",
+        tier="team",
     ),
     FeatureFlag(
         name="view_modes",
         description="Multiple named UI views with admin-defined feature visibility per view and user/team/role assignment",
-        tier="enterprise",
+        tier="team",
     ),
     # ── v1 tier ────────────────────────────────────────────────────────
     FeatureFlag(
@@ -142,22 +142,22 @@ _KNOWN_FLAGS: list[FeatureFlag] = [
     FeatureFlag(
         name="model-backend-management",
         description="Manage LLM backend connections and credentials",
-        tier="enterprise",
+        tier="team",
     ),
     FeatureFlag(
         name="environment-profiles",
         description="Sandbox environment profiles for code execution",
-        tier="enterprise",
+        tier="team",
     ),
     FeatureFlag(
         name="plugin-management",
         description="Manage plugins, connectors, and node categories",
-        tier="enterprise",
+        tier="team",
     ),
 ]
 
 
-TIER_RANK: dict[str, int] = {"free": 0, "enterprise": 1, "v1": 2, "v2": 3}
+TIER_RANK: dict[str, int] = {"community": 0, "team": 1, "v1": 2, "v2": 3}
 
 
 class PlanContext(Protocol):
@@ -168,11 +168,11 @@ class PlanContext(Protocol):
     def list_enabled_features(self) -> list[FeatureFlag]: ...
 
 
-class FreeTier:
-    """Default plan — free-tier features active without a license key."""
+class CommunityTier:
+    """Default plan — community-tier features active without a license key."""
 
     def __init__(self) -> None:
-        self._registry = FeatureFlagRegistry(current_tier="free", has_license_key=False)
+        self._registry = FeatureFlagRegistry(current_tier="community", has_license_key=False)
 
     def feature_enabled(self, name: str) -> bool:
         flag = self._registry.get_flag(name)
@@ -185,7 +185,7 @@ class FreeTier:
 
 
 class LicenseKeyTier:
-    """Enterprise/licensed plan — activates features based on license tier and explicit feature list."""
+    """Licensed plan — activates features based on license tier and explicit feature list."""
 
     def __init__(self, license_data: LicenseData) -> None:
         self._tier = license_data.tier
@@ -207,10 +207,10 @@ class LicenseKeyTier:
 
 
 class TeamPlanContext:
-    """Team plan — enables enterprise-tier features without a license key."""
+    """Team plan — enables team-tier features without a license key."""
 
     def __init__(self) -> None:
-        self._registry = FeatureFlagRegistry(current_tier="enterprise", has_license_key=False)
+        self._registry = FeatureFlagRegistry(current_tier="team", has_license_key=False)
 
     def feature_enabled(self, name: str) -> bool:
         flag = self._registry.get_flag(name)
@@ -222,8 +222,8 @@ class TeamPlanContext:
         return [f for f in self._registry.list_flags() if f.currently_active]
 
 
-class EnterprisePlanContext:
-    """Enterprise plan — enables all features (enterprise, v1, v2)."""
+class FullAccessPlanContext:
+    """Full-access plan — enables all features (team, v1, v2)."""
 
     def __init__(self) -> None:
         self._registry = FeatureFlagRegistry(current_tier="v2", has_license_key=True)
@@ -241,16 +241,16 @@ class EnterprisePlanContext:
 def get_plan_context(plan_id: str) -> PlanContext:
     """Return the right PlanContext for a plan_id."""
     registry: dict[str, type[PlanContext]] = {
-        "free": FreeTier,
+        "community": CommunityTier,
         "team": TeamPlanContext,
-        "enterprise": EnterprisePlanContext,
+        "full-access": FullAccessPlanContext,
     }
-    cls = registry.get(plan_id, FreeTier)
+    cls = registry.get(plan_id, CommunityTier)
     return cls()
 
 
 def resolve_plan_context(settings: Any) -> PlanContext:
-    """Resolve a PlanContext from a stored license, env-var license key, or fall back to FreeTier."""
+    """Resolve a PlanContext from a stored license, env-var license key, or fall back to CommunityTier."""
     from modulo.core.license import get_license, parse_and_verify
 
     lic = get_license()
@@ -264,7 +264,7 @@ def resolve_plan_context(settings: Any) -> PlanContext:
             return LicenseKeyTier(validation.license_data)
         return LicenseKeyTier(
             LicenseData(
-                tier="enterprise",
+                tier="team",
                 features=[],
                 expires_at="",
                 org_id="",
@@ -273,7 +273,7 @@ def resolve_plan_context(settings: Any) -> PlanContext:
             )
         )
 
-    return FreeTier()
+    return CommunityTier()
 
 
 class FeatureFlagRegistry:
@@ -281,7 +281,7 @@ class FeatureFlagRegistry:
 
     _overrides: dict[str, bool] = {}
 
-    def __init__(self, current_tier: str = "free", has_license_key: bool = False) -> None:
+    def __init__(self, current_tier: str = "community", has_license_key: bool = False) -> None:
         self._current_tier = current_tier
         self._has_license_key = has_license_key
         self._flags = _KNOWN_FLAGS
@@ -326,10 +326,10 @@ class FeatureFlagRegistry:
         return self._overrides.get(name)
 
     def tier_gap_flags(self) -> list[FeatureFlag]:
-        """Return flags whose tier is above free but inactive because license is free."""
-        if self._current_tier != "free":
+        """Return flags whose tier is above community but inactive because license is community."""
+        if self._current_tier != "community":
             return []
-        return [f for f in self._flags if f.tier != "free" and not f.currently_active]
+        return [f for f in self._flags if f.tier != "community" and not f.currently_active]
 
 
 async def get_plan_for_org(
@@ -349,4 +349,4 @@ async def get_plan_for_org(
     if config is not None:
         return str(config.value)
 
-    return "free"
+    return "community"
