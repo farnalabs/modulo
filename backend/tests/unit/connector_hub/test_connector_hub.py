@@ -80,6 +80,20 @@ async def test_initialise_creates_github_connector():
     assert connector.connector_type == ConnectorType.GITHUB
 
 
+async def test_initialise_creates_trello_connector():
+    ci = _FakeCI(
+        id=uuid.uuid4(),
+        connector_type_id="trello",
+        credentials_ciphertext=_encrypt({"api_key": "trello_key", "token": "trello_token"}),
+    )
+    backend = create_secrets_backend(fernet_key=_KEY, backend_name="fernet")
+    with patch.object(backend, "get_secret", return_value='{"api_key": "trello_key", "token": "trello_token"}'):
+        hub = ConnectorHub(secrets_backend=backend)
+        await hub.initialise([ci])
+    connector = hub.get(ci.id)
+    assert connector.connector_type == ConnectorType.TRELLO
+
+
 async def test_get_unknown_raises():
     backend = create_secrets_backend(fernet_key=_KEY, backend_name="fernet")
     hub = ConnectorHub(secrets_backend=backend)
