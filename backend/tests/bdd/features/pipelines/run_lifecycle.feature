@@ -31,3 +31,15 @@ Feature: Pipeline Run Lifecycle
     Given pipeline "deploy-service" has default run_context branch="main"
     When I trigger a run with run_context branch="feature/x"
     Then the effective run context branch is "feature/x"
+
+  Scenario: Node returns None output — run continues gracefully
+    Given a running pipeline with a node that returns None output
+    When the node completes
+    Then the run continues to the next node
+    And no error is raised for the None output
+
+  Scenario: Run is cancelled mid-execution
+    Given a running pipeline "deploy-service"
+    When cancellation is requested
+    Then the run status becomes "cancelled"
+    And no further nodes execute
