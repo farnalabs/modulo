@@ -54,13 +54,19 @@ class DispatchResult:
 
 
 class Notifier:
-    """Dispatch notifications to configured endpoints with retry and dead-letter."""
+    """Dispatch notifications to configured endpoints with retry and dead-letter.
 
-    def __init__(self, db_engine: AsyncEngine, fernet_key: str) -> None:
+    When ``use_celery`` is True, ``dispatch_event()`` enqueues the work as a
+    Celery task instead of running inline. Falls back to inline dispatch if
+    the Celery broker is unreachable.
+    """
+
+    def __init__(self, db_engine: AsyncEngine, fernet_key: str, *, use_celery: bool = False) -> None:
         self._engine = db_engine
         self._session_factory = async_sessionmaker(db_engine, expire_on_commit=False)
         self._fernet = Fernet(fernet_key.encode())
         self._http_client: httpx.AsyncClient | None = None
+        self._use_celery = use_celery
 
     async def _get_client(self) -> httpx.AsyncClient:
         if self._http_client is None or self._http_client.is_closed:
@@ -79,6 +85,10 @@ class Notifier:
     ) -> list[DispatchResult]:
         """Dispatch a notification event to subscribed endpoints.
 
+        When ``use_celery`` is True, enqueues a Celery task and returns
+        a placeholder result immediately. Falls back to inline dispatch if
+        the Celery broker is unreachable.
+
         When ``team_id`` is provided, dispatches to team-specific endpoints
         first, falling back to org-wide (team_id IS NULL) endpoints if no
         team-specific endpoints are configured for the event type.
@@ -87,6 +97,11 @@ class Notifier:
 
         Returns a list of DispatchResult, one per endpoint.
         """
+        if self._use_celery:
+            return await self._dispatch_via_celery(
+                org_id, event_type, payload, run_id=run_id, retain_payload=retain_payload, team_id=team_id
+            )
+
         endpoints = await self._get_subscribed_endpoints(org_id, event_type, team_id=team_id)
         if not endpoints:
             _log.debug("notifier.no_subscribers", extra={"event_type": event_type, "org_id": str(org_id)})
@@ -98,6 +113,54 @@ class Notifier:
             result = await self._dispatch_to_endpoint(http_client, ep, event_type, payload, run_id, retain_payload)
             results.append(result)
         return results
+
+    async def _dispatch_via_celery(
+        self,
+        org_id: uuid.UUID,
+        event_type: str,
+        payload: dict[str, Any],
+        *,
+        run_id: uuid.UUID | None = None,
+        retain_payload: bool = False,
+        team_id: uuid.UUID | None = None,
+    ) -> list[DispatchResult]:
+        """Enqueue dispatch to Celery; fall back to inline on failure."""
+        from modulo.core.notifier.celery_tasks import enqueue_dispatch
+
+        try:
+            results = await enqueue_dispatch(
+                org_id,
+                event_type,
+                payload,
+                run_id=run_id,
+                retain_payload=retain_payload,
+                team_id=team_id,
+            )
+            return [
+                DispatchResult(
+                    endpoint_id=uuid.UUID(r["endpoint_id"]) if r["endpoint_id"] != "celery-enqueued" else uuid.uuid4(),
+                    status=r["status"],
+                    attempt_count=r["attempt_count"],
+                    response_code=r["response_code"],
+                    last_error=r["last_error"],
+                )
+                for r in results
+            ]
+        except Exception as exc:
+            _log.warning(
+                "notifier.celery_fallback",
+                extra={"event_type": event_type, "org_id": str(org_id), "error": str(exc)},
+            )
+            # Fall back to inline dispatch
+            endpoints = await self._get_subscribed_endpoints(org_id, event_type, team_id=team_id)
+            if not endpoints:
+                return []
+            http_client = await self._get_client()
+            results: list[DispatchResult] = []
+            for ep in endpoints:
+                result = await self._dispatch_to_endpoint(http_client, ep, event_type, payload, run_id, retain_payload)
+                results.append(result)
+            return results
 
     async def _get_subscribed_endpoints(
         self,
