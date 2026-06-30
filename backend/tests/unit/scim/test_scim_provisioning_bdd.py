@@ -497,7 +497,7 @@ class TestScimAuth:
             secret_key=_VALID_32,
             fernet_key=_VALID_32,
             modulo_admin_password="testpass",
-            modulo_license_key="enterprise-license",
+            modulo_license_key="team-license",
             modulo_scim_token="",
         )
         app.dependency_overrides[get_settings] = lambda: settings
@@ -509,20 +509,20 @@ class TestScimAuth:
 
 
 # ===========================================================================
-# Scenario: Enterprise license gate blocks SCIM without valid license
+# Scenario: Team license gate blocks SCIM without valid license
 # ===========================================================================
 
 class TestLicenseGate:
-    """Enterprise license gating for SCIM endpoints."""
+    """Team license gating for SCIM endpoints."""
 
-    def test_scim_blocked_without_enterprise_license(self) -> None:
+    def test_scim_blocked_without_team_license(self) -> None:
         app.dependency_overrides[get_settings] = _make_no_license_settings
         app.dependency_overrides[get_db_session] = lambda: _make_mock_session()
         resp = TestClient(app).get("/scim/v2/Users", headers={"Authorization": f"Bearer {_SCIM_TOKEN}"})
         app.dependency_overrides.clear()
         assert resp.status_code == 402
 
-    def test_scim_allowed_with_enterprise_license(self) -> None:
+    def test_scim_allowed_with_team_license(self) -> None:
         mock_user_list = ([_make_mock_user()], 1)
 
         app.dependency_overrides[get_settings] = _make_settings

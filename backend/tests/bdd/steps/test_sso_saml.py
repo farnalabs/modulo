@@ -10,7 +10,7 @@ from pytest_bdd import given, parsers, scenarios, then, when
 
 from modulo.api.dependencies import get_plan_context
 from modulo.api.main import app as _app
-from modulo.core.feature_flags import FreeTier, LicenseData, LicenseKeyTier
+from modulo.core.feature_flags import CommunityTier, LicenseData, LicenseKeyTier
 from modulo.settings import Settings, get_settings
 
 try:
@@ -93,11 +93,11 @@ def _saml_settings(license_key: str = "test-license-key") -> Settings:
 
 def _setup_saml_client(license_key: str = "test-license-key") -> None:
     if not license_key:
-        _plan = FreeTier()
+        _plan = CommunityTier()
     else:
         _plan = LicenseKeyTier(
             LicenseData(
-                tier="enterprise",
+                tier="team",
                 features=["sso"],
                 expires_at="",
                 org_id="",
@@ -134,8 +134,8 @@ def saml_enabled(entity_id: str, ctx: dict[str, Any]) -> None:
 # ── License gating ────────────────────────────────────────────────────────
 
 
-@given("I do not have an enterprise license")
-def no_enterprise_license(ctx: dict[str, Any]) -> None:
+@given("I do not have a team license")
+def no_team_license(ctx: dict[str, Any]) -> None:
     ctx["license_key"] = ""
 
 

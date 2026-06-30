@@ -50,7 +50,7 @@ def _sign_license_payload(payload: dict, private_key: str = _TEST_PRIV) -> str:
 
 def _valid_payload(**overrides: object) -> dict[str, object]:
     payload: dict[str, object] = {
-        "tier": "enterprise",
+        "tier": "team",
         "features": ["sso", "team_rbac", "audit_viewer", "admin_spend_limits"],
         "expires_at": (datetime.now(UTC) + timedelta(days=365)).isoformat(),
         "org_id": "acme-org",
@@ -144,7 +144,7 @@ class TestUploadValidLicense:
         assert resp.status_code == 200
         data = resp.json()
         assert data["status"] == "ok"
-        assert data["tier"] == "enterprise"
+        assert data["tier"] == "team"
         for feat in ["sso", "team_rbac", "audit_viewer", "admin_spend_limits"]:
             assert feat in data["features"]
 
@@ -155,7 +155,7 @@ class TestUploadValidLicense:
         admin_client.post(self.URL, json={"license_key": key})
         stored = get_license()
         assert stored is not None
-        assert stored.tier == "enterprise"
+        assert stored.tier == "team"
         assert stored.org_id == "acme-org"
 
 
@@ -171,7 +171,7 @@ class TestInvalidSignature:
         parts = key.split(".")
         tampered_b64 = (
             base64.urlsafe_b64encode(
-                json.dumps({"tier": "free"}, separators=(",", ":"), sort_keys=True).encode()
+                json.dumps({"tier": "community"}, separators=(",", ":"), sort_keys=True).encode()
             )
             .decode()
             .rstrip("=")
@@ -213,21 +213,21 @@ class TestExpiredLicense:
         assert "expires_at" in resp.json()["detail"].lower()
 
 
-# ── Free tier without license ─────────────────────────────────────────────────
+# ── Community tier without license ────────────────────────────────────────────
 
 
-class TestFreeTier:
+class TestCommunityTier:
     URL = "/api/v1/admin/license"
 
-    def test_free_tier_returned_when_no_license(self, admin_client: TestClient) -> None:
+    def test_community_tier_returned_when_no_license(self, admin_client: TestClient) -> None:
         resp = admin_client.get(self.URL)
         assert resp.status_code == 200
         data = resp.json()
         assert data["has_license"] is False
-        assert data["tier"] == "free"
+        assert data["tier"] == "community"
         assert data["features"] == []
 
-    def test_free_tier_has_no_expiry(self, admin_client: TestClient) -> None:
+    def test_community_tier_has_no_expiry(self, admin_client: TestClient) -> None:
         resp = admin_client.get(self.URL)
         data = resp.json()
         assert data.get("expires_at") is None
@@ -250,7 +250,7 @@ class TestLicenseStatus:
         assert resp.status_code == 200
         data = resp.json()
         assert data["has_license"] is True
-        assert data["tier"] == "enterprise"
+        assert data["tier"] == "team"
         assert data["org_id"] == "acme-org"
         assert data["expires_at"] is not None
 
@@ -284,7 +284,7 @@ class TestFeaturesAfterLicense:
         assert "sso" in data["features"]
         assert "team_rbac" in data["features"]
 
-    def test_free_tier_no_enterprise_features(self, admin_client: TestClient) -> None:
+    def test_community_tier_no_team_features(self, admin_client: TestClient) -> None:
         resp = admin_client.get(self.URL)
         data = resp.json()
         assert "sso" not in data["features"]
@@ -308,14 +308,14 @@ class TestLicenseBadgeData:
         assert resp.status_code == 200
         data = resp.json()
         assert data["has_license"] is True
-        assert data["tier"] == "enterprise"
+        assert data["tier"] == "team"
         assert data["expires_at"] is not None
 
-    def test_badge_shows_free_when_no_license(self, admin_client: TestClient) -> None:
+    def test_badge_shows_community_when_no_license(self, admin_client: TestClient) -> None:
         resp = admin_client.get(self.URL)
         data = resp.json()
         assert data["has_license"] is False
-        assert data["tier"] == "free"
+        assert data["tier"] == "community"
         assert data.get("org_id") is None
 
 

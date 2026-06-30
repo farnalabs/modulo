@@ -960,7 +960,7 @@ async def admin_delete_team(
 
 class BillingOverviewResponse(BaseModel):
     plan_id: str | None = None
-    plan_tier: str = "free"
+    plan_tier: str = "community"
     daily_spend_limit: float | None = None
     total_users: int = 0
     total_teams: int = 0
@@ -1021,13 +1021,13 @@ async def admin_billing_overview(
             detail="Billing overview is temporarily unavailable.",
         )
 
-    plan_id = org.plan_id or "free"
-    if plan_id and plan_id.startswith("enterprise"):
-        plan_tier = "enterprise"
-    elif plan_id and plan_id != "free":
+    plan_id = org.plan_id or "community"
+    if plan_id and plan_id.startswith("team"):
+        plan_tier = "team"
+    elif plan_id and plan_id != "community":
         plan_tier = "pro"
     else:
-        plan_tier = "free"
+        plan_tier = "community"
 
     settings = org.settings_json or {}
     return BillingOverviewResponse(

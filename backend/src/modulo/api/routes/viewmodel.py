@@ -96,7 +96,7 @@ class PendingHitlGate(BaseModel):
 
 
 class LicenseInfo(BaseModel):
-    tier: str = "free"
+    tier: str = "community"
     features: list[str] = []
     is_valid: bool = True
 
@@ -173,7 +173,7 @@ async def license_info(
     if has_license_key:
         features = ["notifications"]
     return LicenseInfo(
-        tier="enterprise" if has_license_key else "free",
+        tier="team" if has_license_key else "community",
         features=features,
         is_valid=True,
     )
@@ -344,5 +344,5 @@ def _resolve_tier(settings: Settings) -> str:
     if lic is not None:
         return lic.tier
     if settings.modulo_license_key:
-        return "enterprise"
-    return "free"
+        return "team"
+    return "community"

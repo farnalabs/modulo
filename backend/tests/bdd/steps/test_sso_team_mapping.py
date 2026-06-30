@@ -11,7 +11,7 @@ from pytest_bdd import given, parsers, scenarios, then, when
 
 from modulo.api.dependencies import get_plan_context
 from modulo.api.main import app as _app
-from modulo.core.feature_flags import FreeTier, LicenseData, LicenseKeyTier
+from modulo.core.feature_flags import CommunityTier, LicenseData, LicenseKeyTier
 from modulo.settings import Settings, get_settings
 
 try:
@@ -130,11 +130,11 @@ def _sign_state(provider_id: str, secret_key: str = _VALID_32) -> str:
 
 def _setup_plan(license_key: str = "test-license-key") -> None:
     if not license_key:
-        _plan = FreeTier()
+        _plan = CommunityTier()
     else:
         _plan = LicenseKeyTier(
             LicenseData(
-                tier="enterprise",
+                tier="team",
                 features=["sso"],
                 expires_at="",
                 org_id="",

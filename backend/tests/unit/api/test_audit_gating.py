@@ -91,8 +91,8 @@ def _assert_feature_402(resp):
         assert "audit_viewer" in detail.lower()
 
 class TestAuditGating:
-    def test_list_events_is_free_tier_when_disabled(self, client_no_audit: TestClient) -> None:
-        """Per PRD: read-only recent-events listing is free tier, not gated."""
+    def test_list_events_is_community_tier_when_disabled(self, client_no_audit: TestClient) -> None:
+        """Per PRD: read-only recent-events listing is community tier, not gated."""
         from unittest.mock import patch
         with patch("modulo.api.routes.audit.list_audit_events", return_value={"items": [], "total": 0}):
             resp = client_no_audit.get("/api/v1/admin/audit")
@@ -101,8 +101,8 @@ class TestAuditGating:
     def test_batch_detail_returns_402_when_disabled(self, client_no_audit: TestClient) -> None:
         _assert_feature_402(client_no_audit.post("/api/v1/admin/audit/batch-detail", json={"event_ids": []}))
 
-    def test_verify_chain_is_free_tier(self, client_no_audit: TestClient) -> None:
-        """Per PRD: chain verification is free tier."""
+    def test_verify_chain_is_community_tier(self, client_no_audit: TestClient) -> None:
+        """Per PRD: chain verification is community tier."""
         from unittest.mock import patch
         with patch("modulo.api.routes.audit.verify_chain", return_value={"valid": True}):
             resp = client_no_audit.get("/api/v1/admin/audit/verify")

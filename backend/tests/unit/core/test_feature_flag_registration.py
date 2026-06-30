@@ -13,7 +13,7 @@ class TestSavedViewsFlag:
         registry = FeatureFlagRegistry()
         flag = registry.get_flag("saved_views")
         assert flag is not None
-        assert flag.tier == "free"
+        assert flag.tier == "community"
 
     def test_flag_has_description(self) -> None:
         registry = FeatureFlagRegistry()

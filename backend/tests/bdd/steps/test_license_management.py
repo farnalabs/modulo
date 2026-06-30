@@ -42,7 +42,7 @@ def _sign_license_payload(payload: dict, private_key: str = _TEST_PRIV) -> str:
 
 def _valid_payload(**overrides: Any) -> dict[str, Any]:
     payload: dict[str, Any] = {
-        "tier": "enterprise",
+        "tier": "team",
         "features": ["sso", "team_rbac", "audit_viewer", "admin_spend_limits"],
         "expires_at": (datetime.now(UTC) + timedelta(days=365)).isoformat(),
         "org_id": "acme-org",
@@ -148,8 +148,8 @@ def non_admin_user(ctx: dict[str, Any]) -> None:
     ctx["is_admin"] = False
 
 
-@given("I have a signed enterprise license key")
-def signed_enterprise_key(ctx: dict[str, Any]) -> None:
+@given("I have a signed team license key")
+def signed_team_key(ctx: dict[str, Any]) -> None:
     payload = _valid_payload()
     ctx["license_key"] = _sign_license_payload(payload)
 
@@ -161,7 +161,7 @@ def tampered_license_key(ctx: dict[str, Any]) -> None:
     parts = key.split(".")
     tampered_payload_b64 = (
         base64.urlsafe_b64encode(
-            json.dumps({"tier": "free"}, separators=(",", ":"), sort_keys=True).encode()
+            json.dumps({"tier": "community"}, separators=(",", ":"), sort_keys=True).encode()
         )
         .decode()
         .rstrip("=")
@@ -183,7 +183,7 @@ def no_license(ctx: dict[str, Any]) -> None:
     clear_license()
 
 
-@given("I have stored a valid enterprise license")
+@given("I have stored a valid team license")
 def stored_valid_license(ctx: dict[str, Any]) -> None:
     payload = _valid_payload()
     key = _sign_license_payload(payload)
@@ -193,7 +193,7 @@ def stored_valid_license(ctx: dict[str, Any]) -> None:
     ctx["stored_key"] = key
 
 
-@given("I have stored a valid enterprise license with a known expiry")
+@given("I have stored a valid team license with a known expiry")
 def stored_license_with_expiry(ctx: dict[str, Any]) -> None:
     payload = _valid_payload()
     key = _sign_license_payload(payload)
@@ -269,11 +269,11 @@ def error_detail_mentions(text: str, request: Any) -> None:
     )
 
 
-@then("the response shows free tier")
-def response_shows_free_tier(request: Any) -> None:
+@then("the response shows community tier")
+def response_shows_community_tier(request: Any) -> None:
     resp = request.node._resp
     data = resp.json()
-    assert data["tier"] == "free", f"Expected free tier, got '{data['tier']}'"
+    assert data["tier"] == "community", f"Expected community tier, got '{data['tier']}'"
     assert data["features"] == [], f"Expected empty features, got {data['features']}"
 
 
