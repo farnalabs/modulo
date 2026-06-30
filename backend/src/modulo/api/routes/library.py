@@ -82,6 +82,7 @@ class LibraryPrimitiveResponse(BaseModel):
     owner_team_id: uuid.UUID | None
     visibility: str
     created_by: uuid.UUID | None
+    auto_update: bool = True
     created_at: datetime
     updated_at: datetime
 
@@ -129,6 +130,7 @@ class LibraryPrimitiveUpdate(BaseModel):
     content_json: dict[str, Any] | None = None
     owner_team_id: uuid.UUID | None = None
     visibility: str | None = Field(default=None, pattern=r"^(org|team)$")
+    auto_update: bool | None = None
 
 
 class RatingSubmit(BaseModel):

@@ -66,6 +66,7 @@ def _make_community(
     # server_default fields are not populated without a DB flush; set them explicitly.
     p.created_at = _EPOCH
     p.updated_at = _EPOCH
+    p.auto_update = True
     p.contribution_status = "published" if primitive_type == "test_fixture" else None
     return p
 
@@ -606,6 +607,7 @@ async def copy_to_adapt(
             owner_team_id=target_team_id,
             visibility="org",
             created_by=created_by,
+            auto_update=True,
         )
     return result
 
@@ -1346,6 +1348,8 @@ async def notify_importers_of_update(
     fork_copies = list(result.scalars())
 
     for copy in fork_copies:
+        if not copy.auto_update:
+            continue
         await update_library_primitive(
             session,
             copy.id,
