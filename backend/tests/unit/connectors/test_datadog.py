@@ -14,16 +14,16 @@ _BASE_EU = "https://api.datadoghq.eu"
 
 
 @pytest.fixture()
-def connector():
+def connector() -> DatadogConnector:
     return DatadogConnector(api_key=API_KEY, app_key=APP_KEY, site="us")
 
 
-def test_connector_type(connector):
+def test_connector_type(connector: DatadogConnector) -> None:
     assert connector.connector_type == ConnectorType.DATADOG
 
 
 @respx.mock
-async def test_health_check_ok(connector):
+async def test_health_check_ok(connector: DatadogConnector) -> None:
     respx.get(f"{_BASE}/api/v1/validate").mock(
         return_value=httpx.Response(200, json={"valid": True})
     )
@@ -33,7 +33,7 @@ async def test_health_check_ok(connector):
 
 
 @respx.mock
-async def test_health_check_invalid_key(connector):
+async def test_health_check_invalid_key(connector: DatadogConnector) -> None:
     respx.get(f"{_BASE}/api/v1/validate").mock(
         return_value=httpx.Response(403, text="Forbidden")
     )
@@ -43,7 +43,7 @@ async def test_health_check_invalid_key(connector):
 
 
 @respx.mock
-async def test_health_check_network_error(connector):
+async def test_health_check_network_error(connector: DatadogConnector) -> None:
     respx.get(f"{_BASE}/api/v1/validate").mock(
         side_effect=httpx.ConnectError("connection refused")
     )
@@ -53,7 +53,7 @@ async def test_health_check_network_error(connector):
 
 
 @respx.mock
-async def test_query_monitors(connector):
+async def test_query_monitors(connector: DatadogConnector) -> None:
     monitors = [
         {"id": 1, "name": "CPU Load", "status": "Alert"},
         {"id": 2, "name": "Memory Usage", "status": "OK"},
@@ -67,7 +67,7 @@ async def test_query_monitors(connector):
 
 
 @respx.mock
-async def test_query_monitors_with_filters(connector):
+async def test_query_monitors_with_filters(connector: DatadogConnector) -> None:
     respx.get(
         f"{_BASE}/api/v1/monitor",
         params={"name": "CPU", "tags": "env:prod"},
@@ -88,7 +88,7 @@ async def test_query_monitors_with_filters(connector):
 
 
 @respx.mock
-async def test_query_events(connector):
+async def test_query_events(connector: DatadogConnector) -> None:
     respx.get(f"{_BASE}/api/v1/events").mock(
         return_value=httpx.Response(
             200, json={"events": [{"id": "e1", "title": "Deploy", "text": "v2 deployed"}]}
@@ -100,7 +100,7 @@ async def test_query_events(connector):
 
 
 @respx.mock
-async def test_query_events_with_filters(connector):
+async def test_query_events_with_filters(connector: DatadogConnector) -> None:
     respx.get(
         f"{_BASE}/api/v1/events",
         params={"start": "1700000000", "end": "1700001000", "priority": "normal"},
@@ -120,7 +120,7 @@ async def test_query_events_with_filters(connector):
 
 
 @respx.mock
-async def test_query_metrics(connector):
+async def test_query_metrics(connector: DatadogConnector) -> None:
     respx.post(f"{_BASE}/api/v2/query/timeseries").mock(
         return_value=httpx.Response(
             200,
@@ -133,7 +133,7 @@ async def test_query_metrics(connector):
 
 
 @respx.mock
-async def test_query_dashboards(connector):
+async def test_query_dashboards(connector: DatadogConnector) -> None:
     respx.get(f"{_BASE}/api/v2/dashboards").mock(
         return_value=httpx.Response(
             200,
@@ -146,7 +146,7 @@ async def test_query_dashboards(connector):
 
 
 @respx.mock
-async def test_query_dashboards_with_filters(connector):
+async def test_query_dashboards_with_filters(connector: DatadogConnector) -> None:
     respx.get(
         f"{_BASE}/api/v2/dashboards",
         params={"filter": "system"},
@@ -163,7 +163,7 @@ async def test_query_dashboards_with_filters(connector):
 
 
 @respx.mock
-async def test_query_logs(connector):
+async def test_query_logs(connector: DatadogConnector) -> None:
     respx.post(f"{_BASE}/api/v2/logs/events/search").mock(
         return_value=httpx.Response(
             200,
@@ -180,7 +180,7 @@ async def test_query_logs(connector):
 
 
 @respx.mock
-async def test_query_logs_with_filter(connector):
+async def test_query_logs_with_filter(connector: DatadogConnector) -> None:
     respx.post(f"{_BASE}/api/v2/logs/events/search").mock(
         return_value=httpx.Response(
             200,
@@ -200,7 +200,7 @@ async def test_query_logs_with_filter(connector):
 
 
 @respx.mock
-async def test_query_logs_with_cursor(connector):
+async def test_query_logs_with_cursor(connector: DatadogConnector) -> None:
     respx.post(f"{_BASE}/api/v2/logs/events/search").mock(
         return_value=httpx.Response(
             200,
@@ -218,7 +218,7 @@ async def test_query_logs_with_cursor(connector):
 
 
 @respx.mock
-async def test_write_event(connector):
+async def test_write_event(connector: DatadogConnector) -> None:
     respx.post(f"{_BASE}/api/v1/events").mock(
         return_value=httpx.Response(
             202,
@@ -236,7 +236,7 @@ async def test_write_event(connector):
 
 
 @respx.mock
-async def test_write_event_with_optional_fields(connector):
+async def test_write_event_with_optional_fields(connector: DatadogConnector) -> None:
     respx.post(f"{_BASE}/api/v1/events").mock(
         return_value=httpx.Response(
             202,
@@ -259,7 +259,7 @@ async def test_write_event_with_optional_fields(connector):
 
 
 @respx.mock
-async def test_write_event_missing_title(connector):
+async def test_write_event_missing_title(connector: DatadogConnector) -> None:
     with pytest.raises(ValueError, match="Datadog event write requires"):
         await connector.write(
             ConnectorPayload(resource="event", data={"text": "v2 deployed"})
@@ -267,7 +267,7 @@ async def test_write_event_missing_title(connector):
 
 
 @respx.mock
-async def test_write_monitor(connector):
+async def test_write_monitor(connector: DatadogConnector) -> None:
     respx.post(f"{_BASE}/api/v1/monitor").mock(
         return_value=httpx.Response(
             200, json={"id": 42, "name": "Test Monitor", "type": "metric alert"}
@@ -284,7 +284,7 @@ async def test_write_monitor(connector):
 
 
 @respx.mock
-async def test_write_monitor_missing_query(connector):
+async def test_write_monitor_missing_query(connector: DatadogConnector) -> None:
     with pytest.raises(ValueError, match="Datadog monitor write requires"):
         await connector.write(
             ConnectorPayload(resource="monitor", data={"type": "metric alert"})
@@ -292,7 +292,7 @@ async def test_write_monitor_missing_query(connector):
 
 
 @respx.mock
-async def test_write_monitor_status(connector):
+async def test_write_monitor_status(connector: DatadogConnector) -> None:
     respx.put(f"{_BASE}/api/v1/monitor/42").mock(
         return_value=httpx.Response(200, json={"id": 42, "status": "Muted"})
     )
@@ -306,45 +306,45 @@ async def test_write_monitor_status(connector):
 
 
 @respx.mock
-async def test_write_monitor_status_missing_id(connector):
+async def test_write_monitor_status_missing_id(connector: DatadogConnector) -> None:
     with pytest.raises(ValueError, match="Datadog monitor_status write requires"):
         await connector.write(
             ConnectorPayload(resource="monitor_status", data={"status": "Muted"})
         )
 
 
-async def test_query_invalid_resource(connector):
+async def test_query_invalid_resource(connector: DatadogConnector) -> None:
     with pytest.raises(ValueError, match="Unsupported Datadog resource"):
         await connector.query(ConnectorQuery(resource="invalid"))
 
 
-async def test_write_invalid_resource(connector):
+async def test_write_invalid_resource(connector: DatadogConnector) -> None:
     with pytest.raises(ValueError, match="Unsupported Datadog write resource"):
         await connector.write(ConnectorPayload(resource="invalid", data={}))
 
 
-def test_constructor_us_site():
+def test_constructor_us_site() -> None:
     c = DatadogConnector(api_key="key", app_key="app", site="us")
     assert c._base == "https://api.datadoghq.com"
 
 
-def test_constructor_eu_site():
+def test_constructor_eu_site() -> None:
     c = DatadogConnector(api_key="key", app_key="app", site="eu")
     assert c._base == "https://api.datadoghq.eu"
 
 
-def test_constructor_us3_site():
+def test_constructor_us3_site() -> None:
     c = DatadogConnector(api_key="key", app_key="app", site="us3")
     assert c._base == "https://api.us3.datadoghq.com"
 
 
-def test_constructor_unknown_site():
+def test_constructor_unknown_site() -> None:
     with pytest.raises(ValueError, match="Unknown Datadog site"):
         DatadogConnector(api_key="key", app_key="app", site="invalid")
 
 
 @respx.mock
-async def test_query_http_403(connector):
+async def test_query_http_403(connector: DatadogConnector) -> None:
     respx.get(f"{_BASE}/api/v1/monitor").mock(
         return_value=httpx.Response(403, text="Forbidden")
     )
@@ -353,7 +353,7 @@ async def test_query_http_403(connector):
 
 
 @respx.mock
-async def test_query_http_500(connector):
+async def test_query_http_500(connector: DatadogConnector) -> None:
     respx.get(f"{_BASE}/api/v1/monitor").mock(
         return_value=httpx.Response(500, text="Internal Server Error")
     )

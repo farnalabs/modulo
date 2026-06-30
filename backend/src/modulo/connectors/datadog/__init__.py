@@ -1,6 +1,6 @@
 """DatadogConnector — async Datadog REST API connector (v1 + v2)."""
 
-from typing import Any
+from typing import Any, cast
 
 import httpx
 
@@ -35,8 +35,11 @@ class DatadogConnector(ConnectorBase):
         return ConnectorType.DATADOG
 
     def _client(self) -> httpx.AsyncClient:
+        base = self._base
+        if base is None:
+            raise RuntimeError("site was validated in __init__")
         return httpx.AsyncClient(
-            base_url=self._base,
+            base_url=base,
             headers={
                 "DD-API-KEY": self._api_key,
                 "DD-APPLICATION-KEY": self._app_key,
@@ -169,10 +172,11 @@ class DatadogConnector(ConnectorBase):
         resp.raise_for_status()
         body = resp.json()
         logs: list[dict[str, Any]] = body.get("data", [])
+        next_cursor: str | None = body.get("meta", {}).get("page", {}).get("after")
         return ConnectorResult(
             records=logs,
-            total=body.get("meta", {}).get("page", {}).get("after"),
-            next_cursor=body.get("meta", {}).get("page", {}).get("after"),
+            total=None,
+            next_cursor=next_cursor,
         )
 
     async def _create_event(self, c: httpx.AsyncClient, data: dict[str, Any]) -> dict[str, Any]:
@@ -187,7 +191,7 @@ class DatadogConnector(ConnectorBase):
         resp = await c.post("/api/v1/events", json=body)
         resp.raise_for_status()
         result: dict[str, Any] = resp.json()
-        return result.get("event", result)
+        return cast(dict[str, Any], result.get("event", result))
 
     async def _create_monitor(self, c: httpx.AsyncClient, data: dict[str, Any]) -> dict[str, Any]:
         query = data.get("query")
