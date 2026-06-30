@@ -1,16 +1,22 @@
 <template>
   <div class="relative" data-testid="feature-gate">
-    <div :class="{ 'pointer-events-none select-none opacity-40': !enabled }">
-      <slot />
+    <slot v-if="enabled" />
+    <div v-else class="flex items-center justify-center py-16">
+      <div class="text-center space-y-4">
+        <LockIcon :locked="true" :tooltip="tooltipText" />
+        <div>
+          <h3 class="text-lg font-semibold">Enterprise Feature</h3>
+          <p class="text-sm text-muted-foreground">{{ tooltipText }}</p>
+        </div>
+        <a
+          href="/settings/license"
+          class="btn-glow inline-flex items-center gap-2 rounded-lg bg-primary px-4 py-2 text-sm font-semibold text-primary-foreground border border-primary/30 hover:border-primary/60 hover:brightness-110 transition-all duration-150"
+        >
+          View Plans
+        </a>
+        <slot name="locked" :tooltip="tooltipText" />
+      </div>
     </div>
-    <div
-      v-if="!enabled"
-      class="absolute right-1 top-1"
-      data-testid="feature-gate-lock"
-    >
-      <LockIcon :locked="true" :tooltip="tooltipText" />
-    </div>
-    <slot v-if="!enabled" name="locked" :tooltip="tooltipText" />
   </div>
 </template>
 
