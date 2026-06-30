@@ -1,6 +1,6 @@
 """PagerDutyConnector — async PagerDuty REST API v2 connector."""
 
-from typing import Any
+from typing import Any, cast
 
 import httpx
 
@@ -12,7 +12,6 @@ from modulo.connectors.base import (
     ConnectorType,
     HealthResult,
 )
-
 
 _BASE = "https://api.pagerduty.com"
 
@@ -245,8 +244,8 @@ class PagerDutyConnector(ConnectorBase):
         body: dict[str, Any] = {"incident": incident}
         resp = await c.post("/incidents", json=body)
         resp.raise_for_status()
-        result: dict[str, Any] = resp.json()
-        return result.get("incident", result)
+        result = cast(dict[str, Any], resp.json())
+        return cast(dict[str, Any], result.get("incident", result))
 
     async def _acknowledge_incident(self, c: httpx.AsyncClient, data: dict[str, Any]) -> dict[str, Any]:
         incident_id = data.get("incident_id")
@@ -260,8 +259,8 @@ class PagerDutyConnector(ConnectorBase):
         }
         resp = await c.put(f"/incidents/{incident_id}", json=body)
         resp.raise_for_status()
-        result: dict[str, Any] = resp.json()
-        return result.get("incident", result)
+        result = cast(dict[str, Any], resp.json())
+        return cast(dict[str, Any], result.get("incident", result))
 
     async def _resolve_incident(self, c: httpx.AsyncClient, data: dict[str, Any]) -> dict[str, Any]:
         incident_id = data.get("incident_id")
@@ -275,8 +274,8 @@ class PagerDutyConnector(ConnectorBase):
         }
         resp = await c.put(f"/incidents/{incident_id}", json=body)
         resp.raise_for_status()
-        result: dict[str, Any] = resp.json()
-        return result.get("incident", result)
+        result = cast(dict[str, Any], resp.json())
+        return cast(dict[str, Any], result.get("incident", result))
 
     async def _add_note(self, c: httpx.AsyncClient, data: dict[str, Any]) -> dict[str, Any]:
         incident_id = data.get("incident_id")
@@ -286,5 +285,5 @@ class PagerDutyConnector(ConnectorBase):
         body: dict[str, Any] = {"note": {"content": content}}
         resp = await c.post(f"/incidents/{incident_id}/notes", json=body)
         resp.raise_for_status()
-        result: dict[str, Any] = resp.json()
-        return result.get("note", result)
+        result = cast(dict[str, Any], resp.json())
+        return cast(dict[str, Any], result.get("note", result))
