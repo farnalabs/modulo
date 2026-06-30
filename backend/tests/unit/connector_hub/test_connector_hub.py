@@ -122,6 +122,21 @@ async def test_initialise_creates_asana_connector():
     assert connector.connector_type == ConnectorType.ASANA
 
 
+async def test_initialise_creates_confluence_connector():
+    ci = _FakeCI(
+        id=uuid.uuid4(),
+        connector_type_id="confluence",
+        config_json={"instance": "my-domain.atlassian.net/wiki"},
+        credentials_ciphertext=_encrypt({"token": "confluence_token"}),
+    )
+    backend = create_secrets_backend(fernet_key=_KEY, backend_name="fernet")
+    with patch.object(backend, "get_secret", return_value='{"token": "confluence_token"}'):
+        hub = ConnectorHub(secrets_backend=backend)
+        await hub.initialise([ci])
+    connector = hub.get(ci.id)
+    assert connector.connector_type == ConnectorType.CONFLUENCE
+
+
 async def test_initialise_creates_shortcut_connector():
     ci = _FakeCI(
         id=uuid.uuid4(),
