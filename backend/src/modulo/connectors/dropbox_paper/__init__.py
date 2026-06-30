@@ -99,7 +99,7 @@ class DropboxPaperConnector(ConnectorBase):
                         raise ValueError("Dropbox Paper doc query requires 'doc_id' filter")
                     r = await client.post(
                         "/paper/docs/download",
-                        headers={"Dropbox-API-Arg": f'{{"doc_id": "{doc_id}"}}'},
+                        headers={"Dropbox-API-Arg": json.dumps({"doc_id": doc_id})},
                         content=b"",
                     )
                     r.raise_for_status()
@@ -138,7 +138,7 @@ class DropboxPaperConnector(ConnectorBase):
                     r = await client.post(
                         "/paper/docs/create",
                         params={"import_format": "markdown"},
-                        headers={"Dropbox-API-Arg": f'{{"path": "/{title}"}}'},
+                        headers={"Dropbox-API-Arg": json.dumps({"path": f"/{title}"})},
                         content=content.encode("utf-8"),
                     )
                     r.raise_for_status()
@@ -147,6 +147,4 @@ class DropboxPaperConnector(ConnectorBase):
                     return body
 
                 case _:
-                    raise ValueError(
-                        f"Unsupported Dropbox Paper write resource: {payload.resource!r}"
-                    )
+                    raise ValueError(f"Unsupported Dropbox Paper write resource: {payload.resource!r}")
