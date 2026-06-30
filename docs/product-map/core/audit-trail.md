@@ -3,15 +3,23 @@ id: feat-core-audit-trail
 prd: 8.12
 delivery-tasks: [task-nv0-immutable-audit]
 bdd:
-  - backend/tests/bdd/features/audit/event_recording.feature
+  - backend/tests/features/audit/event_recording.feature
+  - backend/tests/features/audit/audit_viewer.feature
 code:
   - backend/src/modulo/core/audit_logger/__init__.py
   - backend/src/modulo/core/audit_logger/append_only.py
   - backend/src/modulo/db/models/audit_event.py
   - backend/src/modulo/api/routes/audit.py
+  - backend/src/modulo/api/routes/admin_rotation.py
+  - backend/src/modulo/api/routes/admin.py
+  - backend/src/modulo/api/routes/pipelines.py
+  - backend/src/modulo/core/hitl_manager/__init__.py
+  - backend/src/modulo/core/hitl_manager/expiry_job.py
+  - backend/src/modulo/core/pipeline_engine/recovery.py
 unit-tests:
   - backend/tests/unit/audit_logger/test_audit_logger.py
-  - backend/tests/unit/api/test_audit.py
+  - backend/tests/unit/audit_logger/test_append_only.py
+  - backend/tests/integration/test_audit_append_only.py
 
 status: partial
 ---
@@ -78,7 +86,20 @@ Immutable SHA-256-linked audit event chain per organisation. Each event records 
 - [ ] `team_member_added` / `team_member_removed` / `team_member_role_changed` — team_id, user_id, role
 - [ ] `resource_team_ownership_changed` — resource_type, resource_id, old/new team_id
 - [ ] `team_membership_revoked` — team_id, user_id, revoked_by
-- [ ] `hitl_output_delivered` — V1 event, data: run_id, gate_id, user_id, output hash ### Edge Cases
+- [ ] `hitl_output_delivered` — V1 event, data: run_id, gate_id, user_id, output hash
+
+### Implemented Event Types (actually dispatched in code)
+- [x] `pipeline.autonomy_level_changed` — pipeline_id, user_id, old_autonomy, new_autonomy
+- [x] `fernet_key_rotation_started` — key_version, user_id
+- [x] `fernet_key_rotation_completed` — key_version, new_key_count, user_id
+- [x] `org_deletion_requested` — org_id, user_id, scheduled_date
+- [x] `run_purge` — run_count, user_id
+- [x] `hitl.output_modified` — run_id, gate_id, user_id
+- [x] `hitl.output_delivered` — run_id, gate_id, user_id, output_hash
+- [x] `hitl.output_delivery_failed` — run_id, gate_id, error
+- [x] `hitl.manual_delivery` — run_id, gate_id, user_id
+- [x] `hitl.claim_expired` — run_id, gate_id, claim_token
+- [x] `node.recovery` — run_id, node_id, recovery_strategy ### Edge Cases
 - [x] Concurrent event creation under same org → serialized by DB transaction (validates chain head consistency)
 - [x] verify_chain with >max_events → only checks first N, reports total_events correctly but may miss break after max_events
 - [x] Export with page beyond available data → empty items, total still accurate
@@ -110,3 +131,11 @@ Immutable SHA-256-linked audit event chain per organisation. Each event records 
 - verify_chain limited to 10000 events by default — large orgs may need higher limit or batched verification
 - No event retention policy (events accumulate indefinitely)
 - No event schema versioning (payload structure could change between event types)
+- **PRD-vs-implementation divergence**: all 18 PRD-specified event types (`run_started`, `hitl_approved`, `team_created`, etc.) are NOT dispatched. Production code uses 11 different dot-notation event types (`pipeline.autonomy_level_changed`, `hitl.output_delivered`, etc.) with no overlap to the PRD table. The naming convention, granularity, and payload structure differ entirely.
+- **No `run_started` event**: pipeline runs start without an audit event. The `run_started` PRD event is not dispatched anywhere.
+- **No `hitl_claimed`/`hitl_approved`/`hitl_rejected` events**: HITL lifecycle decisions are not recorded in the audit trail. HITL-related events in production are limited to output delivery (`hitl.output_delivered`, `hitl.output_delivery_failed`, `hitl.output_modified`, `hitl.manual_delivery`) and claim expiry (`hitl.claim_expired`).
+- **No team CRUD audit events**: team creation, rename, deletion, membership changes, and role changes are not audited.
+- **No permission change audit**: `user_permission_changed` event not dispatched.
+- **No API key audit**: `api_key_created`/`api_key_revoked` not dispatched.
+- **No auth event audit**: login, logout, and failed auth attempts not recorded.
+- **BDD feature file uses wrong event types**: `event_recording.feature` references `pipeline.created`, `pipeline.deleted`, `run.created`, `hitl.approved` — none of which match either the PRD table or the actual dispatched event types.
