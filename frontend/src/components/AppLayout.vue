@@ -1,7 +1,7 @@
 <template>
   <div class="flex min-h-screen">
     <!-- Sidebar -->
-    <aside class="flex w-64 border-r bg-background p-4 flex-col">
+    <aside class="hidden md:flex w-64 border-r bg-background p-4 flex-col">
       <div class="mb-6 flex items-center gap-2.5 pl-1">
         <div class="flex items-center justify-center rounded-lg bg-gradient-to-br from-teal-500/20 to-transparent p-1.5">
           <LogoMark :size="24" transparent />
