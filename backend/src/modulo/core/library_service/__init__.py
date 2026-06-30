@@ -61,7 +61,7 @@ def _make_community(
         review_count=None,
         owner_team_id=None,
         visibility="community",
-        created_by=None,
+        account_id=None,
     )
     # server_default fields are not populated without a DB flush; set them explicitly.
     p.created_at = _EPOCH
