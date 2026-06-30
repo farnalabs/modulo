@@ -57,7 +57,7 @@ def verify_state(signed: str, secret_key: str) -> str | None:
 # ---------------------------------------------------------------------------
 
 
-async def jit_provision_account(
+async def jit_provision_user(
     session: AsyncSession,
     settings: Settings,
     email: str,
@@ -272,7 +272,7 @@ async def oidc_process_callback(
     name = claims.get("name", "") or claims.get("preferred_username", "") or email.split("@")[0]
     sso_subject = f"{provider_id}:{claims.get('sub', email)}"
 
-    account, org_id, org_role = await jit_provision_account(session, settings, email, name, "oidc", sso_subject)
+    account, org_id, org_role = await jit_provision_user(session, settings, email, name, "oidc", sso_subject)
 
     idp_groups: list[str] = claims.get("groups", []) or []
     if idp_groups:
@@ -475,7 +475,7 @@ async def saml_process_response(
     )
     sso_subject = f"saml:{idp_entity_id}:{name_id}"
 
-    account, org_id, org_role = await jit_provision_account(session, settings, email, display_name, "saml", sso_subject)
+    account, org_id, org_role = await jit_provision_user(session, settings, email, display_name, "saml", sso_subject)
 
     saml_groups: list[str] = []
     for group_attr in ("groups", "memberOf", "Group"):
