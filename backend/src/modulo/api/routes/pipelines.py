@@ -375,7 +375,7 @@ async def create_pipeline_endpoint(
             session,
             org_id=principal.organisation_id,
             name=body.name,
-            created_by=principal.account_id,
+            account_id=principal.account_id,
             description=body.description,
             visibility=body.visibility,
             max_concurrent_runs=body.max_concurrent_runs,
@@ -614,7 +614,7 @@ async def clone_pipeline_endpoint(
                 session,
                 org_id=principal.organisation_id,
                 pipeline_id=pipeline_id,
-                created_by=principal.account_id,
+                account_id=principal.account_id,
                 new_name=body.name,
             )
         except Exception:
@@ -763,7 +763,7 @@ def _snapshot_to_response(s: Any) -> SnapshotResponse:
         tag=s.tag,
         notes=s.notes,
         created_at=s.created_at,
-        created_by=s.account_id,
+        account_id=s.account_id,
     )
 
 
@@ -775,7 +775,7 @@ def _snapshot_to_detail_response(s: Any) -> SnapshotDetailResponse:
         tag=s.tag,
         notes=s.notes,
         created_at=s.created_at,
-        created_by=s.account_id,
+        account_id=s.account_id,
         graph_json=s.graph_json,
         connector_bindings_json=s.connector_bindings_json,
         schema_pins_json=s.schema_pins_json,
@@ -847,7 +847,7 @@ async def rollback_snapshot_endpoint(
     async with session.begin():
         await set_rls_org(session, principal.organisation_id)
         await set_rls_user_context(session, principal.account_id, principal.org_role)
-        new_snapshot = await rollback_to_snapshot(session, pipeline_id, snapshot_id, created_by=principal.account_id)
+        new_snapshot = await rollback_to_snapshot(session, pipeline_id, snapshot_id, account_id=principal.account_id)
     if new_snapshot is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,

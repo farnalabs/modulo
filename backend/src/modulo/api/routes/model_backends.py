@@ -95,7 +95,7 @@ def _to_response(mb: Any) -> ModelBackendResponse:
         default_params=mb.default_params,
         visibility=mb.visibility,
         fallback_backend_ids=fallback_ids,
-        created_by=mb.account_id,
+        account_id=mb.account_id,
         created_at=mb.created_at,
         updated_at=mb.updated_at,
     )
@@ -142,7 +142,7 @@ async def create_model_backend_endpoint(
             provider=body.provider,
             model_id=body.model_id,
             credentials_ciphertext=ciphertext,
-            created_by=principal.account_id,
+            account_id=principal.account_id,
             default_params=body.default_params,
             visibility=body.visibility,
             fallback_backend_ids=fallback_ids,

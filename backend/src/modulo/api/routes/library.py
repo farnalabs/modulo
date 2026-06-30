@@ -342,7 +342,7 @@ async def create_library_primitive_endpoint(
             review_count=None,
             owner_team_id=body.owner_team_id,
             visibility=body.visibility,
-            created_by=principal.account_id,
+            account_id=principal.account_id,
         )
     return LibraryPrimitiveResponse.model_validate(prim)
 
@@ -396,7 +396,7 @@ async def copy_to_adapt_endpoint(
             principal.organisation_id,
             primitive_id,
             target_team_id=body.target_team_id,
-            created_by=principal.account_id,
+            account_id=principal.account_id,
             via_mcp=False,
         )
     except CommunityPrimitiveReadOnlyError:
@@ -627,7 +627,7 @@ async def confirm_import_endpoint(
         result = await materialize_import(
             session,
             org_id=principal.organisation_id,
-            created_by=principal.account_id,
+            account_id=principal.account_id,
             bundle=bundle,
             owner_team_id=body.owner_team_id,
             pipeline_name_override=body.pipeline_name_override,
@@ -838,7 +838,7 @@ async def create_pipeline_from_template_endpoint(
             session,
             org_id=principal.organisation_id,
             name=name,
-            created_by=principal.account_id,
+            account_id=principal.account_id,
             description=description,
             run_context_defaults={
                 "library_source_id": str(primitive_id),

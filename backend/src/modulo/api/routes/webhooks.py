@@ -82,7 +82,7 @@ async def receive_webhook(
             trigger = trigger_row.scalar_one_or_none()
             if trigger is None:
                 raise TriggerNotFoundError(trigger_id=trigger_id)
-            snapshot = await create_snapshot_from_live_graph(session, pipeline_id=trigger.pipeline_id, created_by=None)
+            snapshot = await create_snapshot_from_live_graph(session, pipeline_id=trigger.pipeline_id, account_id=None)
             if snapshot is None:
                 raise HTTPException(
                     status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -155,7 +155,7 @@ async def replay_webhook(
             trigger = trigger_row.scalar_one_or_none()
             if trigger is None:
                 raise TriggerNotFoundError(trigger_id=trigger_id)
-            snapshot = await create_snapshot_from_live_graph(session, pipeline_id=trigger.pipeline_id, created_by=None)
+            snapshot = await create_snapshot_from_live_graph(session, pipeline_id=trigger.pipeline_id, account_id=None)
             if snapshot is None:
                 raise HTTPException(
                     status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
