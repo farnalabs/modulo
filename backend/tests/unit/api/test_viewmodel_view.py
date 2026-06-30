@@ -66,6 +66,45 @@ def _make_run() -> MagicMock:
     return r
 
 
+def _make_org(**overrides: object) -> MagicMock:
+    org = MagicMock()
+    org.id = overrides.get("id", _ORG_ID)
+    org.name = overrides.get("name", "Test Org")
+    org.settings_json = overrides.get("settings_json", {})
+    org.daily_spend_limit = overrides.get("daily_spend_limit", None)
+    return org
+
+
+def _make_user(**overrides: object) -> MagicMock:
+    user = MagicMock()
+    user.id = overrides.get("id", _USER_ID)
+    user.preferences = overrides.get("preferences", {})
+    return user
+
+
+def _make_membership(**overrides: object) -> MagicMock:
+    m = MagicMock()
+    m.team_id = overrides.get("team_id", uuid.uuid4())
+    m.role = overrides.get("role", "viewer")
+    return m
+
+
+def _make_mock_plan_context() -> MagicMock:
+    ctx = MagicMock()
+    flag1 = MagicMock()
+    flag1.name = "parallel_branches"
+    flag1.description = "Run branching logic in parallel within a pipeline"
+    flag1.tier = "free"
+    flag1.currently_active = True
+    flag2 = MagicMock()
+    flag2.name = "eval_system"
+    flag2.description = "Built-in eval runner for LLM output quality gates"
+    flag2.tier = "free"
+    flag2.currently_active = True
+    ctx.list_enabled_features = MagicMock(return_value=[flag1, flag2])
+    return ctx
+
+
 def _make_mock_session() -> AsyncMock:
     session = AsyncMock()
     begin_cm = AsyncMock()
@@ -74,9 +113,10 @@ def _make_mock_session() -> AsyncMock:
     session.begin = MagicMock(return_value=begin_cm)
 
     execute_result = MagicMock()
-    scalars_mock = AsyncMock()
-    scalars_mock.all = AsyncMock(return_value=[])
+    scalars_mock = MagicMock()
+    scalars_mock.all = MagicMock(return_value=[])
     execute_result.scalars.return_value = scalars_mock
+    execute_result.scalar_one_or_none = AsyncMock(return_value=None)
     session.execute = AsyncMock(return_value=execute_result)
     return session
 
@@ -193,12 +233,20 @@ class TestViewModelCurrentViewIntegration:
         views_page = MagicMock(items=[run_view], total=1, page=1, page_size=100)
         pipelines_page = MagicMock(items=[pipeline], total=1, page=1, page_size=20)
         runs_page = MagicMock(items=[run], total=1, page=1, page_size=10)
+        org = _make_org()
+        user = _make_user()
+        plan_ctx = _make_mock_plan_context()
 
         with (
             patch("modulo.api.routes.viewmodel.list_views", return_value=views_page),
             patch("modulo.api.routes.viewmodel.list_pipelines", return_value=pipelines_page),
             patch("modulo.api.routes.viewmodel.list_runs", return_value=runs_page),
             patch("modulo.api.routes.viewmodel.set_rls_org"),
+            patch("modulo.api.routes.viewmodel.set_rls_user_context"),
+            patch("modulo.api.routes.viewmodel.get_organisation", return_value=org),
+            patch("modulo.api.routes.viewmodel.get_user_by_id", return_value=user),
+            patch("modulo.api.routes.viewmodel.list_memberships_for_user", return_value=[]),
+            patch("modulo.api.routes.viewmodel.resolve_plan_context", return_value=plan_ctx),
         ):
             resp = client.get("/api/v1/viewmodel/current")
 
@@ -217,12 +265,20 @@ class TestViewModelCurrentViewIntegration:
         views_page = MagicMock(items=[view], total=1, page=1, page_size=100)
         pipelines_page = MagicMock(items=[pipeline], total=1, page=1, page_size=20)
         runs_page = MagicMock(items=[run], total=1, page=1, page_size=10)
+        org = _make_org()
+        user = _make_user()
+        plan_ctx = _make_mock_plan_context()
 
         with (
             patch("modulo.api.routes.viewmodel.list_views", return_value=views_page),
             patch("modulo.api.routes.viewmodel.list_pipelines", return_value=pipelines_page),
             patch("modulo.api.routes.viewmodel.list_runs", return_value=runs_page),
             patch("modulo.api.routes.viewmodel.set_rls_org"),
+            patch("modulo.api.routes.viewmodel.set_rls_user_context"),
+            patch("modulo.api.routes.viewmodel.get_organisation", return_value=org),
+            patch("modulo.api.routes.viewmodel.get_user_by_id", return_value=user),
+            patch("modulo.api.routes.viewmodel.list_memberships_for_user", return_value=[]),
+            patch("modulo.api.routes.viewmodel.resolve_plan_context", return_value=plan_ctx),
             patch("modulo.api.routes.viewmodel.get_view", return_value=view),
         ):
             resp = client.get(f"/api/v1/viewmodel/current?current_view_id={view_id}")
@@ -241,6 +297,9 @@ class TestViewModelCurrentViewIntegration:
         views_page = MagicMock(items=[], total=0, page=1, page_size=100)
         pipelines_page = MagicMock(items=[pipeline], total=1, page=1, page_size=20)
         runs_page = MagicMock(items=[run], total=1, page=1, page_size=10)
+        org = _make_org()
+        user = _make_user()
+        plan_ctx = _make_mock_plan_context()
 
         missing_id = uuid.uuid4()
 
@@ -249,6 +308,11 @@ class TestViewModelCurrentViewIntegration:
             patch("modulo.api.routes.viewmodel.list_pipelines", return_value=pipelines_page),
             patch("modulo.api.routes.viewmodel.list_runs", return_value=runs_page),
             patch("modulo.api.routes.viewmodel.set_rls_org"),
+            patch("modulo.api.routes.viewmodel.set_rls_user_context"),
+            patch("modulo.api.routes.viewmodel.get_organisation", return_value=org),
+            patch("modulo.api.routes.viewmodel.get_user_by_id", return_value=user),
+            patch("modulo.api.routes.viewmodel.list_memberships_for_user", return_value=[]),
+            patch("modulo.api.routes.viewmodel.resolve_plan_context", return_value=plan_ctx),
             patch("modulo.api.routes.viewmodel.get_view", return_value=None),
         ):
             resp = client.get(f"/api/v1/viewmodel/current?current_view_id={missing_id}")

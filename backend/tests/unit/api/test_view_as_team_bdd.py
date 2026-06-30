@@ -26,6 +26,28 @@ _TEAM_B_ID = uuid.UUID("00000000-0000-0000-0000-000000000011")
 _VIEWMODEL_URL = "/api/v1/viewmodel/current"
 
 
+def _make_org(**overrides: object) -> MagicMock:
+    org = MagicMock()
+    org.id = overrides.get("id", _ORG_ID)
+    org.name = overrides.get("name", "Test Org")
+    org.settings_json = overrides.get("settings_json", {})
+    org.daily_spend_limit = overrides.get("daily_spend_limit", None)
+    return org
+
+
+def _make_user(**overrides: object) -> MagicMock:
+    user = MagicMock()
+    user.id = overrides.get("id", _USER_ID)
+    user.preferences = overrides.get("preferences", {})
+    return user
+
+
+def _make_mock_plan_context() -> MagicMock:
+    ctx = MagicMock()
+    ctx.list_enabled_features = MagicMock(return_value=[])
+    return ctx
+
+
 def _make_settings() -> Settings:
     return Settings(
         database_url="postgresql+asyncpg://localhost/test",
@@ -42,11 +64,19 @@ def _make_mock_session() -> AsyncMock:
     begin_cm.__aexit__ = AsyncMock(return_value=False)
     session.begin = MagicMock(return_value=begin_cm)
     scalar_mock = MagicMock()
-    scalar_mock.all = AsyncMock(return_value=[])
+    scalar_mock.all = MagicMock(return_value=[])
     team_mock = MagicMock()
     team_mock.id = _TEAM_ID
     team_mock.organisation_id = _ORG_ID
     team_mock.name = "engineering"
+    org_mock = MagicMock()
+    org_mock.id = _ORG_ID
+    org_mock.name = "Test Org"
+    org_mock.settings_json = {}
+    org_mock.daily_spend_limit = None
+    user_mock = MagicMock()
+    user_mock.id = _USER_ID
+    user_mock.preferences = {}
     hitl_result = AsyncMock()
     hitl_result.scalar_one_or_none = AsyncMock(return_value=team_mock)
     hitl_result.scalar_one = AsyncMock(return_value=0)
@@ -161,6 +191,25 @@ def runner_client() -> Generator[TestClient, None, None]:
 class TestBDDAdminViewsAsTeam:
     URL = _VIEWMODEL_URL
 
+    def _common_patches(self) -> dict:
+        org = _make_org()
+        user = _make_user()
+        plan_ctx = _make_mock_plan_context()
+        return {
+            "get_organisation": patch(
+                "modulo.api.routes.viewmodel.get_organisation", return_value=org
+            ),
+            "get_user_by_id": patch(
+                "modulo.api.routes.viewmodel.get_user_by_id", return_value=user
+            ),
+            "list_memberships_for_user": patch(
+                "modulo.api.routes.viewmodel.list_memberships_for_user", return_value=[]
+            ),
+            "resolve_plan_context": patch(
+                "modulo.api.routes.viewmodel.resolve_plan_context", return_value=plan_ctx
+            ),
+        }
+
     def test_admin_view_as_team_returns_200(self, client: TestClient) -> None:
         team_pipeline = _fake_pipeline(
             name="release-pipeline",
@@ -180,6 +229,10 @@ class TestBDDAdminViewsAsTeam:
                 new_callable=AsyncMock,
                 return_value=PageResult(items=[], total=0, page=1, page_size=10),
             ),
+            patch("modulo.api.routes.viewmodel.get_organisation", return_value=_make_org()),
+            patch("modulo.api.routes.viewmodel.get_user_by_id", return_value=_make_user()),
+            patch("modulo.api.routes.viewmodel.list_memberships_for_user", return_value=[]),
+            patch("modulo.api.routes.viewmodel.resolve_plan_context", return_value=_make_mock_plan_context()),
         ):
             resp = client.get(self.URL, params={"view_as_team": str(_TEAM_ID)})
 
@@ -202,6 +255,10 @@ class TestBDDAdminViewsAsTeam:
                 new_callable=AsyncMock,
                 return_value=PageResult(items=[], total=0, page=1, page_size=10),
             ),
+            patch("modulo.api.routes.viewmodel.get_organisation", return_value=_make_org()),
+            patch("modulo.api.routes.viewmodel.get_user_by_id", return_value=_make_user()),
+            patch("modulo.api.routes.viewmodel.list_memberships_for_user", return_value=[]),
+            patch("modulo.api.routes.viewmodel.resolve_plan_context", return_value=_make_mock_plan_context()),
         ):
             resp = client.get(self.URL, params={"view_as_team": str(uuid.uuid4())})
 
@@ -238,6 +295,10 @@ class TestBDDResourceFiltering:
                 new_callable=AsyncMock,
                 return_value=PageResult(items=[], total=0, page=1, page_size=10),
             ),
+            patch("modulo.api.routes.viewmodel.get_organisation", return_value=_make_org()),
+            patch("modulo.api.routes.viewmodel.get_user_by_id", return_value=_make_user()),
+            patch("modulo.api.routes.viewmodel.list_memberships_for_user", return_value=[]),
+            patch("modulo.api.routes.viewmodel.resolve_plan_context", return_value=_make_mock_plan_context()),
         ):
             resp = client.get(self.URL, params={"view_as_team": str(_TEAM_ID)})
 
@@ -268,6 +329,10 @@ class TestBDDResourceFiltering:
                 new_callable=AsyncMock,
                 return_value=PageResult(items=[], total=0, page=1, page_size=10),
             ),
+            patch("modulo.api.routes.viewmodel.get_organisation", return_value=_make_org()),
+            patch("modulo.api.routes.viewmodel.get_user_by_id", return_value=_make_user()),
+            patch("modulo.api.routes.viewmodel.list_memberships_for_user", return_value=[]),
+            patch("modulo.api.routes.viewmodel.resolve_plan_context", return_value=_make_mock_plan_context()),
         ):
             resp = client.get(self.URL, params={"view_as_team": str(_TEAM_ID)})
 
@@ -313,7 +378,12 @@ class TestBDDInvalidTeam:
     def test_nonexistent_team_returns_404(self) -> None:
         nonexistent_id = uuid.uuid4()
         mock_session = _make_mock_session()
+        # Team query returns None → 404
         mock_session.execute.return_value.scalar_one_or_none = AsyncMock(return_value=None)
+        # But org and user queries need to succeed for the viewmodel handler
+        mock_session.execute.return_value.scalars = MagicMock(
+            return_value=MagicMock(all=MagicMock(return_value=[]))
+        )
 
         async def override_session():
             yield mock_session
@@ -329,8 +399,14 @@ class TestBDDInvalidTeam:
         )
         c = TestClient(app)
         try:
-            resp = c.get(self.URL, params={"view_as_team": str(nonexistent_id)})
-            assert resp.status_code == 404
+            with (
+                patch("modulo.api.routes.viewmodel.get_organisation", return_value=_make_org()),
+                patch("modulo.api.routes.viewmodel.get_user_by_id", return_value=_make_user()),
+                patch("modulo.api.routes.viewmodel.list_memberships_for_user", return_value=[]),
+                patch("modulo.api.routes.viewmodel.resolve_plan_context", return_value=_make_mock_plan_context()),
+            ):
+                resp = c.get(self.URL, params={"view_as_team": str(nonexistent_id)})
+                assert resp.status_code == 404
         finally:
             app.dependency_overrides.clear()
 
@@ -374,6 +450,10 @@ class TestBDDRestoreOrgWide:
                 new_callable=AsyncMock,
                 return_value=PageResult(items=[], total=0, page=1, page_size=10),
             ),
+            patch("modulo.api.routes.viewmodel.get_organisation", return_value=_make_org()),
+            patch("modulo.api.routes.viewmodel.get_user_by_id", return_value=_make_user()),
+            patch("modulo.api.routes.viewmodel.list_memberships_for_user", return_value=[]),
+            patch("modulo.api.routes.viewmodel.resolve_plan_context", return_value=_make_mock_plan_context()),
         ):
             resp = client.get(self.URL)
 
@@ -407,6 +487,10 @@ class TestBDDRestoreOrgWide:
                 new_callable=AsyncMock,
                 return_value=PageResult(items=[], total=0, page=1, page_size=10),
             ),
+            patch("modulo.api.routes.viewmodel.get_organisation", return_value=_make_org()),
+            patch("modulo.api.routes.viewmodel.get_user_by_id", return_value=_make_user()),
+            patch("modulo.api.routes.viewmodel.list_memberships_for_user", return_value=[]),
+            patch("modulo.api.routes.viewmodel.resolve_plan_context", return_value=_make_mock_plan_context()),
         ):
             resp = client.get(self.URL)
 

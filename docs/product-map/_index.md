@@ -86,6 +86,7 @@ status: covered | partial | gap    # auto-updated by graph-validate
 - [feat-core-db-abstraction-remaining](core/db-abstraction-remaining.md) => PRD 8.17
 - [feat-core-feedback-correction](core/feedback-correction.md) => PRD 8.20
 - [feat-core-feature-flag-ui](core/feature-flag-ui.md) => PRD 8.17
+- [feat-core-viewmodel-current](core/viewmodel-current.md) => PRD 6
 
 ### Evals and Feedback
 - [feat-evals-feedback-proposals](evals/feedback-proposals.md) => PRD 8.20
@@ -196,6 +197,7 @@ status: covered | partial | gap    # auto-updated by graph-validate
 - [feat-core-cost-breakdown](core/cost-breakdown.md) => PRD delivery-tasks: [task-nv7-cost-breakdown]
 - [feat-core-feedback-correction](core/feedback-correction.md) => PRD delivery-tasks: [task-nv4-ai-correction-agent, task-nv4-correction-run]
 - [feat-core-feature-flag-ui](core/feature-flag-ui.md) => PRD delivery-tasks: [task-nv12-feature-flag-ui]
+- [feat-core-viewmodel-current](core/viewmodel-current.md) => PRD delivery-tasks: [task-prd-viewmodel-current-endpoint]
 
 ### Evals and Feedback
 - [feat-evals-feedback-proposals](evals/feedback-proposals.md) => PRD delivery-tasks: [task-nv4-eval-proposals-queue]
