@@ -47,10 +47,10 @@ async def admin_create_org(
     current_user: AuthenticatedPrincipal = Depends(get_current_user),
     session: AsyncSession = Depends(get_db_session),
 ) -> CreateOrgResponse:
-    if current_user.org_role != "admin":
+    if not current_user.is_system_admin:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="Only admin users can create organisations",
+            detail="System admin role required",
         )
 
     existing = await get_organisation_by_slug(session, body.slug)
@@ -102,10 +102,10 @@ async def admin_create_org_user(
     current_user: AuthenticatedPrincipal = Depends(get_current_user),
     session: AsyncSession = Depends(get_db_session),
 ) -> CreateOrgUserResponse:
-    if current_user.org_role != "admin":
+    if not current_user.is_system_admin:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="Only admin users can create users in organisations",
+            detail="System admin role required",
         )
 
     if body.org_role not in ("admin", "operator", "runner", "viewer"):
