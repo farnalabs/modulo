@@ -9,13 +9,25 @@ Feature: Feedback System
     Then a FeedbackRecord is created with type human
     And the feedback status is "pending"
 
-  Scenario: Feedback record transitions through valid states
+  Scenario: Feedback record transitions from pending to routing
     Given a feedback record with status "pending"
     When the status is changed to "routing"
     Then the feedback status is "routing"
     And the transition is allowed
 
-  Scenario: Invalid status transition is rejected
+  Scenario: Feedback record transitions from routing to correcting
+    Given a feedback record with status "routing"
+    When the status is changed to "correcting"
+    Then the feedback status is "correcting"
+    And the transition is allowed
+
+  Scenario: Feedback record transitions from correcting to resolved
+    Given a feedback record with status "correcting"
+    When the status is changed to "resolved"
+    Then the feedback status is "resolved"
+    And the transition is allowed
+
+  Scenario: Invalid status transition from resolved to pending is rejected
     Given a feedback record with status "resolved"
     When the status is changed to "pending"
     Then the transition is rejected

@@ -6,15 +6,15 @@ Feature: Eval Gate Enforcement
   Background:
     Given I am authenticated as an admin in org "acme"
 
-  Scenario: Block behaviour raises EvalBlockedError
+  Scenario: Block behaviour raises EvalBlockedError when regex does not match
     Given node "code-reviewer" has a regex eval "no-secrets"
     And the eval config has pattern "API_KEY|SECRET"
     And the eval config has field "output"
     And the eval has failure_behaviour "block"
-    When the node outputs {"output": "Use API_KEY from env"}
+    When the node outputs {"output": "Use config from env"}
     And the eval engine evaluates the output
     Then an EvalBlockedError is raised with detail "no-secrets"
-    And pipeline execution halts
+    And the run status transitions to "eval_failed"
 
   Scenario: Block behaviour transitions run to eval_failed
     Given node "code-reviewer" has a regex eval "no-secrets"
@@ -24,10 +24,12 @@ Feature: Eval Gate Enforcement
     And the run status transitions to "eval_failed"
     And the error_code is "eval_blocked"
 
-  Scenario: Warn behaviour logs but does not halt
+  Scenario: Warn behaviour logs but does not halt when regex does not match
     Given node "code-reviewer" has a regex eval "no-secrets"
+    And the eval config has pattern "API_KEY|SECRET"
+    And the eval config has field "output"
     And the eval has failure_behaviour "warn"
-    When the node outputs {"output": "Use API_KEY from env"}
+    When the node outputs {"output": "Use config from env"}
     And the eval engine evaluates the output
     Then a warning is logged
     And pipeline execution continues
