@@ -38,7 +38,7 @@ async def create_pipeline(
     pipeline = Pipeline(
         organisation_id=org_id,
         name=name,
-        created_by=account_id,
+        account_id=account_id,
         description=description,
         visibility=visibility,
         owner_team_id=owner_team_id,
@@ -176,7 +176,7 @@ async def clone_pipeline(
     cloned = Pipeline(
         organisation_id=org_id,
         name=name,
-        created_by=account_id,
+        account_id=account_id,
         description=source.description,
         visibility=source.visibility,
         owner_team_id=source.owner_team_id,

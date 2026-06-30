@@ -40,7 +40,7 @@ async def create_agent(
     agent = Agent(
         organisation_id=org_id,
         name=name,
-        created_by=account_id,
+        account_id=account_id,
         is_executable=is_executable,
         input_schema_id=input_schema_id,
         input_schema_version=input_schema_version,

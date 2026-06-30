@@ -44,7 +44,7 @@ async def create_schema(
     schema = Schema(
         organisation_id=org_id,
         name=name,
-        created_by=account_id,
+        account_id=account_id,
         description=description,
         abstract_name=abstract_name,
     )
@@ -145,7 +145,7 @@ async def create_schema_version(
         version=version,
         version_number=version_number,
         definition_json=definition_json,
-        created_by=account_id,
+        account_id=account_id,
         published=published,
     )
     session.add(sv)

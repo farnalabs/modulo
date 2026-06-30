@@ -31,7 +31,7 @@ async def create_view(
         organisation_id=org_id,
         name=name,
         view_type=view_type,
-        created_by=account_id,
+        account_id=account_id,
         description=description,
         filters=filters or {},
         columns=columns,

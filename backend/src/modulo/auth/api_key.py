@@ -89,7 +89,7 @@ async def create_api_key(
         lookup_prefix=prefix,
         hashed_secret=hashed,
         role=role,
-        created_by=created_by,
+        account_id=created_by,
         team_id=team_id,
         expires_at=expires_at,
     )

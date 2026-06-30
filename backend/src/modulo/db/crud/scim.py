@@ -163,7 +163,7 @@ async def scim_create_group(
         session,
         org_id=org_id,
         name=display_name,
-        created_by=account_id,
+        account_id=account_id,
         description=description,
     )
 

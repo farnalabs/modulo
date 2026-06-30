@@ -163,7 +163,7 @@ async def create_snapshot_from_live_graph(
         organisation_id=pipeline.organisation_id,
         pipeline_id=pipeline.id,
         snapshot_version=snapshot_version,
-        created_by=account_id,
+        account_id=account_id,
         graph_json=graph_json,
         connector_bindings_json=connector_bindings,
         schema_pins_json=schema_pins,

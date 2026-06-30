@@ -55,7 +55,7 @@ async def copy_to_adapt(
         review_count=None,
         owner_team_id=target_team_id,
         visibility="org",
-        created_by=account_id,
+        account_id=account_id,
     )
     session.add(copied)
     await session.flush()
@@ -190,7 +190,7 @@ async def create_library_primitive(
         review_count=review_count,
         owner_team_id=owner_team_id,
         visibility=visibility,
-        created_by=account_id,
+        account_id=account_id,
         auto_update=auto_update,
     )
     session.add(primitive)
