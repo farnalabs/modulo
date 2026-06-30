@@ -1,9 +1,11 @@
 """Step definitions for WebSocket reconnection and event replay (PRD §5.3).
 
 Tests the RunEventBroker contract directly — subscribe, publish, replay_since,
-ring buffer eviction, terminal-run handling, and invalid-seq rejection.
+ring buffer eviction, terminal-run handling, invalid-seq rejection, and
+concurrent subscribers.
 """
 
+import asyncio
 import uuid
 from typing import Any
 
@@ -38,6 +40,7 @@ def _ctx(request: Any) -> dict[str, Any]:
             "seq_received": 0,
             "close_code": None,
             "sent_messages": [],
+            "queues": [],
         }
     return request.node._ws_ctx  # type: ignore[no-any-return]
 
@@ -103,6 +106,18 @@ def _given_valid_ws_token(name: str, request: Any) -> None:
     ctx["ws_token"] = "valid-ws-token-for-" + str(ctx.get("run_id", name))
 
 
+@given(parsers.parse("{count:d} subscribers are connected to the same run"))
+def _given_n_subscribers(count: int, request: Any) -> None:
+    ctx = _ctx(request)
+    broker = ctx.get("broker")
+    assert broker is not None, "No active broker — use 'run \"X\" has an active event broker' first"
+
+    queues: list[asyncio.Queue] = []
+    for _ in range(count):
+        queues.append(broker.subscribe())
+    ctx["queues"] = queues
+
+
 # ===========================================================================
 # When
 # ===========================================================================
@@ -117,7 +132,7 @@ def _when_publish_event(event_type: str, request: Any) -> None:
 
 
 @when(parsers.parse("the broker publishes {count:d} events"))
-def _when_publish_n_events(count: int, request: Any) -> None:
+def _when_publish_n(count: int, request: Any) -> None:
     ctx = _ctx(request)
     broker = ctx.get("broker")
     assert broker is not None, "No active broker"
@@ -175,6 +190,19 @@ def _when_run_websocket_negative_seq(seq: int, request: Any) -> None:
     ctx = _ctx(request)
     if seq < 0:
         ctx["close_code"] = 4001
+
+
+@when(parsers.parse("{count:d} subscriber disconnects"))
+def _when_disconnect_one(count: int, request: Any) -> None:
+    ctx = _ctx(request)
+    queues = ctx.get("queues", [])
+    assert len(queues) >= count, f"Need at least {count} queue(s), have {len(queues)}"
+    broker = ctx.get("broker")
+    assert broker is not None
+    for _ in range(count):
+        q = queues.pop(0)
+        broker.unsubscribe(q)
+    ctx["queues"] = queues
 
 
 # ===========================================================================
@@ -283,4 +311,63 @@ def _then_close_4001(request: Any) -> None:
     ctx = _ctx(request)
     assert ctx.get("close_code") == 4001, (
         f"Expected close code 4001, got {ctx.get('close_code')}"
+    )
+
+
+# ===========================================================================
+# Concurrent connections
+# ===========================================================================
+
+
+@then(parsers.parse("all {count:d} subscribers receive all {total:d} events"))
+def _then_all_subscribers_receive(count: int, total: int, request: Any) -> None:
+    ctx = _ctx(request)
+    queues = ctx.get("queues", [])
+    assert len(queues) == count, f"Expected {count} queues, got {len(queues)}"
+    for i, q in enumerate(queues):
+        received = []
+        while not q.empty():
+            received.append(q.get_nowait())
+        assert len(received) == total, (
+            f"Subscriber {i} received {len(received)} events, expected {total}"
+        )
+
+
+@then("each subscriber receives events with correct monotonic sequence")
+def _then_monotonic_seq(request: Any) -> None:
+    ctx = _ctx(request)
+    queues = ctx.get("queues", [])
+    for i, q in enumerate(queues):
+        seqs = []
+        while not q.empty():
+            seqs.append(q.get_nowait().seq)
+        assert seqs == sorted(seqs), f"Subscriber {i} seq not monotonic: {seqs}"
+        assert seqs == list(range(1, len(seqs) + 1)), (
+            f"Subscriber {i} seq not starting from 1: {seqs}"
+        )
+
+
+@then(parsers.parse("the remaining {count:d} subscribers receive the {total:d} events"))
+def _then_remaining_receive(count: int, total: int, request: Any) -> None:
+    ctx = _ctx(request)
+    queues = ctx.get("queues", [])
+    assert len(queues) == count, f"Expected {count} remaining queues, got {len(queues)}"
+    for i, q in enumerate(queues):
+        received = []
+        while not q.empty():
+            received.append(q.get_nowait())
+        assert len(received) == total, (
+            f"Remaining subscriber {i} received {len(received)} events, expected {total}"
+        )
+
+
+@then("the disconnected subscriber receives nothing")
+def _then_disconnected_receives_nothing(request: Any) -> None:
+    """Verify that unsubscribed queues are no longer in the subscriber set."""
+    ctx = _ctx(request)
+    broker = ctx.get("broker")
+    assert broker is not None
+    queues = ctx.get("queues", [])
+    assert broker.subscriber_count == len(queues), (
+        f"Expected {len(queues)} subscribers, got {broker.subscriber_count}"
     )
