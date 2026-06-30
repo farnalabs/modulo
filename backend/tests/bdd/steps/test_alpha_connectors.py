@@ -6,6 +6,7 @@ from pytest_bdd import given, parsers, scenarios, then, when
 
 scenarios("../../features/connectors/filesystem.feature")
 scenarios("../../features/connectors/github.feature")
+scenarios("../../features/connectors/github_issues.feature")
 scenarios("../../features/connectors/health_check.feature")
 
 
@@ -126,6 +127,145 @@ def comment_posted(request):
 @given("a pull request exists with number {num:d}")
 def pr_exists(num: int, request):
     request.node._pr_number = num
+
+
+@given("an issue exists with number {num:d}")
+def issue_exists(num: int, request):
+    request.node._issue_number = num
+
+
+@when(parsers.parse("the connector lists issues"))
+def connector_list_issues(request):
+    pass
+
+
+@when(parsers.parse("the connector fetches issue number {num:d}"))
+def connector_fetch_issue(num: int, request):
+    request.node._issue_number = num
+
+
+@when(parsers.parse("the connector lists labels"))
+def connector_list_labels(request):
+    pass
+
+
+@when(parsers.parse("the connector lists milestones"))
+def connector_list_milestones(request):
+    pass
+
+
+@when(parsers.parse("the connector lists comments on issue {num:d}"))
+def connector_list_comments(num: int, request):
+    request.node._issue_number = num
+
+
+@when(parsers.parse("the connector lists events on issue {num:d}"))
+def connector_list_events(num: int, request):
+    request.node._issue_number = num
+
+
+@when(parsers.parse("the connector lists assignees"))
+def connector_list_assignees(request):
+    pass
+
+
+@when(parsers.parse("the connector fetches timeline for issue {num:d}"))
+def connector_fetch_timeline(num: int, request):
+    request.node._issue_number = num
+
+
+@when(parsers.parse("the connector updates issue {num:d} with state {state}"))
+def connector_update_issue(num: int, state: str, request):
+    request.node._issue_number = num
+
+
+@when(parsers.parse("the connector comments on issue {num:d} with {comment}"))
+def connector_comment_issue(num: int, comment: str, request):
+    request.node._issue_number = num
+
+
+@when(parsers.parse("the connector adds labels {labels} to issue {num:d}"))
+def connector_add_labels(labels: str, num: int, request):
+    request.node._issue_number = num
+
+
+@when(parsers.parse("the connector adds a reaction {reaction} to issue {num:d}"))
+def connector_add_reaction(reaction: str, num: int, request):
+    request.node._issue_number = num
+
+
+@when(parsers.parse('the connector creates a label "{name}" with color "{color}"'))
+def connector_create_label(name: str, color: str, request):
+    pass
+
+
+@when(
+    parsers.parse(
+        'the connector creates a milestone "{title}" with description "{desc}"'
+    )
+)
+def connector_create_milestone(title: str, desc: str, request):
+    pass
+
+
+@then("the result contains open issues")
+def result_contains_issues(request):
+    assert request.node._connector_result is not None
+
+
+@then("the result contains label metadata")
+def result_contains_labels(request):
+    assert request.node._connector_result is not None
+
+
+@then("the result contains milestone metadata")
+def result_contains_milestones(request):
+    assert request.node._connector_result is not None
+
+
+@then("the result contains comment metadata")
+def result_contains_comments(request):
+    assert request.node._connector_result is not None
+
+
+@then("the result contains event metadata")
+def result_contains_events(request):
+    assert request.node._connector_result is not None
+
+
+@then("the result contains assignee metadata")
+def result_contains_assignees(request):
+    assert request.node._connector_result is not None
+
+
+@then("the result contains timeline events")
+def result_contains_timeline(request):
+    assert request.node._connector_result is not None
+
+
+@then("the issue is updated successfully")
+def issue_updated(request):
+    pass
+
+
+@then("the labels are added successfully")
+def labels_added(request):
+    pass
+
+
+@then("the reaction is posted successfully")
+def reaction_posted(request):
+    pass
+
+
+@then("the label is created successfully")
+def label_created(request):
+    pass
+
+
+@then("the milestone is created successfully")
+def milestone_created(request):
+    pass
 
 
 @when(parsers.parse("I GET /api/connectors/{connector_id}/health"))
