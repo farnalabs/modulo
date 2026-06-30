@@ -2857,6 +2857,14 @@ try:
 except (FileNotFoundError, OSError):
     pass
 
+# ============================================================================
+# connectors/google_docs.feature  —  10 scenarios
+# ============================================================================
+try:
+    scenarios("../../features/connectors/google_docs.feature")
+except (FileNotFoundError, OSError):
+    pass
+
 
 @given("a YouTrack connector with valid credentials")
 def step_youtrack_connector(ctx):
@@ -3101,6 +3109,86 @@ def step_confluence_connector(ctx):
     ctx["connector"] = mock_connector
     ctx["query_error"] = None
 
+@given("a Google Docs connector with valid OAuth token")
+def step_google_docs_connector(ctx):
+    from unittest.mock import AsyncMock
+
+    mock_connector = AsyncMock()
+    mock_connector.connector_type = "google_docs"
+
+    async def mock_health_check():
+        return HealthResult(ok=True)
+
+    async def mock_query(q):
+        from modulo.connectors.base import ConnectorResult
+
+        match q.resource:
+            case "documents":
+                return ConnectorResult(
+                    records=[
+                        {"id": "d1", "name": "Doc Alpha", "mimeType": "application/vnd.google-apps.document"},
+                        {"id": "d2", "name": "Doc Beta", "mimeType": "application/vnd.google-apps.document"},
+                    ],
+                    total=2,
+                    next_cursor="token_next",
+                )
+            case "document":
+                doc_id = q.filters.get("document_id", "")
+                if not doc_id:
+                    raise ValueError("Google Docs document query requires 'document_id' filter")
+                return ConnectorResult(
+                    records=[{"documentId": doc_id, "title": "My Document", "body": {"content": []}}]
+                )
+            case "files":
+                return ConnectorResult(
+                    records=[
+                        {"id": "f1", "name": "Report.pdf", "mimeType": "application/pdf", "size": 1024},
+                        {"id": "f2", "name": "Image.png", "mimeType": "image/png", "size": 2048},
+                    ],
+                    total=2,
+                )
+            case "file":
+                file_id = q.filters.get("file_id", "")
+                if not file_id:
+                    raise ValueError("Google Docs file query requires 'file_id' filter")
+                return ConnectorResult(
+                    records=[{"id": file_id, "name": "Report.pdf", "mimeType": "application/pdf"}]
+                )
+            case _:
+                raise ValueError(f"Unsupported Google Docs resource: {q.resource!r}")
+
+    async def mock_write(payload):
+        match payload.resource:
+            case "document":
+                title = payload.data.get("title", "")
+                if not title:
+                    raise ValueError("Google Docs create document requires 'title'")
+                return {"documentId": "d_new", "title": title}
+            case "document_update":
+                doc_id = payload.data.get("document_id", "")
+                text = payload.data.get("text", "")
+                if not doc_id:
+                    raise ValueError("document_update requires 'document_id'")
+                if not text:
+                    raise ValueError("document_update requires 'text'")
+                return {"documentId": doc_id, "replies": [{}]}
+            case "batchUpdate":
+                doc_id = payload.data.get("document_id", "")
+                requests = payload.data.get("requests")
+                if not doc_id:
+                    raise ValueError("batchUpdate requires 'document_id'")
+                if not requests:
+                    raise ValueError("batchUpdate requires 'requests'")
+                return {"documentId": doc_id, "replies": [{}]}
+            case _:
+                raise ValueError(f"Unsupported Google Docs write resource: {payload.resource!r}")
+
+    mock_connector.health_check = mock_health_check
+    mock_connector.query = mock_query
+    mock_connector.write = mock_write
+    ctx["connector"] = mock_connector
+    ctx["query_error"] = None
+
 
 @when(
     parsers.parse('I query YouTrack resource "{resource}"')
@@ -3143,6 +3231,20 @@ def step_notion_health_401(ctx):
     ctx["connector"].health_check = mock_health
 
 
+@given("the Google Drive API returns drive files")
+def step_google_docs_health_valid(ctx):
+    async def mock_health():
+        return HealthResult(ok=True)
+    ctx["connector"].health_check = mock_health
+
+
+@given("the Google Drive API returns 401 Unauthorized")
+def step_google_docs_health_401(ctx):
+    async def mock_health():
+        return HealthResult(ok=False, detail="HTTP 401: Unauthorized")
+    ctx["connector"].health_check = mock_health
+
+
 @when(
     parsers.parse('I query resource "{resource}" with database_id "{db_id}"')
 )
@@ -3177,6 +3279,131 @@ def step_confluence_query_page(page_id, ctx):
         ctx["query_error"] = str(exc)
 
 
+@given("the Google Drive API returns available documents")
+def step_google_docs_documents_available(ctx):
+    connector = ctx["connector"]
+
+    async def mock_query(q):
+        from modulo.connectors.base import ConnectorResult
+        if q.resource == "documents":
+            return ConnectorResult(
+                records=[
+                    {"id": "d1", "name": "Doc Alpha", "mimeType": "application/vnd.google-apps.document"},
+                    {"id": "d2", "name": "Doc Beta", "mimeType": "application/vnd.google-apps.document"},
+                ],
+                total=2,
+                next_cursor="token_next",
+            )
+        raise ValueError(f"Unsupported resource: {q.resource!r}")
+
+    connector.query = mock_query
+
+
+@given("the Google Docs API returns a single document")
+def step_google_docs_single_document(ctx):
+    connector = ctx["connector"]
+
+    async def mock_query(q):
+        from modulo.connectors.base import ConnectorResult
+        if q.resource == "document":
+            return ConnectorResult(
+                records=[{"documentId": "d1", "title": "My Document", "body": {"content": []}}]
+            )
+        raise ValueError(f"Unsupported resource: {q.resource!r}")
+
+    connector.query = mock_query
+
+
+@given("the Google Drive API returns available files")
+def step_google_docs_files_available(ctx):
+    connector = ctx["connector"]
+
+    async def mock_query(q):
+        from modulo.connectors.base import ConnectorResult
+        if q.resource == "files":
+            return ConnectorResult(
+                records=[
+                    {"id": "f1", "name": "Report.pdf", "mimeType": "application/pdf", "size": 1024},
+                    {"id": "f2", "name": "Image.png", "mimeType": "image/png", "size": 2048},
+                ],
+                total=2,
+            )
+        raise ValueError(f"Unsupported resource: {q.resource!r}")
+
+    connector.query = mock_query
+
+
+@given("the Google Drive API returns a single file")
+def step_google_docs_single_file(ctx):
+    connector = ctx["connector"]
+
+    async def mock_query(q):
+        from modulo.connectors.base import ConnectorResult
+        if q.resource == "file":
+            return ConnectorResult(
+                records=[{"id": "f1", "name": "Report.pdf", "mimeType": "application/pdf"}]
+            )
+        raise ValueError(f"Unsupported resource: {q.resource!r}")
+
+    connector.query = mock_query
+
+
+@given("the Google Docs API accepts document creation")
+def step_google_docs_accepts_create(ctx):
+    connector = ctx["connector"]
+
+    async def mock_write(payload):
+        if payload.resource == "document":
+            title = payload.data.get("title", "")
+            if not title:
+                raise ValueError("title required")
+            return {"documentId": "d_new", "title": title}
+        raise ValueError(f"Unsupported write resource: {payload.resource!r}")
+
+    connector.write = mock_write
+
+
+@given("the Google Docs API accepts batch updates")
+def step_google_docs_accepts_batch_update(ctx):
+    connector = ctx["connector"]
+
+    async def mock_write(payload):
+        if payload.resource == "document_update":
+            doc_id = payload.data.get("document_id", "")
+            text = payload.data.get("text", "")
+            if not doc_id:
+                raise ValueError("document_id required")
+            if not text:
+                raise ValueError("text required")
+            return {"documentId": doc_id, "replies": [{}]}
+        raise ValueError(f"Unsupported write resource: {payload.resource!r}")
+
+    connector.write = mock_write
+
+
+@given("the Google Docs connector is configured")
+def step_google_docs_configured(ctx):
+    pass
+
+
+@when(
+    parsers.parse('I query resource "{resource}" with document_id "{document_id}"')
+)
+def step_google_docs_query_with_document_id(resource, document_id, ctx):
+    from modulo.connectors.base import ConnectorQuery
+
+    q = ConnectorQuery(resource=resource, filters={"document_id": document_id})
+    import asyncio
+
+    try:
+        result = asyncio.new_event_loop().run_until_complete(ctx["connector"].query(q))
+        ctx["query_result"] = result
+        ctx["query_error"] = None
+    except Exception as exc:
+        ctx["query_result"] = None
+        ctx["query_error"] = str(exc)
+
+
 @when(
     parsers.parse('I query YouTrack resource "{resource}" with query "{query_text}"')
 )
@@ -3200,6 +3427,24 @@ def step_confluence_query_spaces(space_type, ctx):
     from modulo.connectors.base import ConnectorQuery
 
     q = ConnectorQuery(resource="spaces", filters={"type": space_type})
+    import asyncio
+
+    try:
+        result = asyncio.new_event_loop().run_until_complete(ctx["connector"].query(q))
+        ctx["query_result"] = result
+        ctx["query_error"] = None
+    except Exception as exc:
+        ctx["query_result"] = None
+        ctx["query_error"] = str(exc)
+
+
+@when(
+    parsers.parse('I query resource "{resource}" with file_id "{file_id}"')
+)
+def step_google_docs_query_with_file_id(resource, file_id, ctx):
+    from modulo.connectors.base import ConnectorQuery
+
+    q = ConnectorQuery(resource=resource, filters={"file_id": file_id})
     import asyncio
 
     try:
@@ -3401,6 +3646,26 @@ def step_notion_write_page(resource, db_id, title, ctx):
         ctx["query_error"] = str(exc)
 
 
+@when(
+    parsers.parse(
+        'I write resource "{resource}" with title "{title}"'
+    )
+)
+def step_google_docs_write_document(resource, title, ctx):
+    from modulo.connectors.base import ConnectorPayload
+
+    payload = ConnectorPayload(resource=resource, data={"title": title})
+    import asyncio
+
+    try:
+        result = asyncio.new_event_loop().run_until_complete(ctx["connector"].write(payload))
+        ctx["write_result"] = result
+        ctx["query_error"] = None
+    except Exception as exc:
+        ctx["write_result"] = None
+        ctx["query_error"] = str(exc)
+
+
 @when(parsers.parse('I write resource "label" on page "{page_id}" with name "{label}"'))
 def step_confluence_add_label(page_id, label, ctx):
     from modulo.connectors.base import ConnectorPayload
@@ -3409,6 +3674,26 @@ def step_confluence_add_label(page_id, label, ctx):
         resource="label",
         data={"page_id": page_id, "label": label},
     )
+    import asyncio
+
+    try:
+        result = asyncio.new_event_loop().run_until_complete(ctx["connector"].write(payload))
+        ctx["write_result"] = result
+        ctx["query_error"] = None
+    except Exception as exc:
+        ctx["write_result"] = None
+        ctx["query_error"] = str(exc)
+
+
+@when(
+    parsers.parse(
+        'I write resource "{resource}" for document "{document_id}" with text "{text}"'
+    )
+)
+def step_google_docs_write_document_update(resource, document_id, text, ctx):
+    from modulo.connectors.base import ConnectorPayload
+
+    payload = ConnectorPayload(resource=resource, data={"document_id": document_id, "text": text})
     import asyncio
 
     try:
@@ -3524,3 +3809,32 @@ def step_confluence_label_metadata(ctx):
     result = ctx["query_result"]
     for rec in result.records:
         assert "id" in rec and "name" in rec, f"Record missing label metadata: {rec}"
+
+
+@then("the records contain document metadata")
+def step_google_docs_document_metadata(ctx):
+    result = ctx["query_result"]
+    for rec in result.records:
+        assert "id" in rec and "name" in rec, (
+            f"Record missing document metadata: {rec}"
+        )
+
+
+@then("the record contains document fields")
+def step_google_docs_document_fields(ctx):
+    result = ctx["query_result"]
+    assert len(result.records) > 0
+    rec = result.records[0]
+    assert "documentId" in rec and "title" in rec, (
+        f"Record missing document fields: {rec}"
+    )
+
+
+@then("the record contains file metadata")
+def step_google_docs_file_metadata(ctx):
+    result = ctx["query_result"]
+    assert len(result.records) > 0
+    rec = result.records[0]
+    assert "id" in rec and "name" in rec and "mimeType" in rec, (
+        f"Record missing file metadata: {rec}"
+    )
