@@ -2,6 +2,7 @@
 id: feat-core-registry-protocol-v2
 prd: 8.14
 delivery-tasks: [task-nv8-registry-protocol-v2]
+bdd:
   - backend/tests/bdd/features/library/browse.feature
   - backend/tests/bdd/features/library/copy_to_adapt.feature
   - backend/tests/bdd/features/library/ratings.feature
@@ -19,10 +20,13 @@ unit-tests:
 depends-on: [feat-core-contribute-primitive]
 status: partial
 ---
-# Registry Protocol v2 Ed25519-signed publish/pull/verify protocol for community primitives.
-Supports 6 primitive types, trust tiers, bundle integrity checking
-copy-to-adapt workflow, and in-memory built-in registry with 9 seeded
-entries (3 original + 6 dogfood). Author/name namespaced slugs. ## Behaviours ### V2 Publish Protocol
+# Registry Protocol v2
+
+Ed25519-signed publish/pull/verify protocol for community primitives. Supports 6 primitive types, trust tiers, bundle integrity checking, copy-to-adapt workflow, and in-memory built-in registry with 9 seeded entries (3 original + 6 dogfood). Author/name namespaced slugs.
+
+## Behaviours
+
+### V2 Publish Protocol
 - [ ] POST /api/v1/registry/publish accepts PublishRequestV2 (6 primitive types: schema, workflow, agent, integration, test_fixture, pipeline_template)
 - [ ] Generates temp Ed25519 keypair, signs canonical JSON, stores entry
 - [ ] Computes SHA-256 checksum of canonical bundle JSON

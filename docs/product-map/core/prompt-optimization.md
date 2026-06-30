@@ -2,6 +2,7 @@
 id: feat-core-prompt-optimization
 prd: 8.2
 delivery-tasks: [task-nv10-prompt-optimization]
+bdd:
   - backend/tests/features/agents/prompt_versioning.feature
   - backend/tests/bdd/features/pipelines/run_variants.feature
 code:
@@ -14,7 +15,13 @@ code:
 depends-on: [feat-evals-eval-engine, feat-variants-variant-groups]
 status: partial
 ---
-# Prompt Optimization LLM-driven prompt improvement from eval failures, with full version history, rollback, diff, and pipeline snapshot pinning. ## Behaviours ### Prompt Versioning
+# Prompt Optimization
+
+LLM-driven prompt improvement from eval failures, with full version history, rollback, diff, and pipeline snapshot pinning.
+
+## Behaviours
+
+### Prompt Versioning
 - [ ] Every prompt edit creates a new entry in `prompt_version_history`
 - [ ] Version entries track `version`, `template`, `created_at`, `notes`, `optimized_from`, `eval_result_ids`
 - [ ] Users can roll back to any prior version without creating a new pipeline version

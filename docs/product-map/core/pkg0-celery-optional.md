@@ -2,7 +2,8 @@
 id: feat-core-pkg0-celery-optional
 prd: 14
 delivery-tasks: [task-pkg0-celery-optional]
-bdd: backend/tests/bdd/features/pipelines/scheduling.feature
+bdd:
+  - backend/tests/bdd/features/pipelines/scheduling.feature
 code:
   - backend/src/modulo/celery_app.py
   - backend/src/modulo/core/cron_scheduler.py
@@ -14,9 +15,13 @@ code:
 
 status: partial
 ---
-# Celery/Redis optional — in-process asyncio fallback for scheduling and rate limiting Make Celery and Redis optional dependencies so Modulo runs without a
-Redis process in standalone/development mode, falling back to in-process
-asyncio schedulers for cron and polling triggers. ADR 003 pre-requisite for PyPI packaging. ## Behaviours ### Dependency packaging - [ ] `celery[redis]` and `redis` moved to `[redis]` extras in pyproject.toml
+# Celery/Redis optional — in-process asyncio fallback for scheduling and rate limiting
+
+Make Celery and Redis optional dependencies so Modulo runs without a Redis process in standalone/development mode, falling back to in-process asyncio schedulers for cron and polling triggers. ADR 003 pre-requisite for PyPI packaging.
+
+## Behaviours
+
+### Dependency packaging - [ ] `celery[redis]` and `redis` moved to `[redis]` extras in pyproject.toml
 - [ ] Core install (`pip install modulo`) does not require Celery or Redis
 - [ ] `pip install modulo[redis]` installs Celery + Redis ### Celery app laziness - [ ] `celery_app.py` lazy-initialises `Celery()` only when Redis is configured
 - [ ] `celery_app` module-level attribute is `None` when Redis/Celery unavailable

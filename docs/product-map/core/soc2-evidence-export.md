@@ -12,7 +12,13 @@ unit-tests:
 depends-on: [feat-core-audit-trail, feat-core-audit-viewer-ui]
 status: partial
 ---
-# SOC 2 Evidence Export Paginated JSON export of audit events for SOC 2 compliance evidence. Builds on the core audit trail (immutable SHA-256-linked event chain) to produce downloadable bundles that an external auditor can verify independently. Recording stays free; export is enterprise-gated. ## Behaviours ### Backend Export Endpoint
+# SOC 2 Evidence Export
+
+Paginated JSON export of audit events for SOC 2 compliance evidence. Builds on the core audit trail (immutable SHA-256-linked event chain) to produce downloadable bundles that an external auditor can verify independently. Recording stays free; export is enterprise-gated.
+
+## Behaviours
+
+### Backend Export Endpoint
 - [ ] `GET /api/v1/admin/audit/export` returns paginated JSON of audit events
 - [ ] Default page=1, page_size=100 (max 1000)
 - [ ] Response includes `items`, `total`, `page`, `page_size`

@@ -2,6 +2,7 @@
 id: feat-core-notifications
 prd: 8.11
 delivery-tasks: [task-nv1-team-notifications]
+bdd:
   - backend/tests/features/notifications/hitl_webhook.feature
   - backend/tests/features/notifications/failure_webhook.feature
   - backend/tests/features/notifications/signing.feature
@@ -15,7 +16,13 @@ code:
 depends-on: [feat-teams-team-crud]
 status: partial
 ---
-# Core Notifications Outbound webhook notifications for pipeline lifecycle events, with HMAC signing, retry, dead-letter tracking, and auto-disable. ## Behaviours ### Event dispatch
+# Core Notifications
+
+Outbound webhook notifications for pipeline lifecycle events, with HMAC signing, retry, dead-letter tracking, and auto-disable.
+
+## Behaviours
+
+### Event dispatch
 - [x] `hitl_awaiting` event dispatches when a run reaches a HITL gate
 - [x] `run_failed` event dispatches when a pipeline node raises an unhandled exception
 - [ ] `claim_expired` event dispatches when a HITL claim expires (via ClaimExpiryJob) — code resets claims but does not dispatch the event

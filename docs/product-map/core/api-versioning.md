@@ -12,7 +12,13 @@ code:
 
 status: partial
 ---
-# API Versioning URL-path versioning (`/api/v1/`, `/api/v2/`, etc.). Policy document at `backend/docs/operations/api-versioning.md`. Changelog endpoint at `GET /api/v1/changelog`. Deprecation headers via `DeprecationHeaderMiddleware`. ## Behaviours - [ ] Every route uses a shared API version prefix (`/api/v1/`) — currently hardcoded per-router as `prefix="/api/v1"`
+# API Versioning
+
+URL-path versioning (`/api/v1/`, `/api/v2/`, etc.). Policy document at `backend/docs/operations/api-versioning.md`. Changelog endpoint at `GET /api/v1/changelog`. Deprecation headers via `DeprecationHeaderMiddleware`.
+
+## Behaviours
+
+- [ ] Every route uses a shared API version prefix (`/api/v1/`) — currently hardcoded per-router as `prefix="/api/v1"`
 - [ ] Version prefix is configurable (single point of change for `/api/v1/` → `/api/v2/`)
 - [ ] New API major version can be added alongside previous version (parallel version routing)
 - [x] `DeprecationHeaderMiddleware` adds `Deprecation: true`, `Sunset`, and `Link` headers to deprecated endpoints

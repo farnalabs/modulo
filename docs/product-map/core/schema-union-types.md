@@ -2,6 +2,7 @@
 id: feat-core-schema-union-types
 prd: 8.3
 delivery-tasks: [task-nv9-schema-union-types]
+bdd:
   - backend/tests/bdd/features/connectors/schema_inference.feature
 code:
   - backend/src/modulo/core/schema_registry/validation.py
@@ -22,7 +23,13 @@ unit-tests:
 
 status: partial
 ---
-# Schema Union Types Union type validation (oneOf/anyOf) and array schema validation for the Schema Registry. ## Behaviours ### Happy Path
+# Schema Union Types
+
+Union type validation (oneOf/anyOf) and array schema validation for the Schema Registry.
+
+## Behaviours
+
+### Happy Path
 - [ ] Valid oneOf union schema passes validation
 - [ ] Valid anyOf union schema passes validation
 - [ ] Array schema with items object passes validation

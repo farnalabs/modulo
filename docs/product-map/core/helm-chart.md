@@ -2,8 +2,71 @@
 id: feat-core-helm-chart
 prd: 11, 13
 delivery-tasks: [task-nv9-helm-chart]
-code: [helm/, docker-compose.yml, docker-compose.local.yml, docker-compose.test.yml, docker-compose.mariadb.yml, backend/Dockerfile]
-
+code:
+  - helm/
+  - docker-compose.yml
+  - docker-compose.local.yml
+  - docker-compose.test.yml
+  - docker-compose.mariadb.yml
+  - backend/Dockerfile
 status: partial
 ---
-# Helm Chart / Docker Compose — Deployment Packaging Packages Modulo for self-hosted deployment via Docker Compose (dev/alpha/poc) and Helm (production Kubernetes). Docker Compose is the alpha delivery vehicle ("walkable in under 5 minutes from `docker compose up`"). The Helm chart is the production-grade target for enterprise self-hosting. ## Behaviours ### Docker Compose — local dev / alpha demo - [ ] `docker compose up` starts Postgres 16, Redis 7, backend (uvicorn), and frontend (Vite dev server) - [ ] Backend connects to Postgres via `DATABASE_URL` and Redis via `REDIS_URL` - [ ] Backend auto-migrates schema via Alembic + AsyncPostgresSaver on startup - [ ] Frontend proxies `/api` to backend at port 8000; WebSocket passthrough works for real-time updates - [ ] SQLite mode available for zero-dependency local dev (no Postgres/Redis required) - [ ] MariaDB override via `docker compose -f docker-compose.yml -f docker-compose.mariadb.yml up` - [ ] `docker compose -f docker-compose.test.yml up db-test` provides isolated Postgres for pytest - [ ] Observability stack (otel-collector, Prometheus, Grafana) available via `--profile observability` - [ ] Docker healthcheck on Postgres prevents backend start dependency race - [ ] Hot-reload: backend `src/` and frontend `src/` bind-mounted for live iteration ### Docker build — container images - [ ] Backend image builds from `python:3.12-slim` via uv-based install - [ ] Frontend image builds as nginx serving the Vue 3 SPA - [ ] Images publishable to `ghcr.io/anomalyco/modulo` (or custom registry) ### Helm chart — production Kubernetes deployment - [ ] Chart deploys backend (FastAPI) and frontend (nginx/Vue) as separate Deployments - [ ] Bitnami Postgres 16 sub-chart for database (can be disabled for external DB) - [ ] Bitnami Redis 7 sub-chart for task queue/pub-sub (can be disabled for external Redis) - [ ] Backend pod has liveness, readiness, and startup probes pointed at `/healthz` - [ ] Frontend pod has liveness and readiness probes pointed at nginx root - [ ] Security context: non-root user (UID 1000 backend / 101 frontend), read-only root filesystem, all capabilities dropped - [ ] Secrets (SECRET_KEY, FERNET_KEY, DATABASE_URL, REDIS_URL) stored as k8s `Secret` — never in pod spec env - [ ] Secrets auto-generated via `randAlphaNum` when not explicitly provided - [ ] Existing k8s secret reference supported via `backend.existingSecret` - [ ] ConfigMap for non-sensitive config (CORS_ORIGINS, MODULO_PUBLIC_URL, LOG_LEVEL, MODULO_ENV, nginx default.conf) - [ ] ConfigMap/Secret checksum annotations trigger pod rollout on config change - [ ] Ingress with nginx ingress controller, cert-manager TLS, and path-based routing (`/` → frontend, `/api` → backend) - [ ] HPA with CPU/memory target utilization and configurable scaling behavior (stabilization windows, scale-up/down policies) - [ ] PVC for persistent data (Postgres, Redis) — disabled by default, configurable storage class and size - [ ] ServiceAccount with configurable automount; backend service account separate from frontend - [ ] Helm test pod validates backend `/healthz` endpoint on install ### Configuration flexibility - [ ] External `DATABASE_URL` / `REDIS_URL` overrides disable the corresponding sub-chart - [ ] `image.registry` / `image.tag` overridable globally or per-component (backend vs frontend) - [ ] Resource requests/limits configurable per component - [ ] Node selector, affinity, and tolerations supported for both backend and frontend - [ ] PodDisruptionBudget for HA setups - [ ] ServiceMonitor (Prometheus Operator) integration for metrics scraping - [ ] Extra environment variables supported (plain text and from secrets) - [ ] Extra volume mounts and volumes for custom sidecar/init-container scenarios - [ ] Ingress hostname and path configurable; TLS auto-enabled when cert-manager issuer present - [ ] HPA behavior supports fast scale-up (zero stabilization window) and gradual scale-down (300s window) ### Error states / edge cases - [ ] Missing SECRET_KEY or FERNET_KEY: startup refuses to start; Helm auto-generates at install - [ ] Secret auto-generation idempotent across upgrades (Helm hook weight `-5`, `pre-install,pre-upgrade`) - [ ] Probe failure: Kubernetes restarts/recreates pod; readiness probe prevents traffic routing during startup - [ ] Postgres/Redis connection failures: backend logs fatal error; container restarts via liveness probe - [ ] HPA disabled: static `replicaCount` used - [ ] Persistence disabled: Postgres/Redis use emptyDir (data lost on pod restart — valid for dev only) - [ ] Private registry: `imagePullSecrets` global config propagates to all deployments - [ ] Multi-replica startup race: Postgres advisory lock in startup sequence prevents concurrent migrations - [ ] Resource exhaustion: container killed by OOMKiller; HPA scales up if configured - [ ] Ingress TLS misconfiguration: self-signed cert from cert-manager staging issuer; `modulo.local` is the default hostname for local testing ### Security - [ ] Containers run as non-root with read-only root filesystem and all capabilities dropped - [ ] Secrets stored as `kind: Secret` — never as raw env vars in Deployment manifests - [ ] Sensitive keys (SECRET_KEY, FERNET_KEY) auto-generated with 64-char random alphanumeric - [ ] DATABASE_URL and REDIS_URL in Secrets (not ConfigMap) - [ ] Helm hook annotations prevent secret leaks across install/upgrade - [ ] cert-manager automates TLS certificate lifecycle - [ ] Image pull from private registry supported via `global.imagePullSecrets` ## Known Gaps - No unit tests or BDD scenarios for the Helm chart or Docker Compose setup - `MODULO_ENV=production` env var set but no documented production hardening checklist - No Helm chart CI/CD pipeline (lint, template validation, install test) in GitHub Actions - No migration path from Docker Compose to Helm documented - Backend Dockerfile hardcodes `uvicorn` CMD — no `uvicorn --reload` distinction for dev mode - No `docker-stack.yml` for Docker Swarm deployments - No ARM64 image build in CI - No Helm chart versioning strategy documented (chart version vs app version drift) 
+
+# Helm Chart / Docker Compose — Deployment Packaging
+
+Packages Modulo for self-hosted deployment via Docker Compose (dev/alpha/poc) and Helm (production Kubernetes). Docker Compose is the alpha delivery vehicle ("walkable in under 5 minutes from `docker compose up`"). The Helm chart is the production-grade target for enterprise self-hosting.
+
+## Behaviours
+
+### Docker Compose — local dev / alpha demo
+
+- [ ] `docker compose up` starts Postgres 16, Redis 7, backend (uvicorn), and frontend (Vite dev server)
+- [ ] Backend connects to Postgres via `DATABASE_URL` and Redis via `REDIS_URL`
+- [ ] Backend auto-migrates schema via Alembic + AsyncPostgresSaver on startup
+- [ ] Frontend proxies `/api` to backend at port 8000; WebSocket passthrough works for real-time updates
+- [ ] SQLite mode available for zero-dependency local dev (no Postgres/Redis required)
+- [ ] MariaDB override via `docker compose -f docker-compose.yml -f docker-compose.mariadb.yml up`
+- [ ] `docker compose -f docker-compose.test.yml up db-test` provides isolated Postgres for pytest
+- [ ] Observability stack (otel-collector, Prometheus, Grafana) available via `--profile observability`
+- [ ] Docker healthcheck on Postgres prevents backend start dependency race
+- [ ] Hot-reload: backend `src/` and frontend `src/` bind-mounted for live iteration
+
+### Docker build — container images
+
+- [ ] Backend image builds from `python:3.12-slim` via uv-based install
+- [ ] Frontend image builds as nginx serving the Vue 3 SPA
+- [ ] Images publishable to `ghcr.io/anomalyco/modulo` (or custom registry)
+
+### Helm chart — production Kubernetes deployment
+
+- [ ] Chart deploys backend (FastAPI) and frontend (nginx/Vue) as separate Deployments
+- [ ] Bitnami Postgres 16 sub-chart for database (can be disabled for external DB)
+- [ ] Bitnami Redis 7 sub-chart for task queue/pub-sub (can be disabled for external Redis)
+- [ ] Backend pod has liveness, readiness, and startup probes pointed at `/healthz`
+- [ ] Frontend pod has liveness and readiness probes pointed at nginx root
+- [ ] Security context: non-root user (UID 1000 backend / 101 frontend), read-only root filesystem, all capabilities dropped
+- [ ] Secrets (SECRET_KEY, FERNET_KEY, DATABASE_URL, REDIS_URL) stored as k8s `Secret` — never in pod spec env
+- [ ] Secrets auto-generated via `randAlphaNum` when not explicitly provided
+- [ ] Existing secrets preserved on upgrade (not regenerated)
+- [ ] Ingress with TLS termination and optional `MODULO_PUBLIC_URL` host routing
+- [ ] HorizontalPodAutoscaler for backend and frontend with CPU/memory thresholds
+- [ ] PodDisruptionBudget for HA setups
+- [ ] NetworkPolicy restricting ingress/egress per component
+- [ ] Helm chart version follows semver with AppVersion tag
+- [ ] `helm test` runs `/healthz` connectivity checks
+
+### Edge cases
+
+- [ ] Docker Compose observability profile disabled by default (no resource overhead)
+- [ ] SQLite mode skips Redis entirely — rate limiter falls back to in-memory
+- [ ] Frontend dev proxy works with both HTTP and WebSocket
+- [ ] Helm chart can deploy to namespaces other than `modulo`
+- [ ] Existing Postgres/Redis can be used instead of sub-charts (external DB mode)
+
+## Known Gaps
+
+- No end-to-end Helm deployment test in CI
+- No Helm chart repository or CI-published chart artifact
+- No documented upgrade path between chart versions
+- No automated backup/restore hooks in Helm chart
+- No multi-replica backend deployment tested (advisory locks, rate limiter, scheduler)

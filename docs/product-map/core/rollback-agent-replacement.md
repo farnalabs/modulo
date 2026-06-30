@@ -2,6 +2,7 @@
 id: feat-core-rollback-agent-replacement
 prd: 8.4
 delivery-tasks: [task-nv11-rollback-agent-replacement]
+bdd:
   - backend/tests/bdd/features/pipelines/node_types.feature
   - backend/tests/bdd/features/hitl/manual_node.feature
   - backend/tests/features/personas/alice-devx-sme.feature

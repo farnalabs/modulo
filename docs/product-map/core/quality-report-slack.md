@@ -2,14 +2,19 @@
 id: feat-core-quality-report-slack
 prd: 8.6, 8.11
 delivery-tasks: [task-nv7-quality-report-slack]
-bdd: [backend/tests/bdd/features/connectors/slack_connector.feature ]
+bdd:
+  - backend/tests/bdd/features/connectors/slack_connector.feature
 code:
   - backend/src/modulo/core/reports/quality_report.py
   - backend/src/modulo/core/reports/__init__.py
 depends-on: [feat-core-notifications, feat-evals-eval-engine]
 status: partial
 ---
-# Quality Report Slack Delivery Weekly quality report generated from run volume, eval pass rate, and cost data, formatted as Slack Block Kit and delivered to configured Slack webhook URLs. ## Behaviours - [x] `generate_quality_report` queries OrgDailyRunCount for 7-day run volume and total spend
+# Quality Report Slack Delivery
+
+Weekly quality report generated from run volume, eval pass rate, and cost data, formatted as Slack Block Kit and delivered to configured Slack webhook URLs.
+
+## Behaviours - [x] `generate_quality_report` queries OrgDailyRunCount for 7-day run volume and total spend
 - [x] `generate_quality_report` queries EvalResult for 7-day eval pass rate (passed/total)
 - [x] `generate_quality_report` computes week-over-week deltas (runs, eval pass rate, cost)
 - [x] `generate_quality_report` builds daily trend array (date, run_count, eval_pass_rate, token_spend_usd)
