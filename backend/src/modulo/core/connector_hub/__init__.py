@@ -20,6 +20,7 @@ from typing import Any, cast
 from opentelemetry import trace
 from opentelemetry.trace import Status, StatusCode
 
+from modulo.connectors.asana import AsanaConnector
 from modulo.connectors.azure_repos import AzureReposConnector
 from modulo.connectors.base import (
     ConnectorACL,
@@ -285,6 +286,8 @@ def _build_connector(type_id: str, config: dict[str, Any], creds: dict[str, Any]
                 api_key=_get_cred(creds, "api_key", type_id),
                 token=_get_cred(creds, "token", type_id),
             )
+        case "asana":
+            return AsanaConnector(personal_access_token=_get_cred(creds, "personal_access_token", type_id))
         case _:
             registry = get_plugin_registry()
             if registry.has_connector_type(type_id):

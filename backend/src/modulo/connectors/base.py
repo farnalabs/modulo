@@ -33,6 +33,7 @@ class ConnectorType(StrEnum):
     JIRA = "jira"
     LINEAR = "linear"
     TRELLO = "trello"
+    ASANA = "asana"
     SLACK = "slack"
     SHELL = "shell"
     CUSTOM = "custom"
@@ -67,6 +68,8 @@ class ConnectorType(StrEnum):
             case ConnectorType.LINEAR:
                 return frozenset({Capability.ISSUE_READ, Capability.ISSUE_WRITE, Capability.ISSUE_SEARCH})
             case ConnectorType.TRELLO:
+                return frozenset({Capability.READ, Capability.WRITE})
+            case ConnectorType.ASANA:
                 return frozenset({Capability.READ, Capability.WRITE})
             case ConnectorType.SLACK:
                 return frozenset({Capability.READ, Capability.WRITE})
