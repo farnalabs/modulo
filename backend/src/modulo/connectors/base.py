@@ -29,6 +29,7 @@ class ConnectorType(StrEnum):
     CI_RUNNER = "ci-runner"
     GITEA = "gitea"
     GITLAB = "gitlab"
+    AZURE_REPOS = "azure_repos"
     JIRA = "jira"
     LINEAR = "linear"
     SLACK = "slack"
@@ -57,6 +58,8 @@ class ConnectorType(StrEnum):
             case ConnectorType.GITEA:
                 return frozenset({Capability.READ, Capability.WRITE, Capability.GIT_PUSH, Capability.CREATE_PR})
             case ConnectorType.GITLAB:
+                return frozenset({Capability.READ, Capability.WRITE, Capability.GIT_PUSH, Capability.CREATE_PR})
+            case ConnectorType.AZURE_REPOS:
                 return frozenset({Capability.READ, Capability.WRITE, Capability.GIT_PUSH, Capability.CREATE_PR})
             case ConnectorType.JIRA:
                 return frozenset({Capability.ISSUE_READ, Capability.ISSUE_WRITE, Capability.ISSUE_SEARCH})
