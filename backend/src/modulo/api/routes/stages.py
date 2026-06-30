@@ -64,13 +64,14 @@ class StageListResponse(BaseModel):
 async def list_stages_endpoint(
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=20, ge=1, le=100),
+    owner_team_id: uuid.UUID | None = Query(default=None),
     session: AsyncSession = Depends(get_db_session),
     principal: AuthenticatedPrincipal = Depends(get_current_user),
 ) -> StageListResponse:
     async with session.begin():
         await set_rls_org(session, principal.organisation_id)
         await set_rls_user_context(session, principal.user_id, principal.org_role)
-        result = await list_stages(session, page=page, page_size=page_size)
+        result = await list_stages(session, page=page, page_size=page_size, owner_team_id=owner_team_id)
     return StageListResponse(
         items=[StageResponse.model_validate(s) for s in result.items],
         total=result.total,

@@ -81,7 +81,7 @@
       <div class="overflow-x-auto pb-4">
         <div class="flex gap-4" style="min-width: max-content">
           <div
-            v-for="stage in stages"
+            v-for="stage in filteredStages"
             :key="stage.id"
             class="w-72 shrink-0"
           >
@@ -411,6 +411,11 @@ function stageName(stageId: string | null | undefined): string {
   const s = stages.value.find(st => st.id === stageId)
   return s ? s.name : ''
 }
+
+const filteredStages = computed(() => {
+  if (!teamFilter.value) return stages.value
+  return stages.value.filter(s => s.owner_team_id === teamFilter.value)
+})
 
 const filteredPipelines = computed(() => {
   return allPipelines.value.filter(p => {
