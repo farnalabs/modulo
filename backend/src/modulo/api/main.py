@@ -33,6 +33,7 @@ from modulo.api.routes.admin import router as admin_router
 from modulo.api.routes.admin_feature_flags import router as admin_feature_flags_router
 from modulo.api.routes.admin_license import router as admin_license_router
 from modulo.api.routes.admin_notifications import router as admin_notifications_router
+from modulo.api.routes.admin_orgs import router as admin_orgs_router
 from modulo.api.routes.admin_rate_limits import router as admin_rate_limits_router
 from modulo.api.routes.admin_rotation import router as admin_rotation_router
 from modulo.api.routes.admin_runtime_config import router as admin_runtime_config_router
@@ -532,6 +533,7 @@ app.include_router(registry_router)
 app.include_router(determination_router)
 app.include_router(evals_router)
 app.include_router(admin_notifications_router)
+app.include_router(admin_orgs_router)
 app.include_router(admin_rotation_router)
 app.include_router(notifications_router)
 app.include_router(sensitive_router)

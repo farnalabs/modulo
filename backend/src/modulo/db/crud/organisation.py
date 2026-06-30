@@ -17,6 +17,32 @@ async def get_organisation(
     return result.scalar_one_or_none()
 
 
+async def create_organisation(
+    session: AsyncSession,
+    *,
+    name: str,
+    slug: str,
+    created_by: uuid.UUID | None = None,
+) -> Organisation:
+    org = Organisation(
+        name=name,
+        slug=slug,
+        created_by=created_by,
+    )
+    session.add(org)
+    await session.flush()
+    await session.refresh(org)
+    return org
+
+
+async def get_organisation_by_slug(
+    session: AsyncSession,
+    slug: str,
+) -> Organisation | None:
+    result = await session.execute(select(Organisation).where(Organisation.slug == slug))
+    return result.scalar_one_or_none()
+
+
 async def update_organisation(
     session: AsyncSession,
     org_id: uuid.UUID,
