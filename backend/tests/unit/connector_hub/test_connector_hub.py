@@ -11,6 +11,7 @@ from cryptography.fernet import Fernet
 
 from modulo.connectors.base import (
     ConnectorPayload,
+    ConnectorPermissionError,
     ConnectorQuery,
     ConnectorResult,
     ConnectorType,
@@ -386,6 +387,83 @@ async def test_initialise_creates_shell_connector():
         await hub.initialise([ci])
     connector = hub.get(ci.id)
     assert connector.connector_type == ConnectorType.SHELL
+
+
+# ---------------------------------------------------------------------------
+# ACL gap — constructed but never invoked before hub operations
+# ---------------------------------------------------------------------------
+
+
+async def test_acl_constructed_but_never_called_during_query(tmp_path):
+    """Prove that ConnectorACL is built during initialise() but its check()
+    method is never called before query() or write() on the hub-returned
+    connector. This is a known gap — ACL is stored but not enforced."""
+    import uuid
+
+    from modulo.connectors.base import ConnectorPayload
+    from modulo.core.connector_hub import ConnectorACL
+
+    ci_id = uuid.uuid4()
+    ci = _FakeCI(
+        id=ci_id,
+        connector_type_id="filesystem",
+        config_json={"base_path": str(tmp_path)},
+        credentials_ciphertext=_encrypt({}),
+        visibility="org",
+        allowed_operations=["read"],  # Only 'read' is allowed
+    )
+    key = Fernet.generate_key().decode()
+    backend = create_secrets_backend(fernet_key=key, backend_name="fernet")
+    with patch.object(backend, "get_secret", return_value="{}"):
+        hub = ConnectorHub(secrets_backend=backend)
+        await hub.initialise([ci])
+
+    # Hub.get() returns the connector — no ACL check happens here
+    connector = hub.get(ci_id)
+
+    # ACL exists and would block 'write'
+    acl: ConnectorACL = hub.acl(ci_id)
+    with pytest.raises(ConnectorPermissionError):
+        acl.check("write", request_visibility="team")
+
+    # But the connector itself happily writes — ACL is NEVER invoked
+    out_path = tmp_path / "acl_test.txt"
+    result = await connector.write(
+        ConnectorPayload(resource="file", data={"content": "secret", "path": str(out_path)})
+    )
+    assert result["status"] == "ok"
+    assert out_path.read_text() == "secret"
+
+
+async def test_acl_constructed_but_never_called_during_sample(tmp_path):
+    """Same gap applies to hub.sample() — it calls get() + query() directly
+    without consulting the ACL."""
+    import uuid
+
+
+    ci_id = uuid.uuid4()
+    ci = _FakeCI(
+        id=ci_id,
+        connector_type_id="filesystem",
+        config_json={"base_path": str(tmp_path)},
+        credentials_ciphertext=_encrypt({}),
+        visibility="org",
+        allowed_operations=["read"],
+    )
+    key = Fernet.generate_key().decode()
+    backend = create_secrets_backend(fernet_key=key, backend_name="fernet")
+    with patch.object(backend, "get_secret", return_value="{}"):
+        hub = ConnectorHub(secrets_backend=backend)
+        await hub.initialise([ci])
+
+    # ACL entirely blocks query with 'write' operation
+    acl = hub.acl(ci_id)
+    with pytest.raises(ConnectorPermissionError):
+        acl.check("write")
+
+    # But sample() (which calls get() + query()) still works
+    records = await hub.sample(ci_id, "directory", filters={"path": str(tmp_path)})
+    assert isinstance(records, list)
 
 
 async def test_initialise_shell_no_runtime_provider_raises():
