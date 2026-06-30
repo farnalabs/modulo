@@ -68,7 +68,7 @@ async def create_contribution(
         prim = await contribute_fixture(
             session,
             org_id=principal.organisation_id,
-            created_by=principal.user_id,
+            created_by=principal.account_id,
             name=body.name,
             slug=body.slug,
             description=body.description,
@@ -98,7 +98,7 @@ async def submit_for_review(
             session,
             principal.organisation_id,
             primitive_id,
-            created_by=principal.user_id,
+            created_by=principal.account_id,
         )
     except ContributionNotFoundError:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Contribution not found") from None
@@ -135,7 +135,7 @@ async def publish_contribution_endpoint(
             session,
             principal.organisation_id,
             primitive_id,
-            approved_by=principal.user_id,
+            approved_by=principal.account_id,
         )
     except ContributionNotFoundError:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Contribution not found") from None
@@ -184,7 +184,7 @@ async def submit_contribution_version_endpoint(
                 session,
                 principal.organisation_id,
                 primitive_id,
-                created_by=principal.user_id,
+                created_by=principal.account_id,
                 name=body.name,
                 slug=body.slug,
                 description=body.description,

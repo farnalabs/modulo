@@ -29,8 +29,8 @@ from modulo.db.crud.scim import (
     scim_update_group,
     scim_update_user,
 )
+from modulo.db.models.account import Account
 from modulo.db.models.team import Team
-from modulo.db.models.user import User
 from modulo.db.rls import set_rls_org
 from modulo.settings import Settings, get_settings
 
@@ -65,28 +65,28 @@ def _scim_error(status_code: int, detail: str) -> HTTPException:
     )
 
 
-def _user_to_scim(user: User, base_url: str) -> dict[str, object]:
-    given_name = (user.display_name or "").split(" ")[0] if user.display_name else ""
-    parts = (user.display_name or "").split(" ")
+def _user_to_scim(account: Account, base_url: str) -> dict[str, object]:
+    given_name = (account.display_name or "").split(" ")[0] if account.display_name else ""
+    parts = (account.display_name or "").split(" ")
     family_name = " ".join(parts[1:]) if len(parts) > 1 else ""
     return {
         "schemas": [_SCIM_USER_SCHEMA],
-        "id": str(user.id),
-        "externalId": str(user.id),
+        "id": str(account.id),
+        "externalId": str(account.id),
         "meta": {
             "resourceType": "User",
-            "created": user.created_at.isoformat() if user.created_at else "",
-            "lastModified": user.updated_at.isoformat() if user.updated_at else "",
-            "location": f"{base_url}/scim/v2/Users/{user.id}",
+            "created": account.created_at.isoformat() if account.created_at else "",
+            "lastModified": account.updated_at.isoformat() if account.updated_at else "",
+            "location": f"{base_url}/scim/v2/Users/{account.id}",
         },
-        "userName": user.email,
+        "userName": account.email,
         "name": {
-            "formatted": user.display_name,
+            "formatted": account.display_name,
             "givenName": given_name,
             "familyName": family_name,
         },
-        "emails": [{"value": user.email, "type": "work", "primary": True}],
-        "active": user.active,
+        "emails": [{"value": account.email, "type": "work", "primary": True}],
+        "active": account.active,
     }
 
 
@@ -218,7 +218,7 @@ async def list_users(
 ) -> ScimListResponse:
     async with session.begin():
         await set_rls_org(session, principal.organisation_id)
-        users, total = await scim_list_users(
+        accounts, total = await scim_list_users(
             session,
             principal.organisation_id,
             filter_str=filter,
@@ -232,7 +232,7 @@ async def list_users(
         totalResults=total,
         itemsPerPage=count,
         startIndex=startIndex,
-        Resources=[_user_to_scim(u, base_url) for u in users],
+        Resources=[_user_to_scim(a, base_url) for a in accounts],
     )
 
 
@@ -246,14 +246,18 @@ async def create_user(
     async with session.begin():
         await set_rls_org(session, principal.organisation_id)
 
-        from modulo.db.crud.user import get_user_by_email
+        from modulo.db.crud.account import get_account_by_email
 
-        existing = await get_user_by_email(session, body.userName)
+        existing = await get_account_by_email(session, body.userName)
         if existing is not None:
-            raise _scim_error(
-                status.HTTP_409_CONFLICT,
-                f"User with userName {body.userName} already exists",
-            )
+            from modulo.db.crud.org_membership import get_membership_by_account_and_org
+
+            membership = await get_membership_by_account_and_org(session, existing.id, principal.organisation_id)
+            if membership is not None:
+                raise _scim_error(
+                    status.HTTP_409_CONFLICT,
+                    f"User with userName {body.userName} already exists in this org",
+                )
 
         display_name = body.userName
         if body.name and body.name.formatted:
@@ -262,7 +266,7 @@ async def create_user(
             parts = [p for p in (body.name.givenName, body.name.familyName) if p]
             display_name = " ".join(parts)
 
-        user = await scim_create_user(
+        account = await scim_create_user(
             session,
             org_id=principal.organisation_id,
             email=body.userName,
@@ -270,7 +274,7 @@ async def create_user(
             active=body.active,
         )
 
-    return _user_to_scim(user, _get_base_url(settings))
+    return _user_to_scim(account, _get_base_url(settings))
 
 
 @router.get("/Users/{user_id}")
@@ -282,12 +286,12 @@ async def get_user(
 ) -> dict[str, object]:
     async with session.begin():
         await set_rls_org(session, principal.organisation_id)
-        user = await scim_get_user(session, principal.organisation_id, user_id)
+        account = await scim_get_user(session, principal.organisation_id, user_id)
 
-    if user is None:
+    if account is None:
         raise _scim_error(status.HTTP_404_NOT_FOUND, f"User {user_id} not found")
 
-    return _user_to_scim(user, _get_base_url(settings))
+    return _user_to_scim(account, _get_base_url(settings))
 
 
 @router.put("/Users/{user_id}")
@@ -300,20 +304,20 @@ async def replace_user(
 ) -> dict[str, object]:
     async with session.begin():
         await set_rls_org(session, principal.organisation_id)
-        user = await scim_get_user(session, principal.organisation_id, user_id)
-        if user is None:
+        account = await scim_get_user(session, principal.organisation_id, user_id)
+        if account is None:
             raise _scim_error(status.HTTP_404_NOT_FOUND, f"User {user_id} not found")
 
         display_name = body.name.formatted if body.name and body.name.formatted else body.userName
-        user = await scim_update_user(
+        account = await scim_update_user(
             session,
-            user,
+            account,
             email=body.userName,
             display_name=display_name,
             active=body.active,
         )
 
-    return _user_to_scim(user, _get_base_url(settings))
+    return _user_to_scim(account, _get_base_url(settings))
 
 
 @router.patch("/Users/{user_id}")
@@ -326,38 +330,38 @@ async def patch_user(
 ) -> dict[str, object]:
     async with session.begin():
         await set_rls_org(session, principal.organisation_id)
-        user = await scim_get_user(session, principal.organisation_id, user_id)
-        if user is None:
+        account = await scim_get_user(session, principal.organisation_id, user_id)
+        if account is None:
             raise _scim_error(status.HTTP_404_NOT_FOUND, f"User {user_id} not found")
 
         for op in body.Operations:
             if op.op == "replace":
                 if isinstance(op.value, dict):
                     if "userName" in op.value:
-                        user.email = str(op.value["userName"])
+                        account.email = str(op.value["userName"])
                     if "active" in op.value:
-                        user.active = bool(op.value["active"])
+                        account.active = bool(op.value["active"])
                     if isinstance(op.value.get("name"), dict):
                         name_data = op.value["name"]
                         formatted = name_data.get("formatted") or name_data.get("givenName", "") + " " + name_data.get(
                             "familyName", ""
                         )
-                        user.display_name = str(formatted).strip()
+                        account.display_name = str(formatted).strip()
                 if op.path == "active":
-                    user.active = bool(op.value)
+                    account.active = bool(op.value)
             elif op.op == "remove":
                 if op.path == "active":
-                    user.active = False
+                    account.active = False
             elif op.op == "add":
                 if isinstance(op.value, dict):
                     if "userName" in op.value:
-                        user.email = str(op.value["userName"])
+                        account.email = str(op.value["userName"])
                     if "active" in op.value:
-                        user.active = bool(op.value["active"])
+                        account.active = bool(op.value["active"])
 
         await session.flush()
 
-    return _user_to_scim(user, _get_base_url(settings))
+    return _user_to_scim(account, _get_base_url(settings))
 
 
 @router.delete("/Users/{user_id}", status_code=status.HTTP_204_NO_CONTENT)
@@ -443,11 +447,16 @@ async def create_group(
 
         # Use the first member's ID as created_by, or a fallback.
         # SCIM does not carry a "creator" concept, so we use the first
-        # admin-like user or a placeholder.
-        from modulo.db.crud.user import list_users_for_org
+        # admin-like account or a placeholder.
+        from modulo.db.crud.account import get_account_by_id
+        from modulo.db.crud.org_membership import list_memberships_for_org
 
-        org_users = await list_users_for_org(session, principal.organisation_id)
-        creator_id = org_users[0].id if org_users else None
+        org_memberships = await list_memberships_for_org(session, principal.organisation_id)
+        creator_id = None
+        if org_memberships:
+            first_account = await get_account_by_id(session, org_memberships[0].account_id)
+            if first_account is not None:
+                creator_id = first_account.id
 
         team = await scim_create_group(
             session,

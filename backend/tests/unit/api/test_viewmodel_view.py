@@ -244,8 +244,8 @@ class TestViewModelCurrentViewIntegration:
             patch("modulo.api.routes.viewmodel.set_rls_org"),
             patch("modulo.api.routes.viewmodel.set_rls_user_context"),
             patch("modulo.api.routes.viewmodel.get_organisation", return_value=org),
-            patch("modulo.api.routes.viewmodel.get_user_by_id", return_value=user),
-            patch("modulo.api.routes.viewmodel.list_memberships_for_user", return_value=[]),
+            patch("modulo.api.routes.viewmodel.get_account_by_id", return_value=user),
+            patch("modulo.api.routes.viewmodel.list_team_memberships_for_account", return_value=[]),
             patch("modulo.api.routes.viewmodel.resolve_plan_context", return_value=plan_ctx),
         ):
             resp = client.get("/api/v1/viewmodel/current")
@@ -276,8 +276,8 @@ class TestViewModelCurrentViewIntegration:
             patch("modulo.api.routes.viewmodel.set_rls_org"),
             patch("modulo.api.routes.viewmodel.set_rls_user_context"),
             patch("modulo.api.routes.viewmodel.get_organisation", return_value=org),
-            patch("modulo.api.routes.viewmodel.get_user_by_id", return_value=user),
-            patch("modulo.api.routes.viewmodel.list_memberships_for_user", return_value=[]),
+            patch("modulo.api.routes.viewmodel.get_account_by_id", return_value=user),
+            patch("modulo.api.routes.viewmodel.list_team_memberships_for_account", return_value=[]),
             patch("modulo.api.routes.viewmodel.resolve_plan_context", return_value=plan_ctx),
             patch("modulo.api.routes.viewmodel.get_view", return_value=view),
         ):
@@ -310,8 +310,8 @@ class TestViewModelCurrentViewIntegration:
             patch("modulo.api.routes.viewmodel.set_rls_org"),
             patch("modulo.api.routes.viewmodel.set_rls_user_context"),
             patch("modulo.api.routes.viewmodel.get_organisation", return_value=org),
-            patch("modulo.api.routes.viewmodel.get_user_by_id", return_value=user),
-            patch("modulo.api.routes.viewmodel.list_memberships_for_user", return_value=[]),
+            patch("modulo.api.routes.viewmodel.get_account_by_id", return_value=user),
+            patch("modulo.api.routes.viewmodel.list_team_memberships_for_account", return_value=[]),
             patch("modulo.api.routes.viewmodel.resolve_plan_context", return_value=plan_ctx),
             patch("modulo.api.routes.viewmodel.get_view", return_value=None),
         ):

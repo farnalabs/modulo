@@ -74,7 +74,7 @@ async def list_endpoints(
 ) -> list[NotificationEndpointResponse]:
     async with session.begin():
         await set_rls_org(session, principal.organisation_id)
-        await set_rls_user_context(session, principal.user_id, principal.org_role)
+        await set_rls_user_context(session, principal.account_id, principal.org_role)
         result = await session.execute(
             select(NotificationEndpoint).where(NotificationEndpoint.organisation_id == principal.organisation_id)
         )
@@ -108,7 +108,7 @@ async def create_endpoint(
 
     async with session.begin():
         await set_rls_org(session, principal.organisation_id)
-        await set_rls_user_context(session, principal.user_id, principal.org_role)
+        await set_rls_user_context(session, principal.account_id, principal.org_role)
         ep = NotificationEndpoint(
             id=uuid.uuid4(),
             organisation_id=principal.organisation_id,
@@ -116,7 +116,7 @@ async def create_endpoint(
             secret_ciphertext=secret_ciphertext,
             events=json.dumps(body.events),
             description=body.description,
-            created_by=principal.user_id,
+            created_by=principal.account_id,
             team_id=team_id,
         )
         session.add(ep)
@@ -133,7 +133,7 @@ async def get_endpoint(
 ) -> NotificationEndpointResponse:
     async with session.begin():
         await set_rls_org(session, principal.organisation_id)
-        await set_rls_user_context(session, principal.user_id, principal.org_role)
+        await set_rls_user_context(session, principal.account_id, principal.org_role)
         ep = await session.get(NotificationEndpoint, endpoint_id)
         if ep is None or ep.organisation_id != principal.organisation_id:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Endpoint not found")
@@ -158,7 +158,7 @@ async def update_endpoint(
 
     async with session.begin():
         await set_rls_org(session, principal.organisation_id)
-        await set_rls_user_context(session, principal.user_id, principal.org_role)
+        await set_rls_user_context(session, principal.account_id, principal.org_role)
         ep = await session.get(NotificationEndpoint, endpoint_id)
         if ep is None or ep.organisation_id != principal.organisation_id:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Endpoint not found")
@@ -188,7 +188,7 @@ async def delete_endpoint(
 ) -> None:
     async with session.begin():
         await set_rls_org(session, principal.organisation_id)
-        await set_rls_user_context(session, principal.user_id, principal.org_role)
+        await set_rls_user_context(session, principal.account_id, principal.org_role)
         ep = await session.get(NotificationEndpoint, endpoint_id)
         if ep is None or ep.organisation_id != principal.organisation_id:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Endpoint not found")

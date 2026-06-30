@@ -27,7 +27,7 @@ from modulo.db.models.model_backend import ModelBackend
 from modulo.db.models.organisation import Organisation
 from modulo.db.models.pipeline import Pipeline
 from modulo.db.models.run import Run
-from modulo.db.models.user import User
+from modulo.db.models.org_membership import OrgMembership
 
 DELETION_TOKEN_BYTES = 48
 CONFIRMATION_WINDOW_HOURS = 24
@@ -47,7 +47,7 @@ async def _collect_org_export(session: AsyncSession, org: Organisation) -> dict[
     """Bundle all org-owned data into a JSON-serialisable dict."""
     org_id = org.id
 
-    users = (await session.execute(select(User).where(User.organisation_id == org_id))).scalars().all()
+    memberships = (await session.execute(select(OrgMembership).where(OrgMembership.organisation_id == org_id))).scalars().all()
     pipelines = (await session.execute(select(Pipeline).where(Pipeline.organisation_id == org_id))).scalars().all()
     runs = (await session.execute(select(Run).where(Run.organisation_id == org_id).limit(5000))).scalars().all()
     audit = (
@@ -85,7 +85,7 @@ async def _collect_org_export(session: AsyncSession, org: Organisation) -> dict[
 
     return {
         "organisation": _serialise([org]),
-        "users": _serialise(users),
+        "memberships": _serialise(memberships),
         "pipelines": _serialise(pipelines),
         "runs": _serialise(runs),
         "audit_events": _serialise(audit),

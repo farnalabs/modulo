@@ -89,8 +89,8 @@ class TestChangePassword:
         user = _make_mock_user(password_hash=hash_password(_STRONG_PW))
 
         with (
-            patch("modulo.api.routes.me.get_user_by_id", return_value=user) as mock_get,
-            patch("modulo.api.routes.me.list_families_for_user", return_value=[]),
+            patch("modulo.api.routes.me.get_account_by_id", return_value=user) as mock_get,
+            patch("modulo.api.routes.me.list_families_for_account", return_value=[]),
             patch("modulo.api.routes.me.blacklist_family", return_value=True),
         ):
             resp = client.put(
@@ -109,8 +109,8 @@ class TestChangePassword:
         user = _make_mock_user(password_hash=hash_password(_STRONG_PW))
 
         with (
-            patch("modulo.api.routes.me.get_user_by_id", return_value=user),
-            patch("modulo.api.routes.me.list_families_for_user", return_value=[]),
+            patch("modulo.api.routes.me.get_account_by_id", return_value=user),
+            patch("modulo.api.routes.me.list_families_for_account", return_value=[]),
             patch("modulo.api.routes.me.blacklist_family", return_value=True),
         ):
             resp = client.put(
@@ -128,8 +128,8 @@ class TestChangePassword:
         user = _make_mock_user(password_hash=hash_password(_STRONG_PW))
 
         with (
-            patch("modulo.api.routes.me.get_user_by_id", return_value=user),
-            patch("modulo.api.routes.me.list_families_for_user", return_value=[]),
+            patch("modulo.api.routes.me.get_account_by_id", return_value=user),
+            patch("modulo.api.routes.me.list_families_for_account", return_value=[]),
             patch("modulo.api.routes.me.blacklist_family", return_value=True),
         ):
             resp = client.put(
@@ -158,8 +158,8 @@ class TestChangePassword:
         user = _make_mock_user(password_hash=None)
 
         with (
-            patch("modulo.api.routes.me.get_user_by_id", return_value=user),
-            patch("modulo.api.routes.me.list_families_for_user", return_value=[]),
+            patch("modulo.api.routes.me.get_account_by_id", return_value=user),
+            patch("modulo.api.routes.me.list_families_for_account", return_value=[]),
             patch("modulo.api.routes.me.blacklist_family", return_value=True),
         ):
             resp = client.put(
@@ -175,8 +175,8 @@ class TestChangePassword:
 
     def test_user_not_found_returns_404(self, client: TestClient) -> None:
         with (
-            patch("modulo.api.routes.me.get_user_by_id", return_value=None),
-            patch("modulo.api.routes.me.list_families_for_user", return_value=[]),
+            patch("modulo.api.routes.me.get_account_by_id", return_value=None),
+            patch("modulo.api.routes.me.list_families_for_account", return_value=[]),
             patch("modulo.api.routes.me.blacklist_family", return_value=True),
         ):
             resp = client.put(
@@ -197,8 +197,8 @@ class TestChangePassword:
         mock_family_2.family_id = uuid.uuid4()
 
         with (
-            patch("modulo.api.routes.me.get_user_by_id", return_value=user),
-            patch("modulo.api.routes.me.list_families_for_user", return_value=[mock_family_1, mock_family_2]) as mock_list,
+            patch("modulo.api.routes.me.get_account_by_id", return_value=user),
+            patch("modulo.api.routes.me.list_families_for_account", return_value=[mock_family_1, mock_family_2]) as mock_list,
             patch("modulo.api.routes.me.blacklist_family", return_value=True) as mock_blacklist,
         ):
             resp = client.put(

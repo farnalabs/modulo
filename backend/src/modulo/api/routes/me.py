@@ -12,8 +12,8 @@ from modulo.api.routes.auth import me as _me_handler
 from modulo.auth.dependencies import get_current_user
 from modulo.auth.jwt import AuthenticatedPrincipal
 from modulo.auth.passwords import hash_password, validate_password_strength
-from modulo.db.crud.token_family import blacklist_family, list_families_for_user
-from modulo.db.crud.user import get_user_by_id
+from modulo.db.crud.account import get_account_by_id, update_account_preferences
+from modulo.db.crud.token_family import blacklist_family, list_families_for_account
 
 router = APIRouter(prefix="/api/v1", tags=["user"])
 
@@ -39,10 +39,10 @@ async def get_user_settings(
     current_user: AuthenticatedPrincipal = Depends(get_current_user),
     session: AsyncSession = Depends(get_db_session),
 ) -> dict[str, Any]:
-    user = await get_user_by_id(session, current_user.user_id)
-    if user is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
-    return user.preferences
+    account = await get_account_by_id(session, current_user.account_id)
+    if account is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Account not found")
+    return account.preferences
 
 
 @router.put("/me/settings")
@@ -51,16 +51,10 @@ async def update_user_settings(
     current_user: AuthenticatedPrincipal = Depends(get_current_user),
     session: AsyncSession = Depends(get_db_session),
 ) -> dict[str, Any]:
-    user = await get_user_by_id(session, current_user.user_id)
-    if user is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
-    prefs = dict(user.preferences or {})
+    prefs = {}
     if body.theme is not None:
         prefs["theme"] = body.theme
-    user.preferences = prefs
-    session.add(user)
-    await session.commit()
-    return user.preferences
+    return await update_account_preferences(session, current_user.account_id, prefs)
 
 
 class PasswordChangeRequest(BaseModel):
@@ -77,11 +71,11 @@ async def change_password(
     from modulo.auth.passwords import verify_password
 
     async with session.begin():
-        user = await get_user_by_id(session, current_user.user_id)
-        if user is None:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
+        account = await get_account_by_id(session, current_user.account_id)
+        if account is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Account not found")
 
-        if not user.password_hash or not verify_password(body.current_password, user.password_hash):
+        if not account.password_hash or not verify_password(body.current_password, account.password_hash):
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Current password is incorrect")
 
         try:
@@ -89,10 +83,10 @@ async def change_password(
         except ValueError as exc:
             raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
 
-        user.password_hash = hash_password(body.new_password)
-        session.add(user)
+        account.password_hash = hash_password(body.new_password)
+        session.add(account)
 
-        families = await list_families_for_user(session, current_user.user_id)
+        families = await list_families_for_account(session, current_user.account_id)
         for family in families:
             await blacklist_family(session, family.family_id)
 

@@ -1,4 +1,4 @@
-"""Auth routes: login, refresh, logout, me (v1 user management)."""
+"""Auth routes: login, refresh, logout, me (v1 account management)."""
 
 import logging
 import secrets
@@ -24,8 +24,9 @@ from modulo.auth.jwt import (
 )
 from modulo.auth.passwords import authenticate_db_user
 from modulo.auth.ws_token import create_ws_token as create_opaque_ws_token
+from modulo.db.crud.account import get_account_by_email, get_account_by_id, update_last_login
+from modulo.db.crud.org_membership import list_memberships_for_account
 from modulo.db.crud.token_family import advance_sequence, blacklist_family, create_family
-from modulo.db.crud.user import get_user_by_email, get_user_by_id, update_last_login
 from modulo.settings import Settings, get_settings
 
 _log = logging.getLogger(__name__)
@@ -88,8 +89,8 @@ async def login(
     limiter = get_auth_rate_limiter(settings)
 
     async with session.begin():
-        user = await get_user_by_email(session, body.email)
-        if not user or not authenticate_db_user(body.password, user):
+        account = await get_account_by_email(session, body.email)
+        if not account or not authenticate_db_user(body.password, account):
             await limiter.record_failure(ip)
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
@@ -97,22 +98,40 @@ async def login(
             )
 
         await limiter.record_success(ip)
-        await update_last_login(session, user.id)
-        family = await create_family(session, user.id, user.organisation_id)
+        await update_last_login(session, account.id)
+
+        memberships = await list_memberships_for_account(session, account.id)
+        if not memberships and not account.is_system_admin:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Account has no org memberships",
+            )
+
+        if memberships:
+            membership = memberships[0]
+            org_id = membership.organisation_id
+            org_role = membership.role
+        else:
+            org_id = None
+            org_role = None
+
+        family = await create_family(session, account.id, org_id)
 
     access_token = create_access_token(
-        user.email,
+        account.email,
         settings.secret_key,
-        organisation_id=str(user.organisation_id),
-        user_id=str(user.id),
-        org_role=user.org_role,
+        organisation_id=str(org_id) if org_id else "",
+        account_id=str(account.id),
+        org_role=org_role or "",
+        is_system_admin=account.is_system_admin,
     )
     refresh_token = create_refresh_token(
-        user.email,
+        account.email,
         settings.secret_key,
-        organisation_id=str(user.organisation_id),
-        user_id=str(user.id),
-        org_role=user.org_role,
+        organisation_id=str(org_id) if org_id else "",
+        account_id=str(account.id),
+        org_role=org_role or "",
+        is_system_admin=account.is_system_admin,
         token_family=str(family.family_id),
         token_sequence=0,
     )
@@ -163,9 +182,9 @@ async def refresh(
 
     sub_val = claims.get("sub")
     org_id_val = claims.get("org_id")
-    user_id_val = claims.get("user_id") or claims.get("account_id")
+    account_id_val = claims.get("account_id") or claims.get("user_id")
     org_role_val = claims.get("org_role")
-    if not all(isinstance(v, str) for v in [sub_val, org_id_val, user_id_val, org_role_val]):
+    if not all(isinstance(v, str) for v in [sub_val, org_id_val, account_id_val, org_role_val]):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid refresh token payload",
@@ -175,14 +194,14 @@ async def refresh(
         str(sub_val),
         settings.secret_key,
         organisation_id=str(org_id_val),
-        user_id=str(user_id_val),
+        account_id=str(account_id_val),
         org_role=str(org_role_val),
     )
     new_refresh = create_refresh_token(
         str(sub_val),
         settings.secret_key,
         organisation_id=str(org_id_val),
-        user_id=str(user_id_val),
+        account_id=str(account_id_val),
         org_role=str(org_role_val),
         token_family=family_id_str,
         token_sequence=new_sequence,
@@ -228,9 +247,9 @@ async def ws_token(
 ) -> WsTokenResponse:
     principal_json = {
         "sub": current_user.username,
-        "org_id": str(current_user.organisation_id),
-        "user_id": str(current_user.user_id),
-        "org_role": current_user.org_role,
+        "org_id": str(current_user.organisation_id) if current_user.organisation_id else "",
+        "account_id": str(current_user.account_id),
+        "org_role": current_user.org_role or "",
     }
 
     if settings.redis_url:
@@ -245,7 +264,7 @@ async def ws_token(
             )
             return WsTokenResponse(
                 ws_token=token,
-                token_type="ws-opaque",  # noqa: S106
+                token_type="ws-opaque",
                 expires_in_seconds=settings.modulo_ws_token_ttl_seconds,
             )
         except Exception as exc:
@@ -254,13 +273,13 @@ async def ws_token(
     token = create_jwt_ws_token(
         current_user.username,
         settings.secret_key,
-        organisation_id=str(current_user.organisation_id),
-        user_id=str(current_user.user_id),
-        org_role=current_user.org_role,
+        organisation_id=str(current_user.organisation_id) if current_user.organisation_id else "",
+        account_id=str(current_user.account_id),
+        org_role=current_user.org_role or "",
     )
     return WsTokenResponse(
         ws_token=token,
-        token_type="ws-jwt",  # noqa: S106
+        token_type="ws-jwt",
         expires_in_seconds=settings.modulo_ws_token_ttl_seconds,
     )
 
@@ -270,16 +289,16 @@ async def me(
     current_user: AuthenticatedPrincipal = Depends(get_current_user),
     session: AsyncSession = Depends(get_db_session),
 ) -> MeResponse:
-    user = await get_user_by_id(session, current_user.user_id)
-    if user is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
+    account = await get_account_by_id(session, current_user.account_id)
+    if account is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Account not found")
     return MeResponse(
-        id=str(user.id),
-        email=user.email,
-        display_name=user.display_name,
-        org_role=user.org_role,
-        active=user.active,
-        created_at=user.created_at.isoformat(),
+        id=str(account.id),
+        email=account.email,
+        display_name=account.display_name,
+        org_role=current_user.org_role or "",
+        active=account.active,
+        created_at=account.created_at.isoformat(),
     )
 
 

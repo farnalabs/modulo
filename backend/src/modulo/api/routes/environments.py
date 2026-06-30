@@ -172,7 +172,7 @@ async def create_profile(
             org_id=principal.organisation_id,
             name=body.name,
             image_ref=body.image_ref,
-            created_by=principal.user_id,
+            created_by=principal.account_id,
             description=body.description,
             capabilities=body.capabilities,
             egress_policy=body.egress_policy,

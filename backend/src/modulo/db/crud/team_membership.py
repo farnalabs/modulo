@@ -14,13 +14,13 @@ async def add_team_member(
     *,
     org_id: uuid.UUID,
     team_id: uuid.UUID,
-    user_id: uuid.UUID,
+    account_id: uuid.UUID,
     role: str = "viewer",
 ) -> TeamMembership:
     membership = TeamMembership(
         organisation_id=org_id,
         team_id=team_id,
-        user_id=user_id,
+        account_id=account_id,
         role=role,
     )
     session.add(membership)
@@ -33,13 +33,13 @@ async def get_membership(session: AsyncSession, membership_id: uuid.UUID) -> Tea
     return result.scalar_one_or_none()
 
 
-async def get_membership_by_team_and_user(
-    session: AsyncSession, team_id: uuid.UUID, user_id: uuid.UUID
+async def get_membership_by_team_and_account(
+    session: AsyncSession, team_id: uuid.UUID, account_id: uuid.UUID
 ) -> TeamMembership | None:
     result = await session.execute(
         select(TeamMembership).where(
             TeamMembership.team_id == team_id,
-            TeamMembership.user_id == user_id,
+            TeamMembership.account_id == account_id,
         )
     )
     return result.scalar_one_or_none()
@@ -82,8 +82,8 @@ async def update_member_role(
     return membership
 
 
-async def list_memberships_for_user(session: AsyncSession, user_id: uuid.UUID) -> list[TeamMembership]:
-    result = await session.execute(select(TeamMembership).where(TeamMembership.user_id == user_id))
+async def list_team_memberships_for_account(session: AsyncSession, account_id: uuid.UUID) -> list[TeamMembership]:
+    result = await session.execute(select(TeamMembership).where(TeamMembership.account_id == account_id))
     return list(result.scalars().all())
 
 

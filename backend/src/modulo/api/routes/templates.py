@@ -138,7 +138,7 @@ async def create_pipeline_from_template_endpoint(
             session,
             org_id=principal.organisation_id,
             name=f"{template.name} (from template)",
-            created_by=principal.user_id,
+            created_by=principal.account_id,
             description=template.description or f"Created from template: {template.name}",
         )
 

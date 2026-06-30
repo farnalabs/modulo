@@ -289,7 +289,7 @@ async def download_registry_primitive_endpoint(
             review_count=None,
             owner_team_id=None,
             visibility="org",
-            created_by=principal.user_id,
+            created_by=principal.account_id,
         )
 
     return PullResponse(

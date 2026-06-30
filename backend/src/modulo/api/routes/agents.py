@@ -255,7 +255,7 @@ async def create_agent_endpoint(
             session,
             org_id=principal.organisation_id,
             name=body.name,
-            created_by=principal.user_id,
+            created_by=principal.account_id,
             input_schema_id=body.input_schema_id,
             input_schema_version=body.input_schema_version,
             output_schema_id=body.output_schema_id,

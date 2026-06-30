@@ -198,21 +198,26 @@ class TestTeamSuccess:
         assert resp.status_code == 200
 
     def test_add_member_succeeds_when_enabled(self, licensed_client: TestClient) -> None:
-        target_user = MagicMock()
-        target_user.id = _USER_ID
-        target_user.org_role = "admin"
+        target_account = MagicMock()
+        target_account.id = _USER_ID
+        target_membership = MagicMock()
+        target_membership.role = "admin"
         membership = MagicMock()
         membership.id = uuid.uuid4()
         membership.team_id = _TEAM_ID
-        membership.user_id = _USER_ID
+        membership.account_id = _USER_ID
         membership.role = "viewer"
         membership.created_at = _NOW
         with (
-            patch("modulo.api.routes.teams.add_team_member", return_value=membership),
-            patch("modulo.api.routes.teams.get_user_by_id_org", return_value=target_user),
-            patch("modulo.api.routes.teams.get_team", return_value=_make_team()),
-            patch("modulo.api.routes.teams.set_rls_org"),
-            patch("modulo.api.routes.teams.set_rls_user_context"),
+            patch("modulo.api.routes.teams.add_team_member", new=AsyncMock(return_value=membership)),
+            patch("modulo.db.crud.account.get_account_by_id", new=AsyncMock(return_value=target_account)),
+            patch(
+                "modulo.db.crud.org_membership.get_membership_by_account_and_org",
+                new=AsyncMock(return_value=target_membership),
+            ),
+            patch("modulo.api.routes.teams.get_team", new=AsyncMock(return_value=_make_team())),
+            patch("modulo.api.routes.teams.set_rls_org", new=AsyncMock()),
+            patch("modulo.api.routes.teams.set_rls_user_context", new=AsyncMock()),
         ):
             resp = licensed_client.post(
                 f"/api/v1/teams/{_TEAM_ID}/members",

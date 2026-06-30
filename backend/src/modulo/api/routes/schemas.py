@@ -164,7 +164,7 @@ async def create_schema_endpoint(
             session,
             org_id=principal.organisation_id,
             name=body.name,
-            created_by=principal.user_id,
+            created_by=principal.account_id,
             description=body.description,
             abstract_name=body.abstract_name,
         )
@@ -285,7 +285,7 @@ async def create_schema_version_endpoint(
             version=body.version,
             version_number=body.version_number,
             definition_json=body.definition_json,
-            created_by=principal.user_id,
+            created_by=principal.account_id,
             published=body.published,
         )
     return SchemaVersionResponse.model_validate(sv)

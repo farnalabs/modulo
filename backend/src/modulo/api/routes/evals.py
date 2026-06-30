@@ -128,7 +128,7 @@ async def create_eval_definition(
 
     async with session.begin():
         await set_rls_org(session, principal.organisation_id)
-        await set_rls_user_context(session, principal.user_id, principal.org_role)
+        await set_rls_user_context(session, principal.account_id, principal.org_role)
         eval_def = EvalDefinition(
             organisation_id=principal.organisation_id,
             pipeline_id=body.pipeline_id,
@@ -139,7 +139,7 @@ async def create_eval_definition(
             failure_behaviour=body.failure_behaviour,
             pass_threshold=body.pass_threshold,
             suite_id=body.suite_id,
-            created_by=principal.user_id,
+            created_by=principal.account_id,
         )
         session.add(eval_def)
         await session.flush()
@@ -169,7 +169,7 @@ async def list_eval_definitions(
 
     async with session.begin():
         await set_rls_org(session, principal.organisation_id)
-        await set_rls_user_context(session, principal.user_id, principal.org_role)
+        await set_rls_user_context(session, principal.account_id, principal.org_role)
 
         total_q = select(sa_func.count(EvalDefinition.id)).where(*conditions)
         total = (await session.execute(total_q)).scalar() or 0
@@ -205,7 +205,7 @@ async def eval_coverage(
     """Return eval coverage map for a pipeline."""
     async with session.begin():
         await set_rls_org(session, principal.organisation_id)
-        await set_rls_user_context(session, principal.user_id, principal.org_role)
+        await set_rls_user_context(session, principal.account_id, principal.org_role)
 
         pipeline = (
             await session.execute(
@@ -280,7 +280,7 @@ async def get_eval_definition(
     """Get a single eval definition by ID."""
     async with session.begin():
         await set_rls_org(session, principal.organisation_id)
-        await set_rls_user_context(session, principal.user_id, principal.org_role)
+        await set_rls_user_context(session, principal.account_id, principal.org_role)
         result = await session.execute(
             select(EvalDefinition).where(
                 EvalDefinition.id == eval_id,
@@ -306,7 +306,7 @@ async def update_eval_definition(
 
     async with session.begin():
         await set_rls_org(session, principal.organisation_id)
-        await set_rls_user_context(session, principal.user_id, principal.org_role)
+        await set_rls_user_context(session, principal.account_id, principal.org_role)
         result = await session.execute(
             select(EvalDefinition).where(
                 EvalDefinition.id == eval_id,
@@ -337,7 +337,7 @@ async def delete_eval_definition(
 
     async with session.begin():
         await set_rls_org(session, principal.organisation_id)
-        await set_rls_user_context(session, principal.user_id, principal.org_role)
+        await set_rls_user_context(session, principal.account_id, principal.org_role)
         result = await session.execute(
             select(EvalDefinition).where(
                 EvalDefinition.id == eval_id,
@@ -366,7 +366,7 @@ async def list_run_evals(
     """
     async with session.begin():
         await set_rls_org(session, principal.organisation_id)
-        await set_rls_user_context(session, principal.user_id, principal.org_role)
+        await set_rls_user_context(session, principal.account_id, principal.org_role)
 
         run_result = await session.execute(
             select(Run).where(
@@ -454,7 +454,7 @@ async def compare_evals(
     """Compare eval results between two runs side by side."""
     async with session.begin():
         await set_rls_org(session, principal.organisation_id)
-        await set_rls_user_context(session, principal.user_id, principal.org_role)
+        await set_rls_user_context(session, principal.account_id, principal.org_role)
 
         run_a = (
             await session.execute(
@@ -577,7 +577,7 @@ async def create_eval_from_run(
 
     async with session.begin():
         await set_rls_org(session, principal.organisation_id)
-        await set_rls_user_context(session, principal.user_id, principal.org_role)
+        await set_rls_user_context(session, principal.account_id, principal.org_role)
 
         run = (
             await session.execute(
@@ -626,7 +626,7 @@ async def create_eval_from_run(
             eval_type=body.eval_type,
             config_json=config_json,
             failure_behaviour="warn",
-            created_by=principal.user_id,
+            created_by=principal.account_id,
         )
         session.add(eval_def)
         await session.flush()

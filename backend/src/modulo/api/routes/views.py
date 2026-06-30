@@ -83,7 +83,7 @@ async def list_views_endpoint(
     try:
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
-            await set_rls_user_context(session, principal.user_id, principal.org_role)
+            await set_rls_user_context(session, principal.account_id, principal.org_role)
             result = await list_views(session, view_type=view_type, page=page, page_size=page_size)
     except ProgrammingError:
         logger.exception("views.table_missing")
@@ -108,13 +108,13 @@ async def create_view_endpoint(
     try:
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
-            await set_rls_user_context(session, principal.user_id, principal.org_role)
+            await set_rls_user_context(session, principal.account_id, principal.org_role)
             view = await create_view(
                 session,
                 org_id=principal.organisation_id,
                 name=body.name,
                 view_type=body.view_type,
-                created_by=principal.user_id,
+                created_by=principal.account_id,
                 description=body.description,
                 filters=body.filters,
                 columns=body.columns,
@@ -139,7 +139,7 @@ async def get_view_endpoint(
     try:
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
-            await set_rls_user_context(session, principal.user_id, principal.org_role)
+            await set_rls_user_context(session, principal.account_id, principal.org_role)
             view = await get_view(session, view_id)
     except ProgrammingError:
         logger.exception("views.table_missing")
@@ -163,7 +163,7 @@ async def update_view_endpoint(
     try:
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
-            await set_rls_user_context(session, principal.user_id, principal.org_role)
+            await set_rls_user_context(session, principal.account_id, principal.org_role)
             view = await update_view(session, view_id, updates)
     except ProgrammingError:
         logger.exception("views.table_missing")
@@ -185,7 +185,7 @@ async def delete_view_endpoint(
     try:
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
-            await set_rls_user_context(session, principal.user_id, principal.org_role)
+            await set_rls_user_context(session, principal.account_id, principal.org_role)
             deleted = await delete_view(session, view_id)
     except ProgrammingError:
         logger.exception("views.table_missing")

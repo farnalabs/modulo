@@ -171,8 +171,8 @@ def test_viewmodel_current_returns_200(client: TestClient) -> None:
         patch("modulo.api.routes.viewmodel.set_rls_org"),
         patch("modulo.api.routes.viewmodel.set_rls_user_context"),
         patch("modulo.api.routes.viewmodel.get_organisation", return_value=org),
-        patch("modulo.api.routes.viewmodel.get_user_by_id", return_value=user),
-        patch("modulo.api.routes.viewmodel.list_memberships_for_user", return_value=[]),
+        patch("modulo.api.routes.viewmodel.get_account_by_id", return_value=user),
+        patch("modulo.api.routes.viewmodel.list_team_memberships_for_account", return_value=[]),
         patch("modulo.api.routes.viewmodel.resolve_plan_context", return_value=plan_ctx),
     ):
         resp = client.get("/api/v1/viewmodel/current")
@@ -228,8 +228,8 @@ def test_viewmodel_current_includes_pending_hitl(client: TestClient) -> None:
         patch("modulo.api.routes.viewmodel.set_rls_org"),
         patch("modulo.api.routes.viewmodel.set_rls_user_context"),
         patch("modulo.api.routes.viewmodel.get_organisation", return_value=org),
-        patch("modulo.api.routes.viewmodel.get_user_by_id", return_value=user),
-        patch("modulo.api.routes.viewmodel.list_memberships_for_user", return_value=[]),
+        patch("modulo.api.routes.viewmodel.get_account_by_id", return_value=user),
+        patch("modulo.api.routes.viewmodel.list_team_memberships_for_account", return_value=[]),
         patch("modulo.api.routes.viewmodel.resolve_plan_context", return_value=plan_ctx),
         patch(
             "modulo.api.routes.viewmodel.AsyncSession.execute",
@@ -257,8 +257,8 @@ def test_viewmodel_current_includes_feature_flags(client: TestClient) -> None:
         patch("modulo.api.routes.viewmodel.set_rls_org"),
         patch("modulo.api.routes.viewmodel.set_rls_user_context"),
         patch("modulo.api.routes.viewmodel.get_organisation", return_value=org),
-        patch("modulo.api.routes.viewmodel.get_user_by_id", return_value=user),
-        patch("modulo.api.routes.viewmodel.list_memberships_for_user", return_value=[]),
+        patch("modulo.api.routes.viewmodel.get_account_by_id", return_value=user),
+        patch("modulo.api.routes.viewmodel.list_team_memberships_for_account", return_value=[]),
         patch("modulo.api.routes.viewmodel.resolve_plan_context", return_value=plan_ctx),
     ):
         resp = client.get("/api/v1/viewmodel/current")
@@ -290,8 +290,8 @@ def test_viewmodel_current_includes_org_info(client: TestClient) -> None:
         patch("modulo.api.routes.viewmodel.set_rls_org"),
         patch("modulo.api.routes.viewmodel.set_rls_user_context"),
         patch("modulo.api.routes.viewmodel.get_organisation", return_value=org),
-        patch("modulo.api.routes.viewmodel.get_user_by_id", return_value=user),
-        patch("modulo.api.routes.viewmodel.list_memberships_for_user", return_value=[]),
+        patch("modulo.api.routes.viewmodel.get_account_by_id", return_value=user),
+        patch("modulo.api.routes.viewmodel.list_team_memberships_for_account", return_value=[]),
         patch("modulo.api.routes.viewmodel.resolve_plan_context", return_value=plan_ctx),
     ):
         resp = client.get("/api/v1/viewmodel/current")
@@ -320,8 +320,8 @@ def test_viewmodel_current_includes_team_memberships(client: TestClient) -> None
         patch("modulo.api.routes.viewmodel.set_rls_org"),
         patch("modulo.api.routes.viewmodel.set_rls_user_context"),
         patch("modulo.api.routes.viewmodel.get_organisation", return_value=org),
-        patch("modulo.api.routes.viewmodel.get_user_by_id", return_value=user),
-        patch("modulo.api.routes.viewmodel.list_memberships_for_user", return_value=[membership]),
+        patch("modulo.api.routes.viewmodel.get_account_by_id", return_value=user),
+        patch("modulo.api.routes.viewmodel.list_team_memberships_for_account", return_value=[membership]),
         patch("modulo.api.routes.viewmodel.resolve_plan_context", return_value=plan_ctx),
     ):
         resp = client.get("/api/v1/viewmodel/current")
@@ -348,8 +348,8 @@ def test_viewmodel_current_includes_preferences(client: TestClient) -> None:
         patch("modulo.api.routes.viewmodel.set_rls_org"),
         patch("modulo.api.routes.viewmodel.set_rls_user_context"),
         patch("modulo.api.routes.viewmodel.get_organisation", return_value=org),
-        patch("modulo.api.routes.viewmodel.get_user_by_id", return_value=user),
-        patch("modulo.api.routes.viewmodel.list_memberships_for_user", return_value=[]),
+        patch("modulo.api.routes.viewmodel.get_account_by_id", return_value=user),
+        patch("modulo.api.routes.viewmodel.list_team_memberships_for_account", return_value=[]),
         patch("modulo.api.routes.viewmodel.resolve_plan_context", return_value=plan_ctx),
     ):
         resp = client.get("/api/v1/viewmodel/current")
@@ -375,8 +375,8 @@ def test_viewmodel_current_includes_plan(client: TestClient) -> None:
         patch("modulo.api.routes.viewmodel.set_rls_org"),
         patch("modulo.api.routes.viewmodel.set_rls_user_context"),
         patch("modulo.api.routes.viewmodel.get_organisation", return_value=org),
-        patch("modulo.api.routes.viewmodel.get_user_by_id", return_value=user),
-        patch("modulo.api.routes.viewmodel.list_memberships_for_user", return_value=[]),
+        patch("modulo.api.routes.viewmodel.get_account_by_id", return_value=user),
+        patch("modulo.api.routes.viewmodel.list_team_memberships_for_account", return_value=[]),
         patch("modulo.api.routes.viewmodel.resolve_plan_context", return_value=plan_ctx),
     ):
         resp = client.get("/api/v1/viewmodel/current")

@@ -199,11 +199,11 @@ class TestBDDAdminViewsAsTeam:
             "get_organisation": patch(
                 "modulo.api.routes.viewmodel.get_organisation", return_value=org
             ),
-            "get_user_by_id": patch(
-                "modulo.api.routes.viewmodel.get_user_by_id", return_value=user
+            "get_account_by_id": patch(
+                "modulo.api.routes.viewmodel.get_account_by_id", return_value=user
             ),
-            "list_memberships_for_user": patch(
-                "modulo.api.routes.viewmodel.list_memberships_for_user", return_value=[]
+            "list_team_memberships_for_account": patch(
+                "modulo.api.routes.viewmodel.list_team_memberships_for_account", return_value=[]
             ),
             "resolve_plan_context": patch(
                 "modulo.api.routes.viewmodel.resolve_plan_context", return_value=plan_ctx
@@ -230,8 +230,8 @@ class TestBDDAdminViewsAsTeam:
                 return_value=PageResult(items=[], total=0, page=1, page_size=10),
             ),
             patch("modulo.api.routes.viewmodel.get_organisation", return_value=_make_org()),
-            patch("modulo.api.routes.viewmodel.get_user_by_id", return_value=_make_user()),
-            patch("modulo.api.routes.viewmodel.list_memberships_for_user", return_value=[]),
+            patch("modulo.api.routes.viewmodel.get_account_by_id", return_value=_make_user()),
+            patch("modulo.api.routes.viewmodel.list_team_memberships_for_account", return_value=[]),
             patch("modulo.api.routes.viewmodel.resolve_plan_context", return_value=_make_mock_plan_context()),
         ):
             resp = client.get(self.URL, params={"view_as_team": str(_TEAM_ID)})
@@ -256,8 +256,8 @@ class TestBDDAdminViewsAsTeam:
                 return_value=PageResult(items=[], total=0, page=1, page_size=10),
             ),
             patch("modulo.api.routes.viewmodel.get_organisation", return_value=_make_org()),
-            patch("modulo.api.routes.viewmodel.get_user_by_id", return_value=_make_user()),
-            patch("modulo.api.routes.viewmodel.list_memberships_for_user", return_value=[]),
+            patch("modulo.api.routes.viewmodel.get_account_by_id", return_value=_make_user()),
+            patch("modulo.api.routes.viewmodel.list_team_memberships_for_account", return_value=[]),
             patch("modulo.api.routes.viewmodel.resolve_plan_context", return_value=_make_mock_plan_context()),
         ):
             resp = client.get(self.URL, params={"view_as_team": str(uuid.uuid4())})
@@ -296,8 +296,8 @@ class TestBDDResourceFiltering:
                 return_value=PageResult(items=[], total=0, page=1, page_size=10),
             ),
             patch("modulo.api.routes.viewmodel.get_organisation", return_value=_make_org()),
-            patch("modulo.api.routes.viewmodel.get_user_by_id", return_value=_make_user()),
-            patch("modulo.api.routes.viewmodel.list_memberships_for_user", return_value=[]),
+            patch("modulo.api.routes.viewmodel.get_account_by_id", return_value=_make_user()),
+            patch("modulo.api.routes.viewmodel.list_team_memberships_for_account", return_value=[]),
             patch("modulo.api.routes.viewmodel.resolve_plan_context", return_value=_make_mock_plan_context()),
         ):
             resp = client.get(self.URL, params={"view_as_team": str(_TEAM_ID)})
@@ -330,8 +330,8 @@ class TestBDDResourceFiltering:
                 return_value=PageResult(items=[], total=0, page=1, page_size=10),
             ),
             patch("modulo.api.routes.viewmodel.get_organisation", return_value=_make_org()),
-            patch("modulo.api.routes.viewmodel.get_user_by_id", return_value=_make_user()),
-            patch("modulo.api.routes.viewmodel.list_memberships_for_user", return_value=[]),
+            patch("modulo.api.routes.viewmodel.get_account_by_id", return_value=_make_user()),
+            patch("modulo.api.routes.viewmodel.list_team_memberships_for_account", return_value=[]),
             patch("modulo.api.routes.viewmodel.resolve_plan_context", return_value=_make_mock_plan_context()),
         ):
             resp = client.get(self.URL, params={"view_as_team": str(_TEAM_ID)})
@@ -401,8 +401,8 @@ class TestBDDInvalidTeam:
         try:
             with (
                 patch("modulo.api.routes.viewmodel.get_organisation", return_value=_make_org()),
-                patch("modulo.api.routes.viewmodel.get_user_by_id", return_value=_make_user()),
-                patch("modulo.api.routes.viewmodel.list_memberships_for_user", return_value=[]),
+            patch("modulo.api.routes.viewmodel.get_account_by_id", return_value=_make_user()),
+            patch("modulo.api.routes.viewmodel.list_team_memberships_for_account", return_value=[]),
                 patch("modulo.api.routes.viewmodel.resolve_plan_context", return_value=_make_mock_plan_context()),
             ):
                 resp = c.get(self.URL, params={"view_as_team": str(nonexistent_id)})
@@ -451,8 +451,8 @@ class TestBDDRestoreOrgWide:
                 return_value=PageResult(items=[], total=0, page=1, page_size=10),
             ),
             patch("modulo.api.routes.viewmodel.get_organisation", return_value=_make_org()),
-            patch("modulo.api.routes.viewmodel.get_user_by_id", return_value=_make_user()),
-            patch("modulo.api.routes.viewmodel.list_memberships_for_user", return_value=[]),
+            patch("modulo.api.routes.viewmodel.get_account_by_id", return_value=_make_user()),
+            patch("modulo.api.routes.viewmodel.list_team_memberships_for_account", return_value=[]),
             patch("modulo.api.routes.viewmodel.resolve_plan_context", return_value=_make_mock_plan_context()),
         ):
             resp = client.get(self.URL)
@@ -488,8 +488,8 @@ class TestBDDRestoreOrgWide:
                 return_value=PageResult(items=[], total=0, page=1, page_size=10),
             ),
             patch("modulo.api.routes.viewmodel.get_organisation", return_value=_make_org()),
-            patch("modulo.api.routes.viewmodel.get_user_by_id", return_value=_make_user()),
-            patch("modulo.api.routes.viewmodel.list_memberships_for_user", return_value=[]),
+            patch("modulo.api.routes.viewmodel.get_account_by_id", return_value=_make_user()),
+            patch("modulo.api.routes.viewmodel.list_team_memberships_for_account", return_value=[]),
             patch("modulo.api.routes.viewmodel.resolve_plan_context", return_value=_make_mock_plan_context()),
         ):
             resp = client.get(self.URL)

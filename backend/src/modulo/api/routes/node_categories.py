@@ -69,7 +69,7 @@ async def list_node_categories_endpoint(
 ) -> NodeCategoryListResponse:
     async with session.begin():
         await set_rls_org(session, principal.organisation_id)
-        await set_rls_user_context(session, principal.user_id, principal.org_role)
+        await set_rls_user_context(session, principal.account_id, principal.org_role)
         result = await list_node_categories(session, page=page, page_size=page_size)
     return NodeCategoryListResponse(
         items=[NodeCategoryResponse.model_validate(c) for c in result.items],
@@ -87,12 +87,12 @@ async def create_node_category_endpoint(
 ) -> NodeCategoryResponse:
     async with session.begin():
         await set_rls_org(session, principal.organisation_id)
-        await set_rls_user_context(session, principal.user_id, principal.org_role)
+        await set_rls_user_context(session, principal.account_id, principal.org_role)
         category = await create_node_category(
             session,
             org_id=principal.organisation_id,
             name=body.name,
-            created_by=principal.user_id,
+            created_by=principal.account_id,
             description=body.description,
             color=body.color,
             icon=body.icon,
@@ -109,7 +109,7 @@ async def get_node_category_endpoint(
 ) -> NodeCategoryResponse:
     async with session.begin():
         await set_rls_org(session, principal.organisation_id)
-        await set_rls_user_context(session, principal.user_id, principal.org_role)
+        await set_rls_user_context(session, principal.account_id, principal.org_role)
         category = await get_node_category(session, category_id)
     if category is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Node category not found")
@@ -126,7 +126,7 @@ async def update_node_category_endpoint(
     updates = {k: v for k, v in body.model_dump().items() if v is not None}
     async with session.begin():
         await set_rls_org(session, principal.organisation_id)
-        await set_rls_user_context(session, principal.user_id, principal.org_role)
+        await set_rls_user_context(session, principal.account_id, principal.org_role)
         category = await update_node_category(session, category_id, updates)
     if category is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Node category not found")
@@ -141,7 +141,7 @@ async def delete_node_category_endpoint(
 ) -> None:
     async with session.begin():
         await set_rls_org(session, principal.organisation_id)
-        await set_rls_user_context(session, principal.user_id, principal.org_role)
+        await set_rls_user_context(session, principal.account_id, principal.org_role)
         deleted = await delete_node_category(session, category_id)
     if not deleted:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Node category not found")

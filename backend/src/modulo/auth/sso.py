@@ -1,4 +1,4 @@
-"""OIDC and SAML 2.0 SSO support with JIT user provisioning."""
+"""OIDC and SAML 2.0 SSO support with JIT account provisioning."""
 
 import base64
 import hmac
@@ -17,12 +17,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.auth.jwt import create_access_token, create_refresh_token
 from modulo.auth.oidc_verify import OidcVerifyError, verify_id_token
-from modulo.db.crud.team_membership import add_team_member, get_membership_by_team_and_user, update_member_role
+from modulo.db.crud.account import create_account, get_account_by_email, update_last_login
+from modulo.db.crud.org_membership import create_membership, get_membership_by_account_and_org
+from modulo.db.crud.team_membership import add_team_member, get_membership_by_team_and_account, update_member_role
 from modulo.db.crud.token_family import create_family
-from modulo.db.crud.user import get_user_by_email, update_last_login
+from modulo.db.models.account import Account
 from modulo.db.models.organisation import Organisation
 from modulo.db.models.sso_provider import SsoProvider
-from modulo.db.models.user import User
 from modulo.settings import Settings
 
 _log = logging.getLogger(__name__)
@@ -52,11 +53,11 @@ def verify_state(signed: str, secret_key: str) -> str | None:
 
 
 # ---------------------------------------------------------------------------
-# JIT user provisioning
+# JIT account provisioning
 # ---------------------------------------------------------------------------
 
 
-async def jit_provision_user(
+async def jit_provision_account(
     session: AsyncSession,
     settings: Settings,
     email: str,
@@ -64,14 +65,30 @@ async def jit_provision_user(
     auth_provider: str,
     sso_subject: str,
     default_org_id: uuid.UUID | None = None,
-) -> User:
-    """Find or create a user record for an SSO-authenticated identity."""
-    user = await get_user_by_email(session, email)
-    if user is not None:
-        user.sso_subject = sso_subject
-        user.auth_provider = auth_provider
+) -> tuple[Account, uuid.UUID, str]:
+    """Find or create an Account + OrgMembership for an SSO-authenticated identity.
+
+    Returns (account, org_id, org_role).
+    """
+    account = await get_account_by_email(session, email)
+    if account is not None:
+        account.sso_subject = sso_subject
+        account.auth_provider = auth_provider
         await session.flush()
-        return user
+    else:
+        account = await create_account(
+            session,
+            email=email,
+            display_name=display_name,
+            password_hash=None,
+            auth_provider=auth_provider,
+        )
+        account.sso_subject = sso_subject
+        await session.flush()
+        _log.info(
+            "sso.jit_provisioned",
+            extra={"email": email, "auth_provider": auth_provider, "sso_subject": sso_subject},
+        )
 
     if default_org_id is not None:
         org_id = default_org_id
@@ -79,25 +96,22 @@ async def jit_provision_user(
         result = await session.execute(select(Organisation).order_by(Organisation.created_at).limit(1))
         org = result.scalar_one_or_none()
         if org is None:
-            raise RuntimeError("No organisation exists — cannot JIT provision user")
+            raise RuntimeError("No organisation exists — cannot JIT provision account")
         org_id = org.id
 
-    user = User(
-        organisation_id=org_id,
-        email=email,
-        display_name=display_name,
-        password_hash=None,
-        org_role=settings.modulo_sso_default_role,
-        auth_provider=auth_provider,
-        sso_subject=sso_subject,
-    )
-    session.add(user)
-    await session.flush()
-    _log.info(
-        "sso.jit_provisioned",
-        extra={"email": email, "auth_provider": auth_provider, "sso_subject": sso_subject},
-    )
-    return user
+    existing = await get_membership_by_account_and_org(session, account.id, org_id)
+    if existing is None:
+        membership = await create_membership(
+            session,
+            account_id=account.id,
+            org_id=org_id,
+            role=settings.modulo_sso_default_role,
+        )
+        org_role = membership.role
+    else:
+        org_role = existing.role
+
+    return account, org_id, org_role
 
 
 # ---------------------------------------------------------------------------
@@ -107,11 +121,12 @@ async def jit_provision_user(
 
 async def apply_group_mappings(
     session: AsyncSession,
-    user: User,
+    account: Account,
+    org_id: uuid.UUID,
     idp_groups: list[str],
     group_mappings: list[dict[str, str]],
 ) -> None:
-    """Apply SSO group-to-team mappings for a JIT-provisioned user."""
+    """Apply SSO group-to-team mappings for a JIT-provisioned account."""
     for mapping in group_mappings:
         idp_group = mapping.get("idp_group", "")
         if idp_group not in idp_groups:
@@ -119,16 +134,16 @@ async def apply_group_mappings(
         team_id = uuid.UUID(mapping["team_id"])
         team_role = mapping.get("team_role", "viewer")
 
-        existing = await get_membership_by_team_and_user(session, team_id, user.id)
+        existing = await get_membership_by_team_and_account(session, team_id, account.id)
         if existing is not None:
             if existing.role != team_role:
                 await update_member_role(session, existing.id, team_role)
         else:
             await add_team_member(
                 session,
-                org_id=user.organisation_id,
+                org_id=org_id,
                 team_id=team_id,
-                user_id=user.id,
+                account_id=account.id,
                 role=team_role,
             )
 
@@ -147,24 +162,26 @@ async def _lookup_provider_by_entity_id(session: AsyncSession, entity_id: str) -
     return result.scalar_one_or_none()
 
 
-async def issue_sso_tokens(user: User, session: AsyncSession, settings: Settings) -> dict[str, str]:
-    """Issue access + refresh tokens for an SSO-authenticated user."""
-    await update_last_login(session, user.id)
-    family = await create_family(session, user.id, user.organisation_id)
+async def issue_sso_tokens(
+    account: Account, org_id: uuid.UUID, org_role: str, session: AsyncSession, settings: Settings
+) -> dict[str, str]:
+    """Issue access + refresh tokens for an SSO-authenticated account."""
+    await update_last_login(session, account.id)
+    family = await create_family(session, account.id, org_id)
 
     access_token = create_access_token(
-        user.email,
+        account.email,
         settings.secret_key,
-        organisation_id=str(user.organisation_id),
-        user_id=str(user.id),
-        org_role=user.org_role,
+        organisation_id=str(org_id),
+        account_id=str(account.id),
+        org_role=org_role,
     )
     refresh_token = create_refresh_token(
-        user.email,
+        account.email,
         settings.secret_key,
-        organisation_id=str(user.organisation_id),
-        user_id=str(user.id),
-        org_role=user.org_role,
+        organisation_id=str(org_id),
+        account_id=str(account.id),
+        org_role=org_role,
         token_family=str(family.family_id),
         token_sequence=0,
     )
@@ -214,7 +231,7 @@ async def oidc_process_callback(
     session: AsyncSession,
     redirect_uri: str,
 ) -> dict[str, str]:
-    """Exchange auth code for tokens, JIT provision user, return JWT pair."""
+    """Exchange auth code for tokens, JIT provision account, return JWT pair."""
     state_data = verify_state(state, settings.secret_key)
     if not state_data:
         raise ValueError("Invalid state parameter — possible CSRF")
@@ -255,15 +272,15 @@ async def oidc_process_callback(
     name = claims.get("name", "") or claims.get("preferred_username", "") or email.split("@")[0]
     sso_subject = f"{provider_id}:{claims.get('sub', email)}"
 
-    user = await jit_provision_user(session, settings, email, name, "oidc", sso_subject)
+    account, org_id, org_role = await jit_provision_account(session, settings, email, name, "oidc", sso_subject)
 
     idp_groups: list[str] = claims.get("groups", []) or []
     if idp_groups:
         db_provider = await _lookup_provider_by_client_id(session, provider["client_id"])
         if db_provider is not None and db_provider.group_mappings:
-            await apply_group_mappings(session, user, idp_groups, db_provider.group_mappings)
+            await apply_group_mappings(session, account, org_id, idp_groups, db_provider.group_mappings)
 
-    return await issue_sso_tokens(user, session, settings)
+    return await issue_sso_tokens(account, org_id, org_role, session, settings)
 
 
 def parse_oidc_providers(settings: Settings) -> list[dict[str, str]]:
@@ -292,7 +309,7 @@ async def _fetch_discovery(discovery_url: str) -> dict[str, Any]:
     async with httpx.AsyncClient() as client:
         resp = await client.get(discovery_url, timeout=10)
         resp.raise_for_status()
-        return resp.json()  # type: ignore[no-any-return]
+        return resp.json()
 
 
 async def _exchange_code(
@@ -316,7 +333,7 @@ async def _exchange_code(
             timeout=15,
         )
         resp.raise_for_status()
-        return resp.json()  # type: ignore[no-any-return]
+        return resp.json()
 
 
 def _decode_id_token_claims(id_token: str) -> dict[str, Any]:
@@ -333,7 +350,7 @@ def _decode_id_token_claims(id_token: str) -> dict[str, Any]:
         return {}
     try:
         padded = parts[1] + "=" * (4 - len(parts[1]) % 4)
-        return json.loads(base64.urlsafe_b64decode(padded))  # type: ignore[no-any-return]
+        return json.loads(base64.urlsafe_b64decode(padded))
     except Exception:
         return {}
 
@@ -458,7 +475,7 @@ async def saml_process_response(
     )
     sso_subject = f"saml:{idp_entity_id}:{name_id}"
 
-    user = await jit_provision_user(session, settings, email, display_name, "saml", sso_subject)
+    account, org_id, org_role = await jit_provision_account(session, settings, email, display_name, "saml", sso_subject)
 
     saml_groups: list[str] = []
     for group_attr in ("groups", "memberOf", "Group"):
@@ -469,9 +486,9 @@ async def saml_process_response(
     if saml_groups:
         db_provider = await _lookup_provider_by_entity_id(session, idp_entity_id)
         if db_provider is not None and db_provider.group_mappings:
-            await apply_group_mappings(session, user, saml_groups, db_provider.group_mappings)
+            await apply_group_mappings(session, account, org_id, saml_groups, db_provider.group_mappings)
 
-    return await issue_sso_tokens(user, session, settings)
+    return await issue_sso_tokens(account, org_id, org_role, session, settings)
 
 
 async def _saml_fetch_idp_metadata(settings: Settings) -> str:

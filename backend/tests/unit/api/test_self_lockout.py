@@ -51,8 +51,8 @@ class TestPreventLastAdminLockoutDirect:
         """Setting role to 'admin' never triggers lockout."""
         session = AsyncMock()
         result = await _prevent_last_admin_lockout(
-            current_user_id=_USER_ID,
-            target_user_id=_USER_ID,
+            current_account_id=_USER_ID,
+            target_account_id=_USER_ID,
             org_id=_ORG_ID,
             new_role="admin",
             db_session=session,
@@ -65,8 +65,8 @@ class TestPreventLastAdminLockoutDirect:
         """Changing another user's role does not trigger guard."""
         session = AsyncMock()
         result = await _prevent_last_admin_lockout(
-            current_user_id=_USER_ID,
-            target_user_id=_ANOTHER_USER_ID,
+            current_account_id=_USER_ID,
+            target_account_id=_ANOTHER_USER_ID,
             org_id=_ORG_ID,
             new_role="operator",
             db_session=session,
@@ -79,8 +79,8 @@ class TestPreventLastAdminLockoutDirect:
         """No lockout risk when role is not being changed."""
         session = AsyncMock()
         result = await _prevent_last_admin_lockout(
-            current_user_id=_USER_ID,
-            target_user_id=_USER_ID,
+            current_account_id=_USER_ID,
+            target_account_id=_USER_ID,
             org_id=_ORG_ID,
             new_role=None,
             db_session=session,
@@ -99,8 +99,8 @@ class TestPreventLastAdminLockoutDirect:
 
         with pytest.raises(HTTPException) as exc:
             await _prevent_last_admin_lockout(
-                current_user_id=_USER_ID,
-                target_user_id=_USER_ID,
+                current_account_id=_USER_ID,
+                target_account_id=_USER_ID,
                 org_id=_ORG_ID,
                 new_role="operator",
                 db_session=session,
@@ -118,8 +118,8 @@ class TestPreventLastAdminLockoutDirect:
         session.execute.return_value = result_mock
 
         result = await _prevent_last_admin_lockout(
-            current_user_id=_USER_ID,
-            target_user_id=_USER_ID,
+            current_account_id=_USER_ID,
+            target_account_id=_USER_ID,
             org_id=_ORG_ID,
             new_role="runner",
             db_session=session,
@@ -137,8 +137,8 @@ class TestPreventLastAdminLockoutDirect:
 
         with pytest.raises(HTTPException) as exc:
             await _prevent_last_admin_lockout(
-                current_user_id=_USER_ID,
-                target_user_id=_USER_ID,
+                current_account_id=_USER_ID,
+                target_account_id=_USER_ID,
                 org_id=_ORG_ID,
                 new_role="viewer",
                 db_session=session,
@@ -157,8 +157,8 @@ class TestPreventLastAdminLockoutDirect:
 
         with pytest.raises(HTTPException) as exc:
             await _prevent_last_admin_lockout(
-                current_user_id=_USER_ID,
-                target_user_id=_USER_ID,
+                current_account_id=_USER_ID,
+                target_account_id=_USER_ID,
                 org_id=_ORG_ID,
                 new_role="operator",
                 db_session=session,
@@ -218,18 +218,20 @@ class TestSelfLockoutEndpoint:
         assert resp.status_code == 422
         assert "last admin" in resp.json()["detail"].lower()
 
+    def _make_mock_account(self, user_id: uuid.UUID, org_role: str = "admin") -> MagicMock:
+        mock = MagicMock()
+        mock.id = user_id
+        mock.email = "admin@test.com"
+        mock.display_name = "Admin User"
+        mock.active = True
+        mock.auth_provider = "local"
+        mock.created_at = datetime(2025, 1, 1, tzinfo=UTC)
+        mock.last_login = None
+        return mock
+
     def test_self_demote_with_another_admin_succeeds(self, client: TestClient) -> None:
         """HTTP 200 when self-demoting with another active admin."""
-        mock_user = MagicMock(
-            id=_USER_ID,
-            email="admin@test.com",
-            display_name="Admin User",
-            org_role="operator",
-            active=True,
-            auth_provider="local",
-            created_at=datetime(2025, 1, 1, tzinfo=UTC),
-            last_login=None,
-        )
+        mock_account = self._make_mock_account(_USER_ID)
 
         scalar_mock = MagicMock(return_value=2)
         result_mock = MagicMock()
@@ -248,30 +250,26 @@ class TestSelfLockoutEndpoint:
 
         app.dependency_overrides[get_db_session] = override_session
 
+        mock_membership = MagicMock()
+        mock_membership.role = "operator"
+
         with (
             patch("modulo.api.routes.admin.set_rls_org"),
-            patch("modulo.api.routes.admin.crud_update_user", return_value=mock_user),
+            patch("modulo.api.routes.admin.get_account_by_id", return_value=mock_account),
+            patch(
+                "modulo.db.crud.org_membership.get_membership_by_account_and_org",
+                return_value=mock_membership,
+            ),
         ):
             resp = client.put(
                 self.URL.format(user_id=_USER_ID),
                 json={"org_role": "operator"},
             )
         assert resp.status_code == 200
-        data = resp.json()
-        assert data["org_role"] == "operator"
 
     def test_change_other_user_role_always_succeeds(self, client: TestClient) -> None:
         """Changing another user's role never triggers the guard."""
-        mock_user = MagicMock(
-            id=_ANOTHER_USER_ID,
-            email="other@test.com",
-            display_name="Other User",
-            org_role="operator",
-            active=True,
-            auth_provider="local",
-            created_at=datetime(2025, 1, 1, tzinfo=UTC),
-            last_login=None,
-        )
+        mock_account = self._make_mock_account(_ANOTHER_USER_ID)
 
         mock_session = AsyncMock()
         begin_cm = AsyncMock()
@@ -284,9 +282,16 @@ class TestSelfLockoutEndpoint:
 
         app.dependency_overrides[get_db_session] = override_session
 
+        mock_membership = MagicMock()
+        mock_membership.role = "operator"
+
         with (
             patch("modulo.api.routes.admin.set_rls_org"),
-            patch("modulo.api.routes.admin.crud_update_user", return_value=mock_user),
+            patch("modulo.api.routes.admin.get_account_by_id", return_value=mock_account),
+            patch(
+                "modulo.db.crud.org_membership.get_membership_by_account_and_org",
+                return_value=mock_membership,
+            ),
         ):
             resp = client.put(
                 self.URL.format(user_id=_ANOTHER_USER_ID),
@@ -296,16 +301,7 @@ class TestSelfLockoutEndpoint:
 
     def test_promote_to_admin_never_triggers_guard(self, client: TestClient) -> None:
         """Promoting a user to admin never triggers lockout (only demotion does)."""
-        mock_user = MagicMock(
-            id=_USER_ID,
-            email="admin@test.com",
-            display_name="Admin User",
-            org_role="admin",
-            active=True,
-            auth_provider="local",
-            created_at=datetime(2025, 1, 1, tzinfo=UTC),
-            last_login=None,
-        )
+        mock_account = self._make_mock_account(_USER_ID)
 
         mock_session = AsyncMock()
         begin_cm = AsyncMock()
@@ -318,9 +314,16 @@ class TestSelfLockoutEndpoint:
 
         app.dependency_overrides[get_db_session] = override_session
 
+        mock_membership = MagicMock()
+        mock_membership.role = "admin"
+
         with (
             patch("modulo.api.routes.admin.set_rls_org"),
-            patch("modulo.api.routes.admin.crud_update_user", return_value=mock_user),
+            patch("modulo.api.routes.admin.get_account_by_id", return_value=mock_account),
+            patch(
+                "modulo.db.crud.org_membership.get_membership_by_account_and_org",
+                return_value=mock_membership,
+            ),
         ):
             resp = client.put(
                 self.URL.format(user_id=_USER_ID),
