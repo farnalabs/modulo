@@ -1,6 +1,6 @@
 # improve-architecture Tracker
 
-Current index: 11
+Current index: 14
 Last updated: 2026-06-30
 
 ## History
@@ -13,3 +13,4 @@ Last updated: 2026-06-30
 - 2026-06-30: feat-connectors-github → complete, cross-cutting QA: fixed broken frontmatter (missing bdd:, empty unit-tests), corrected OAuth scope names to match code, added 9 unit tests (HTTP error paths, missing filters, health check), marked 80+ behaviours [x]
 - 2026-06-30: feat-teams-team-crud → complete, cross-cutting QA: fixed 3 code bugs (TeamResponse/AdminTeamItem/AdminCreateTeamResponse field mismatch created_by→account_id, update_team duplicate name check, test fixture missing get_plan_context override), added bdd: frontmatter, marked 80+ behaviours [x], added BDD feature file (team_crud.feature, 12 scenarios) + step definitions, added 4 new unit tests (duplicate rename, same-name-allowed, response account_id), consolidated gaps from 8→10 with updated descriptions
 - 2026-06-30: feat-connectors-slack → complete, cross-cutting QA: added 30 unit tests (health check, channels, messages, users, write, error paths), 14 BDD scenarios (cursor pagination, timestamp filters, health check, unsupported resource), 2 code fixes (rate-limit detection, raise_for_status), fixed frontmatter YAML
+- 2026-06-30: feat-core-notifications → complete, cross-cutting QA: fixed frontmatter (added unit-tests: []), marked 44 [ ] → [x] (claim_expired dispatch, retry + dead-letter, delivery log, admin API, expiry job, security, concurrency, backward compat), added 6 new checkboxes from error path audit (ProgrammingError catch gap on 9/11 routes, notifier dispatch_event top-level try/except, _record_delivery exception wrapping), discovered 4 BDD mismatches (X-Modulo-Signature-256 vs X-Modulo-Signature header, per-org vs per-endpoint secrets in signing.feature, 5 vs 10 failures in failure_webhook.feature, X-Modulo-Timestamp missing from code), consolidated known gaps from 6→16 with detailed descriptions
