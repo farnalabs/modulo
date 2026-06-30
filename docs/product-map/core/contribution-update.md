@@ -2,6 +2,7 @@
 id: feat-core-contribution-update
 prd: 8.14
 delivery-tasks: [task-nv8-contribution-update]
+bdd:
   - backend/tests/bdd/features/library/browse.feature
   - backend/tests/bdd/features/library/copy_to_adapt.feature
   - backend/tests/bdd/features/library/ratings.feature
@@ -13,7 +14,13 @@ code:
 depends-on: [feat-core-contribution-provenance]
 status: partial
 ---
-# Contribution Update Submitting new versions of published community contributions, listing version history, and notifying downstream copies of available updates — the update side of the contribution workflow. ## Behaviours ### Contribution versioning
+# Contribution Update
+
+Submitting new versions of published community contributions, listing version history, and notifying downstream copies of available updates — the update side of the contribution workflow.
+
+## Behaviours
+
+### Contribution versioning
 - [ ] Submit new version of published contribution creates draft row with auto-incremented minor version
 - [ ] New version row linked to original via version_group_id
 - [ ] Submitting version of non-published contribution raises ContributionInvalidTransitionError

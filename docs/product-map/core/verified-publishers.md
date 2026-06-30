@@ -17,7 +17,13 @@ unit-tests:
 depends-on: [feat-core-registry-protocol-v2]
 status: partial
 ---
-# Verified Publishers Trust tiers for community registry primitives: green (verified publisher) and amber (community). Publishers are org-scoped entities managed via the admin API. The `verified` field on library primitives reflects the publisher's tier. ## Behaviours ### Admin publisher CRUD
+# Verified Publishers
+
+Trust tiers for community registry primitives: green (verified publisher) and amber (community). Publishers are org-scoped entities managed via the admin API. The `verified` field on library primitives reflects the publisher's tier.
+
+## Behaviours
+
+### Admin publisher CRUD
 - [ ] Admin creates a green-tier publisher → created with `verified_since` set to current time
 - [ ] Admin creates an amber-tier publisher → created with `verified_since` null
 - [ ] Admin lists publishers, optionally filtered by `trust_tier`

@@ -13,7 +13,13 @@ unit-tests:
 
 status: partial
 ---
-# SAML 2.0 Integration SAML 2.0 SSO with HTTP-Redirect AuthnRequest, HTTP-POST ACS, IdP metadata parsing, JIT user provisioning, and group-to-team mapping. ## Behaviours ### AuthnRequest generation
+# SAML 2.0 Integration
+
+SAML 2.0 SSO with HTTP-Redirect AuthnRequest, HTTP-POST ACS, IdP metadata parsing, JIT user provisioning, and group-to-team mapping.
+
+## Behaviours
+
+### AuthnRequest generation
 - [ ] `GET /api/v1/auth/saml/login` redirects to IdP with SAMLRequest (HTTP 307)
 - [ ] AuthnRequest XML contains correct Issuer from `modulo_saml_entity_id`
 - [ ] AuthnRequest uses HTTP-Redirect binding with deflated + base64-encoded XML

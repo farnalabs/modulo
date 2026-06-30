@@ -2,6 +2,7 @@
 id: feat-core-polling-trigger
 prd: 8.5
 delivery-tasks: [task-nv10-polling-trigger]
+bdd:
   - backend/tests/bdd/features/pipelines/scheduling.feature
 code:
   - backend/src/modulo/core/trigger_engine/__init__.py
@@ -9,7 +10,13 @@ code:
 depends-on: [feat-connectors-hub]
 status: partial
 ---
-# Polling Trigger Discovered from 1 completed delivery tasks. Also specified in PRD 8.5 (Trigger System) as a v1 polling type using connector-based condition evaluation. ## Behaviours ### Schedule & Firing
+# Polling Trigger
+
+Discovered from 1 completed delivery tasks. Also specified in PRD 8.5 (Trigger System) as a v1 polling type using connector-based condition evaluation.
+
+## Behaviours
+
+### Schedule & Firing
 - [x] DatabasePollingScheduler queries `triggers` table for `trigger_type='polling'` and `next_fire_at <= now()` on each beat tick
 - [x] DatabasePollingEntry is created per matching trigger row
 - [x] PollingFireTask fires asynchronously via Celery with `autoretry_for=(Exception,)`, `max_retries=2`, `default_retry_delay=30`

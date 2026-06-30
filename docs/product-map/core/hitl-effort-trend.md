@@ -1,6 +1,8 @@
 ---
 id: feat-core-hitl-effort-trend
 prd: 8.8
+delivery-tasks: []
+bdd:
   - backend/tests/bdd/features/observability/metrics.feature 
   - backend/tests/bdd/features/ui/eval_dashboard.feature 
 code:

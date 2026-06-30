@@ -2,7 +2,9 @@
 id: feat-core-core
 prd: 8.16, 8.4
 delivery-tasks: [task-nv5-sdlc-onboarding-path]
+bdd:
   - backend/tests/bdd/features/orgs/org_onboarding.feature
+unit-tests:
   - backend/tests/unit/api/test_onboarding.py
 code:
   - backend/src/modulo/api/routes/onboarding.py
@@ -10,7 +12,15 @@ code:
 depends-on: [feat-core-schema-inference-ui, feat-core-replace-step-agent]
 status: partial
 ---
-# SDLC Onboarding Existing SDLC onboarding: teams can map their current process (even manual steps) into Modulo pipelines and progressively replace steps with AI agents — no big-bang replacement required. Discovered from 1 completed delivery task. ## Behaviours ### PRD 8.16 — SDLC Onboarding Path (5 steps) - [ ] Connect tools (Jira, GitHub, Notion) from the onboarding wizard
+# SDLC Onboarding
+
+Existing SDLC onboarding: teams can map their current process (even manual steps) into Modulo pipelines and progressively replace steps with AI agents — no big-bang replacement required. Discovered from 1 completed delivery task.
+
+## Behaviours
+
+### PRD 8.16 — SDLC Onboarding Path (5 steps)
+
+- [ ] Connect tools (Jira, GitHub, Notion) from the onboarding wizard
 - [ ] Run schema inference on each resource type to get draft schemas
 - [ ] Review and publish schemas from the inferred draft
 - [ ] Browse the community library filtered by inferred data shape
