@@ -37,7 +37,6 @@ from modulo.connectors.ci_runner import GitHubActionsCIRunner, GitLabCIRunner
 from modulo.connectors.circleci import CircleCIConnector
 from modulo.connectors.confluence import ConfluenceConnector
 from modulo.connectors.datadog import DatadogConnector
-from modulo.connectors.sentry import SentryConnector
 from modulo.connectors.dropbox_paper import DropboxPaperConnector
 from modulo.connectors.filesystem import FilesystemConnector
 from modulo.connectors.gitea import GiteaConnector
@@ -48,6 +47,7 @@ from modulo.connectors.jira import JiraConnector
 from modulo.connectors.linear import LinearConnector
 from modulo.connectors.monday import MondayConnector
 from modulo.connectors.notion import NotionConnector
+from modulo.connectors.sentry import SentryConnector
 from modulo.connectors.sharepoint import SharePointConnector
 from modulo.connectors.shortcut import ShortcutConnector
 from modulo.connectors.slack import SlackConnector
