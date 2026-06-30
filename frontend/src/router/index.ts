@@ -277,6 +277,10 @@ const router = createRouter({
       component: CopyPipelineWizard,
     },
     {
+      path: '/pipelines',
+      redirect: '/templates',
+    },
+    {
       path: '/templates',
       name: 'pipeline-templates',
       component: PipelineTemplateGallery,

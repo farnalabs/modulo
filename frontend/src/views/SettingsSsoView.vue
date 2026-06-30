@@ -178,6 +178,7 @@ import type { components } from '../lib/api/client'
 import SsoProviderForm from '../components/SsoProviderForm.vue'
 import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
+import { formatError } from '../lib/utils'
 
 type SsoProviderResponse = components['schemas']['SsoProviderResponse']
 type SsoProviderCreate = components['schemas']['SsoProviderCreate']
@@ -243,7 +244,7 @@ async function loadProviders() {
   try {
     const { data, error: err } = await api.GET('/api/v1/admin/sso/providers')
     if (err) {
-      error.value = `Failed to load providers: ${err}`
+      error.value = `Failed to load providers: ${formatError(err)}`
     } else if (data) {
       providers.value = (Array.isArray(data) ? data : (data as any)?.items ?? [])
     }
@@ -356,13 +357,13 @@ async function createProvider() {
       body: buildCreateBody(),
     })
     if (err) {
-      formError.value = String(err)
+      formError.value = formatError(err)
     } else if (data) {
       providers.value.push(data)
       closeForm()
     }
   } catch (e: unknown) {
-    formError.value = e instanceof Error ? e.message : String(e)
+    formError.value = formatError(e)
   } finally {
     saving.value = false
   }
@@ -378,14 +379,14 @@ async function updateProvider() {
       body: buildUpdateBody(),
     })
     if (err) {
-      formError.value = String(err)
+      formError.value = formatError(err)
     } else if (data) {
       const idx = providers.value.findIndex(p => p.id === editProviderId.value)
       if (idx >= 0) providers.value[idx] = data
       closeEditForm()
     }
   } catch (e: unknown) {
-    formError.value = e instanceof Error ? e.message : String(e)
+    formError.value = formatError(e)
   } finally {
     saving.value = false
   }
@@ -397,7 +398,7 @@ async function toggleProvider(provider: SsoProviderResponse) {
       params: { path: { provider_id: provider.id } },
     })
     if (err) {
-      error.value = `Toggle failed: ${err}`
+      error.value = `Toggle failed: ${formatError(err)}`
     } else if (data) {
       const idx = providers.value.findIndex(p => p.id === provider.id)
       if (idx >= 0) providers.value[idx] = data
@@ -421,13 +422,13 @@ async function deleteProvider(providerId: string) {
       params: { path: { provider_id: providerId } },
     })
     if (err) {
-      deleteError.value = String(err)
+      deleteError.value = formatError(err)
     } else if (response.status === 204 || response.ok) {
       providers.value = providers.value.filter(p => p.id !== providerId)
       deleteConfirmProviderId.value = null
     }
   } catch (e: unknown) {
-    deleteError.value = e instanceof Error ? e.message : String(e)
+    deleteError.value = formatError(e)
   } finally {
     deleting.value = false
   }
@@ -442,13 +443,13 @@ async function testConnection(providerId: string) {
       params: { path: { provider_id: providerId } },
     })
     if (err) {
-      testResult.value = { success: false, message: String(err), provider_info: null }
+      testResult.value = { success: false, message: formatError(err), provider_info: null }
     } else if (data) {
       testResult.value = data
       setTimeout(() => { testResultProviderId.value = null; testResult.value = null }, 12000)
     }
   } catch (e: unknown) {
-    testResult.value = { success: false, message: e instanceof Error ? e.message : String(e), provider_info: null }
+    testResult.value = { success: false, message: formatError(e), provider_info: null }
   } finally {
     testingId.value = null
   }

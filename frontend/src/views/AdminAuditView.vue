@@ -301,6 +301,7 @@ import { api } from '../lib/api/client'
 import type { components } from '../lib/api/client'
 import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
+import { formatError } from '../lib/utils'
 
 type AuditEvent = components['schemas']['AuditEventResponse']
 
@@ -405,7 +406,7 @@ async function loadEvents(cursor?: string | null) {
       params: { query: buildQuery(cursor) as any },
     })
     if (err) {
-      error.value = `Failed to load audit events: ${err}`
+      error.value = `Failed to load audit events: ${formatError(err)}`
     } else if (data) {
       events.value = data.items
       total.value = data.total
@@ -467,7 +468,7 @@ async function exportCsv() {
         },
       })
       if (err) {
-        error.value = `Export failed: ${err}`
+        error.value = `Export failed: ${formatError(err)}`
         return
       }
       if (!data) break
@@ -553,7 +554,7 @@ async function exportJsonl() {
         },
       })
       if (err) {
-        error.value = `Export failed: ${err}`
+        error.value = `Export failed: ${formatError(err)}`
         return
       }
       if (!data) break
