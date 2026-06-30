@@ -97,11 +97,11 @@ class PipelineResponse(BaseModel):
     run_context_defaults: dict[str, Any]
     default_autonomy_level: str | None = None
     snapshot_count: int = 0
-    created_by: uuid.UUID
+    created_by: uuid.UUID = Field(validation_alias="account_id")
     created_at: datetime
     updated_at: datetime
 
-    model_config = {"from_attributes": True}
+    model_config = {"from_attributes": True, "populate_by_name": True}
 
 
 class PipelineListResponse(BaseModel):
