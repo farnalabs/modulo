@@ -310,7 +310,7 @@ def single_run_triggered(ctx: dict[str, Any]) -> None:
                 org_id=uuid.UUID("00000000-0000-0000-0000-000000000001"),
                 group=ctx["variant_group"],
                 input_payload={},
-                created_by=uuid.UUID("00000000-0000-0000-0000-000000000002"),
+                account_id=uuid.UUID("00000000-0000-0000-0000-000000000002"),
             )
         return result
 

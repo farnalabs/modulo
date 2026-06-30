@@ -5,6 +5,7 @@ from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, Field
+from sqlalchemy.exc import ProgrammingError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.api.dependencies import get_db_session
@@ -101,19 +102,25 @@ async def create_group(
     session: AsyncSession = Depends(get_db_session),
     principal: AuthenticatedPrincipal = Depends(get_current_user),
 ) -> dict[str, Any]:
-    async with session.begin():
-        await set_rls_org(session, principal.organisation_id)
-        group = await create_variant_group(
-            session,
-            org_id=principal.organisation_id,
-            pipeline_id=body.pipeline_id,
-            name=body.name,
-            variants=[v.model_dump() for v in body.variants],
-            description=body.description,
-            selection_strategy=body.selection_strategy,
-            max_concurrent_runs=body.max_concurrent_runs,
-            degraded_evals=body.degraded_evals,
-        )
+    try:
+        async with session.begin():
+            await set_rls_org(session, principal.organisation_id)
+            group = await create_variant_group(
+                session,
+                org_id=principal.organisation_id,
+                pipeline_id=body.pipeline_id,
+                name=body.name,
+                variants=[v.model_dump() for v in body.variants],
+                description=body.description,
+                selection_strategy=body.selection_strategy,
+                max_concurrent_runs=body.max_concurrent_runs,
+                degraded_evals=body.degraded_evals,
+            )
+    except ProgrammingError:
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="Feature is not available. Run database migrations to enable it.",
+        ) from None
     return _variant_to_response(group)
 
 
@@ -125,9 +132,15 @@ async def list_groups(
     session: AsyncSession = Depends(get_db_session),
     principal: AuthenticatedPrincipal = Depends(get_current_user),
 ) -> list[dict[str, Any]]:
-    async with session.begin():
-        await set_rls_org(session, principal.organisation_id)
-        items, _total = await list_variant_groups(session, pipeline_id=pipeline_id, page=page, page_size=page_size)
+    try:
+        async with session.begin():
+            await set_rls_org(session, principal.organisation_id)
+            items, _total = await list_variant_groups(session, pipeline_id=pipeline_id, page=page, page_size=page_size)
+    except ProgrammingError:
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="Feature is not available. Run database migrations to enable it.",
+        ) from None
     return [_variant_to_response(g) for g in items]
 
 
@@ -137,9 +150,15 @@ async def get_group(
     session: AsyncSession = Depends(get_db_session),
     principal: AuthenticatedPrincipal = Depends(get_current_user),
 ) -> dict[str, Any]:
-    async with session.begin():
-        await set_rls_org(session, principal.organisation_id)
-        group = await get_variant_group(session, group_id)
+    try:
+        async with session.begin():
+            await set_rls_org(session, principal.organisation_id)
+            group = await get_variant_group(session, group_id)
+    except ProgrammingError:
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="Feature is not available. Run database migrations to enable it.",
+        ) from None
     if group is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Variant group not found")
     return _variant_to_response(group)
@@ -152,18 +171,24 @@ async def update_group(
     session: AsyncSession = Depends(get_db_session),
     principal: AuthenticatedPrincipal = Depends(get_current_user),
 ) -> dict[str, Any]:
-    async with session.begin():
-        await set_rls_org(session, principal.organisation_id)
-        group = await update_variant_group(
-            session,
-            group_id,
-            name=body.name,
-            description=body.description,
-            variants=[v.model_dump() for v in body.variants],
-            selection_strategy=body.selection_strategy,
-            max_concurrent_runs=body.max_concurrent_runs,
-            degraded_evals=body.degraded_evals,
-        )
+    try:
+        async with session.begin():
+            await set_rls_org(session, principal.organisation_id)
+            group = await update_variant_group(
+                session,
+                group_id,
+                name=body.name,
+                description=body.description,
+                variants=[v.model_dump() for v in body.variants],
+                selection_strategy=body.selection_strategy,
+                max_concurrent_runs=body.max_concurrent_runs,
+                degraded_evals=body.degraded_evals,
+            )
+    except ProgrammingError:
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="Feature is not available. Run database migrations to enable it.",
+        ) from None
     if group is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Variant group not found")
     return _variant_to_response(group)
@@ -175,9 +200,15 @@ async def delete_group(
     session: AsyncSession = Depends(get_db_session),
     principal: AuthenticatedPrincipal = Depends(get_current_user),
 ) -> None:
-    async with session.begin():
-        await set_rls_org(session, principal.organisation_id)
-        deleted = await delete_variant_group(session, group_id)
+    try:
+        async with session.begin():
+            await set_rls_org(session, principal.organisation_id)
+            deleted = await delete_variant_group(session, group_id)
+    except ProgrammingError:
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="Feature is not available. Run database migrations to enable it.",
+        ) from None
     if not deleted:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Variant group not found")
     return None
@@ -190,28 +221,34 @@ async def run_variant(
     session: AsyncSession = Depends(get_db_session),
     principal: AuthenticatedPrincipal = Depends(get_current_user),
 ) -> dict[str, Any]:
-    async with session.begin():
-        await set_rls_org(session, principal.organisation_id)
-        group = await get_variant_group(session, group_id)
-        if group is None:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail="Variant group not found",
-            )
+    try:
+        async with session.begin():
+            await set_rls_org(session, principal.organisation_id)
+            group = await get_variant_group(session, group_id)
+            if group is None:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail="Variant group not found",
+                )
 
-        if not await check_pipeline_run_quota(session, group):
-            raise HTTPException(
-                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-                detail="Pipeline concurrent run quota exceeded",
-            )
+            if not await check_pipeline_run_quota(session, group):
+                raise HTTPException(
+                    status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                    detail="Pipeline concurrent run quota exceeded",
+                )
 
-        result = await run_variant_weighted(
-            session,
-            org_id=principal.organisation_id,
-            group=group,
-            input_payload=body.input_payload,
-            account_id=principal.account_id,
-        )
+            result = await run_variant_weighted(
+                session,
+                org_id=principal.organisation_id,
+                group=group,
+                input_payload=body.input_payload,
+                account_id=principal.account_id,
+            )
+    except ProgrammingError:
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="Feature is not available. Run database migrations to enable it.",
+        ) from None
 
     if result is None:
         raise HTTPException(
@@ -232,15 +269,21 @@ async def coverage_gaps(
     session: AsyncSession = Depends(get_db_session),
     principal: AuthenticatedPrincipal = Depends(get_current_user),
 ) -> list[dict[str, Any]]:
-    async with session.begin():
-        await set_rls_org(session, principal.organisation_id)
-        group = await get_variant_group(session, group_id)
-        if group is None:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail="Variant group not found",
-            )
-        gaps = await get_coverage_gaps(session, group)
+    try:
+        async with session.begin():
+            await set_rls_org(session, principal.organisation_id)
+            group = await get_variant_group(session, group_id)
+            if group is None:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail="Variant group not found",
+                )
+            gaps = await get_coverage_gaps(session, group)
+    except ProgrammingError:
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="Feature is not available. Run database migrations to enable it.",
+        ) from None
     return gaps
 
 
@@ -250,13 +293,19 @@ async def prompt_diffs(
     session: AsyncSession = Depends(get_db_session),
     principal: AuthenticatedPrincipal = Depends(get_current_user),
 ) -> list[dict[str, Any]]:
-    async with session.begin():
-        await set_rls_org(session, principal.organisation_id)
-        group = await get_variant_group(session, group_id)
-        if group is None:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail="Variant group not found",
-            )
-        diffs = await get_prompt_diffs(session, group)
+    try:
+        async with session.begin():
+            await set_rls_org(session, principal.organisation_id)
+            group = await get_variant_group(session, group_id)
+            if group is None:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail="Variant group not found",
+                )
+            diffs = await get_prompt_diffs(session, group)
+    except ProgrammingError:
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="Feature is not available. Run database migrations to enable it.",
+        ) from None
     return diffs
