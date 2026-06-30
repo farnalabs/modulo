@@ -36,7 +36,7 @@ def _make_agent() -> MagicMock:
     a.id = _AGENT_ID
     a.organisation_id = _ORG_ID
     a.name = "Test Agent"
-    a.description = None
+    a.description = "A test agent for unit tests"
     a.input_schema_id = _SCHEMA_ID
     a.input_schema_version = "1.0"
     a.output_schema_id = _SCHEMA_ID
@@ -65,6 +65,7 @@ def _make_mock_session() -> AsyncMock:
 
 _AGENT_BODY = {
     "name": "Test Agent",
+    "description": "A test agent for unit tests",
     "input_schema_id": str(_SCHEMA_ID),
     "input_schema_version": "1.0",
     "output_schema_id": str(_SCHEMA_ID),
@@ -144,6 +145,7 @@ def test_update_agent_returns_200(client: TestClient) -> None:
     agent = _make_agent()
     agent.name = "Updated"
     with (
+        patch("modulo.api.routes.agents.get_agent", return_value=agent),
         patch("modulo.api.routes.agents.update_agent", return_value=agent),
         patch("modulo.api.routes.agents.set_rls_org"),
     ):
@@ -154,6 +156,7 @@ def test_update_agent_returns_200(client: TestClient) -> None:
 
 def test_update_agent_not_found_returns_404(client: TestClient) -> None:
     with (
+        patch("modulo.api.routes.agents.get_agent", return_value=None),
         patch("modulo.api.routes.agents.update_agent", return_value=None),
         patch("modulo.api.routes.agents.set_rls_org"),
     ):
@@ -213,9 +216,92 @@ def test_update_agent_max_input_length(client: TestClient) -> None:
     agent = _make_agent()
     agent.max_input_length = 10000
     with (
+        patch("modulo.api.routes.agents.get_agent", return_value=agent),
         patch("modulo.api.routes.agents.update_agent", return_value=agent),
         patch("modulo.api.routes.agents.set_rls_org"),
     ):
         resp = client.patch(f"/api/v1/agents/{_AGENT_ID}", json={"max_input_length": 10000})
     assert resp.status_code == 200
     assert resp.json()["max_input_length"] == 10000
+
+
+# ── Generic agent criteria validation tests ──────────────────────────────
+
+
+def test_create_generic_agent_missing_description_returns_422(client: TestClient) -> None:
+    body = {**_AGENT_BODY, "description": None}
+    resp = client.post("/api/v1/agents", json=body)
+    assert resp.status_code == 422
+    assert "description" in resp.json()["detail"].lower()
+
+
+def test_create_generic_agent_with_library_id_skips_description_check(client: TestClient) -> None:
+    body = {**_AGENT_BODY, "description": None, "library_id": str(uuid.uuid4())}
+    agent = _make_agent()
+    agent.library_id = uuid.UUID(body["library_id"])
+    with (
+        patch("modulo.api.routes.agents.create_agent", return_value=agent),
+        patch("modulo.api.routes.agents.set_rls_org"),
+    ):
+        resp = client.post("/api/v1/agents", json=body)
+    assert resp.status_code == 201
+
+
+def test_create_non_executable_agent_missing_description_returns_422(client: TestClient) -> None:
+    body = {**_AGENT_BODY, "description": None, "is_executable": False}
+    resp = client.post("/api/v1/agents", json=body)
+    assert resp.status_code == 422
+    assert "description" in resp.json()["detail"].lower()
+
+
+def test_create_generic_agent_with_description_succeeds(client: TestClient) -> None:
+    body = {**_AGENT_BODY, "description": "Valid generic agent"}
+    agent = _make_agent()
+    agent.description = "Valid generic agent"
+    with (
+        patch("modulo.api.routes.agents.create_agent", return_value=agent),
+        patch("modulo.api.routes.agents.set_rls_org"),
+    ):
+        resp = client.post("/api/v1/agents", json=body)
+    assert resp.status_code == 201
+    assert resp.json()["description"] == "Valid generic agent"
+
+
+def test_update_generic_agent_clearing_description_returns_422(client: TestClient) -> None:
+    agent = _make_agent()
+    agent.description = "Current description"
+    with (
+        patch("modulo.api.routes.agents.get_agent", return_value=agent),
+        patch("modulo.api.routes.agents.set_rls_org"),
+    ):
+        resp = client.patch(f"/api/v1/agents/{_AGENT_ID}", json={"description": ""})
+    assert resp.status_code == 422
+    assert "description" in resp.json()["detail"].lower()
+
+
+def test_update_library_agent_clearing_description_succeeds(client: TestClient) -> None:
+    agent = _make_agent()
+    agent.library_id = uuid.uuid4()
+    agent.description = "library-sourced"
+    with (
+        patch("modulo.api.routes.agents.get_agent", return_value=agent),
+        patch("modulo.api.routes.agents.update_agent", return_value=agent),
+        patch("modulo.api.routes.agents.set_rls_org"),
+    ):
+        resp = client.patch(f"/api/v1/agents/{_AGENT_ID}", json={"description": ""})
+    assert resp.status_code == 200
+
+
+def test_update_agent_making_non_executable_without_description_returns_422(client: TestClient) -> None:
+    agent = _make_agent()
+    agent.description = ""
+    with (
+        patch("modulo.api.routes.agents.get_agent", return_value=agent),
+        patch("modulo.api.routes.agents.set_rls_org"),
+    ):
+        resp = client.patch(
+            f"/api/v1/agents/{_AGENT_ID}",
+            json={"is_executable": False},
+        )
+    assert resp.status_code == 422
+    assert "description" in resp.json()["detail"].lower()

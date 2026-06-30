@@ -2,6 +2,7 @@
 
 import difflib
 import json
+import logging
 import uuid
 from datetime import datetime
 from typing import Any, cast
@@ -32,6 +33,7 @@ from modulo.db.models.model_backend import ModelBackend
 from modulo.db.rls import set_rls_org
 from modulo.settings import get_settings
 
+_log = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/v1/agents", tags=["agents"])
 
 
@@ -158,6 +160,64 @@ class PromptRollbackResponse(BaseModel):
     message: str
 
 
+def _validate_generic_agent(
+    name: str,
+    is_executable: bool,
+    description: str | None,
+    evals: list[dict[str, Any]],
+    library_id: uuid.UUID | None,
+) -> None:
+    """Validate criteria for generic (non-library) agents.
+
+    Library-sourced agents (those with a ``library_id``) inherit trust and
+    documentation from their source — they bypass generic-agent checks.
+
+    Generic user-defined agents are experimental per PRD §8.2 and must
+    satisfy the following criteria before they can execute in a pipeline:
+      - An executable generic agent MUST have a ``description`` so other
+        pipeline authors can understand its purpose.
+      - A non-executable agent (template or blueprint) MUST also have a
+        ``description``, since it serves as documentation for future agents.
+      - Executable generic agents with *novel schema pairs* (no matching
+        library primitive) SHOULD define at least one eval for quality
+        assurance.  In alpha this is a logged advisory; in production it
+        becomes a hard requirement (see PRD §15 — "require eval rubric
+        before production promotion").
+    """
+    if library_id is not None:
+        return
+
+    if is_executable and not description:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail=(
+                f"Generic agent '{name}' has no description. "
+                "User-defined executable agents must include a description "
+                "so that pipeline authors can understand the agent's purpose."
+            ),
+        )
+
+    if not is_executable and not description:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail=(
+                f"Non-executable agent '{name}' has no description. "
+                "Template and blueprint agents must include a description "
+                "that documents the intended use of the agent."
+            ),
+        )
+
+    if is_executable and not evals:
+        _log.warning(
+            "Generic executable agent '%s' has no eval definitions. "
+            "Per PRD §8.2, generic agents are experimental and require "
+            "an eval rubric before production promotion. "
+            "Consider adding at least one eval before deploying this agent "
+            "in a production pipeline.",
+            name,
+        )
+
+
 @router.get("", response_model=AgentListResponse)
 async def list_agents_endpoint(
     page: int = Query(default=1, ge=1),
@@ -182,6 +242,13 @@ async def create_agent_endpoint(
     session: AsyncSession = Depends(get_db_session),
     principal: AuthenticatedPrincipal = Depends(get_current_user),
 ) -> AgentResponse:
+    _validate_generic_agent(
+        name=body.name,
+        is_executable=body.is_executable,
+        description=body.description,
+        evals=body.evals,
+        library_id=body.library_id,
+    )
     async with session.begin():
         await set_rls_org(session, principal.organisation_id)
         agent = await create_agent(
@@ -228,13 +295,31 @@ async def update_agent_endpoint(
     session: AsyncSession = Depends(get_db_session),
     principal: AuthenticatedPrincipal = Depends(get_current_user),
 ) -> AgentResponse:
+    async with session.begin():
+        await set_rls_org(session, principal.organisation_id)
+        agent = await get_agent(session, agent_id)
+    if agent is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Agent not found")
+
+    merged_name = body.name if body.name is not None else agent.name
+    merged_is_executable = body.is_executable if body.is_executable is not None else agent.is_executable
+    merged_description = body.description if body.description is not None else agent.description
+    merged_evals = body.evals if body.evals is not None else (agent.evals or [])
+    _validate_generic_agent(
+        name=merged_name,
+        is_executable=merged_is_executable,
+        description=merged_description,
+        evals=merged_evals,
+        library_id=agent.library_id,
+    )
+
     updates = {k: v for k, v in body.model_dump().items() if v is not None}
     async with session.begin():
         await set_rls_org(session, principal.organisation_id)
-        agent = await update_agent(session, agent_id, updates)
-    if agent is None:
+        updated = await update_agent(session, agent_id, updates)
+    if updated is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Agent not found")
-    return AgentResponse.model_validate(agent)
+    return AgentResponse.model_validate(updated)
 
 
 @router.post("/{agent_id}/prompts/{version}/optimize", response_model=PromptOptimizeResponse)
