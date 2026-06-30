@@ -40,12 +40,12 @@ describe('FeatureGate', () => {
     store.$patch({ features: { 'test-feature': false } })
 
     const wrapper = mount(FeatureGate, {
-      props: { featureName: 'test-feature', requiredTier: 'enterprise' },
+      props: { featureName: 'test-feature', requiredTier: 'team' },
       slots: { default: 'Gated Content' },
     })
 
     const lock = wrapper.find('[data-testid="feature-gate-lock"]')
-    expect(lock.find('[data-testid="lock-icon"]').attributes('title')).toBe('Available on enterprise plan')
+    expect(lock.find('[data-testid="lock-icon"]').attributes('title')).toBe('Available on team plan')
   })
 
   it('renders locked slot when feature is disabled', () => {

@@ -3,11 +3,11 @@ import { setActivePinia, createPinia } from 'pinia'
 import { usePlanStore } from '../stores/planStore'
 
 const mockFlagsResponse = {
-  license: { tier: 'enterprise', has_license_key: true, is_valid: true },
+  license: { tier: 'team', has_license_key: true, is_valid: true },
   flags: [
-    { name: 'parallel_branches', description: 'Parallel branches', tier: 'enterprise', currently_active: true, depends_on: null },
-    { name: 'eval_system', description: 'Eval system', tier: 'enterprise', currently_active: false, depends_on: null },
-    { name: 'hitl_gates', description: 'HITL gates', tier: 'free', currently_active: true, depends_on: null },
+    { name: 'parallel_branches', description: 'Parallel branches', tier: 'team', currently_active: true, depends_on: null },
+    { name: 'eval_system', description: 'Eval system', tier: 'team', currently_active: false, depends_on: null },
+    { name: 'hitl_gates', description: 'HITL gates', tier: 'community', currently_active: true, depends_on: null },
   ],
   would_activate: [],
 }
@@ -25,10 +25,10 @@ describe('usePlanStore', () => {
 
   it('starts with default state', () => {
     const store = usePlanStore()
-    expect(store.currentTier).toBe('free')
+    expect(store.currentTier).toBe('community')
     expect(store.features).toEqual({})
     expect(store.isLoading).toBe(false)
-    expect(store.isEnterprise).toBe(false)
+    expect(store.isTeam).toBe(false)
   })
 
   it('fetchPlan populates state from API', async () => {
@@ -38,13 +38,13 @@ describe('usePlanStore', () => {
     const store = usePlanStore()
     await store.fetchPlan()
 
-    expect(store.currentTier).toBe('enterprise')
+    expect(store.currentTier).toBe('team')
     expect(store.features).toEqual({
       parallel_branches: true,
       eval_system: false,
       hitl_gates: true,
     })
-    expect(store.isEnterprise).toBe(true)
+    expect(store.isTeam).toBe(true)
     expect(store.isLoading).toBe(false)
   })
 
@@ -87,7 +87,7 @@ describe('usePlanStore', () => {
     ;(api.GET as any).mockImplementation((path: string) => {
       if (path === '/api/v1/admin/license') {
         return Promise.resolve({
-          data: { has_license: true, tier: 'enterprise', features: [], expires_at: '2026-12-31T23:59:59Z', org_id: 'Acme Corp' },
+          data: { has_license: true, tier: 'team', features: [], expires_at: '2026-12-31T23:59:59Z', org_id: 'Acme Corp' },
           error: undefined,
         })
       }
@@ -99,6 +99,6 @@ describe('usePlanStore', () => {
 
     expect(store.expiresAt).toBe('2026-12-31T23:59:59Z')
     expect(store.orgName).toBe('Acme Corp')
-    expect(store.currentTier).toBe('enterprise')
+    expect(store.currentTier).toBe('team')
   })
 })

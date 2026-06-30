@@ -125,11 +125,11 @@
         </div>
       </div>
 
-      <!-- Team breakdown (Enterprise only) -->
-      <div v-if="isEnterprise && summary.teams && summary.teams.length > 0" class="card p-4">
+      <!-- Team breakdown (Team only) -->
+      <div v-if="isTeam && summary.teams && summary.teams.length > 0" class="card p-4">
         <div class="flex items-center justify-between mb-4">
           <h2 class="text-lg font-semibold">Team Breakdown</h2>
-          <span class="text-xs font-medium text-muted-foreground bg-muted px-2 py-0.5 rounded">Enterprise</span>
+          <span class="text-xs font-medium text-muted-foreground bg-muted px-2 py-0.5 rounded">Team</span>
         </div>
         <table class="w-full text-sm">
           <thead>
@@ -267,7 +267,7 @@ const loading = computed(() => dashboardStore.loading)
 const error = computed(() => dashboardStore.error)
 const summary = computed(() => dashboardStore.summary)
 
-const isEnterprise = computed(() => planStore.isEnterprise)
+const isTeam = computed(() => planStore.isTeam)
 
 const expandedTeam = ref<string | null>(null)
 
@@ -394,7 +394,7 @@ function fetchData() {
 }
 
 onMounted(async () => {
-  if (!planStore.currentTier || planStore.currentTier === 'free') {
+  if (!planStore.currentTier || planStore.currentTier === 'community') {
     await planStore.fetchPlan()
   }
   await fetchData()

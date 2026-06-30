@@ -19,8 +19,8 @@ describe('LockIcon', () => {
   })
 
   it('uses custom tooltip when provided', () => {
-    const wrapper = mount(LockIcon, { props: { locked: true, tooltip: 'Available on enterprise plan' } })
-    expect(wrapper.attributes('title')).toBe('Available on enterprise plan')
+    const wrapper = mount(LockIcon, { props: { locked: true, tooltip: 'Available on team plan' } })
+    expect(wrapper.attributes('title')).toBe('Available on team plan')
   })
 
   it('renders slot content', () => {

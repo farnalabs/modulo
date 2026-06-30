@@ -12,8 +12,8 @@ vi.mock('../lib/api/client', () => ({
             total_users: 5,
             total_teams: 2,
             total_pipelines: 12,
-            plan_tier: 'free',
-            plan_id: 'free',
+            plan_tier: 'community',
+            plan_id: 'community',
           },
           error: undefined,
         })
@@ -108,7 +108,7 @@ describe('AdminOrgSettingsView', () => {
 
   it('displays the plan badge', async () => {
     const wrapper = await mountView()
-    expect(wrapper.text()).toContain('Free')
+    expect(wrapper.text()).toContain('Community')
   })
 
   it('enables delete confirm button when correct org name is typed', async () => {
