@@ -2,7 +2,9 @@
 id: feat-pipelines-core
 prd: 8.4
 delivery-tasks: []
-code:
+bdd: []
+code: []
+unit-tests: []
 depends-on: []
 status: gap
 ---
