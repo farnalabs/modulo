@@ -1,7 +1,7 @@
 <template>
   <div class="mx-auto max-w-7xl space-y-6 p-6">
     <header>
-      <h1 class="text-3xl font-bold tracking-tight">Notification Delivery Log</h1>
+      <h1 data-testid="admin-notification-log-title" class="text-3xl font-bold tracking-tight">Notification Delivery Log</h1>
       <p class="mt-1 text-muted-foreground">Admin view of all webhook notification deliveries</p>
     </header>
 
@@ -95,7 +95,7 @@
 
     <ErrorAlert v-else-if="error" :message="error" :on-retry="loadDeliveries" />
 
-    <div v-else-if="items.length === 0" class="rounded-lg border bg-card p-8 text-center">
+    <div v-else-if="items.length === 0" data-testid="admin-notification-log-empty" class="rounded-lg border bg-card p-8 text-center">
       <p class="text-lg font-medium">No delivery logs found</p>
       <p class="mt-1 text-sm text-muted-foreground">
         Try adjusting your filters or wait for notifications to be sent.
@@ -219,7 +219,7 @@
         </button>
       </div>
 
-      <div v-if="deadLetteredCount > 0" class="rounded-lg border bg-card p-4 shadow-sm">
+      <div v-if="deadLetteredCount > 0" data-testid="admin-notification-log-dlq" class="rounded-lg border bg-card p-4 shadow-sm">
         <div class="flex items-center justify-between">
           <div>
             <h3 class="text-lg font-semibold">Dead Letter Queue</h3>
