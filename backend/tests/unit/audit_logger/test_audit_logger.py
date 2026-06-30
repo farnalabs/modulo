@@ -9,6 +9,8 @@ from modulo.core.audit_logger import (
     _compute_event_hash,
     append_audit_event,
     export_chain,
+    get_audit_events_batch,
+    list_audit_events,
     verify_chain,
 )
 from modulo.db.models.audit_event import AuditChainHead
@@ -309,3 +311,379 @@ class TestExportChain:
         result = await export_chain(session, uuid.uuid4())
         assert result["total"] == 0
         assert result["items"] == []
+
+    async def test_export_page_two(self, session):
+        org_id = uuid.uuid4()
+        total = 50
+
+        call_count = 0
+
+        async def _execute(*a, **kw):
+            nonlocal call_count
+            call_count += 1
+            r = MagicMock()
+            if call_count == 1:
+                r.scalars = MagicMock(return_value=[MagicMock(
+                    id=uuid.uuid4(),
+                    organisation_id=org_id,
+                    event_type="test.event",
+                    account_id=None,
+                    resource_type=None,
+                    resource_id=None,
+                    payload_json={"seq": i},
+                    request_id=None,
+                    previous_hash=None,
+                    created_at=MagicMock(isoformat=lambda: "2025-06-01T00:00:00+00:00"),
+                ) for i in range(10)])
+            else:
+                r.scalar = MagicMock(return_value=total)
+            return r
+
+        session.execute = _execute
+
+        result = await export_chain(session, org_id, page=2, page_size=10)
+        assert result["page"] == 2
+        assert result["page_size"] == 10
+        assert result["total"] == 50
+        assert len(result["items"]) == 10
+
+
+class TestGetAuditEventsBatch:
+    @pytest.fixture
+    def session(self):
+        s = MagicMock()
+        s.flush = AsyncMock()
+        s.execute = MagicMock()
+        s.add = MagicMock()
+        s.begin = MagicMock()
+        return s
+
+    async def test_batch_valid_uuids(self, session):
+        org_id = uuid.uuid4()
+        eid1 = str(uuid.uuid4())
+        eid2 = str(uuid.uuid4())
+
+        async def _execute(*a, **kw):
+            r = MagicMock()
+            r.scalars = MagicMock(return_value=[
+                MagicMock(
+                    id=uuid.UUID(eid1),
+                    organisation_id=org_id,
+                    event_type="test.event",
+                    account_id=None,
+                    resource_type=None,
+                    resource_id=None,
+                    payload_json={"key": "value"},
+                    request_id=None,
+                    previous_hash=None,
+                    created_at=MagicMock(isoformat=lambda: "t"),
+                ),
+            ])
+            return r
+
+        session.execute = _execute
+
+        result = await get_audit_events_batch(session, org_id, [eid1, eid2])
+        assert len(result) == 1
+
+    async def test_batch_skips_invalid_uuids(self, session):
+        org_id = uuid.uuid4()
+
+        async def _execute(*a, **kw):
+            r = MagicMock()
+            r.scalars = MagicMock(return_value=[])
+            return r
+
+        session.execute = _execute
+
+        result = await get_audit_events_batch(session, org_id, ["not-a-uuid", "also-bad"])
+        assert len(result) == 0
+
+    async def test_batch_empty_list(self, session):
+        org_id = uuid.uuid4()
+        result = await get_audit_events_batch(session, org_id, [])
+        assert result == []
+
+
+class TestListAuditEvents:
+    @pytest.fixture
+    def session(self):
+        s = MagicMock()
+        s.flush = AsyncMock()
+        s.execute = MagicMock()
+        s.add = MagicMock()
+        s.begin = MagicMock()
+        return s
+
+    async def test_list_default_limit(self, session):
+        org_id = uuid.uuid4()
+
+        call_count = 0
+
+        async def _execute(*a, **kw):
+            nonlocal call_count
+            call_count += 1
+            r = MagicMock()
+            if call_count == 1:
+                r.scalar = MagicMock(return_value=0)
+            else:
+                r.scalars = MagicMock(return_value=[])
+            return r
+
+        session.execute = _execute
+
+        result = await list_audit_events(session, org_id)
+        assert result["total"] == 0
+        assert result["items"] == []
+
+    async def test_list_with_invalid_cursor(self, session):
+        org_id = uuid.uuid4()
+
+        call_count = 0
+
+        async def _execute(*a, **kw):
+            nonlocal call_count
+            call_count += 1
+            r = MagicMock()
+            if call_count == 1:
+                r.scalar = MagicMock(return_value=0)
+            else:
+                r.scalars = MagicMock(return_value=[])
+            return r
+
+        session.execute = _execute
+
+        result = await list_audit_events(session, org_id, cursor="not-a-uuid")
+        assert result["total"] == 0
+        assert result["items"] == []
+
+    async def test_list_filter_by_event_type(self, session):
+        org_id = uuid.uuid4()
+
+        call_count = 0
+
+        async def _execute(*a, **kw):
+            nonlocal call_count
+            call_count += 1
+            r = MagicMock()
+            if call_count == 1:
+                r.scalar = MagicMock(return_value=1)
+            else:
+                r.scalars = MagicMock(return_value=[
+                    MagicMock(
+                        id=uuid.uuid4(),
+                        organisation_id=org_id,
+                        event_type="pipeline.autonomy_level_changed",
+                        account_id=None,
+                        resource_type="pipeline",
+                        resource_id=uuid.uuid4(),
+                        payload_json={},
+                        request_id=None,
+                        previous_hash=None,
+                        created_at=MagicMock(isoformat=lambda: "t"),
+                    ),
+                ])
+            return r
+
+        session.execute = _execute
+
+        result = await list_audit_events(session, org_id, event_type="pipeline.autonomy_level_changed")
+        assert result["total"] == 1
+        assert len(result["items"]) == 1
+        assert result["items"][0]["event_type"] == "pipeline.autonomy_level_changed"
+
+    async def test_list_with_has_more(self, session):
+        org_id = uuid.uuid4()
+        limit = 3
+
+        call_count = 0
+
+        async def _execute(*a, **kw):
+            nonlocal call_count
+            call_count += 1
+            r = MagicMock()
+            if call_count == 1:
+                r.scalar = MagicMock(return_value=10)
+            else:
+                # Return limit+1 items to trigger has_more
+                r.scalars = MagicMock(return_value=[
+                    MagicMock(
+                        id=uuid.uuid4(),
+                        organisation_id=org_id,
+                        event_type="test.event",
+                        account_id=None,
+                        resource_type=None,
+                        resource_id=None,
+                        payload_json={},
+                        request_id=None,
+                        previous_hash=None,
+                        created_at=MagicMock(isoformat=lambda: f"t{i}"),
+                    )
+                    for i in range(limit + 1)
+                ])
+            return r
+
+        session.execute = _execute
+
+        result = await list_audit_events(session, org_id, limit=limit)
+        assert len(result["items"]) == limit
+        assert result["next_cursor"] is not None
+
+
+class TestAppendAuditEventEdgeCases:
+    @pytest.fixture
+    def session(self):
+        s = MagicMock()
+        s.flush = AsyncMock()
+        s.add = MagicMock()
+        s.begin = MagicMock()
+        return s
+
+    @pytest.mark.parametrize("payload", [None, {}, {"key": "value"}])
+    async def test_payload_none_defaults_to_empty_dict(self, session, payload):
+        async def _execute(*a, **kw):
+            r = MagicMock()
+            r.scalar_one_or_none = MagicMock(return_value=None)
+            return r
+
+        session.execute = _execute
+
+        event = await append_audit_event(
+            session,
+            org_id=uuid.uuid4(),
+            event_type="test.event",
+            payload_json=payload,
+        )
+        assert event.payload_json == (payload if payload is not None else {})
+
+    async def test_request_id_passed_through(self, session):
+        async def _execute(*a, **kw):
+            r = MagicMock()
+            r.scalar_one_or_none = MagicMock(return_value=None)
+            return r
+
+        session.execute = _execute
+
+        event = await append_audit_event(
+            session,
+            org_id=uuid.uuid4(),
+            event_type="test.event",
+            request_id="req-abc-123",
+        )
+        assert event.request_id == "req-abc-123"
+
+    async def test_previous_hash_none_for_first_event(self, session):
+        async def _execute(*a, **kw):
+            r = MagicMock()
+            r.scalar_one_or_none = MagicMock(return_value=None)
+            return r
+
+        session.execute = _execute
+
+        event = await append_audit_event(
+            session,
+            org_id=uuid.uuid4(),
+            event_type="test.event",
+        )
+        assert event.previous_hash is None
+
+    async def test_actor_user_id_optional(self, session):
+        async def _execute(*a, **kw):
+            r = MagicMock()
+            r.scalar_one_or_none = MagicMock(return_value=None)
+            return r
+
+        session.execute = _execute
+
+        event = await append_audit_event(
+            session,
+            org_id=uuid.uuid4(),
+            event_type="test.event",
+            actor_user_id=None,
+        )
+        assert event.account_id is None
+
+    async def test_resource_type_and_id_optional(self, session):
+        async def _execute(*a, **kw):
+            r = MagicMock()
+            r.scalar_one_or_none = MagicMock(return_value=None)
+            return r
+
+        session.execute = _execute
+
+        event = await append_audit_event(
+            session,
+            org_id=uuid.uuid4(),
+            event_type="test.event",
+            resource_type=None,
+            resource_id=None,
+        )
+        assert event.resource_type is None
+        assert event.resource_id is None
+
+
+class TestExportEdgeCases:
+    @pytest.fixture
+    def session(self):
+        s = MagicMock()
+        s.flush = AsyncMock()
+        s.execute = MagicMock()
+        s.add = MagicMock()
+        s.begin = MagicMock()
+        return s
+
+    async def test_export_with_large_payload(self, session):
+        org_id = uuid.uuid4()
+        large_payload = {"data": "x" * 10000}
+
+        async def _execute(*a, **kw):
+            r = MagicMock()
+            r.scalars = MagicMock(return_value=[
+                MagicMock(
+                    id=uuid.uuid4(),
+                    organisation_id=org_id,
+                    event_type="test.event",
+                    account_id=None,
+                    resource_type=None,
+                    resource_id=None,
+                    payload_json=large_payload,
+                    request_id=None,
+                    previous_hash=None,
+                    created_at=MagicMock(isoformat=lambda: "t"),
+                ),
+            ])
+            r.scalar = MagicMock(return_value=1)
+            return r
+
+        session.execute = _execute
+
+        result = await export_chain(session, org_id)
+        assert len(result["items"]) == 1
+        assert result["items"][0]["payload_json"] == large_payload
+
+    async def test_export_with_none_dates(self, session):
+        org_id = uuid.uuid4()
+
+        async def _execute(*a, **kw):
+            r = MagicMock()
+            r.scalars = MagicMock(return_value=[
+                MagicMock(
+                    id=uuid.uuid4(),
+                    organisation_id=org_id,
+                    event_type="test.event",
+                    account_id=None,
+                    resource_type=None,
+                    resource_id=None,
+                    payload_json={},
+                    request_id=None,
+                    previous_hash=None,
+                    created_at=None,
+                ),
+            ])
+            r.scalar = MagicMock(return_value=1)
+            return r
+
+        session.execute = _execute
+
+        result = await export_chain(session, org_id)
+        assert result["items"][0]["created_at"] is None
