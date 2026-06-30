@@ -606,7 +606,7 @@ async def copy_to_adapt(
             review_count=None,
             owner_team_id=target_team_id,
             visibility="org",
-            created_by=created_by,
+            account_id=created_by,
             auto_update=True,
         )
     return result
@@ -1064,7 +1064,7 @@ async def contribute_fixture(
             review_count=None,
             owner_team_id=owner_team_id,
             visibility="org",
-            created_by=created_by,
+            account_id=created_by,
         )
         update = await update_library_primitive(
             session,
@@ -1269,7 +1269,7 @@ async def submit_contribution_version(
             review_count=None,
             owner_team_id=owner_team_id,
             visibility="org",
-            created_by=created_by,
+            account_id=created_by,
         )
         update = await update_library_primitive(
             session,

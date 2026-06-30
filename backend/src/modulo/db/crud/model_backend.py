@@ -35,7 +35,7 @@ async def create_model_backend(
         provider=provider,
         model_id=model_id,
         credentials_ciphertext=credentials_ciphertext,
-        created_by=account_id,
+        account_id=account_id,
         default_params=default_params or {},
         visibility=visibility,
         owner_team_id=owner_team_id,

@@ -28,7 +28,7 @@ async def create_stage(
     stage = Stage(
         organisation_id=org_id,
         name=name,
-        created_by=account_id,
+        account_id=account_id,
         description=description,
         position=position,
         owner_team_id=owner_team_id,

@@ -115,7 +115,7 @@ async def create_oauth_client(
         name=name,
         scopes=scopes,
         redirect_uris=redirect_uris,
-        created_by=created_by,
+        account_id=created_by,
     )
     session.add(client)
     await session.flush()

@@ -28,7 +28,7 @@ async def create_node_category(
     category = NodeCategory(
         organisation_id=org_id,
         name=name,
-        created_by=account_id,
+        account_id=account_id,
         description=description,
         color=color,
         icon=icon,

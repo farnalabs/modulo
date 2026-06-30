@@ -124,7 +124,7 @@ async def rollback_to_snapshot(
     pipeline.graph_nodes_json = copy.deepcopy(target.graph_json.get("nodes", []))
     await session.flush()
 
-    new_snapshot = await create_snapshot_from_live_graph(session, pipeline_id=pipeline_id, created_by=account_id)
+    new_snapshot = await create_snapshot_from_live_graph(session, pipeline_id=pipeline_id, account_id=account_id)
     if new_snapshot is not None:
         new_snapshot.tag = f"rollback-v{target.snapshot_version}"
         new_snapshot.notes = f"Rollback to snapshot version {target.snapshot_version}"

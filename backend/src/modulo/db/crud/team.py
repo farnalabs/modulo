@@ -20,7 +20,7 @@ async def create_team(
     team = Team(
         organisation_id=org_id,
         name=name,
-        created_by=account_id,
+        account_id=account_id,
         description=description,
     )
     session.add(team)

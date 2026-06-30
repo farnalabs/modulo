@@ -458,7 +458,7 @@ async def materialize_import(
             session,
             org_id=org_id,
             name=sname,
-            created_by=created_by,
+            account_id=created_by,
             description=sd.get("description"),
             abstract_name=sd.get("abstract_name"),
         )
@@ -471,7 +471,7 @@ async def materialize_import(
             version=sd.get("latest_version", "1.0"),
             version_number=1,
             definition_json=definition,
-            created_by=created_by,
+            account_id=created_by,
             published=True,
         )
         schema_version_map[export_schema_id] = new_sv.version
@@ -498,7 +498,7 @@ async def materialize_import(
             session,
             org_id=org_id,
             name=aname,
-            created_by=created_by,
+            account_id=created_by,
             input_schema_id=uuid.UUID(resolved_input_id),
             input_schema_version=resolved_input_version,
             output_schema_id=uuid.UUID(resolved_output_id),
@@ -531,7 +531,7 @@ async def materialize_import(
         session,
         org_id=org_id,
         name=pname,
-        created_by=created_by,
+        account_id=created_by,
         description=pipeline_info.get("description"),
         visibility="org",
         owner_team_id=owner_team_id,
@@ -585,7 +585,7 @@ async def materialize_import(
         review_count=None,
         owner_team_id=owner_team_id,
         visibility="org",
-        created_by=created_by,
+        account_id=created_by,
     )
 
     return {

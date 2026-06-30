@@ -188,7 +188,7 @@ async def run_variant_weighted(
         else variant["snapshot_id"],
         trigger_type=trigger_type,
         input_payload=merged_payload,
-        created_by=account_id,
+        account_id=account_id,
     )
 
     await increment_run_count(session, group.id)
