@@ -68,7 +68,7 @@ def client() -> Generator[TestClient, None, None]:
     app.dependency_overrides[get_current_user] = lambda: AuthenticatedPrincipal(
         username="testuser",
         organisation_id=_ORG,
-        user_id=_USER,
+        account_id=_USER,
         org_role="operator",
     )
     yield TestClient(app)

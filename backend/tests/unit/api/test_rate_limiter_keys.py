@@ -52,7 +52,7 @@ def _valid_jwt(org_id: str | None = None, user_id: str | None = None) -> str:
         subject="testuser",
         secret_key=JWT_SECRET,
         organisation_id=org_id or str(uuid.uuid4()),
-        user_id=user_id or str(uuid.uuid4()),
+        account_id=user_id or str(uuid.uuid4()),
         org_role="admin",
     )
 

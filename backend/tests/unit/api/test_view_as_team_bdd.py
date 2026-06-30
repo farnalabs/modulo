@@ -116,7 +116,7 @@ def client() -> Generator[TestClient, None, None]:
     app.dependency_overrides[get_current_user] = lambda: AuthenticatedPrincipal(
         username="admin",
         organisation_id=_ORG_ID,
-        user_id=_USER_ID,
+        account_id=_USER_ID,
         org_role="admin",
     )
     yield TestClient(app)
@@ -136,7 +136,7 @@ def viewer_client() -> Generator[TestClient, None, None]:
     app.dependency_overrides[get_current_user] = lambda: AuthenticatedPrincipal(
         username="viewer",
         organisation_id=_ORG_ID,
-        user_id=_ALT_USER_ID,
+        account_id=_ALT_USER_ID,
         org_role="viewer",
     )
     yield TestClient(app)
@@ -156,7 +156,7 @@ def operator_client() -> Generator[TestClient, None, None]:
     app.dependency_overrides[get_current_user] = lambda: AuthenticatedPrincipal(
         username="operator",
         organisation_id=_ORG_ID,
-        user_id=uuid.uuid4(),
+        account_id=uuid.uuid4(),
         org_role="operator",
     )
     yield TestClient(app)
@@ -176,7 +176,7 @@ def runner_client() -> Generator[TestClient, None, None]:
     app.dependency_overrides[get_current_user] = lambda: AuthenticatedPrincipal(
         username="runner",
         organisation_id=_ORG_ID,
-        user_id=uuid.uuid4(),
+        account_id=uuid.uuid4(),
         org_role="runner",
     )
     yield TestClient(app)
@@ -394,7 +394,7 @@ class TestBDDInvalidTeam:
         app.dependency_overrides[get_current_user] = lambda: AuthenticatedPrincipal(
             username="admin",
             organisation_id=_ORG_ID,
-            user_id=_USER_ID,
+            account_id=_USER_ID,
             org_role="admin",
         )
         c = TestClient(app)

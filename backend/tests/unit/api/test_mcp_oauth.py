@@ -43,7 +43,7 @@ def _make_admin_principal() -> AuthenticatedPrincipal:
     return AuthenticatedPrincipal(
         username="admin",
         organisation_id=_ORG_ID,
-        user_id=_USER_ID,
+        account_id=_USER_ID,
         org_role="admin",
     )
 
@@ -52,7 +52,7 @@ def _make_runner_principal() -> AuthenticatedPrincipal:
     return AuthenticatedPrincipal(
         username="runner",
         organisation_id=_ORG_ID,
-        user_id=_USER_ID,
+        account_id=_USER_ID,
         org_role="runner",
     )
 

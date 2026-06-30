@@ -148,7 +148,7 @@ def client(mock_session: AsyncMock) -> Generator[TestClient, None, None]:
     app.dependency_overrides[get_current_user] = lambda: AuthenticatedPrincipal(
         username="testuser",
         organisation_id=ORG_ID,
-        user_id=USER_ID,
+        account_id=USER_ID,
         org_role="admin",
     )
 

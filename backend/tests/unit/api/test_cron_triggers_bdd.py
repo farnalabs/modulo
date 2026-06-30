@@ -80,7 +80,7 @@ def client() -> TestClient:
     app.dependency_overrides[get_settings] = override_settings
     app.dependency_overrides[get_db_session] = override_session
     app.dependency_overrides[get_current_user] = lambda: AuthenticatedPrincipal(
-        username="testuser", organisation_id=_ORG_ID, user_id=_USER_ID, org_role="admin"
+        username="testuser", organisation_id=_ORG_ID, account_id=_USER_ID, org_role="admin"
     )
     return TestClient(app)
 

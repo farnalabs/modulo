@@ -212,7 +212,7 @@ def when_update_rate_limits(
     app.dependency_overrides[get_current_user] = lambda: AuthenticatedPrincipal(
         username="admin",
         organisation_id="00000000-0000-0000-0000-000000000001",
-        user_id="00000000-0000-0000-0000-000000000002",
+        account_id="00000000-0000-0000-0000-000000000002",
         org_role="admin",
     )
 

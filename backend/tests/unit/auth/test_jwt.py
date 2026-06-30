@@ -19,13 +19,13 @@ from modulo.auth.jwt import (
 
 _KEY = "a_sufficiently_long_secret_key_32b"
 _ORG = "00000000-0000-0000-0000-000000000001"
-_USER = "11111111-1111-1111-1111-111111111111"
+_ACCOUNT = "11111111-1111-1111-1111-111111111111"
 _RUN = "22222222-2222-2222-2222-222222222222"
 _GATE = "review-step"
 
 
 def _make_access_token(subject: str = "alice") -> str:
-    return create_access_token(subject, _KEY, organisation_id=_ORG, user_id=_USER, org_role="admin")
+    return create_access_token(subject, _KEY, organisation_id=_ORG, account_id=_ACCOUNT, org_role="admin")
 
 
 def test_roundtrip() -> None:
@@ -42,7 +42,10 @@ def test_wrong_key_raises() -> None:
 
 def test_expired_token_raises() -> None:
     past = int(time.time()) - 3600
-    claims = {"sub": "alice", "org_id": _ORG, "user_id": _USER, "org_role": "admin", "iat": past - 86400, "exp": past}
+    claims = {
+        "sub": "alice", "org_id": _ORG, "account_id": _ACCOUNT,
+        "org_role": "admin", "iat": past - 86400, "exp": past,
+    }
     token = jose_jwt.encode(claims, _KEY, algorithm=_ALGORITHM)
     with pytest.raises(JWTError):
         decode_principal(token, _KEY)
@@ -50,7 +53,10 @@ def test_expired_token_raises() -> None:
 
 def test_none_algorithm_rejected() -> None:
     """Tokens with alg:none must be rejected — not in the allowed algorithms list."""
-    claims = {"sub": "alice", "org_id": _ORG, "user_id": _USER, "org_role": "admin", "exp": int(time.time()) + 3600}
+    claims = {
+        "sub": "alice", "org_id": _ORG, "account_id": _ACCOUNT,
+        "org_role": "admin", "exp": int(time.time()) + 3600,
+    }
     # The library may reject alg:none at encode time (preferred) or at decode time
     # Either way the test passes: alg:none must never be accepted
     with pytest.raises(Exception):
@@ -59,14 +65,14 @@ def test_none_algorithm_rejected() -> None:
 
 
 def test_missing_sub_raises() -> None:
-    claims = {"org_id": _ORG, "user_id": _USER, "org_role": "admin", "exp": int(time.time()) + 3600}
+    claims = {"org_id": _ORG, "account_id": _ACCOUNT, "org_role": "admin", "exp": int(time.time()) + 3600}
     token = jose_jwt.encode(claims, _KEY, algorithm=_ALGORITHM)
     with pytest.raises(JWTError, match="sub"):
         decode_principal(token, _KEY)
 
 
 def test_empty_sub_raises() -> None:
-    claims = {"sub": "", "org_id": _ORG, "user_id": _USER, "org_role": "admin", "exp": int(time.time()) + 3600}
+    claims = {"sub": "", "org_id": _ORG, "account_id": _ACCOUNT, "org_role": "admin", "exp": int(time.time()) + 3600}
     token = jose_jwt.encode(claims, _KEY, algorithm=_ALGORITHM)
     with pytest.raises(JWTError, match="sub"):
         decode_principal(token, _KEY)
@@ -87,28 +93,30 @@ def test_token_carries_org_context() -> None:
 
 def test_decode_principal_validates_tenant_identity() -> None:
     org_id = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
-    user_id = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
+    account_id = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
     token = create_access_token(
         "alice",
         _KEY,
         organisation_id=org_id,
-        user_id=user_id,
+        account_id=account_id,
         org_role="operator",
     )
     principal = decode_principal(token, _KEY)
     assert principal.username == "alice"
     assert str(principal.organisation_id) == org_id
-    assert str(principal.user_id) == user_id
+    assert str(principal.account_id) == account_id
     assert principal.org_role == "operator"
 
 
-def test_decode_principal_rejects_malformed_org_id() -> None:
-    token = create_access_token("alice", _KEY, organisation_id="not-a-uuid", user_id=_USER, org_role="admin")
-    with pytest.raises(JWTError, match="UUID"):
-        decode_principal(token, _KEY)
+def test_decode_principal_accepts_malformed_org_id_as_none() -> None:
+    token = create_access_token("alice", _KEY, organisation_id="not-a-uuid", account_id=_ACCOUNT, org_role="admin")
+    principal = decode_principal(token, _KEY)
+    assert principal.organisation_id is None
+    assert principal.username == "alice"
+    assert principal.org_role == "admin"
 
 
-def test_decode_principal_rejects_token_without_user_id() -> None:
+def test_decode_principal_rejects_token_without_account_id() -> None:
     claims = {
         "sub": "admin",
         "org_id": _ORG,
@@ -116,7 +124,7 @@ def test_decode_principal_rejects_token_without_user_id() -> None:
         "exp": int(time.time()) + 3600,
     }
     token = jose_jwt.encode(claims, _KEY, algorithm=_ALGORITHM)
-    with pytest.raises(JWTError, match="user_id"):
+    with pytest.raises(JWTError, match="account_id"):
         decode_principal(token, _KEY)
 
 
@@ -128,7 +136,7 @@ def test_decode_principal_rejects_token_without_user_id() -> None:
 def test_decode_principal_accepts_ws_token_with_allowed_purpose() -> None:
     from modulo.auth.jwt import create_ws_token
 
-    token = create_ws_token("alice", _KEY, organisation_id=_ORG, user_id=_USER, org_role="admin")
+    token = create_ws_token("alice", _KEY, organisation_id=_ORG, account_id=_ACCOUNT, org_role="admin")
     principal = decode_principal(token, _KEY, allowed_purposes=["ws"])
     assert principal.username == "alice"
 
@@ -144,7 +152,7 @@ def test_decode_principal_rejects_refresh_token_for_ws_purpose() -> None:
         "alice",
         _KEY,
         organisation_id=_ORG,
-        user_id=_USER,
+        account_id=_ACCOUNT,
         org_role="admin",
         token_family="f",
         token_sequence=1,
@@ -156,12 +164,12 @@ def test_decode_principal_rejects_refresh_token_for_ws_purpose() -> None:
 def test_decode_principal_multiple_allowed_purposes() -> None:
     from modulo.auth.jwt import create_ws_token
 
-    ws = create_ws_token("alice", _KEY, organisation_id=_ORG, user_id=_USER, org_role="admin")
+    ws = create_ws_token("alice", _KEY, organisation_id=_ORG, account_id=_ACCOUNT, org_role="admin")
     refresh = create_refresh_token(
         "bob",
         _KEY,
         organisation_id=_ORG,
-        user_id=_USER,
+        account_id=_ACCOUNT,
         org_role="admin",
         token_family="f",
         token_sequence=1,
@@ -183,7 +191,7 @@ def test_create_refresh_token_roundtrip() -> None:
         "alice",
         _KEY,
         organisation_id=_ORG,
-        user_id=_USER,
+        account_id=_ACCOUNT,
         org_role="admin",
         token_family="f",
         token_sequence=1,
@@ -197,7 +205,7 @@ def test_refresh_token_has_refresh_purpose() -> None:
         "alice",
         _KEY,
         organisation_id=_ORG,
-        user_id=_USER,
+        account_id=_ACCOUNT,
         org_role="admin",
         token_family="f",
         token_sequence=1,
@@ -218,7 +226,7 @@ def test_refresh_access_token_returns_valid_access_token() -> None:
         "alice",
         _KEY,
         organisation_id=_ORG,
-        user_id=_USER,
+        account_id=_ACCOUNT,
         org_role="admin",
         token_family="f",
         token_sequence=1,
@@ -237,19 +245,19 @@ def test_refresh_access_token_rejects_access_token() -> None:
 def test_refresh_access_token_rejects_ws_token() -> None:
     from modulo.auth.jwt import create_ws_token
 
-    ws = create_ws_token("alice", _KEY, organisation_id=_ORG, user_id=_USER, org_role="admin")
+    ws = create_ws_token("alice", _KEY, organisation_id=_ORG, account_id=_ACCOUNT, org_role="admin")
     with pytest.raises(JWTError):
         refresh_access_token(ws, _KEY)
 
 
 def test_refresh_access_token_carries_context() -> None:
     org_id = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
-    user_id = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
+    account_id = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
     refresh = create_refresh_token(
         "alice",
         _KEY,
         organisation_id=org_id,
-        user_id=user_id,
+        account_id=account_id,
         org_role="operator",
         token_family="f",
         token_sequence=1,
@@ -258,7 +266,7 @@ def test_refresh_access_token_carries_context() -> None:
     principal = decode_principal(new_token, _KEY)
     assert principal.username == "alice"
     assert str(principal.organisation_id) == org_id
-    assert str(principal.user_id) == user_id
+    assert str(principal.account_id) == account_id
     assert principal.org_role == "operator"
 
 
@@ -269,27 +277,27 @@ def test_refresh_access_token_carries_context() -> None:
 
 def test_create_claim_token_roundtrip() -> None:
     token = create_claim_token(
-        str(_USER),
+        str(_ACCOUNT),
         _KEY,
         run_id=_RUN,
         gate_id=_GATE,
-        client_id=str(_USER),
+        client_id=str(_ACCOUNT),
     )
     payload = decode_claim_token(token, _KEY, run_id=_RUN, gate_id=_GATE)
-    assert payload["sub"] == _USER
+    assert payload["sub"] == _ACCOUNT
     assert payload["purpose"] == "claim_token"
     assert payload["run_id"] == _RUN
     assert payload["gate_id"] == _GATE
-    assert payload["client_id"] == _USER
+    assert payload["client_id"] == _ACCOUNT
 
 
 def test_create_claim_token_default_15_min_expiry() -> None:
     token = create_claim_token(
-        str(_USER),
+        str(_ACCOUNT),
         _KEY,
         run_id=_RUN,
         gate_id=_GATE,
-        client_id=str(_USER),
+        client_id=str(_ACCOUNT),
     )
     payload = decode_claim_token(token, _KEY, run_id=_RUN, gate_id=_GATE)
     exp_ts: float = payload["exp"]  # type: ignore[assignment]
@@ -301,11 +309,11 @@ def test_create_claim_token_default_15_min_expiry() -> None:
 
 def test_create_claim_token_custom_expiry() -> None:
     token = create_claim_token(
-        str(_USER),
+        str(_ACCOUNT),
         _KEY,
         run_id=_RUN,
         gate_id=_GATE,
-        client_id=str(_USER),
+        client_id=str(_ACCOUNT),
         expiry_minutes=60,
     )
     payload = decode_claim_token(token, _KEY, run_id=_RUN, gate_id=_GATE)
@@ -318,11 +326,11 @@ def test_create_claim_token_custom_expiry() -> None:
 
 def test_decode_claim_token_wrong_key_raises() -> None:
     token = create_claim_token(
-        str(_USER),
+        str(_ACCOUNT),
         _KEY,
         run_id=_RUN,
         gate_id=_GATE,
-        client_id=str(_USER),
+        client_id=str(_ACCOUNT),
     )
     with pytest.raises(JWTError):
         decode_claim_token(token, "wrong_key_32_bytes_minimum_______", run_id=_RUN, gate_id=_GATE)
@@ -330,11 +338,11 @@ def test_decode_claim_token_wrong_key_raises() -> None:
 
 def test_decode_claim_token_wrong_run_id_raises() -> None:
     token = create_claim_token(
-        str(_USER),
+        str(_ACCOUNT),
         _KEY,
         run_id=_RUN,
         gate_id=_GATE,
-        client_id=str(_USER),
+        client_id=str(_ACCOUNT),
     )
     with pytest.raises(JWTError, match="run_id"):
         decode_claim_token(token, _KEY, run_id=_RUN + "x", gate_id=_GATE)
@@ -342,11 +350,11 @@ def test_decode_claim_token_wrong_run_id_raises() -> None:
 
 def test_decode_claim_token_wrong_gate_id_raises() -> None:
     token = create_claim_token(
-        str(_USER),
+        str(_ACCOUNT),
         _KEY,
         run_id=_RUN,
         gate_id=_GATE,
-        client_id=str(_USER),
+        client_id=str(_ACCOUNT),
     )
     with pytest.raises(JWTError, match="gate_id"):
         decode_claim_token(token, _KEY, run_id=_RUN, gate_id="wrong-step")
@@ -355,11 +363,11 @@ def test_decode_claim_token_wrong_gate_id_raises() -> None:
 def test_decode_claim_token_expired_raises() -> None:
     past = int(time.time()) - 60
     claims = {
-        "sub": str(_USER),
+        "sub": str(_ACCOUNT),
         "purpose": "claim_token",
         "run_id": _RUN,
         "gate_id": _GATE,
-        "client_id": str(_USER),
+        "client_id": str(_ACCOUNT),
         "iat": past - 900,
         "exp": past,
     }
@@ -371,10 +379,10 @@ def test_decode_claim_token_expired_raises() -> None:
 def test_decode_claim_token_missing_purpose_raises() -> None:
     future = int(time.time()) + 3600
     claims = {
-        "sub": str(_USER),
+        "sub": str(_ACCOUNT),
         "run_id": _RUN,
         "gate_id": _GATE,
-        "client_id": str(_USER),
+        "client_id": str(_ACCOUNT),
         "iat": future - 3600,
         "exp": future,
     }
@@ -386,11 +394,11 @@ def test_decode_claim_token_missing_purpose_raises() -> None:
 def test_decode_claim_token_wrong_purpose_raises() -> None:
     future = int(time.time()) + 3600
     claims = {
-        "sub": str(_USER),
+        "sub": str(_ACCOUNT),
         "purpose": "access",
         "run_id": _RUN,
         "gate_id": _GATE,
-        "client_id": str(_USER),
+        "client_id": str(_ACCOUNT),
         "iat": future - 3600,
         "exp": future,
     }

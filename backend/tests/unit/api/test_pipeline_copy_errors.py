@@ -72,7 +72,7 @@ def client() -> Generator[TestClient, None, None]:
     app.dependency_overrides[get_current_user] = lambda: AuthenticatedPrincipal(
         username="testuser",
         organisation_id=_ORG_ID,
-        user_id=_USER_ID,
+        account_id=_USER_ID,
         org_role="admin",
     )
     yield TestClient(app)
@@ -93,7 +93,7 @@ def viewer_client() -> Generator[TestClient, None, None]:
     app.dependency_overrides[get_current_user] = lambda: AuthenticatedPrincipal(
         username="viewer",
         organisation_id=_ORG_ID,
-        user_id=_USER_ID,
+        account_id=_USER_ID,
         org_role="viewer",
     )
     yield TestClient(app)

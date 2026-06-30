@@ -68,7 +68,7 @@ def test_create_ws_token_is_short_lived():
         "testuser",
         settings.secret_key,
         organisation_id=str(_ORG_ID),
-        user_id=str(_USER_ID),
+        account_id=str(_USER_ID),
         org_role="admin",
     )
     principal = decode_principal(token, settings.secret_key)
@@ -82,7 +82,7 @@ def test_create_ws_token_expires_quickly():
         "u",
         settings.secret_key,
         organisation_id=str(_ORG_ID),
-        user_id=str(_USER_ID),
+        account_id=str(_USER_ID),
         org_role="admin",
     )
     from jose import jwt
@@ -101,7 +101,7 @@ def test_create_ws_token_has_purpose_claim():
         "u",
         settings.secret_key,
         organisation_id=str(_ORG_ID),
-        user_id=str(_USER_ID),
+        account_id=str(_USER_ID),
         org_role="admin",
     )
     from jose import jwt
@@ -118,13 +118,13 @@ def test_create_ws_token_carries_identity():
         "alice",
         settings.secret_key,
         organisation_id=str(org_id),
-        user_id=str(user_id),
+        account_id=str(user_id),
         org_role="operator",
     )
     principal = decode_principal(token, settings.secret_key)
     assert principal.username == "alice"
     assert principal.organisation_id == org_id
-    assert principal.user_id == user_id
+    assert principal.account_id == user_id
     assert principal.org_role == "operator"
 
 
@@ -135,7 +135,7 @@ def test_access_token_not_accepted_as_ws_token():
         "testuser",
         settings.secret_key,
         organisation_id=str(_ORG_ID),
-        user_id=str(_USER_ID),
+        account_id=str(_USER_ID),
         org_role="admin",
     )
     with pytest.raises(JWTError, match="purpose"):
@@ -148,7 +148,7 @@ def test_ws_token_rejected_with_wrong_key():
         "testuser",
         settings.secret_key,
         organisation_id=str(_ORG_ID),
-        user_id=str(_USER_ID),
+        account_id=str(_USER_ID),
         org_role="admin",
     )
     with pytest.raises(JWTError):
@@ -182,7 +182,7 @@ def client(mock_session: AsyncMock) -> Generator[TestClient, None, None]:
     app.dependency_overrides[get_current_user] = lambda: AuthenticatedPrincipal(
         username="testuser",
         organisation_id=_ORG_ID,
-        user_id=_USER_ID,
+        account_id=_USER_ID,
         org_role="admin",
     )
 
@@ -209,7 +209,7 @@ def test_ws_token_decodes_correctly(client: TestClient) -> None:
     principal = decode_principal(token, settings.secret_key, allowed_purposes=["ws"])
     assert principal.username == "testuser"
     assert principal.organisation_id == _ORG_ID
-    assert principal.user_id == _USER_ID
+    assert principal.account_id == _USER_ID
 
 
 def test_ws_token_endpoint_unauthenticated_returns_4xx() -> None:
