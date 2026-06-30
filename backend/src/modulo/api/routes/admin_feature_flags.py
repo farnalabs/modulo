@@ -9,29 +9,32 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 from starlette.responses import Response
 
+from modulo.api.dependencies import get_db_session
 from modulo.auth.dependencies import get_current_user
 from modulo.auth.jwt import AuthenticatedPrincipal
 from modulo.core.feature_flags import FeatureFlagRegistry
 from modulo.settings import Settings, get_settings
+from sqlalchemy.ext.asyncio import AsyncSession
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/v1/admin/feature-flags", tags=["admin-feature-flags"])
 
 
-def _build_registry(settings: Settings) -> FeatureFlagRegistry:
+async def _build_registry(settings: Settings, session: AsyncSession) -> FeatureFlagRegistry:
     has_key = bool(settings.modulo_license_key)
     tier = "team" if has_key else "community"
-    return FeatureFlagRegistry(current_tier=tier, has_license_key=has_key)
+    return await FeatureFlagRegistry.from_db(session, current_tier=tier, has_license_key=has_key)
 
 
 @router.get("")
 async def list_feature_flags(
     settings: Settings = Depends(get_settings),
+    session: AsyncSession = Depends(get_db_session),
     current_user: AuthenticatedPrincipal = Depends(get_current_user),
 ) -> Response:
     try:
-        registry = _build_registry(settings)
+        registry = await _build_registry(settings, session)
         has_key = bool(settings.modulo_license_key)
         tier = "team" if has_key else "community"
         return {
@@ -77,10 +80,11 @@ async def list_feature_flags(
 async def get_feature_flag(
     flag_name: str,
     settings: Settings = Depends(get_settings),
+    session: AsyncSession = Depends(get_db_session),
     current_user: AuthenticatedPrincipal = Depends(get_current_user),
 ) -> Response:
     try:
-        registry = _build_registry(settings)
+        registry = await _build_registry(settings, session)
         flag = registry.get_flag(flag_name)
         if flag is None:
             raise HTTPException(
@@ -118,10 +122,11 @@ async def toggle_feature_flag(
     flag_name: str,
     body: ToggleFlagRequest,
     settings: Settings = Depends(get_settings),
+    session: AsyncSession = Depends(get_db_session),
     current_user: AuthenticatedPrincipal = Depends(get_current_user),
 ) -> Response:
     try:
-        registry = _build_registry(settings)
+        registry = await _build_registry(settings, session)
         flag = registry.get_flag(flag_name)
         if flag is None:
             raise HTTPException(
