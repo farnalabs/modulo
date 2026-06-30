@@ -48,6 +48,7 @@ class ConnectorType(StrEnum):
     BUILDKITE = "buildkite"
     JENKINS = "jenkins"
     TEAMCITY = "teamcity"
+    AZURE_PIPELINES = "azure_pipelines"
 
     @property
     def capabilities(self) -> frozenset[Capability]:
@@ -122,6 +123,15 @@ class ConnectorType(StrEnum):
                     }
                 )
             case ConnectorType.TEAMCITY:
+                return frozenset(
+                    {
+                        Capability.TRIGGER_RUN,
+                        Capability.GET_RUN_STATUS,
+                        Capability.GET_RUN_LOGS,
+                        Capability.LIST_RUNS,
+                    }
+                )
+            case ConnectorType.AZURE_PIPELINES:
                 return frozenset(
                     {
                         Capability.TRIGGER_RUN,

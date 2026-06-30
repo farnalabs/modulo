@@ -21,6 +21,7 @@ from opentelemetry import trace
 from opentelemetry.trace import Status, StatusCode
 
 from modulo.connectors.asana import AsanaConnector
+from modulo.connectors.azure_pipelines import AzurePipelinesConnector
 from modulo.connectors.azure_repos import AzureReposConnector
 from modulo.connectors.base import (
     ConnectorACL,
@@ -333,6 +334,16 @@ def _build_connector(type_id: str, config: dict[str, Any], creds: dict[str, Any]
             return TeamCityConnector(
                 token=_get_cred(creds, "token", type_id),
                 base_url=config.get("base_url", "http://localhost:8111"),
+            )
+        case "azure_pipelines":
+            organization = config.get("organization", "")
+            if not organization:
+                raise ValueError("AzurePipelinesConnector requires 'organization' in config_json")
+            project = config.get("project", "")
+            return AzurePipelinesConnector(
+                token=_get_cred(creds, "token", type_id),
+                organization=organization,
+                project=project,
             )
         case _:
             registry = get_plugin_registry()
