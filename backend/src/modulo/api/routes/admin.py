@@ -1003,15 +1003,13 @@ async def admin_billing_overview(
                 await session.execute(select(func.count()).select_from(Pipeline).where(Pipeline.organisation_id == org_id))
             ).scalar() or 0
 
-            now = datetime.now(UTC)
+            month_start = datetime.now(UTC).replace(day=1, hour=0, minute=0, second=0, microsecond=0)
             runs_this_month = (
                 await session.execute(
-                    text("""
-                        SELECT COUNT(*) FROM runs
-                        WHERE organisation_id = :org_id
-                            AND created_at >= date_trunc('month', :now::timestamp)
-                    """),
-                    {"org_id": current_user.organisation_id, "now": now},
+                    select(func.count(Run.id)).where(
+                        Run.organisation_id == current_user.organisation_id,
+                        Run.created_at >= month_start,
+                    )
                 )
             ).scalar() or 0
     except Exception:
