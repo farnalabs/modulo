@@ -23,6 +23,9 @@ class Capability(StrEnum):
     MONITORING = "monitoring"
     OBSERVABILITY = "observability"
     INCIDENT_MANAGEMENT = "incident_management"
+    COLLABORATION = "collaboration"
+    MESSAGING = "messaging"
+    NOTIFICATION = "notification"
 
 
 class ConnectorType(StrEnum):
@@ -56,6 +59,7 @@ class ConnectorType(StrEnum):
     SENTRY = "sentry"
     PAGERDUTY = "pagerduty"
     GRAFANA = "grafana"
+    MICROSOFT_TEAMS = "microsoft_teams"
 
     @property
     def capabilities(self) -> frozenset[Capability]:
@@ -162,6 +166,11 @@ class ConnectorType(StrEnum):
             case ConnectorType.GRAFANA:
                 return frozenset({
                     Capability.MONITORING, Capability.OBSERVABILITY,
+                    Capability.READ, Capability.WRITE,
+                })
+            case ConnectorType.MICROSOFT_TEAMS:
+                return frozenset({
+                    Capability.COLLABORATION, Capability.MESSAGING, Capability.NOTIFICATION,
                     Capability.READ, Capability.WRITE,
                 })
             case _:

@@ -46,6 +46,7 @@ from modulo.connectors.gitlab import GitLabConnector
 from modulo.connectors.jenkins import JenkinsConnector
 from modulo.connectors.jira import JiraConnector
 from modulo.connectors.linear import LinearConnector
+from modulo.connectors.microsoft_teams import MicrosoftTeamsConnector
 from modulo.connectors.monday import MondayConnector
 from modulo.connectors.notion import NotionConnector
 from modulo.connectors.pagerduty import PagerDutyConnector
@@ -365,6 +366,8 @@ def _build_connector(type_id: str, config: dict[str, Any], creds: dict[str, Any]
             return PagerDutyConnector(token=_get_cred(creds, "token", type_id))
         case "grafana":
             return GrafanaConnector(token=_get_cred(creds, "token", type_id), base_url=config.get("base_url", "http://localhost:3000"))
+        case "microsoft_teams":
+            return MicrosoftTeamsConnector(token=_get_cred(creds, "token", type_id))
         case _:
             registry = get_plugin_registry()
             if registry.has_connector_type(type_id):
