@@ -374,7 +374,7 @@ async def create_trigger(
             config_json=body.config_json,
             cron_expression=body.cron_expression,
             cron_timezone=body.cron_timezone,
-            created_by=principal.account_id,
+            account_id=principal.account_id,
         )
         if body.cron_expression:
             err = validate_cron_expression(body.cron_expression, body.cron_timezone or "UTC")
@@ -571,7 +571,7 @@ async def test_trigger(
             from modulo.db.crud.run import create_run
 
             snapshot = await create_snapshot_from_live_graph(
-                session, pipeline_id=trigger.pipeline_id, created_by=principal.account_id
+                session, pipeline_id=trigger.pipeline_id, account_id=principal.account_id
             )
             if snapshot is None:
                 raise HTTPException(
@@ -585,7 +585,7 @@ async def test_trigger(
                 snapshot_id=snapshot.id,
                 trigger_type="manual",
                 input_payload=body.payload,
-                created_by=principal.account_id,
+                account_id=principal.account_id,
                 trigger_id=trigger.id,
             )
             run_id = str(run.id)

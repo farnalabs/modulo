@@ -96,7 +96,7 @@ async def register_oauth_client(
             name=body.name,
             scopes=scopes_str,
             redirect_uris=redirect_uris_str,
-            created_by=principal.account_id,
+            account_id=principal.account_id,
         )
 
     return CreateOAuthClientResponse(

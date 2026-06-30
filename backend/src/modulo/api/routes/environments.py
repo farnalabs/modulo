@@ -120,7 +120,7 @@ def _to_response(p: EnvironmentProfile) -> ProfileResponse:
         resource_limits=p.resource_limits_json,
         persistence_policy=p.persistence_policy,
         is_active=p.is_active,
-        created_by=str(p.account_id) if p.account_id else None,
+        account_id=str(p.account_id) if p.account_id else None,
         created_at=p.created_at.isoformat() if p.created_at else None,
         updated_at=p.updated_at.isoformat() if p.updated_at else None,
     )
@@ -172,7 +172,7 @@ async def create_profile(
             org_id=principal.organisation_id,
             name=body.name,
             image_ref=body.image_ref,
-            created_by=principal.account_id,
+            account_id=principal.account_id,
             description=body.description,
             capabilities=body.capabilities,
             egress_policy=body.egress_policy,

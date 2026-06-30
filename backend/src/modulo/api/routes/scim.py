@@ -462,7 +462,7 @@ async def create_group(
             session,
             org_id=principal.organisation_id,
             display_name=body.displayName,
-            created_by=creator_id,
+            account_id=creator_id,
         )
 
         for member_ref in body.members:

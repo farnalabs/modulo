@@ -328,7 +328,7 @@ async def trigger_pipeline(
             pipeline = await get_pipeline(s, pid)
             if pipeline is None:
                 return {"error": "pipeline_not_found", "pipeline_id": pipeline_id}
-            snapshot = await create_snapshot_from_live_graph(s, pipeline_id=pid, created_by=None)
+            snapshot = await create_snapshot_from_live_graph(s, pipeline_id=pid, account_id=None)
             if snapshot is None:
                 return {"error": "snapshot_failed", "pipeline_id": pipeline_id}
             run = await create_run(

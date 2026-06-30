@@ -174,7 +174,7 @@ async def trigger_run(
         snapshot = await create_snapshot_from_live_graph(
             session,
             pipeline_id=pipeline.id,
-            created_by=principal.account_id,
+            account_id=principal.account_id,
         )
         if snapshot is None:
             raise HTTPException(

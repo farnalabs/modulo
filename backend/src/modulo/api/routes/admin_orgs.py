@@ -64,7 +64,7 @@ async def admin_create_org(
         session,
         name=body.name,
         slug=body.slug,
-        created_by=current_user.account_id,
+        account_id=current_user.account_id,
     )
 
     return CreateOrgResponse(

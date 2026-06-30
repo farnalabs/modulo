@@ -139,7 +139,7 @@ async def create_eval_definition(
             failure_behaviour=body.failure_behaviour,
             pass_threshold=body.pass_threshold,
             suite_id=body.suite_id,
-            created_by=principal.account_id,
+            account_id=principal.account_id,
         )
         session.add(eval_def)
         await session.flush()
@@ -626,7 +626,7 @@ async def create_eval_from_run(
             eval_type=body.eval_type,
             config_json=config_json,
             failure_behaviour="warn",
-            created_by=principal.account_id,
+            account_id=principal.account_id,
         )
         session.add(eval_def)
         await session.flush()

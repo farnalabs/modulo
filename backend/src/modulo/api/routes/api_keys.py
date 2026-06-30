@@ -100,7 +100,7 @@ async def create_api_key_endpoint(
             org_id=principal.organisation_id,
             name=body.name,
             role=body.role,
-            created_by=principal.account_id,
+            account_id=principal.account_id,
             team_id=team_id,
             expires_at=expires_at,
         )

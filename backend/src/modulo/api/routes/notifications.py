@@ -116,7 +116,7 @@ async def create_endpoint(
             secret_ciphertext=secret_ciphertext,
             events=json.dumps(body.events),
             description=body.description,
-            created_by=principal.account_id,
+            account_id=principal.account_id,
             team_id=team_id,
         )
         session.add(ep)

@@ -423,7 +423,7 @@ async def admin_create_team(
             session,
             org_id=current_user.organisation_id,
             name=body.name,
-            created_by=current_user.account_id,
+            account_id=current_user.account_id,
             description=body.description,
         )
 
@@ -431,7 +431,7 @@ async def admin_create_team(
         id=str(team.id),
         name=team.name,
         description=team.description,
-        created_by=str(team.account_id),
+        account_id=str(team.account_id),
         created_at=team.created_at.isoformat(),
     )
 
@@ -517,7 +517,7 @@ async def admin_regenerate_api_key(
         _, raw_key = await create_api_key(
             session,
             org_id=current_user.organisation_id,
-            created_by=current_user.account_id,
+            account_id=current_user.account_id,
             name="Default Org API Key",
             role="operator",
         )
@@ -877,7 +877,7 @@ async def admin_list_teams(
                 id=str(t.id),
                 name=t.name,
                 description=t.description,
-                created_by=str(t.account_id),
+                account_id=str(t.account_id),
                 member_count=member_counts.get(t.id, 0),
                 created_at=t.created_at.isoformat(),
             )
@@ -919,7 +919,7 @@ async def admin_update_team(
         id=str(team.id),
         name=team.name,
         description=team.description,
-        created_by=str(team.account_id),
+        account_id=str(team.account_id),
         created_at=team.created_at.isoformat(),
     )
 

@@ -114,7 +114,7 @@ async def create_view_endpoint(
                 org_id=principal.organisation_id,
                 name=body.name,
                 view_type=body.view_type,
-                created_by=principal.account_id,
+                account_id=principal.account_id,
                 description=body.description,
                 filters=body.filters,
                 columns=body.columns,

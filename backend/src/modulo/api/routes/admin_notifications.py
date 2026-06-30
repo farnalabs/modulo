@@ -423,7 +423,7 @@ async def create_webhook(
             secret_ciphertext=secret_ciphertext,
             events=json.dumps(body.events),
             description=body.description,
-            created_by=principal.account_id,
+            account_id=principal.account_id,
         )
         session.add(ep)
         await session.flush()

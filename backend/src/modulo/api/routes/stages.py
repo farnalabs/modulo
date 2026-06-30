@@ -93,7 +93,7 @@ async def create_stage_endpoint(
             session,
             org_id=principal.organisation_id,
             name=body.name,
-            created_by=principal.account_id,
+            account_id=principal.account_id,
             description=body.description,
             position=body.position,
             owner_team_id=body.owner_team_id,
