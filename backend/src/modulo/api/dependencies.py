@@ -21,7 +21,6 @@ from sqlalchemy.ext.asyncio import (
 from modulo.auth.dependencies import get_current_user
 from modulo.auth.jwt import AuthenticatedPrincipal
 from modulo.core.feature_flags import PlanContext, get_plan_for_org
-from modulo.core.feature_flags import get_plan_context as resolve_plan_by_id
 from modulo.settings import Settings, get_settings
 
 
@@ -122,5 +121,7 @@ async def get_plan_context(
     2. SystemConfig.default_plan (deployment-wide, from DB)
     3. CommunityTier (default fallback)
     """
+    from modulo.core.feature_flags import DbPlanContext
+
     plan_id = await get_plan_for_org(session, current_user.organisation_id)
-    return resolve_plan_by_id(plan_id)
+    return await DbPlanContext.from_db(session, plan_id)
