@@ -8,7 +8,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from fastapi.testclient import TestClient
 
-from modulo.api.dependencies import _get_engine, get_db_session
+from modulo.api.dependencies import _get_engine, get_db_session, get_plan_context
 from modulo.api.main import app
 from modulo.auth.dependencies import get_current_user
 from modulo.auth.jwt import AuthenticatedPrincipal
@@ -32,13 +32,23 @@ def _make_settings() -> Settings:
     )
 
 
+class _EnterprisePlan:
+    """Stub plan context that enables all enterprise features for tests."""
+
+    def feature_enabled(self, name: str) -> bool:
+        return True
+
+    def list_enabled_features(self) -> list:
+        return []
+
+
 def _make_team(**overrides: object) -> MagicMock:
     t = MagicMock()
     t.id = overrides.get("id", _TEAM_ID)
     t.organisation_id = overrides.get("organisation_id", _ORG_ID)
     t.name = overrides.get("name", "Test Team")
     t.description = overrides.get("description", None)
-    t.created_by = overrides.get("created_by", _USER_ID)
+    t.account_id = overrides.get("account_id", _USER_ID)
     t.notification_endpoints = overrides.get("notification_endpoints", [])
     t.created_at = _NOW
     t.updated_at = _NOW
@@ -78,6 +88,7 @@ def client() -> Generator[TestClient, None, None]:
     app.dependency_overrides[get_settings] = _make_settings
     app.dependency_overrides[get_db_session] = override_session
     app.dependency_overrides[_get_engine] = lambda: MagicMock()
+    app.dependency_overrides[get_plan_context] = lambda: _EnterprisePlan()
     app.dependency_overrides[get_current_user] = lambda: AuthenticatedPrincipal(
         username="testuser",
         organisation_id=_ORG_ID,
@@ -91,6 +102,7 @@ def client() -> Generator[TestClient, None, None]:
 @pytest.fixture()
 def unauth_client() -> Generator[TestClient, None, None]:
     app.dependency_overrides[get_settings] = _make_settings
+    app.dependency_overrides[get_plan_context] = lambda: _EnterprisePlan()
     yield TestClient(app)
     app.dependency_overrides.clear()
 
@@ -105,6 +117,7 @@ def operator_client() -> Generator[TestClient, None, None]:
     app.dependency_overrides[get_settings] = _make_settings
     app.dependency_overrides[get_db_session] = override_session
     app.dependency_overrides[_get_engine] = lambda: MagicMock()
+    app.dependency_overrides[get_plan_context] = lambda: _EnterprisePlan()
     app.dependency_overrides[get_current_user] = lambda: AuthenticatedPrincipal(
         username="operator",
         organisation_id=_ORG_ID,
@@ -205,6 +218,7 @@ class TestUpdateTeam:
         team = _make_team(name="Updated")
         with (
             patch("modulo.api.routes.teams.update_team", return_value=team),
+            patch("modulo.api.routes.teams.get_team_by_name", return_value=None),
             patch("modulo.api.routes.teams.set_rls_org"),
             patch("modulo.api.routes.teams.set_rls_user_context"),
         ):
@@ -215,6 +229,7 @@ class TestUpdateTeam:
     def test_not_found_returns_404(self, client: TestClient) -> None:
         with (
             patch("modulo.api.routes.teams.update_team", return_value=None),
+            patch("modulo.api.routes.teams.get_team_by_name", return_value=None),
             patch("modulo.api.routes.teams.set_rls_org"),
             patch("modulo.api.routes.teams.set_rls_user_context"),
         ):
@@ -224,6 +239,27 @@ class TestUpdateTeam:
     def test_empty_name_returns_422(self, client: TestClient) -> None:
         resp = client.patch(f"/api/v1/teams/{_TEAM_ID}", json={"name": ""})
         assert resp.status_code == 422
+
+    def test_duplicate_name_returns_409(self, client: TestClient) -> None:
+        existing = _make_team(id=uuid.uuid4(), name="Existing")
+        with (
+            patch("modulo.api.routes.teams.get_team_by_name", return_value=existing),
+            patch("modulo.api.routes.teams.set_rls_org"),
+            patch("modulo.api.routes.teams.set_rls_user_context"),
+        ):
+            resp = client.patch(f"/api/v1/teams/{_TEAM_ID}", json={"name": "Existing"})
+        assert resp.status_code == 409
+
+    def test_same_name_same_team_allowed(self, client: TestClient) -> None:
+        team = _make_team(name="Same Name")
+        with (
+            patch("modulo.api.routes.teams.update_team", return_value=team),
+            patch("modulo.api.routes.teams.get_team_by_name", return_value=team),
+            patch("modulo.api.routes.teams.set_rls_org"),
+            patch("modulo.api.routes.teams.set_rls_user_context"),
+        ):
+            resp = client.patch(f"/api/v1/teams/{_TEAM_ID}", json={"name": "Same Name"})
+        assert resp.status_code == 200
 
 
 class TestDeleteTeam:

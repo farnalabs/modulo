@@ -397,7 +397,7 @@ class AdminCreateTeamResponse(BaseModel):
     id: str
     name: str
     description: str | None
-    created_by: str
+    account_id: str
     created_at: str
 
 
@@ -824,7 +824,7 @@ class AdminTeamItem(BaseModel):
     id: str
     name: str
     description: str | None = None
-    created_by: str
+    account_id: str
     member_count: int = 0
     created_at: str
 
