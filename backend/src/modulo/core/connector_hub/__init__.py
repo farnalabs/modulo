@@ -22,6 +22,7 @@ from opentelemetry.trace import Status, StatusCode
 
 from modulo.connectors.asana import AsanaConnector
 from modulo.connectors.azure_repos import AzureReposConnector
+from modulo.connectors.buildkite import BuildkiteConnector
 from modulo.connectors.base import (
     ConnectorACL,
     ConnectorBase,
@@ -312,6 +313,8 @@ def _build_connector(type_id: str, config: dict[str, Any], creds: dict[str, Any]
             return NotionConnector(token=_get_cred(creds, "token", type_id))
         case "dropbox_paper":
             return DropboxPaperConnector(token=_get_cred(creds, "token", type_id))
+        case "buildkite":
+            return BuildkiteConnector(token=_get_cred(creds, "token", type_id))
         case "circleci":
             return CircleCIConnector(token=_get_cred(creds, "token", type_id))
         case "jenkins":
