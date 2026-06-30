@@ -1,7 +1,7 @@
 <template>
   <div data-theme="agent" class="mx-auto max-w-4xl space-y-6 p-6">
     <header>
-      <h1 class="text-3xl font-bold tracking-tight">API Changelog</h1>
+      <h1 data-testid="changelog-title" class="text-3xl font-bold tracking-tight">API Changelog</h1>
       <p class="mt-1 text-muted-foreground">Version history and deprecation notices for the Modulo API</p>
     </header>
 
@@ -9,13 +9,13 @@
 
     <ErrorAlert v-else-if="error" :message="error" :on-retry="loadChangelog" />
 
-    <div v-else-if="entries.length === 0" class="rounded-lg border bg-card p-8 text-center">
+    <div v-else-if="entries.length === 0" data-testid="changelog-empty" class="rounded-lg border bg-card p-8 text-center">
       <p class="text-lg font-medium">No changelog entries</p>
       <p class="mt-1 text-sm text-muted-foreground">No API version history is available yet.</p>
     </div>
 
     <template v-else>
-      <div
+      <div data-testid="changelog-list"
         v-for="entry in entries"
         :key="entry.version"
         class="rounded-lg border bg-card shadow-sm"
@@ -96,12 +96,12 @@ async function loadChangelog() {
   try {
     const { data, error: err } = await api.GET('/api/v1/changelog')
     if (err) {
-      error.value = `Failed to load changelog: ${err}`
+      error.value = `Unable to load the changelog right now. Please try again later. (${err})`
     } else if (data) {
       entries.value = data as unknown as ChangelogEntry[]
     }
   } catch (e: unknown) {
-    error.value = `Failed to load changelog: ${e instanceof Error ? e.message : String(e)}`
+    error.value = `Unable to load the changelog right now. Please try again later.`
   } finally {
     loading.value = false
   }

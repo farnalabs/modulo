@@ -1,7 +1,7 @@
 <template>
   <div data-theme="agent" data-loading="false" class="mx-auto max-w-4xl space-y-8 p-6">
     <header>
-      <h1 class="text-3xl font-bold tracking-tight">License</h1>
+      <h1 data-testid="license-title" class="text-3xl font-bold tracking-tight">License</h1>
       <p class="mt-1 text-muted-foreground">Manage your Modulo Enterprise license key and view plan details</p>
     </header>
 
@@ -104,6 +104,7 @@
           <textarea
             v-model="newLicenseKey"
             rows="4"
+            data-testid="license-key-input"
             class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm font-mono placeholder:text-muted-foreground/50 focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 outline-none transition-all"
             placeholder="Paste your MODULO_LICENSE_KEY value here..."
           />
@@ -112,10 +113,10 @@
           </p>
 
           <div class="flex flex-wrap items-center gap-3">
-            <Button variant="outline" :disabled="!newLicenseKey.trim() || verifying" @click="verifyKey">
+            <Button data-testid="license-verify-btn" variant="outline" :disabled="!newLicenseKey.trim() || verifying" @click="verifyKey">
               {{ verifying ? 'Verifying...' : 'Verify Key' }}
             </Button>
-            <Button :disabled="!newLicenseKey.trim() || applying" @click="openApplyDialog">
+            <Button data-testid="license-apply-btn" :disabled="!newLicenseKey.trim() || applying" @click="openApplyDialog">
               {{ applying ? 'Applying...' : 'Apply Key' }}
             </Button>
             <Button v-if="licenseInfo.has_license" variant="destructive" :disabled="removing" @click="openRemoveDialog">

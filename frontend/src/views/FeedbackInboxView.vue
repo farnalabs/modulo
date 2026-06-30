@@ -1,7 +1,7 @@
 <template>
   <div class="mx-auto max-w-6xl space-y-8 p-6">
     <header>
-      <h1 class="text-3xl font-bold tracking-tight">Feedback Inbox</h1>
+      <h1 data-testid="feedback-inbox-title" class="text-3xl font-bold tracking-tight">Feedback Inbox</h1>
       <p class="mt-1 text-muted-foreground">Review and resolve pending feedback from pipeline evaluations</p>
     </header>
 
@@ -70,7 +70,7 @@
     <ErrorAlert v-else-if="error" :message="error" />
 
     <template v-else>
-      <div v-if="records.length === 0" class="rounded-lg border bg-card p-8 text-center">
+      <div v-if="records.length === 0" data-testid="feedback-inbox-empty" class="rounded-lg border bg-card p-8 text-center">
         <svg
           class="mx-auto mb-3 h-12 w-12 text-muted-foreground"
           xmlns="http://www.w3.org/2000/svg"
@@ -81,7 +81,7 @@
         >
           <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
         </svg>
-        <p class="text-lg font-medium">No pending feedback</p>
+        <p class="text-lg font-medium">No feedback yet</p>
         <p class="mt-1 text-sm text-muted-foreground">All feedback records have been resolved or no evaluations have run yet.</p>
       </div>
 

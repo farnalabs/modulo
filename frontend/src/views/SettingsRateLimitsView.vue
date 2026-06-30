@@ -1,7 +1,7 @@
 <template>
   <div data-theme="agent" class="mx-auto max-w-4xl space-y-8 p-6">
     <header>
-      <h1 class="text-3xl font-bold tracking-tight">Rate Limits</h1>
+      <h1 data-testid="rate-limits-title" class="text-3xl font-bold tracking-tight">Rate Limits</h1>
       <p class="mt-1 text-muted-foreground">View per-route rate limiting rules and current usage</p>
     </header>
 
@@ -10,7 +10,7 @@
     <ErrorAlert v-else-if="loadError" :message="loadError" :on-retry="loadRules" />
 
     <div v-else class="space-y-6">
-      <div class="rounded-lg border bg-card p-6 shadow-sm">
+      <div data-testid="rate-limits-mode" class="rounded-lg border bg-card p-6 shadow-sm">
         <div class="mb-4 flex items-center justify-between">
           <h2 class="text-lg font-semibold">Mode</h2>
           <span
@@ -25,9 +25,9 @@
         </p>
       </div>
 
-      <div class="rounded-lg border bg-card p-6 shadow-sm">
+      <div data-testid="rate-limits-rules" class="rounded-lg border bg-card p-6 shadow-sm">
         <h2 class="mb-4 text-lg font-semibold">Rules</h2>
-        <table v-if="rules.length > 0" class="w-full text-sm">
+        <table v-if="rules.length > 0" data-testid="rate-limits-table" class="w-full text-sm">
           <thead>
             <tr class="border-b text-left text-muted-foreground">
               <th class="pb-2 font-medium">Path Prefix</th>

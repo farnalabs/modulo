@@ -70,6 +70,7 @@
           <input
             v-model="dateFrom"
             type="date"
+            placeholder="YYYY-MM-DD"
             data-testid="stage-board-date-from"
             class="rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
             @change="applyFilters"
@@ -81,6 +82,7 @@
           <input
             v-model="dateTo"
             type="date"
+            placeholder="YYYY-MM-DD"
             data-testid="stage-board-date-to"
             class="rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
             @change="applyFilters"
