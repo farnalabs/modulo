@@ -44,6 +44,7 @@
         <SidebarLink to="/admin/views" icon="Eye" label="Saved Views" />
         <SidebarLink to="/admin/costs" icon="DollarSign" label="Cost Breakdown" />
         <SidebarLink to="/admin/costs/limits" icon="CreditCard" label="Spend Limits" />
+        <SidebarLink to="/admin/costs/controls" icon="SlidersHorizontal" label="Cost Controls" />
         <SidebarLink to="/admin/run-retention" icon="Clock" label="Run Retention" />
         <SidebarLink to="/admin/feature-flags" icon="Flag" label="Feature Flags" />
         <SidebarLink to="/admin/org" icon="Building" label="Org Settings" />
@@ -175,6 +176,7 @@
         <SidebarLink to="/admin/views" icon="Eye" label="Saved Views" @click="mobileOpen = false" />
         <SidebarLink to="/admin/costs" icon="DollarSign" label="Cost Breakdown" @click="mobileOpen = false" />
         <SidebarLink to="/admin/costs/limits" icon="CreditCard" label="Spend Limits" @click="mobileOpen = false" />
+        <SidebarLink to="/admin/costs/controls" icon="SlidersHorizontal" label="Cost Controls" @click="mobileOpen = false" />
         <SidebarLink to="/admin/run-retention" icon="Clock" label="Run Retention" @click="mobileOpen = false" />
         <SidebarLink to="/admin/feature-flags" icon="Flag" label="Feature Flags" @click="mobileOpen = false" />
         <SidebarLink to="/admin/org" icon="Building" label="Org Settings" @click="mobileOpen = false" />
@@ -280,6 +282,7 @@ const icons: Record<string, string> = {
   Bell: '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9"/><path d="M10.3 21a1.94 1.94 0 0 0 3.4 0"/></svg>',
   Container: '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/><polyline points="3.27 6.96 12 12.01 20.73 6.96"/><line x1="12" y1="22.08" x2="12" y2="12"/></svg>',
   LayoutTemplate: '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><line x1="3" y1="9" x2="21" y2="9"/><line x1="9" y1="21" x2="9" y2="9"/></svg>',
+  SlidersHorizontal: '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="21" y1="4" x2="14" y2="4"/><line x1="10" y1="4" x2="3" y2="4"/><line x1="21" y1="12" x2="12" y2="12"/><line x1="8" y1="12" x2="3" y2="12"/><line x1="21" y1="20" x2="16" y2="20"/><line x1="12" y1="20" x2="3" y2="20"/><line x1="14" y1="2" x2="14" y2="6"/><line x1="8" y1="10" x2="8" y2="14"/><line x1="16" y1="18" x2="16" y2="22"/></svg>',
 }
 
 export const SidebarLink = defineComponent({

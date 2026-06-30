@@ -32,6 +32,7 @@ import PipelineTemplateGallery from '../views/PipelineTemplateGallery.vue'
 import AdminUsersView from '../views/AdminUsersView.vue'
 import AdminSpendLimitsView from '../views/AdminSpendLimitsView.vue'
 import AdminCostBreakdownView from '../views/AdminCostBreakdownView.vue'
+import AdminCostControlsView from '../views/AdminCostControlsView.vue'
 import AdminConnectorsView from '../views/AdminConnectorsView.vue'
 import AdminNodeCategoriesView from '../views/AdminNodeCategoriesView.vue'
 import AdminViewsView from '../views/AdminViewsView.vue'
@@ -188,6 +189,11 @@ const router = createRouter({
       path: '/admin/costs',
       name: 'admin-costs',
       component: AdminCostBreakdownView,
+    },
+    {
+      path: '/admin/costs/controls',
+      name: 'admin-costs-controls',
+      component: AdminCostControlsView,
     },
     {
       path: '/admin/audit',
