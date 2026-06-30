@@ -27,6 +27,7 @@ class Capability(StrEnum):
     COLLABORATION = "collaboration"
     MESSAGING = "messaging"
     NOTIFICATION = "notification"
+    PACKAGE_MANAGEMENT = "package_management"
     SECRETS_MANAGEMENT = "secrets_management"
 
 
@@ -50,6 +51,7 @@ class ConnectorType(StrEnum):
     SHORTCUT = "shortcut"
     YOUTRACK = "youtrack"
     NOTION = "notion"
+    NPM = "npm"
     CONFLUENCE = "confluence"
     DROPBOX_PAPER = "dropbox_paper"
     CIRCLECI = "circleci"
@@ -220,6 +222,8 @@ class ConnectorType(StrEnum):
                 return frozenset({
                     Capability.SECRETS_MANAGEMENT, Capability.READ, Capability.WRITE,
                 })
+            case ConnectorType.NPM:
+                return frozenset({Capability.PACKAGE_MANAGEMENT, Capability.READ})
             case _:
                 return frozenset()
 
