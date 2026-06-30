@@ -61,6 +61,7 @@ from modulo.connectors.snyk import SnykConnector
 from modulo.connectors.sonarqube import SonarQubeConnector
 from modulo.connectors.teamcity import TeamCityConnector
 from modulo.connectors.trello import TrelloConnector
+from modulo.connectors.trivy import TrivyConnector
 from modulo.connectors.youtrack import YouTrackConnector
 from modulo.core.pipeline_engine.output_filter import filter_payload_for_injection
 from modulo.core.plugin_registry import get_plugin_registry
@@ -386,6 +387,11 @@ def _build_connector(type_id: str, config: dict[str, Any], creds: dict[str, Any]
             return CodeClimateConnector(token=_get_cred(creds, "token", type_id))
         case "snyk":
             return SnykConnector(token=_get_cred(creds, "token", type_id))
+        case "trivy":
+            return TrivyConnector(
+                token=creds.get("token", ""),
+                base_url=config.get("base_url", "http://localhost:8080"),
+            )
         case _:
             registry = get_plugin_registry()
             if registry.has_connector_type(type_id):
