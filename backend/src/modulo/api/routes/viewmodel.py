@@ -58,6 +58,7 @@ class MeResponse(BaseModel):
     team_memberships_truncated: bool
     org_role: str
     preferences: dict[str, Any] = {}
+    is_system_admin: bool = False
 
 
 class UpdatePreferencesRequest(BaseModel):
@@ -155,6 +156,7 @@ class ViewModelCurrent(BaseModel):
     pending_hitl_gates: list[PendingHitlGate]
     views: list[ViewInfo] | None = None
     current_view: ViewInfo | None = None
+    is_system_admin: bool = False
 
 
 # ---------------------------------------------------------------------------
@@ -189,6 +191,7 @@ async def me(current_user: AuthenticatedPrincipal = Depends(get_current_user)) -
         team_memberships=[],
         team_memberships_truncated=False,
         org_role=current_user.org_role,
+        is_system_admin=current_user.is_system_admin,
     )
 
 
@@ -287,6 +290,7 @@ async def viewmodel_current(
         pending_hitl_gates=[PendingHitlGate.model_validate(h) for h in pending_hitl],
         views=all_views,
         current_view=current_view,
+        is_system_admin=current_user.is_system_admin,
     )
 
 

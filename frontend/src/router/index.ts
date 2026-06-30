@@ -47,6 +47,8 @@ import SettingsTriggersView from '../views/SettingsTriggersView.vue'
 import SettingsHitlReviewView from '../views/SettingsHitlReviewView.vue'
 import AdminNotificationDeliveryLogView from '../views/AdminNotificationDeliveryLogView.vue'
 import AdminEnvironmentProfilesView from '../views/AdminEnvironmentProfilesView.vue'
+import AdminSystemOrgsView from '../views/AdminSystemOrgsView.vue'
+import AdminSystemConfigView from '../views/AdminSystemConfigView.vue'
 
 const router = createRouter({
   history: createWebHistory(),
@@ -265,6 +267,16 @@ const router = createRouter({
       path: '/admin/environments',
       name: 'admin-environments',
       component: AdminEnvironmentProfilesView,
+    },
+    {
+      path: '/admin/system/orgs',
+      name: 'admin-system-orgs',
+      component: AdminSystemOrgsView,
+    },
+    {
+      path: '/admin/system/config',
+      name: 'admin-system-config',
+      component: AdminSystemConfigView,
     },
     {
       path: '/stages',
