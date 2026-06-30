@@ -174,7 +174,7 @@ async def trigger_run(
         snapshot = await create_snapshot_from_live_graph(
             session,
             pipeline_id=pipeline.id,
-            created_by=principal.user_id,
+            created_by=principal.account_id,
         )
         if snapshot is None:
             raise HTTPException(
@@ -597,7 +597,7 @@ async def observe_run_node(
             organisation_id=principal.organisation_id,
             run_id=run_id,
             node_id=node_id,
-            observed_by=principal.user_id,
+            observed_by=principal.account_id,
         )
 
     return ObserveNodeResponse(
@@ -661,7 +661,7 @@ async def recover_run_node(
                 run_id=run_id,
                 node_id=node_id,
                 input_data=body.input_data,
-                actor_id=principal.user_id,
+                actor_id=principal.account_id,
             )
         except RecoveryNotAllowedError as exc:
             raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc

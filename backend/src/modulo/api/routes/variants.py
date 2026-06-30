@@ -210,7 +210,7 @@ async def run_variant(
             org_id=principal.organisation_id,
             group=group,
             input_payload=body.input_payload,
-            created_by=principal.user_id,
+            created_by=principal.account_id,
         )
 
     if result is None:

@@ -4,20 +4,19 @@ import uuid
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field
-from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.api.dependencies import get_db_session
 from modulo.auth.dependencies import get_current_user
 from modulo.auth.jwt import AuthenticatedPrincipal
 from modulo.auth.passwords import hash_password, validate_password_strength
+from modulo.db.crud.account import create_account, get_account_by_email
+from modulo.db.crud.org_membership import create_membership
 from modulo.db.crud.organisation import (
     create_organisation,
     get_organisation,
     get_organisation_by_slug,
 )
-from modulo.db.crud.user import create_user, get_user_by_email
-from modulo.db.models.user import User
 
 router = APIRouter(prefix="/api/v1/admin/orgs", tags=["admin"])
 
@@ -65,7 +64,7 @@ async def admin_create_org(
         session,
         name=body.name,
         slug=body.slug,
-        created_by=current_user.user_id,
+        created_by=current_user.account_id,
     )
 
     return CreateOrgResponse(
@@ -122,12 +121,16 @@ async def admin_create_org_user(
             detail="Organisation not found",
         )
 
-    existing = await get_user_by_email(session, body.email)
+    existing = await get_account_by_email(session, body.email)
     if existing is not None:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail="A user with this email already exists",
-        )
+        from modulo.db.crud.org_membership import get_membership_by_account_and_org
+
+        membership = await get_membership_by_account_and_org(session, existing.id, org_id)
+        if membership is not None:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="A user with this email already exists in this organisation",
+            )
 
     try:
         validate_password_strength(body.password)
@@ -138,20 +141,30 @@ async def admin_create_org_user(
         ) from exc
 
     pw_hash = hash_password(body.password)
-    user = await create_user(
+
+    if existing is not None:
+        account = existing
+        account.password_hash = pw_hash
+    else:
+        account = await create_account(
+            session,
+            email=body.email,
+            display_name=body.display_name,
+            password_hash=pw_hash,
+        )
+
+    membership = await create_membership(
         session,
+        account_id=account.id,
         org_id=org_id,
-        email=body.email,
-        display_name=body.display_name,
-        password_hash=pw_hash,
-        org_role=body.org_role,
+        role=body.org_role,
     )
 
     return CreateOrgUserResponse(
-        id=str(user.id),
-        email=user.email,
-        display_name=user.display_name,
-        org_role=user.org_role,
-        auth_provider=user.auth_provider,
-        created_at=user.created_at.isoformat(),
+        id=str(account.id),
+        email=account.email,
+        display_name=account.display_name,
+        org_role=membership.role,
+        auth_provider=account.auth_provider,
+        created_at=account.created_at.isoformat(),
     )

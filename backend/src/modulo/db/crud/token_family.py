@@ -10,14 +10,14 @@ from modulo.db.models.token_family import TokenFamily
 
 
 async def get_or_create_family(
-    session: AsyncSession, family_id: uuid.UUID, user_id: uuid.UUID, org_id: uuid.UUID
+    session: AsyncSession, family_id: uuid.UUID, account_id: uuid.UUID, org_id: uuid.UUID | None
 ) -> TokenFamily:
     result = await session.execute(select(TokenFamily).where(TokenFamily.family_id == family_id))
     family = result.scalar_one_or_none()
     if family is None:
         family = TokenFamily(
             family_id=family_id,
-            user_id=user_id,
+            account_id=account_id,
             organisation_id=org_id,
             max_sequence=0,
         )
@@ -26,10 +26,10 @@ async def get_or_create_family(
     return family
 
 
-async def create_family(session: AsyncSession, user_id: uuid.UUID, org_id: uuid.UUID) -> TokenFamily:
+async def create_family(session: AsyncSession, account_id: uuid.UUID, org_id: uuid.UUID | None) -> TokenFamily:
     family = TokenFamily(
         family_id=uuid.uuid4(),
-        user_id=user_id,
+        account_id=account_id,
         organisation_id=org_id,
         max_sequence=0,
     )
@@ -76,8 +76,8 @@ async def blacklist_family(session: AsyncSession, family_id: uuid.UUID) -> bool:
     return True
 
 
-async def list_families_for_user(session: AsyncSession, user_id: uuid.UUID) -> list[TokenFamily]:
-    result = await session.execute(select(TokenFamily).where(TokenFamily.user_id == user_id))
+async def list_families_for_account(session: AsyncSession, account_id: uuid.UUID) -> list[TokenFamily]:
+    result = await session.execute(select(TokenFamily).where(TokenFamily.account_id == account_id))
     return list(result.scalars().all())
 
 

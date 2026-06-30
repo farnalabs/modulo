@@ -70,7 +70,7 @@ async def list_stages_endpoint(
 ) -> StageListResponse:
     async with session.begin():
         await set_rls_org(session, principal.organisation_id)
-        await set_rls_user_context(session, principal.user_id, principal.org_role)
+        await set_rls_user_context(session, principal.account_id, principal.org_role)
         result = await list_stages(session, page=page, page_size=page_size, owner_team_id=owner_team_id)
     return StageListResponse(
         items=[StageResponse.model_validate(s) for s in result.items],
@@ -88,12 +88,12 @@ async def create_stage_endpoint(
 ) -> StageResponse:
     async with session.begin():
         await set_rls_org(session, principal.organisation_id)
-        await set_rls_user_context(session, principal.user_id, principal.org_role)
+        await set_rls_user_context(session, principal.account_id, principal.org_role)
         stage = await create_stage(
             session,
             org_id=principal.organisation_id,
             name=body.name,
-            created_by=principal.user_id,
+            created_by=principal.account_id,
             description=body.description,
             position=body.position,
             owner_team_id=body.owner_team_id,
@@ -110,7 +110,7 @@ async def get_stage_endpoint(
 ) -> StageResponse:
     async with session.begin():
         await set_rls_org(session, principal.organisation_id)
-        await set_rls_user_context(session, principal.user_id, principal.org_role)
+        await set_rls_user_context(session, principal.account_id, principal.org_role)
         stage = await get_stage(session, stage_id)
     if stage is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Stage not found")
@@ -127,7 +127,7 @@ async def update_stage_endpoint(
     updates = {k: v for k, v in body.model_dump().items() if v is not None}
     async with session.begin():
         await set_rls_org(session, principal.organisation_id)
-        await set_rls_user_context(session, principal.user_id, principal.org_role)
+        await set_rls_user_context(session, principal.account_id, principal.org_role)
         stage = await update_stage(session, stage_id, updates)
     if stage is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Stage not found")
@@ -142,7 +142,7 @@ async def delete_stage_endpoint(
 ) -> None:
     async with session.begin():
         await set_rls_org(session, principal.organisation_id)
-        await set_rls_user_context(session, principal.user_id, principal.org_role)
+        await set_rls_user_context(session, principal.account_id, principal.org_role)
         deleted = await delete_stage(session, stage_id)
     if not deleted:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Stage not found")

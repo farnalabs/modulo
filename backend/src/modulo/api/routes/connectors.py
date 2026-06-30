@@ -105,7 +105,7 @@ async def list_connectors_endpoint(
 ) -> ConnectorListResponse:
     async with session.begin():
         await set_rls_org(session, principal.organisation_id)
-        await set_rls_user_context(session, principal.user_id, principal.org_role)
+        await set_rls_user_context(session, principal.account_id, principal.org_role)
         result = await list_connector_instances(session, page=page, page_size=page_size, cursor=cursor)
     return ConnectorListResponse(
         items=[_to_response(ci) for ci in result.items],
@@ -146,13 +146,13 @@ async def create_connector_endpoint(
     ciphertext = _encrypt(body.credentials, settings.fernet_key)
     async with session.begin():
         await set_rls_org(session, principal.organisation_id)
-        await set_rls_user_context(session, principal.user_id, principal.org_role)
+        await set_rls_user_context(session, principal.account_id, principal.org_role)
         ci = await create_connector_instance(
             session,
             org_id=principal.organisation_id,
             name=body.name,
             connector_type_id=body.connector_type_id,
-            owner_id=principal.user_id,
+            owner_id=principal.account_id,
             credentials_ciphertext=ciphertext,
             config_json=body.config_json,
             allowed_operations=body.allowed_operations,
@@ -169,7 +169,7 @@ async def get_connector_endpoint(
 ) -> ConnectorResponse:
     async with session.begin():
         await set_rls_org(session, principal.organisation_id)
-        await set_rls_user_context(session, principal.user_id, principal.org_role)
+        await set_rls_user_context(session, principal.account_id, principal.org_role)
         ci = await get_connector_instance(session, connector_id)
     if ci is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Connector not found")
@@ -190,7 +190,7 @@ async def update_connector_endpoint(
         # Fetch current connector to check type
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
-            await set_rls_user_context(session, principal.user_id, principal.org_role)
+            await set_rls_user_context(session, principal.account_id, principal.org_role)
             existing = await get_connector_instance(session, connector_id)
         if existing is not None and existing.connector_type_id == "github":
             temp = GitHubConnector(token=new_credentials)
@@ -214,7 +214,7 @@ async def update_connector_endpoint(
         updates["credentials_ciphertext"] = _ct  # nosemgrep: credential-not-in-state
     async with session.begin():
         await set_rls_org(session, principal.organisation_id)
-        await set_rls_user_context(session, principal.user_id, principal.org_role)
+        await set_rls_user_context(session, principal.account_id, principal.org_role)
         ci = await update_connector_instance(session, connector_id, updates)
     if ci is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Connector not found")
@@ -229,7 +229,7 @@ async def delete_connector_endpoint(
 ) -> None:
     async with session.begin():
         await set_rls_org(session, principal.organisation_id)
-        await set_rls_user_context(session, principal.user_id, principal.org_role)
+        await set_rls_user_context(session, principal.account_id, principal.org_role)
         deleted = await delete_connector_instance(session, connector_id)
     if not deleted:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Connector not found")

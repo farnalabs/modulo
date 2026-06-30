@@ -94,11 +94,11 @@ async def rotate_key(
         session,
         org_id=current_user.organisation_id,
         event_type="fernet_key_rotation_started",
-        actor_user_id=current_user.user_id,
+        actor_user_id=current_user.account_id,
         resource_type="encryption",
         resource_id=current_user.organisation_id,
         payload_json={
-            "initiated_by": str(current_user.user_id),
+            "initiated_by": str(current_user.account_id),
             "old_key_provided": bool(body.old_fernet_key),
         },
     )
@@ -116,7 +116,7 @@ async def rotate_key(
             new_key=body.new_fernet_key,
             old_key=old_key,
             org_id=current_user.organisation_id,
-            actor_user_id=current_user.user_id,
+            actor_user_id=current_user.account_id,
         )
     )
     task_id = str(id(task))

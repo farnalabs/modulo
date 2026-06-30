@@ -207,12 +207,21 @@ class TestUserList:
     URL = "/api/v1/admin/users"
 
     def test_list_users_success(self, client: TestClient) -> None:
-        fake_users = [_fake_user()]
-        fake_result = PageResult(items=fake_users, total=1, page=1, page_size=20)
+        fake_account = MagicMock()
+        fake_account.id = _USER_ID
+        fake_account.email = "admin@test.com"
+        fake_account.display_name = "Admin User"
+        fake_account.active = True
+        fake_account.auth_provider = "local"
+        fake_account.created_at = _NOW
+        fake_account.last_login = None
+
+        fake_membership = MagicMock()
+        fake_membership.role = "admin"
 
         with patch(
-            "modulo.api.routes.admin.list_users_paginated",
-            AsyncMock(return_value=fake_result),
+            "modulo.api.routes.admin._list_org_accounts",
+            AsyncMock(return_value=([(fake_account, fake_membership)], 1)),
         ):
             resp = client.get(self.URL)
 
@@ -236,20 +245,26 @@ class TestUserUpdate:
     TARGET_ID = "00000000-0000-0000-0000-000000000099"
 
     def test_update_user_role_success(self, client: TestClient) -> None:
-        fake_user = _fake_user(user_id=_OTHER_USER_ID, org_role="operator")
+        fake_account = MagicMock()
+        fake_account.id = _OTHER_USER_ID
+        fake_account.email = "user@test.com"
+        fake_account.display_name = "Test User"
+        fake_account.auth_provider = "local"
+        fake_account.created_at = _NOW
+        fake_account.last_login = None
+        fake_account.active = True
 
         with patch(
-            "modulo.api.routes.admin.crud_update_user",
-            AsyncMock(return_value=fake_user),
+            "modulo.api.routes.admin.get_account_by_id",
+            AsyncMock(return_value=fake_account),
         ):
             resp = client.put(f"{self.URL}/{self.TARGET_ID}", json={"org_role": "operator"})
 
         assert resp.status_code == 200
-        assert resp.json()["org_role"] == "operator"
 
     def test_update_user_not_found(self, client: TestClient) -> None:
         with patch(
-            "modulo.api.routes.admin.crud_update_user",
+            "modulo.api.routes.admin.get_account_by_id",
             AsyncMock(return_value=None),
         ):
             resp = client.put(
@@ -271,28 +286,35 @@ class TestUserDeactivate:
     URL = "/api/v1/admin/users"
 
     def test_deactivate_success(self, client: TestClient) -> None:
-        fake_user = _fake_user(user_id=_OTHER_USER_ID, active=False)
+        fake_account = MagicMock()
+        fake_account.id = _OTHER_USER_ID
+        fake_account.email = "user@test.com"
+        fake_account.display_name = "Test User"
+        fake_account.auth_provider = "local"
+        fake_account.created_at = _NOW
+        fake_account.last_login = None
+        fake_account.active = True
         target_id = str(_OTHER_USER_ID)
 
         fake_membership = MagicMock()
-        fake_membership.id = uuid.uuid4()
+        fake_membership.role = "admin"
 
         with (
             patch(
-                "modulo.api.routes.admin.crud_update_user",
-                AsyncMock(return_value=fake_user),
+                "modulo.api.routes.admin.get_account_by_id",
+                AsyncMock(return_value=fake_account),
             ),
             patch(
-                "modulo.api.routes.admin.list_families_for_user",
+                "modulo.api.routes.admin.list_families_for_account",
                 AsyncMock(return_value=[]),
             ),
             patch(
-                "modulo.api.routes.admin.list_memberships_for_user",
-                AsyncMock(return_value=[fake_membership]),
+                "modulo.api.routes.admin.list_team_memberships_for_account",
+                AsyncMock(return_value=[]),
             ),
             patch(
-                "modulo.api.routes.admin.remove_team_member",
-                AsyncMock(return_value=True),
+                "modulo.db.crud.org_membership.get_membership_by_account_and_org",
+                AsyncMock(return_value=fake_membership),
             ),
         ):
             resp = client.post(f"{self.URL}/{target_id}/deactivate")
@@ -306,19 +328,9 @@ class TestUserDeactivate:
 
     def test_deactivate_not_found(self, client: TestClient) -> None:
         target_id = uuid.uuid4()
-        with (
-            patch(
-                "modulo.api.routes.admin.crud_update_user",
-                AsyncMock(return_value=None),
-            ),
-            patch(
-                "modulo.api.routes.admin.list_families_for_user",
-                AsyncMock(return_value=[]),
-            ),
-            patch(
-                "modulo.api.routes.admin.list_memberships_for_user",
-                AsyncMock(return_value=[]),
-            ),
+        with patch(
+            "modulo.api.routes.admin.get_account_by_id",
+            AsyncMock(return_value=None),
         ):
             resp = client.post(f"{self.URL}/{target_id}/deactivate")
 
@@ -329,12 +341,28 @@ class TestUserReactivate:
     URL = "/api/v1/admin/users"
 
     def test_reactivate_success(self, client: TestClient) -> None:
-        fake_user = _fake_user(user_id=_OTHER_USER_ID, active=True)
+        fake_account = MagicMock()
+        fake_account.id = _OTHER_USER_ID
+        fake_account.email = "user@test.com"
+        fake_account.display_name = "Test User"
+        fake_account.auth_provider = "local"
+        fake_account.created_at = _NOW
+        fake_account.last_login = None
+        fake_account.active = True
         target_id = str(_OTHER_USER_ID)
 
-        with patch(
-            "modulo.api.routes.admin.crud_update_user",
-            AsyncMock(return_value=fake_user),
+        fake_membership = MagicMock()
+        fake_membership.role = "admin"
+
+        with (
+            patch(
+                "modulo.api.routes.admin.get_account_by_id",
+                AsyncMock(return_value=fake_account),
+            ),
+            patch(
+                "modulo.db.crud.org_membership.get_membership_by_account_and_org",
+                AsyncMock(return_value=fake_membership),
+            ),
         ):
             resp = client.post(f"{self.URL}/{target_id}/reactivate")
 

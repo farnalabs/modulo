@@ -50,7 +50,7 @@ def _make_membership(**overrides: object) -> MagicMock:
     m.id = overrides.get("id", _MEMBERSHIP_ID)
     m.organisation_id = overrides.get("organisation_id", _ORG_ID)
     m.team_id = overrides.get("team_id", _TEAM_ID)
-    m.user_id = overrides.get("user_id", _USER_ID)
+    m.account_id = overrides.get("account_id", _USER_ID)
     m.role = overrides.get("role", "viewer")
     m.created_at = _NOW
     return m
@@ -248,20 +248,24 @@ class TestDeleteTeam:
 
 class TestAddMember:
     def test_returns_201(self, client: TestClient) -> None:
-        target_user = MagicMock()
-        target_user.id = _USER_ID
-        target_user.org_role = "admin"
+        target_account = MagicMock()
+        target_account.id = _USER_ID
+        target_membership = MagicMock()
+        target_membership.role = "admin"
         with (
             patch(
                 "modulo.api.routes.teams.add_team_member",
                 return_value=_make_membership(),
             ),
-            patch("modulo.api.routes.teams.get_user_by_id_org", new_callable=AsyncMock) as m_get_user,
+            patch("modulo.db.crud.account.get_account_by_id", new=AsyncMock(return_value=target_account)),
+            patch(
+                "modulo.db.crud.org_membership.get_membership_by_account_and_org",
+                new=AsyncMock(return_value=target_membership),
+            ),
             patch("modulo.api.routes.teams.get_team", return_value=_make_team()),
-            patch("modulo.api.routes.teams.set_rls_org"),
-            patch("modulo.api.routes.teams.set_rls_user_context"),
+            patch("modulo.api.routes.teams.set_rls_org", new=AsyncMock()),
+            patch("modulo.api.routes.teams.set_rls_user_context", new=AsyncMock()),
         ):
-            m_get_user.return_value = target_user
             resp = client.post(
                 f"/api/v1/teams/{_TEAM_ID}/members",
                 json={"user_id": str(_USER_ID), "role": "viewer"},
@@ -290,17 +294,21 @@ class TestAddMember:
         assert resp.status_code == 422
 
     def test_role_exceeds_org_role_returns_422(self, client: TestClient) -> None:
-        target_user = MagicMock()
-        target_user.id = _USER_ID
-        target_user.org_role = "viewer"
+        target_account = MagicMock()
+        target_account.id = _USER_ID
+        target_membership = MagicMock()
+        target_membership.role = "viewer"
         with (
-            patch("modulo.api.routes.teams.get_user_by_id_org", new_callable=AsyncMock) as m_get_user,
+            patch("modulo.db.crud.account.get_account_by_id", new=AsyncMock(return_value=target_account)),
+            patch(
+                "modulo.db.crud.org_membership.get_membership_by_account_and_org",
+                new=AsyncMock(return_value=target_membership),
+            ),
             patch("modulo.api.routes.teams.add_team_member"),
             patch("modulo.api.routes.teams.get_team", return_value=_make_team()),
-            patch("modulo.api.routes.teams.set_rls_org"),
-            patch("modulo.api.routes.teams.set_rls_user_context"),
+            patch("modulo.api.routes.teams.set_rls_org", new=AsyncMock()),
+            patch("modulo.api.routes.teams.set_rls_user_context", new=AsyncMock()),
         ):
-            m_get_user.return_value = target_user
             resp = client.post(
                 f"/api/v1/teams/{_TEAM_ID}/members",
                 json={"user_id": str(_USER_ID), "role": "operator"},
@@ -310,20 +318,24 @@ class TestAddMember:
         assert "exceeds" in data["detail"].lower()
 
     def test_role_within_org_role_succeeds(self, client: TestClient) -> None:
-        target_user = MagicMock()
-        target_user.id = _USER_ID
-        target_user.org_role = "admin"
+        target_account = MagicMock()
+        target_account.id = _USER_ID
+        target_membership = MagicMock()
+        target_membership.role = "admin"
         with (
-            patch("modulo.api.routes.teams.get_user_by_id_org", new_callable=AsyncMock) as m_get_user,
+            patch("modulo.db.crud.account.get_account_by_id", new=AsyncMock(return_value=target_account)),
+            patch(
+                "modulo.db.crud.org_membership.get_membership_by_account_and_org",
+                new=AsyncMock(return_value=target_membership),
+            ),
             patch(
                 "modulo.api.routes.teams.add_team_member",
-                return_value=_make_membership(role="operator"),
+                new=AsyncMock(return_value=_make_membership(role="operator")),
             ),
             patch("modulo.api.routes.teams.get_team", return_value=_make_team()),
-            patch("modulo.api.routes.teams.set_rls_org"),
-            patch("modulo.api.routes.teams.set_rls_user_context"),
+            patch("modulo.api.routes.teams.set_rls_org", new=AsyncMock()),
+            patch("modulo.api.routes.teams.set_rls_user_context", new=AsyncMock()),
         ):
-            m_get_user.return_value = target_user
             resp = client.post(
                 f"/api/v1/teams/{_TEAM_ID}/members",
                 json={"user_id": str(_USER_ID), "role": "operator"},
@@ -332,11 +344,10 @@ class TestAddMember:
 
     def test_user_not_found_returns_404(self, client: TestClient) -> None:
         with (
-            patch("modulo.api.routes.teams.get_user_by_id_org", new_callable=AsyncMock) as m_get_user,
-            patch("modulo.api.routes.teams.set_rls_org"),
-            patch("modulo.api.routes.teams.set_rls_user_context"),
+            patch("modulo.db.crud.account.get_account_by_id", new=AsyncMock(return_value=None)),
+            patch("modulo.api.routes.teams.set_rls_org", new=AsyncMock()),
+            patch("modulo.api.routes.teams.set_rls_user_context", new=AsyncMock()),
         ):
-            m_get_user.return_value = None
             resp = client.post(
                 f"/api/v1/teams/{_TEAM_ID}/members",
                 json={"user_id": str(uuid.uuid4()), "role": "viewer"},

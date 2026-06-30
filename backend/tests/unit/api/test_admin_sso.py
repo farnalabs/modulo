@@ -588,14 +588,13 @@ class TestApplyGroupMappings:
         session = _make_mock_session()
         session.execute.return_value = MagicMock(scalar_one_or_none=MagicMock(return_value=None))
 
-        user = MagicMock()
-        user.id = _USER_ID
-        user.organisation_id = _ORG_ID
+        account = MagicMock()
+        account.id = _USER_ID
 
         mappings = [
             {"idp_group": "engineering", "team_id": "00000000-0000-0000-0000-000000000020", "team_role": "operator"},
         ]
-        await apply_group_mappings(session, user, ["engineering", "design"], mappings)
+        await apply_group_mappings(session, account, _ORG_ID, ["engineering", "design"], mappings)
 
         add_calls = [c for c in session.add.call_args_list if c[0][0].__class__.__name__ == "TeamMembership"]
         assert len(add_calls) == 1
@@ -605,14 +604,13 @@ class TestApplyGroupMappings:
 
         session = _make_mock_session()
 
-        user = MagicMock()
-        user.id = _USER_ID
-        user.organisation_id = _ORG_ID
+        account = MagicMock()
+        account.id = _USER_ID
 
         mappings = [
             {"idp_group": "engineering", "team_id": "00000000-0000-0000-0000-000000000020", "team_role": "operator"},
         ]
-        await apply_group_mappings(session, user, ["design"], mappings)
+        await apply_group_mappings(session, account, _ORG_ID, ["design"], mappings)
 
         add_calls = [c for c in session.add.call_args_list if c[0][0].__class__.__name__ == "TeamMembership"]
         assert len(add_calls) == 0
@@ -622,11 +620,10 @@ class TestApplyGroupMappings:
 
         session = _make_mock_session()
 
-        user = MagicMock()
-        user.id = _USER_ID
-        user.organisation_id = _ORG_ID
+        account = MagicMock()
+        account.id = _USER_ID
 
-        await apply_group_mappings(session, user, ["engineering"], [])
+        await apply_group_mappings(session, account, _ORG_ID, ["engineering"], [])
 
         add_calls = [c for c in session.add.call_args_list if c[0][0].__class__.__name__ == "TeamMembership"]
         assert len(add_calls) == 0
@@ -640,13 +637,12 @@ class TestApplyGroupMappings:
         existing.role = "viewer"
         session.execute.return_value = MagicMock(scalar_one_or_none=MagicMock(return_value=existing))
 
-        user = MagicMock()
-        user.id = _USER_ID
-        user.organisation_id = _ORG_ID
+        account = MagicMock()
+        account.id = _USER_ID
 
         mappings = [
             {"idp_group": "engineering", "team_id": "00000000-0000-0000-0000-000000000020", "team_role": "operator"},
         ]
-        await apply_group_mappings(session, user, ["engineering"], mappings)
+        await apply_group_mappings(session, account, _ORG_ID, ["engineering"], mappings)
 
         assert existing.role == "operator"

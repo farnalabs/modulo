@@ -121,7 +121,7 @@ async def claim_gate(
                 run_id=run_id,
                 gate_id=gate_id,
                 org_id=principal.organisation_id,
-                claimant_id=principal.user_id,
+                claimant_id=principal.account_id,
                 expiry_minutes=body.expiry_minutes,
             )
         except GateNotFoundError as exc:
@@ -170,7 +170,7 @@ async def approve_gate(
                 gate_id=gate_id,
                 org_id=principal.organisation_id,
                 claim_token=body.claim_token,
-                actor_id=principal.user_id,
+                actor_id=principal.account_id,
             )
         except GateNotFoundError as exc:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
@@ -229,7 +229,7 @@ async def approve_gate_with_modification(
                 org_id=principal.organisation_id,
                 claim_token=body.claim_token,
                 modified_output=body.modified_output,
-                actor_id=principal.user_id,
+                actor_id=principal.account_id,
             )
         except GateNotFoundError as exc:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
@@ -348,7 +348,7 @@ async def deliver_manual_output(
                 org_id=principal.organisation_id,
                 claim_token=body.claim_token,
                 output=body.output,
-                actor_id=principal.user_id,
+                actor_id=principal.account_id,
             )
         except GateNotFoundError as exc:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
@@ -398,7 +398,7 @@ async def submit_manual_output(
                 gate_id=gate_id,
                 org_id=principal.organisation_id,
                 claim_token=body.claim_token,
-                actor_id=principal.user_id,
+                actor_id=principal.account_id,
             )
         except GateNotFoundError as exc:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc

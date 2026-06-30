@@ -350,7 +350,7 @@ async def list_pipelines_endpoint(
 ) -> PipelineListResponse:
     async with session.begin():
         await set_rls_org(session, principal.organisation_id)
-        await set_rls_user_context(session, principal.user_id, principal.org_role)
+        await set_rls_user_context(session, principal.account_id, principal.org_role)
         result = await list_pipelines(session, page=page, page_size=page_size, cursor=cursor)
     return PipelineListResponse(
         items=[PipelineResponse.model_validate(p) for p in result.items],
@@ -370,12 +370,12 @@ async def create_pipeline_endpoint(
 ) -> PipelineResponse:
     async with session.begin():
         await set_rls_org(session, principal.organisation_id)
-        await set_rls_user_context(session, principal.user_id, principal.org_role)
+        await set_rls_user_context(session, principal.account_id, principal.org_role)
         pipeline = await create_pipeline(
             session,
             org_id=principal.organisation_id,
             name=body.name,
-            created_by=principal.user_id,
+            created_by=principal.account_id,
             description=body.description,
             visibility=body.visibility,
             max_concurrent_runs=body.max_concurrent_runs,
@@ -395,7 +395,7 @@ async def get_pipeline_endpoint(
 ) -> PipelineResponse:
     async with session.begin():
         await set_rls_org(session, principal.organisation_id)
-        await set_rls_user_context(session, principal.user_id, principal.org_role)
+        await set_rls_user_context(session, principal.account_id, principal.org_role)
         pipeline = await get_pipeline(session, pipeline_id)
     if pipeline is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Pipeline not found")
@@ -410,7 +410,7 @@ async def get_pipeline_graph_endpoint(
 ) -> PipelineGraphResponse:
     async with session.begin():
         await set_rls_org(session, principal.organisation_id)
-        await set_rls_user_context(session, principal.user_id, principal.org_role)
+        await set_rls_user_context(session, principal.account_id, principal.org_role)
         graph = await get_pipeline_graph(session, pipeline_id)
     if graph is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Pipeline not found")
@@ -465,7 +465,7 @@ async def replace_pipeline_graph_endpoint(
 
     async with session.begin():
         await set_rls_org(session, principal.organisation_id)
-        await set_rls_user_context(session, principal.user_id, principal.org_role)
+        await set_rls_user_context(session, principal.account_id, principal.org_role)
         schema_pins, model_backend_pins = await _resolve_graph_references(
             session,
             body.nodes,
@@ -511,7 +511,7 @@ async def update_pipeline_endpoint(
     updates = {k: v for k, v in body.model_dump().items() if v is not None}
     async with session.begin():
         await set_rls_org(session, principal.organisation_id)
-        await set_rls_user_context(session, principal.user_id, principal.org_role)
+        await set_rls_user_context(session, principal.account_id, principal.org_role)
         if "default_autonomy_level" in updates:
             previous = await get_pipeline(session, pipeline_id)
             prev_level = previous.default_autonomy_level if previous else None
@@ -520,7 +520,7 @@ async def update_pipeline_endpoint(
                     session,
                     org_id=principal.organisation_id,
                     event_type="pipeline.autonomy_level_changed",
-                    actor_user_id=principal.user_id,
+                    actor_user_id=principal.account_id,
                     resource_type="pipeline",
                     resource_id=pipeline_id,
                     payload_json=autonomy_change_payload(
@@ -543,7 +543,7 @@ async def delete_pipeline_endpoint(
 ) -> None:
     async with session.begin():
         await set_rls_org(session, principal.organisation_id)
-        await set_rls_user_context(session, principal.user_id, principal.org_role)
+        await set_rls_user_context(session, principal.account_id, principal.org_role)
         deleted = await delete_pipeline(session, pipeline_id)
     if not deleted:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Pipeline not found")
@@ -570,12 +570,12 @@ async def clone_pipeline_endpoint(
     session: AsyncSession = Depends(get_db_session),
     principal: AuthenticatedPrincipal = Depends(get_current_user),
 ) -> PipelineResponse:
-    _log.info("Copy request: pipeline=%s org=%s user=%s", pipeline_id, principal.organisation_id, principal.user_id)
+    _log.info("Copy request: pipeline=%s org=%s user=%s", pipeline_id, principal.organisation_id, principal.account_id)
 
     if principal.org_role not in ("admin", "owner", "member"):
         _log.warning(
             "Copy denied: user %s has role '%s' (requires admin/owner/member)",
-            principal.user_id,
+            principal.account_id,
             principal.org_role,
         )
         raise HTTPException(
@@ -585,7 +585,7 @@ async def clone_pipeline_endpoint(
 
     async with session.begin():
         await set_rls_org(session, principal.organisation_id)
-        await set_rls_user_context(session, principal.user_id, principal.org_role)
+        await set_rls_user_context(session, principal.account_id, principal.org_role)
 
         # Step 1 — validate source exists
         _log.info("Step 1/4: verifying source pipeline %s exists", pipeline_id)
@@ -614,7 +614,7 @@ async def clone_pipeline_endpoint(
                 session,
                 org_id=principal.organisation_id,
                 pipeline_id=pipeline_id,
-                created_by=principal.user_id,
+                created_by=principal.account_id,
                 new_name=body.name,
             )
         except Exception:
@@ -663,7 +663,7 @@ async def trigger_quality_report(
 ) -> QualityReportResponse:
     async with session.begin():
         await set_rls_org(session, principal.organisation_id)
-        await set_rls_user_context(session, principal.user_id, principal.org_role)
+        await set_rls_user_context(session, principal.account_id, principal.org_role)
 
         pipeline = await get_pipeline(session, pipeline_id)
         if pipeline is None:
@@ -796,7 +796,7 @@ async def list_snapshot_endpoint(
 ) -> SnapshotListResponse:
     async with session.begin():
         await set_rls_org(session, principal.organisation_id)
-        await set_rls_user_context(session, principal.user_id, principal.org_role)
+        await set_rls_user_context(session, principal.account_id, principal.org_role)
         snapshots, total = await list_snapshots(session, pipeline_id, page=page, page_size=page_size)
     return SnapshotListResponse(
         items=[_snapshot_to_response(s) for s in snapshots],
@@ -813,7 +813,7 @@ async def get_snapshot_detail_endpoint(
 ) -> SnapshotDetailResponse:
     async with session.begin():
         await set_rls_org(session, principal.organisation_id)
-        await set_rls_user_context(session, principal.user_id, principal.org_role)
+        await set_rls_user_context(session, principal.account_id, principal.org_role)
         snapshot = await get_snapshot_detail(session, snapshot_id)
     if snapshot is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Snapshot not found")
@@ -830,7 +830,7 @@ async def tag_snapshot_endpoint(
 ) -> SnapshotResponse:
     async with session.begin():
         await set_rls_org(session, principal.organisation_id)
-        await set_rls_user_context(session, principal.user_id, principal.org_role)
+        await set_rls_user_context(session, principal.account_id, principal.org_role)
         snapshot = await tag_snapshot(session, snapshot_id, tag=body.tag, notes=body.notes)
     if snapshot is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Snapshot not found")
@@ -846,8 +846,8 @@ async def rollback_snapshot_endpoint(
 ) -> SnapshotResponse:
     async with session.begin():
         await set_rls_org(session, principal.organisation_id)
-        await set_rls_user_context(session, principal.user_id, principal.org_role)
-        new_snapshot = await rollback_to_snapshot(session, pipeline_id, snapshot_id, created_by=principal.user_id)
+        await set_rls_user_context(session, principal.account_id, principal.org_role)
+        new_snapshot = await rollback_to_snapshot(session, pipeline_id, snapshot_id, created_by=principal.account_id)
     if new_snapshot is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -870,7 +870,7 @@ async def delete_snapshot_endpoint(
         )
     async with session.begin():
         await set_rls_org(session, principal.organisation_id)
-        await set_rls_user_context(session, principal.user_id, principal.org_role)
+        await set_rls_user_context(session, principal.account_id, principal.org_role)
         deleted = await delete_snapshot(session, snapshot_id)
     if not deleted:
         raise HTTPException(
@@ -888,7 +888,7 @@ async def diff_snapshot_endpoint(
 ) -> SnapshotDiffResponse:
     async with session.begin():
         await set_rls_org(session, principal.organisation_id)
-        await set_rls_user_context(session, principal.user_id, principal.org_role)
+        await set_rls_user_context(session, principal.account_id, principal.org_role)
         result = await diff_snapshots(session, body.snapshot_a_id, body.snapshot_b_id)
     if result is None:
         raise HTTPException(
@@ -922,7 +922,7 @@ async def convert_node_to_agent_endpoint(
 ) -> PipelineGraphResponse:
     async with session.begin():
         await set_rls_org(session, principal.organisation_id)
-        await set_rls_user_context(session, principal.user_id, principal.org_role)
+        await set_rls_user_context(session, principal.account_id, principal.org_role)
 
         graph = await get_pipeline_graph(session, pipeline_id)
         if graph is None:
@@ -1005,7 +1005,7 @@ async def revert_node_to_manual_endpoint(
 ) -> PipelineGraphResponse:
     async with session.begin():
         await set_rls_org(session, principal.organisation_id)
-        await set_rls_user_context(session, principal.user_id, principal.org_role)
+        await set_rls_user_context(session, principal.account_id, principal.org_role)
 
         graph = await get_pipeline_graph(session, pipeline_id)
         if graph is None:

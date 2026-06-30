@@ -42,15 +42,16 @@ def _make_mock_session() -> AsyncMock:
     return session
 
 
-def _make_mock_user() -> MagicMock:
-    user = MagicMock()
-    user.id = _USER_ID
-    user.email = "testuser@example.com"
-    user.display_name = "Test User"
-    user.org_role = "admin"
-    user.active = True
-    user.created_at = _NOW
-    return user
+def _make_mock_account() -> MagicMock:
+    account = MagicMock()
+    account.id = _USER_ID
+    account.email = "testuser@example.com"
+    account.display_name = "Test User"
+    account.active = True
+    account.created_at = _NOW
+    account.is_system_admin = False
+    account.password_hash = None
+    return account
 
 
 def _make_mock_pipeline(**kwargs: Any) -> MagicMock:
@@ -207,11 +208,19 @@ class TestResponseModelCoverage:
 
 class TestAuthEndpointSchemas:
     def test_login_success_schema(self, client: TestClient) -> None:
-        user = _make_mock_user()
+        account = _make_mock_account()
+        fake_membership = MagicMock()
+        fake_membership.organisation_id = _ORG_ID
+        fake_membership.role = "admin"
+
         with (
-            patch("modulo.api.routes.auth.get_user_by_email", return_value=user),
+            patch("modulo.api.routes.auth.get_account_by_email", return_value=account),
             patch("modulo.api.routes.auth.authenticate_db_user", return_value=True),
             patch("modulo.api.routes.auth.update_last_login"),
+            patch(
+                "modulo.api.routes.auth.list_memberships_for_account",
+                return_value=[fake_membership],
+            ),
             patch(
                 "modulo.api.routes.auth.create_family",
                 return_value=MagicMock(family_id=uuid.uuid4()),
@@ -228,7 +237,7 @@ class TestAuthEndpointSchemas:
         validate_shape(resp.json(), LoginResponse)
 
     def test_login_failure_schema(self, client: TestClient) -> None:
-        with patch("modulo.api.routes.auth.get_user_by_email", return_value=None):
+        with patch("modulo.api.routes.auth.get_account_by_email", return_value=None):
             resp = client.post(
                 "/api/v1/auth/login",
                 json={"email": "nobody", "password": "wrong"},
@@ -238,8 +247,8 @@ class TestAuthEndpointSchemas:
         validate_shape(resp.json(), ErrorResponse)
 
     def test_me_schema(self, client: TestClient) -> None:
-        user = _make_mock_user()
-        with patch("modulo.api.routes.auth.get_user_by_id", return_value=user):
+        account = _make_mock_account()
+        with patch("modulo.api.routes.auth.get_account_by_id", return_value=account):
             resp = client.get("/api/v1/auth/me")
 
         assert resp.status_code == 200

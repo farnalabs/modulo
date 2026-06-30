@@ -88,7 +88,7 @@ async def create_feedback(
         record = await mgr.create_feedback_record(
             run_id=run_id,
             gate_id=body.gate_id,
-            rejected_by=principal.user_id,
+            rejected_by=principal.account_id,
             rejection_reason=body.rejection_reason,
             rejected_output=body.rejected_output,
             producing_node_id=body.producing_node_id,

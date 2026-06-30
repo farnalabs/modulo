@@ -1,24 +1,27 @@
-"""SCIM 2.0 provisioning CRUD — maps SCIM resources to internal User/Team models.
+"""SCIM 2.0 provisioning CRUD — maps SCIM resources to internal Account/OrgMembership models.
 
-Users  → internal User
+Users  → Account + OrgMembership
 Groups → internal Team, with members → TeamMembership
 """
 
 import uuid
 
 from sqlalchemy import func, or_, select
+from sqlalchemy import update as sa_update
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from modulo.db.crud.account import get_account_by_email, get_account_by_id
+from modulo.db.crud.org_membership import create_membership, get_membership_by_account_and_org
 from modulo.db.crud.team import create_team, delete_team, get_team, update_team
 from modulo.db.crud.team_membership import (
     add_team_member,
-    get_membership_by_team_and_user,
+    get_membership_by_team_and_account,
     remove_team_member,
 )
-from modulo.db.crud.user import get_user_by_id_org
+from modulo.db.models.account import Account
+from modulo.db.models.org_membership import OrgMembership
 from modulo.db.models.team import Team
 from modulo.db.models.team_membership import TeamMembership
-from modulo.db.models.user import User
 
 # ── User provisioning ─────────────────────────────────────────────────
 
@@ -31,51 +34,80 @@ async def scim_create_user(
     display_name: str,
     active: bool = True,
     org_role: str = "runner",
-) -> User:
-    user = User(
-        organisation_id=org_id,
+) -> Account:
+    existing = await get_account_by_email(session, email)
+    if existing is not None:
+        membership = await get_membership_by_account_and_org(session, existing.id, org_id)
+        if membership is None:
+            await create_membership(
+                session,
+                account_id=existing.id,
+                org_id=org_id,
+                role=org_role,
+            )
+        existing.active = active
+        await session.flush()
+        return existing
+
+    account = Account(
         email=email,
         display_name=display_name,
         active=active,
-        org_role=org_role,
         auth_provider="scim",
         password_hash=None,
     )
-    session.add(user)
+    session.add(account)
     await session.flush()
-    return user
+
+    await create_membership(
+        session,
+        account_id=account.id,
+        org_id=org_id,
+        role=org_role,
+    )
+    return account
 
 
-async def scim_get_user(session: AsyncSession, org_id: uuid.UUID, user_id: uuid.UUID) -> User | None:
-    return await get_user_by_id_org(session, user_id, org_id)
+async def scim_get_user(session: AsyncSession, org_id: uuid.UUID, user_id: uuid.UUID) -> Account | None:
+    account = await get_account_by_id(session, user_id)
+    if account is None:
+        return None
+    membership = await get_membership_by_account_and_org(session, user_id, org_id)
+    if membership is None:
+        return None
+    return account
 
 
 async def scim_update_user(
     session: AsyncSession,
-    user: User,
+    account: Account,
     *,
     email: str | None = None,
     display_name: str | None = None,
     active: bool | None = None,
     org_role: str | None = None,
-) -> User:
+) -> Account:
     if email is not None:
-        user.email = email
+        account.email = email
     if display_name is not None:
-        user.display_name = display_name
+        account.display_name = display_name
     if active is not None:
-        user.active = active
+        account.active = active
     if org_role is not None:
-        user.org_role = org_role
+        await session.execute(
+            sa_update(OrgMembership)
+            .where(OrgMembership.account_id == account.id)
+            .values(role=org_role)
+        )
     await session.flush()
-    return user
+    return account
 
 
 async def scim_delete_user_by_id(session: AsyncSession, org_id: uuid.UUID, user_id: uuid.UUID) -> bool:
-    user = await get_user_by_id_org(session, user_id, org_id)
-    if user is None:
+    account = await scim_get_user(session, org_id, user_id)
+    if account is None:
         return False
-    await session.delete(user)
+    await session.delete(account)
     await session.flush()
     return True
 
@@ -87,16 +119,28 @@ async def scim_list_users(
     filter_str: str | None = None,
     start_index: int = 1,
     count: int = 20,
-) -> tuple[list[User], int]:
-    conditions = [User.organisation_id == org_id]
+) -> tuple[list[Account], int]:
+    conditions = [OrgMembership.organisation_id == org_id]
     if filter_str:
         like = f"%{filter_str}%"
-        conditions.append(or_(User.email.ilike(like), User.display_name.ilike(like)))
+        conditions.append(or_(Account.email.ilike(like), Account.display_name.ilike(like)))
 
-    count_q = select(func.count()).select_from(User).where(*conditions)
+    count_q = (
+        select(func.count())
+        .select_from(OrgMembership)
+        .join(Account, Account.id == OrgMembership.account_id)
+        .where(*conditions)
+    )
     total = (await session.execute(count_q)).scalar() or 0
 
-    query = select(User).where(*conditions).order_by(User.created_at).offset(start_index - 1).limit(count)
+    query = (
+        select(Account)
+        .join(OrgMembership, Account.id == OrgMembership.account_id)
+        .where(*conditions)
+        .order_by(Account.created_at)
+        .offset(start_index - 1)
+        .limit(count)
+    )
     result = await session.execute(query)
     items = list(result.scalars().all())
     return items, total
@@ -179,14 +223,14 @@ async def scim_add_group_member(
     user_id: uuid.UUID,
     role: str = "member",
 ) -> TeamMembership:
-    existing = await get_membership_by_team_and_user(session, team_id, user_id)
+    existing = await get_membership_by_team_and_account(session, team_id, user_id)
     if existing is not None:
         return existing
-    return await add_team_member(session, org_id=org_id, team_id=team_id, user_id=user_id, role=role)
+    return await add_team_member(session, org_id=org_id, team_id=team_id, account_id=user_id, role=role)
 
 
 async def scim_remove_group_member(session: AsyncSession, team_id: uuid.UUID, user_id: uuid.UUID) -> bool:
-    membership = await get_membership_by_team_and_user(session, team_id, user_id)
+    membership = await get_membership_by_team_and_account(session, team_id, user_id)
     if membership is None:
         return False
     await remove_team_member(session, membership.id)

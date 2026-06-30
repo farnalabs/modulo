@@ -152,7 +152,7 @@ async def _ensure_default_org(settings: Settings) -> None:
 
 
 async def _seed_modulo_users(settings: Settings) -> None:
-    """Seed MODULO_USERS env var entries into the user table on first boot.
+    """Seed MODULO_USERS env var entries into the account + membership tables.
 
     Accepts both bcrypt hashes (user1:$2b$12$hash) and plaintext passwords
     (admin:admin). Plaintext passwords are auto-hashed with bcrypt at seed time.
@@ -165,8 +165,9 @@ async def _seed_modulo_users(settings: Settings) -> None:
 
     from modulo.api.dependencies import get_or_create_engine, get_or_create_session_factory
     from modulo.auth.passwords import hash_password
+    from modulo.db.models.account import Account
+    from modulo.db.models.org_membership import OrgMembership
     from modulo.db.models.organisation import Organisation
-    from modulo.db.models.user import User
 
     engine = get_or_create_engine(settings)
     factory = get_or_create_session_factory(engine)
@@ -189,38 +190,62 @@ async def _seed_modulo_users(settings: Settings) -> None:
                 email = entry[:colon]
                 pw_part = entry[colon + 1 :]
 
-                result = await session.execute(select(User).where(User.email == email, User.organisation_id == org.id))
-                existing = result.scalar_one_or_none()
+                result = await session.execute(select(Account).where(Account.email == email))
+                existing_account = result.scalar_one_or_none()
                 pw_hash = pw_part if pw_part.startswith("$2") else hash_password(pw_part)
 
-                if existing is not None:
-                    if not existing.password_hash or not existing.password_hash.startswith("$2"):
-                        existing.password_hash = pw_hash
+                if existing_account is not None:
+                    if not existing_account.password_hash or not existing_account.password_hash.startswith("$2"):
+                        existing_account.password_hash = pw_hash
                         logger.info("startup.user_rehashed", extra={"email": email})
+
+                    # Ensure OrgMembership exists and role is correct
+                    mem_result = await session.execute(
+                        select(OrgMembership).where(
+                            OrgMembership.account_id == existing_account.id,
+                            OrgMembership.organisation_id == org.id,
+                        )
+                    )
+                    membership = mem_result.scalar_one_or_none()
                     admin_role = "admin" if email in ("admin", "admin@modulo.run") else None
-                    if admin_role and existing.org_role != "admin":
-                        existing.org_role = "admin"
-                        logger.info("startup.user_role_set_admin", extra={"email": email})
+                    if membership is not None:
+                        if admin_role and membership.role != "admin":
+                            membership.role = "admin"
+                            logger.info("startup.user_role_set_admin", extra={"email": email})
+                        else:
+                            logger.info("startup.user_exists", extra={"email": email})
                     else:
-                        logger.info("startup.user_exists", extra={"email": email})
+                        new_membership = OrgMembership(
+                            account_id=existing_account.id,
+                            organisation_id=org.id,
+                            role=admin_role or "runner",
+                        )
+                        session.add(new_membership)
+                        logger.info("startup.user_membership_created", extra={"email": email})
                     continue
 
-                user = User(
-                    organisation_id=org.id,
+                account = Account(
                     email=email,
                     display_name=email.split("@")[0],
                     password_hash=pw_hash,
-                    org_role="admin" if email in ("admin", "admin@modulo.run") else "runner",
                     auth_provider="local",
                 )
-                session.add(user)
+                session.add(account)
+                await session.flush()
+
+                membership = OrgMembership(
+                    account_id=account.id,
+                    organisation_id=org.id,
+                    role="admin" if email in ("admin", "admin@modulo.run") else "runner",
+                )
+                session.add(membership)
                 logger.info("startup.user_seeded", extra={"email": email})
 
 
 async def _seed_demo_data(settings: Settings) -> None:
     """Seed demo data when MODULO_DEMO_MODE is enabled.
 
-    Creates a read-only demo user. Future iterations may seed sample
+    Creates a read-only demo account. Future iterations may seed sample
     pipelines, agents, schemas, and connectors.
     """
     if not settings.modulo_demo_mode:
@@ -230,8 +255,9 @@ async def _seed_demo_data(settings: Settings) -> None:
 
     from modulo.api.dependencies import get_or_create_engine, get_or_create_session_factory
     from modulo.auth.passwords import hash_password
+    from modulo.db.models.account import Account
+    from modulo.db.models.org_membership import OrgMembership
     from modulo.db.models.organisation import Organisation
-    from modulo.db.models.user import User
 
     engine = get_or_create_engine(settings)
     factory = get_or_create_session_factory(engine)
@@ -245,17 +271,24 @@ async def _seed_demo_data(settings: Settings) -> None:
                 return
 
             demo_email = "demo"
-            result = await session.execute(select(User).where(User.email == demo_email, User.organisation_id == org.id))
-            if result.scalar_one_or_none() is None:
-                demo_user = User(
-                    organisation_id=org.id,
+            result = await session.execute(select(Account).where(Account.email == demo_email))
+            demo_account = result.scalar_one_or_none()
+            if demo_account is None:
+                demo_account = Account(
                     email=demo_email,
                     display_name="Demo User",
                     password_hash=hash_password("demo"),
-                    org_role="viewer",
                     auth_provider="local",
                 )
-                session.add(demo_user)
+                session.add(demo_account)
+                await session.flush()
+
+                membership = OrgMembership(
+                    account_id=demo_account.id,
+                    organisation_id=org.id,
+                    role="viewer",
+                )
+                session.add(membership)
                 logger.info("startup.demo_user_seeded")
 
             logger.info("startup.demo_data_ready")

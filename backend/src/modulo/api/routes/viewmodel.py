@@ -17,11 +17,11 @@ from modulo.api.dependencies import get_db_session
 from modulo.auth.dependencies import get_current_user
 from modulo.auth.jwt import AuthenticatedPrincipal
 from modulo.core.feature_flags import resolve_plan_context
+from modulo.db.crud.account import get_account_by_id
 from modulo.db.crud.organisation import get_organisation
 from modulo.db.crud.pipeline import list_pipelines
 from modulo.db.crud.run import list_runs
-from modulo.db.crud.team_membership import list_memberships_for_user
-from modulo.db.crud.user import get_user_by_id
+from modulo.db.crud.team_membership import list_team_memberships_for_account
 from modulo.db.crud.view import get_view, list_views
 from modulo.db.models.hitl_claim import HitlClaim
 from modulo.db.models.team import Team
@@ -205,7 +205,7 @@ async def viewmodel_current(
 
     async with session.begin():
         await set_rls_org(session, current_user.organisation_id)
-        await set_rls_user_context(session, current_user.user_id, current_user.org_role)
+        await set_rls_user_context(session, current_user.account_id, current_user.org_role)
 
         if view_as_team is not None:
             team_result = await session.execute(
@@ -222,11 +222,11 @@ async def viewmodel_current(
         if org is None:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Organisation not found")
 
-        user = await get_user_by_id(session, current_user.user_id)
-        if user is None:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
+        account = await get_account_by_id(session, current_user.account_id)
+        if account is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Account not found")
 
-        memberships = await list_memberships_for_user(session, current_user.user_id)
+        memberships = await list_team_memberships_for_account(session, current_user.account_id)
 
         pipelines_page = await list_pipelines(session, page=1, page_size=20)
         runs_page = await list_runs(session, page=1, page_size=10)
@@ -241,13 +241,13 @@ async def viewmodel_current(
         pending_hitl = scalar_result.all()
 
         all_views_result = await list_views(session, page=1, page_size=100)
-        all_views = [_enrich_view(v, current_user.user_id) for v in all_views_result.items]
+        all_views = [_enrich_view(v, current_user.account_id) for v in all_views_result.items]
 
         current_view = None
         if current_view_id is not None:
             view = await get_view(session, current_view_id)
             if view is not None:
-                current_view = _enrich_view(view, current_user.user_id)
+                current_view = _enrich_view(view, current_user.account_id)
 
     plan_ctx = resolve_plan_context(settings)
     enabled_features = plan_ctx.list_enabled_features()
@@ -274,7 +274,7 @@ async def viewmodel_current(
             for m in memberships
         ],
         team_memberships_truncated=False,
-        preferences=user.preferences,
+        preferences=account.preferences,
         feature_flags=feature_flags,
         plan=PlanInfo(
             tier=_resolve_tier(settings),
@@ -299,10 +299,10 @@ async def viewmodel_list_views(
 ) -> ViewModelViewsResponse:
     async with session.begin():
         await set_rls_org(session, current_user.organisation_id)
-        await set_rls_user_context(session, current_user.user_id, current_user.org_role)
+        await set_rls_user_context(session, current_user.account_id, current_user.org_role)
         result = await list_views(session, page=page, page_size=page_size)
 
-    items = [_enrich_view(v, current_user.user_id) for v in result.items]
+    items = [_enrich_view(v, current_user.account_id) for v in result.items]
     return ViewModelViewsResponse(
         items=items,
         total=result.total,

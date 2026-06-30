@@ -322,7 +322,7 @@ async def create_report(
             format=body.format,
             recipients=body.recipients,
             schedule_type=body.schedule_type,
-            created_by=current_user.user_id,
+            created_by=current_user.account_id,
         )
 
     return ReportResponse(

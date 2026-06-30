@@ -94,13 +94,13 @@ async def create_api_key_endpoint(
         expires_at = datetime.fromisoformat(body.expires_at)
     async with session.begin():
         await set_rls_org(session, principal.organisation_id)
-        await set_rls_user_context(session, principal.user_id, principal.org_role)
+        await set_rls_user_context(session, principal.account_id, principal.org_role)
         key, full_key = await create_api_key(
             session,
             org_id=principal.organisation_id,
             name=body.name,
             role=body.role,
-            created_by=principal.user_id,
+            created_by=principal.account_id,
             team_id=team_id,
             expires_at=expires_at,
         )
@@ -122,7 +122,7 @@ async def list_api_keys_endpoint(
 ) -> list[dict[str, Any]]:
     async with session.begin():
         await set_rls_org(session, principal.organisation_id)
-        await set_rls_user_context(session, principal.user_id, principal.org_role)
+        await set_rls_user_context(session, principal.account_id, principal.org_role)
         return await list_api_keys(session, principal.organisation_id)
 
 
@@ -146,7 +146,7 @@ async def update_api_key_endpoint(
         team_id = uuid.UUID(body.team_id)
     async with session.begin():
         await set_rls_org(session, principal.organisation_id)
-        await set_rls_user_context(session, principal.user_id, principal.org_role)
+        await set_rls_user_context(session, principal.account_id, principal.org_role)
         key = await update_api_key(
             session,
             key_id,
@@ -174,7 +174,7 @@ async def revoke_api_key_endpoint(
 ) -> ApiKeyRevokeResponse:
     async with session.begin():
         await set_rls_org(session, principal.organisation_id)
-        await set_rls_user_context(session, principal.user_id, principal.org_role)
+        await set_rls_user_context(session, principal.account_id, principal.org_role)
         revoked = await revoke_api_key(session, key_id, principal.organisation_id)
     if not revoked:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="API key not found")

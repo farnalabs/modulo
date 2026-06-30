@@ -35,17 +35,18 @@ from modulo.db.crud.publisher import (
 from modulo.db.crud.run import batch_delete_old_terminal_runs, purge_runs
 from modulo.db.crud.team import create_team, delete_team, list_teams
 from modulo.db.crud.team import update_team as crud_update_team
-from modulo.db.crud.team_membership import list_memberships_for_user, remove_team_member
-from modulo.db.crud.token_family import blacklist_family, list_families_for_user
-from modulo.db.crud.user import create_user, get_user_by_email, list_users_paginated
-from modulo.db.crud.user import update_user as crud_update_user
+from modulo.db.crud.team_membership import list_team_memberships_for_account, remove_team_member
+from modulo.db.crud.token_family import blacklist_family, list_families_for_account
+from modulo.db.crud.account import get_account_by_email, get_account_by_id
+from modulo.db.crud.org_membership import create_membership
+from modulo.db.models.account import Account
 from modulo.db.models.api_key import OrgApiKey
+from modulo.db.models.org_membership import OrgMembership
 from modulo.db.models.eval_definition import EvalDefinition
 from modulo.db.models.eval_result import EvalResult
 from modulo.db.models.pipeline import Pipeline
 from modulo.db.models.run import Run
 from modulo.db.models.team import Team
-from modulo.db.models.user import User
 from modulo.db.rls import set_rls_org, set_rls_user_context
 
 router = APIRouter(prefix="/api/v1/admin", tags=["admin"])
@@ -332,12 +333,16 @@ async def admin_create_user(
             detail=(f"Invalid role: {body.org_role}. Must be one of: admin, operator, runner, viewer"),
         )
 
-    existing = await get_user_by_email(session, body.email)
+    existing = await get_account_by_email(session, body.email)
     if existing is not None:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail="A user with this email already exists",
-        )
+        from modulo.db.crud.org_membership import get_membership_by_account_and_org
+
+        membership = await get_membership_by_account_and_org(session, existing.id, current_user.organisation_id)
+        if membership is not None:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="A user with this email already exists in this organisation",
+            )
 
     try:
         validate_password_strength(body.password)
@@ -348,20 +353,32 @@ async def admin_create_user(
         ) from exc
 
     pw_hash = hash_password(body.password)
-    user = await create_user(
+
+    if existing is not None:
+        account = existing
+        account.password_hash = pw_hash
+    else:
+        from modulo.db.crud.account import create_account
+
+        account = await create_account(
+            session,
+            email=body.email,
+            display_name=body.display_name,
+            password_hash=pw_hash,
+        )
+
+    membership = await create_membership(
         session,
+        account_id=account.id,
         org_id=current_user.organisation_id,
-        email=body.email,
-        display_name=body.display_name,
-        password_hash=pw_hash,
-        org_role=body.org_role,
+        role=body.org_role,
     )
 
     return CreateUserResponse(
-        id=str(user.id),
-        email=user.email,
-        display_name=user.display_name,
-        org_role=user.org_role,
+        id=str(account.id),
+        email=account.email,
+        display_name=account.display_name,
+        org_role=membership.role,
     )
 
 
@@ -406,7 +423,7 @@ async def admin_create_team(
             session,
             org_id=current_user.organisation_id,
             name=body.name,
-            created_by=current_user.user_id,
+            created_by=current_user.account_id,
             description=body.description,
         )
 
@@ -500,7 +517,7 @@ async def admin_regenerate_api_key(
         _, raw_key = await create_api_key(
             session,
             org_id=current_user.organisation_id,
-            created_by=current_user.user_id,
+            created_by=current_user.account_id,
             name="Default Org API Key",
             role="operator",
         )
@@ -546,7 +563,7 @@ async def admin_list_users(
 
     async with session.begin():
         await set_rls_org(session, current_user.organisation_id)
-        result = await list_users_paginated(
+        accounts_memberships, total = await _list_org_accounts(
             session,
             org_id=current_user.organisation_id,
             page=page,
@@ -558,21 +575,56 @@ async def admin_list_users(
     return UserListResponse(
         items=[
             UserListItem(
-                id=str(u.id),
-                email=u.email,
-                display_name=u.display_name,
-                org_role=u.org_role,
-                is_active=u.active,
-                auth_provider=u.auth_provider,
-                created_at=u.created_at.isoformat(),
-                last_login=u.last_login.isoformat() if u.last_login else None,
+                id=str(a.id),
+                email=a.email,
+                display_name=a.display_name,
+                org_role=m.role,
+                is_active=a.active,
+                auth_provider=a.auth_provider,
+                created_at=a.created_at.isoformat(),
+                last_login=a.last_login.isoformat() if a.last_login else None,
             )
-            for u in result.items
+            for a, m in accounts_memberships
         ],
-        total=result.total,
-        page=result.page,
-        page_size=result.page_size,
+        total=total,
+        page=page,
+        page_size=page_size,
     )
+
+
+async def _list_org_accounts(
+    session: AsyncSession,
+    *,
+    org_id: uuid.UUID,
+    page: int = 1,
+    page_size: int = 20,
+    search: str | None = None,
+    role_filter: str | None = None,
+) -> tuple[list[tuple[Account, object]], int]:
+    conditions = [OrgMembership.organisation_id == org_id]
+    if search:
+        conditions.append(Account.email.ilike(f"%{search}%"))
+    if role_filter:
+        conditions.append(OrgMembership.role == role_filter)
+
+    count_q = (
+        select(func.count())
+        .select_from(OrgMembership)
+        .join(Account, Account.id == OrgMembership.account_id)
+        .where(*conditions)
+    )
+    total = (await session.execute(count_q)).scalar() or 0
+
+    query = (
+        select(Account, OrgMembership)
+        .join(OrgMembership, Account.id == OrgMembership.account_id)
+        .where(*conditions)
+        .order_by(Account.created_at)
+        .offset((page - 1) * page_size)
+        .limit(page_size)
+    )
+    result = await session.execute(query)
+    return list(result.all()), total
 
 
 class UpdateUserRequest(BaseModel):
@@ -581,22 +633,21 @@ class UpdateUserRequest(BaseModel):
 
 
 async def _prevent_last_admin_lockout(
-    current_user_id: uuid.UUID,
-    target_user_id: uuid.UUID,
+    current_account_id: uuid.UUID,
+    target_account_id: uuid.UUID,
     org_id: uuid.UUID,
     new_role: str | None,
     db_session: AsyncSession,
 ) -> None:
-    if target_user_id != current_user_id:
+    if target_account_id != current_account_id:
         return
     if new_role is None or new_role == "admin":
         return
 
     result = await db_session.execute(
         select(func.count()).where(
-            User.organisation_id == org_id,
-            User.org_role == "admin",
-            User.active == True,  # noqa: E712
+            OrgMembership.organisation_id == org_id,
+            OrgMembership.role == "admin",
         )
     )
     admin_count = result.scalar() or 0
@@ -621,36 +672,52 @@ async def admin_update_user(
             detail="Only admin users can update users",
         )
 
-    updates: dict[str, object] = {}
-    if body.org_role is not None:
-        updates["org_role"] = body.org_role
-    if body.is_active is not None:
-        updates["active"] = body.is_active
-
     async with session.begin():
         await set_rls_org(session, current_user.organisation_id)
         await _prevent_last_admin_lockout(
-            current_user_id=current_user.user_id,
-            target_user_id=user_id,
+            current_account_id=current_user.account_id,
+            target_account_id=user_id,
             org_id=current_user.organisation_id,
             new_role=body.org_role,
             db_session=session,
         )
-        user = await crud_update_user(session, user_id, updates)
 
-    if user is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
+        account = await get_account_by_id(session, user_id)
+        if account is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
 
+        if body.is_active is not None:
+            account.active = body.is_active
+        if body.org_role is not None:
+            from sqlalchemy import update as sa_update
+
+            await session.execute(
+                sa_update(OrgMembership)
+                .where(
+                    OrgMembership.account_id == user_id,
+                    OrgMembership.organisation_id == current_user.organisation_id,
+                )
+                .values(role=body.org_role)
+            )
+
+    org_role = body.org_role or (await _get_org_role(session, user_id, current_user.organisation_id))
     return UserListItem(
-        id=str(user.id),
-        email=user.email,
-        display_name=user.display_name,
-        org_role=user.org_role,
-        is_active=user.active,
-        auth_provider=user.auth_provider,
-        created_at=user.created_at.isoformat(),
-        last_login=user.last_login.isoformat() if user.last_login else None,
+        id=str(account.id),
+        email=account.email,
+        display_name=account.display_name,
+        org_role=org_role,
+        is_active=account.active,
+        auth_provider=account.auth_provider,
+        created_at=account.created_at.isoformat(),
+        last_login=account.last_login.isoformat() if account.last_login else None,
     )
+
+
+async def _get_org_role(session: AsyncSession, account_id: uuid.UUID, org_id: uuid.UUID) -> str:
+    from modulo.db.crud.org_membership import get_membership_by_account_and_org
+
+    membership = await get_membership_by_account_and_org(session, account_id, org_id)
+    return membership.role if membership is not None else ""
 
 
 @router.post("/users/{user_id}/deactivate", response_model=UserListItem)
@@ -665,7 +732,7 @@ async def admin_deactivate_user(
             detail="Only admin users can deactivate users",
         )
 
-    if current_user.user_id == user_id:
+    if current_user.account_id == user_id:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail="Cannot deactivate yourself",
@@ -673,15 +740,16 @@ async def admin_deactivate_user(
 
     async with session.begin():
         await set_rls_org(session, current_user.organisation_id)
-        await set_rls_user_context(session, current_user.user_id, current_user.org_role)
-        user = await crud_update_user(session, user_id, {"active": False})
-        if user is None:
+        await set_rls_user_context(session, current_user.account_id, current_user.org_role)
+        account = await get_account_by_id(session, user_id)
+        if account is None:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail="User not found",
             )
+        account.active = False
 
-        families = await list_families_for_user(session, user_id)
+        families = await list_families_for_account(session, user_id)
         for family in families:
             await blacklist_family(session, family.family_id)
 
@@ -696,19 +764,22 @@ async def admin_deactivate_user(
         for key in active_keys:
             await revoke_api_key(session, key.id, current_user.organisation_id)
 
-        memberships = await list_memberships_for_user(session, user_id)
-        for membership in memberships:
-            await remove_team_member(session, membership.id)
+        team_memberships = await list_team_memberships_for_account(session, user_id)
+        for tm in team_memberships:
+            await remove_team_member(session, tm.id)
 
+        await session.flush()
+
+    org_role = await _get_org_role(session, user_id, current_user.organisation_id)
     return UserListItem(
-        id=str(user.id),
-        email=user.email,
-        display_name=user.display_name,
-        org_role=user.org_role,
-        is_active=user.active,
-        auth_provider=user.auth_provider,
-        created_at=user.created_at.isoformat(),
-        last_login=user.last_login.isoformat() if user.last_login else None,
+        id=str(account.id),
+        email=account.email,
+        display_name=account.display_name,
+        org_role=org_role,
+        is_active=account.active,
+        auth_provider=account.auth_provider,
+        created_at=account.created_at.isoformat(),
+        last_login=account.last_login.isoformat() if account.last_login else None,
     )
 
 
@@ -726,20 +797,22 @@ async def admin_reactivate_user(
 
     async with session.begin():
         await set_rls_org(session, current_user.organisation_id)
-        user = await crud_update_user(session, user_id, {"active": True})
+        account = await get_account_by_id(session, user_id)
+        if account is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
+        account.active = True
+        await session.flush()
 
-    if user is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
-
+    org_role = await _get_org_role(session, user_id, current_user.organisation_id)
     return UserListItem(
-        id=str(user.id),
-        email=user.email,
-        display_name=user.display_name,
-        org_role=user.org_role,
-        is_active=user.active,
-        auth_provider=user.auth_provider,
-        created_at=user.created_at.isoformat(),
-        last_login=user.last_login.isoformat() if user.last_login else None,
+        id=str(account.id),
+        email=account.email,
+        display_name=account.display_name,
+        org_role=org_role,
+        is_active=account.active,
+        auth_provider=account.auth_provider,
+        created_at=account.created_at.isoformat(),
+        last_login=account.last_login.isoformat() if account.last_login else None,
     )
 
 
@@ -919,7 +992,7 @@ async def admin_billing_overview(
 
             org_id = current_user.organisation_id
             user_count = (
-                await session.execute(select(func.count()).select_from(User).where(User.organisation_id == org_id))
+                await session.execute(select(func.count()).select_from(OrgMembership).where(OrgMembership.organisation_id == org_id))
             ).scalar() or 0
 
             team_count = (
@@ -1008,7 +1081,7 @@ async def request_org_deletion(
             result = await _request_deletion(
                 session,
                 org_id=current_user.organisation_id,
-                actor_user_id=current_user.user_id,
+                actor_user_id=current_user.account_id,
             )
         except ValueError as exc:
             raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
@@ -1017,7 +1090,7 @@ async def request_org_deletion(
             session,
             org_id=current_user.organisation_id,
             event_type="org_deletion_requested",
-            actor_user_id=current_user.user_id,
+            actor_user_id=current_user.account_id,
             resource_type="organisation",
             resource_id=current_user.organisation_id,
             payload_json={
@@ -1161,7 +1234,7 @@ async def delete_org_immediate(
             req = await _request_deletion(
                 session,
                 org_id=current_user.organisation_id,
-                actor_user_id=current_user.user_id,
+                actor_user_id=current_user.account_id,
             )
         except ValueError as exc:
             raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
@@ -1170,7 +1243,7 @@ async def delete_org_immediate(
             session,
             org_id=current_user.organisation_id,
             event_type="org_deletion_requested",
-            actor_user_id=current_user.user_id,
+            actor_user_id=current_user.account_id,
             resource_type="organisation",
             resource_id=current_user.organisation_id,
             payload_json={"immediate": True, "exported_entities": list(req["export"].keys())},
@@ -1822,7 +1895,7 @@ async def admin_manual_purge(
         session,
         org_id=current_user.organisation_id,
         event_type="run_purge",
-        actor_user_id=current_user.user_id,
+        actor_user_id=current_user.account_id,
         resource_type="run",
         payload_json={"older_than": body.older_than},
     )

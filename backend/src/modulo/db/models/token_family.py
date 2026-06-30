@@ -13,16 +13,16 @@ class TokenFamily(Base):
     __tablename__ = "token_families"
 
     family_id: Mapped[uuid.UUID] = mapped_column(Uuid(), primary_key=True, default=uuid.uuid4)
-    user_id: Mapped[uuid.UUID] = mapped_column(
+    account_id: Mapped[uuid.UUID] = mapped_column(
         Uuid(),
-        ForeignKey("users.id", ondelete="CASCADE"),
+        ForeignKey("accounts.id", ondelete="CASCADE"),
         nullable=False,
         index=True,
     )
-    organisation_id: Mapped[uuid.UUID] = mapped_column(
+    organisation_id: Mapped[uuid.UUID | None] = mapped_column(
         Uuid(),
         ForeignKey("organisations.id", ondelete="CASCADE"),
-        nullable=False,
+        nullable=True,
         index=True,
     )
     max_sequence: Mapped[int] = mapped_column(Integer, nullable=False, default=0)

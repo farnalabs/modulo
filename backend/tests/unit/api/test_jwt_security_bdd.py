@@ -34,16 +34,15 @@ def _override() -> Settings:
     )
 
 
-def _make_mock_user() -> MagicMock:
-    user = MagicMock()
-    user.id = _USER_ID
-    user.email = "admin@example.com"
-    user.display_name = "Admin User"
-    user.org_role = "admin"
-    user.active = True
-    user.organisation_id = _ORG_ID
-    user.password_hash = hash_password("testpass")
-    return user
+def _make_mock_account() -> MagicMock:
+    account = MagicMock()
+    account.id = _USER_ID
+    account.email = "admin@example.com"
+    account.display_name = "Admin User"
+    account.active = True
+    account.password_hash = hash_password("testpass")
+    account.is_system_admin = False
+    return account
 
 
 @pytest.fixture(autouse=True)
@@ -81,13 +80,17 @@ def client(mock_session: AsyncMock) -> TestClient:
 
 
 def test_login_returns_token_pair(client: TestClient) -> None:
-    mock_user = _make_mock_user()
+    mock_account = _make_mock_account()
     mock_family = MagicMock()
     mock_family.family_id = uuid.uuid4()
+    mock_membership = MagicMock()
+    mock_membership.organisation_id = _ORG_ID
+    mock_membership.role = "admin"
     with (
-        patch("modulo.api.routes.auth.get_user_by_email", new=AsyncMock(return_value=mock_user)),
+        patch("modulo.api.routes.auth.get_account_by_email", new=AsyncMock(return_value=mock_account)),
         patch("modulo.api.routes.auth.authenticate_db_user", return_value=True),
         patch("modulo.api.routes.auth.update_last_login", new=AsyncMock()),
+        patch("modulo.api.routes.auth.list_memberships_for_account", return_value=[mock_membership]),
         patch("modulo.api.routes.auth.create_family", new=AsyncMock(return_value=mock_family)),
     ):
         resp = client.post(
@@ -111,11 +114,11 @@ def test_login_returns_token_pair(client: TestClient) -> None:
 
 
 def test_access_token_grants_me_access(client: TestClient) -> None:
-    mock_user = _make_mock_user()
-    mock_user.created_at = datetime.now(UTC)
+    mock_account = _make_mock_account()
+    mock_account.created_at = datetime.now(UTC)
 
     token = _create_valid_access_token()
-    with patch("modulo.api.routes.auth.get_user_by_id", new=AsyncMock(return_value=mock_user)):
+    with patch("modulo.api.routes.auth.get_account_by_id", new=AsyncMock(return_value=mock_account)):
         resp = client.get(
             "/api/v1/auth/me",
             headers={"Authorization": f"Bearer {token}"},
@@ -315,13 +318,17 @@ def _create_expired_token() -> str:
 
 
 def _login_and_get_tokens(client: TestClient) -> tuple[str, str]:
-    mock_user = _make_mock_user()
+    mock_account = _make_mock_account()
     mock_family = MagicMock()
     mock_family.family_id = uuid.uuid4()
+    mock_membership = MagicMock()
+    mock_membership.organisation_id = _ORG_ID
+    mock_membership.role = "admin"
     with (
-        patch("modulo.api.routes.auth.get_user_by_email", new=AsyncMock(return_value=mock_user)),
+        patch("modulo.api.routes.auth.get_account_by_email", new=AsyncMock(return_value=mock_account)),
         patch("modulo.api.routes.auth.authenticate_db_user", return_value=True),
         patch("modulo.api.routes.auth.update_last_login", new=AsyncMock()),
+        patch("modulo.api.routes.auth.list_memberships_for_account", return_value=[mock_membership]),
         patch("modulo.api.routes.auth.create_family", new=AsyncMock(return_value=mock_family)),
     ):
         resp = client.post(

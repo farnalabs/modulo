@@ -178,7 +178,7 @@ async def test_create_org_duplicate_slug_orig(client_admin):
 async def test_create_org_user_success(client_admin):
     """Create a user in a specified org."""
     import modulo.api.routes.admin_orgs as admin_orgs
-    from modulo.db.models.user import User
+    from modulo.db.models.account import Account
 
     target_org_id = uuid4()
 
@@ -190,24 +190,37 @@ async def test_create_org_user_success(client_admin):
     original_get_org = admin_orgs.get_organisation
     admin_orgs.get_organisation = AsyncMock(return_value=target_org)
 
-    original_get_user = admin_orgs.get_user_by_email
-    admin_orgs.get_user_by_email = AsyncMock(return_value=None)
+    original_get_account = admin_orgs.get_account_by_email
+    admin_orgs.get_account_by_email = AsyncMock(return_value=None)
 
-    original_create_user = admin_orgs.create_user
+    original_create_account = admin_orgs.create_account
 
-    async def mock_create_user(session, *, org_id, email, display_name, password_hash, org_role, auth_provider="local"):
-        user = User(
+    async def mock_create_account(session, *, email, display_name, password_hash, auth_provider="local"):
+        account = Account(
             id=uuid4(),
-            organisation_id=org_id,
             email=email,
             display_name=display_name,
-            org_role=org_role,
+            password_hash=password_hash,
             auth_provider=auth_provider,
             created_at=datetime.now(timezone.utc),
         )
-        return user
+        return account
 
-    admin_orgs.create_user = mock_create_user
+    admin_orgs.create_account = mock_create_account
+
+    original_create_membership = admin_orgs.create_membership
+
+    async def mock_create_membership(session, *, account_id, org_id, role="runner"):
+        from modulo.db.models.org_membership import OrgMembership
+
+        return OrgMembership(
+            id=uuid4(),
+            account_id=account_id,
+            organisation_id=org_id,
+            role=role,
+        )
+
+    admin_orgs.create_membership = mock_create_membership
 
     try:
         resp = await client_admin.post(
@@ -226,8 +239,9 @@ async def test_create_org_user_success(client_admin):
         assert UUID(data["id"])
     finally:
         admin_orgs.get_organisation = original_get_org
-        admin_orgs.get_user_by_email = original_get_user
-        admin_orgs.create_user = original_create_user
+        admin_orgs.get_account_by_email = original_get_account
+        admin_orgs.create_account = original_create_account
+        admin_orgs.create_membership = original_create_membership
 
 
 @pytest.mark.anyio
