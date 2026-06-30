@@ -18,13 +18,11 @@ from sqlalchemy.ext.asyncio import (
     create_async_engine,
 )
 
-from modulo.core.feature_flags import PlanContext, resolve_plan_context
+from modulo.auth.dependencies import get_current_user
+from modulo.auth.jwt import AuthenticatedPrincipal
+from modulo.core.feature_flags import PlanContext, get_plan_for_org
+from modulo.core.feature_flags import get_plan_context as resolve_plan_by_id
 from modulo.settings import Settings, get_settings
-
-
-async def get_plan_context(settings: Settings = Depends(get_settings)) -> PlanContext:
-    """FastAPI dependency — resolve the current plan context from stored license or env var."""
-    return resolve_plan_context(settings)
 
 
 def require_feature(feature_name: str):
@@ -111,3 +109,18 @@ async def get_db_session(
     """Yield an AsyncSession. Transaction management is left to the caller."""
     async with factory() as session:
         yield session
+
+
+async def get_plan_context(
+    current_user: AuthenticatedPrincipal = Depends(get_current_user),
+    session: AsyncSession = Depends(get_db_session),
+) -> PlanContext:
+    """FastAPI dependency — resolve plan context per-org from Organisation.plan_id.
+
+    Resolution order:
+    1. Organisation.plan_id (per-org, from DB)
+    2. SystemConfig.default_plan (deployment-wide, from DB)
+    3. FreeTier (default fallback)
+    """
+    plan_id = await get_plan_for_org(session, current_user.organisation_id)
+    return resolve_plan_by_id(plan_id)

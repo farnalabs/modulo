@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import uuid
 from dataclasses import dataclass
 from typing import Any, Protocol
 
@@ -205,6 +206,49 @@ class LicenseKeyTier:
         ]
 
 
+class TeamPlanContext:
+    """Team plan — enables enterprise-tier features without a license key."""
+
+    def __init__(self) -> None:
+        self._registry = FeatureFlagRegistry(current_tier="enterprise", has_license_key=False)
+
+    def feature_enabled(self, name: str) -> bool:
+        flag = self._registry.get_flag(name)
+        if flag is None:
+            return False
+        return flag.currently_active
+
+    def list_enabled_features(self) -> list[FeatureFlag]:
+        return [f for f in self._registry.list_flags() if f.currently_active]
+
+
+class EnterprisePlanContext:
+    """Enterprise plan — enables all features (enterprise, v1, v2)."""
+
+    def __init__(self) -> None:
+        self._registry = FeatureFlagRegistry(current_tier="v2", has_license_key=True)
+
+    def feature_enabled(self, name: str) -> bool:
+        flag = self._registry.get_flag(name)
+        if flag is None:
+            return False
+        return flag.currently_active
+
+    def list_enabled_features(self) -> list[FeatureFlag]:
+        return [f for f in self._registry.list_flags() if f.currently_active]
+
+
+def get_plan_context(plan_id: str) -> PlanContext:
+    """Return the right PlanContext for a plan_id."""
+    registry: dict[str, type[PlanContext]] = {
+        "free": FreeTier,
+        "team": TeamPlanContext,
+        "enterprise": EnterprisePlanContext,
+    }
+    cls = registry.get(plan_id, FreeTier)
+    return cls()
+
+
 def resolve_plan_context(settings: Any) -> PlanContext:
     """Resolve a PlanContext from a stored license, env-var license key, or fall back to FreeTier."""
     from modulo.core.license import get_license, parse_and_verify
@@ -286,3 +330,23 @@ class FeatureFlagRegistry:
         if self._current_tier != "free":
             return []
         return [f for f in self._flags if f.tier != "free" and not f.currently_active]
+
+
+async def get_plan_for_org(
+    session: Any,
+    org_id: uuid.UUID | None,
+) -> str:
+    """Get the effective plan for an org."""
+    from modulo.db.crud.organisation import get_organisation
+    from modulo.db.crud.system_config import get_config
+
+    if org_id is not None:
+        org = await get_organisation(session, org_id)
+        if org is not None and org.plan_id:
+            return org.plan_id
+
+    config = await get_config(session, "default_plan")
+    if config is not None:
+        return str(config.value)
+
+    return "free"

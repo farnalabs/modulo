@@ -34,6 +34,7 @@ from modulo.db.models.secret import Secret
 from modulo.db.models.spend_anomaly import SpendAnomaly
 from modulo.db.models.sso_provider import SsoProvider
 from modulo.db.models.stage import Stage
+from modulo.db.models.system_config import SystemConfig
 from modulo.db.models.team import Team
 from modulo.db.models.team_membership import TeamMembership
 from modulo.db.models.token_family import TokenFamily
@@ -87,6 +88,7 @@ __all__ = [
     "SpendAnomaly",
     "SsoProvider",
     "Stage",
+    "SystemConfig",
     "Team",
     "TeamMembership",
     "TimestampMixin",

@@ -1,0 +1,151 @@
+"""Tests for the admin system config API."""
+
+from unittest.mock import AsyncMock
+from uuid import uuid4
+
+import pytest
+from httpx import ASGITransport, AsyncClient
+
+from modulo.api.dependencies import get_db_session
+from modulo.api.routes import admin_system_config as sc_route
+from modulo.auth.dependencies import get_current_user
+from modulo.auth.jwt import AuthenticatedPrincipal
+
+ORG_ID = uuid4()
+USER_ID = uuid4()
+SYSTEM_ADMIN = AuthenticatedPrincipal(
+    username="sysadmin@test",
+    organisation_id=ORG_ID,
+    account_id=USER_ID,
+    org_role="admin",
+    is_system_admin=True,
+)
+REGULAR_ADMIN = AuthenticatedPrincipal(
+    username="admin@test",
+    organisation_id=ORG_ID,
+    account_id=uuid4(),
+    org_role="admin",
+    is_system_admin=False,
+)
+
+
+@pytest.fixture
+def mock_session():
+    from unittest.mock import MagicMock
+
+    session = AsyncMock()
+    session.flush.return_value = None
+    execute_result = MagicMock()
+    execute_result.scalar_one_or_none.return_value = None
+    execute_result.scalars.return_value.all.return_value = []
+    session.execute.return_value = execute_result
+    return session
+
+
+@pytest.fixture
+def client_sys_admin(mock_session):
+    from modulo.api.main import app
+
+    app.dependency_overrides[get_db_session] = lambda: mock_session
+    app.dependency_overrides[get_current_user] = lambda: SYSTEM_ADMIN
+    transport = ASGITransport(app=app)
+    client = AsyncClient(transport=transport, base_url="http://test")
+    yield client
+    app.dependency_overrides.clear()
+
+
+@pytest.fixture
+def client_regular_admin(mock_session):
+    from modulo.api.main import app
+
+    app.dependency_overrides[get_db_session] = lambda: mock_session
+    app.dependency_overrides[get_current_user] = lambda: REGULAR_ADMIN
+    transport = ASGITransport(app=app)
+    client = AsyncClient(transport=transport, base_url="http://test")
+    yield client
+    app.dependency_overrides.clear()
+
+
+class TestAdminListConfig:
+    @pytest.mark.anyio
+    async def test_system_admin_can_list(self, client_sys_admin, mock_session):
+        resp = await client_sys_admin.get("/api/v1/system-admin/config")
+        assert resp.status_code == 200
+        assert resp.json() == []
+
+    @pytest.mark.anyio
+    async def test_regular_admin_gets_403(self, client_regular_admin):
+        resp = await client_regular_admin.get("/api/v1/system-admin/config")
+        assert resp.status_code == 403
+
+    @pytest.mark.anyio
+    async def test_returns_entries(self, client_sys_admin, mock_session):
+        from modulo.db.models.system_config import SystemConfig
+
+        entry = SystemConfig(key="test_key", value="test_val")
+        mock_session.execute.return_value.scalars.return_value.all.return_value = [entry]
+        resp = await client_sys_admin.get("/api/v1/system-admin/config")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert len(data) == 1
+        assert data[0]["key"] == "test_key"
+        assert data[0]["value"] == "test_val"
+
+
+class TestAdminSetConfig:
+    @pytest.mark.anyio
+    async def test_system_admin_can_set(self, client_sys_admin, mock_session):
+        mock_session.execute.return_value.scalar_one_or_none.return_value = None
+        resp = await client_sys_admin.put(
+            "/api/v1/system-admin/config/my_key",
+            json={"value": "my_value"},
+        )
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["key"] == "my_key"
+        assert data["value"] == "my_value"
+
+    @pytest.mark.anyio
+    async def test_regular_admin_gets_403(self, client_regular_admin):
+        resp = await client_regular_admin.put(
+            "/api/v1/system-admin/config/my_key",
+            json={"value": "my_value"},
+        )
+        assert resp.status_code == 403
+
+    @pytest.mark.anyio
+    async def test_updates_existing(self, client_sys_admin, mock_session):
+        from modulo.db.models.system_config import SystemConfig
+
+        existing = SystemConfig(key="my_key", value="old")
+        mock_session.execute.return_value.scalar_one_or_none.return_value = existing
+        resp = await client_sys_admin.put(
+            "/api/v1/system-admin/config/my_key",
+            json={"value": "updated"},
+        )
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["key"] == "my_key"
+        assert data["value"] == "updated"
+
+
+class TestAdminDeleteConfig:
+    @pytest.mark.anyio
+    async def test_system_admin_can_delete(self, client_sys_admin, mock_session):
+        from modulo.db.models.system_config import SystemConfig
+
+        existing = SystemConfig(key="del_key", value="val")
+        mock_session.execute.return_value.scalar_one_or_none.return_value = existing
+        resp = await client_sys_admin.delete("/api/v1/system-admin/config/del_key")
+        assert resp.status_code == 204
+
+    @pytest.mark.anyio
+    async def test_regular_admin_gets_403(self, client_regular_admin):
+        resp = await client_regular_admin.delete("/api/v1/system-admin/config/del_key")
+        assert resp.status_code == 403
+
+    @pytest.mark.anyio
+    async def test_nonexistent_returns_404(self, client_sys_admin, mock_session):
+        mock_session.execute.return_value.scalar_one_or_none.return_value = None
+        resp = await client_sys_admin.delete("/api/v1/system-admin/config/missing")
+        assert resp.status_code == 404
