@@ -18,6 +18,7 @@ from modulo.model_backends.qwen import QwenBackend
 from modulo.model_backends.stub import StubModelBackend
 from modulo.model_backends.togetherai import TogetherAIBackend
 from modulo.model_backends.vllm import VllmBackend
+from modulo.model_backends.watsonx import WatsonXBackend
 
 __all__ = [
     "Ai21Backend",
@@ -40,4 +41,5 @@ __all__ = [
     "TgiBackend",
     "TogetherAIBackend",
     "VllmBackend",
+    "WatsonXBackend",
 ]
