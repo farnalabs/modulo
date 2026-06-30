@@ -76,6 +76,7 @@ class MeResponse(BaseModel):
     org_role: str
     active: bool
     created_at: str
+    is_system_admin: bool = False
 
 
 @router.post("/login")
@@ -299,6 +300,7 @@ async def me(
         org_role=current_user.org_role or "",
         active=account.active,
         created_at=account.created_at.isoformat(),
+        is_system_admin=current_user.is_system_admin,
     )
 
 
