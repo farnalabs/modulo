@@ -35,6 +35,7 @@ from modulo.connectors.base import (
 from modulo.connectors.buildkite import BuildkiteConnector
 from modulo.connectors.ci_runner import GitHubActionsCIRunner, GitLabCIRunner
 from modulo.connectors.circleci import CircleCIConnector
+from modulo.connectors.codeclimate import CodeClimateConnector
 from modulo.connectors.confluence import ConfluenceConnector
 from modulo.connectors.datadog import DatadogConnector
 from modulo.connectors.discord import DiscordConnector
@@ -380,6 +381,8 @@ def _build_connector(type_id: str, config: dict[str, Any], creds: dict[str, Any]
                 token=_get_cred(creds, "token", type_id),
                 base_url=config.get("base_url", "http://localhost:9000"),
             )
+        case "codeclimate":
+            return CodeClimateConnector(token=_get_cred(creds, "token", type_id))
         case _:
             registry = get_plugin_registry()
             if registry.has_connector_type(type_id):
