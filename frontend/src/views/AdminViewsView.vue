@@ -64,14 +64,27 @@
               data-testid="admin-views-columns-input"
             />
           </div>
-          <div>
-            <label class="mb-1 block text-sm font-medium">Sort</label>
-            <input
-              v-model="form.sort"
-              class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary/50"
-              placeholder="created_at:desc"
-              data-testid="admin-views-sort-input"
-            />
+          <div class="grid grid-cols-2 gap-4">
+            <div>
+              <label class="mb-1 block text-sm font-medium">Sort By</label>
+              <input
+                v-model="form.sort_by"
+                class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary/50"
+                placeholder="created_at"
+                data-testid="admin-views-sort-by-input"
+              />
+            </div>
+            <div>
+              <label class="mb-1 block text-sm font-medium">Sort Order</label>
+              <select
+                v-model="form.sort_order"
+                class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary/50"
+                data-testid="admin-views-sort-order-select"
+              >
+                <option value="desc">Descending</option>
+                <option value="asc">Ascending</option>
+              </select>
+            </div>
           </div>
           <div v-if="saveError" class="text-sm text-destructive">{{ saveError }}</div>
           <div class="flex items-center gap-2">
@@ -96,10 +109,34 @@
       </div>
 
       <div v-if="views.length === 0 && !showForm" class="card p-8 text-center">
-        <p class="text-lg font-medium">No saved views</p>
-        <p class="mt-1 text-sm text-muted-foreground">
-          Create a view to save filter configurations and layout preferences.
+        <svg
+          class="mx-auto h-16 w-16 text-muted-foreground/40"
+          xmlns="http://www.w3.org/2000/svg"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="1.5"
+        >
+          <rect x="3" y="3" width="18" height="18" rx="2" />
+          <line x1="3" y1="9" x2="21" y2="9" />
+          <line x1="9" y1="21" x2="9" y2="9" />
+        </svg>
+        <p class="mt-4 text-lg font-medium">No saved views yet</p>
+        <p class="mt-1 text-sm text-muted-foreground max-w-md mx-auto">
+          Create a view to save filter configurations and layout preferences so you can quickly switch between different data perspectives.
         </p>
+        <a
+          href="https://modulo.run/docs/features/saved-views"
+          target="_blank"
+          class="mt-4 inline-flex items-center gap-1 text-sm text-primary hover:underline"
+        >
+          Learn about saved views
+          <svg class="h-3.5 w-3.5" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6" />
+            <polyline points="15 3 21 3 21 9" />
+            <line x1="10" y1="14" x2="21" y2="3" />
+          </svg>
+        </a>
       </div>
 
       <div v-if="views.length > 0" class="overflow-hidden rounded-lg border">
@@ -206,8 +243,9 @@ interface SavedView {
   name: string
   view_type: string
   filters: Record<string, unknown> | string | null
-  columns: string
-  sort: string
+  columns: string[] | null
+  sort_by: string | null
+  sort_order: string
   created_by: string | null
   created_at: string
 }
@@ -225,7 +263,8 @@ const form = ref({
   view_type: 'table',
   filters: '',
   columns: '',
-  sort: '',
+  sort_by: '',
+  sort_order: 'desc',
 })
 
 const deleteConfirmId = ref<string | null>(null)
@@ -277,10 +316,11 @@ function formatDate(dateStr: string | null): string {
 
 function openAddForm() {
   editingId.value = null
-  form.value = { name: '', view_type: 'table', filters: '', columns: '', sort: '' }
+  form.value = { name: '', view_type: 'table', filters: '', columns: '', sort_by: '', sort_order: 'desc' }
   showForm.value = true
   deleteConfirmId.value = null
   saveError.value = null
+  error.value = null
 }
 
 function openEditForm(v: SavedView) {
@@ -289,8 +329,9 @@ function openEditForm(v: SavedView) {
     name: v.name,
     view_type: v.view_type,
     filters: v.filters ? (typeof v.filters === 'string' ? v.filters : JSON.stringify(v.filters, null, 2)) : '',
-    columns: v.columns || '',
-    sort: v.sort || '',
+    columns: v.columns?.join(', ') || '',
+    sort_by: v.sort_by || '',
+    sort_order: v.sort_order || 'desc',
   }
   showForm.value = true
   deleteConfirmId.value = null
@@ -316,12 +357,16 @@ async function handleSave() {
       }
     }
 
+    const columns = form.value.columns
+      ? form.value.columns.split(',').map(c => c.trim()).filter(Boolean)
+      : null
     const payload: Record<string, unknown> = {
       name: form.value.name,
       view_type: form.value.view_type,
       filters,
-      columns: form.value.columns,
-      sort: form.value.sort,
+      columns,
+      sort_by: form.value.sort_by || null,
+      sort_order: form.value.sort_order,
     }
 
     const method = editingId.value ? 'PATCH' : 'POST'
@@ -381,7 +426,8 @@ async function duplicateView(v: SavedView) {
       view_type: v.view_type,
       filters: v.filters,
       columns: v.columns,
-      sort: v.sort,
+      sort_by: v.sort_by,
+      sort_order: v.sort_order,
     }
     const res = await fetch('/api/v1/views', {
       method: 'POST',
