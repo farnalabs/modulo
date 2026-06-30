@@ -2,9 +2,10 @@
 id: feat-connectors-slack
 prd: 8.6
 delivery-tasks: []
-  - backend/tests/bdd/features/connectors/connector_health.feature
+bdd:
   - backend/tests/bdd/features/connectors/slack_connector.feature
-unit-tests: []
+unit-tests:
+  - backend/tests/unit/connectors/test_slack.py
 code:
   - backend/src/modulo/connectors/slack/__init__.py
   - backend/src/modulo/connectors/base.py
@@ -26,8 +27,9 @@ Async Slack Web API connector implementing `ConnectorBase`. Provides read/write 
 - [x] Return `HealthResult(ok=True)` when `api.test` returns `{"ok": true}`
 - [x] Return `HealthResult(ok=False)` with `error` field on failure
 - [ ] Support token rotation via ConnectorHub without disrupting in-flight runs
-- [ ] Rate-limit awareness — Slack enforces tier-based rate limits (1–50+ per min); no 429 retry/backoff
-- [ ] Handle Slack `ResponseMetadata` retry-after for rate-limited responses
+- [ ] Rate-limit awareness — Slack enforces tier-based rate limits (1–50+ per min); no automatic 429 retry/backoff
+- [x] Detect 429 rate-limited responses and surface `Retry-After` value in error
+- [x] Raise `HTTPStatusError` on non-2xx HTTP responses from Slack API
 
 ### Channel Operations — listing and reading
 
@@ -88,6 +90,9 @@ Async Slack Web API connector implementing `ConnectorBase`. Provides read/write 
 - [x] Validate Bot Token by calling `api.test` — fail if `ok` is false
 - [x] Return error detail from Slack API `error` field on failure
 - [x] Return `HealthResult(ok=True)` with no extra detail on success
+- [x] Raise `HTTPStatusError` on non-2xx HTTP responses from Slack API
+- [x] Detect 429 rate-limited responses and surface `Retry-After` value
+- [x] Return `HealthResult(ok=False)` with detail for HTTP errors, rate limits, network errors, and API errors
 - [ ] Detect revoked tokens vs network errors vs workspace deactivation
 - [ ] Check token scopes during health check (e.g. `channels:history`, `chat:write`)
 - [ ] Verify bot is in at least one channel (common misconfiguration)
@@ -106,8 +111,10 @@ Async Slack Web API connector implementing `ConnectorBase`. Provides read/write 
 - [ ] **Text-only messages**: no Block Kit support for rich formatting, buttons, or interactive components
 - [ ] **No message search**: `search.messages` API not used; agents cannot search across all channels
 - [ ] **Channel history limited**: only one page of `conversations.history` — full history not accessible
-- [ ] **BDD placeholder**: `backend/tests/bdd/features/connectors/slack_connector.feature` is a 3-line placeholder with no real scenarios
-- [ ] **No unit tests**: `unit-tests` field is empty
-- [ ] **No rate-limit handling**: no 429 retry, no `Retry-After` header inspection
+- [x] **BDD scenarios exist**: `backend/tests/bdd/features/connectors/slack_connector.feature` — 14 BDD scenarios covering happy paths, edge cases, and error paths
+- [x] **Unit tests exist**: `backend/tests/unit/connectors/test_slack.py` — 30+ tests covering health check, query, write, error paths, and rate limiting
+- [x] **Rate-limit detection**: 429 responses detected, `Retry-After` value surfaced in error messages
+- [ ] **No automatic 429 retry/backoff**: 429 is detected but no automatic retry with exponential backoff
 - [ ] **No scope verification**: health check does not verify token has required scopes
+- [ ] **No specific exception types**: rate-limit, auth, and API errors all raise generic `ValueError` or `httpx.HTTPStatusError` — not domain-specific exception types
 - [ ] **ConnectorHub pre-run health check not wired**: credentials are not yet decrypted and validated at run-start via ConnectorHub
