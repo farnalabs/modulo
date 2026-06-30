@@ -2,14 +2,18 @@
 
 from __future__ import annotations
 
-from typing import Any
+import logging
 
 from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi.responses import JSONResponse
+from starlette.responses import Response
 
 from modulo.auth.dependencies import get_current_user
 from modulo.auth.jwt import AuthenticatedPrincipal
 from modulo.core.feature_flags import FeatureFlagRegistry
 from modulo.settings import Settings, get_settings
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/v1/admin/feature-flags", tags=["admin-feature-flags"])
 
@@ -24,36 +28,48 @@ def _build_registry(settings: Settings) -> FeatureFlagRegistry:
 async def list_feature_flags(
     settings: Settings = Depends(get_settings),
     current_user: AuthenticatedPrincipal = Depends(get_current_user),
-) -> dict[str, Any]:
-    registry = _build_registry(settings)
-    has_key = bool(settings.modulo_license_key)
-    tier = "enterprise" if has_key else "free"
-    return {
-        "license": {
-            "tier": tier,
-            "has_license_key": has_key,
-            "is_valid": True,
-        },
-        "flags": [
-            {
-                "name": f.name,
-                "description": f.description,
-                "tier": f.tier,
-                "currently_active": f.currently_active,
-                "depends_on": f.depends_on,
-            }
-            for f in registry.list_flags()
-        ],
-        "would_activate": [
-            {
-                "name": f.name,
-                "description": f.description,
-                "tier": f.tier,
-                "depends_on": f.depends_on,
-            }
-            for f in registry.tier_gap_flags()
-        ],
-    }
+) -> Response:
+    try:
+        registry = _build_registry(settings)
+        has_key = bool(settings.modulo_license_key)
+        tier = "enterprise" if has_key else "free"
+        return {
+            "license": {
+                "tier": tier,
+                "has_license_key": has_key,
+                "is_valid": True,
+            },
+            "flags": [
+                {
+                    "name": f.name,
+                    "description": f.description,
+                    "tier": f.tier,
+                    "currently_active": f.currently_active,
+                    "depends_on": f.depends_on,
+                }
+                for f in registry.list_flags()
+            ],
+            "would_activate": [
+                {
+                    "name": f.name,
+                    "description": f.description,
+                    "tier": f.tier,
+                    "depends_on": f.depends_on,
+                }
+                for f in registry.tier_gap_flags()
+            ],
+        }
+    except Exception:
+        logger.exception("feature_flags.list_failed")
+        return JSONResponse(
+            status_code=500,
+            content={
+                "error": {
+                    "code": "INTERNAL_ERROR",
+                    "message": "Failed to list feature flags",
+                }
+            },
+        )
 
 
 @router.get("/{flag_name}")
@@ -61,18 +77,32 @@ async def get_feature_flag(
     flag_name: str,
     settings: Settings = Depends(get_settings),
     current_user: AuthenticatedPrincipal = Depends(get_current_user),
-) -> dict[str, Any]:
-    registry = _build_registry(settings)
-    flag = registry.get_flag(flag_name)
-    if flag is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Unknown feature flag: {flag_name}",
+) -> Response:
+    try:
+        registry = _build_registry(settings)
+        flag = registry.get_flag(flag_name)
+        if flag is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Unknown feature flag: {flag_name}",
+            )
+        return {
+            "name": flag.name,
+            "description": flag.description,
+            "tier": flag.tier,
+            "currently_active": flag.currently_active,
+            "depends_on": flag.depends_on,
+        }
+    except HTTPException:
+        raise
+    except Exception:
+        logger.exception("feature_flags.get_failed", extra={"flag_name": flag_name})
+        return JSONResponse(
+            status_code=500,
+            content={
+                "error": {
+                    "code": "INTERNAL_ERROR",
+                    "message": f"Failed to get feature flag: {flag_name}",
+                }
+            },
         )
-    return {
-        "name": flag.name,
-        "description": flag.description,
-        "tier": flag.tier,
-        "currently_active": flag.currently_active,
-        "depends_on": flag.depends_on,
-    }
