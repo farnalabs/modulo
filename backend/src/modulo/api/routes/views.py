@@ -1,5 +1,6 @@
 """Saved View CRUD REST API — persisted filters and display preferences."""
 
+import logging
 import uuid
 from datetime import datetime
 
@@ -18,6 +19,8 @@ from modulo.db.crud.view import (
     update_view,
 )
 from modulo.db.rls import set_rls_org, set_rls_user_context
+
+_log = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/v1/views", tags=["views"])
 
@@ -76,10 +79,14 @@ async def list_views_endpoint(
     session: AsyncSession = Depends(get_db_session),
     principal: AuthenticatedPrincipal = Depends(get_current_user),
 ) -> ViewListResponse:
-    async with session.begin():
-        await set_rls_org(session, principal.organisation_id)
-        await set_rls_user_context(session, principal.user_id, principal.org_role)
-        result = await list_views(session, view_type=view_type, page=page, page_size=page_size)
+    try:
+        async with session.begin():
+            await set_rls_org(session, principal.organisation_id)
+            await set_rls_user_context(session, principal.user_id, principal.org_role)
+            result = await list_views(session, view_type=view_type, page=page, page_size=page_size)
+    except Exception:
+        _log.exception("list_views_endpoint: failed to list views")
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to list views")
     return ViewListResponse(
         items=[ViewResponse.model_validate(v) for v in result.items],
         total=result.total,

@@ -18,8 +18,9 @@ const sampleViews = {
       name: 'Active Runs',
       view_type: 'table',
       filters: { status: 'active' },
-      columns: 'name, status, created_at',
-      sort: 'created_at:desc',
+      columns: ['name', 'status', 'created_at'],
+      sort_by: 'created_at',
+      sort_order: 'desc',
       created_by: 'alice@test.com',
       created_at: '2025-01-15T10:00:00Z',
     },
@@ -28,8 +29,9 @@ const sampleViews = {
       name: 'Kanban Board',
       view_type: 'kanban',
       filters: null,
-      columns: 'title, assignee',
-      sort: 'priority:asc',
+      columns: ['title', 'assignee'],
+      sort_by: 'priority',
+      sort_order: 'asc',
       created_by: 'bob@test.com',
       created_at: '2025-02-20T14:30:00Z',
     },
@@ -85,7 +87,7 @@ describe('AdminViewsView', () => {
       },
     })
     await flush()
-    expect(wrapper.text()).toContain('No saved views')
+    expect(wrapper.text()).toContain('No saved views yet')
   })
 
   it('opens create form on button click', async () => {
