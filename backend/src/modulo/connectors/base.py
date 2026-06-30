@@ -40,6 +40,7 @@ class ConnectorType(StrEnum):
     CUSTOM = "custom"
     SHORTCUT = "shortcut"
     YOUTRACK = "youtrack"
+    NOTION = "notion"
 
     @property
     def capabilities(self) -> frozenset[Capability]:
@@ -83,6 +84,7 @@ class ConnectorType(StrEnum):
             case ConnectorType.SHORTCUT:
                 return frozenset({Capability.READ, Capability.WRITE})
             case ConnectorType.YOUTRACK:
+            case ConnectorType.NOTION:
                 return frozenset({Capability.READ, Capability.WRITE})
             case _:
                 return frozenset()

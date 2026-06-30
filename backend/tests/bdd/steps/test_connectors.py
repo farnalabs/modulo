@@ -1,4 +1,4 @@
-"""Step definitions for Connector Health and connector-related features."""
+﻿"""Step definitions for Connector Health and connector-related features."""
 
 import uuid
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -9,7 +9,7 @@ from pytest_bdd import given, parsers, scenarios, then, when
 from modulo.connectors.base import HealthResult
 
 # ---------------------------------------------------------------------------
-# Connector Health feature (active — 3 scenarios)
+# Connector Health feature (active â€” 3 scenarios)
 # ---------------------------------------------------------------------------
 try:
     scenarios("../features/connectors/connector_health.feature")
@@ -30,7 +30,7 @@ def ctx():
 
 
 # ============================================================================
-# Connector Health — healthy
+# Connector Health â€” healthy
 # ============================================================================
 
 
@@ -73,7 +73,7 @@ def response_ok_true(request):
 
 
 # ============================================================================
-# Connector Health — unreachable
+# Connector Health â€” unreachable
 # ============================================================================
 
 
@@ -99,7 +99,7 @@ def response_detail_describes_error(request):
 
 
 # ============================================================================
-# Connector Health — encryption at rest
+# Connector Health â€” encryption at rest
 # ============================================================================
 
 
@@ -124,7 +124,7 @@ def connector_with_api_key(api_key, ctx):
 
 @when("I inspect the database directly")
 def inspect_database(ctx):
-    """Simulate reading the stored ciphertext — not the decrypted value."""
+    """Simulate reading the stored ciphertext â€” not the decrypted value."""
     ci = ctx.get("connector_instance")
     assert ci is not None
     # The raw database column is bytes; we confirm it's the ciphertext
@@ -143,7 +143,7 @@ def api_key_not_plaintext(ctx):
 
 
 # ============================================================================
-# Helper — patch connector health
+# Helper â€” patch connector health
 # ============================================================================
 
 
@@ -184,7 +184,7 @@ def _make_mock_connector_instance(ctx) -> MagicMock:
 
 
 # ============================================================================
-# Cleanup — stop all patchers after each scenario
+# Cleanup â€” stop all patchers after each scenario
 # ============================================================================
 
 
@@ -200,7 +200,7 @@ def _cleanup_patches(ctx):
 
 
 # ============================================================================
-# connectors/schema_inference.feature — 5 scenarios
+# connectors/schema_inference.feature â€” 5 scenarios
 # ============================================================================
 try:
     scenarios("../features/connectors/schema_inference.feature")
@@ -208,7 +208,7 @@ except (FileNotFoundError, OSError):
     pass
 
 # ============================================================================
-# connectors/github_connector.feature — 5 scenarios
+# connectors/github_connector.feature â€” 5 scenarios
 # ============================================================================
 try:
     scenarios("../features/connectors/github_connector.feature")
@@ -216,7 +216,7 @@ except (FileNotFoundError, OSError):
     pass
 
 # ============================================================================
-# connectors/jira_connector.feature — 5 scenarios
+# connectors/jira_connector.feature â€” 5 scenarios
 # ============================================================================
 try:
     scenarios("../features/connectors/jira_connector.feature")
@@ -224,7 +224,7 @@ except (FileNotFoundError, OSError):
     pass
 
 # ============================================================================
-# connectors/linear_connector.feature — 5 scenarios
+# connectors/linear_connector.feature â€” 5 scenarios
 # ============================================================================
 try:
     scenarios("../features/connectors/linear_connector.feature")
@@ -232,7 +232,7 @@ except (FileNotFoundError, OSError):
     pass
 
 # ============================================================================
-# connectors/slack_connector.feature — 5 scenarios
+# connectors/slack_connector.feature â€” 5 scenarios
 # ============================================================================
 try:
     scenarios("../features/connectors/slack_connector.feature")
@@ -319,7 +319,7 @@ def _infer_resp(status_code, **kwargs):
     parsers.parse("I POST /api/schemas/infer with the connector instance"),
 )
 def step_infer_schema(request, ctx):
-    """POST /api/v1/schemas/infer — simulated response."""
+    """POST /api/v1/schemas/infer â€” simulated response."""
     if ctx.get("connector_not_found"):
         request.node._resp = _infer_resp(404, detail="Connector instance not found")
         return
@@ -401,7 +401,7 @@ def step_migration_plan_has_fields(ctx):
 
 
 # ============================================================================
-# connectors/github_connector.feature — 5 scenarios
+# connectors/github_connector.feature â€” 5 scenarios
 # ============================================================================
 try:
     scenarios("../../features/connectors/github_connector.feature")
@@ -629,7 +629,7 @@ def step_result_is_error(ctx):
 
 
 # ============================================================================
-# connectors/jira_connector.feature  —  5 scenarios
+# connectors/jira_connector.feature  â€”  5 scenarios
 # ============================================================================
 try:
     scenarios("../../features/connectors/jira_connector.feature")
@@ -793,7 +793,7 @@ def step_jira_query_without_key(resource, ctx):
 
 
 # ============================================================================
-# connectors/linear_connector.feature  —  5 scenarios
+# connectors/linear_connector.feature  â€”  5 scenarios
 # ============================================================================
 try:
     scenarios("../../features/connectors/linear_connector.feature")
@@ -969,7 +969,7 @@ def step_health_result_is_ok(ctx):
 
 
 # ============================================================================
-# connectors/slack_connector.feature  —  5 scenarios
+# connectors/slack_connector.feature  â€”  5 scenarios
 # ============================================================================
 try:
     scenarios("../../features/connectors/slack_connector.feature")
@@ -1130,7 +1130,7 @@ def step_records_contain_channel_metadata(ctx):
 
 
 # ============================================================================
-# connectors/gitea_connector.feature  —  6 scenarios
+# connectors/gitea_connector.feature  â€”  6 scenarios
 # ============================================================================
 try:
     scenarios("../../features/connectors/gitea_connector.feature")
@@ -1303,7 +1303,7 @@ def step_gitea_create_issue(resource, title, ctx):
 
 
 # ============================================================================
-# connectors/monday.feature  —  13 scenarios
+# connectors/monday.feature  â€”  13 scenarios
 # ============================================================================
 try:
     scenarios("../../features/connectors/monday.feature")
@@ -1737,7 +1737,7 @@ def step_monday_users_metadata(ctx):
 
 
 # ============================================================================
-# connectors/trello.feature  —  8+ scenarios
+# connectors/trello.feature  â€”  8+ scenarios
 # ============================================================================
 try:
     scenarios("../../features/connectors/trello.feature")
@@ -2071,7 +2071,7 @@ def step_trello_card_fields(ctx):
 # ============================================================================
 
 # ============================================================================
-# connectors/asana.feature  —  11 scenarios
+# connectors/asana.feature  â€”  11 scenarios
 # ============================================================================
 try:
     scenarios("../../features/connectors/asana.feature")
@@ -2080,7 +2080,7 @@ except (FileNotFoundError, OSError):
 
 
 # ============================================================================
-# connectors/shortcut.feature  —  10 scenarios
+# connectors/shortcut.feature  â€”  10 scenarios
 # ============================================================================
 try:
     scenarios("../../features/connectors/shortcut.feature")
@@ -2841,6 +2841,14 @@ try:
 except (FileNotFoundError, OSError):
     pass
 
+# ============================================================================
+# connectors/notion_connector.feature  —  9 scenarios
+# ============================================================================
+try:
+    scenarios("../features/connectors/notion_connector.feature")
+except (FileNotFoundError, OSError):
+    pass
+
 
 @given("a YouTrack connector with valid credentials")
 def step_youtrack_connector(ctx):
@@ -2912,6 +2920,78 @@ def step_youtrack_connector(ctx):
     ctx["query_error"] = None
 
 
+@given("a Notion connector with valid token")
+def step_notion_connector(ctx):
+    from unittest.mock import AsyncMock
+
+    mock_connector = AsyncMock()
+    mock_connector.connector_type = "notion"
+
+    async def mock_health_check():
+        return HealthResult(ok=True, detail="2 users accessible")
+
+    async def mock_query(q):
+        from modulo.connectors.base import ConnectorResult
+
+        match q.resource:
+            case "databases":
+                return ConnectorResult(
+                    records=[
+                        {"id": "db1", "title": [{"plain_text": "Project Tracker"}], "object": "database"},
+                        {"id": "db2", "title": [{"plain_text": "Bug Tracker"}], "object": "database"},
+                    ],
+                    total=2,
+                )
+            case "database":
+                database_id = q.filters.get("database_id", "")
+                if not database_id:
+                    raise ValueError("Notion database query requires 'database_id' filter")
+                return ConnectorResult(
+                    records=[{"id": database_id, "title": [{"plain_text": "Project Tracker"}], "object": "database"}]
+                )
+            case "pages":
+                database_id = q.filters.get("database_id", "")
+                if not database_id:
+                    raise ValueError("Notion pages query requires 'database_id' filter")
+                return ConnectorResult(
+                    records=[
+                        {"id": "p1", "object": "page", "properties": {"Name": {"title": [{"plain_text": "Task 1"}]}}},
+                        {"id": "p2", "object": "page", "properties": {"Name": {"title": [{"plain_text": "Task 2"}]}}},
+                    ],
+                    total=2,
+                )
+            case "page":
+                page_id = q.filters.get("page_id", "")
+                if not page_id:
+                    raise ValueError("Notion page query requires 'page_id' filter")
+                return ConnectorResult(
+                    records=[{"id": page_id, "object": "page", "properties": {"title": {"title": [{"plain_text": "Hello"}]}}}]
+                )
+            case "users":
+                return ConnectorResult(
+                    records=[
+                        {"id": "u1", "name": "Alice", "type": "person"},
+                        {"id": "u2", "name": "Bob", "type": "bot"},
+                    ],
+                    total=2,
+                )
+            case _:
+                raise ValueError(f"Unsupported Notion resource: {q.resource!r}")
+
+    async def mock_write(payload):
+        match payload.resource:
+            case "page":
+                return {"id": "p_new", "object": "page", "url": "https://notion.so/p_new"}
+            case _:
+                raise ValueError(f"Unsupported Notion write resource: {payload.resource!r}")
+
+    mock_connector.health_check = mock_health_check
+    mock_connector.query = mock_query
+    mock_connector.write = mock_write
+    ctx["connector"] = mock_connector
+    ctx["query_error"] = None
+
+
 @when(
     parsers.parse('I query YouTrack resource "{resource}"')
 )
@@ -2930,6 +3010,31 @@ def step_youtrack_query_resource(resource, ctx):
         ctx["query_error"] = str(exc)
 
 
+@given("the Notion API returns 401 Unauthorized")
+def step_notion_health_401(ctx):
+    async def mock_health():
+        return HealthResult(ok=False, detail="HTTP 401: Unauthorized")
+    ctx["connector"].health_check = mock_health
+
+
+@when(
+    parsers.parse('I query resource "{resource}" with database_id "{db_id}"')
+)
+def step_notion_query_with_database_id(resource, db_id, ctx):
+    from modulo.connectors.base import ConnectorQuery
+
+    q = ConnectorQuery(resource=resource, filters={"database_id": db_id})
+    import asyncio
+
+    try:
+        result = asyncio.new_event_loop().run_until_complete(ctx["connector"].query(q))
+        ctx["query_result"] = result
+        ctx["query_error"] = None
+    except Exception as exc:
+        ctx["query_result"] = None
+        ctx["query_error"] = str(exc)
+
+
 @when(
     parsers.parse('I query YouTrack resource "{resource}" with query "{query_text}"')
 )
@@ -2937,6 +3042,24 @@ def step_youtrack_query_issues(resource, query_text, ctx):
     from modulo.connectors.base import ConnectorQuery
 
     q = ConnectorQuery(resource=resource, filters={"query": query_text})
+    import asyncio
+
+    try:
+        result = asyncio.new_event_loop().run_until_complete(ctx["connector"].query(q))
+        ctx["query_result"] = result
+        ctx["query_error"] = None
+    except Exception as exc:
+        ctx["query_result"] = None
+        ctx["query_error"] = str(exc)
+
+
+@when(
+    parsers.parse('I query resource "{resource}" with page_id "{page_id}"')
+)
+def step_notion_query_with_page_id(resource, page_id, ctx):
+    from modulo.connectors.base import ConnectorQuery
+
+    q = ConnectorQuery(resource=resource, filters={"page_id": page_id})
     import asyncio
 
     try:
@@ -2985,6 +3108,24 @@ def step_youtrack_query_without_id(resource, ctx):
 
 
 @when(
+    parsers.parse('I query resource "{resource}" without database_id filter')
+)
+def step_notion_query_without_database_id(resource, ctx):
+    from modulo.connectors.base import ConnectorQuery
+
+    q = ConnectorQuery(resource=resource, filters={})
+    import asyncio
+
+    try:
+        asyncio.new_event_loop().run_until_complete(ctx["connector"].query(q))
+        ctx["query_result"] = "unexpected_success"
+        ctx["query_error"] = None
+    except Exception as exc:
+        ctx["query_result"] = None
+        ctx["query_error"] = str(exc)
+
+
+@when(
     parsers.parse(
         'I write YouTrack resource "{resource}" with summary "{summary}"'
         ' and project "{project}"'
@@ -2996,6 +3137,33 @@ def step_youtrack_write_issue(resource, summary, project, ctx):
     payload = ConnectorPayload(
         resource=resource,
         data={"summary": summary, "project": {"id": project}},
+    )
+    import asyncio
+
+    try:
+        result = asyncio.new_event_loop().run_until_complete(ctx["connector"].write(payload))
+        ctx["write_result"] = result
+        ctx["query_error"] = None
+    except Exception as exc:
+        ctx["write_result"] = None
+        ctx["query_error"] = str(exc)
+
+
+@when(
+    parsers.parse(
+        'I write Notion resource "{resource}" with database_id "{db_id}"'
+        ' and title "{title}"'
+    )
+)
+def step_notion_write_page(resource, db_id, title, ctx):
+    from modulo.connectors.base import ConnectorPayload
+
+    payload = ConnectorPayload(
+        resource=resource,
+        data={
+            "parent": {"database_id": db_id},
+            "properties": {"Name": {"title": [{"text": {"content": title}}]}},
+        },
     )
     import asyncio
 
@@ -3054,3 +3222,32 @@ def step_youtrack_write_comment(resource, issue_id, text, ctx):
     except Exception as exc:
         ctx["write_result"] = None
         ctx["query_error"] = str(exc)
+
+
+@then("the records contain database metadata")
+def step_notion_database_metadata(ctx):
+    result = ctx["query_result"]
+    for rec in result.records:
+        assert "id" in rec and "object" in rec, (
+            f"Record missing database metadata: {rec}"
+        )
+
+
+@then("the record contains database fields")
+def step_notion_database_fields(ctx):
+    result = ctx["query_result"]
+    assert len(result.records) > 0
+    rec = result.records[0]
+    assert "id" in rec and "title" in rec, (
+        f"Record missing database fields: {rec}"
+    )
+
+
+@then("the record contains Notion page fields")
+def step_notion_page_fields(ctx):
+    result = ctx["query_result"]
+    assert len(result.records) > 0
+    rec = result.records[0]
+    assert "id" in rec and "properties" in rec, (
+        f"Record missing Notion page fields: {rec}"
+    )

@@ -39,6 +39,7 @@ from modulo.connectors.gitlab import GitLabConnector
 from modulo.connectors.jira import JiraConnector
 from modulo.connectors.linear import LinearConnector
 from modulo.connectors.monday import MondayConnector
+from modulo.connectors.notion import NotionConnector
 from modulo.connectors.shortcut import ShortcutConnector
 from modulo.connectors.slack import SlackConnector
 from modulo.connectors.trello import TrelloConnector
@@ -300,6 +301,8 @@ def _build_connector(type_id: str, config: dict[str, Any], creds: dict[str, Any]
                 token=_get_cred(creds, "token", type_id),
                 base_url=config.get("base_url", "https://youtrack.mycompany.com/api"),
             )
+        case "notion":
+            return NotionConnector(token=_get_cred(creds, "token", type_id))
         case _:
             registry = get_plugin_registry()
             if registry.has_connector_type(type_id):
