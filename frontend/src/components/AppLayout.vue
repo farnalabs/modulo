@@ -78,16 +78,16 @@
           <router-link
             to="/settings/license"
             class="shrink-0"
-            :title="planStore.isEnterprise && planStore.expiresAt ? 'Expires: ' + new Date(planStore.expiresAt).toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' }) : undefined"
+            :title="planStore.isTeam && planStore.expiresAt ? 'Expires: ' + new Date(planStore.expiresAt).toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' }) : undefined"
           >
             <span
-              v-if="planStore.currentTier === 'enterprise'"
+              v-if="planStore.currentTier === 'team'"
               class="badge-plan bg-primary/10 text-primary font-medium"
-            >Enterprise</span>
+            >Team</span>
             <span
               v-else
               class="badge-plan"
-            >Free</span>
+            >Community</span>
           </router-link>
         </div>
 
@@ -214,16 +214,16 @@
           <router-link
             to="/settings/license"
             class="shrink-0"
-            :title="planStore.isEnterprise && planStore.expiresAt ? 'Expires: ' + new Date(planStore.expiresAt).toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' }) : undefined"
+            :title="planStore.isTeam && planStore.expiresAt ? 'Expires: ' + new Date(planStore.expiresAt).toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' }) : undefined"
           >
             <span
-              v-if="planStore.currentTier === 'enterprise'"
+              v-if="planStore.currentTier === 'team'"
               class="badge-plan bg-primary/10 text-primary font-medium"
-            >Enterprise</span>
+            >Team</span>
             <span
               v-else
               class="badge-plan"
-            >Free</span>
+            >Community</span>
           </router-link>
         </div>
 

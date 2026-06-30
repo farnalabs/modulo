@@ -5,7 +5,7 @@
       <p class="mt-1 text-muted-foreground">Configure OpenTelemetry export and LangSmith integration</p>
     </header>
 
-    <FeatureGate feature-name="observability" required-tier="enterprise">
+    <FeatureGate feature-name="observability" required-tier="team">
       <template #locked="{ tooltip }">
         <div class="mb-4 flex items-center gap-2 rounded-lg border border-warning/30 bg-warning/5 p-4 text-sm text-warning">
           <LockIcon :locked="true" :tooltip="tooltip" />

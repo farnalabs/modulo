@@ -5,7 +5,7 @@
       <div class="text-center space-y-4">
         <LockIcon :locked="true" :tooltip="tooltipText" />
         <div>
-          <h3 class="text-lg font-semibold">Enterprise Feature</h3>
+          <h3 class="text-lg font-semibold">Team Feature</h3>
           <p class="text-sm text-muted-foreground">{{ tooltipText }}</p>
         </div>
         <a

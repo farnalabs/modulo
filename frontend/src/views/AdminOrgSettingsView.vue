@@ -1,5 +1,5 @@
 <template>
-  <FeatureGate feature-name="team_rbac" required-tier="enterprise">
+  <FeatureGate feature-name="team_rbac" required-tier="team">
     <template #locked="{ tooltip }">
       <div data-theme="agent" class="mx-auto max-w-6xl space-y-6 p-6">
         <div class="mb-4 flex items-center gap-2 rounded-lg border border-warning/30 bg-warning/5 p-4 text-sm text-warning">
@@ -34,8 +34,8 @@
           <div>
             <span class="text-xs font-medium text-muted-foreground">Plan</span>
             <p class="mt-0.5">
-              <span :class="orgInfo.planTier === 'enterprise' ? 'badge badge-context-purple' : 'badge badge-status-muted'">
-                {{ orgInfo.planTier === 'enterprise' ? 'Enterprise' : 'Free' }}
+              <span :class="orgInfo.planTier === 'team' ? 'badge badge-context-purple' : 'badge badge-status-muted'">
+                {{ orgInfo.planTier === 'team' ? 'Team' : 'Community' }}
               </span>
             </p>
           </div>
@@ -197,7 +197,7 @@ const orgInfo = reactive({
   id: '',
   name: '',
   slug: '',
-  planTier: 'free' as string,
+  planTier: 'community' as string,
   createdAt: '',
   memberCount: 0,
 })
@@ -265,7 +265,7 @@ async function loadData() {
     orgInfo.name = exportResult.organisation?.name ?? 'Unnamed Org'
     orgInfo.slug = exportResult.organisation?.slug ?? ''
     orgInfo.createdAt = exportResult.organisation?.created_at ?? ''
-    orgInfo.planTier = overview.plan_tier ?? 'free'
+    orgInfo.planTier = overview.plan_tier ?? 'community'
     orgInfo.memberCount = overview.total_users ?? 0
   } catch (e: unknown) {
     loadError.value = `Failed to load org info: ${e instanceof Error ? e.message : String(e)}`

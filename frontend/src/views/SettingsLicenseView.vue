@@ -2,7 +2,7 @@
   <div data-theme="agent" data-loading="false" class="mx-auto max-w-4xl space-y-8 p-6">
     <header>
       <h1 data-testid="license-title" class="text-3xl font-bold tracking-tight">License</h1>
-      <p class="mt-1 text-muted-foreground">Manage your Modulo Enterprise license key and view plan details</p>
+      <p class="mt-1 text-muted-foreground">Manage your Modulo Team license key and view plan details</p>
     </header>
 
     <LoadingSpinner v-if="loading" />
@@ -11,10 +11,10 @@
     <template v-else>
       <!-- Current Tier Card -->
       <div class="rounded-lg border bg-card p-6 shadow-sm">
-        <div v-if="licenseInfo.tier === 'enterprise'" class="flex items-start justify-between">
+        <div v-if="licenseInfo.tier === 'team'" class="flex items-start justify-between">
           <div>
             <div class="flex items-center gap-2">
-              <h2 class="text-lg font-semibold">Enterprise</h2>
+              <h2 class="text-lg font-semibold">Team</h2>
               <Badge variant="default">Active</Badge>
             </div>
             <p v-if="licenseInfo.org_id" class="mt-2 text-sm text-muted-foreground">
@@ -27,11 +27,11 @@
         </div>
         <div v-else>
           <div class="flex items-center gap-2">
-            <h2 class="text-lg font-semibold">Free Tier</h2>
-            <Badge variant="outline">Free</Badge>
+            <h2 class="text-lg font-semibold">Community</h2>
+            <Badge variant="outline">Community</Badge>
           </div>
           <p class="mt-2 text-sm text-muted-foreground">
-            You are currently on the Free Tier. Upgrade to Enterprise to unlock all features.
+            You are currently on the Community tier. Upgrade to Team to unlock all features.
           </p>
           <a
             href="https://modulo.run/pricing"
@@ -39,7 +39,7 @@
             rel="noopener noreferrer"
             class="btn-glow mt-4 inline-flex items-center gap-2 rounded-lg bg-primary px-4 py-2 text-sm font-semibold text-primary-foreground border border-primary/30 hover:border-primary/60 hover:brightness-110 transition-all duration-150"
           >
-            Get an Enterprise License
+            Get a Team License
             <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg>
           </a>
         </div>
@@ -51,9 +51,9 @@
           <h2 class="text-lg font-semibold">Active Features</h2>
           <p class="mt-0.5 text-sm text-muted-foreground">
             {{ flagsEnabled }} of {{ allFlags.length }} features active
-            <span v-if="flagsWouldActivate.length > 0" class="ml-2">
-              &middot; {{ flagsWouldActivate.length }} would activate with Enterprise
-            </span>
+              <span v-if="flagsWouldActivate.length > 0" class="ml-2">
+                &middot; {{ flagsWouldActivate.length }} would activate with Team
+              </span>
           </p>
         </div>
         <div v-if="allFlags.length === 0" class="px-6 py-8 text-center text-sm text-muted-foreground">
@@ -82,7 +82,7 @@
                 </span>
                 <span v-else class="inline-flex items-center gap-1 text-sm text-muted-foreground">
                   <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
-                  Requires Enterprise
+                  Requires Team
                 </span>
               </td>
             </tr>
@@ -154,7 +154,7 @@
         <DialogHeader>
           <DialogTitle>Remove License</DialogTitle>
           <DialogDescription>
-            Are you sure you want to remove the Enterprise license? Your instance will revert to Free Tier and all Enterprise features will be disabled.
+            Are you sure you want to remove the Team license? Your instance will revert to Community tier and all Team features will be disabled.
           </DialogDescription>
         </DialogHeader>
         <DialogFooter class="gap-2 sm:justify-end">
@@ -214,7 +214,7 @@ const loadError = ref<string | null>(null)
 
 const licenseInfo = ref<LicenseStatus>({
   has_license: false,
-  tier: 'free',
+  tier: 'community',
   features: [],
   expires_at: null,
   org_id: null,
@@ -237,7 +237,7 @@ const removeDialogOpen = ref(false)
 const flagsEnabled = computed(() => allFlags.value.filter((f) => f.currently_active).length)
 
 const maskedKey = computed(() => {
-  return 'Enterprise license key active'
+  return 'Team license key active'
 })
 
 function formatDate(iso: string): string {

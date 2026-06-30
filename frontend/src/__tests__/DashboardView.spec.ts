@@ -50,14 +50,14 @@ const mockSummaryData = {
 }
 
 const mockFlagData = {
-  license: { tier: 'free', has_license_key: false, is_valid: false },
+  license: { tier: 'community', has_license_key: false, is_valid: false },
   flags: [],
   would_activate: [],
 }
 
 const mockLicenseData = {
   has_license: false,
-  tier: 'free',
+  tier: 'community',
   features: [],
   expires_at: null,
   org_id: null,
@@ -114,7 +114,7 @@ function setupEnterpriseMocks() {
     if (url === '/api/v1/admin/feature-flags') {
       return Promise.resolve({
         data: {
-          license: { tier: 'enterprise', has_license_key: true, is_valid: true },
+          license: { tier: 'team', has_license_key: true, is_valid: true },
           flags: [],
           would_activate: [],
         },
@@ -125,7 +125,7 @@ function setupEnterpriseMocks() {
       return Promise.resolve({
         data: {
           has_license: true,
-          tier: 'enterprise',
+          tier: 'team',
           features: [],
           expires_at: '2026-12-31T23:59:59Z',
           org_id: 'org-1',
@@ -189,7 +189,7 @@ describe('DashboardView', () => {
     setupEnterpriseMocks()
     const wrapper = mount(DashboardView)
     await flushPromises()
-    expect(wrapper.text()).toContain('Enterprise')
+    expect(wrapper.text()).toContain('Team')
   })
 
   it('does not show team breakdown for non-enterprise plans', async () => {
