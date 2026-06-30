@@ -22,7 +22,6 @@ from opentelemetry.trace import Status, StatusCode
 
 from modulo.connectors.asana import AsanaConnector
 from modulo.connectors.azure_repos import AzureReposConnector
-from modulo.connectors.confluence import ConfluenceConnector
 from modulo.connectors.base import (
     ConnectorACL,
     ConnectorBase,
@@ -33,6 +32,7 @@ from modulo.connectors.base import (
     HealthResult,
 )
 from modulo.connectors.ci_runner import GitHubActionsCIRunner, GitLabCIRunner
+from modulo.connectors.confluence import ConfluenceConnector
 from modulo.connectors.filesystem import FilesystemConnector
 from modulo.connectors.gitea import GiteaConnector
 from modulo.connectors.github import GitHubConnector
@@ -41,10 +41,10 @@ from modulo.connectors.jira import JiraConnector
 from modulo.connectors.linear import LinearConnector
 from modulo.connectors.monday import MondayConnector
 from modulo.connectors.notion import NotionConnector
+from modulo.connectors.sharepoint import SharePointConnector
 from modulo.connectors.shortcut import ShortcutConnector
 from modulo.connectors.slack import SlackConnector
 from modulo.connectors.trello import TrelloConnector
-from modulo.connectors.sharepoint import SharePointConnector
 from modulo.connectors.youtrack import YouTrackConnector
 from modulo.core.pipeline_engine.output_filter import filter_payload_for_injection
 from modulo.core.plugin_registry import get_plugin_registry
