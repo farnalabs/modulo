@@ -169,6 +169,7 @@
 <script setup lang="ts">
 import { ref, reactive, onMounted } from 'vue'
 import { api } from '../lib/api/client'
+import { formatApiError } from '../lib/api/formatError'
 import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
 
@@ -252,7 +253,7 @@ async function loadConfig() {
   try {
     const { data, error: err } = await api.GET('/api/v1/admin/runtime-config')
     if (err) {
-      error.value = `Failed to load runtime config: ${err}`
+      error.value = `Failed to load runtime config: ${formatApiError(err)}`
     } else if (data) {
       applyResponse(data as unknown as ConfigResponse)
     }
@@ -269,7 +270,7 @@ async function reloadConfig() {
   try {
     const { data, error: err } = await api.POST('/api/v1/admin/runtime-config/reload')
     if (err) {
-      error.value = `Failed to reload config: ${err}`
+      error.value = `Failed to reload config: ${formatApiError(err)}`
     } else if (data) {
       applyResponse(data as unknown as ConfigResponse)
     }
@@ -289,7 +290,7 @@ async function applyOverride(key: string) {
       body: { overrides: { [key]: editedValues[key] } },
     })
     if (err) {
-      formError.value = `Failed to apply override: ${err}`
+      formError.value = `Failed to apply override: ${formatApiError(err)}`
     } else if (data) {
       applyResponse(data as unknown as ConfigResponse)
       formSuccess.value = `Override applied for ${key}.`
@@ -311,7 +312,7 @@ async function clearOverride(key: string) {
       body: { clear: [key] },
     })
     if (err) {
-      formError.value = `Failed to clear override: ${err}`
+      formError.value = `Failed to clear override: ${formatApiError(err)}`
     } else if (data) {
       applyResponse(data as unknown as ConfigResponse)
       formSuccess.value = `Override cleared for ${key}.`
