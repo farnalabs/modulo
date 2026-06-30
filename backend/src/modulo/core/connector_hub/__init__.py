@@ -42,6 +42,7 @@ from modulo.connectors.monday import MondayConnector
 from modulo.connectors.shortcut import ShortcutConnector
 from modulo.connectors.slack import SlackConnector
 from modulo.connectors.trello import TrelloConnector
+from modulo.connectors.youtrack import YouTrackConnector
 from modulo.core.pipeline_engine.output_filter import filter_payload_for_injection
 from modulo.core.plugin_registry import get_plugin_registry
 from modulo.core.secrets_backend import SecretsBackend
@@ -294,6 +295,11 @@ def _build_connector(type_id: str, config: dict[str, Any], creds: dict[str, Any]
             return AsanaConnector(personal_access_token=_get_cred(creds, "personal_access_token", type_id))
         case "monday":
             return MondayConnector(api_key=_get_cred(creds, "api_key", type_id))
+        case "youtrack":
+            return YouTrackConnector(
+                token=_get_cred(creds, "token", type_id),
+                base_url=config.get("base_url", "https://youtrack.mycompany.com/api"),
+            )
         case _:
             registry = get_plugin_registry()
             if registry.has_connector_type(type_id):
