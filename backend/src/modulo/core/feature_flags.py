@@ -168,53 +168,8 @@ class PlanContext(Protocol):
     def list_enabled_features(self) -> list[FeatureFlag]: ...
 
 
-# DEPRECATED: Use DbPlanContext.from_db() instead. These hardcoded classes
-# are kept for the fallback path when no DB session is available.
-class CommunityTier:
-    """Default plan — community-tier features active without a license key."""
-
-    def __init__(self) -> None:
-        self._registry = FeatureFlagRegistry(current_tier="community", has_license_key=False)
-
-    def feature_enabled(self, name: str) -> bool:
-        flag = self._registry.get_flag(name)
-        if flag is None:
-            return False
-        return flag.currently_active
-
-    def list_enabled_features(self) -> list[FeatureFlag]:
-        return [f for f in self._registry.list_flags() if f.currently_active]
-
-
-class LicenseKeyTier:
-    """Licensed plan — activates features based on license tier and explicit feature list."""
-
-    def __init__(self, license_data: LicenseData) -> None:
-        self._tier = license_data.tier
-        self._features = set(license_data.features)
-        self._registry = FeatureFlagRegistry(current_tier=license_data.tier, has_license_key=True)
-
-    def feature_enabled(self, name: str) -> bool:
-        flag = self._registry.get_flag(name)
-        if flag is None:
-            return False
-        return flag.currently_active or name in self._features
-
-    def list_enabled_features(self) -> list[FeatureFlag]:
-        return [
-            f
-            for f in self._registry.list_flags()
-            if f.currently_active or f.name in self._features
-        ]
-
-
 class DbPlanContext:
-    """Plan context resolved from the DB-backed tier catalog.
-
-    Uses ``FeatureFlagRegistry`` loaded from ``tier_catalog`` /
-    ``feature_flag_catalog`` tables.  Falls back to hardcoded
-    ``_KNOWN_FLAGS`` / ``TIER_RANK`` when the DB isn't available.
-    """
+    """Plan context resolved from the DB-backed tier catalog."""
 
     def __init__(self, registry: FeatureFlagRegistry) -> None:
         self._registry = registry
@@ -230,7 +185,6 @@ class DbPlanContext:
         """Resolve a plan context from the tier catalog in the database."""
         registry = await FeatureFlagRegistry.from_db(session, plan_id, has_license_key)
 
-        # If a license provides explicit features, overlay them
         if license_features:
             for flag in registry.list_flags():
                 if flag.name in license_features:
@@ -238,12 +192,6 @@ class DbPlanContext:
 
         return cls(registry)
 
-    @classmethod
-    def fallback(cls, plan_id: str, has_license_key: bool = False) -> DbPlanContext:
-        """Create a plan context using hardcoded fallback data (no DB session)."""
-        registry = FeatureFlagRegistry(current_tier=plan_id, has_license_key=has_license_key)
-        return cls(registry)
-
     def feature_enabled(self, name: str) -> bool:
         flag = self._registry.get_flag(name)
         if flag is None:
@@ -254,95 +202,28 @@ class DbPlanContext:
         return [f for f in self._registry.list_flags() if f.currently_active]
 
 
-# DEPRECATED: Use DbPlanContext.from_db() instead. These hardcoded classes
-# are kept for the fallback path when no DB session is available.
-class TeamPlanContext:
-    """Team plan — enables team-tier features without a license key."""
-
-    def __init__(self) -> None:
-        self._registry = FeatureFlagRegistry(current_tier="team", has_license_key=False)
-
-    def feature_enabled(self, name: str) -> bool:
-        flag = self._registry.get_flag(name)
-        if flag is None:
-            return False
-        return flag.currently_active
-
-    def list_enabled_features(self) -> list[FeatureFlag]:
-        return [f for f in self._registry.list_flags() if f.currently_active]
-
-
-# DEPRECATED: Use DbPlanContext.from_db() instead. These hardcoded classes
-# are kept for the fallback path when no DB session is available.
-class FullAccessPlanContext:
-    """Full-access plan — enables all features (team, v1, v2)."""
-
-    def __init__(self) -> None:
-        self._registry = FeatureFlagRegistry(current_tier="v2", has_license_key=True)
-
-    def feature_enabled(self, name: str) -> bool:
-        flag = self._registry.get_flag(name)
-        if flag is None:
-            return False
-        return flag.currently_active
-
-    def list_enabled_features(self) -> list[FeatureFlag]:
-        return [f for f in self._registry.list_flags() if f.currently_active]
-
-
-# DEPRECATED: Use DbPlanContext.from_db() instead. These hardcoded classes
-# are kept for the fallback path when no DB session is available.
-def get_plan_context(plan_id: str) -> PlanContext:
-    """Return the right PlanContext for a plan_id."""
-    registry: dict[str, type[PlanContext]] = {
-        "community": CommunityTier,
-        "team": TeamPlanContext,
-        "full-access": FullAccessPlanContext,
-    }
-    cls = registry.get(plan_id, CommunityTier)
-    return cls()
-
-
-async def resolve_plan_context(settings: Any, session: Any | None = None) -> PlanContext:
-    """Resolve a PlanContext from a stored license, env-var license key, or fall back to CommunityTier.
-
-    When ``session`` is provided, resolves from the DB-backed tier catalog.
-    Otherwise falls back to hardcoded PlanContext classes.
-    """
+async def resolve_plan_context(settings: Any, session: Any) -> PlanContext:
+    """Resolve a PlanContext from a stored license, env-var license key, or CommunityTier (no license)."""
     from modulo.core.license import get_license, parse_and_verify
 
     lic = get_license()
     if lic is not None:
-        if session is not None:
-            return await DbPlanContext.from_db(
-                session, lic.tier, has_license_key=True,
-                license_features=set(lic.features),
-            )
-        return LicenseKeyTier(lic)
+        return await DbPlanContext.from_db(
+            session, lic.tier, has_license_key=True,
+            license_features=set(lic.features),
+        )
 
     raw_key: str = getattr(settings, "modulo_license_key", "") or ""
     if raw_key:
         validation = parse_and_verify(raw_key)
         if validation.valid and validation.license_data is not None:
-            ld = validation.license_data
-            if session is not None:
-                return await DbPlanContext.from_db(
-                    session, ld.tier, has_license_key=True,
-                    license_features=set(ld.features),
-                )
-            return LicenseKeyTier(ld)
-        if session is not None:
-            return await DbPlanContext.from_db(session, "team", has_license_key=True)
-        return LicenseKeyTier(
-            LicenseData(
-                tier="team", features=[], expires_at="",
-                org_id="", raw_payload={}, raw_key=raw_key,
+            return await DbPlanContext.from_db(
+                session, validation.license_data.tier, has_license_key=True,
+                license_features=set(validation.license_data.features),
             )
-        )
+        return await DbPlanContext.from_db(session, "team", has_license_key=True)
 
-    if session is not None:
-        return await DbPlanContext.from_db(session, "community")
-    return CommunityTier()
+    return await DbPlanContext.from_db(session, "community")
 
 
 class FeatureFlagRegistry:

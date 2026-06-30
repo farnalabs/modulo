@@ -16,10 +16,12 @@ from modulo.settings import get_settings
 TIERS = [
     {"tier_id": "community", "label": "Community", "rank": 0, "requires_license": False, "description": "Free tier, no license key required"},
     {"tier_id": "team", "label": "Team", "rank": 1, "requires_license": True, "description": "Self-serve paid tier with team features"},
-    {"tier_id": "v1", "label": "V1", "rank": 2, "requires_license": True, "description": "Future tier — V1 Core features"},
-    {"tier_id": "v2", "label": "V2", "rank": 3, "requires_license": True, "description": "Future tier — V2 features"},
 ]
 
+# Only flags assigned to a seeded tier go here. Flags not yet assigned to any tier
+# (future features, undelivered) stay in _KNOWN_FLAGS (hardcoded fallback) and
+# never activate until a license key grants their tier. Adding a new tier means
+# INSERT into tier_catalog above + optionally moving flags from _KNOWN_FLAGS here.
 FLAGS = [
     {"name": "parallel_branches", "description": "Run branching logic in parallel within a pipeline", "tier_id": "community", "depends_on": None},
     {"name": "eval_system", "description": "Built-in eval runner for LLM output quality gates", "tier_id": "community", "depends_on": None},
@@ -37,16 +39,6 @@ FLAGS = [
     {"name": "model-backend-management", "description": "Manage LLM backend connections and credentials", "tier_id": "team", "depends_on": None},
     {"name": "environment-profiles", "description": "Sandbox environment profiles for code execution", "tier_id": "team", "depends_on": None},
     {"name": "plugin-management", "description": "Manage plugins, connectors, and node categories", "tier_id": "team", "depends_on": None},
-    {"name": "polling_trigger", "description": "Trigger pipelines by polling external endpoints", "tier_id": "v1", "depends_on": None},
-    {"name": "agent_signal_trigger", "description": "Trigger pipelines via agent-to-agent signals", "tier_id": "v1", "depends_on": None},
-    {"name": "schema_union_types", "description": "Union types and polymorphic schemas", "tier_id": "v1", "depends_on": None},
-    {"name": "migration_cli", "description": "CLI tool for migrating pipelines across instances", "tier_id": "v1", "depends_on": None},
-    {"name": "helm_deployment", "description": "Helm chart for production Kubernetes deployment", "tier_id": "v1", "depends_on": None},
-    {"name": "checkpoint_encryption", "description": "Encrypt pipeline checkpoints at rest", "tier_id": "v2", "depends_on": None},
-    {"name": "audit_crypto_chain", "description": "Cryptographic chaining of audit events for tamper evidence", "tier_id": "v2", "depends_on": None},
-    {"name": "community_registry", "description": "Publish and discover community pipeline primitives", "tier_id": "v2", "depends_on": None},
-    {"name": "prompt_optimization", "description": "Automated prompt tuning and optimisation", "tier_id": "v2", "depends_on": None},
-    {"name": "pipeline_diff_rollback", "description": "Diff-based pipeline version comparison and rollback", "tier_id": "v2", "depends_on": None},
 ]
 
 

@@ -265,7 +265,7 @@ async def viewmodel_current(
             all_views = []
             current_view = None
 
-    plan_ctx = resolve_plan_context(settings)
+    plan_ctx = await resolve_plan_context(settings, session)
     enabled_features = plan_ctx.list_enabled_features()
     feature_flags = [
         FeatureFlagInfo(
