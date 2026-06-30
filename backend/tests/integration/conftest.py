@@ -54,15 +54,8 @@ def migrated_db_url(db_url: str) -> str:
     asyncio.run(_ensure_alembic_table())
     # Override DATABASE_URL so alembic env.py uses the testcontainer, not any
     # CI env var pointing at the service postgres.
-    _prev = os.environ.get("DATABASE_URL")
     os.environ["DATABASE_URL"] = db_url
-    try:
-        command.upgrade(config, "head")
-    finally:
-        if _prev is None:
-            os.environ.pop("DATABASE_URL", None)
-        else:
-            os.environ["DATABASE_URL"] = _prev
+    command.upgrade(config, "heads")
 
     async def _existing_cols(conn, table: str) -> set[str]:
         result = await conn.execute(
