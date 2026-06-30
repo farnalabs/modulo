@@ -452,8 +452,58 @@ Wait-Process -Name "uv" -ErrorAction SilentlyContinue  # doesn't block; just con
 
 ### Frontend / Layout
 
+- Every list/table page must have an empty-state message when data is empty — never leave a blank content area. Use the existing pattern: a centered card with title + description.
+- Enterprise-gated pages (`FeatureGate` component) must never render infinite spinners — hide the sidebar link entirely on Free tier, or show a clear upgrade CTA with a link to `/settings/license`. A locked overlay with a permanent spinner beneath it is worse than showing nothing.
+
+### Frontend / API & Errors
+
+- `openapi-fetch` returns error objects (not strings) on non-2xx responses — never embed bare `${err}` in template literals. Always use `formatApiError(err)` (see `frontend/src/lib/api/formatError.ts`) to extract a readable `error.detail` or `error.message`.
+- API failures must not trigger full-page redirects — show an in-page `ErrorAlert` with retry button instead. This is especially critical for the feature-flags API called by `planStore.fetchPlan()`, which runs on every page mount.
+- The 401 interceptor in `client.ts` does a hard `window.location.href = '/login'` — ensure the auth token is still valid before the interceptor fires. A single expired-token or failed feature-flags call can cascade into an unusable redirect loop.
+
+### Frontend / Security
+
+- Runtime Config values matching sensitive key patterns (`SECRET|PASSWORD|TOKEN|KEY|DATABASE_URL|ENCRYPTION|SIGNING|PRIVATE`, case-insensitive) must be masked by default with `"********"` and a per-key "Reveal" toggle — never displayed in plaintext. Non-sensitive keys (e.g. `APP_NAME`, `LOG_LEVEL`) display normally.
+- Sidebar nav links for Enterprise-only features should be conditionally rendered based on the plan tier, not just visually dimmed — a visible-but-broken link is worse than no link.
+
+### Frontend / Layout (continued)
+
 - Mobile dropdown menus (`v-if="mobileOpen"`) inside a `flex` (row-direction) container get laid out as skinny horizontal columns instead of full-width panels below the header. Always position mobile dropdowns with `fixed top-14 left-0 right-0 z-40` to take them out of flex flow — never rely on the natural document flow inside a horizontal flex container for overlay-style elements.
 - `pt-14` (56px) is a fragile approximation of a fixed header's height. The header's actual height varies with padding (`py-3` = 24px vertical), content (20px SVG), and border (1px) — real height is ~63px. Use `sticky` positioning for the mobile header instead of `fixed` + `pt-14`, or measure the actual height precisely. The gap between `pt-14` and true header height causes content to peek behind or leave a visible strip.
 - The mobile layout has oscillated between `fixed` header + `pt-14` and in-flow/`sticky` header approaches multiple times (commits e3028c2, 8f36188, a080bfa, 393605d). Neither approach is inherently better — the choice depends on whether the dropdown/menu panel needs to push content down or overlay it. **Decide upfront:** overlay (fixed header, z-index stacking) vs. push (sticky header, content reflow). Don't flip-flop.
 - When both the mobile menu panel and main content need scrolling, avoid nesting `overflow-auto`/`overflow-hidden` on multiple flex layers — it creates scroll-snapping issues where one layer traps scroll. Use a single scroll container (`overflow-y-auto` on `main`) and let the menu panel scroll within itself if needed.
+## Skipped Findings — Explore Deployment (2026-06-30)
+
+Findings from the `explore-deployment` review that were investigated and intentionally not fixed, with reasons.
+
+### Not reproducible in source code
+
+- **F1 (rogue setTimeout)**: No `pushState`/`replaceState` calls exist anywhere in the frontend source. The rogue auto-navigation is either a deployment-specific artifact (compiled bundle differs from source), the Playwright extension itself injecting navigation events, or API-failure cascading being misinterpreted as a timer. Cannot fix what isn't in the code.
+
+### Backend API issues — need backend-side investigation
+
+- **F2 (backend API unresponsive)**: Multiple `/api/v1/*` endpoints time out. This is a deployment/infrastructure issue (resource limits on Free tier, slow DB, missing workers) — no frontend code change can fix.
+- **F3 (feature-flags ERR_FAILED)**: The feature-flags endpoint returns `net::ERR_FAILED` (network-level failure, not HTTP status). Likely a server-side crash, resource exhaustion, or reverse-proxy config issue.
+- **F11 (observability API hangs)**: `GET /api/v1/settings/observability` hangs with no response — likely the same root cause as F2.
+- **F15 (401 on Node Categories / Saved Views)**: Node Categories uses raw `fetch` (not the `api` typed client), and the backend returns 401 despite a valid token. Likely an API permission configuration issue — the endpoint may not be wired for the admin role. Needs backend route-level investigation.
+
+### Payment/plan gating — expected behaviour
+
+- **F16 (Model Backends feature-gate spinner)**: Known. The `FeatureGate` wrapper handles this but needs a better upgrade CTA.
+- **F20 (Teams API 402)**: Expected — Free tier doesn't include team management. The `[object Object]` error display (fixed in F13/F14) was the real bug here.
+- **F23 (SSO payment retry loop)**: Same — payment required, and the retry button shouldn't show for 4xx errors (usability concern, not a bug fix).
+- **F30 (Enterprise pages redirecting)**: Expected — these pages require a license key. The redirect is the gating mechanism. A better CTA is desirable but existing behaviour.
+
+### Minor UX polish (not fixing now)
+
+- **F21 (License buttons disabled)**: Typing should enable Verify Key. Minor — no security impact.
+- **F22 (MCP keys not listed)**: The API likely doesn't return created keys. Needs backend endpoint fix.
+- **F24 (Schema Inference empty)**: Missing form fields — skeleton page, likely not implemented yet.
+- **F25 (Pipeline dropdown empty)**: No pipelines exist on this org — expected empty state for a fresh org.
+- **F26/F40 (data-testid absent)**: Dot-release work. Smoke tests catch missing routes; testid completeness is lower priority.
+- **F28 (Add Connector dead)**: Button click produces no dialog — likely backend data not loaded yet.
+- **F31 (Org Settings → License redirect)**: Known — likely not implemented yet for this org.
+- **F33 (Dashboard no CTA)**: Nice-to-have for fresh orgs. Low priority.
+- **F34-F39, F41-F44**: Console noise from browser extensions, formatting nits, copy-button gaps, form wrapping. All minor.
+
 - Commit `393605d` gutted the mobile layout (removed LogoMark, dynamic nav items with sections/icons, theme toggle, user profile, logout button) to work around a Vite 8 SFC parsing issue. If functionality needs to be restored, build it back incrementally rather than doing another full rewrite — the layout fundamentals are now stable.
