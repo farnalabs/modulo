@@ -149,7 +149,7 @@
                 {{ entry.endpoint_url || '—' }}
               </td>
               <td class="px-4 py-3">
-                <span :class="statusBadge(entry.status)">
+                <span :class="statusBadge(entry.status)" class="capitalize">
                   {{ entry.status }}
                 </span>
               </td>
