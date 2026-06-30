@@ -29,7 +29,7 @@ async def fix():
             await s.execute(text(\"DELETE FROM alembic_version WHERE version_num = '0037_agent_columns'\"))
 asyncio.run(fix())
 " 2>&1 || echo "WARNING: Alembic prep step failed — continuing anyway"
-.venv/bin/alembic upgrade head || echo "WARNING: Migration failed — continuing anyway"
+.venv/bin/alembic upgrade heads || echo "WARNING: Migration failed — continuing anyway"
 
 echo "=== Applying schema patches (columns missing from base migrations) ==="
 .venv/bin/python3 -c "

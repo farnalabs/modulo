@@ -80,6 +80,7 @@ def get_or_create_engine(settings: Settings) -> AsyncEngine:
         if db_type != "sqlite":
             kw["pool_size"] = 10
             kw["max_overflow"] = 5
+            kw["pool_timeout"] = 10
         _engine = create_async_engine(**kw)
     return _engine
 
