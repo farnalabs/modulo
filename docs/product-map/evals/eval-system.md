@@ -1,6 +1,6 @@
 ---
 id: feat-evals-system
-prd: "§8.17"
+prd: 8.17
 delivery-tasks:
   - task-nv2-eval-definition
   - task-nv2-eval-engine
