@@ -6,6 +6,8 @@ from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, status
 
+from modulo.auth.dependencies import get_current_user
+from modulo.auth.jwt import AuthenticatedPrincipal
 from modulo.core.feature_flags import FeatureFlagRegistry
 from modulo.settings import Settings, get_settings
 
@@ -21,6 +23,7 @@ def _build_registry(settings: Settings) -> FeatureFlagRegistry:
 @router.get("")
 async def list_feature_flags(
     settings: Settings = Depends(get_settings),
+    current_user: AuthenticatedPrincipal = Depends(get_current_user),
 ) -> dict[str, Any]:
     registry = _build_registry(settings)
     has_key = bool(settings.modulo_license_key)
@@ -57,6 +60,7 @@ async def list_feature_flags(
 async def get_feature_flag(
     flag_name: str,
     settings: Settings = Depends(get_settings),
+    current_user: AuthenticatedPrincipal = Depends(get_current_user),
 ) -> dict[str, Any]:
     registry = _build_registry(settings)
     flag = registry.get_flag(flag_name)
