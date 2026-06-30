@@ -35,6 +35,7 @@ from modulo.model_backends.jan import JanBackend
 from modulo.model_backends.llamacpp import LLamaCppBackend
 from modulo.model_backends.lm_studio import LmStudioBackend
 from modulo.model_backends.localai import LocalAIBackend
+from modulo.model_backends.mistral import MistralBackend
 from modulo.model_backends.ollama import OllamaBackend
 from modulo.model_backends.openai import OpenAIBackend
 from modulo.model_backends.openrouter import OpenRouterBackend
@@ -278,6 +279,8 @@ def _build_backend(
                 base_url=base_url,
                 **default_params,
             )
+        case "mistral":
+            return MistralBackend(api_key=creds["api_key"], model_id=model_id, **default_params)
         case "ollama":
             base_url = creds.get("base_url", "http://localhost:11434/v1")
             return OllamaBackend(
