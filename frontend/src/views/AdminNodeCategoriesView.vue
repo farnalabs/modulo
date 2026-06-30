@@ -140,7 +140,7 @@
 
 <script setup lang="ts">
 import { ref, onMounted } from 'vue'
-import { getAccessToken } from '../lib/api/client'
+import { api } from '../lib/api/client'
 import NodeCategoryEditor from '../components/NodeCategoryEditor.vue'
 import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
@@ -168,24 +168,16 @@ const deleteConfirmName = ref('')
 const deleting = ref(false)
 const deleteError = ref<string | null>(null)
 
-function getHeaders(): Record<string, string> {
-  const headers: Record<string, string> = { 'Content-Type': 'application/json' }
-  const token = getAccessToken()
-  if (token) headers['Authorization'] = `Bearer ${token}`
-  return headers
-}
-
 async function loadCategories() {
   loading.value = true
   error.value = null
   try {
-    const res = await fetch('/api/v1/node-categories', { headers: getHeaders() })
-    if (!res.ok) {
-      const errData = await res.json().catch(() => null)
-      throw new Error(errData?.detail ?? `Failed to load categories (${res.status})`)
+    const { data, error: err } = await api.GET('/api/v1/node-categories')
+    if (err) {
+      error.value = `Failed to load categories: ${err}`
+    } else if (data) {
+      categories.value = data.items ?? data as unknown as NodeCategory[]
     }
-    const data = await res.json()
-    categories.value = data.items ?? data
   } catch (e: unknown) {
     error.value = e instanceof Error ? e.message : String(e)
   } finally {
@@ -235,16 +227,15 @@ async function deleteCategory() {
   deleting.value = true
   deleteError.value = null
   try {
-    const res = await fetch(`/api/v1/node-categories/${deleteConfirmCategoryId.value}`, {
-      method: 'DELETE',
-      headers: getHeaders(),
+    const { error: err, response } = await api.DELETE('/api/v1/node-categories/{category_id}', {
+      params: { path: { category_id: deleteConfirmCategoryId.value } },
     })
-    if (!res.ok && res.status !== 204) {
-      const errData = await res.json().catch(() => null)
-      throw new Error(errData?.detail ?? `Delete failed (${res.status})`)
+    if (err) {
+      deleteError.value = String(err)
+    } else if (response.status === 204 || response.ok) {
+      categories.value = categories.value.filter(c => c.id !== deleteConfirmCategoryId.value)
+      deleteConfirmCategoryId.value = null
     }
-    categories.value = categories.value.filter(c => c.id !== deleteConfirmCategoryId.value)
-    deleteConfirmCategoryId.value = null
   } catch (e: unknown) {
     deleteError.value = e instanceof Error ? e.message : String(e)
   } finally {
