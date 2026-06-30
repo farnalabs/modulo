@@ -15,7 +15,13 @@ code:
 depends-on: [feat-evals-eval-engine, feat-variants-variant-groups]
 status: partial
 ---
-# Run Variants — Coverage Gap Signal Discovered from 1 completed delivery tasks. ## Behaviours ### Variant Group Lifecycle
+# Run Variants — Coverage Gap Signal
+
+Discovered from 1 completed delivery tasks.
+
+## Behaviours
+
+### Variant Group Lifecycle
 - [ ] Create variant group with 2+ variants, each with `run_context_overrides` and `eval_definition_ids`
 - [ ] List variant groups for a pipeline
 - [ ] Get single variant group by ID

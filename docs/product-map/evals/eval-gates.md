@@ -2,6 +2,7 @@
 id: feat-evals-eval-gates
 prd: 8.17
 delivery-tasks: [task-nv2-conditional-hitl, task-nv2-eval-gate-enforcement]
+bdd:
   - backend/tests/features/evals/conditional_hitl.feature
   - backend/tests/features/evals/eval_block.feature
   - backend/tests/bdd/features/hitl/approval_gate.feature
@@ -25,7 +26,15 @@ unit-tests:
 depends-on: [feat-evals-eval-engine]
 status: partial
 ---
-# Eval Gates Conditional HITL gating and eval-before-interrupt for pipeline nodes. A HITL gate can be made conditional via a JMESPath `condition` expression on the gate config. Additionally, node-scoped eval definitions are evaluated after the condition check but before the interrupt — block-level eval failures raise `EvalBlockedError`, preventing the interrupt entirely. Post-run, eval suites with `pass_threshold` are checked and can transition the run to `eval_failed`. ## Behaviours ### Happy Path - [ ] HITL gate with no condition and no evals fires NodeInterrupt at expected gate node
+# Eval Gates
+
+Conditional HITL gating and eval-before-interrupt for pipeline nodes. A HITL gate can be made conditional via a JMESPath `condition` expression on the gate config. Additionally, node-scoped eval definitions are evaluated after the condition check but before the interrupt — block-level eval failures raise `EvalBlockedError`, preventing the interrupt entirely. Post-run, eval suites with `pass_threshold` are checked and can transition the run to `eval_failed`.
+
+## Behaviours
+
+### Happy Path
+
+- [ ] HITL gate with no condition and no evals fires NodeInterrupt at expected gate node
 - [ ] Gate creates a `hitl_claims` row on first visit (idempotent on re-creation)
 - [ ] Claim sets claimant, token, and TTL expiry; returns updated gate
 - [ ] Approve with valid token records "approved" decision and clears claim fields

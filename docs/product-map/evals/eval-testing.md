@@ -2,6 +2,7 @@
 id: feat-evals-eval-testing
 prd: 8.17
 delivery-tasks: [task-nv2-eval-bdd-tests]
+bdd:
   - backend/tests/features/evals/eval_regex.feature
   - backend/tests/features/evals/eval_llm_judge.feature
   - backend/tests/features/evals/eval_block.feature
@@ -22,7 +23,13 @@ unit-tests:
 depends-on: [feat-evals-eval-engine, feat-evals-eval-gates]
 status: partial
 ---
-# Eval Testing Discovered from 1 completed delivery task (task-nv2-eval-bdd-tests). Tests validate the Eval System ($8.17) across BDD acceptance and unit levels, covering eval definitions, run lifecycle, regex/LLM-judge/block eval types, suite aggregation, dashboard, comparison, coverage, regression alerts, and gate enforcement. ## Behaviours ### Eval definition CRUD
+# Eval Testing
+
+Discovered from 1 completed delivery task (task-nv2-eval-bdd-tests). Tests validate the Eval System (8.17) across BDD acceptance and unit levels, covering eval definitions, run lifecycle, regex/LLM-judge/block eval types, suite aggregation, dashboard, comparison, coverage, regression alerts, and gate enforcement.
+
+## Behaviours
+
+### Eval definition CRUD
 - [ ] Create eval definition with all fields (pipeline_id, name, eval_type, config_json, failure_behaviour, pass_threshold, suite_id) returns 201
 - [ ] Create eval definition with optional fields omitted returns 201 with null defaults
 - [ ] Create eval definition requires admin role (runner gets 403)

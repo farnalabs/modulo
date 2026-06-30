@@ -2,6 +2,7 @@
 id: feat-evals-eval-definitions
 prd: 8.17
 delivery-tasks: [task-nv2-eval-definition]
+bdd:
   - backend/tests/bdd/features/eval/eval_run.feature
   - backend/tests/features/evals/eval_regex.feature
   - backend/tests/features/evals/eval_llm_judge.feature
@@ -15,7 +16,13 @@ code:
 depends-on: [feat-pipelines-core]
 status: partial
 ---
-# Eval Definitions Eval definitions describe automated quality checks that run as a post-node step within the LangGraph StateGraph (8.17). Each definition specifies an eval type, config, pass threshold, and failure behaviour. ## Behaviours ### Eval Definition CRUD
+# Eval Definitions
+
+Eval definitions describe automated quality checks that run as a post-node step within the LangGraph StateGraph (8.17). Each definition specifies an eval type, config, pass threshold, and failure behaviour.
+
+## Behaviours
+
+### Eval Definition CRUD
 - [x] Admin can create an eval definition with pipeline_id, name, eval_type, and optional node_id, config_json, failure_behaviour, pass_threshold, suite_id
 - [x] Admin can create an eval definition with only required fields (pipeline_id, name, eval_type)
 - [x] Non-admin user (runner) receives 403 when creating eval definition

@@ -2,6 +2,7 @@
 id: feat-evals-feedback-records
 prd: 8.20
 delivery-tasks: [task-nv4-feedback-record]
+bdd:
   - backend/tests/bdd/features/eval/feedback_system.feature
 code:
   - backend/src/modulo/core/feedback_manager/__init__.py

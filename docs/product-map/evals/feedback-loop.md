@@ -2,6 +2,7 @@
 id: feat-evals-feedback-loop
 prd: 8.20
 delivery-tasks: [task-nv4-feedback-loop-auto]
+bdd:
   - backend/tests/bdd/features/eval/feedback_system.feature
   - backend/tests/features/personas/priya-platform-engineer.feature
 code:
@@ -13,7 +14,13 @@ code:
 depends-on: [feat-core-feedback-correction, feat-evals-feedback-proposals, feat-frontend-feedback-inbox-ui]
 status: partial
 ---
-# Feedback System — feedback loop, eval gap detection, eval suite growth The Feedback System treats every human rejection as structured signal. Handles FeedbackRecord lifecycle, three handler types, correction run spawning, eval gap detection, and eval proposal curation. ## Behaviours ### FeedbackRecord entity
+# Feedback System — feedback loop, eval gap detection, eval suite growth
+
+The Feedback System treats every human rejection as structured signal. Handles FeedbackRecord lifecycle, three handler types, correction run spawning, eval gap detection, and eval proposal curation.
+
+## Behaviours
+
+### FeedbackRecord entity
 - [x] Every HITL rejection produces a FeedbackRecord with run_id, gate_id, rejected_by, rejection_reason, rejected_output, producing_node_id, producing_agent_id
 - [x] FeedbackRecord is immutable after creation; correction loop produces new runs, does not modify original
 - [x] Status lifecycle: pending -> routing -> correcting -> resolved | escalated | dismissed

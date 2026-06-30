@@ -2,6 +2,7 @@
 id: feat-evals-conditional-transitions
 prd: 8.17
 delivery-tasks: [task-nv9-conditional-transitions]
+bdd:
   - backend/tests/features/evals/conditional_hitl.feature
 code:
   - backend/src/modulo/core/pipeline_engine/graph_cache.py
@@ -17,7 +18,15 @@ unit-tests:
 depends-on: [feat-evals-eval-engine]
 status: partial
 ---
-# Conditional Transitions Two conditional routing mechanisms within the LangGraph pipeline: (A) **conditional edges** — JMESPath-based graph edges (`type: "conditional"`) that route execution to different target nodes based on state, and (B) **conditional HITL gating** — a JMESPath `condition` on the HITL gate config that skips the gate when falsy, plus eval-before-interrupt where node-scoped eval definitions are evaluated after the condition check and before the interrupt. ## Behaviours ### Conditional Edge Routing - [ ] Edge `type: "conditional"` compiled via `add_conditional_edges` with a JMESPath-based router function
+# Conditional Transitions
+
+Two conditional routing mechanisms within the LangGraph pipeline: (A) **conditional edges** — JMESPath-based graph edges (`type: "conditional"`) that route execution to different target nodes based on state, and (B) **conditional HITL gating** — a JMESPath `condition` on the HITL gate config that skips the gate when falsy, plus eval-before-interrupt where node-scoped eval definitions are evaluated after the condition check and before the interrupt.
+
+## Behaviours
+
+### Conditional Edge Routing
+
+- [ ] Edge `type: "conditional"` compiled via `add_conditional_edges` with a JMESPath-based router function
 - [ ] Router evaluates `condition_expression` against the full LangGraph state dict
 - [ ] First matching conditional edge's target is returned as the next node
 - [ ] Normal edges from the same source serve as fallback targets when no condition matches

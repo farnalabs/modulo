@@ -7,7 +7,15 @@ code: [backend/src/modulo/core/feedback_manager/, backend/src/modulo/api/routes/
 depends-on: [feat-evals-eval-definitions, feat-evals-feedback-routing]
 status: partial
 ---
-# Feedback Proposals — Eval Suite Growth Discovered from 1 completed delivery tasks. ## Behaviours ### Eval Gap Detection (8.20 ¶Eval suite growth #1) - [x] System runs pipeline eval suite against rejected output as standalone evaluation (EvalEngine.evaluate) — `detect_eval_gap()` now executes real eval suite
+# Feedback Proposals — Eval Suite Growth
+
+Discovered from 1 completed delivery tasks.
+
+## Behaviours
+
+### Eval Gap Detection (8.20 ¶Eval suite growth #1)
+
+- [x] System runs pipeline eval suite against rejected output as standalone evaluation (EvalEngine.evaluate) — `detect_eval_gap()` now executes real eval suite
 - [x] FeedbackRecord is tagged `eval_gap=True` when no eval scored the output as failing — logic implemented
 - [ ] API endpoint `POST /feedback/{record_id}/detect-gap` triggers gap detection
 - [ ] API endpoint returns `eval_gap` boolean in response ### Proposed Eval Generation (8.20 ¶Eval suite growth #2) - [ ] AI correction agent or eval-proposal agent drafts a new eval case on `eval_gap` — Not implemented
