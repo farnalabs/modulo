@@ -24,6 +24,7 @@ from modulo.model_backends.ai21 import Ai21Backend
 from modulo.model_backends.anthropic import AnthropicBackend
 from modulo.model_backends.azure_openai import AzureOpenAIBackend
 from modulo.model_backends.base import ModelBackendBase
+from modulo.model_backends.bedrock import BedrockBackend
 from modulo.model_backends.cohere import CohereBackend
 from modulo.model_backends.deepseek import DeepSeekBackend
 from modulo.model_backends.fireworks import FireworksBackend
@@ -229,6 +230,14 @@ def _build_backend(
     creds: dict[str, Any],
     default_params: dict[str, Any],
 ) -> ModelBackendBase:
+    if provider == "bedrock":
+        return BedrockBackend(
+            aws_access_key_id=creds["aws_access_key_id"],
+            aws_secret_access_key=creds["aws_secret_access_key"],
+            model_id=model_id,
+            region=creds.get("region", "us-east-1"),
+            **default_params,
+        )
     if "api_key" not in creds:
         raise ValueError(f"Missing 'api_key' in credentials for provider {provider!r}")
     match provider:
