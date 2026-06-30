@@ -9,6 +9,7 @@ layer entirely.
 - `docs/deployment-security.md` — deployment security baseline
 - `docs/security/secret-management.md` — Fernet key management
 - `docs/operations/backup.md` — backup/restore procedures
+- `docs/operations/self-hosted-admin.md` — broader self-hosted emergency procedures (password reset, key recovery, auth bypass)
 
 ---
 
@@ -621,5 +622,6 @@ pg_restore -d "$DATABASE_URL" /tmp/pre-bypass-*.dump
 | Checkpoint encryption architecture | `docs/security/checkpoint-encryption.md` |
 | Backup and restore | `docs/operations/backup.md` |
 | Audit log chain verification | `docs/deployment-security.md` §6.1 |
+| Self-hosted admin operations | `docs/operations/self-hosted-admin.md` |
 | Deployment security hardening | `docs/deployment-security.md` |
 | Incident response playbook | `docs/security/incident-response-playbook.md` |
