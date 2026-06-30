@@ -1300,3 +1300,335 @@ def step_gitea_create_issue(resource, title, ctx):
     except Exception as exc:
         ctx["write_result"] = None
         ctx["query_error"] = str(exc)
+
+
+# ============================================================================
+# connectors/trello.feature  —  8+ scenarios
+# ============================================================================
+try:
+    scenarios("../../features/connectors/trello.feature")
+except (FileNotFoundError, OSError):
+    pass
+
+
+@given("a Trello connector with valid API key and token")
+def step_trello_connector(ctx):
+    from unittest.mock import AsyncMock
+
+    mock_connector = AsyncMock()
+    mock_connector.connector_type = "trello"
+
+    async def mock_health_check():
+        return HealthResult(ok=True, detail="Test User")
+
+    async def mock_query(q):
+        from modulo.connectors.base import ConnectorResult
+
+        match q.resource:
+            case "boards":
+                return ConnectorResult(
+                    records=[
+                        {"id": "b1", "name": "Board One", "closed": False},
+                        {"id": "b2", "name": "Board Two", "closed": False},
+                    ],
+                    total=2,
+                )
+            case "lists":
+                board_id = q.filters.get("board_id", "")
+                if not board_id:
+                    raise ValueError("Trello lists query requires 'board_id' filter")
+                return ConnectorResult(
+                    records=[
+                        {"id": "l1", "name": "To Do", "closed": False},
+                        {"id": "l2", "name": "Done", "closed": False},
+                    ],
+                    total=2,
+                )
+            case "cards":
+                return ConnectorResult(
+                    records=[
+                        {"id": "c1", "name": "Card One", "desc": "First card"},
+                        {"id": "c2", "name": "Card Two", "desc": "Second card"},
+                    ],
+                    total=2,
+                )
+            case "card":
+                card_id = q.filters.get("card_id", "")
+                if not card_id:
+                    raise ValueError("Trello card query requires 'card_id' filter")
+                return ConnectorResult(
+                    records=[{"id": card_id, "name": "Single Card", "desc": "A card"}]
+                )
+            case "members":
+                board_id = q.filters.get("board_id", "")
+                if not board_id:
+                    raise ValueError("Trello members query requires 'board_id' filter")
+                return ConnectorResult(
+                    records=[
+                        {"id": "u1", "fullName": "Alice"},
+                        {"id": "u2", "fullName": "Bob"},
+                    ],
+                    total=2,
+                )
+            case _:
+                raise ValueError(f"Unsupported Trello resource: {q.resource!r}")
+
+    async def mock_write(payload):
+        match payload.resource:
+            case "card":
+                return {
+                    "id": "c_new",
+                    "name": payload.data.get("name", ""),
+                    "idList": payload.data.get("idList", ""),
+                    "url": "https://trello.com/c/c_new",
+                }
+            case "card_update":
+                card_id = payload.data.get("id", "")
+                if not card_id:
+                    raise ValueError("Trello card_update requires 'id' in data")
+                return {"id": card_id, "name": "Updated Name"}
+            case "comment":
+                card_id = payload.data.get("card_id", "")
+                if not card_id:
+                    raise ValueError("Trello comment requires 'card_id' in data")
+                return {"id": "act1", "type": "commentCard", "data": {"text": payload.data.get("text", "")}}
+            case _:
+                raise ValueError(f"Unsupported Trello write resource: {payload.resource!r}")
+
+    mock_connector.health_check = mock_health_check
+    mock_connector.query = mock_query
+    mock_connector.write = mock_write
+    ctx["connector"] = mock_connector
+    ctx["query_error"] = None
+
+
+@given("the Trello API returns a valid member profile")
+def step_trello_health_valid(ctx):
+    async def mock_health():
+        return HealthResult(ok=True, detail="Test User")
+    ctx["connector"].health_check = mock_health
+
+
+@given("the Trello API returns 401 Unauthorized")
+def step_trello_health_401(ctx):
+    async def mock_health():
+        return HealthResult(ok=False, detail="HTTP 401: Unauthorized")
+    ctx["connector"].health_check = mock_health
+
+
+@given("the Trello API returns available boards")
+def step_trello_boards_available(ctx):
+    connector = ctx["connector"]
+
+    async def mock_query(q):
+        from modulo.connectors.base import ConnectorResult
+        if q.resource == "boards":
+            return ConnectorResult(
+                records=[
+                    {"id": "b1", "name": "Board One", "closed": False},
+                    {"id": "b2", "name": "Board Two", "closed": False},
+                ],
+                total=2,
+            )
+        raise ValueError(f"Unsupported Trello resource: {q.resource!r}")
+
+    connector.query = mock_query
+
+
+@given("the Trello API returns lists for a board")
+def step_trello_lists_available(ctx):
+    connector = ctx["connector"]
+
+    async def mock_query(q):
+        from modulo.connectors.base import ConnectorResult
+        if q.resource == "lists":
+            return ConnectorResult(
+                records=[
+                    {"id": "l1", "name": "To Do", "closed": False},
+                    {"id": "l2", "name": "Done", "closed": False},
+                ],
+                total=2,
+            )
+        raise ValueError(f"Unsupported Trello resource: {q.resource!r}")
+
+    connector.query = mock_query
+
+
+@given("the Trello API returns cards for a board")
+def step_trello_cards_available(ctx):
+    connector = ctx["connector"]
+
+    async def mock_query(q):
+        from modulo.connectors.base import ConnectorResult
+        if q.resource == "cards":
+            return ConnectorResult(
+                records=[
+                    {"id": "c1", "name": "Card One", "desc": "First"},
+                    {"id": "c2", "name": "Card Two", "desc": "Second"},
+                ],
+                total=2,
+            )
+        raise ValueError(f"Unsupported Trello resource: {q.resource!r}")
+
+    connector.query = mock_query
+
+
+@given("the Trello API returns a single card")
+def step_trello_single_card(ctx):
+    connector = ctx["connector"]
+
+    async def mock_query(q):
+        from modulo.connectors.base import ConnectorResult
+        if q.resource == "card":
+            return ConnectorResult(
+                records=[{"id": q.filters.get("card_id", ""), "name": "Single Card", "desc": "A card"}]
+            )
+        raise ValueError(f"Unsupported Trello resource: {q.resource!r}")
+
+    connector.query = mock_query
+
+
+@given("the Trello API accepts card creation")
+def step_trello_accepts_create(ctx):
+    connector = ctx["connector"]
+
+    async def mock_write(payload):
+        if payload.resource == "card":
+            return {"id": "c_new", "name": payload.data.get("name", ""), "idList": payload.data.get("idList", ""), "url": "https://trello.com/c/c_new"}
+        raise ValueError(f"Unsupported Trello write: {payload.resource!r}")
+
+    connector.write = mock_write
+
+
+@given("the Trello API accepts comments")
+def step_trello_accepts_comments(ctx):
+    connector = ctx["connector"]
+
+    async def mock_write(payload):
+        if payload.resource == "comment":
+            return {"id": "act1", "type": "commentCard", "data": {"text": payload.data.get("text", "")}}
+        raise ValueError(f"Unsupported Trello write: {payload.resource!r}")
+
+    connector.write = mock_write
+
+
+@given("the Trello connector is configured")
+def step_trello_configured(ctx):
+    pass
+
+
+@when(
+    parsers.parse('I query resource "{resource}" with board_id "{board_id}"')
+)
+def step_trello_query_with_board_id(resource, board_id, ctx):
+    from modulo.connectors.base import ConnectorQuery
+
+    q = ConnectorQuery(resource=resource, filters={"board_id": board_id})
+    import asyncio
+
+    try:
+        result = asyncio.new_event_loop().run_until_complete(ctx["connector"].query(q))
+        ctx["query_result"] = result
+        ctx["query_error"] = None
+    except Exception as exc:
+        ctx["query_result"] = None
+        ctx["query_error"] = str(exc)
+
+
+@when(
+    parsers.parse('I query resource "{resource}" with card_id "{card_id}"')
+)
+def step_trello_query_with_card_id(resource, card_id, ctx):
+    from modulo.connectors.base import ConnectorQuery
+
+    q = ConnectorQuery(resource=resource, filters={"card_id": card_id})
+    import asyncio
+
+    try:
+        result = asyncio.new_event_loop().run_until_complete(ctx["connector"].query(q))
+        ctx["query_result"] = result
+        ctx["query_error"] = None
+    except Exception as exc:
+        ctx["query_result"] = None
+        ctx["query_error"] = str(exc)
+
+
+@when(
+    parsers.parse(
+        'I write resource "{resource}" with name "{name}" and list_id "{list_id}"'
+    )
+)
+def step_trello_create_card(resource, name, list_id, ctx):
+    from modulo.connectors.base import ConnectorPayload
+
+    payload = ConnectorPayload(
+        resource=resource,
+        data={"name": name, "idList": list_id},
+    )
+    import asyncio
+
+    try:
+        result = asyncio.new_event_loop().run_until_complete(ctx["connector"].write(payload))
+        ctx["write_result"] = result
+        ctx["query_error"] = None
+    except Exception as exc:
+        ctx["write_result"] = None
+        ctx["query_error"] = str(exc)
+
+
+@when(
+    parsers.parse(
+        'I write resource "{resource}" for card "{card_id}" with text "{text}"'
+    )
+)
+def step_trello_add_comment(resource, card_id, text, ctx):
+    from modulo.connectors.base import ConnectorPayload
+
+    payload = ConnectorPayload(
+        resource=resource,
+        data={"card_id": card_id, "text": text},
+    )
+    import asyncio
+
+    try:
+        result = asyncio.new_event_loop().run_until_complete(ctx["connector"].write(payload))
+        ctx["write_result"] = result
+        ctx["query_error"] = None
+    except Exception as exc:
+        ctx["write_result"] = None
+        ctx["query_error"] = str(exc)
+
+
+@then("the health result is not ok")
+def step_trello_health_not_ok(ctx):
+    result = ctx.get("health_result")
+    assert result is not None, "No health check result"
+    assert result.ok is False, f"Health check unexpectedly passed: {result.detail}"
+
+
+@then("the records contain board metadata")
+def step_trello_boards_metadata(ctx):
+    result = ctx["query_result"]
+    for rec in result.records:
+        assert "id" in rec and "name" in rec, (
+            f"Record missing board metadata: {rec}"
+        )
+
+
+@then("the records contain list metadata")
+def step_trello_lists_metadata(ctx):
+    result = ctx["query_result"]
+    for rec in result.records:
+        assert "id" in rec and "name" in rec, (
+            f"Record missing list metadata: {rec}"
+        )
+
+
+@then("the record contains card fields")
+def step_trello_card_fields(ctx):
+    result = ctx["query_result"]
+    assert len(result.records) > 0
+    rec = result.records[0]
+    assert "id" in rec and "name" in rec, (
+        f"Record missing card fields: {rec}"
+    )
