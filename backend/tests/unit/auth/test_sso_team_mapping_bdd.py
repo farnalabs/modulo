@@ -165,7 +165,7 @@ def client() -> Generator[TestClient, None, None]:
     _app.dependency_overrides[get_current_user] = lambda: AuthenticatedPrincipal(
         username="admin",
         organisation_id=_ORG_ID,
-        user_id=uuid.uuid4(),
+        account_id=uuid.uuid4(),
         org_role="admin",
     )
     try:
@@ -197,7 +197,7 @@ def saml_client() -> Generator[TestClient, None, None]:
     _app.dependency_overrides[get_current_user] = lambda: AuthenticatedPrincipal(
         username="admin",
         organisation_id=_ORG_ID,
-        user_id=uuid.uuid4(),
+        account_id=uuid.uuid4(),
         org_role="admin",
     )
     try:
@@ -248,7 +248,7 @@ class TestAdminSetGroupMappings:
         _app.dependency_overrides[get_current_user] = lambda: AuthenticatedPrincipal(
             username="viewer",
             organisation_id=_ORG_ID,
-            user_id=uuid.uuid4(),
+            account_id=uuid.uuid4(),
             org_role="viewer",
         )
         try:

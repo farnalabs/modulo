@@ -43,7 +43,7 @@ def client() -> Generator[TestClient, None, None]:
     app.dependency_overrides[get_current_user] = lambda: AuthenticatedPrincipal(
         username="testuser",
         organisation_id=MagicMock(),
-        user_id=MagicMock(),
+        account_id=MagicMock(),
         org_role="admin",
     )
     yield TestClient(app)

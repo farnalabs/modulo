@@ -258,7 +258,7 @@ def user_requests_get_stage(username: str, stage_name: str, request: pytest.Fixt
     app.dependency_overrides[get_current_user] = lambda: AuthenticatedPrincipal(
         username=username,
         organisation_id=ORG_ID,
-        user_id=user_id,
+        account_id=user_id,
         org_role="operator",
     )
 

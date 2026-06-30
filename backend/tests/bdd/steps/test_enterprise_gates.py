@@ -98,7 +98,7 @@ def _setup_client(license_key: str, client: Any, ctx: dict[str, Any]) -> None:
     _app.dependency_overrides[get_current_user] = lambda: AuthenticatedPrincipal(
         username="admin",
         organisation_id=_ORG_ID,
-        user_id=uuid.UUID("00000000-0000-0000-0000-000000000002"),
+        account_id=uuid.UUID("00000000-0000-0000-0000-000000000002"),
         org_role="admin",
     )
 

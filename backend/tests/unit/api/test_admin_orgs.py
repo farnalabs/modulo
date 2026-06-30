@@ -19,13 +19,13 @@ USER_ID = uuid4()
 ADMIN_PRINCIPAL = AuthenticatedPrincipal(
     username="admin@test",
     organisation_id=ORG_ID,
-    user_id=USER_ID,
+    account_id=USER_ID,
     org_role="admin",
 )
 VIEWER_PRINCIPAL = AuthenticatedPrincipal(
     username="viewer@test",
     organisation_id=ORG_ID,
-    user_id=uuid4(),
+    account_id=uuid4(),
     org_role="viewer",
 )
 

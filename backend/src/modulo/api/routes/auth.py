@@ -163,7 +163,7 @@ async def refresh(
 
     sub_val = claims.get("sub")
     org_id_val = claims.get("org_id")
-    user_id_val = claims.get("user_id")
+    user_id_val = claims.get("user_id") or claims.get("account_id")
     org_role_val = claims.get("org_role")
     if not all(isinstance(v, str) for v in [sub_val, org_id_val, user_id_val, org_role_val]):
         raise HTTPException(

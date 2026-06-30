@@ -146,7 +146,7 @@ def webhook_client() -> Generator[TestClient, None, None]:
         return AuthenticatedPrincipal(
             username="ci@test.local",
             organisation_id=_fake_org_id,
-            user_id=_fake_user_id,
+            account_id=_fake_user_id,
             org_role="admin",
         )
 

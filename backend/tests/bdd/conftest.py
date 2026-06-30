@@ -157,7 +157,7 @@ def client(mock_session: AsyncMock) -> Generator[TestClient, None, None]:
     app.dependency_overrides[get_current_user] = lambda: AuthenticatedPrincipal(
         username="testuser",
         organisation_id=ORG_ID,
-        user_id=USER_ID,
+        account_id=USER_ID,
         org_role="admin",
     )
 
@@ -215,7 +215,7 @@ def alt_org_client(mock_session: AsyncMock) -> Generator[TestClient, None, None]
     app.dependency_overrides[get_current_user] = lambda: AuthenticatedPrincipal(
         username="otheruser",
         organisation_id=ALT_ORG_ID,
-        user_id=uuid.uuid4(),
+        account_id=uuid.uuid4(),
         org_role="admin",
     )
 
@@ -235,7 +235,7 @@ def viewer_client(mock_session: AsyncMock) -> Generator[TestClient, None, None]:
     app.dependency_overrides[get_current_user] = lambda: AuthenticatedPrincipal(
         username="viewer",
         organisation_id=ORG_ID,
-        user_id=uuid.uuid4(),
+        account_id=uuid.uuid4(),
         org_role="viewer",
     )
 

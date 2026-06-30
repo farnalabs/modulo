@@ -61,7 +61,7 @@ def client() -> Generator[TestClient, None, None]:
     app.dependency_overrides[get_db_session] = override_session
     app.dependency_overrides[_get_engine] = lambda: MagicMock()
     app.dependency_overrides[get_current_user] = lambda: AuthenticatedPrincipal(
-        username="admin", organisation_id=_ORG_ID, user_id=_USER_ID, org_role="admin"
+        username="admin", organisation_id=_ORG_ID, account_id=_USER_ID, org_role="admin"
     )
     yield TestClient(app)
     app.dependency_overrides.clear()
@@ -221,7 +221,7 @@ class TestRevealEndpoint:
 
     def test_reveal_requires_admin_role(self, client: TestClient) -> None:
         app.dependency_overrides[get_current_user] = lambda: AuthenticatedPrincipal(
-            username="runner", organisation_id=_ORG_ID, user_id=_USER_ID, org_role="runner"
+            username="runner", organisation_id=_ORG_ID, account_id=_USER_ID, org_role="runner"
         )
         resp = client.post(
             "/api/v1/admin/sensitive/reveal",
@@ -229,7 +229,7 @@ class TestRevealEndpoint:
         )
         assert resp.status_code == 403
         app.dependency_overrides[get_current_user] = lambda: AuthenticatedPrincipal(
-            username="admin", organisation_id=_ORG_ID, user_id=_USER_ID, org_role="admin"
+            username="admin", organisation_id=_ORG_ID, account_id=_USER_ID, org_role="admin"
         )
 
     def _setup_session_execute(self, return_value: MagicMock | None) -> None:

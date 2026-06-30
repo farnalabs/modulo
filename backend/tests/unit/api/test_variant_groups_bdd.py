@@ -27,7 +27,7 @@ def make_session_mock() -> AsyncMock:
 def make_mock_principal(**kwargs: Any) -> MagicMock:
     p = MagicMock()
     p.organisation_id = kwargs.get("org_id", uuid.uuid4())
-    p.user_id = kwargs.get("user_id", uuid.uuid4())
+    p.account_id = kwargs.get("user_id", uuid.uuid4())
     p.username = kwargs.get("username", "test_user")
     p.org_role = kwargs.get("org_role", "admin")
     return p

@@ -176,7 +176,7 @@ def test_refresh_token_reuse_detects_theft(client: TestClient) -> None:
         "alice",
         _VALID_32,
         organisation_id=str(_ORG_ID),
-        user_id=str(_USER_ID),
+        account_id=str(_USER_ID),
         org_role="admin",
         token_family=family_id,
         token_sequence=0,
@@ -294,7 +294,7 @@ def _create_valid_access_token() -> str:
         "admin@example.com",
         _VALID_32,
         organisation_id=str(_ORG_ID),
-        user_id=str(_USER_ID),
+        account_id=str(_USER_ID),
         org_role="admin",
     )
 

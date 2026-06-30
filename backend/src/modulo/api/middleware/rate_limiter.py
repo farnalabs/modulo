@@ -152,7 +152,7 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
             try:
                 claims = jose_jwt.get_unverified_claims(token)
                 org_id = claims.get("org_id", "")
-                user_id = claims.get("user_id", "")
+                user_id = claims.get("user_id", "") or claims.get("account_id", "")
                 if org_id and user_id:
                     return f"user:{org_id}:{user_id}:{path}"
             except Exception as exc:
