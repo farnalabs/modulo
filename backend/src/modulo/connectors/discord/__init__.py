@@ -120,7 +120,9 @@ class DiscordConnector(ConnectorBase):
                     message_id = payload.data.get("message_id", "")
                     emoji = payload.data.get("emoji", "")
                     if not channel_id or not message_id or not emoji:
-                        raise ValueError("Discord reaction write requires 'channel_id', 'message_id', and 'emoji' in data")
+                        raise ValueError(
+                            "Discord reaction write requires 'channel_id', 'message_id', and 'emoji' in data"
+                        )
                     resp = await c.put(f"/channels/{channel_id}/messages/{message_id}/reactions/{emoji}/@me")
                     resp.raise_for_status()
                     return {"ok": True}
