@@ -52,6 +52,7 @@ from modulo.connectors.linear import LinearConnector
 from modulo.connectors.microsoft_teams import MicrosoftTeamsConnector
 from modulo.connectors.monday import MondayConnector
 from modulo.connectors.notion import NotionConnector
+from modulo.connectors.npm import NpmConnector
 from modulo.connectors.onepassword import OnePasswordConnector
 from modulo.connectors.opsgenie import OpsgenieConnector
 from modulo.connectors.pagerduty import PagerDutyConnector
@@ -326,6 +327,9 @@ def _build_connector(type_id: str, config: dict[str, Any], creds: dict[str, Any]
             )
         case "notion":
             return NotionConnector(token=_get_cred(creds, "token", type_id))
+        case "npm":
+            token = creds.get("token", "")
+            return NpmConnector(token=token)
         case "dropbox_paper":
             return DropboxPaperConnector(token=_get_cred(creds, "token", type_id))
         case "buildkite":
