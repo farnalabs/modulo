@@ -1303,6 +1303,440 @@ def step_gitea_create_issue(resource, title, ctx):
 
 
 # ============================================================================
+# connectors/monday.feature  —  13 scenarios
+# ============================================================================
+try:
+    scenarios("../../features/connectors/monday.feature")
+except (FileNotFoundError, OSError):
+    pass
+
+
+@given("a Monday.com connector with valid API key")
+def step_monday_connector(ctx):
+    from unittest.mock import AsyncMock
+
+    mock_connector = AsyncMock()
+    mock_connector.connector_type = "monday"
+
+    async def mock_health_check():
+        return HealthResult(ok=True, detail="Test User")
+
+    async def mock_query(q):
+        from modulo.connectors.base import ConnectorResult
+
+        match q.resource:
+            case "boards":
+                return ConnectorResult(
+                    records=[
+                        {"id": "1", "name": "Board A"},
+                        {"id": "2", "name": "Board B"},
+                    ],
+                    total=2,
+                )
+            case "board":
+                board_id = q.filters.get("board_id", "")
+                if not board_id:
+                    raise ValueError("Monday board query requires 'board_id' filter")
+                return ConnectorResult(
+                    records=[
+                        {
+                            "id": str(board_id),
+                            "name": "My Board",
+                            "columns": [{"id": "col1", "title": "Status", "type": "text"}],
+                            "groups": [{"id": "g1", "title": "Group 1"}],
+                        }
+                    ]
+                )
+            case "items":
+                board_id = q.filters.get("board_id", "")
+                if not board_id:
+                    raise ValueError("Monday items query requires 'board_id' filter")
+                return ConnectorResult(
+                    records=[
+                        {"id": "101", "name": "Item One"},
+                        {"id": "102", "name": "Item Two"},
+                    ],
+                    total=2,
+                )
+            case "item":
+                item_id = q.filters.get("item_id", "")
+                if not item_id:
+                    raise ValueError("Monday item query requires 'item_id' filter")
+                return ConnectorResult(
+                    records=[{"id": str(item_id), "name": "Single Item", "column_values": []}]
+                )
+            case "users":
+                return ConnectorResult(
+                    records=[
+                        {"id": "u1", "name": "Alice", "email": "alice@example.com"},
+                        {"id": "u2", "name": "Bob", "email": "bob@example.com"},
+                    ],
+                    total=2,
+                )
+            case "workspaces":
+                return ConnectorResult(
+                    records=[
+                        {"id": "ws1", "name": "Engineering"},
+                        {"id": "ws2", "name": "Marketing"},
+                    ],
+                    total=2,
+                )
+            case _:
+                raise ValueError(f"Unsupported Monday.com resource: {q.resource!r}")
+
+    async def mock_write(payload):
+        match payload.resource:
+            case "item":
+                board_id = payload.data.get("board_id")
+                item_name = payload.data.get("item_name")
+                if not board_id or not item_name:
+                    raise ValueError("Monday item write requires 'board_id' and 'item_name' in data")
+                return {"id": "301", "name": item_name}
+            case "item_update":
+                item_id = payload.data.get("item_id")
+                column_values = payload.data.get("column_values")
+                if item_id is None or column_values is None:
+                    raise ValueError("Monday item_update requires 'item_id' and 'column_values' in data")
+                return {"id": str(item_id), "name": "Updated Task"}
+            case "column_value":
+                item_id = payload.data.get("item_id")
+                column_id = payload.data.get("column_id")
+                value = payload.data.get("value")
+                if item_id is None or column_id is None or value is None:
+                    raise ValueError("Monday column_value write requires 'item_id', 'column_id', and 'value' in data")
+                return {"id": str(item_id), "name": "Task"}
+            case "update":
+                item_id = payload.data.get("item_id")
+                body = payload.data.get("body")
+                if item_id is None or not body:
+                    raise ValueError("Monday update requires 'item_id' and 'body' in data")
+                return {"id": "up1", "text": body}
+            case _:
+                raise ValueError(f"Unsupported Monday.com write resource: {payload.resource!r}")
+
+    mock_connector.health_check = mock_health_check
+    mock_connector.query = mock_query
+    mock_connector.write = mock_write
+    ctx["connector"] = mock_connector
+    ctx["query_error"] = None
+
+
+@given("the Monday.com API returns a valid user profile")
+def step_monday_health_valid(ctx):
+    async def mock_health():
+        return HealthResult(ok=True, detail="Test User")
+    ctx["connector"].health_check = mock_health
+
+
+@given("the Monday.com API returns 401 Unauthorized")
+def step_monday_health_401(ctx):
+    async def mock_health():
+        return HealthResult(ok=False, detail="HTTP 401: Unauthorized")
+    ctx["connector"].health_check = mock_health
+
+
+@given("the Monday.com API returns available boards")
+def step_monday_boards_available(ctx):
+    connector = ctx["connector"]
+
+    async def mock_query(q):
+        from modulo.connectors.base import ConnectorResult
+        if q.resource == "boards":
+            return ConnectorResult(
+                records=[
+                    {"id": "1", "name": "Board A"},
+                    {"id": "2", "name": "Board B"},
+                ],
+                total=2,
+            )
+        raise ValueError(f"Unsupported Monday.com resource: {q.resource!r}")
+
+    connector.query = mock_query
+
+
+@given("the Monday.com API returns a single board")
+def step_monday_board_available(ctx):
+    connector = ctx["connector"]
+
+    async def mock_query(q):
+        from modulo.connectors.base import ConnectorResult
+        if q.resource == "board":
+            return ConnectorResult(
+                records=[{
+                    "id": str(q.filters.get("board_id", "")),
+                    "name": "My Board",
+                    "columns": [{"id": "col1", "title": "Status", "type": "text"}],
+                    "groups": [{"id": "g1", "title": "Group 1"}],
+                }]
+            )
+        raise ValueError(f"Unsupported Monday.com resource: {q.resource!r}")
+
+    connector.query = mock_query
+
+
+@given("the Monday.com API returns items for a board")
+def step_monday_items_available(ctx):
+    connector = ctx["connector"]
+
+    async def mock_query(q):
+        from modulo.connectors.base import ConnectorResult
+        if q.resource == "items":
+            return ConnectorResult(
+                records=[
+                    {"id": "101", "name": "Item One"},
+                    {"id": "102", "name": "Item Two"},
+                ],
+                total=2,
+            )
+        raise ValueError(f"Unsupported Monday.com resource: {q.resource!r}")
+
+    connector.query = mock_query
+
+
+@given("the Monday.com API returns a single item")
+def step_monday_item_available(ctx):
+    connector = ctx["connector"]
+
+    async def mock_query(q):
+        from modulo.connectors.base import ConnectorResult
+        if q.resource == "item":
+            return ConnectorResult(
+                records=[{"id": str(q.filters.get("item_id", "")), "name": "Single Item", "column_values": []}]
+            )
+        raise ValueError(f"Unsupported Monday.com resource: {q.resource!r}")
+
+    connector.query = mock_query
+
+
+@given("the Monday.com API returns users")
+def step_monday_users_available(ctx):
+    connector = ctx["connector"]
+
+    async def mock_query(q):
+        from modulo.connectors.base import ConnectorResult
+        if q.resource == "users":
+            return ConnectorResult(
+                records=[
+                    {"id": "u1", "name": "Alice", "email": "alice@example.com"},
+                    {"id": "u2", "name": "Bob", "email": "bob@example.com"},
+                ],
+                total=2,
+            )
+        raise ValueError(f"Unsupported Monday.com resource: {q.resource!r}")
+
+    connector.query = mock_query
+
+
+@given("the Monday.com API returns workspaces")
+def step_monday_workspaces_available(ctx):
+    connector = ctx["connector"]
+
+    async def mock_query(q):
+        from modulo.connectors.base import ConnectorResult
+        if q.resource == "workspaces":
+            return ConnectorResult(
+                records=[
+                    {"id": "ws1", "name": "Engineering"},
+                    {"id": "ws2", "name": "Marketing"},
+                ],
+                total=2,
+            )
+        raise ValueError(f"Unsupported Monday.com resource: {q.resource!r}")
+
+    connector.query = mock_query
+
+
+@given("the Monday.com API accepts item creation")
+def step_monday_accepts_create(ctx):
+    connector = ctx["connector"]
+
+    async def mock_write(payload):
+        if payload.resource == "item":
+            return {"id": "301", "name": payload.data.get("item_name", "")}
+        raise ValueError(f"Unsupported Monday.com write: {payload.resource!r}")
+
+    connector.write = mock_write
+
+
+@given("the Monday.com API accepts item column updates")
+def step_monday_accepts_column_updates(ctx):
+    connector = ctx["connector"]
+
+    async def mock_write(payload):
+        if payload.resource == "item_update":
+            return {"id": str(payload.data.get("item_id", "")), "name": "Updated Task"}
+        raise ValueError(f"Unsupported Monday.com write: {payload.resource!r}")
+
+    connector.write = mock_write
+
+
+@given("the Monday.com API accepts single column value changes")
+def step_monday_accepts_column_value_change(ctx):
+    connector = ctx["connector"]
+
+    async def mock_write(payload):
+        if payload.resource == "column_value":
+            return {"id": str(payload.data.get("item_id", "")), "name": "Task"}
+        raise ValueError(f"Unsupported Monday.com write: {payload.resource!r}")
+
+    connector.write = mock_write
+
+
+@given("the Monday.com API accepts updates")
+def step_monday_accepts_updates(ctx):
+    connector = ctx["connector"]
+
+    async def mock_write(payload):
+        if payload.resource == "update":
+            return {"id": "up1", "text": payload.data.get("body", "")}
+        raise ValueError(f"Unsupported Monday.com write: {payload.resource!r}")
+
+    connector.write = mock_write
+
+
+@given("the Monday.com connector is configured")
+def step_monday_configured(ctx):
+    pass
+
+
+@when(
+    parsers.parse('I query resource "{resource}" with board_id "{board_id}"')
+)
+def step_monday_query_with_board_id(resource, board_id, ctx):
+    from modulo.connectors.base import ConnectorQuery
+
+    q = ConnectorQuery(resource=resource, filters={"board_id": int(board_id)})
+    import asyncio
+
+    try:
+        result = asyncio.new_event_loop().run_until_complete(ctx["connector"].query(q))
+        ctx["query_result"] = result
+        ctx["query_error"] = None
+    except Exception as exc:
+        ctx["query_result"] = None
+        ctx["query_error"] = str(exc)
+
+
+@when(
+    parsers.parse('I query resource "{resource}" with item_id "{item_id}"')
+)
+def step_monday_query_with_item_id(resource, item_id, ctx):
+    from modulo.connectors.base import ConnectorQuery
+
+    q = ConnectorQuery(resource=resource, filters={"item_id": int(item_id)})
+    import asyncio
+
+    try:
+        result = asyncio.new_event_loop().run_until_complete(ctx["connector"].query(q))
+        ctx["query_result"] = result
+        ctx["query_error"] = None
+    except Exception as exc:
+        ctx["query_result"] = None
+        ctx["query_error"] = str(exc)
+
+
+@when(
+    parsers.parse(
+        'I write resource "{resource}" with name "{name}" and board_id "{board_id}"'
+    )
+)
+def step_monday_create_item(resource, name, board_id, ctx):
+    from modulo.connectors.base import ConnectorPayload
+
+    payload = ConnectorPayload(
+        resource=resource,
+        data={"board_id": int(board_id), "item_name": name},
+    )
+    import asyncio
+
+    try:
+        result = asyncio.new_event_loop().run_until_complete(ctx["connector"].write(payload))
+        ctx["write_result"] = result
+        ctx["query_error"] = None
+    except Exception as exc:
+        ctx["write_result"] = None
+        ctx["query_error"] = str(exc)
+
+
+@when(
+    parsers.parse(
+        'I write resource "{resource}" for item "{item_id}" with column values {column_values}'
+    )
+)
+def step_monday_update_column_values(resource, item_id, column_values, ctx):
+    from modulo.connectors.base import ConnectorPayload
+
+    payload = ConnectorPayload(
+        resource=resource,
+        data={"item_id": int(item_id), "column_values": column_values},
+    )
+    import asyncio
+
+    try:
+        result = asyncio.new_event_loop().run_until_complete(ctx["connector"].write(payload))
+        ctx["write_result"] = result
+        ctx["query_error"] = None
+    except Exception as exc:
+        ctx["write_result"] = None
+        ctx["query_error"] = str(exc)
+
+
+@when(
+    parsers.parse(
+        'I write resource "{resource}" for item "{item_id}" with column_id "{col_id}" and value {value}'
+    )
+)
+def step_monday_change_column_value(resource, item_id, col_id, value, ctx):
+    from modulo.connectors.base import ConnectorPayload
+
+    payload = ConnectorPayload(
+        resource=resource,
+        data={"item_id": int(item_id), "column_id": col_id, "value": value},
+    )
+    import asyncio
+
+    try:
+        result = asyncio.new_event_loop().run_until_complete(ctx["connector"].write(payload))
+        ctx["write_result"] = result
+        ctx["query_error"] = None
+    except Exception as exc:
+        ctx["write_result"] = None
+        ctx["query_error"] = str(exc)
+
+
+@when(
+    parsers.parse(
+        'I write resource "{resource}" for item "{item_id}" with body "{body}"'
+    )
+)
+def step_monday_add_update(resource, item_id, body, ctx):
+    from modulo.connectors.base import ConnectorPayload
+
+    payload = ConnectorPayload(
+        resource=resource,
+        data={"item_id": int(item_id), "body": body},
+    )
+    import asyncio
+
+    try:
+        result = asyncio.new_event_loop().run_until_complete(ctx["connector"].write(payload))
+        ctx["write_result"] = result
+        ctx["query_error"] = None
+    except Exception as exc:
+        ctx["write_result"] = None
+        ctx["query_error"] = str(exc)
+
+
+@then("the records contain user fields")
+def step_monday_users_metadata(ctx):
+    result = ctx["query_result"]
+    for rec in result.records:
+        assert "id" in rec and "name" in rec and "email" in rec, (
+            f"Record missing user fields: {rec}"
+        )
+
+
+# ============================================================================
 # connectors/trello.feature  —  8+ scenarios
 # ============================================================================
 try:
