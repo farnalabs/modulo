@@ -1,5 +1,6 @@
 """Minimal /api/v1/me endpoint — delegates to auth's /me logic."""
 
+import uuid
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -7,6 +8,14 @@ from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.api.dependencies import get_db_session
+from modulo.api.routes.admin_remy import (
+    SkillCreate,
+    SkillResponse,
+    SkillUpdate,
+    _skill_to_response,
+    get_user_skill_or_404,
+    get_user_skills,
+)
 from modulo.api.routes.auth import MeResponse
 from modulo.api.routes.auth import me as _me_handler
 from modulo.auth.dependencies import get_current_user
@@ -14,6 +23,7 @@ from modulo.auth.jwt import AuthenticatedPrincipal
 from modulo.auth.passwords import hash_password, validate_password_strength
 from modulo.db.crud.account import get_account_by_id, update_account_preferences
 from modulo.db.crud.token_family import blacklist_family, list_families_for_account
+from modulo.db.models.remy_skill import RemySkill
 
 router = APIRouter(prefix="/api/v1", tags=["user"])
 
@@ -91,3 +101,72 @@ async def change_password(
             await blacklist_family(session, family.family_id)
 
     return {"detail": "Password changed successfully"}
+
+
+# ── User-level Remy Skills ────────────────────────────────────────────
+
+
+@router.get("/me/remy/skills", response_model=list[SkillResponse])
+async def list_user_skills(
+    current_user: AuthenticatedPrincipal = Depends(get_current_user),
+    session: AsyncSession = Depends(get_db_session),
+) -> list[SkillResponse]:
+    async with session.begin():
+        skills = await get_user_skills(session, current_user.account_id)
+    return [_skill_to_response(s) for s in skills]
+
+
+@router.post("/me/remy/skills", response_model=SkillResponse, status_code=status.HTTP_201_CREATED)
+async def create_user_skill(
+    body: SkillCreate,
+    current_user: AuthenticatedPrincipal = Depends(get_current_user),
+    session: AsyncSession = Depends(get_db_session),
+) -> SkillResponse:
+    async with session.begin():
+        skill = RemySkill(
+            id=uuid.uuid4(),
+            organisation_id=None,
+            user_id=current_user.account_id,
+            name=body.name,
+            description=body.description,
+            triggers=body.triggers,
+            body=body.body,
+            active=body.active,
+        )
+        session.add(skill)
+        await session.flush()
+    return _skill_to_response(skill)
+
+
+@router.put("/me/remy/skills/{skill_id}", response_model=SkillResponse)
+async def update_user_skill(
+    skill_id: uuid.UUID,
+    body: SkillUpdate,
+    current_user: AuthenticatedPrincipal = Depends(get_current_user),
+    session: AsyncSession = Depends(get_db_session),
+) -> SkillResponse:
+    async with session.begin():
+        skill = await get_user_skill_or_404(session, current_user.account_id, skill_id)
+        if body.name is not None:
+            skill.name = body.name
+        if body.description is not None:
+            skill.description = body.description
+        if body.triggers is not None:
+            skill.triggers = body.triggers
+        if body.body is not None:
+            skill.body = body.body
+        if body.active is not None:
+            skill.active = body.active
+        await session.flush()
+    return _skill_to_response(skill)
+
+
+@router.delete("/me/remy/skills/{skill_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_user_skill(
+    skill_id: uuid.UUID,
+    current_user: AuthenticatedPrincipal = Depends(get_current_user),
+    session: AsyncSession = Depends(get_db_session),
+) -> None:
+    async with session.begin():
+        skill = await get_user_skill_or_404(session, current_user.account_id, skill_id)
+        await session.delete(skill)
