@@ -29,6 +29,15 @@ export interface PageContext {
   entities: string[]
 }
 
+export interface SkillItem {
+  id: string
+  name: string
+  description?: string
+  triggers?: string[]
+  body?: string
+  active: boolean
+}
+
 export interface UserSkill {
   id: string
   name: string

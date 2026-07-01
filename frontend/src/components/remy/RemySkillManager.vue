@@ -117,7 +117,7 @@ async function saveSkill() {
   const payload = {
     name: form.value.name.trim(),
     description: form.value.description.trim(),
-    triggers: form.value.triggersText.split(',').map(s => s.trim()).filter(Boolean),
+    triggers: form.value.triggersText.split(/[\s,]+/).map(s => s.trim()).filter(Boolean),
     body: form.value.body,
   }
 

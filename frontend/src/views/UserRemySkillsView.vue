@@ -131,15 +131,7 @@ import ErrorAlert from '../components/shared/ErrorAlert.vue'
 import FeatureGate from '../components/FeatureGate.vue'
 import LockIcon from '../components/LockIcon.vue'
 import RemySkillDialog from '../components/remy/RemySkillDialog.vue'
-
-interface SkillItem {
-  id: string
-  name: string
-  description?: string
-  triggers?: string[]
-  body?: string
-  active: boolean
-}
+import type { SkillItem } from '../types/remy'
 
 const skills = ref<SkillItem[]>([])
 const loading = ref(true)

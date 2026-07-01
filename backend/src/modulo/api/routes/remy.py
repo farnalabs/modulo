@@ -473,11 +473,17 @@ async def stream_chat(
     settings: Settings = Depends(get_settings),
 ) -> StreamingResponse:
     # Validate the session exists and belongs to user
-    async with session.begin():
-        await set_rls_org(session, principal.organisation_id)
-        chat_session = await session.get(ChatSession, session_id)
-        if chat_session is None or chat_session.user_id != principal.account_id:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Session not found")
+    try:
+        async with session.begin():
+            await set_rls_org(session, principal.organisation_id)
+            chat_session = await session.get(ChatSession, session_id)
+            if chat_session is None or chat_session.user_id != principal.account_id:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Session not found")
+    except ProgrammingError:
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="Feature is not available. Run database migrations to enable it.",
+        ) from None
 
     mcp_base_url = settings.modulo_public_url.rstrip("/")
 
