@@ -63,6 +63,12 @@ function validateDashboardSummary(data: unknown): DashboardSummary | null {
   const d = data as Record<string, unknown>
   if (typeof d.total_runs !== 'number') return null
   if (typeof d.active_pipelines !== 'number') return null
+  if (!d.run_counts_by_status || typeof d.run_counts_by_status !== 'object') return null
+  const rcs = d.run_counts_by_status as Record<string, unknown>
+  if (typeof rcs.running !== 'number' || typeof rcs.awaiting_human !== 'number' || typeof rcs.failed !== 'number' || typeof rcs.idle !== 'number') return null
+  if (!Array.isArray(d.teams)) return null  
+  if (!Array.isArray(d.trend)) return null
+  if (!Array.isArray(d.recent_runs)) return null
   return d as unknown as DashboardSummary
 }
 
@@ -79,6 +85,7 @@ export const useDashboardStore = defineStore('dashboard', () => {
   })
 
   async function fetchSummary() {
+    if (loading.value) return
     loading.value = true
     error.value = null
     try {
@@ -99,7 +106,9 @@ export const useDashboardStore = defineStore('dashboard', () => {
     if (!syncingIds.value.has(event.id)) {
       syncingIds.value.add(event.id)
       if (event.type === 'run' || event.type === 'pipeline') {
-        fetchSummary()
+        void fetchSummary().finally(() => {
+          syncingIds.value.delete(event.id)
+        })
       }
     }
   }
@@ -107,11 +116,15 @@ export const useDashboardStore = defineStore('dashboard', () => {
   unsubHandlers.push(registerHandler('run', handleSyncEvent))
   unsubHandlers.push(registerHandler('pipeline', handleSyncEvent))
 
+  if (import.meta.hot) {
+    import.meta.hot.dispose(() => { disposeHandlers() })
+  }
+
   function disposeHandlers(): void {
     for (const unsub of unsubHandlers) unsub()
     unsubHandlers.length = 0
     syncingIds.value.clear()
   }
 
-  return { summary, loading, error, totalSpend, fetchSummary, syncingIds, handleSyncEvent, disposeHandlers }
+  return { summary, loading, error, totalSpend, fetchSummary, disposeHandlers }
 })
