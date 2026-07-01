@@ -22,11 +22,16 @@ class EventBus:
 
     Slow consumers (queues that fill up) are automatically removed to
     prevent back-pressure on publishers.
+
+    Thread-safe: all subscriber list mutations are guarded by an asyncio
+    lock so concurrent publish/subscribe/unsubscribe calls from different
+    coroutines do not race on shared state.
     """
 
     def __init__(self, redis_broker: RedisEventBroker | None = None) -> None:
         self._subscribers: dict[str, list[asyncio.Queue]] = {}
         self._redis_broker = redis_broker
+        self._lock: asyncio.Lock = asyncio.Lock()
 
     def publish(
         self,
@@ -44,7 +49,7 @@ class EventBus:
             "version": version,
             "org_id": org_id,
         }
-        queues = self._subscribers.get(org_id, [])
+        queues = list(self._subscribers.get(org_id, []))
         dead: list[asyncio.Queue] = []
         for q in queues:
             try:
@@ -66,20 +71,22 @@ class EventBus:
         except Exception:
             _log.warning("event_bus.redis_broadcast_failed", extra={"org_id": org_id})
 
-    def subscribe(self, org_id: str) -> asyncio.Queue:
+    async def subscribe(self, org_id: str) -> asyncio.Queue:
         """Return a queue that receives resource-change events for the org."""
-        q: asyncio.Queue = asyncio.Queue()
-        if org_id not in self._subscribers:
-            self._subscribers[org_id] = []
-        self._subscribers[org_id].append(q)
-        return q
+        async with self._lock:
+            q: asyncio.Queue = asyncio.Queue()
+            if org_id not in self._subscribers:
+                self._subscribers[org_id] = []
+            self._subscribers[org_id].append(q)
+            return q
 
-    def unsubscribe(self, org_id: str, queue: asyncio.Queue) -> None:
+    async def unsubscribe(self, org_id: str, queue: asyncio.Queue) -> None:
         """Remove a subscriber queue from the org's fan-out set."""
-        try:
-            self._subscribers[org_id].remove(queue)
-        except (ValueError, KeyError):
-            pass
+        async with self._lock:
+            try:
+                self._subscribers[org_id].remove(queue)
+            except (ValueError, KeyError):
+                pass
 
 
 # Module-level singleton

@@ -72,7 +72,7 @@ class TestEventBusSSEIntegration:
     async def test_receive_event(self):
         bus = get_event_bus()
         org_id = "org-test"
-        q = bus.subscribe(org_id)
+        q = await bus.subscribe(org_id)
 
         bus.publish(org_id, "run", "run-1", "created", version=0)
 
@@ -85,8 +85,8 @@ class TestEventBusSSEIntegration:
     @pytest.mark.asyncio
     async def test_org_filtering(self):
         bus = get_event_bus()
-        q_a = bus.subscribe("org-a")
-        q_b = bus.subscribe("org-b")
+        q_a = await bus.subscribe("org-a")
+        q_b = await bus.subscribe("org-b")
 
         bus.publish("org-a", "pipeline", "pipe-1", "created", version=0)
 
@@ -96,15 +96,15 @@ class TestEventBusSSEIntegration:
         with pytest.raises(asyncio.TimeoutError):
             await asyncio.wait_for(q_b.get(), timeout=0.3)
 
-        bus.unsubscribe("org-a", q_a)
-        bus.unsubscribe("org-b", q_b)
+        await bus.unsubscribe("org-a", q_a)
+        await bus.unsubscribe("org-b", q_b)
 
     @pytest.mark.asyncio
     async def test_multiple_subscribers(self):
         bus = get_event_bus()
         org_id = "org-multi"
-        q1 = bus.subscribe(org_id)
-        q2 = bus.subscribe(org_id)
+        q1 = await bus.subscribe(org_id)
+        q2 = await bus.subscribe(org_id)
 
         bus.publish(org_id, "agent", "agent-1", "updated", version=1)
 
@@ -113,24 +113,24 @@ class TestEventBusSSEIntegration:
         assert e1["id"] == "agent-1"
         assert e2["id"] == "agent-1"
 
-        bus.unsubscribe(org_id, q1)
-        bus.unsubscribe(org_id, q2)
+        await bus.unsubscribe(org_id, q1)
+        await bus.unsubscribe(org_id, q2)
 
     @pytest.mark.asyncio
     async def test_cleanup_on_unsubscribe(self):
         bus = get_event_bus()
         org_id = "org-cleanup"
-        q = bus.subscribe(org_id)
+        q = await bus.subscribe(org_id)
         assert len(bus._subscribers.get(org_id, [])) == 1
 
-        bus.unsubscribe(org_id, q)
+        await bus.unsubscribe(org_id, q)
         assert len(bus._subscribers.get(org_id, [])) == 0
 
     @pytest.mark.asyncio
     async def test_sse_message_format(self):
         bus = get_event_bus()
         org_id = "org-format"
-        q = bus.subscribe(org_id)
+        q = await bus.subscribe(org_id)
 
         bus.publish(org_id, "schema", "schema-1", "updated", version=0)
 
@@ -142,7 +142,7 @@ class TestEventBusSSEIntegration:
         assert '"id": "schema-1"' in sse
         assert '"action": "updated"' in sse
 
-        bus.unsubscribe(org_id, q)
+        await bus.unsubscribe(org_id, q)
 
     @pytest.mark.asyncio
     async def test_slow_consumer_cleanup(self):
