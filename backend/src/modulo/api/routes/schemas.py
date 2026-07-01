@@ -219,13 +219,14 @@ async def deprecate_schema_endpoint(
 @router.delete("/{schema_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_schema_endpoint(
     schema_id: uuid.UUID,
+    force: bool = Query(False),
     session: AsyncSession = Depends(get_db_session),
     principal: AuthenticatedPrincipal = Depends(get_current_user),
 ) -> None:
     try:
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
-            deleted = await delete_schema(session, schema_id)
+            deleted = await delete_schema(session, schema_id, force=force)
     except SchemaDeletionProtectedError as exc:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,

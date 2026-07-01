@@ -1,6 +1,7 @@
 """Org-scoped CRUD for Schema and SchemaVersion.
 
-Deletion protection: delete_schema refuses if any Agent references this schema.
+Deletion protection: delete_schema refuses if any Agent, PipelineSnapshot,
+or LibraryPrimitive references this schema. Use force=True to skip all checks.
 All functions require RLS org context to be set by the caller.
 """
 
@@ -8,22 +9,26 @@ import uuid
 from datetime import UTC, datetime
 from typing import Any
 
-from sqlalchemy import func, or_, select
+from sqlalchemy import cast, func, or_, select, String
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.db.crud.base import PageResult, apply_updates
 from modulo.db.models.agent import Agent
+from modulo.db.models.library_primitive import LibraryPrimitive
+from modulo.db.models.pipeline_snapshot import PipelineSnapshot
 from modulo.db.models.schema import Schema, SchemaVersion
 
 
 class SchemaDeletionProtectedError(Exception):
-    """Raised when a Schema cannot be deleted because Agents reference it."""
+    """Raised when a Schema cannot be deleted because references exist."""
 
-    def __init__(self, schema_id: uuid.UUID) -> None:
-        super().__init__(
-            f"Schema {schema_id} cannot be deleted: one or more Agents reference it. "
-            "Reassign or delete those Agents first."
-        )
+    def __init__(self, schema_id: uuid.UUID, detail: str | None = None) -> None:
+        if detail is None:
+            detail = (
+                f"Schema {schema_id} cannot be deleted: one or more Agents reference it. "
+                "Reassign or delete those Agents first."
+            )
+        super().__init__(detail)
         self.schema_id = schema_id
 
 
@@ -98,22 +103,71 @@ async def deprecate_schema(session: AsyncSession, schema_id: uuid.UUID) -> Schem
     return schema
 
 
-async def delete_schema(session: AsyncSession, schema_id: uuid.UUID) -> bool:
-    """Delete a schema. Raises SchemaDeletionProtectedError if agents depend on it."""
-    agent_count = (
-        await session.execute(
-            select(func.count())
-            .select_from(Agent)
-            .where(
-                or_(
-                    Agent.input_schema_id == schema_id,
-                    Agent.output_schema_id == schema_id,
+async def delete_schema(
+    session: AsyncSession,
+    schema_id: uuid.UUID,
+    force: bool = False,
+) -> bool:
+    """Delete a schema.
+
+    Raises SchemaDeletionProtectedError if references exist (Agents,
+    PipelineSnapshots, LibraryPrimitives) unless force=True.
+    """
+    if not force:
+        refs: list[str] = []
+
+        agent_count = (
+            await session.execute(
+                select(func.count())
+                .select_from(Agent)
+                .where(
+                    or_(
+                        Agent.input_schema_id == schema_id,
+                        Agent.output_schema_id == schema_id,
+                    )
                 )
             )
-        )
-    ).scalar_one()
-    if agent_count:
-        raise SchemaDeletionProtectedError(schema_id)
+        ).scalar_one()
+        if agent_count:
+            refs.append("Agents")
+
+        pipelines_with_ref = (
+            await session.execute(
+                select(func.count())
+                .select_from(PipelineSnapshot)
+                .where(
+                    cast(PipelineSnapshot.schema_pins_json, String).contains(
+                        str(schema_id)
+                    )
+                )
+            )
+        ).scalar_one()
+        if pipelines_with_ref:
+            refs.append("PipelineSnapshots (schema_pins_json)")
+
+        library_refs = (
+            await session.execute(
+                select(func.count())
+                .select_from(LibraryPrimitive)
+                .where(
+                    LibraryPrimitive.primitive_type == "schema",
+                    LibraryPrimitive.source == "local",
+                    cast(LibraryPrimitive.content_json, String).contains(
+                        str(schema_id)
+                    ),
+                )
+            )
+        ).scalar_one()
+        if library_refs:
+            refs.append("LibraryPrimitives (local schema entries)")
+
+        if refs:
+            detail = (
+                f"Schema {schema_id} cannot be deleted: references exist in "
+                f"{' and '.join(refs)}. "
+                "Remove those references or use force=true to delete unconditionally."
+            )
+            raise SchemaDeletionProtectedError(schema_id, detail=detail)
 
     schema = await get_schema(session, schema_id)
     if schema is None:
