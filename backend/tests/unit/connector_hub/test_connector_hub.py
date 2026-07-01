@@ -223,7 +223,8 @@ async def test_connector_ids_property(tmp_path):
     assert hub.connector_ids == frozenset({id1, id2})
 
 
-async def test_wrong_fernet_key_raises_decrypt_error():
+async def test_wrong_fernet_key_skips_connector():
+    """Decrypt errors are logged and the connector is skipped (not propagated)."""
     other_key = Fernet.generate_key().decode()
     ci = _FakeCI(
         id=uuid.uuid4(),
@@ -232,12 +233,13 @@ async def test_wrong_fernet_key_raises_decrypt_error():
     backend = create_secrets_backend(fernet_key=other_key, backend_name="fernet")
     with patch.object(backend, "get_secret", side_effect=KeyError(str(ci.id))):
         hub = ConnectorHub(secrets_backend=backend)
-        with pytest.raises(ConnectorDecryptError) as exc_info:
-            await hub.initialise([ci])
-    assert exc_info.value.connector_id == ci.id
+        await hub.initialise([ci])
+    with pytest.raises(ConnectorNotFoundError):
+        hub.get(ci.id)
 
 
-async def test_missing_base_path_in_config_raises():
+async def test_missing_base_path_in_config_skips():
+    """Missing required config logs warning and skips the connector."""
     ci = _FakeCI(
         id=uuid.uuid4(),
         connector_type_id="filesystem",
@@ -247,11 +249,13 @@ async def test_missing_base_path_in_config_raises():
     backend = create_secrets_backend(fernet_key=_KEY, backend_name="fernet")
     with patch.object(backend, "get_secret", return_value="{}"):
         hub = ConnectorHub(secrets_backend=backend)
-        with pytest.raises(ValueError, match="base_path"):
-            await hub.initialise([ci])
+        await hub.initialise([ci])
+    with pytest.raises(ConnectorNotFoundError):
+        hub.get(ci.id)
 
 
-async def test_unknown_connector_type_raises():
+async def test_unknown_connector_type_skips():
+    """Unknown connector types are skipped with a warning."""
     ci = _FakeCI(
         id=uuid.uuid4(),
         connector_type_id="nonexistent",
@@ -260,8 +264,9 @@ async def test_unknown_connector_type_raises():
     backend = create_secrets_backend(fernet_key=_KEY, backend_name="fernet")
     with patch.object(backend, "get_secret", return_value="{}"):
         hub = ConnectorHub(secrets_backend=backend)
-        with pytest.raises(ValueError, match="Unknown connector type"):
-            await hub.initialise([ci])
+        await hub.initialise([ci])
+    with pytest.raises(ConnectorNotFoundError):
+        hub.get(ci.id)
 
 
 async def test_initialise_plugin_fallback_connector():
@@ -312,8 +317,8 @@ async def test_initialise_plugin_fallback_connector():
     assert connector.connector_type == ConnectorType.CUSTOM
 
 
-async def test_initialise_plugin_fallback_not_registered_raises():
-    """When a connector type is not built-in and not in the plugin registry, raise ValueError."""
+async def test_initialise_plugin_fallback_not_registered_skips():
+    """When a connector type is not built-in and not in the plugin registry, skip with warning."""
     ci = _FakeCI(
         id=uuid.uuid4(),
         connector_type_id="some_unknown_type",
@@ -324,8 +329,9 @@ async def test_initialise_plugin_fallback_not_registered_raises():
         patch.object(backend, "get_secret", return_value="{}"),
     ):
         hub = ConnectorHub(secrets_backend=backend)
-        with pytest.raises(ValueError, match="Unknown connector type"):
-            await hub.initialise([ci])
+        await hub.initialise([ci])
+    with pytest.raises(ConnectorNotFoundError):
+        hub.get(ci.id)
 
 
 async def test_initialise_is_additive(tmp_path):
@@ -381,7 +387,6 @@ async def test_initialise_creates_shell_connector():
         credentials_ciphertext=_encrypt({}),
     )
     backend = create_secrets_backend(fernet_key=_KEY, backend_name="fernet")
-    _HubFakeRuntimeProvider()
     with patch.object(backend, "get_secret", return_value="{}"):
         hub = ConnectorHub(secrets_backend=backend)
         await hub.initialise([ci])
@@ -390,56 +395,14 @@ async def test_initialise_creates_shell_connector():
 
 
 # ---------------------------------------------------------------------------
-# ACL gap — constructed but never invoked before hub operations
+# ACL enforcement via _TracedConnector
 # ---------------------------------------------------------------------------
 
 
-async def test_acl_constructed_but_never_called_during_query(tmp_path):
-    """Prove that ConnectorACL is built during initialise() but its check()
-    method is never called before query() or write() on the hub-returned
-    connector. This is a known gap — ACL is stored but not enforced."""
-    import uuid
-
+async def test_acl_blocks_write(tmp_path):
+    """ConnectorACL is enforced by _TracedConnector — writes are blocked when
+    allowed_operations omits 'write'."""
     from modulo.connectors.base import ConnectorPayload
-    from modulo.core.connector_hub import ConnectorACL
-
-    ci_id = uuid.uuid4()
-    ci = _FakeCI(
-        id=ci_id,
-        connector_type_id="filesystem",
-        config_json={"base_path": str(tmp_path)},
-        credentials_ciphertext=_encrypt({}),
-        visibility="org",
-        allowed_operations=["read"],  # Only 'read' is allowed
-    )
-    key = Fernet.generate_key().decode()
-    backend = create_secrets_backend(fernet_key=key, backend_name="fernet")
-    with patch.object(backend, "get_secret", return_value="{}"):
-        hub = ConnectorHub(secrets_backend=backend)
-        await hub.initialise([ci])
-
-    # Hub.get() returns the connector — no ACL check happens here
-    connector = hub.get(ci_id)
-
-    # ACL exists and would block 'write'
-    acl: ConnectorACL = hub.acl(ci_id)
-    with pytest.raises(ConnectorPermissionError):
-        acl.check("write", request_visibility="team")
-
-    # But the connector itself happily writes — ACL is NEVER invoked
-    out_path = tmp_path / "acl_test.txt"
-    result = await connector.write(
-        ConnectorPayload(resource="file", data={"content": "secret", "path": str(out_path)})
-    )
-    assert result["status"] == "ok"
-    assert out_path.read_text() == "secret"
-
-
-async def test_acl_constructed_but_never_called_during_sample(tmp_path):
-    """Same gap applies to hub.sample() — it calls get() + query() directly
-    without consulting the ACL."""
-    import uuid
-
 
     ci_id = uuid.uuid4()
     ci = _FakeCI(
@@ -456,26 +419,52 @@ async def test_acl_constructed_but_never_called_during_sample(tmp_path):
         hub = ConnectorHub(secrets_backend=backend)
         await hub.initialise([ci])
 
-    # ACL entirely blocks query with 'write' operation
-    acl = hub.acl(ci_id)
-    with pytest.raises(ConnectorPermissionError):
-        acl.check("write")
+    connector = hub.get(ci_id)
 
-    # But sample() (which calls get() + query()) still works
+    with pytest.raises(ConnectorPermissionError):
+        await connector.write(
+            ConnectorPayload(resource="file", data={"content": "secret", "path": str(tmp_path / "acl_test.txt")})
+        )
+
+
+async def test_acl_allows_read(tmp_path):
+    """ACL with 'read' permitted — query and sample pass."""
+    ci_id = uuid.uuid4()
+    ci = _FakeCI(
+        id=ci_id,
+        connector_type_id="filesystem",
+        config_json={"base_path": str(tmp_path)},
+        credentials_ciphertext=_encrypt({}),
+        visibility="org",
+        allowed_operations=["read"],
+    )
+    key = Fernet.generate_key().decode()
+    backend = create_secrets_backend(fernet_key=key, backend_name="fernet")
+    with patch.object(backend, "get_secret", return_value="{}"):
+        hub = ConnectorHub(secrets_backend=backend)
+        await hub.initialise([ci])
+
     records = await hub.sample(ci_id, "directory", filters={"path": str(tmp_path)})
     assert isinstance(records, list)
 
 
-async def test_initialise_shell_no_runtime_provider_raises():
-    """Shell connector initialisation without a RuntimeProvider should raise ValueError."""
+async def test_initialise_shell_no_runtime_provider_creates_connector():
+    """Shell connector initialised without RuntimeProvider succeeds at init
+    but raises ValueError on query/write."""
     ci = _FakeCI(
         id=uuid.uuid4(),
         connector_type_id="shell",
         config_json={"allowed_commands": ["echo"]},
         credentials_ciphertext=_encrypt({}),
     )
+    from modulo.connectors.base import ConnectorQuery
+
     backend = create_secrets_backend(fernet_key=_KEY, backend_name="fernet")
     with patch.object(backend, "get_secret", return_value="{}"):
         hub = ConnectorHub(secrets_backend=backend)
-        with pytest.raises(ValueError, match="RuntimeProvider"):
-            await hub.initialise([ci])
+        await hub.initialise([ci])
+
+    connector = hub.get(ci.id)
+    assert connector.connector_type == ConnectorType.SHELL
+    with pytest.raises(ValueError, match="Runtime provider not configured"):
+        await connector.query(ConnectorQuery(resource="directory"))

@@ -13,6 +13,7 @@ Sensitive data (credentials, API keys, user content) is never included in span a
 """
 
 import json
+import logging
 import uuid
 from collections.abc import Sequence
 from typing import Any, cast
@@ -28,6 +29,7 @@ from modulo.connectors.base import (
     ConnectorACL,
     ConnectorBase,
     ConnectorPayload,
+    ConnectorPermissionError,
     ConnectorQuery,
     ConnectorResult,
     ConnectorType,
@@ -73,6 +75,8 @@ from modulo.core.plugin_registry import get_plugin_registry
 from modulo.core.secrets_backend import SecretsBackend
 from modulo.db.models.connector_instance import ConnectorInstance
 
+logger = logging.getLogger(__name__)
+
 from .locking import ConnectorLockError as ConnectorLockError
 
 
@@ -98,12 +102,18 @@ class ConnectorHub:
     Not thread-safe. Each run gets its own ConnectorHub instance.
     """
 
-    def __init__(self, secrets_backend: SecretsBackend, org_id: str | None = None) -> None:
+    def __init__(
+        self,
+        secrets_backend: SecretsBackend,
+        org_id: str | None = None,
+        runtime_provider: Any = None,
+    ) -> None:
         self._secrets_backend = secrets_backend
         self._connectors: dict[uuid.UUID, ConnectorBase] = {}
         self._acls: dict[uuid.UUID, ConnectorACL] = {}
         self._tracer = trace.get_tracer("modulo.connector_hub")
         self._org_id = org_id
+        self._runtime_provider = runtime_provider
 
     async def __aenter__(self) -> "ConnectorHub":
         return self
@@ -116,23 +126,41 @@ class ConnectorHub:
         """Decrypt credentials and initialise connectors. Call once at run start.
 
         ACLs are built from instance visibility and allowed_operations columns.
+        Connectors that fail to initialise are skipped and logged individually
+        so that one misconfigured connector does not block the rest.
         """
         for ci in instances:
             try:
                 raw_str = await self._secrets_backend.get_secret(str(ci.id))
-            except KeyError as exc:
-                raise ConnectorDecryptError(ci.id) from exc
-            try:
-                creds: dict[str, Any] = json.loads(raw_str)
-            except json.JSONDecodeError as exc:
-                raise ConnectorDecryptError(ci.id) from exc
-            connector = _build_connector(ci.connector_type_id, ci.config_json, creds)
-            traced = _TracedConnector(connector, tracer=self._tracer, org_id=self._org_id)
-            self._connectors[ci.id] = traced
-            self._acls[ci.id] = ConnectorACL(
-                visibility=ci.visibility,
-                allowed_operations=ci.allowed_operations or None,
-            )
+                try:
+                    creds: dict[str, Any] = json.loads(raw_str)
+                except json.JSONDecodeError as exc:
+                    raise ConnectorDecryptError(ci.id) from exc
+                connector = _build_connector(
+                    ci.connector_type_id,
+                    ci.config_json,
+                    creds,
+                    runtime_provider=self._runtime_provider,
+                )
+                acl = ConnectorACL(
+                    visibility=ci.visibility,
+                    allowed_operations=ci.allowed_operations or None,
+                )
+                traced = _TracedConnector(
+                    connector,
+                    tracer=self._tracer,
+                    org_id=self._org_id,
+                    acl=acl,
+                )
+                self._connectors[ci.id] = traced
+                self._acls[ci.id] = acl
+            except Exception as exc:
+                logger.warning(
+                    "Skipping connector %s (%s): %s",
+                    ci.id,
+                    ci.connector_type_id,
+                    exc,
+                )
 
     def _lookup(self, connector_id: uuid.UUID) -> ConnectorBase:
         try:
@@ -140,9 +168,16 @@ class ConnectorHub:
         except KeyError:
             raise ConnectorNotFoundError(connector_id) from None
 
-    def get(self, connector_id: uuid.UUID) -> ConnectorBase:
-        """Return the initialised connector. Raises ConnectorNotFoundError if absent."""
-        return self._lookup(connector_id)
+    def get(self, connector_id: uuid.UUID, *, operation: str | None = None) -> ConnectorBase:
+        """Return the initialised connector. Raises ConnectorNotFoundError if absent.
+
+        When *operation* is provided, ACL is checked before returning the connector.
+        Callers that already enforce ACL at a higher layer may omit it.
+        """
+        connector = self._lookup(connector_id)
+        if operation is not None:
+            self._acls[connector_id].check(operation)
+        return connector
 
     def acl(self, connector_id: uuid.UUID) -> ConnectorACL:
         """Return the ACL for a connector. Raises ConnectorNotFoundError if absent."""
@@ -161,8 +196,10 @@ class ConnectorHub:
         """Sample data from a connector by querying the given resource.
 
         Convenience method that wraps get() + query() into a single call.
+        ACL is enforced for 'read' operation.
         """
         connector = self._lookup(connector_id)
+        self._acls[connector_id].check("read")
         query = ConnectorQuery(
             resource=resource,
             filters=filters or {},
@@ -177,15 +214,23 @@ class ConnectorHub:
 
 
 class _TracedConnector(ConnectorBase):
-    """Proxy wrapper that adds OTel spans around every connector operation.
+    """Proxy wrapper that adds OTel spans and ACL enforcement around every connector operation.
 
     Spans carry connector_type, operation_name, and org_id attributes but NEVER
     include credentials, API keys, or user content (queries, payloads).
+    ACL is checked before each operation when an ACL object is provided.
     """
 
-    def __init__(self, inner: ConnectorBase, tracer: trace.Tracer, org_id: str | None = None) -> None:
+    def __init__(
+        self,
+        inner: ConnectorBase,
+        tracer: trace.Tracer,
+        org_id: str | None = None,
+        acl: ConnectorACL | None = None,
+    ) -> None:
         self._inner = inner
         self._tracer = tracer
+        self._acl = acl
         self._base_attrs: dict[str, str] = {}
         if org_id is not None:
             self._base_attrs["connector.org_id"] = org_id
@@ -197,6 +242,10 @@ class _TracedConnector(ConnectorBase):
     def connector_type(self) -> ConnectorType:
         return self._inner.connector_type
 
+    def _enforce_acl(self, operation: str) -> None:
+        if self._acl is not None:
+            self._acl.check(operation)
+
     async def _run_with_tracing(
         self,
         span_name: str,
@@ -205,8 +254,11 @@ class _TracedConnector(ConnectorBase):
         *args: Any,
         extra_attrs: dict[str, Any] | None = None,
         post_span: Any = None,
+        acl_operation: str | None = None,
         **kwargs: Any,
     ) -> Any:
+        if acl_operation is not None:
+            self._enforce_acl(acl_operation)
         attrs = self._base_attrs | {
             "connector.type": str(self._inner.connector_type),
             "connector.operation": operation,
@@ -233,6 +285,7 @@ class _TracedConnector(ConnectorBase):
                 "health_check",
                 self._inner.health_check,
                 post_span=lambda span, result: span.set_attribute("connector.healthy", result.ok),
+                acl_operation="read",
             ),
         )
 
@@ -244,10 +297,11 @@ class _TracedConnector(ConnectorBase):
                 "query",
                 self._inner.query,
                 q,
-                extra_attrs={"connector.limit": q.limit},
+                extra_attrs={"connector.resource": q.resource, "connector.limit": q.limit},
                 post_span=lambda span, result: (
                     span.set_attribute("connector.result_total", result.total) if result.total is not None else None
                 ),
+                acl_operation="read",
             ),
         )
 
@@ -260,6 +314,8 @@ class _TracedConnector(ConnectorBase):
                 "write",
                 self._inner.write,
                 payload,
+                extra_attrs={"connector.resource": payload.resource},
+                acl_operation="write",
             ),
         )
 
@@ -271,7 +327,12 @@ def _get_cred(creds: dict[str, Any], key: str, type_id: str) -> Any:
         raise ValueError(f"Missing credential key {key!r} for connector type {type_id!r}") from None
 
 
-def _build_connector(type_id: str, config: dict[str, Any], creds: dict[str, Any]) -> ConnectorBase:
+def _build_connector(
+    type_id: str,
+    config: dict[str, Any],
+    creds: dict[str, Any],
+    runtime_provider: Any = None,
+) -> ConnectorBase:
     match type_id:
         case "filesystem":
             base_path = config.get("base_path")
@@ -299,7 +360,7 @@ def _build_connector(type_id: str, config: dict[str, Any], creds: dict[str, Any]
             allowed = config.get("allowed_commands")
             from modulo.connectors.shell import ShellConnector
 
-            return ShellConnector(runtime_provider=None, allowed_commands=allowed)
+            return ShellConnector(runtime_provider=runtime_provider, allowed_commands=allowed)
         case "linear":
             return LinearConnector(api_key=_get_cred(creds, "api_key", type_id))
         case "jira":
