@@ -9,7 +9,7 @@ import uuid
 import pytest
 import pytest_asyncio
 from sqlalchemy import text
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
 from modulo.core.audit_logger.append_only import register_append_only_guard
 from modulo.db.models.audit_event import AuditEvent
@@ -86,12 +86,12 @@ class TestAuditAppendOnlyOrmGuard:
     """Tests that the ORM-level event listeners block UPDATE/DELETE."""
 
     @pytest_asyncio.fixture(autouse=True)
-    async def setup(self, db_engine) -> None:
+    async def setup(self) -> None:
         """Register the ORM guard before each test."""
         register_append_only_guard()
 
     @pytest_asyncio.fixture
-    async def fresh_session(self, db_engine) -> AsyncSession:
+    async def fresh_session(self, db_engine: AsyncEngine) -> AsyncSession:
         factory = async_sessionmaker(db_engine, expire_on_commit=False)
         async with factory() as session:
             yield session

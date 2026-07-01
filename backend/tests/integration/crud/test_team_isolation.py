@@ -19,38 +19,36 @@ pytestmark = [
 
 async def _create_org(db_engine: AsyncEngine, slug: str) -> uuid.UUID:
     org_id = uuid.uuid4()
-    async with db_engine.connect() as conn:
-        async with conn.begin():
-            await conn.execute(
-                text(
-                    "INSERT INTO organisations (id, name, slug, settings_json) VALUES (:id, :name, :slug, '{}'::json)"
-                ),
-                {
-                    "id": str(org_id),
-                    "name": f"Org {slug}",
-                    "slug": slug,
-                },
-            )
+    async with db_engine.connect() as conn, conn.begin():
+        await conn.execute(
+            text(
+                "INSERT INTO organisations (id, name, slug, settings_json) VALUES (:id, :name, :slug, '{}'::json)",
+            ),
+            {
+                "id": str(org_id),
+                "name": f"Org {slug}",
+                "slug": slug,
+            },
+        )
     return org_id
 
 
 async def _create_user(db_engine: AsyncEngine, org_id: uuid.UUID, email: str) -> uuid.UUID:
     user_id = uuid.uuid4()
-    async with db_engine.connect() as conn:
-        async with conn.begin():
-            await conn.execute(
-                text(
-                    "INSERT INTO users (id, organisation_id, email, display_name, "
-                    "org_role, auth_provider, active) "
-                    "VALUES (:id, :org_id, :email, :name, 'admin', 'local', true)"
-                ),
-                {
-                    "id": str(user_id),
-                    "org_id": str(org_id),
-                    "email": email,
-                    "name": email.split("@")[0],
-                },
-            )
+    async with db_engine.connect() as conn, conn.begin():
+        await conn.execute(
+            text(
+                "INSERT INTO users (id, organisation_id, email, display_name, "
+                "org_role, auth_provider, active) "
+                "VALUES (:id, :org_id, :email, :name, 'admin', 'local', true)",
+            ),
+            {
+                "id": str(user_id),
+                "org_id": str(org_id),
+                "email": email,
+                "name": email.split("@", maxsplit=1)[0],
+            },
+        )
     return user_id
 
 

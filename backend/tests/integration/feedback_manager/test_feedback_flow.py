@@ -23,7 +23,7 @@ class TestFeedbackFlowUnit:
     """Test FeedbackManager methods against a real DB session."""
 
     async def test_create_feedback_record_persists(
-        self, rls_session: AsyncSession, test_org: uuid.UUID, test_user: uuid.UUID
+        self, rls_session: AsyncSession, test_org: uuid.UUID, test_user: uuid.UUID,
     ) -> None:
         run_id = await _create_seed_run(rls_session, test_org, test_user)
         mgr = FeedbackManager(rls_session, test_org)
@@ -45,7 +45,7 @@ class TestFeedbackFlowUnit:
         assert record.rejection_reason == "Output quality insufficient"
 
     async def test_get_feedback_record_by_id(
-        self, rls_session: AsyncSession, test_org: uuid.UUID, test_user: uuid.UUID
+        self, rls_session: AsyncSession, test_org: uuid.UUID, test_user: uuid.UUID,
     ) -> None:
         run_id = await _create_seed_run(rls_session, test_org, test_user)
         mgr = FeedbackManager(rls_session, test_org)
@@ -73,7 +73,7 @@ class TestFeedbackFlowUnit:
         assert result is None
 
     async def test_list_feedback_records_pagination(
-        self, rls_session: AsyncSession, test_org: uuid.UUID, test_user: uuid.UUID
+        self, rls_session: AsyncSession, test_org: uuid.UUID, test_user: uuid.UUID,
     ) -> None:
         run_id = await _create_seed_run(rls_session, test_org, test_user)
         mgr = FeedbackManager(rls_session, test_org)
@@ -106,7 +106,7 @@ class TestFeedbackFlowUnit:
         assert len(result["items"]) == 0
 
     async def test_update_status_transition(
-        self, rls_session: AsyncSession, test_org: uuid.UUID, test_user: uuid.UUID
+        self, rls_session: AsyncSession, test_org: uuid.UUID, test_user: uuid.UUID,
     ) -> None:
         run_id = await _create_seed_run(rls_session, test_org, test_user)
         mgr = FeedbackManager(rls_session, test_org)
@@ -137,7 +137,7 @@ class TestFeedbackFlowUnit:
         assert result is None
 
     async def test_link_correction_run(
-        self, rls_session: AsyncSession, test_org: uuid.UUID, test_user: uuid.UUID
+        self, rls_session: AsyncSession, test_org: uuid.UUID, test_user: uuid.UUID,
     ) -> None:
         run_id = await _create_seed_run(rls_session, test_org, test_user)
         correction_id = await _create_seed_run(rls_session, test_org, test_user)
@@ -157,7 +157,7 @@ class TestFeedbackFlowUnit:
         assert updated.feedback_status == "correcting"
 
     async def test_create_human_review_feedback(
-        self, rls_session: AsyncSession, test_org: uuid.UUID, test_user: uuid.UUID
+        self, rls_session: AsyncSession, test_org: uuid.UUID, test_user: uuid.UUID,
     ) -> None:
         run_id = await _create_seed_run(rls_session, test_org, test_user)
         mgr = FeedbackManager(rls_session, test_org)
@@ -176,7 +176,7 @@ class TestFeedbackFlowUnit:
         assert record.feedback_status == "correcting"
 
     async def test_create_ai_correction_feedback(
-        self, rls_session: AsyncSession, test_org: uuid.UUID, test_user: uuid.UUID
+        self, rls_session: AsyncSession, test_org: uuid.UUID, test_user: uuid.UUID,
     ) -> None:
         run_id = await _create_seed_run(rls_session, test_org, test_user)
         mgr = FeedbackManager(rls_session, test_org)
@@ -237,7 +237,7 @@ async def _create_seed_run(
     await session.execute(
         text(
             "INSERT INTO pipelines (id, organisation_id, name, created_by, run_context_defaults) "
-            "VALUES (:id, :org_id, :name, :user_id, '{}'::json)"
+            "VALUES (:id, :org_id, :name, :user_id, '{}'::json)",
         ),
         {
             "id": str(pipeline_id),
@@ -252,7 +252,7 @@ async def _create_seed_run(
             "  config_json, created_by, connector_bindings_json, schema_pins_json, "
             "  prompt_pins_json, model_backend_pins_json, run_context_defaults) "
             "VALUES (:id, :pipeline_id, :org_id, 1, :graph, :config, :user_id, "
-            "'[]'::json, '[]'::json, '[]'::json, '[]'::json, '{}'::json)"
+            "'[]'::json, '[]'::json, '[]'::json, '[]'::json, '{}'::json)",
         ),
         {
             "id": str(snapshot_id),
@@ -268,7 +268,7 @@ async def _create_seed_run(
             "INSERT INTO runs (id, organisation_id, pipeline_id, snapshot_id, "
             "  trigger_type, status, input_hash, langgraph_thread_id, created_by) "
             "VALUES (:id, :org_id, :pipeline_id, :snapshot_id, "
-            "  :trigger_type, :status, :input_hash, :thread_id, :created_by)"
+            "  :trigger_type, :status, :input_hash, :thread_id, :created_by)",
         ),
         {
             "id": str(run_id),

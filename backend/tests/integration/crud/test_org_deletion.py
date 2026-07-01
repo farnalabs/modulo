@@ -24,55 +24,52 @@ pytestmark = [
 async def _create_org(db_engine: AsyncEngine, suffix: str = "") -> uuid.UUID:
     org_id = uuid.uuid4()
     slug = f"del-test-{suffix or org_id.hex[:8]}"
-    async with db_engine.connect() as conn:
-        async with conn.begin():
-            await conn.execute(
-                text(
-                    "INSERT INTO organisations (id, name, slug, settings_json) VALUES (:id, :name, :slug, '{}'::json)"
-                ),
-                {"id": str(org_id), "name": f"Deletion Test {suffix}", "slug": slug},
-            )
+    async with db_engine.connect() as conn, conn.begin():
+        await conn.execute(
+            text(
+                "INSERT INTO organisations (id, name, slug, settings_json) VALUES (:id, :name, :slug, '{}'::json)",
+            ),
+            {"id": str(org_id), "name": f"Deletion Test {suffix}", "slug": slug},
+        )
     return org_id
 
 
 async def _create_user(db_engine: AsyncEngine, org_id: uuid.UUID, email: str) -> uuid.UUID:
     user_id = uuid.uuid4()
-    async with db_engine.connect() as conn:
-        async with conn.begin():
-            await conn.execute(
-                text(
-                    "INSERT INTO users (id, organisation_id, email, display_name, "
-                    "org_role, auth_provider, active) "
-                    "VALUES (:id, :org_id, :email, :name, 'admin', 'local', true)"
-                ),
-                {
-                    "id": str(user_id),
-                    "org_id": str(org_id),
-                    "email": email,
-                    "name": email.split("@")[0],
-                },
-            )
+    async with db_engine.connect() as conn, conn.begin():
+        await conn.execute(
+            text(
+                "INSERT INTO users (id, organisation_id, email, display_name, "
+                "org_role, auth_provider, active) "
+                "VALUES (:id, :org_id, :email, :name, 'admin', 'local', true)",
+            ),
+            {
+                "id": str(user_id),
+                "org_id": str(org_id),
+                "email": email,
+                "name": email.split("@", maxsplit=1)[0],
+            },
+        )
     return user_id
 
 
 async def _create_pipeline(db_engine: AsyncEngine, org_id: uuid.UUID, name: str) -> uuid.UUID:
     pid = uuid.uuid4()
-    async with db_engine.connect() as conn:
-        async with conn.begin():
-            await conn.execute(
-                text(
-                    "INSERT INTO pipelines (id, organisation_id, name, slug, "
-                    "visibility, max_concurrent_runs, lock_wait_timeout_seconds, "
-                    "state_graph_json) "
-                    "VALUES (:id, :org_id, :name, :slug, 'org', 1, 30, '{}'::json)"
-                ),
-                {
-                    "id": str(pid),
-                    "org_id": str(org_id),
-                    "name": name,
-                    "slug": f"pipe-{pid.hex[:8]}",
-                },
-            )
+    async with db_engine.connect() as conn, conn.begin():
+        await conn.execute(
+            text(
+                "INSERT INTO pipelines (id, organisation_id, name, slug, "
+                "visibility, max_concurrent_runs, lock_wait_timeout_seconds, "
+                "state_graph_json) "
+                "VALUES (:id, :org_id, :name, :slug, 'org', 1, 30, '{}'::json)",
+            ),
+            {
+                "id": str(pid),
+                "org_id": str(org_id),
+                "name": name,
+                "slug": f"pipe-{pid.hex[:8]}",
+            },
+        )
     return pid
 
 
@@ -94,7 +91,7 @@ async def _get_org_status(db_engine: AsyncEngine, org_id: uuid.UUID) -> dict[str
             text(
                 "SELECT status, deleted_at, deletion_token, "
                 "deletion_token_expires_at, export_bundle_json "
-                "FROM organisations WHERE id = :id"
+                "FROM organisations WHERE id = :id",
             ),
             {"id": str(org_id)},
         )
@@ -320,7 +317,7 @@ class TestConfirmOrgDeletion:
                     "UPDATE organisations SET status='deleted', "
                     "deletion_token=:token, "
                     "deletion_token_expires_at=:expires "
-                    "WHERE id=:id"
+                    "WHERE id=:id",
                 ),
                 {
                     "token": "expired-token-value",

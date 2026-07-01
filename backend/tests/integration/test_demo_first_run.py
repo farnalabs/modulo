@@ -29,7 +29,7 @@ pytestmark = pytest.mark.integration
 # The onboarding route stores state at backend-root/.onboarding-state.json
 # which is 4 levels up from its own file (backend/src/modulo/api/routes/onboarding.py)
 _ONBOARDING_STATE_PATH = os.path.join(
-    os.path.dirname(__file__), "..", "..", ".onboarding-state.json"
+    os.path.dirname(__file__), "..", "..", ".onboarding-state.json",
 )
 
 
@@ -57,19 +57,18 @@ def _clean_onboarding_before_test() -> None:
 async def test_org(db_engine: AsyncEngine) -> uuid.UUID:
     """Default organisation for demo mode tests."""
     org_id = uuid.uuid4()
-    async with db_engine.connect() as conn:
-        async with conn.begin():
-            await conn.execute(
-                text(
-                    "INSERT INTO organisations (id, name, slug, settings_json) "
-                    "VALUES (:id, :name, :slug, '{}'::json)"
-                ),
-                {
-                    "id": str(org_id),
-                    "name": "Demo First-Run Test Org",
-                    "slug": f"demo-fr-{org_id.hex[:8]}",
-                },
-            )
+    async with db_engine.connect() as conn, conn.begin():
+        await conn.execute(
+            text(
+                "INSERT INTO organisations (id, name, slug, settings_json) "
+                "VALUES (:id, :name, :slug, '{}'::json)",
+            ),
+            {
+                "id": str(org_id),
+                "name": "Demo First-Run Test Org",
+                "slug": f"demo-fr-{org_id.hex[:8]}",
+            },
+        )
     return org_id
 
 
@@ -87,23 +86,22 @@ async def test_demo_user(db_engine: AsyncEngine, test_org: uuid.UUID) -> uuid.UU
         await conn.commit()
 
     user_id = uuid.uuid4()
-    async with db_engine.connect() as conn:
-        async with conn.begin():
-            await conn.execute(
-                text(
-                    "INSERT INTO users (id, organisation_id, email, display_name, "
-                    "password_hash, org_role, auth_provider, active) "
-                    "VALUES (:id, :oid, :email, :name, :hash, :role, 'local', true)"
-                ),
-                {
-                    "id": str(user_id),
-                    "oid": str(test_org),
-                    "email": "demo",
-                    "name": "Demo User",
-                    "hash": hash_password("demo"),
-                    "role": "viewer",
-                },
-            )
+    async with db_engine.connect() as conn, conn.begin():
+        await conn.execute(
+            text(
+                "INSERT INTO users (id, organisation_id, email, display_name, "
+                "password_hash, org_role, auth_provider, active) "
+                "VALUES (:id, :oid, :email, :name, :hash, :role, 'local', true)",
+            ),
+            {
+                "id": str(user_id),
+                "oid": str(test_org),
+                "email": "demo",
+                "name": "Demo User",
+                "hash": hash_password("demo"),
+                "role": "viewer",
+            },
+        )
     return user_id
 
 
@@ -115,24 +113,23 @@ async def demo_pipeline(
 ) -> uuid.UUID:
     """Create a demo pipeline that can be viewed."""
     pipeline_id = uuid.uuid4()
-    async with db_engine.connect() as conn:
-        async with conn.begin():
-            await conn.execute(
-                text(
-                    "INSERT INTO pipelines (id, organisation_id, name, description, created_by, "
-                    "max_concurrent_runs, lock_wait_timeout_seconds, node_timeout_seconds, "
-                    "run_context_defaults, graph_nodes_json, default_autonomy_level, visibility) "
-                    "VALUES (:id, :oid, :name, :desc, :uid, 5, 30, 300, "
-                    "'{}'::json, '[]'::json, 'manual_approval', 'org')"
-                ),
-                {
-                    "id": str(pipeline_id),
-                    "oid": str(test_org),
-                    "name": "PRD to Requirements",
-                    "desc": "Demo pipeline: convert PRDs to requirements documents",
-                    "uid": str(test_demo_user),
-                },
-            )
+    async with db_engine.connect() as conn, conn.begin():
+        await conn.execute(
+            text(
+                "INSERT INTO pipelines (id, organisation_id, name, description, created_by, "
+                "max_concurrent_runs, lock_wait_timeout_seconds, node_timeout_seconds, "
+                "run_context_defaults, graph_nodes_json, default_autonomy_level, visibility) "
+                "VALUES (:id, :oid, :name, :desc, :uid, 5, 30, 300, "
+                "'{}'::json, '[]'::json, 'manual_approval', 'org')",
+            ),
+            {
+                "id": str(pipeline_id),
+                "oid": str(test_org),
+                "name": "PRD to Requirements",
+                "desc": "Demo pipeline: convert PRDs to requirements documents",
+                "uid": str(test_demo_user),
+            },
+        )
     return pipeline_id
 
 
@@ -193,19 +190,18 @@ async def test_seed_demo_data_creates_demo_user(db_engine: AsyncEngine, db_url: 
     )
 
     org_id = uuid.uuid4()
-    async with db_engine.connect() as conn:
-        async with conn.begin():
-            await conn.execute(
-                text(
-                    "INSERT INTO organisations (id, name, slug, settings_json) "
-                    "VALUES (:id, :name, :slug, '{}'::json)"
-                ),
-                {
-                    "id": str(org_id),
-                    "name": "Seed Demo Test Org",
-                    "slug": f"seed-demo-{org_id.hex[:8]}",
-                },
-            )
+    async with db_engine.connect() as conn, conn.begin():
+        await conn.execute(
+            text(
+                "INSERT INTO organisations (id, name, slug, settings_json) "
+                "VALUES (:id, :name, :slug, '{}'::json)",
+            ),
+            {
+                "id": str(org_id),
+                "name": "Seed Demo Test Org",
+                "slug": f"seed-demo-{org_id.hex[:8]}",
+            },
+        )
 
     import modulo.api.dependencies as deps
     deps._engine = None
@@ -215,7 +211,7 @@ async def test_seed_demo_data_creates_demo_user(db_engine: AsyncEngine, db_url: 
 
     async with db_engine.connect() as conn:
         result = await conn.execute(
-            text("SELECT email, display_name, org_role, password_hash FROM users WHERE email = 'demo'")
+            text("SELECT email, display_name, org_role, password_hash FROM users WHERE email = 'demo'"),
         )
         row = result.one_or_none()
         assert row is not None, "Demo user was not created by _seed_demo_data"
@@ -291,7 +287,7 @@ async def test_seed_demo_data_skipped_when_disabled(db_engine: AsyncEngine, db_u
 
     async with db_engine.connect() as conn:
         result = await conn.execute(
-            text("SELECT email FROM users WHERE email = 'demo'")
+            text("SELECT email FROM users WHERE email = 'demo'"),
         )
         assert result.one_or_none() is None, "No demo user should exist when MODULO_DEMO_MODE is disabled"
 
@@ -310,19 +306,18 @@ async def test_seed_demo_data_idempotent(db_engine: AsyncEngine, db_url: str) ->
     )
 
     org_id = uuid.uuid4()
-    async with db_engine.connect() as conn:
-        async with conn.begin():
-            await conn.execute(
-                text(
-                    "INSERT INTO organisations (id, name, slug, settings_json) "
-                    "VALUES (:id, :name, :slug, '{}'::json)"
-                ),
-                {
-                    "id": str(org_id),
-                    "name": "Idempotent Test Org",
-                    "slug": f"idempotent-{org_id.hex[:8]}",
-                },
-            )
+    async with db_engine.connect() as conn, conn.begin():
+        await conn.execute(
+            text(
+                "INSERT INTO organisations (id, name, slug, settings_json) "
+                "VALUES (:id, :name, :slug, '{}'::json)",
+            ),
+            {
+                "id": str(org_id),
+                "name": "Idempotent Test Org",
+                "slug": f"idempotent-{org_id.hex[:8]}",
+            },
+        )
 
     import modulo.api.dependencies as deps
     deps._engine = None
@@ -333,7 +328,7 @@ async def test_seed_demo_data_idempotent(db_engine: AsyncEngine, db_url: str) ->
 
     async with db_engine.connect() as conn:
         result = await conn.execute(
-            text("SELECT COUNT(*) FROM users WHERE email = 'demo'")
+            text("SELECT COUNT(*) FROM users WHERE email = 'demo'"),
         )
         count = result.scalar()
         assert count == 1, f"Expected 1 demo user, got {count}"
@@ -369,13 +364,13 @@ class TestDemoAuth:
 
     async def test_demo_user_invalid_password(self, demo_client: AsyncClient) -> None:
         resp = await demo_client.post(
-            "/api/v1/auth/login", json={"email": "demo", "password": "wrongpassword"}
+            "/api/v1/auth/login", json={"email": "demo", "password": "wrongpassword"},
         )
         assert resp.status_code == 401
 
     async def test_demo_user_invalid_email(self, demo_client: AsyncClient) -> None:
         resp = await demo_client.post(
-            "/api/v1/auth/login", json={"email": "nonexistent", "password": "demo"}
+            "/api/v1/auth/login", json={"email": "nonexistent", "password": "demo"},
         )
         assert resp.status_code == 401
 

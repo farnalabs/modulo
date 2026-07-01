@@ -116,55 +116,52 @@ async def test_rls_isolation(db_engine: AsyncEngine) -> None:
     org_b = uuid.uuid4()
 
     # Seed orgs
-    async with db_engine.connect() as conn:
-        async with conn.begin():
-            await conn.execute(
-                text(
-                    "INSERT INTO organisations (id, name, slug, settings_json) VALUES (:id, :name, :slug, '{}'::json)"
-                ),
-                {"id": str(org_a), "name": "RLS Org A", "slug": f"rls-a-{org_a.hex[:8]}"},
-            )
-            await conn.execute(
-                text(
-                    "INSERT INTO organisations (id, name, slug, settings_json) VALUES (:id, :name, :slug, '{}'::json)"
-                ),
-                {"id": str(org_b), "name": "RLS Org B", "slug": f"rls-b-{org_b.hex[:8]}"},
-            )
+    async with db_engine.connect() as conn, conn.begin():
+        await conn.execute(
+            text(
+                "INSERT INTO organisations (id, name, slug, settings_json) VALUES (:id, :name, :slug, '{}'::json)",
+            ),
+            {"id": str(org_a), "name": "RLS Org A", "slug": f"rls-a-{org_a.hex[:8]}"},
+        )
+        await conn.execute(
+            text(
+                "INSERT INTO organisations (id, name, slug, settings_json) VALUES (:id, :name, :slug, '{}'::json)",
+            ),
+            {"id": str(org_b), "name": "RLS Org B", "slug": f"rls-b-{org_b.hex[:8]}"},
+        )
 
     # Create a profile in org_a
-    async with db_engine.connect() as conn:
-        async with conn.begin():
-            await conn.execute(
-                text(
-                    "INSERT INTO environment_profiles "
-                    "(id, organisation_id, name, image_ref, capabilities) "
-                    "VALUES (:id, :org_id, :name, :image, '[]'::json)"
-                ),
-                {
-                    "id": str(uuid.uuid4()),
-                    "org_id": str(org_a),
-                    "name": "org-a-profile",
-                    "image": "img:latest",
-                },
-            )
+    async with db_engine.connect() as conn, conn.begin():
+        await conn.execute(
+            text(
+                "INSERT INTO environment_profiles "
+                "(id, organisation_id, name, image_ref, capabilities) "
+                "VALUES (:id, :org_id, :name, :image, '[]'::json)",
+            ),
+            {
+                "id": str(uuid.uuid4()),
+                "org_id": str(org_a),
+                "name": "org-a-profile",
+                "image": "img:latest",
+            },
+        )
 
     # Create a profile in org_b
     b_id = uuid.uuid4()
-    async with db_engine.connect() as conn:
-        async with conn.begin():
-            await conn.execute(
-                text(
-                    "INSERT INTO environment_profiles "
-                    "(id, organisation_id, name, image_ref, capabilities) "
-                    "VALUES (:id, :org_id, :name, :image, '[]'::json)"
-                ),
-                {
-                    "id": str(b_id),
-                    "org_id": str(org_b),
-                    "name": "org-b-profile",
-                    "image": "img:latest",
-                },
-            )
+    async with db_engine.connect() as conn, conn.begin():
+        await conn.execute(
+            text(
+                "INSERT INTO environment_profiles "
+                "(id, organisation_id, name, image_ref, capabilities) "
+                "VALUES (:id, :org_id, :name, :image, '[]'::json)",
+            ),
+            {
+                "id": str(b_id),
+                "org_id": str(org_b),
+                "name": "org-b-profile",
+                "image": "img:latest",
+            },
+        )
 
     # Query from org_a's context should not see org_b's profile
     from sqlalchemy.ext.asyncio import async_sessionmaker

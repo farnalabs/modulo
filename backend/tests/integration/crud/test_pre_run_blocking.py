@@ -52,7 +52,7 @@ async def test_pre_run_blocks_on_cycle(
                     {"source": "a", "target": "b", "type": "normal"},
                     {"source": "b", "target": "a", "type": "normal"},
                 ],
-            }
+            },
         ),
         {},
         rls_session,
@@ -74,7 +74,7 @@ async def test_pre_run_blocks_on_nesting_exceeded(
                     {"source": "c", "target": "d", "type": "normal"},
                     {"source": "d", "target": "e", "type": "normal"},
                 ],
-            }
+            },
         ),
         {},
         rls_session,
@@ -94,7 +94,7 @@ async def test_pre_run_passes_valid_graph(
                     {"source": "a", "target": "b", "type": "normal"},
                     {"source": "b", "target": "c", "type": "normal"},
                 ],
-            }
+            },
         ),
         {},
         rls_session,

@@ -39,7 +39,7 @@ async def test_create_model_backend(rls_session: AsyncSession, test_org: uuid.UU
 
 
 async def test_get_model_backend_returns_existing(
-    rls_session: AsyncSession, test_org: uuid.UUID, test_user: uuid.UUID
+    rls_session: AsyncSession, test_org: uuid.UUID, test_user: uuid.UUID,
 ) -> None:
     mb = await create_model_backend(rls_session, **_mb_kwargs(test_org, test_user, suffix="-fetch"))
     fetched = await get_model_backend(rls_session, mb.id)
@@ -52,7 +52,7 @@ async def test_get_model_backend_returns_none_for_unknown(rls_session: AsyncSess
 
 
 async def test_list_model_backends_pagination(
-    rls_session: AsyncSession, test_org: uuid.UUID, test_user: uuid.UUID
+    rls_session: AsyncSession, test_org: uuid.UUID, test_user: uuid.UUID,
 ) -> None:
     for i in range(3):
         await create_model_backend(
