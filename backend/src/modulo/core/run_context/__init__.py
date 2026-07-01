@@ -1,5 +1,4 @@
-"""Run context — seeded at run start from pipeline defaults and extended by
-context-setter agents during execution.
+"""Run context — seeded at run start from pipeline defaults and extended by context-setter agents during execution.
 
 The autonomy module provides runtime resolution of HITL gate behaviour
 based on pipeline-level configuration and context-setter recommendations.
