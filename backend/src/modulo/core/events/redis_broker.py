@@ -98,7 +98,8 @@ class RedisEventBroker:
         """Serialize *data* as JSON and publish to the given *channel*."""
         await self._ensure_connected()
         async with self._lock:
-            assert self._pub is not None
+            if self._pub is None:
+                raise RuntimeError("Redis publisher connection not established. Call connect() first.")
             await self._pub.publish(f"{CHANNEL_PREFIX}{channel}", json.dumps(data))
 
     async def subscribe(self, channel: str) -> PubSub:
@@ -110,7 +111,8 @@ class RedisEventBroker:
         """
         await self._ensure_connected()
         async with self._lock:
-            assert self._sub is not None
+            if self._sub is None:
+                raise RuntimeError("Redis subscriber connection not established. Call connect() first.")
             pubsub = self._sub.pubsub()
             await pubsub.subscribe(f"{CHANNEL_PREFIX}{channel}")
             return pubsub
