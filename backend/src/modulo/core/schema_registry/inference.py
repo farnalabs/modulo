@@ -33,8 +33,9 @@ _INFER_TIMEOUT = 60.0
 def _build_infer_prompt(
     samples: list[dict[str, Any]],
     system_prompt: str | None = None,
+    max_records: int = _MAX_SAMPLE_RECORDS,
 ) -> list[BaseMessage]:
-    display = samples[:_MAX_SAMPLE_RECORDS]
+    display = samples[:max_records]
     sample_text = json.dumps(display, indent=2, default=str)
     message_text = (
         f"Sample data ({len(display)} records):\n```\n{sample_text}\n```\nReturn ONLY the JSON Schema object."
@@ -69,7 +70,7 @@ class SchemaInferenceService:
         if not all(isinstance(r, dict) for r in samples):
             raise ValueError("samples must be a list of dicts")
 
-        messages = _build_infer_prompt(samples, self._system_prompt)
+        messages = _build_infer_prompt(samples, self._system_prompt, self._max_sample_records)
         return await invoke_and_parse(
             self._backend,
             messages,
