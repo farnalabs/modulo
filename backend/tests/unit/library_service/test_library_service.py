@@ -107,8 +107,8 @@ def test_community_primitives_have_correct_visibiliy():
 
 
 def test_community_primitives_count():
-    # 7 schemas + 7 agents + 2 workflows + 1 fixture + 3 pipeline_templates
-    assert len(_MODULO_PRIMITIVES) == 24
+    # 7 schemas + 7 agents + 2 workflows + 1 fixture + 3 pipeline_templates + 7 composites
+    assert len(_MODULO_PRIMITIVES) == 27
 
 
 def test_community_by_id_index():
