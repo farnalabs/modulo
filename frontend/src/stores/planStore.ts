@@ -40,58 +40,42 @@ export const usePlanStore = defineStore('plan', () => {
     error.value = null
     const apiErrors: string[] = []
     try {
-      // Feature flags
-      try {
-        const { data, error: err } = await api.GET('/api/v1/admin/feature-flags')
-        if (err) {
-          apiErrors.push(`Feature flags: ${formatApiError(err)}`)
-        } else if (data) {
-          currentTier.value = data.license.tier
-          const map: Record<string, boolean> = {}
-          for (const flag of data.flags) {
-            map[flag.name] = flag.currently_active
-          }
-          features.value = map
+      const [flagsRes, licenseRes, tiersRes] = await Promise.all([
+        api.GET('/api/v1/admin/feature-flags'),
+        api.GET('/api/v1/admin/license'),
+        api.GET('/api/v1/admin/tiers'),
+      ])
+
+      if (flagsRes.error) {
+        apiErrors.push(`Feature flags: ${formatApiError(flagsRes.error)}`)
+      } else if (flagsRes.data) {
+        currentTier.value = flagsRes.data.license.tier
+        const map: Record<string, boolean> = {}
+        for (const flag of flagsRes.data.flags) {
+          map[flag.name] = flag.currently_active
         }
-      } catch (e: unknown) {
-        apiErrors.push(`Feature flags: ${formatApiError(e)}`)
+        features.value = map
       }
 
-      error.value = apiErrors.length > 0 ? apiErrors.join('; ') : null
-
-      // License
-      try {
-        const { data: licenseData, error: licenseError } = await api.GET('/api/v1/admin/license')
-        if (licenseError) {
-          apiErrors.push(`License: ${formatApiError(licenseError)}`)
-        } else if (licenseData) {
-          expiresAt.value = licenseData.expires_at ?? null
-          orgName.value = licenseData.org_id ?? null
-          if (licenseData.tier) currentTier.value = licenseData.tier
-        }
-      } catch (e: unknown) {
-        apiErrors.push(`License: ${formatApiError(e)}`)
+      if (licenseRes.error) {
+        apiErrors.push(`License: ${formatApiError(licenseRes.error)}`)
+      } else if (licenseRes.data) {
+        expiresAt.value = licenseRes.data.expires_at ?? null
+        orgName.value = licenseRes.data.org_id ?? null
+        if (licenseRes.data.tier) currentTier.value = licenseRes.data.tier
       }
 
-      error.value = apiErrors.length > 0 ? apiErrors.join('; ') : null
-
-      // Tiers
-      try {
-        const { data: tiersData, error: tiersError } = await api.GET('/api/v1/admin/tiers')
-        if (tiersError) {
-          apiErrors.push(`Tiers: ${formatApiError(tiersError)}`)
-        } else if (tiersData) {
-          const labels: Record<string, string> = {}
-          const ranks: Record<string, number> = {}
-          for (const t of tiersData.tiers) {
-            labels[t.tier_id] = t.label
-            ranks[t.tier_id] = t.rank
-          }
-          tierLabels.value = labels
-          tierRanks.value = ranks
+      if (tiersRes.error) {
+        apiErrors.push(`Tiers: ${formatApiError(tiersRes.error)}`)
+      } else if (tiersRes.data) {
+        const labels: Record<string, string> = {}
+        const ranks: Record<string, number> = {}
+        for (const t of tiersRes.data.tiers) {
+          labels[t.tier_id] = t.label
+          ranks[t.tier_id] = t.rank
         }
-      } catch (e: unknown) {
-        apiErrors.push(`Tiers: ${formatApiError(e)}`)
+        tierLabels.value = labels
+        tierRanks.value = ranks
       }
 
       error.value = apiErrors.length > 0 ? apiErrors.join('; ') : null
