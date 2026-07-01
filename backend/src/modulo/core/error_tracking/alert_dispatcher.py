@@ -43,7 +43,7 @@ async def dispatch_alert(
     admin_url = f"/admin/errors/{alert.error_group_id}"
 
     if alert.action_type == "in_app":
-        await _dispatch_in_app(org_id, alert, sample_message, admin_url)
+        await _dispatch_in_app(org_id, alert, sample_message, admin_url, session)
     elif alert.action_type == "email":
         await _dispatch_email(org_id, alert, sample_message, admin_url)
     elif alert.action_type == "webhook":
@@ -55,12 +55,9 @@ async def _dispatch_in_app(
     alert: TriggeredAlert,
     sample_message: str,
     admin_url: str,
+    session: AsyncSession,
 ) -> None:
-    """Create an in-app notification via the notification_delivery_log table.
-
-    We create a minimal delivery log entry as a lightweight in-app notification.
-    For a production system this would route to a proper notification table.
-    """
+    """Create an in-app notification via the notification_delivery_log table."""
     from modulo.db.models.notification_delivery import NotificationDeliveryLog
 
     entry = NotificationDeliveryLog(
@@ -70,9 +67,7 @@ async def _dispatch_in_app(
         attempt_count=1,
         last_error=_build_summary(alert, sample_message),
     )
-    session = _get_session_from_context()
-    if session is not None:
-        session.add(entry)
+    session.add(entry)
 
     _log.info(
         "alert.in_app",
@@ -170,12 +165,3 @@ def _format_slack_payload(payload: dict[str, Any], emoji: str) -> dict[str, Any]
 def _build_summary(alert: TriggeredAlert, sample_message: str) -> str:
     return f"[{alert.level}] {alert.rule_name}: {sample_message[:200]} (count={alert.count})"
 
-
-def _get_session_from_context() -> AsyncSession | None:
-    """Retrieve the active DB session from the calling context.
-
-    This is a best-effort helper. Currently returns None — in-app
-    notifications use the delivery log table; the session should be
-    passed explicitly where possible.
-    """
-    return None
