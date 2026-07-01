@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { mount } from '@vue/test-utils'
+import { createPinia, setActivePinia } from 'pinia'
 import { nextTick } from 'vue'
 
 const mockGet = vi.fn()
@@ -19,6 +20,7 @@ import AdminNodeCategoriesView from '../views/AdminNodeCategoriesView.vue'
 
 describe('AdminNodeCategoriesView', () => {
   beforeEach(() => {
+    setActivePinia(createPinia())
     vi.clearAllMocks()
     mockGet.mockResolvedValue({ data: { items: [] }, error: null })
     mockDelete.mockResolvedValue({ response: { status: 204 }, error: null })
@@ -31,6 +33,7 @@ describe('AdminNodeCategoriesView', () => {
           LoadingSpinner: true,
           ErrorAlert: true,
           NodeCategoryEditor: true,
+          FeatureGate: { template: '<div><slot /></div>' },
         },
       },
     })

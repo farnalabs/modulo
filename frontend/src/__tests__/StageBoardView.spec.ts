@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { mount } from '@vue/test-utils'
+import { createPinia, setActivePinia } from 'pinia'
 import { createRouter, createWebHistory } from 'vue-router'
 import { nextTick } from 'vue'
 
@@ -57,6 +58,7 @@ function flushPromises() {
 
 describe('StageBoardView', () => {
   beforeEach(() => {
+    setActivePinia(createPinia())
     vi.clearAllMocks()
   })
 
@@ -64,7 +66,7 @@ describe('StageBoardView', () => {
     router.push('/stages')
     await router.isReady()
     const wrapper = mount(StageBoardView, {
-      global: { plugins: [router] },
+      global: { plugins: [router], stubs: { FeatureGate: { template: '<div><slot /></div>' } } },
     })
     await flushPromises()
     await nextTick()
@@ -75,7 +77,7 @@ describe('StageBoardView', () => {
     router.push('/stages')
     await router.isReady()
     const wrapper = mount(StageBoardView, {
-      global: { plugins: [router] },
+      global: { plugins: [router], stubs: { FeatureGate: { template: '<div><slot /></div>' } } },
     })
     await flushPromises()
     await nextTick()
@@ -86,7 +88,7 @@ describe('StageBoardView', () => {
     router.push('/stages')
     await router.isReady()
     const wrapper = mount(StageBoardView, {
-      global: { plugins: [router] },
+      global: { plugins: [router], stubs: { FeatureGate: { template: '<div><slot /></div>' } } },
     })
     await flushPromises()
     await nextTick()
@@ -99,7 +101,7 @@ describe('StageBoardView', () => {
     router.push('/stages')
     await router.isReady()
     const wrapper = mount(StageBoardView, {
-      global: { plugins: [router] },
+      global: { plugins: [router], stubs: { FeatureGate: { template: '<div><slot /></div>' } } },
     })
     await flushPromises()
     await nextTick()
@@ -113,7 +115,7 @@ describe('StageBoardView', () => {
     router.push('/stages')
     await router.isReady()
     const wrapper = mount(StageBoardView, {
-      global: { plugins: [router] },
+      global: { plugins: [router], stubs: { FeatureGate: { template: '<div><slot /></div>' } } },
     })
     await flushPromises()
     await nextTick()
@@ -127,7 +129,7 @@ describe('StageBoardView', () => {
     router.push('/stages')
     await router.isReady()
     const wrapper = mount(StageBoardView, {
-      global: { plugins: [router] },
+      global: { plugins: [router], stubs: { FeatureGate: { template: '<div><slot /></div>' } } },
     })
     await flushPromises()
     await nextTick()
@@ -141,7 +143,7 @@ describe('StageBoardView', () => {
     router.push('/stages')
     await router.isReady()
     const wrapper = mount(StageBoardView, {
-      global: { plugins: [router] },
+      global: { plugins: [router], stubs: { FeatureGate: { template: '<div><slot /></div>' } } },
     })
     await flushPromises()
     await nextTick()
@@ -152,7 +154,7 @@ describe('StageBoardView', () => {
     router.push('/stages')
     await router.isReady()
     const wrapper = mount(StageBoardView, {
-      global: { plugins: [router] },
+      global: { plugins: [router], stubs: { FeatureGate: { template: '<div><slot /></div>' } } },
     })
     await flushPromises()
     await nextTick()
@@ -167,7 +169,7 @@ describe('StageBoardView', () => {
     router.push('/stages')
     await router.isReady()
     const wrapper = mount(StageBoardView, {
-      global: { plugins: [router] },
+      global: { plugins: [router], stubs: { FeatureGate: { template: '<div><slot /></div>' } } },
     })
     await flushPromises()
     await nextTick()
@@ -181,7 +183,7 @@ describe('StageBoardView', () => {
     router.push('/stages')
     await router.isReady()
     const wrapper = mount(StageBoardView, {
-      global: { plugins: [router] },
+      global: { plugins: [router], stubs: { FeatureGate: { template: '<div><slot /></div>' } } },
     })
     await flushPromises()
     await nextTick()
@@ -195,7 +197,7 @@ describe('StageBoardView', () => {
     router.push('/stages')
     await router.isReady()
     const wrapper = mount(StageBoardView, {
-      global: { plugins: [router] },
+      global: { plugins: [router], stubs: { FeatureGate: { template: '<div><slot /></div>' } } },
     })
     await flushPromises()
     await nextTick()
@@ -208,7 +210,7 @@ describe('StageBoardView', () => {
     router.push('/stages')
     await router.isReady()
     const wrapper = mount(StageBoardView, {
-      global: { plugins: [router] },
+      global: { plugins: [router], stubs: { FeatureGate: { template: '<div><slot /></div>' } } },
     })
     await flushPromises()
     await nextTick()
@@ -223,7 +225,7 @@ describe('StageBoardView', () => {
     router.push('/stages')
     await router.isReady()
     const wrapper = mount(StageBoardView, {
-      global: { plugins: [router] },
+      global: { plugins: [router], stubs: { FeatureGate: { template: '<div><slot /></div>' } } },
     })
     await flushPromises()
     await nextTick()
@@ -242,7 +244,7 @@ describe('StageBoardView', () => {
     router.push('/stages')
     await router.isReady()
     const wrapper = mount(StageBoardView, {
-      global: { plugins: [router] },
+      global: { plugins: [router], stubs: { FeatureGate: { template: '<div><slot /></div>' } } },
     })
     await flushPromises()
     await nextTick()

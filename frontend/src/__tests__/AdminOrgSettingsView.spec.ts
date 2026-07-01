@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { mount } from '@vue/test-utils'
-import { createPinia } from 'pinia'
+import { createPinia, setActivePinia } from 'pinia'
 import { nextTick } from 'vue'
 
 vi.mock('../lib/api/client', () => ({
@@ -56,9 +56,13 @@ vi.mock('vue-router', async () => {
 })
 
 import AdminOrgSettingsView from '../views/AdminOrgSettingsView.vue'
+import { usePlanStore } from '../stores/planStore'
 
 async function mountView() {
   const pinia = createPinia()
+  setActivePinia(pinia)
+  const store = usePlanStore()
+  store.$patch({ features: { team_rbac: true }, currentTier: 'team' })
   const wrapper = mount(AdminOrgSettingsView, {
     global: { plugins: [pinia] },
   })
@@ -113,8 +117,11 @@ describe('AdminOrgSettingsView', () => {
 
   it('enables delete confirm button when correct org name is typed', async () => {
     const pinia = createPinia()
+    setActivePinia(pinia)
+    const store = usePlanStore()
+    store.$patch({ features: { team_rbac: true }, currentTier: 'team' })
     const wrapper = mount(AdminOrgSettingsView, {
-      global: { plugins: [pinia] },
+      global: { plugins: [pinia], stubs: { FeatureGate: { template: '<div><slot /></div>' } } },
       attachTo: document.body,
     })
     for (let i = 0; i < 10; i++) {
