@@ -9,13 +9,13 @@
             type="text"
             placeholder="Search primitives..."
             class="input-teal px-3 py-1.5 border border-input bg-background rounded-lg text-sm"
-            @input="loadPrimitives"
+            @input="onSearchInput"
             data-testid="library-search"
           />
           <select
             v-model="typeFilter"
             class="input-teal px-3 py-1.5 border border-input bg-background rounded-lg text-sm"
-            @change="loadPrimitives"
+            @change="onFilterChange"
             data-testid="library-type-filter"
           >
             <option value="">All Types</option>
@@ -25,6 +25,7 @@
             <option value="schema">Schemas</option>
             <option value="integration">Integrations</option>
             <option value="test_fixture">Test Fixtures</option>
+            <option value="composite">Composites</option>
           </select>
         </div>
       </div>
@@ -141,6 +142,8 @@ import { ref, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { useApi } from '../composables/useApi'
 
+let searchTimer: ReturnType<typeof setTimeout> | null = null
+
 interface LibraryPrimitive {
   id: string
   organisation_id: string
@@ -199,6 +202,17 @@ async function loadPrimitives() {
   }
 }
 
+function onSearchInput() {
+  page.value = 1
+  if (searchTimer) clearTimeout(searchTimer)
+  searchTimer = setTimeout(loadPrimitives, 300)
+}
+
+function onFilterChange() {
+  page.value = 1
+  loadPrimitives()
+}
+
 function prevPage() {
   if (page.value > 1) {
     page.value--
@@ -221,6 +235,7 @@ function typeBadgeClass(type: string): string {
     schema: 'badge badge-context-amber',
     integration: 'badge badge-context-cyan',
     test_fixture: 'badge badge-context-pink',
+    composite: 'badge badge-context-green',
   }
   return map[type] ?? 'badge badge-context-slate'
 }
@@ -239,7 +254,8 @@ async function toggleAutoUpdate(prim: LibraryPrimitive) {
     await patch<LibraryPrimitive>(`/api/v1/libraries/${prim.id}`, { auto_update: newValue })
     prim.auto_update = newValue
   } catch (e) {
-    console.error('Failed to toggle auto-update', e)
+    const msg = e instanceof Error ? e.message : 'Failed to toggle auto-update'
+    error.value = msg
   }
 }
 
