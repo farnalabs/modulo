@@ -544,7 +544,7 @@ def step_feedback_human_provides(ctx, request):
             mgr.create_feedback_record(
                 run_id=ctx.get("run_id", uuid.uuid4()),
                 gate_id="gate-output-review",
-                rejected_by=USER_ID,
+                account_id=USER_ID,
                 rejection_reason="Output contained hallucination",
                 rejected_output={"text": "Incorrect data"},
                 producing_node_id="node-generate",
@@ -690,7 +690,7 @@ def step_feedback_spawn_correction(ctx, request):
             mock_record.rejection_reason = "Bad output"
             mock_record.rejected_output = {"text": "bad"}
             mock_record.producing_node_id = "node-gen"
-            mock_record.rejected_by = USER_ID
+            mock_record.account_id = USER_ID
             mock_record.feedback_status = "pending"
             mock_session.get = AsyncMock(return_value=mock_record)
 
