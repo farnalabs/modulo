@@ -50,10 +50,18 @@ def _make_listener(action: str) -> Callable[[Any, Any, Any], None]:
     def listener(mapper: Any, connection: Any, target: Any) -> None:
         resource_type = _RESOURCE_TYPES.get(type(target))
         if resource_type is None:
+            _log.warning(
+                "event_listener.unknown_model",
+                extra={"model": type(target).__name__, "action": action},
+            )
             return
 
         action_name = _ACTION_MAP.get(action)
         if action_name is None:
+            _log.warning(
+                "event_listener.unknown_action",
+                extra={"action": action},
+            )
             return
 
         try:

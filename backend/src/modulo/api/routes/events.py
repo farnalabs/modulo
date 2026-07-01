@@ -19,38 +19,40 @@ from starlette import status
 from modulo.auth.dependencies import get_current_user
 from modulo.auth.jwt import AuthenticatedPrincipal
 from modulo.core.events.event_bus import get_event_bus
+from modulo.settings import Settings, get_settings
 
 _log = logging.getLogger(__name__)
 
 router = APIRouter(tags=["events"])
-
-_ZOMBIE_TIMEOUT = 2.0
-_MAX_CONNECTIONS_PER_ORG = 100
-_MAX_CONNECTIONS_PER_USER = 10
 
 _active_connections: dict[str, set[asyncio.Queue[dict[str, Any]]]] = {}
 _queue_users: dict[int, str] = {}  # id(q) -> user_id
 _active_connections_lock: asyncio.Lock = asyncio.Lock()
 
 
-async def _track_connection(org_id: str, user_id: str, queue: asyncio.Queue[dict[str, Any]]) -> None:
+async def _track_connection(
+    org_id: str,
+    user_id: str,
+    queue: asyncio.Queue[dict[str, Any]],
+    settings: Settings,
+) -> None:
     """Register a connection, raising 429 if the per-org or per-user limit is exceeded."""
     async with _active_connections_lock:
         active = _active_connections.setdefault(org_id, set())
-        if len(active) >= _MAX_CONNECTIONS_PER_ORG:
+        if len(active) >= settings.modulo_sse_max_connections_per_org:
             raise HTTPException(
                 status_code=status.HTTP_429_TOO_MANY_REQUESTS,
                 detail="Too many SSE connections for this organisation. "
-                f"Limit is {_MAX_CONNECTIONS_PER_ORG} concurrent streams.",
+                f"Limit is {settings.modulo_sse_max_connections_per_org} concurrent streams.",
             )
         user_count = sum(
             1 for q in active if _queue_users.get(id(q)) == user_id
         )
-        if user_count >= _MAX_CONNECTIONS_PER_USER:
+        if user_count >= settings.modulo_sse_max_connections_per_user:
             raise HTTPException(
                 status_code=status.HTTP_429_TOO_MANY_REQUESTS,
                 detail="Too many SSE connections from this user. "
-                f"Limit is {_MAX_CONNECTIONS_PER_USER} concurrent streams per user.",
+                f"Limit is {settings.modulo_sse_max_connections_per_user} concurrent streams per user.",
             )
         _queue_users[id(queue)] = user_id
         active.add(queue)
@@ -67,10 +69,15 @@ async def _untrack_connection(org_id: str, queue: asyncio.Queue[dict[str, Any]])
                 del _active_connections[org_id]
 
 
-@router.get("/api/v1/events")
+@router.get(
+    "/api/v1/events",
+    operation_id="stream_events",
+    summary="Subscribe to org-scoped real-time resource-change events via SSE.",
+)
 async def sse_event_stream(
     request: Request,
     principal: AuthenticatedPrincipal = Depends(get_current_user),
+    settings: Settings = Depends(get_settings),
 ) -> StreamingResponse:
     """SSE endpoint: streams resource-changed events for the current org.
 
@@ -84,19 +91,25 @@ async def sse_event_stream(
     org_id = str(principal.organisation_id) if principal.organisation_id else ""
     if not org_id:
         raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
+            status_code=status.HTTP_403_FORBIDDEN,
             detail="Cannot open SSE stream: user is not assigned to an organisation.",
         )
 
     event_bus = get_event_bus()
-    queue = await event_bus.subscribe(org_id)
-    await _track_connection(org_id, str(principal.user_id), queue)
+    queue = await event_bus.subscribe(org_id, maxsize=256)
+    try:
+        await _track_connection(org_id, str(principal.user_id), queue, settings)
+    except HTTPException:
+        await event_bus.unsubscribe(org_id, queue)
+        raise
 
     headers = {
-        "Cache-Control": "no-cache",
+        "Cache-Control": "no-cache, no-store",
         "Connection": "keep-alive",
         "X-Accel-Buffering": "no",
     }
+
+    zombie_timeout = settings.modulo_sse_zombie_timeout_seconds
 
     async def _pump() -> AsyncGenerator[str, None]:
         """Pull events from the queue and write them to the stream.
@@ -110,13 +123,14 @@ async def sse_event_stream(
              fires when *nothing is changing* — zero wakeups during active
              use.
         """
+        yield ": connected\n\n"
         try:
             while not await request.is_disconnected():
                 try:
-                    event = await asyncio.wait_for(queue.get(), timeout=_ZOMBIE_TIMEOUT)
+                    event = await asyncio.wait_for(queue.get(), timeout=zombie_timeout)
                     yield f"event: resource_changed\ndata: {json.dumps(event)}\n\n"
                 except TimeoutError:
-                    yield ": keepalive\n\n"
+                    yield "data: \n\n"
         except asyncio.CancelledError:
             pass
         except Exception:

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import threading
 from typing import Any
 
 from modulo.core.events.redis_broker import RedisEventBroker
@@ -23,7 +24,7 @@ class EventBus:
     Slow consumers (queues that fill up) are automatically removed to
     prevent back-pressure on publishers.
 
-    Thread-safe: all subscriber list mutations are guarded by an asyncio
+    Coroutine-safe: all subscriber list mutations are guarded by an asyncio
     lock so concurrent publish/subscribe/unsubscribe calls from different
     coroutines do not race on shared state.
     """
@@ -31,7 +32,7 @@ class EventBus:
     def __init__(self, redis_broker: RedisEventBroker | None = None) -> None:
         self._subscribers: dict[str, list[asyncio.Queue[dict[str, Any]]]] = {}
         self._redis_broker = redis_broker
-        self._lock: asyncio.Lock = asyncio.Lock()
+        self._lock: threading.Lock = threading.Lock()
 
     def publish(
         self,
@@ -49,18 +50,24 @@ class EventBus:
             "version": version,
             "org_id": org_id,
         }
-        queues = list(self._subscribers.get(org_id, []))
         dead: list[asyncio.Queue[dict[str, Any]]] = []
+        queues = list(self._subscribers.get(org_id, []))
         for q in queues:
             try:
                 q.put_nowait(event)
             except (asyncio.QueueFull, ValueError):
                 dead.append(q)
-        for q in dead:
-            try:
-                self._subscribers[org_id].remove(q)
-            except ValueError:
-                pass
+        if dead:
+            with self._lock:
+                sub_list = self._subscribers.get(org_id)
+                if sub_list is not None:
+                    for q in dead:
+                        try:
+                            sub_list.remove(q)
+                        except ValueError:
+                            pass
+                    if not sub_list:
+                        del self._subscribers[org_id]
         broker = self._redis_broker
         if broker is not None:
             try:
@@ -79,10 +86,15 @@ class EventBus:
         except Exception:
             _log.exception("event_bus.redis_broadcast_failed", extra={"org_id": org_id})
 
-    async def subscribe(self, org_id: str) -> asyncio.Queue[dict[str, Any]]:
-        """Return a queue that receives resource-change events for the org."""
-        async with self._lock:
-            q: asyncio.Queue[dict[str, Any]] = asyncio.Queue()
+    async def subscribe(self, org_id: str, maxsize: int = 256) -> asyncio.Queue[dict[str, Any]]:
+        """Return a queue that receives resource-change events for the org.
+
+        The queue has a finite *maxsize* so that slow consumers are detected
+        and ejected by the publisher (see ``QueueFull`` handling in
+        :meth:`publish`).
+        """
+        with self._lock:
+            q: asyncio.Queue[dict[str, Any]] = asyncio.Queue(maxsize=maxsize)
             if org_id not in self._subscribers:
                 self._subscribers[org_id] = []
             self._subscribers[org_id].append(q)
@@ -90,11 +102,16 @@ class EventBus:
 
     async def unsubscribe(self, org_id: str, queue: asyncio.Queue[dict[str, Any]]) -> None:
         """Remove a subscriber queue from the org's fan-out set."""
-        async with self._lock:
+        with self._lock:
+            sub_list = self._subscribers.get(org_id)
+            if sub_list is None:
+                return
             try:
-                self._subscribers[org_id].remove(queue)
-            except (ValueError, KeyError):
-                pass
+                sub_list.remove(queue)
+            except ValueError:
+                return
+            if not sub_list:
+                del self._subscribers[org_id]
 
 
 # Module-level singleton

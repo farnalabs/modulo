@@ -6,6 +6,7 @@ import asyncio
 import json
 import logging
 from typing import Any
+from urllib.parse import urlparse
 
 import redis.asyncio as aioredis
 from redis.asyncio.client import PubSub
@@ -43,24 +44,50 @@ class RedisEventBroker:
         self._sub: aioredis.Redis | None = None
         self._lock: asyncio.Lock = asyncio.Lock()
 
+    @staticmethod
+    def _redact_url(url: str) -> str:
+        """Return a log-safe URL with the password portion masked."""
+        parsed = urlparse(url)
+        if parsed.password:
+            return url.replace(parsed.password, "****")
+        return url
+
     async def connect(self) -> None:
         """Open dedicated connections for publishing and subscribing."""
         async with self._lock:
             if self._pub is not None and self._sub is not None:
                 return
-            if self._pub is None:
-                self._pub = aioredis.from_url(self._redis_url, decode_responses=True)
-            if self._sub is None:
-                self._sub = aioredis.from_url(self._redis_url, decode_responses=True)
-            _log.info("RedisEventBroker connected to %s", self._redis_url)
+            pub: aioredis.Redis | None = None
+            sub: aioredis.Redis | None = None
+            try:
+                if self._pub is None:
+                    pub = aioredis.from_url(
+                        self._redis_url, decode_responses=True, socket_connect_timeout=2.0, socket_timeout=5.0
+                    )
+                if self._sub is None:
+                    sub = aioredis.from_url(
+                        self._redis_url, decode_responses=True, socket_connect_timeout=2.0, socket_timeout=5.0
+                    )
+                if pub is not None:
+                    self._pub = pub
+                if sub is not None:
+                    self._sub = sub
+            except Exception:
+                if pub is not None:
+                    await pub.close()
+                if sub is not None:
+                    await sub.close()
+                raise
+            _log.info("RedisEventBroker connected to %s", self._redact_url(self._redis_url))
 
     async def publish(self, channel: str, data: dict[str, Any]) -> None:
         """Serialize *data* as JSON and publish to the given *channel*."""
         async with self._lock:
             if self._pub is None:
-                self._pub = aioredis.from_url(self._redis_url, decode_responses=True)
-            pub = self._pub
-        await pub.publish(f"{CHANNEL_PREFIX}{channel}", json.dumps(data))
+                self._pub = aioredis.from_url(
+                    self._redis_url, decode_responses=True, socket_connect_timeout=2.0, socket_timeout=5.0
+                )
+            await self._pub.publish(f"{CHANNEL_PREFIX}{channel}", json.dumps(data))
 
     async def subscribe(self, channel: str) -> PubSub:
         """Return a PubSub object subscribed to the given *channel*.
@@ -71,11 +98,12 @@ class RedisEventBroker:
         """
         async with self._lock:
             if self._sub is None:
-                self._sub = aioredis.from_url(self._redis_url, decode_responses=True)
-            sub = self._sub
-        pubsub = sub.pubsub()
-        await pubsub.subscribe(f"{CHANNEL_PREFIX}{channel}")
-        return pubsub
+                self._sub = aioredis.from_url(
+                    self._redis_url, decode_responses=True, socket_connect_timeout=2.0, socket_timeout=5.0
+                )
+            pubsub = self._sub.pubsub()
+            await pubsub.subscribe(f"{CHANNEL_PREFIX}{channel}")
+            return pubsub
 
     async def close(self) -> None:
         """Close both Redis connections."""
@@ -94,4 +122,4 @@ class RedisEventBroker:
                 await sub.close()
             except Exception:
                 _log.warning("redis_broker.sub_close_failed", exc_info=True)
-        _log.info("RedisEventBroker closed")
+        _log.info("RedisEventBroker closed for %s", self._redact_url(self._redis_url))
