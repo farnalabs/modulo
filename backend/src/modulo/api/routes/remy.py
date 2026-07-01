@@ -240,37 +240,43 @@ async def list_sessions(
     session: AsyncSession = Depends(get_db_session),
     principal: AuthenticatedPrincipal = Depends(get_current_user),
 ) -> dict[str, Any]:
-    async with session.begin():
-        await set_rls_org(session, principal.organisation_id)
-        total_q = select(func.count(ChatSession.id)).where(ChatSession.user_id == principal.account_id)
-        total_result = await session.execute(total_q)
-        total = total_result.scalar() or 0
+    try:
+        async with session.begin():
+            await set_rls_org(session, principal.organisation_id)
+            total_q = select(func.count(ChatSession.id)).where(ChatSession.user_id == principal.account_id)
+            total_result = await session.execute(total_q)
+            total = total_result.scalar() or 0
 
-        q = (
-            select(ChatSession)
-            .where(ChatSession.user_id == principal.account_id)
-            .order_by(ChatSession.updated_at.desc())
-            .offset((page - 1) * page_size)
-            .limit(page_size)
-        )
-        result = await session.execute(q)
-        sessions = result.scalars().all()
-
-        if sessions:
-            session_ids = [s.id for s in sessions]
-            count_q = (
-                select(ChatMessage.session_id, func.count(ChatMessage.id).label("cnt"))
-                .where(ChatMessage.session_id.in_(session_ids))
-                .group_by(ChatMessage.session_id)
+            q = (
+                select(ChatSession)
+                .where(ChatSession.user_id == principal.account_id)
+                .order_by(ChatSession.updated_at.desc())
+                .offset((page - 1) * page_size)
+                .limit(page_size)
             )
-            count_result = await session.execute(count_q)
-            count_map = {row.session_id: row.cnt for row in count_result}
-        else:
-            count_map = {}
+            result = await session.execute(q)
+            sessions = result.scalars().all()
 
-        items = [_serialise_session(s, count_map.get(s.id, 0)) for s in sessions]
+            if sessions:
+                session_ids = [s.id for s in sessions]
+                count_q = (
+                    select(ChatMessage.session_id, func.count(ChatMessage.id).label("cnt"))
+                    .where(ChatMessage.session_id.in_(session_ids))
+                    .group_by(ChatMessage.session_id)
+                )
+                count_result = await session.execute(count_q)
+                count_map = {row.session_id: row.cnt for row in count_result}
+            else:
+                count_map = {}
 
-    return {"items": items, "total": total, "page": page, "page_size": page_size}
+            items = [_serialise_session(s, count_map.get(s.id, 0)) for s in sessions]
+
+        return {"items": items, "total": total, "page": page, "page_size": page_size}
+    except ProgrammingError:
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="Feature is not available. Run database migrations to enable it.",
+        ) from None
 
 
 @router.post("/sessions", status_code=status.HTTP_201_CREATED)
@@ -279,20 +285,26 @@ async def create_session(
     session: AsyncSession = Depends(get_db_session),
     principal: AuthenticatedPrincipal = Depends(get_current_user),
 ) -> dict[str, Any]:
-    async with session.begin():
-        await set_rls_org(session, principal.organisation_id)
-        chat_session = ChatSession(
-            organisation_id=principal.organisation_id,
-            user_id=principal.account_id,
-            name=body.name,
-            provider=body.provider,
-            model=body.model,
-            context_window_tokens=body.context_window_tokens,
-        )
-        session.add(chat_session)
-        await session.flush()
+    try:
+        async with session.begin():
+            await set_rls_org(session, principal.organisation_id)
+            chat_session = ChatSession(
+                organisation_id=principal.organisation_id,
+                user_id=principal.account_id,
+                name=body.name,
+                provider=body.provider,
+                model=body.model,
+                context_window_tokens=body.context_window_tokens,
+            )
+            session.add(chat_session)
+            await session.flush()
 
-    return _serialise_session(chat_session)
+        return _serialise_session(chat_session)
+    except ProgrammingError:
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="Feature is not available. Run database migrations to enable it.",
+        ) from None
 
 
 @router.get("/sessions/{session_id}", status_code=status.HTTP_200_OK)
@@ -301,17 +313,23 @@ async def get_session(
     session: AsyncSession = Depends(get_db_session),
     principal: AuthenticatedPrincipal = Depends(get_current_user),
 ) -> dict[str, Any]:
-    async with session.begin():
-        await set_rls_org(session, principal.organisation_id)
-        chat_session = await session.get(ChatSession, session_id)
-        if chat_session is None or chat_session.user_id != principal.account_id:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Session not found")
+    try:
+        async with session.begin():
+            await set_rls_org(session, principal.organisation_id)
+            chat_session = await session.get(ChatSession, session_id)
+            if chat_session is None or chat_session.user_id != principal.account_id:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Session not found")
 
-        count_q = select(func.count(ChatMessage.id)).where(ChatMessage.session_id == session_id)
-        count_result = await session.execute(count_q)
-        msg_count = count_result.scalar() or 0
+            count_q = select(func.count(ChatMessage.id)).where(ChatMessage.session_id == session_id)
+            count_result = await session.execute(count_q)
+            msg_count = count_result.scalar() or 0
 
-    return _serialise_session(chat_session, msg_count)
+        return _serialise_session(chat_session, msg_count)
+    except ProgrammingError:
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="Feature is not available. Run database migrations to enable it.",
+        ) from None
 
 
 @router.patch("/sessions/{session_id}", status_code=status.HTTP_200_OK)
@@ -321,16 +339,22 @@ async def rename_session(
     session: AsyncSession = Depends(get_db_session),
     principal: AuthenticatedPrincipal = Depends(get_current_user),
 ) -> dict[str, Any]:
-    async with session.begin():
-        await set_rls_org(session, principal.organisation_id)
-        chat_session = await session.get(ChatSession, session_id)
-        if chat_session is None or chat_session.user_id != principal.account_id:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Session not found")
+    try:
+        async with session.begin():
+            await set_rls_org(session, principal.organisation_id)
+            chat_session = await session.get(ChatSession, session_id)
+            if chat_session is None or chat_session.user_id != principal.account_id:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Session not found")
 
-        chat_session.name = body.name
-        await session.flush()
+            chat_session.name = body.name
+            await session.flush()
 
-    return _serialise_session(chat_session)
+        return _serialise_session(chat_session)
+    except ProgrammingError:
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="Feature is not available. Run database migrations to enable it.",
+        ) from None
 
 
 @router.delete("/sessions/{session_id}", status_code=status.HTTP_200_OK)
@@ -339,15 +363,21 @@ async def delete_session(
     session: AsyncSession = Depends(get_db_session),
     principal: AuthenticatedPrincipal = Depends(get_current_user),
 ) -> dict[str, str]:
-    async with session.begin():
-        await set_rls_org(session, principal.organisation_id)
-        chat_session = await session.get(ChatSession, session_id)
-        if chat_session is None or chat_session.user_id != principal.account_id:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Session not found")
+    try:
+        async with session.begin():
+            await set_rls_org(session, principal.organisation_id)
+            chat_session = await session.get(ChatSession, session_id)
+            if chat_session is None or chat_session.user_id != principal.account_id:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Session not found")
 
-        await session.delete(chat_session)
+            await session.delete(chat_session)
 
-    return {"status": "deleted", "id": str(session_id)}
+        return {"status": "deleted", "id": str(session_id)}
+    except ProgrammingError:
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="Feature is not available. Run database migrations to enable it.",
+        ) from None
 
 
 # ── Message endpoints ────────────────────────────────────────────────────
@@ -361,32 +391,38 @@ async def list_messages(
     session: AsyncSession = Depends(get_db_session),
     principal: AuthenticatedPrincipal = Depends(get_current_user),
 ) -> dict[str, Any]:
-    async with session.begin():
-        await set_rls_org(session, principal.organisation_id)
-        chat_session = await session.get(ChatSession, session_id)
-        if chat_session is None or chat_session.user_id != principal.account_id:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Session not found")
+    try:
+        async with session.begin():
+            await set_rls_org(session, principal.organisation_id)
+            chat_session = await session.get(ChatSession, session_id)
+            if chat_session is None or chat_session.user_id != principal.account_id:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Session not found")
 
-        total_q = select(func.count(ChatMessage.id)).where(ChatMessage.session_id == session_id)
-        total_result = await session.execute(total_q)
-        total = total_result.scalar() or 0
+            total_q = select(func.count(ChatMessage.id)).where(ChatMessage.session_id == session_id)
+            total_result = await session.execute(total_q)
+            total = total_result.scalar() or 0
 
-        q = (
-            select(ChatMessage)
-            .where(ChatMessage.session_id == session_id, ChatMessage.organisation_id == principal.organisation_id)
-            .order_by(ChatMessage.created_at.asc())
-            .offset((page - 1) * page_size)
-            .limit(page_size)
-        )
-        result = await session.execute(q)
-        messages = result.scalars().all()
+            q = (
+                select(ChatMessage)
+                .where(ChatMessage.session_id == session_id, ChatMessage.organisation_id == principal.organisation_id)
+                .order_by(ChatMessage.created_at.asc())
+                .offset((page - 1) * page_size)
+                .limit(page_size)
+            )
+            result = await session.execute(q)
+            messages = result.scalars().all()
 
-    return {
-        "items": [_serialise_message(m) for m in messages],
-        "total": total,
-        "page": page,
-        "page_size": page_size,
-    }
+        return {
+            "items": [_serialise_message(m) for m in messages],
+            "total": total,
+            "page": page,
+            "page_size": page_size,
+        }
+    except ProgrammingError:
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="Feature is not available. Run database migrations to enable it.",
+        ) from None
 
 
 @router.post("/sessions/{session_id}/messages", status_code=status.HTTP_201_CREATED)
@@ -396,26 +432,32 @@ async def append_message(
     session: AsyncSession = Depends(get_db_session),
     principal: AuthenticatedPrincipal = Depends(get_current_user),
 ) -> dict[str, Any]:
-    async with session.begin():
-        await set_rls_org(session, principal.organisation_id)
-        chat_session = await session.get(ChatSession, session_id)
-        if chat_session is None or chat_session.user_id != principal.account_id:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Session not found")
+    try:
+        async with session.begin():
+            await set_rls_org(session, principal.organisation_id)
+            chat_session = await session.get(ChatSession, session_id)
+            if chat_session is None or chat_session.user_id != principal.account_id:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Session not found")
 
-        msg = ChatMessage(
-            organisation_id=principal.organisation_id,
-            session_id=session_id,
-            role=body.role,
-            content=body.content,
-            tool_calls_json=body.tool_calls_json,
-            tool_results_json=body.tool_results_json,
-            token_count=body.token_count,
-            parent_id=body.parent_id,
-        )
-        session.add(msg)
-        await session.flush()
+            msg = ChatMessage(
+                organisation_id=principal.organisation_id,
+                session_id=session_id,
+                role=body.role,
+                content=body.content,
+                tool_calls_json=body.tool_calls_json,
+                tool_results_json=body.tool_results_json,
+                token_count=body.token_count,
+                parent_id=body.parent_id,
+            )
+            session.add(msg)
+            await session.flush()
 
-    return _serialise_message(msg)
+        return _serialise_message(msg)
+    except ProgrammingError:
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="Feature is not available. Run database migrations to enable it.",
+        ) from None
 
 
 # ── Streaming endpoint ───────────────────────────────────────────────────

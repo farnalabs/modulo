@@ -131,7 +131,6 @@ import ErrorAlert from '../components/shared/ErrorAlert.vue'
 import FeatureGate from '../components/FeatureGate.vue'
 import LockIcon from '../components/LockIcon.vue'
 import RemySkillDialog from '../components/remy/RemySkillDialog.vue'
-import type { SkillFormItem } from '../components/remy/RemySkillDialog.vue'
 
 interface SkillItem {
   id: string

@@ -9,6 +9,7 @@ from typing import Any
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field
 from sqlalchemy import select
+from sqlalchemy.exc import ProgrammingError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.api.dependencies import get_db_session
@@ -101,24 +102,32 @@ async def get_remy_config(
     principal: AuthenticatedPrincipal = Depends(get_current_user),
 ) -> RemyConfigResponse:
     _require_admin(principal)
-    async with session.begin():
-        result = await session.execute(
-            select(SystemConfig).where(SystemConfig.key == f"remy_config:{principal.organisation_id}")
+    try:
+        async with session.begin():
+            result = await session.execute(
+                select(SystemConfig).where(SystemConfig.key == f"remy_config:{principal.organisation_id}")
+            )
+            entry = result.scalar_one_or_none()
+        if entry is None:
+            return RemyConfigResponse()
+        value = entry.value if isinstance(entry.value, dict) else {}
+        return RemyConfigResponse(
+            system_prompt=value.get("system_prompt"),
+            additional_guidance=value.get("additional_guidance"),
+            access_list=AccessList(**value.get("access_list", {})),
+            default_provider=value.get("default_provider", "anthropic"),
+            default_model=value.get("default_model", "claude-sonnet-4-20250514"),
+            default_context_window=value.get("default_context_window", 200000),
+            allowed_providers=value.get(
+                "allowed_providers", ["anthropic", "openai", "google-gemini", "deepseek", "groq"]
+            ),
+            allowed_models=value.get("allowed_models", []),
         )
-        entry = result.scalar_one_or_none()
-    if entry is None:
-        return RemyConfigResponse()
-    value = entry.value if isinstance(entry.value, dict) else {}
-    return RemyConfigResponse(
-        system_prompt=value.get("system_prompt"),
-        additional_guidance=value.get("additional_guidance"),
-        access_list=AccessList(**value.get("access_list", {})),
-        default_provider=value.get("default_provider", "anthropic"),
-        default_model=value.get("default_model", "claude-sonnet-4-20250514"),
-        default_context_window=value.get("default_context_window", 200000),
-        allowed_providers=value.get("allowed_providers", ["anthropic", "openai", "google-gemini", "deepseek", "groq"]),
-        allowed_models=value.get("allowed_models", []),
-    )
+    except ProgrammingError:
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="Feature is not available. Run database migrations to enable it.",
+        ) from None
 
 
 @router.put("/config", response_model=RemyConfigResponse)
@@ -128,48 +137,54 @@ async def update_remy_config(
     principal: AuthenticatedPrincipal = Depends(get_current_user),
 ) -> RemyConfigResponse:
     _require_admin(principal)
-    async with session.begin():
-        result = await session.execute(
-            select(SystemConfig).where(SystemConfig.key == f"remy_config:{principal.organisation_id}")
+    try:
+        async with session.begin():
+            result = await session.execute(
+                select(SystemConfig).where(SystemConfig.key == f"remy_config:{principal.organisation_id}")
+            )
+            entry = result.scalar_one_or_none()
+            if entry is None:
+                entry = SystemConfig(key=f"remy_config:{principal.organisation_id}", value={})
+                session.add(entry)
+
+            current: dict[str, Any] = entry.value if isinstance(entry.value, dict) else {}
+            if body.system_prompt is not None:
+                current["system_prompt"] = body.system_prompt
+            if body.additional_guidance is not None:
+                current["additional_guidance"] = body.additional_guidance
+            if body.access_list is not None:
+                current["access_list"] = body.access_list.model_dump()
+            if body.default_provider is not None:
+                current["default_provider"] = body.default_provider
+            if body.default_model is not None:
+                current["default_model"] = body.default_model
+            if body.default_context_window is not None:
+                current["default_context_window"] = body.default_context_window
+            if body.allowed_providers is not None:
+                current["allowed_providers"] = body.allowed_providers
+            if body.allowed_models is not None:
+                current["allowed_models"] = body.allowed_models
+            entry.updated_by = principal.account_id
+            entry.value = current
+            await session.flush()
+
+        return RemyConfigResponse(
+            system_prompt=current.get("system_prompt"),
+            additional_guidance=current.get("additional_guidance"),
+            access_list=AccessList(**current.get("access_list", {})),
+            default_provider=current.get("default_provider", "anthropic"),
+            default_model=current.get("default_model", "claude-sonnet-4-20250514"),
+            default_context_window=current.get("default_context_window", 200000),
+            allowed_providers=current.get(
+                "allowed_providers", ["anthropic", "openai", "google-gemini", "deepseek", "groq"]
+            ),
+            allowed_models=current.get("allowed_models", []),
         )
-        entry = result.scalar_one_or_none()
-        if entry is None:
-            entry = SystemConfig(key=f"remy_config:{principal.organisation_id}", value={})
-            session.add(entry)
-
-        current: dict[str, Any] = entry.value if isinstance(entry.value, dict) else {}
-        if body.system_prompt is not None:
-            current["system_prompt"] = body.system_prompt
-        if body.additional_guidance is not None:
-            current["additional_guidance"] = body.additional_guidance
-        if body.access_list is not None:
-            current["access_list"] = body.access_list.model_dump()
-        if body.default_provider is not None:
-            current["default_provider"] = body.default_provider
-        if body.default_model is not None:
-            current["default_model"] = body.default_model
-        if body.default_context_window is not None:
-            current["default_context_window"] = body.default_context_window
-        if body.allowed_providers is not None:
-            current["allowed_providers"] = body.allowed_providers
-        if body.allowed_models is not None:
-            current["allowed_models"] = body.allowed_models
-        entry.updated_by = principal.account_id
-        entry.value = current
-        await session.flush()
-
-    return RemyConfigResponse(
-        system_prompt=current.get("system_prompt"),
-        additional_guidance=current.get("additional_guidance"),
-        access_list=AccessList(**current.get("access_list", {})),
-        default_provider=current.get("default_provider", "anthropic"),
-        default_model=current.get("default_model", "claude-sonnet-4-20250514"),
-        default_context_window=current.get("default_context_window", 200000),
-        allowed_providers=current.get(
-            "allowed_providers", ["anthropic", "openai", "google-gemini", "deepseek", "groq"]
-        ),
-        allowed_models=current.get("allowed_models", []),
-    )
+    except ProgrammingError:
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="Feature is not available. Run database migrations to enable it.",
+        ) from None
 
 
 # ── Org-level Skills CRUD ─────────────────────────────────────────────
@@ -208,18 +223,24 @@ async def list_org_skills(
     principal: AuthenticatedPrincipal = Depends(get_current_user),
 ) -> list[SkillResponse]:
     _require_admin(principal)
-    async with session.begin():
-        await set_rls_org(session, principal.organisation_id)
-        result = await session.execute(
-            select(RemySkill)
-            .where(
-                RemySkill.organisation_id == principal.organisation_id,
-                RemySkill.user_id.is_(None),
+    try:
+        async with session.begin():
+            await set_rls_org(session, principal.organisation_id)
+            result = await session.execute(
+                select(RemySkill)
+                .where(
+                    RemySkill.organisation_id == principal.organisation_id,
+                    RemySkill.user_id.is_(None),
+                )
+                .order_by(RemySkill.created_at.desc())
             )
-            .order_by(RemySkill.created_at.desc())
-        )
-        skills = list(result.scalars())
-    return [_skill_to_response(s) for s in skills]
+            skills = list(result.scalars())
+        return [_skill_to_response(s) for s in skills]
+    except ProgrammingError:
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="Feature is not available. Run database migrations to enable it.",
+        ) from None
 
 
 @router.post("/skills", response_model=SkillResponse, status_code=status.HTTP_201_CREATED)
@@ -229,21 +250,27 @@ async def create_org_skill(
     principal: AuthenticatedPrincipal = Depends(get_current_user),
 ) -> SkillResponse:
     _require_admin(principal)
-    async with session.begin():
-        await set_rls_org(session, principal.organisation_id)
-        skill = RemySkill(
-            id=uuid.uuid4(),
-            organisation_id=principal.organisation_id,
-            user_id=None,
-            name=body.name,
-            description=body.description,
-            triggers=body.triggers,
-            body=body.body,
-            active=body.active,
-        )
-        session.add(skill)
-        await session.flush()
-    return _skill_to_response(skill)
+    try:
+        async with session.begin():
+            await set_rls_org(session, principal.organisation_id)
+            skill = RemySkill(
+                id=uuid.uuid4(),
+                organisation_id=principal.organisation_id,
+                user_id=None,
+                name=body.name,
+                description=body.description,
+                triggers=body.triggers,
+                body=body.body,
+                active=body.active,
+            )
+            session.add(skill)
+            await session.flush()
+        return _skill_to_response(skill)
+    except ProgrammingError:
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="Feature is not available. Run database migrations to enable it.",
+        ) from None
 
 
 @router.put("/skills/{skill_id}", response_model=SkillResponse)
@@ -254,21 +281,27 @@ async def update_org_skill(
     principal: AuthenticatedPrincipal = Depends(get_current_user),
 ) -> SkillResponse:
     _require_admin(principal)
-    async with session.begin():
-        await set_rls_org(session, principal.organisation_id)
-        skill = await _get_org_skill(session, skill_id, principal.organisation_id)
-        if body.name is not None:
-            skill.name = body.name
-        if body.description is not None:
-            skill.description = body.description
-        if body.triggers is not None:
-            skill.triggers = body.triggers
-        if body.body is not None:
-            skill.body = body.body
-        if body.active is not None:
-            skill.active = body.active
-        await session.flush()
-    return _skill_to_response(skill)
+    try:
+        async with session.begin():
+            await set_rls_org(session, principal.organisation_id)
+            skill = await _get_org_skill(session, skill_id, principal.organisation_id)
+            if body.name is not None:
+                skill.name = body.name
+            if body.description is not None:
+                skill.description = body.description
+            if body.triggers is not None:
+                skill.triggers = body.triggers
+            if body.body is not None:
+                skill.body = body.body
+            if body.active is not None:
+                skill.active = body.active
+            await session.flush()
+        return _skill_to_response(skill)
+    except ProgrammingError:
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="Feature is not available. Run database migrations to enable it.",
+        ) from None
 
 
 @router.delete("/skills/{skill_id}", status_code=status.HTTP_204_NO_CONTENT)
@@ -278,10 +311,16 @@ async def delete_org_skill(
     principal: AuthenticatedPrincipal = Depends(get_current_user),
 ) -> None:
     _require_admin(principal)
-    async with session.begin():
-        await set_rls_org(session, principal.organisation_id)
-        skill = await _get_org_skill(session, skill_id, principal.organisation_id)
-        await session.delete(skill)
+    try:
+        async with session.begin():
+            await set_rls_org(session, principal.organisation_id)
+            skill = await _get_org_skill(session, skill_id, principal.organisation_id)
+            await session.delete(skill)
+    except ProgrammingError:
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="Feature is not available. Run database migrations to enable it.",
+        ) from None
 
 
 # ── User-level helper (reused by me.py) ────────────────────────────────
