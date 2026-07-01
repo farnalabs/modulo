@@ -11,7 +11,11 @@ export function createSyncAdapter(store: SyncableStore) {
   return function handleSyncEvent(event: EventBusEvent): void {
     if (store.dirtyIds.has(event.id)) return
     if (event.action === 'deleted') {
-      store.remove(event.id)
+      try {
+        store.remove(event.id)
+      } catch (e) {
+        console.error('[SyncAdapter] remove error', e)
+      }
     } else {
       store.fetch(event.id).catch((err: unknown) => {
         console.error('[SyncAdapter] fetch error', err)

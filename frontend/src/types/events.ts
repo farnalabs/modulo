@@ -1,5 +1,5 @@
 export interface EventBusEvent {
-  type: string
+  type: ResourceType
   id: string
   action: 'created' | 'updated' | 'deleted'
   version: number
