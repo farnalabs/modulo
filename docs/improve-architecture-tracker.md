@@ -1,9 +1,10 @@
 # improve-architecture Tracker
 
-Current index: 18
+Current index: 19
 Last updated: 2026-07-01
 
 ## History
+- 2026-07-01: feat-core-saml-integration → complete, cross-cutting QA: fixed frontmatter (added bdd:, depends-on: feat-auth-jwt-auth/feat-teams-team-isolation, test_sso_saml_bdd.py), marked 60+ behaviours [x] (all SAML behaviours implemented in code), removed outdated BDD gap (feature file exists at tests/bdd/features/auth/sso_saml.feature), added 2 new known gaps (no integration test for SAML ACS real XML parsing, login route missing explicit check)
 - 2026-07-01: feat-auth-rate-limiting → complete, cross-cutting QA: fixed trigger_pipeline 60/min rate marked [x]→[ ] (not implemented), rewrote BDD feature file (4→11 scenarios matching PRD §7.18), fixed in-memory TokenBucket to compute params from rule instead of hardcoded defaults, added 5 new known gaps (MCP trigger_pipeline not implemented, HITL 20/min catch-all, missing Redis integration test, BDD file location, fixed TokenBucket defaults), updated product map, updated both trackers
 - 2026-06-30: feat-teams-team-isolation → complete, cross-cutting QA: fixed broken frontmatter (missing bdd:), reformatted markdown, marked 22 [ ] → [x], added 3 integration tests (set_rls_user_context GUCs, pool checkout hook reset, rls_team_isolation policy existence), added 2 BDD scenarios (set_rls_user_context error path, set_rls_user_context correctness), implemented real step definitions for 7 rls_enforcement scenarios, consolidated known gaps from 5→10 with updated descriptions, created website stub
 - 2026-06-30: feat-auth-scim → complete, cross-cutting QA: marked 34 behaviours [x], added bdd/unit-tests frontmatter, fixed 403→401 claim, added 3 new gaps
