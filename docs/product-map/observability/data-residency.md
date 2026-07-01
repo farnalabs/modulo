@@ -32,7 +32,9 @@ status: partial
 
 # Data Residency
 
-Self-hosted Modulo deployments keep all data within the organisation's infrastructure. Telemetry is opt-in and disabled by default. Network egress requires explicit operator configuration at every layer.
+Self-hosted Modulo deployments keep all data within the organisation's infrastructure.
+Telemetry is opt-in and disabled by default. Network egress requires explicit operator
+configuration at every layer.
 
 ## Behaviours
 
@@ -84,7 +86,8 @@ Self-hosted Modulo deployments keep all data within the organisation's infrastru
 
 ### BDD & Test Coverage
 
-- [ ] `backend/tests/features/personas/marcus-ciso.feature` — `@goal-marcus-data-residency` delivered (no data leaves infrastructure)
+- [ ] `backend/tests/features/personas/marcus-ciso.feature` — `@goal-marcus-data-residency`
+  delivered (no data leaves infrastructure)
 - [ ] `backend/tests/bdd/features/observability/otel_traces.feature` — TODO placeholder (not yet implemented)
 - [ ] `backend/tests/bdd/features/observability/metrics.feature` — TODO placeholder (not yet implemented)
 - [ ] `backend/tests/bdd/features/observability/run_logs.feature` — TODO placeholder (not yet implemented)
