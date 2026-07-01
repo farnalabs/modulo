@@ -30,10 +30,10 @@ class RateLimitRule:
 class TokenBucket:
     """Simple in-memory token bucket fallback when Redis is unavailable."""
 
-    def __init__(self, rate: float, burst: int) -> None:
-        self.rate = rate
-        self.burst = burst
-        self.tokens = float(burst)
+    def __init__(self, max_requests: int, window_s: int) -> None:
+        self.rate = max_requests / window_s
+        self.burst = max_requests
+        self.tokens = float(max_requests)
         self.last_refill = time.monotonic()
         self._lock = asyncio.Lock()
 
@@ -91,7 +91,7 @@ class RateLimiterRegistry:
         self._sliding: RedisSlidingWindowRateLimiter | None = (
             RedisSlidingWindowRateLimiter(redis_client) if redis_client is not None else None
         )
-        self._buckets: dict[str, TokenBucket] = defaultdict(lambda: TokenBucket(rate=10.0, burst=20))
+        self._buckets: dict[str, TokenBucket] = {}
 
     @property
     def has_redis(self) -> bool:
@@ -100,6 +100,8 @@ class RateLimiterRegistry:
     async def check(self, key: str, max_requests: int, window_s: int = WINDOW_SECONDS) -> bool:
         if self._sliding is not None:
             return await self._sliding.check(key, max_requests, window_s)
+        if key not in self._buckets:
+            self._buckets[key] = TokenBucket(max_requests=max_requests, window_s=window_s)
         bucket = self._buckets[key]
         return await bucket.consume()
 
