@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 from typing import Any
@@ -40,17 +41,23 @@ class RedisEventBroker:
         self._redis_url = redis_url
         self._pub: aioredis.Redis | None = None
         self._sub: aioredis.Redis | None = None
+        self._lock: asyncio.Lock = asyncio.Lock()
 
     async def connect(self) -> None:
         """Open dedicated connections for publishing and subscribing."""
-        self._pub = aioredis.from_url(self._redis_url, decode_responses=True)
-        self._sub = aioredis.from_url(self._redis_url, decode_responses=True)
-        _log.info("RedisEventBroker connected to %s", self._redis_url)
+        async with self._lock:
+            if self._pub is not None and self._sub is not None:
+                return
+            self._pub = aioredis.from_url(self._redis_url, decode_responses=True)
+            self._sub = aioredis.from_url(self._redis_url, decode_responses=True)
+            _log.info("RedisEventBroker connected to %s", self._redis_url)
 
     async def publish(self, channel: str, data: dict[str, Any]) -> None:
         """Serialize *data* as JSON and publish to the given *channel*."""
-        if self._pub is None:
-            await self.connect()
+        async with self._lock:
+            if self._pub is None:
+                self._pub = aioredis.from_url(self._redis_url, decode_responses=True)
+                self._sub = aioredis.from_url(self._redis_url, decode_responses=True)
         await self._pub.publish(f"{CHANNEL_PREFIX}{channel}", json.dumps(data))
 
     async def subscribe(self, channel: str) -> PubSub:
@@ -60,18 +67,23 @@ class RedisEventBroker:
         calling ``await pubsub.unsubscribe()`` / ``await pubsub.close()``
         when done.
         """
-        if self._sub is None:
-            await self.connect()
+        async with self._lock:
+            if self._sub is None:
+                self._sub = aioredis.from_url(self._redis_url, decode_responses=True)
+                self._pub = aioredis.from_url(self._redis_url, decode_responses=True)
         pubsub = self._sub.pubsub()
         await pubsub.subscribe(f"{CHANNEL_PREFIX}{channel}")
         return pubsub
 
     async def close(self) -> None:
         """Close both Redis connections."""
-        if self._pub is not None:
-            await self._pub.close()
+        async with self._lock:
+            pub = self._pub
+            sub = self._sub
             self._pub = None
-        if self._sub is not None:
-            await self._sub.close()
             self._sub = None
+        if pub is not None:
+            await pub.close()
+        if sub is not None:
+            await sub.close()
         _log.info("RedisEventBroker closed")

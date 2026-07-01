@@ -24,7 +24,7 @@ class TestEventBus:
     async def test_subscribe_and_receive(self):
         bus = EventBus()
         org_id = "org-123"
-        queue = bus.subscribe(org_id)
+        queue = await bus.subscribe(org_id)
 
         bus.publish(org_id, "run", "run-1", "created", version=0)
 
@@ -37,8 +37,8 @@ class TestEventBus:
     async def test_multiple_subscribers_all_receive(self):
         bus = EventBus()
         org_id = "org-123"
-        q1 = bus.subscribe(org_id)
-        q2 = bus.subscribe(org_id)
+        q1 = await bus.subscribe(org_id)
+        q2 = await bus.subscribe(org_id)
 
         bus.publish(org_id, "pipeline", "pipe-1", "updated", version=1)
 
@@ -50,10 +50,10 @@ class TestEventBus:
     async def test_unsubscribe_removes_from_fan_out(self):
         bus = EventBus()
         org_id = "org-123"
-        q1 = bus.subscribe(org_id)
-        q2 = bus.subscribe(org_id)
+        q1 = await bus.subscribe(org_id)
+        q2 = await bus.subscribe(org_id)
 
-        bus.unsubscribe(org_id, q1)
+        await bus.unsubscribe(org_id, q1)
         bus.publish(org_id, "agent", "agent-1", "deleted", version=0)
 
         with pytest.raises(asyncio.TimeoutError):
@@ -63,8 +63,8 @@ class TestEventBus:
 
     async def test_org_isolation(self):
         bus = EventBus()
-        q_a = bus.subscribe("org-a")
-        q_b = bus.subscribe("org-b")
+        q_a = await bus.subscribe("org-a")
+        q_b = await bus.subscribe("org-b")
 
         bus.publish("org-a", "run", "run-a", "created", version=0)
 
@@ -76,7 +76,7 @@ class TestEventBus:
     async def test_slow_consumer_removed(self):
         bus = EventBus()
         org_id = "org-123"
-        q = bus.subscribe(org_id)
+        q = await bus.subscribe(org_id)
 
         # Fill the queue to its maxsize (default 0 = infinite).
         # Create a queue with maxsize=1 for slow-consumer test.
@@ -115,8 +115,8 @@ class TestEventBus:
 
     async def test_publish_to_multiple_orgs(self):
         bus = EventBus()
-        q_a = bus.subscribe("org-a")
-        q_b = bus.subscribe("org-b")
+        q_a = await bus.subscribe("org-a")
+        q_b = await bus.subscribe("org-b")
 
         bus.publish("org-a", "schema", "s1", "created", version=0)
         bus.publish("org-b", "team", "t1", "updated", version=0)
