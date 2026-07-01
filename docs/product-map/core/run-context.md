@@ -83,6 +83,7 @@ status: partial
 - [x] Multiple context-setters in sequence — later writes win
 - [x] Context-setter writes empty dict — no-op, state unchanged
 - [x] Context-setter writes nested dict — stored as-is (no flattening) ### Error states
+- [ ] Non-context-setter violation emits audit event (context_write_by_non_setter) — currently only raises error + log.warning
 - [ ] Invalid run_context_overrides type (non-dict) raises validation error
 - [ ] Node timeout while writing run_context — context write not persisted
 - [x] Non-context-setter violation raises error (PRD specifies silent discard + audit warning — code currently raises) — design tension
@@ -91,6 +92,7 @@ status: partial
 - [ ] Cancellation-while-waiting for capacity slot transitions to cancelled status ### Security
 - [x] Context-setter role evaluated at LangGraph-node level, not agent config level
 - [ ] Audit event emitted on context_write_by_non_setter violation
+- [ ] Audit event emitted on context_write_by_non_setter violation with node_id and attempted_keys
 - [x] _run_context_write_log is internal-only (not writable by agents)
 - [x] Non-context-setter cannot inject run_context via state manipulation ### Run inspection
 - [ ] Run detail view shows run_context before and after each node
@@ -106,10 +108,13 @@ status: partial
 - [x] Existing pipelines without run_context_defaults run normally (empty dict)
 - [x] Existing agents unaware of run_context are unaffected
 - [x] Previous runs' contexts unchanged by pipeline default changes
-- [ ] All unit and BDD tests pass ## Known Gaps - **Non-context-setter guard strategy mismatch**: PRD 8.18 specifies silent discard + audit_warning event for non-context-setter writes to run_context. Current decorator code raises ContextSetterViolationError instead. The PRD's stated intent is non-breaking behaviour; the code takes a hard-fail approach. Needs resolution: either update PRD to match code (hard error), or update code to match PRD (silent discard).
-- **Trigger override merging not wired through executor**: `run_context_overrides` from trigger events are not merged in `_seed_state` — only `snapshot.run_context_defaults` is used. The trigger override code path is not yet connected to the executor.
-- **Missing BDD features for context-setter guard, write-log, and autonomy resolution**: Existing BDD tests cover seeding and override merging but not the core read/write enforcement mechanics. The only dedicated run_context BDD feature file (`backend/tests/bdd/features/complexity/complexity_reviewer.feature`) is a placeholder with no scenarios.
+- [ ] All unit and BDD tests pass
+## Known Gaps
+- **Non-context-setter guard strategy mismatch**: PRD 8.18 specifies silent discard + audit_warning event for non-context-setter writes to run_context. Current decorator code raises ContextSetterViolationError instead. The PRD's stated intent is non-breaking behaviour; the code takes a hard-fail approach. Needs resolution: either update PRD to match code (hard error), or update code to match PRD (silent discard). Code path: `backend/src/modulo/core/pipeline_engine/decorator.py:129-142`.
+- **Missing audit event dispatch on violation**: When a non-context-setter violation occurs, only `_log.warning()` is emitted. PRD specifies an `audit_warning` event with node_id and attempted_keys. The decorator lacks DB session access to dispatch to the `audit_events` table. Needs a ContextVar-based callback pattern (similar to the cancellation check) plumbed through the executor.
+- **Trigger override merging not wired through executor**: `run_context_overrides` from trigger events are not merged in `_seed_state` — only `snapshot.run_context_defaults` is used. The trigger override code path is not yet connected to the executor. Code path: `backend/src/modulo/core/pipeline_engine/executor.py:95-119`.
+- **No BDD scenario for autonomy resolution via run_context**: Unit tests in `test_autonomy.py` cover autonomy resolution, but there is no BDD-level scenario verifying that `run_context.autonomy_recommendation` actually affects HITL gate behaviour. Should add a scenario to `backend/tests/bdd/features/pipelines/run_context.feature`.
 - **No template rendering test for run_context**: The product map entry lists `{{ run_context.key }}` access as a behaviour, but there is no test verifying that run_context fields are interpolated in prompt templates.
 - **Run inspection UI for context diffs and write-log**: Not yet implemented — frontend run detail view needs to surface run_context state diff per-node and display write-log.
 - **Parallel context-setter conflict warning**: PRD specifies a pipeline validation warning when parallel context-setters write the same key (v1). Not yet implemented.
-- **Complexity-reviewer end-to-end test**: No integration test verifying the canonical library primitive writes correct fields and downstream agents can consume them. 
+- **Complexity-reviewer end-to-end test**: No integration test verifying the canonical library primitive writes correct fields and downstream agents can consume them.
