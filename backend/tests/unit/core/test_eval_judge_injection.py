@@ -68,7 +68,7 @@ class TestContentWrapping:
         _, safe_eval_def = captured[0]
         assert safe_eval_def.config["_judge_guard_instruction"] == _GUARD_INSTRUCTION
 
-    def test_safe_content_key_added_to_output(self) -> None:
+    def test_output_field_replaced_with_wrapped_content(self) -> None:
         captured: list = []
         engine = EvalEngine()
         eval_def = _make_eval_def({"field": "output"})
@@ -76,8 +76,8 @@ class TestContentWrapping:
         engine.evaluate({"output": "test"}, eval_def, llm_judge_callable=_capturing_callable(captured))
 
         safe_output, _ = captured[0]
-        assert "_judge_safe_content" in safe_output
-        assert safe_output["_judge_safe_content"] == safe_output["output"]
+        assert _CONTENT_BEGIN in safe_output["output"]
+        assert "test" in safe_output["output"]
 
 
 class TestDelimiterStripping:
@@ -242,4 +242,3 @@ class TestBuildSafeJudgeInput:
 
         assert "output" in original
         assert original["output"] == "original"
-        assert "_judge_safe_content" not in original
