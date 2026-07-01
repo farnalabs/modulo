@@ -22,18 +22,18 @@ Feature: Pipeline Scheduling
     When I create a cron trigger for pipeline "nightly-report" with expression "not-a-cron"
     Then the response status is 422
 
-  @awaiting-implementation
   Scenario: Toggle trigger active state
-    Given an active cron trigger exists for pipeline "nightly-report"
+    Given org "acme" has pipeline "nightly-report"
+    And an active cron trigger exists for pipeline "nightly-report" with expression "0 6 * * *"
     And I am authenticated in org "acme"
     When I toggle the trigger active state
     Then the response status is 200
     And the trigger is no longer active
 
-  @awaiting-implementation
   Scenario: Preview next cron fire times
-    Given a cron trigger with expression "0 6 * * *" exists
+    Given org "acme" has pipeline "nightly-report"
+    And an active cron trigger exists for pipeline "nightly-report" with expression "0 6 * * *"
     And I am authenticated in org "acme"
-    When I GET the cron schedule preview with count 3
+    When I fetch the cron schedule preview with count 3
     Then the response status is 200
     And the response lists 3 future fire times

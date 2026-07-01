@@ -5,12 +5,21 @@ import logging
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
-from celery import Celery, Task  # type: ignore[import-untyped]
 from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from modulo.db.models.trigger_event import TriggerEvent
 from modulo.settings import get_settings
+
+try:
+    from celery import Celery, Task  # type: ignore[import-untyped]
+except ImportError:
+    import typing
+
+    if typing.TYPE_CHECKING:
+        from celery import Celery, Task  # type: ignore[import-untyped]
+    Celery = None  # type: ignore[misc]
+    Task = object  # type: ignore[misc]
 
 _log = logging.getLogger(__name__)
 
@@ -51,15 +60,15 @@ async def cleanup_old_webhook_events(db_session: AsyncSession) -> int:
 # Celery task — wraps cleanup_old_webhook_events for Celery beat
 # ---------------------------------------------------------------------------
 
-CELERY_APP_GLOBAL: Celery | None = None
+CELERY_APP_GLOBAL: Any = None
 
 
-def get_celery_app() -> Celery:
+def get_celery_app() -> Any:
     global CELERY_APP_GLOBAL
     if CELERY_APP_GLOBAL is None:
-        from modulo.celery_app import celery_app as _app
+        from modulo.celery_app import get_celery_app as _get_celery_app
 
-        CELERY_APP_GLOBAL = _app
+        CELERY_APP_GLOBAL = _get_celery_app()
     return CELERY_APP_GLOBAL
 
 
