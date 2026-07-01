@@ -15,6 +15,7 @@ from typing import Any, Literal
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, Field, model_validator
 from sqlalchemy import select
+from sqlalchemy.exc import ProgrammingError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.api.dependencies import get_db_session
@@ -1121,57 +1122,76 @@ async def revert_node_to_manual_endpoint(
     session: AsyncSession = Depends(get_db_session),
     principal: AuthenticatedPrincipal = Depends(get_current_user),
 ) -> PipelineGraphResponse:
-    async with session.begin():
-        await set_rls_org(session, principal.organisation_id)
-        await set_rls_user_context(session, principal.account_id, principal.org_role)
+    try:
+        async with session.begin():
+            await set_rls_org(session, principal.organisation_id)
+            await set_rls_user_context(session, principal.account_id, principal.org_role)
 
-        graph = await get_pipeline_graph(session, pipeline_id)
-        if graph is None:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Pipeline not found")
-        nodes, edges = graph
+            graph = await get_pipeline_graph(session, pipeline_id)
+            if graph is None:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Pipeline not found")
+            nodes, edges = graph
 
-        target = _find_node_in_list(nodes, node_id)
-        if target is None:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Node not found")
-        if target.get("node_type") != "agent":
-            raise HTTPException(
-                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-                detail="Only agent nodes can be reverted to manual",
+            target = _find_node_in_list(nodes, node_id)
+            if target is None:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Node not found")
+            if target.get("node_type") != "agent":
+                raise HTTPException(
+                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                    detail="Only agent nodes can be reverted to manual",
+                )
+
+            snapshot = await get_snapshot_detail(session, snapshot_id)
+            if snapshot is None:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Snapshot not found")
+
+            snapshot_nodes = snapshot.graph_json.get("nodes", [])
+            snapshot_node = _find_node_in_list(snapshot_nodes, node_id)
+            if snapshot_node is None:
+                raise HTTPException(
+                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                    detail="Snapshot does not contain this node",
+                )
+            if snapshot_node.get("node_type") != "manual":
+                raise HTTPException(
+                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                    detail="Snapshot node was not a manual node",
+                )
+
+            output_schema_id = snapshot_node.get("output_schema_id")
+            if output_schema_id is None:
+                raise HTTPException(
+                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                    detail="Snapshot node has no output schema",
+                )
+
+            target["node_type"] = "manual"
+            sid = str(output_schema_id) if not isinstance(output_schema_id, str) else output_schema_id
+            target["output_schema_id"] = sid
+            target.pop("agent_id", None)
+            target.pop("connector_binding", None)
+            if not target.get("label"):
+                target["label"] = snapshot_node.get("label") or f"Manual {node_id}"
+
+            await append_audit_event(
+                session,
+                organisation_id=principal.organisation_id,
+                principal_id=principal.account_id,
+                event_type="pipeline.node.revert_to_manual",
+                resource_type="pipeline",
+                resource_id=str(pipeline_id),
+                metadata={
+                    "node_id": str(node_id),
+                    "snapshot_id": str(snapshot_id),
+                },
             )
 
-        snapshot = await get_snapshot_detail(session, snapshot_id)
-        if snapshot is None:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Snapshot not found")
-
-        snapshot_nodes = snapshot.graph_json.get("nodes", [])
-        snapshot_node = _find_node_in_list(snapshot_nodes, node_id)
-        if snapshot_node is None:
-            raise HTTPException(
-                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-                detail="Snapshot does not contain this node",
-            )
-        if snapshot_node.get("node_type") != "manual":
-            raise HTTPException(
-                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-                detail="Snapshot node was not a manual node",
-            )
-
-        output_schema_id = snapshot_node.get("output_schema_id")
-        if output_schema_id is None:
-            raise HTTPException(
-                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-                detail="Snapshot node has no output schema",
-            )
-
-        target["node_type"] = "manual"
-        sid = str(output_schema_id) if not isinstance(output_schema_id, str) else output_schema_id
-        target["output_schema_id"] = sid
-        target.pop("agent_id", None)
-        target.pop("connector_binding", None)
-        if not target.get("label"):
-            target["label"] = snapshot_node.get("label") or f"Manual {node_id}"
-
-        saved = await _save_graph(session, pipeline_id, principal.organisation_id, nodes, edges)
+            saved = await _save_graph(session, pipeline_id, principal.organisation_id, nodes, edges)
+    except ProgrammingError:
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="Feature is not available. Run database migrations to enable it.",
+        )
 
     if saved is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Pipeline not found")
