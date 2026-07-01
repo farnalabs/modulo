@@ -1817,7 +1817,11 @@ async def admin_update_publisher(
 
         if "name" in updates:
             name_val = updates["name"]
-            assert isinstance(name_val, str)
+            if not isinstance(name_val, str):
+                raise HTTPException(
+                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                    detail="publisher_name_invalid: Name must be a string",
+                )
             existing = await get_publisher_by_name(session, current_user.organisation_id, name_val)
             if existing is not None and existing.id != publisher_id:
                 raise HTTPException(
@@ -1827,7 +1831,11 @@ async def admin_update_publisher(
 
         if "public_key_hex" in updates:
             key_val = updates["public_key_hex"]
-            assert isinstance(key_val, str)
+            if not isinstance(key_val, str):
+                raise HTTPException(
+                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                    detail="publisher_key_invalid: Public key must be a string",
+                )
             existing_key = await get_publisher_by_key(session, current_user.organisation_id, key_val)
             if existing_key is not None and existing_key.id != publisher_id:
                 raise HTTPException(

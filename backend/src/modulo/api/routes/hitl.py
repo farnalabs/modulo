@@ -132,8 +132,11 @@ async def claim_gate(
         # Update run status to "claimed".
         await update_run_status(session, run_id, "claimed")
 
-    assert gate.claim_token is not None
-    assert gate.expires_at is not None
+    if gate.claim_token is None or gate.expires_at is None:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="gate_missing_claim_data: Gate claim token or expiry missing after successful claim",
+        )
     return ClaimResponse(
         run_id=gate.run_id,
         gate_id=gate.gate_id,
