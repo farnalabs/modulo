@@ -326,40 +326,47 @@ const spendSparklineData = computed(() => {
   return summary.value.trend.map(d => d.token_spend_usd)
 })
 
+const trendDuration = ref(7)
 const trendDurations = [
   { label: '7d', value: 7 },
   { label: '30d', value: 30 },
   { label: '90d', value: 90 },
 ]
-const trendDuration = ref(7)
 
-function switchTrendDuration(days: number) {
-  trendDuration.value = days
-}
+const trendsRaw = computed(() => dashboardStore.trends)
 
 const trendData = computed(() => {
-  if (!summary.value?.trend) return []
-  const dur = trendDuration.value
-  if (dur === 7) return summary.value.trend
-  if (summary.value.trend.length === 0) return []
-  const last = summary.value.trend[summary.value.trend.length - 1]
+  const tr = trendsRaw.value
+  if (!tr) {
+    // Fall back to summary trend when /trends hasn't been fetched yet
+    if (!summary.value?.trend) return []
+    return summary.value.trend.map(d => ({
+      date: d.date,
+      run_count: d.run_count,
+      eval_pass_rate: d.eval_pass_rate,
+      token_spend_usd: d.token_spend_usd,
+    }))
+  }
   const items: Array<{ date: string; run_count: number; eval_pass_rate: number | null; token_spend_usd: number }> = []
-  const sourceLen = summary.value.trend.length
-  for (let i = 0; i < dur; i++) {
-    const srcIdx = i % sourceLen
-    const src = summary.value.trend[srcIdx]
-    const dayOffset = dur - i
-    const d = new Date(last.date)
-    d.setDate(d.getDate() - dayOffset + 1)
+  const countMap = new Map(tr.run_counts.map(r => [r.date, r.run_count]))
+  const evalMap = new Map(tr.eval_pass_rates.map(r => [r.date, r.pass_rate]))
+  const spendMap = new Map(tr.token_spend.map(r => [r.date, r.total_spend_usd]))
+  // Build a combined series covering all dates
+  for (const entry of tr.run_counts) {
     items.push({
-      date: d.toISOString().slice(0, 10),
-      run_count: src.run_count,
-      eval_pass_rate: src.eval_pass_rate,
-      token_spend_usd: src.token_spend_usd,
+      date: entry.date,
+      run_count: entry.run_count,
+      eval_pass_rate: evalMap.get(entry.date) ?? null,
+      token_spend_usd: spendMap.get(entry.date) ?? 0,
     })
   }
   return items
 })
+
+function switchTrendDuration(days: number) {
+  trendDuration.value = days
+  dashboardStore.fetchTrends(days)
+}
 
 const trendRunCounts = computed(() => trendData.value.map(d => d.run_count))
 const trendEvalRates = computed(() => trendData.value.map(d => d.eval_pass_rate ?? 0))
@@ -395,7 +402,8 @@ function fetchData() {
 
 onMounted(async () => {
   if (!planStore.currentTier || planStore.currentTier === 'community') {
-    await planStore.fetchPlan()
+    // Don't await — let plan fetch and dashboard fetch run in parallel
+    planStore.fetchPlan()
   }
   await fetchData()
 })
