@@ -9,6 +9,8 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+from collections.abc import AsyncGenerator
+from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import StreamingResponse
@@ -26,12 +28,12 @@ _ZOMBIE_TIMEOUT = 2.0
 _MAX_CONNECTIONS_PER_ORG = 100
 _MAX_CONNECTIONS_PER_USER = 10
 
-_active_connections: dict[str, set[asyncio.Queue]] = {}
+_active_connections: dict[str, set[asyncio.Queue[dict[str, Any]]]] = {}
 _queue_users: dict[int, str] = {}  # id(q) -> user_id
 _active_connections_lock: asyncio.Lock = asyncio.Lock()
 
 
-async def _track_connection(org_id: str, user_id: str, queue: asyncio.Queue) -> None:
+async def _track_connection(org_id: str, user_id: str, queue: asyncio.Queue[dict[str, Any]]) -> None:
     """Register a connection, raising 429 if the per-org or per-user limit is exceeded."""
     async with _active_connections_lock:
         active = _active_connections.setdefault(org_id, set())
@@ -54,7 +56,7 @@ async def _track_connection(org_id: str, user_id: str, queue: asyncio.Queue) -> 
         active.add(queue)
 
 
-async def _untrack_connection(org_id: str, queue: asyncio.Queue) -> None:
+async def _untrack_connection(org_id: str, queue: asyncio.Queue[dict[str, Any]]) -> None:
     """Remove a connection from the active set."""
     async with _active_connections_lock:
         _queue_users.pop(id(queue), None)
@@ -96,7 +98,7 @@ async def sse_event_stream(
         "X-Accel-Buffering": "no",
     }
 
-    async def _pump():
+    async def _pump() -> AsyncGenerator[str, None]:
         """Pull events from the queue and write them to the stream.
 
         Two cleanup paths:
