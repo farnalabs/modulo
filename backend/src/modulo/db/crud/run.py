@@ -64,7 +64,8 @@ async def update_run_outputs(
     outputs: dict[str, Any],
 ) -> Run | None:
     """Store per-node outputs for a completed run."""
-    run = await get_run(session, run_id)
+    result = await session.execute(select(Run).where(Run.id == run_id).with_for_update())
+    run = result.scalar_one_or_none()
     if run is None:
         return None
     run.outputs_json = outputs
@@ -147,7 +148,8 @@ async def update_run_status(
     total_cost_usd: Decimal | None = None,
     node_token_usage: dict[str, Any] | None = None,
 ) -> Run | None:
-    run = await get_run(session, run_id)
+    result = await session.execute(select(Run).where(Run.id == run_id).with_for_update())
+    run = result.scalar_one_or_none()
     if run is None:
         return None
     run.status = status
@@ -170,7 +172,8 @@ async def update_run_status(
 
 
 async def request_cancellation(session: AsyncSession, run_id: uuid.UUID) -> Run | None:
-    run = await get_run(session, run_id)
+    result = await session.execute(select(Run).where(Run.id == run_id).with_for_update())
+    run = result.scalar_one_or_none()
     if run is None:
         return None
     run.cancellation_requested = True
@@ -354,7 +357,10 @@ async def purge_runs(
     Requires RLS org context to be set by the caller.
     Returns dict with ``deleted_run_count``.
     """
-    cutoff = datetime.strptime(older_than, "%Y-%m-%d").replace(tzinfo=UTC)
+    try:
+        cutoff = datetime.strptime(older_than, "%Y-%m-%d").replace(tzinfo=UTC)
+    except ValueError as exc:
+        raise ValueError(f"Invalid date format: '{older_than}'. Expected YYYY-MM-DD.") from exc
     deleted_total = 0
     while True:
         ids = list(
