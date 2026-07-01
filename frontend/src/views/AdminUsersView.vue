@@ -82,22 +82,31 @@
               {{ u.created_at ? new Date(u.created_at).toLocaleDateString() : '—' }}
             </td>
             <td class="px-4 py-3 text-right">
-              <button
-                v-if="u.is_active"
-                :data-testid="`admin-users-deactivate-${u.id}`"
-                @click="deactivate(u)"
-                class="text-xs text-destructive hover:underline"
-              >
-                Deactivate
-              </button>
-              <button
-                v-else
-                :data-testid="`admin-users-reactivate-${u.id}`"
-                @click="reactivate(u)"
-                class="text-xs text-success hover:underline"
-              >
-                Reactivate
-              </button>
+              <div class="flex items-center justify-end gap-2">
+                <button
+                  :data-testid="`admin-users-reset-password-${u.id}`"
+                  @click="resetPassword(u)"
+                  class="text-xs text-muted-foreground hover:text-foreground hover:underline"
+                >
+                  Reset Password
+                </button>
+                <button
+                  v-if="u.is_active"
+                  :data-testid="`admin-users-deactivate-${u.id}`"
+                  @click="deactivate(u)"
+                  class="text-xs text-destructive hover:underline"
+                >
+                  Deactivate
+                </button>
+                <button
+                  v-else
+                  :data-testid="`admin-users-reactivate-${u.id}`"
+                  @click="reactivate(u)"
+                  class="text-xs text-success hover:underline"
+                >
+                  Reactivate
+                </button>
+              </div>
             </td>
           </tr>
         </tbody>
@@ -159,6 +168,35 @@
         </form>
       </div>
     </div>
+
+    <div v-if="showResetDialog" class="fixed inset-0 z-50 flex items-center justify-center bg-black/50" @click.self="showResetDialog = false">
+      <div class="bg-background rounded-xl border shadow-lg p-6 w-full max-w-md mx-4 space-y-4">
+        <h2 class="text-lg font-semibold">Password Reset</h2>
+        <p class="text-sm text-muted-foreground">
+          A temporary password has been generated for <strong>{{ resetUserEmail }}</strong>.
+          Share this password with the user — they will be prompted to change it on next login.
+        </p>
+        <div class="flex items-center gap-2 bg-muted rounded-lg px-4 py-3">
+          <code class="flex-1 text-sm font-mono break-all">{{ tempPassword }}</code>
+          <button
+            @click="copyPassword"
+            data-testid="admin-users-copy-password"
+            class="shrink-0 px-3 py-1.5 text-xs bg-primary text-primary-foreground font-medium rounded-md hover:brightness-110 transition-all"
+          >
+            {{ copied ? 'Copied!' : 'Copy' }}
+          </button>
+        </div>
+        <div class="flex justify-end pt-2">
+          <button
+            @click="showResetDialog = false"
+            data-testid="admin-users-reset-done"
+            class="px-4 py-2 bg-primary text-primary-foreground text-sm font-medium rounded-lg"
+          >
+            Done
+          </button>
+        </div>
+      </div>
+    </div>
   </div>
 </template>
 
@@ -196,6 +234,11 @@ const total = ref(0)
 const showCreate = ref(false)
 const createError = ref('')
 const newUser = ref({ email: '', display_name: '', password: '', org_role: 'runner' })
+const showResetDialog = ref(false)
+const tempPassword = ref('')
+const resetUserEmail = ref('')
+const copied = ref(false)
+let copyTimeout: ReturnType<typeof setTimeout> | null = null
 
 function initialOf(name: string): string {
   return name ? name.charAt(0).toUpperCase() : '?'
@@ -244,6 +287,25 @@ async function reactivate(u: UserItem) {
   } catch {
     loadUsers()
   }
+}
+
+async function resetPassword(u: UserItem) {
+  try {
+    const data = await post<{ temporary_password: string }>(`/api/v1/admin/users/${u.id}/reset-password`)
+    tempPassword.value = data.temporary_password
+    resetUserEmail.value = u.email
+    copied.value = false
+    showResetDialog.value = true
+  } catch {
+    loadUsers()
+  }
+}
+
+function copyPassword() {
+  navigator.clipboard.writeText(tempPassword.value)
+  copied.value = true
+  if (copyTimeout) clearTimeout(copyTimeout)
+  copyTimeout = setTimeout(() => { copied.value = false }, 2000)
 }
 
 async function createUser() {
