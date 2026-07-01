@@ -1,7 +1,7 @@
 from modulo.model_backends.ai21 import Ai21Backend
 from modulo.model_backends.anthropic import AnthropicBackend
 from modulo.model_backends.azure_openai import AzureOpenAIBackend
-from modulo.model_backends.base import ModelBackendBase
+from modulo.model_backends.base import HealthResult, ModelBackendBase
 from modulo.model_backends.deepseek import DeepSeekBackend
 from modulo.model_backends.fireworks import FireworksBackend
 from modulo.model_backends.grok import GrokBackend
@@ -22,6 +22,7 @@ from modulo.model_backends.vllm import VllmBackend
 from modulo.model_backends.watsonx import WatsonXBackend
 
 __all__ = [
+    "HealthResult",
     "Ai21Backend",
     "AnthropicBackend",
     "AzureOpenAIBackend",
