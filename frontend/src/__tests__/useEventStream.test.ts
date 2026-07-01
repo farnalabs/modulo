@@ -3,10 +3,9 @@ import type { EventBusEvent } from '../types/events'
 
 const mockInstances: any[] = []
 
-beforeEach(() => {
-  mockInstances.splice(0)
-  vi.resetModules()
-  localStorage.setItem('modulo_access_token', 'test-token')
+  beforeEach(() => {
+    mockInstances.splice(0)
+    vi.resetModules()
   ;(globalThis as any).EventSource = vi.fn().mockImplementation((url: string) => {
     const instance = {
       url,
@@ -33,8 +32,7 @@ describe('eventBus', () => {
     const handler = vi.fn()
     const unsub = eventBus.subscribe('run', handler)
     expect(mockInstances.length).toBe(1)
-    expect(mockInstances[0].url).toContain('/api/v1/events')
-    expect(mockInstances[0].url).toContain('token=test-token')
+    expect(mockInstances[0].url).toBe('/api/v1/events')
     unsub()
   })
 
@@ -121,7 +119,7 @@ describe('createSyncAdapter', () => {
     const fetch = vi.fn()
     const remove = vi.fn()
     const dirtyIds = new Set<string>(['dirty-1'])
-    const handleSyncEvent = createSyncAdapter('run', { dirtyIds, fetch, remove })
+    const handleSyncEvent = createSyncAdapter({ dirtyIds, fetch, remove })
 
     const event: EventBusEvent = { type: 'run', id: 'dirty-1', action: 'updated', version: 1, org_id: 'org-1' }
     handleSyncEvent(event)
@@ -134,7 +132,7 @@ describe('createSyncAdapter', () => {
     const fetch = vi.fn().mockResolvedValue(undefined)
     const remove = vi.fn()
     const dirtyIds = new Set<string>([])
-    const handleSyncEvent = createSyncAdapter('run', { dirtyIds, fetch, remove })
+    const handleSyncEvent = createSyncAdapter({ dirtyIds, fetch, remove })
 
     const event: EventBusEvent = { type: 'run', id: 'clean-1', action: 'updated', version: 1, org_id: 'org-1' }
     handleSyncEvent(event)
@@ -146,7 +144,7 @@ describe('createSyncAdapter', () => {
     const fetch = vi.fn().mockResolvedValue(undefined)
     const remove = vi.fn()
     const dirtyIds = new Set<string>([])
-    const handleSyncEvent = createSyncAdapter('run', { dirtyIds, fetch, remove })
+    const handleSyncEvent = createSyncAdapter({ dirtyIds, fetch, remove })
 
     const event: EventBusEvent = { type: 'run', id: 'del-1', action: 'deleted', version: 1, org_id: 'org-1' }
     handleSyncEvent(event)
