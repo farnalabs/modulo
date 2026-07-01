@@ -52,6 +52,12 @@ class TestBuildInferPrompt:
         assert len(messages) == 2
         assert "0 records" in messages[1].content
 
+    def test_respects_custom_max_records(self) -> None:
+        samples = [{"i": i} for i in range(100)]
+        messages = _build_infer_prompt(samples, max_records=5)
+        assert "5 records" in messages[1].content
+        assert "100 records" not in messages[1].content
+
 
 class TestParseSchemaFromResponse:
     def test_parses_plain_json(self) -> None:
@@ -124,6 +130,31 @@ class TestSchemaInferenceService:
         service = SchemaInferenceService(backend)
         with pytest.raises(SchemaInferenceError, match="Failed to parse"):
             await service.infer([{"a": 1}])
+
+    async def test_infer_respects_max_sample_records(self) -> None:
+        class _CapturingBackend:
+            def __init__(self):
+                self.captured_messages = None
+
+            @property
+            def backend_id(self) -> str:
+                return "test/capture"
+
+            async def invoke(self, messages, **kwargs):
+                self.captured_messages = messages
+                from langchain_core.messages import AIMessage
+                return AIMessage(content='{"type": "object", "properties": {}}')
+
+            def stream(self, messages, **kwargs):
+                raise NotImplementedError
+
+        samples = [{"i": i} for i in range(10)]
+        backend = _CapturingBackend()
+        service = SchemaInferenceService(backend, max_sample_records=3)
+        result = await service.infer(samples)
+        assert result == {"type": "object", "properties": {}}
+        assert "3 records" in backend.captured_messages[1].content
+        assert "10 records" not in backend.captured_messages[1].content
 
     async def test_infer_handles_empty_samples(self) -> None:
         backend = _FakeBackend(response='{"type": "object", "properties": {}}')

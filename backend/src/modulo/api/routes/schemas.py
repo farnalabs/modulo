@@ -341,22 +341,29 @@ async def infer_schema_endpoint(
     The returned *definition_json* is a draft for the user to review and
     save via the standard POST /api/v1/schemas endpoint.
     """
-    async with session.begin():
-        await set_rls_org(session, principal.organisation_id)
+    try:
+        async with session.begin():
+            await set_rls_org(session, principal.organisation_id)
 
-        ci = await get_connector_instance(session, body.connector_instance_id)
-        if ci is None:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail="Connector instance not found",
-            )
+            ci = await get_connector_instance(session, body.connector_instance_id)
+            if ci is None:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail="Connector instance not found",
+                )
 
-        mbs = await list_model_backends(session, page_size=1)
-        if not mbs.items:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="No model backends configured; cannot perform inference",
-            )
+            mbs = await list_model_backends(session, page_size=1)
+            if not mbs.items:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="No model backends configured; cannot perform inference",
+                )
+    except ProgrammingError:
+        logger.exception("schemas.infer.table_missing")
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="Schema inference is not available. Run database migrations to enable it.",
+        )
 
     secrets_backend = create_secrets_backend(fernet_key=settings.fernet_key)
 

@@ -11,6 +11,11 @@ try:
 except (FileNotFoundError, OSError):
     pass
 
+try:
+    scenarios("../features/connectors/schema_inference.feature")
+except (FileNotFoundError, OSError):
+    pass
+
 _ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
 _CONNECTOR_INSTANCES: dict[str, dict] = {}
 _MOCK_SCHEMAS: dict[str, MagicMock] = {}
@@ -373,6 +378,102 @@ def step_suggestion_name_mentions(text: str, request):
 def step_schema_version_published(request):
     data = request.node._resp.json()
     assert data.get("published") is True, f"Schema version not published: {data}"
+
+
+# ---------------------------------------------------------------------------
+# Step definitions for features/connectors/schema_inference.feature
+# ---------------------------------------------------------------------------
+
+
+@given("a connector instance with sample data")
+def step_connector_with_samples_unnamed(request):
+    step_connector_with_samples("default-connector", request)
+
+
+@given("a non-existent connector instance")
+def step_non_existent_connector(request):
+    request.node._mock_ci = None
+    request.node._connector_name = None
+
+
+@given("no model backends are configured")
+def step_no_model_backends(request):
+    request.node._model_backend = None
+
+
+@given("a generated schema definition")
+def step_generated_schema_definition(request):
+    request.node._schema_definition = {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+            "title": {"type": "string"},
+            "completed": {"type": "boolean"},
+        },
+        "required": ["title"],
+    }
+
+
+@given("a source schema and a target schema")
+def step_source_and_target_schemas(request):
+    request.node._source_def = {
+        "type": "object",
+        "properties": {"name": {"type": "string"}},
+    }
+    request.node._target_def = {
+        "type": "object",
+        "properties": {
+            "name": {"type": "string"},
+            "email": {"type": "string"},
+        },
+    }
+
+
+@when("I validate the schema")
+def step_validate_schema(request, client):
+    definition = getattr(request.node, "_schema_definition", {})
+    resp = client.post("/api/v1/schemas/validate", json={"definition": definition})
+    request.node._resp = resp
+
+
+@when(parsers.parse("I POST /api/v1/schemas/migrate/plan with both definitions"))
+def step_migrate_plan_from_feature(request, client):
+    source_def = getattr(request.node, "_source_def", {})
+    target_def = getattr(request.node, "_target_def", {})
+    resp = client.post(
+        "/api/v1/schemas/migrate/plan",
+        json={"from_definition": source_def, "to_definition": target_def},
+    )
+    request.node._resp = resp
+
+
+@then("the response contains a definition_json")
+def step_response_contains_definition_json(request):
+    data = request.node._resp.json()
+    assert "definition_json" in data
+
+
+@then("the response has a suggestion_name")
+def step_response_has_suggestion_name(request):
+    data = request.node._resp.json()
+    assert "suggestion_name" in data
+
+
+@then("the schema is structurally valid")
+def step_schema_is_structurally_valid(request):
+    from jsonschema import Draft202012Validator, ValidationError
+    definition = getattr(request.node, "_schema_definition", {})
+    try:
+        Draft202012Validator.check_schema(definition)
+    except ValidationError as exc:
+        pytest.fail(f"Schema is not valid: {exc}")
+
+
+@then("the response contains field_additions and field_removals")
+def step_response_has_field_additions_removals(request):
+    data = request.node._resp.json()
+    assert "field_additions" in data, f"Response missing field_additions: {data}"
+    assert "field_removals" in data, f"Response missing field_removals: {data}"
 
 
 def contextlib_patch_multi(patches):
