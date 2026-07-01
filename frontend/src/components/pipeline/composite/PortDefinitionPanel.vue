@@ -24,6 +24,7 @@ const formDefaults = {
   type: 'string' as ParameterPortType,
   required: false,
   default: '',
+  multiline: false,
 }
 
 const form = ref({ ...formDefaults })
@@ -50,6 +51,7 @@ function openEditForm(index: number) {
     type: p.type,
     required: p.required,
     default: p.default !== undefined && p.default !== null ? String(p.default) : '',
+    multiline: p.multiline || false,
   }
   showAddForm.value = true
   formError.value = null
@@ -75,6 +77,7 @@ function savePort() {
     type: form.value.type,
     required: form.value.required,
     default: form.value.type === 'number' ? Number(form.value.default) : form.value.default || undefined,
+    multiline: form.value.multiline,
   }
 
   const updated = [...props.ports]
@@ -109,7 +112,7 @@ function moveDown(index: number) {
 
 async function detectPlaceholders() {
   try {
-    const result = await post<{ ports: ParameterPort[] }>('/api/v1/composites/detect-params', { node_ids: props.nodeIds })
+    const result = await post<{ ports: ParameterPort[] }>('/api/v1/composite-templates/detect-params', { node_ids: props.nodeIds })
     if (result.ports && result.ports.length > 0) {
       const existing = new Set(props.ports.map(p => p.name))
       const newPorts = result.ports.filter(p => !existing.has(p.name))
@@ -155,7 +158,7 @@ async function detectPlaceholders() {
             <span class="rounded bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground">{{ port.type }}</span>
           </div>
           <p v-if="port.description" class="mt-0.5 text-xs text-muted-foreground">{{ port.description }}</p>
-          <code class="mt-1 block text-[10px] text-indigo-400">\#{'{{'}parameter.{{ port.name }}\{'}}'}</code>
+          <code class="mt-1 block text-[10px] text-indigo-400">{'{{'}}parameter.{{ port.name }}{{'}}'}</code>
         </div>
         <div class="ml-2 flex flex-col gap-1">
           <button
@@ -240,6 +243,14 @@ async function detectPlaceholders() {
             class="h-4 w-4 rounded border-gray-300 text-indigo-500 focus:ring-indigo-500"
           />
           <label class="text-xs text-muted-foreground">Required</label>
+        </div>
+        <div v-if="form.type === 'string'" class="flex items-center gap-2">
+          <input
+            v-model="form.multiline"
+            type="checkbox"
+            class="h-4 w-4 rounded border-gray-300 text-indigo-500 focus:ring-indigo-500"
+          />
+          <label class="text-xs text-muted-foreground">Multiline</label>
         </div>
         <div v-if="form.type !== 'boolean'">
           <label class="mb-1 block text-xs font-medium text-muted-foreground">Default Value</label>
