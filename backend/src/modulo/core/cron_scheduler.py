@@ -23,8 +23,17 @@ import logging
 import uuid
 from typing import Any
 
-from celery import Celery, Task
-from celery.beat import ScheduleEntry, Scheduler
+try:
+    from celery import Celery, Task
+    from celery.beat import ScheduleEntry, Scheduler
+except ImportError:
+    import typing
+
+    if typing.TYPE_CHECKING:
+        from celery import Celery, Task
+        from celery.beat import ScheduleEntry, Scheduler
+    Celery = Task = ScheduleEntry = Scheduler = object  # type: ignore[misc]
+
 from croniter import croniter
 from sqlalchemy import func, select, text, update
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker, create_async_engine
@@ -91,16 +100,16 @@ def compute_next_fire(cron_expression: str, after: datetime.datetime | None = No
 # Celery task — fire one cron trigger
 # ---------------------------------------------------------------------------
 
-celery_app_global: Celery | None = None
+_celery_app_global = None
 
 
-def get_celery_app() -> Celery:
-    global celery_app_global
-    if celery_app_global is None:
-        from modulo.celery_app import celery_app as _app
+def get_celery_app():
+    global _celery_app_global
+    if _celery_app_global is None:
+        from modulo.celery_app import get_celery_app as _get_celery_app
 
-        celery_app_global = _app
-    return celery_app_global
+        _celery_app_global = _get_celery_app()
+    return _celery_app_global
 
 
 class CronFireTask(Task):  # type: ignore[misc]

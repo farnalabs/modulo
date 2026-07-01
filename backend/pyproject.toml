@@ -76,9 +76,6 @@ dependencies = [
     "opentelemetry-exporter-otlp>=1.24.0",
     # Structured logging
     "python-json-logger>=2.0.0",
-    # Task queue (optional alpha)
-    "celery[redis]>=5.4.0",
-    "redis>=5.0.0",
     "croniter>=6.2.2",
     "jmespath>=1.0.1",
     "mcp>=1.28.1",
@@ -129,6 +126,10 @@ dev = [
 
 ]
 docker = ["aiodocker>=0.21.0"]
+redis = [
+    "celery[redis]>=5.4.0",
+    "redis>=5.0.0",
+]
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/modulo"]

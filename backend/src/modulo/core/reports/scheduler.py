@@ -26,14 +26,26 @@ from collections.abc import Awaitable, Callable
 from typing import Any
 
 import httpx
-from celery import Celery, Task  # type: ignore[import-untyped]
-from celery.beat import ScheduleEntry, Scheduler  # type: ignore[import-untyped]
 from croniter import croniter  # type: ignore[import-untyped]
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker, create_async_engine
 
 from modulo.db.models.scheduled_report import ScheduledReport
 from modulo.settings import get_settings
+
+try:
+    from celery import Celery, Task  # type: ignore[import-untyped]
+    from celery.beat import ScheduleEntry, Scheduler  # type: ignore[import-untyped]
+except ImportError:
+    import typing
+
+    if typing.TYPE_CHECKING:
+        from celery import Celery, Task  # type: ignore[import-untyped]
+        from celery.beat import ScheduleEntry, Scheduler  # type: ignore[import-untyped]
+    Celery = None  # type: ignore[misc]
+    Task = object  # type: ignore[misc]
+    ScheduleEntry = object  # type: ignore[misc]
+    Scheduler = object  # type: ignore[misc]
 
 _log = logging.getLogger(__name__)
 
@@ -134,15 +146,15 @@ async def _set_rls_org(session: AsyncSession, org_id: uuid.UUID) -> None:
 # Celery task — fire one scheduled report
 # ---------------------------------------------------------------------------
 
-celery_app_global: Celery | None = None
+celery_app_global: Any = None
 
 
-def get_celery_app() -> Celery:
+def get_celery_app() -> Any:
     global celery_app_global
     if celery_app_global is None:
-        from modulo.celery_app import celery_app as _app
+        from modulo.celery_app import get_celery_app as _get_celery_app
 
-        celery_app_global = _app
+        celery_app_global = _get_celery_app()
     return celery_app_global
 
 

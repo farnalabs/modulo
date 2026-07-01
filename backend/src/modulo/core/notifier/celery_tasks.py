@@ -19,11 +19,20 @@ import logging
 import uuid
 from typing import Any
 
-from celery import Celery, Task  # type: ignore[import-untyped]
 from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
 
 from modulo.core.notifier import MAX_RETRIES, Notifier
 from modulo.settings import get_settings
+
+try:
+    from celery import Celery, Task  # type: ignore[import-untyped]
+except ImportError:
+    import typing
+
+    if typing.TYPE_CHECKING:
+        from celery import Celery, Task  # type: ignore[import-untyped]
+    Celery = None  # type: ignore[misc]
+    Task = object  # type: ignore[misc]
 
 __all__ = [
     "DispatchNotificationTask",
@@ -47,15 +56,15 @@ def _get_engine() -> AsyncEngine:
 # Lazy Celery app reference (same pattern as cron_scheduler / polling)
 # ---------------------------------------------------------------------------
 
-_APP: Celery | None = None
+_APP: Any = None
 
 
-def get_celery_app() -> Celery:
+def get_celery_app() -> Celery | None:
     global _APP
     if _APP is None:
-        from modulo.celery_app import celery_app as app
+        from modulo.celery_app import get_celery_app as _get_celery_app
 
-        _APP = app
+        _APP = _get_celery_app()
     return _APP
 
 

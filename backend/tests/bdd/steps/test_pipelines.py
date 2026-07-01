@@ -1325,6 +1325,18 @@ def active_cron_trigger_exists(pipeline_name: str, request: pytest.FixtureReques
     request.node._cron_expression = "0 6 * * *"
 
 
+@given(
+    parsers.parse(
+        'an active cron trigger exists for pipeline "{pipeline_name}" with expression "{expression}"'
+    )
+)
+def active_cron_trigger_with_expression(pipeline_name: str, expression: str, request: pytest.FixtureRequest) -> None:
+    request.node._trigger_id = uuid.uuid5(uuid.NAMESPACE_DNS, f"cron-{pipeline_name}-{expression}")
+    request.node._trigger_type = "cron"
+    request.node._trigger_active = True
+    request.node._cron_expression = expression
+
+
 @given(parsers.parse('a cron trigger with expression "{expression}" exists'))
 def cron_trigger_with_expression(expression: str, request: pytest.FixtureRequest) -> None:
     request.node._trigger_id = uuid.uuid5(uuid.NAMESPACE_DNS, expression)
@@ -1370,13 +1382,17 @@ def cron_trigger_fires(request: pytest.FixtureRequest) -> None:
 
 
 @when("I toggle the trigger active state")
-def toggle_trigger(client, request: pytest.FixtureRequest, patches: list[Any]) -> None:
+def toggle_trigger(client, request: pytest.FixtureRequest, patches: list[Any], mock_session) -> None:
     trigger_id = getattr(request.node, "_trigger_id", uuid.uuid4())
 
-    mock_trigger = MagicMock()
+    mock_trigger = MagicMock(spec=["id", "active", "trigger_type"])
     mock_trigger.id = trigger_id
     mock_trigger.trigger_type = "cron"
-    mock_trigger.active = False
+    mock_trigger.active = True
+
+    result = MagicMock()
+    result.scalar_one_or_none.return_value = mock_trigger
+    mock_session.execute.return_value = result
 
     _patch_set_rls(patches, "modulo.api.routes.triggers.set_rls_org")
 
@@ -1384,15 +1400,19 @@ def toggle_trigger(client, request: pytest.FixtureRequest, patches: list[Any]) -
     _store_response(request, resp)
 
 
-@when("I GET the cron schedule preview with count 3")
-def get_cron_preview(client, request: pytest.FixtureRequest, patches: list[Any]) -> None:
+@when("I fetch the cron schedule preview with count 3")
+def get_cron_preview(client, request: pytest.FixtureRequest, patches: list[Any], mock_session) -> None:
     trigger_id = getattr(request.node, "_trigger_id", uuid.uuid4())
 
-    mock_trigger = MagicMock()
+    mock_trigger = MagicMock(spec=["id", "trigger_type", "cron_expression", "cron_timezone", "active"])
     mock_trigger.id = trigger_id
     mock_trigger.trigger_type = "cron"
     mock_trigger.cron_expression = getattr(request.node, "_cron_expression", "0 6 * * *")
     mock_trigger.cron_timezone = "UTC"
+
+    result = MagicMock()
+    result.scalar_one_or_none.return_value = mock_trigger
+    mock_session.execute.return_value = result
 
     _patch_set_rls(patches, "modulo.api.routes.triggers.set_rls_org")
 
