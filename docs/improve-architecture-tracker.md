@@ -1,12 +1,13 @@
 # improve-architecture Tracker
 
-Current product-map entry index: 26
-Last updated: 2026-07-01T22:45:00Z
+Current product-map entry index: 27
+Last updated: 2026-07-01T23:15:00Z
 
 ## In-flight
 - (none)
 
 ## History
+- 2026-07-01: feat-connectors-schema-inference → complete, cross-cutting QA: updated product map from gap→partial — marked 11 behaviours [x], added accurate frontmatter (code paths, BDD refs, unit tests), consolidated 7 known gaps (removed 3 outdated: 'no implementation', 'BDD placeholder', 'no unit tests'), added 4 new gaps, added audit event dispatch to inference endpoint (schema_inference_completed), added connector-type validation (400 on unsupported types), added BDD scenario + step definitions for unsupported-type rejection. 11/12 BDD tests pass (1 pre-existing). Status: gap → partial.
 - 2026-07-01: feat-connectors-linear → complete, cross-cutting QA: fixed frontmatter (added unit-tests), removed outdated known gaps #7 (BDD placeholder → 5 real scenarios) and #8 (unit tests exist), added 3 BDD error-path scenarios + step definitions, added 4 unit tests (missing id, update failure, GraphQL error), fixed search to respect q.limit via first:$limit, consolidated gaps from 9→9 with updated descriptions. 17/17 unit tests pass; 11 pre-existing BDD failures unchanged.
 - 2026-07-01: feat-auth-sso-provider-ui → complete, cross-cutting QA: added audit event dispatching to SSO provider CRUD (create/update/delete/toggle), added duplicate name check on create (409 Conflict), added FeatureGate wrapper to SettingsSsoView.vue, added bdd:/unit-tests: frontmatter, marked 3 behaviours [ ]→[x] (FeatureGate, duplicate name, SAML 402), fixed SAML status 403→402 in product map, added 4 new known gaps (no admin CRUD BDD, nav entry not gated, no SAML integration test, no enterprise gate on nav entry)
 - 2026-07-01: feat-core-saml-integration → complete, cross-cutting QA: fixed frontmatter (added bdd:, depends-on: feat-auth-jwt-auth/feat-teams-team-isolation, test_sso_saml_bdd.py), marked 60+ behaviours [x] (all SAML behaviours implemented in code), removed outdated BDD gap (feature file exists at tests/bdd/features/auth/sso_saml.feature), added 2 new known gaps (no integration test for SAML ACS real XML parsing, login route missing explicit check)
