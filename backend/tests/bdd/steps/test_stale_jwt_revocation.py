@@ -30,6 +30,12 @@ def auth_admin(org: str) -> None:
     pass
 
 
+@given(parsers.parse('a user "{username}" exists'))
+def user_exists(username: str, ctx) -> None:
+    if username not in ctx["users"]:
+        ctx["users"][username] = {"id": str(uuid.uuid4()), "username": username}
+
+
 @given(parsers.parse('a team "{team_name}" exists'))
 def team_exists(team_name: str, ctx) -> None:
     ctx["teams"][team_name] = {"id": str(uuid.uuid4()), "name": team_name}
@@ -101,7 +107,7 @@ def run_awaiting_gate(run_name: str, gate_id: str, team_name: str, ctx) -> None:
     ctx["gates"][gate_id] = {"id": gate_id, "required_team_id": team_id}
 
 
-@when(parsers.parse('I revoke user "{username}"\'s session'))
+@when(parsers.parse('I revoke sessions for user "{username}"'))
 def revoke_user_session(username: str, ctx) -> None:
     ctx["tokens_valid"] = False
 

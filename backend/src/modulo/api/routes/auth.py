@@ -283,6 +283,7 @@ async def ws_token(
         organisation_id=str(current_user.organisation_id) if current_user.organisation_id else "",
         account_id=str(current_user.account_id),
         org_role=current_user.org_role or "",
+        ttl_minutes=max(1, settings.modulo_ws_token_ttl_seconds // 60),
     )
     return WsTokenResponse(
         ws_token=token,
