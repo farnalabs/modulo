@@ -26,7 +26,7 @@ class TestEventBus:
         org_id = "org-123"
         queue = await bus.subscribe(org_id)
 
-        bus.publish(org_id, "run", "run-1", "created", version=0)
+        await bus.publish(org_id, "run", "run-1", "created", version=0)
 
         event = await asyncio.wait_for(queue.get(), timeout=1.0)
         assert event["type"] == "run"
@@ -40,7 +40,7 @@ class TestEventBus:
         q1 = await bus.subscribe(org_id)
         q2 = await bus.subscribe(org_id)
 
-        bus.publish(org_id, "pipeline", "pipe-1", "updated", version=1)
+        await bus.publish(org_id, "pipeline", "pipe-1", "updated", version=1)
 
         event1 = await asyncio.wait_for(q1.get(), timeout=1.0)
         event2 = await asyncio.wait_for(q2.get(), timeout=1.0)
@@ -54,7 +54,7 @@ class TestEventBus:
         q2 = await bus.subscribe(org_id)
 
         await bus.unsubscribe(org_id, q1)
-        bus.publish(org_id, "agent", "agent-1", "deleted", version=0)
+        await bus.publish(org_id, "agent", "agent-1", "deleted", version=0)
 
         with pytest.raises(asyncio.TimeoutError):
             await asyncio.wait_for(q1.get(), timeout=0.2)
@@ -66,7 +66,7 @@ class TestEventBus:
         q_a = await bus.subscribe("org-a")
         q_b = await bus.subscribe("org-b")
 
-        bus.publish("org-a", "run", "run-a", "created", version=0)
+        await bus.publish("org-a", "run", "run-a", "created", version=0)
 
         with pytest.raises(asyncio.TimeoutError):
             await asyncio.wait_for(q_b.get(), timeout=0.2)
@@ -84,8 +84,8 @@ class TestEventBus:
         limited_q: asyncio.Queue = asyncio.Queue(maxsize=1)
         bus._subscribers[org_id].append(limited_q)
 
-        bus.publish(org_id, "run", "r1", "created", version=0)
-        bus.publish(org_id, "run", "r2", "updated", version=1)
+        await bus.publish(org_id, "run", "r1", "created", version=0)
+        await bus.publish(org_id, "run", "r2", "updated", version=1)
 
         assert limited_q not in bus._subscribers.get(org_id, [])
 
@@ -118,8 +118,8 @@ class TestEventBus:
         q_a = await bus.subscribe("org-a")
         q_b = await bus.subscribe("org-b")
 
-        bus.publish("org-a", "schema", "s1", "created", version=0)
-        bus.publish("org-b", "team", "t1", "updated", version=0)
+        await bus.publish("org-a", "schema", "s1", "created", version=0)
+        await bus.publish("org-b", "team", "t1", "updated", version=0)
 
         event_a = await asyncio.wait_for(q_a.get(), timeout=1.0)
         event_b = await asyncio.wait_for(q_b.get(), timeout=1.0)
@@ -128,4 +128,4 @@ class TestEventBus:
 
     async def test_no_subscribers_does_not_raise(self):
         bus = EventBus()
-        bus.publish("org-empty", "run", "r1", "created", version=0)
+        await bus.publish("org-empty", "run", "r1", "created", version=0)

@@ -9,8 +9,6 @@ import pytest
 from fastapi.testclient import TestClient
 
 from modulo.api.main import app
-from modulo.auth.dependencies import get_current_user
-from modulo.auth.jwt import AuthenticatedPrincipal
 from modulo.core.events.event_bus import EventBus, get_event_bus
 from modulo.settings import Settings, get_settings
 
@@ -74,7 +72,7 @@ class TestEventBusSSEIntegration:
         org_id = "org-test"
         q = await bus.subscribe(org_id)
 
-        bus.publish(org_id, "run", "run-1", "created", version=0)
+        await bus.publish(org_id, "run", "run-1", "created", version=0)
 
         event = await asyncio.wait_for(q.get(), timeout=2.0)
         assert event["type"] == "run"
@@ -88,7 +86,7 @@ class TestEventBusSSEIntegration:
         q_a = await bus.subscribe("org-a")
         q_b = await bus.subscribe("org-b")
 
-        bus.publish("org-a", "pipeline", "pipe-1", "created", version=0)
+        await bus.publish("org-a", "pipeline", "pipe-1", "created", version=0)
 
         event_a = await asyncio.wait_for(q_a.get(), timeout=2.0)
         assert event_a["org_id"] == "org-a"
@@ -106,7 +104,7 @@ class TestEventBusSSEIntegration:
         q1 = await bus.subscribe(org_id)
         q2 = await bus.subscribe(org_id)
 
-        bus.publish(org_id, "agent", "agent-1", "updated", version=1)
+        await bus.publish(org_id, "agent", "agent-1", "updated", version=1)
 
         e1 = await asyncio.wait_for(q1.get(), timeout=2.0)
         e2 = await asyncio.wait_for(q2.get(), timeout=2.0)
@@ -132,7 +130,7 @@ class TestEventBusSSEIntegration:
         org_id = "org-format"
         q = await bus.subscribe(org_id)
 
-        bus.publish(org_id, "schema", "schema-1", "updated", version=0)
+        await bus.publish(org_id, "schema", "schema-1", "updated", version=0)
 
         event = await asyncio.wait_for(q.get(), timeout=2.0)
         sse = f"event: resource_changed\ndata: {json.dumps(event)}\n\n"
@@ -151,12 +149,12 @@ class TestEventBusSSEIntegration:
         limited_q = asyncio.Queue(maxsize=1)
         bus._subscribers[org_id] = [limited_q]
 
-        bus.publish(org_id, "run", "r1", "updated", version=0)
-        bus.publish(org_id, "run", "r2", "deleted", version=0)
+        await bus.publish(org_id, "run", "r1", "updated", version=0)
+        await bus.publish(org_id, "run", "r2", "deleted", version=0)
 
         assert bus._subscribers.get(org_id) is None or len(bus._subscribers.get(org_id, [])) == 0
 
     @pytest.mark.asyncio
     async def test_publish_no_subscribers_does_not_raise(self):
         bus = get_event_bus()
-        bus.publish("org-empty", "run", "r1", "created", version=0)
+        await bus.publish("org-empty", "run", "r1", "created", version=0)

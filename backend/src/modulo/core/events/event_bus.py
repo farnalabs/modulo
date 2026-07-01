@@ -3,11 +3,12 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
-import threading
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
-from modulo.core.events.redis_broker import RedisEventBroker
+if TYPE_CHECKING:
+    from modulo.core.events.redis_broker import RedisEventBroker
 
 _log = logging.getLogger(__name__)
 
@@ -30,11 +31,12 @@ class EventBus:
     """
 
     def __init__(self, redis_broker: RedisEventBroker | None = None) -> None:
+        """Initialize with an optional Redis broker for cross-worker broadcast."""
         self._subscribers: dict[str, list[asyncio.Queue[dict[str, Any]]]] = {}
         self._redis_broker = redis_broker
-        self._lock: threading.Lock = threading.Lock()
+        self._lock: asyncio.Lock = asyncio.Lock()
 
-    def publish(
+    async def publish(
         self,
         org_id: str,
         resource_type: str,
@@ -57,27 +59,36 @@ class EventBus:
                 q.put_nowait(event)
             except (asyncio.QueueFull, ValueError):
                 dead.append(q)
-        if dead:
-            with self._lock:
-                sub_list = self._subscribers.get(org_id)
-                if sub_list is not None:
-                    for q in dead:
-                        try:
-                            sub_list.remove(q)
-                        except ValueError:
-                            pass
-                    if not sub_list:
-                        del self._subscribers[org_id]
+        await self._remove_dead_queues(org_id, dead)
+        await self._redis_broadcast_if_configured(org_id, event)
+
+    async def _remove_dead_queues(
+        self, org_id: str, dead: list[asyncio.Queue[dict[str, Any]]],
+    ) -> None:
+        if not dead:
+            return
+        async with self._lock:
+            sub_list = self._subscribers.get(org_id)
+            if sub_list is None:
+                return
+            for q in dead:
+                with contextlib.suppress(ValueError):
+                    sub_list.remove(q)
+            if not sub_list:
+                del self._subscribers[org_id]
+
+    async def _redis_broadcast_if_configured(self, org_id: str, event: dict[str, Any]) -> None:
         broker = self._redis_broker
-        if broker is not None:
-            try:
-                asyncio.get_running_loop()
-            except RuntimeError:
-                _log.warning("event_bus.no_running_loop", extra={"org_id": org_id})
-            else:
-                _task = asyncio.create_task(self._redis_broadcast(broker, org_id, event))
-                _background_tasks.add(_task)
-                _task.add_done_callback(_background_tasks.discard)
+        if broker is None:
+            return
+        try:
+            asyncio.get_running_loop()
+        except RuntimeError:
+            _log.warning("event_bus.no_running_loop", extra={"org_id": org_id})
+        else:
+            task = asyncio.create_task(self._redis_broadcast(broker, org_id, event))
+            _background_tasks.add(task)
+            task.add_done_callback(_background_tasks.discard)
 
     async def _redis_broadcast(self, broker: RedisEventBroker, org_id: str, event: dict[str, Any]) -> None:
         """Fire-and-forget: publish event to Redis channel (best-effort)."""
@@ -93,7 +104,7 @@ class EventBus:
         and ejected by the publisher (see ``QueueFull`` handling in
         :meth:`publish`).
         """
-        with self._lock:
+        async with self._lock:
             q: asyncio.Queue[dict[str, Any]] = asyncio.Queue(maxsize=maxsize)
             if org_id not in self._subscribers:
                 self._subscribers[org_id] = []
@@ -102,7 +113,7 @@ class EventBus:
 
     async def unsubscribe(self, org_id: str, queue: asyncio.Queue[dict[str, Any]]) -> None:
         """Remove a subscriber queue from the org's fan-out set."""
-        with self._lock:
+        async with self._lock:
             sub_list = self._subscribers.get(org_id)
             if sub_list is None:
                 return
@@ -118,11 +129,16 @@ class EventBus:
 _event_bus: EventBus | None = None
 
 
+def _set_event_bus(bus: EventBus | None) -> None:
+    global _event_bus
+    _event_bus = bus
+
+
 def get_event_bus() -> EventBus:
     """Return the module-level EventBus singleton (lazy init)."""
-    global _event_bus
     if _event_bus is None:
-        _event_bus = EventBus()
+        _set_event_bus(EventBus())
+    assert _event_bus is not None
     return _event_bus
 
 
@@ -132,8 +148,7 @@ def configure_event_bus(redis_broker: RedisEventBroker | None = None) -> None:
     Call during application startup (before any events are published) to
     enable cross-worker event broadcasting via Redis.
     """
-    global _event_bus
     if _event_bus is None:
-        _event_bus = EventBus(redis_broker=redis_broker)
+        _set_event_bus(EventBus(redis_broker=redis_broker))
     else:
         _event_bus._redis_broker = redis_broker
