@@ -4,10 +4,10 @@ from unittest.mock import MagicMock, patch
 
 from pytest_bdd import given, parsers, scenarios, then, when
 
-scenarios("../../features/connectors/filesystem.feature")
-scenarios("../../features/connectors/github.feature")
-scenarios("../../features/connectors/github_issues.feature")
-scenarios("../../features/connectors/health_check.feature")
+scenarios("../features/connectors/filesystem.feature")
+scenarios("../features/connectors/github.feature")
+scenarios("../features/connectors/github_issues.feature")
+scenarios("../features/connectors/health_check.feature")
 
 
 @given(parsers.parse('a filesystem connector configured with base_path "{path}"'))

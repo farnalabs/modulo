@@ -1,4 +1,4 @@
-﻿"""BDD step definitions: Team deletion blocked when resources exist."""
+"""BDD step definitions: Team deletion blocked when resources exist."""
 
 import uuid
 from typing import Any
@@ -14,7 +14,7 @@ from modulo.settings import get_settings
 from tests.bdd.conftest import make_settings
 
 try:
-    scenarios("../../features/teams/team_deletion_blocked.feature")
+    scenarios("../features/teams/team_deletion_blocked.feature")
 except (FileNotFoundError, OSError):
     pass
 

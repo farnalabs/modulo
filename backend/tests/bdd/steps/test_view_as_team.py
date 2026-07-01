@@ -17,7 +17,7 @@ from modulo.settings import get_settings
 from tests.bdd.conftest import make_mock_pipeline, make_mock_session, make_settings
 
 try:
-    scenarios("../../features/teams/view_as_team.feature")
+    scenarios("../features/teams/view_as_team.feature")
 except (FileNotFoundError, OSError):
     pass
 

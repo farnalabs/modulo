@@ -6,7 +6,7 @@ from unittest.mock import AsyncMock, patch
 
 from pytest_bdd import given, parsers, scenarios, then, when
 
-scenarios("../../features/organisation/org_deletion.feature")
+scenarios("../features/organisation/org_deletion.feature")
 
 _ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
 _USER_ID = uuid.UUID("00000000-0000-0000-0000-000000000002")

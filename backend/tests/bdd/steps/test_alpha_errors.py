@@ -5,9 +5,9 @@ from unittest.mock import MagicMock, patch
 
 from pytest_bdd import given, parsers, scenarios, then, when
 
-scenarios("../../features/errors/retry.feature")
-scenarios("../../features/errors/failed_state.feature")
-scenarios("../../features/errors/recovery.feature")
+scenarios("../features/errors/retry.feature")
+scenarios("../features/errors/failed_state.feature")
+scenarios("../features/errors/recovery.feature")
 
 from tests.bdd.conftest import make_mock_run  # noqa: E402
 

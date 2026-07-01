@@ -7,11 +7,11 @@ from unittest.mock import MagicMock, patch
 
 from pytest_bdd import given, parsers, scenarios, then, when
 
-scenarios("../../features/mcp/trigger.feature")
-scenarios("../../features/mcp/review_hitl.feature")
-scenarios("../../features/mcp/human_only.feature")
-scenarios("../../features/mcp/library_browse.feature")
-scenarios("../../features/mcp/onboarding.feature")
+scenarios("../features/mcp/trigger.feature")
+scenarios("../features/mcp/review_hitl.feature")
+scenarios("../features/mcp/human_only.feature")
+scenarios("../features/mcp/library_browse.feature")
+scenarios("../features/mcp/onboarding.feature")
 
 from tests.bdd.conftest import make_mock_pipeline  # noqa: E402
 

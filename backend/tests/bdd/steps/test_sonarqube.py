@@ -7,7 +7,7 @@ from modulo.connectors.base import ConnectorPayload, ConnectorQuery
 from modulo.connectors.sonarqube import SonarQubeConnector
 
 try:
-    scenarios("../../features/connectors/sonarqube.feature")
+    scenarios("../features/connectors/sonarqube.feature")
 except Exception:
     pass
 

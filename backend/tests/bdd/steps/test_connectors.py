@@ -1,4 +1,4 @@
-﻿"""Step definitions for Connector Health and connector-related features."""
+"""Step definitions for Connector Health and connector-related features."""
 
 import uuid
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -404,7 +404,7 @@ def step_migration_plan_has_fields(ctx):
 # connectors/github_connector.feature â€” 5 scenarios
 # ============================================================================
 try:
-    scenarios("../../features/connectors/github_connector.feature")
+    scenarios("../features/connectors/github_connector.feature")
 except (FileNotFoundError, OSError):
     pass
 
@@ -632,7 +632,7 @@ def step_result_is_error(ctx):
 # connectors/jira_connector.feature  â€”  5 scenarios
 # ============================================================================
 try:
-    scenarios("../../features/connectors/jira_connector.feature")
+    scenarios("../features/connectors/jira_connector.feature")
 except (FileNotFoundError, OSError):
     pass
 
@@ -796,7 +796,7 @@ def step_jira_query_without_key(resource, ctx):
 # connectors/linear_connector.feature  â€”  5 scenarios
 # ============================================================================
 try:
-    scenarios("../../features/connectors/linear_connector.feature")
+    scenarios("../features/connectors/linear_connector.feature")
 except (FileNotFoundError, OSError):
     pass
 
@@ -972,7 +972,7 @@ def step_health_result_is_ok(ctx):
 # connectors/slack_connector.feature  â€”  5 scenarios
 # ============================================================================
 try:
-    scenarios("../../features/connectors/slack_connector.feature")
+    scenarios("../features/connectors/slack_connector.feature")
 except (FileNotFoundError, OSError):
     pass
 
@@ -1235,7 +1235,7 @@ def step_health_result_indicates_failure(ctx):
 # connectors/gitlab_issues.feature  â€”  23 scenarios
 # ============================================================================
 try:
-    scenarios("../../features/connectors/gitlab_issues.feature")
+    scenarios("../features/connectors/gitlab_issues.feature")
 except (FileNotFoundError, OSError):
     pass
 
@@ -1581,7 +1581,7 @@ def step_records_contain_issue_fields(ctx):
 # connectors/gitea_connector.feature  â€”  6 scenarios
 # ============================================================================
 try:
-    scenarios("../../features/connectors/gitea_connector.feature")
+    scenarios("../features/connectors/gitea_connector.feature")
 except (FileNotFoundError, OSError):
     pass
 
@@ -1754,7 +1754,7 @@ def step_gitea_create_issue(resource, title, ctx):
 # connectors/monday.feature  â€”  13 scenarios
 # ============================================================================
 try:
-    scenarios("../../features/connectors/monday.feature")
+    scenarios("../features/connectors/monday.feature")
 except (FileNotFoundError, OSError):
     pass
 
@@ -2188,7 +2188,7 @@ def step_monday_users_metadata(ctx):
 # connectors/trello.feature  â€”  8+ scenarios
 # ============================================================================
 try:
-    scenarios("../../features/connectors/trello.feature")
+    scenarios("../features/connectors/trello.feature")
 except (FileNotFoundError, OSError):
     pass
 
@@ -2522,7 +2522,7 @@ def step_trello_card_fields(ctx):
 # connectors/asana.feature  â€”  11 scenarios
 # ============================================================================
 try:
-    scenarios("../../features/connectors/asana.feature")
+    scenarios("../features/connectors/asana.feature")
 except (FileNotFoundError, OSError):
     pass
 
@@ -2531,7 +2531,7 @@ except (FileNotFoundError, OSError):
 # connectors/shortcut.feature  â€”  10 scenarios
 # ============================================================================
 try:
-    scenarios("../../features/connectors/shortcut.feature")
+    scenarios("../features/connectors/shortcut.feature")
 except (FileNotFoundError, OSError):
     pass
 
@@ -3301,7 +3301,7 @@ except (FileNotFoundError, OSError):
 # connectors/confluence.feature  —  9 scenarios
 # ============================================================================
 try:
-    scenarios("../../features/connectors/confluence.feature")
+    scenarios("../features/connectors/confluence.feature")
 except (FileNotFoundError, OSError):
     pass
 
@@ -3309,7 +3309,7 @@ except (FileNotFoundError, OSError):
 # connectors/google_docs.feature  —  10 scenarios
 # ============================================================================
 try:
-    scenarios("../../features/connectors/google_docs.feature")
+    scenarios("../features/connectors/google_docs.feature")
 except (FileNotFoundError, OSError):
     pass
 
@@ -4292,7 +4292,7 @@ def step_google_docs_file_metadata(ctx):
 # connectors/datadog.feature  —  10 scenarios
 # ============================================================================
 try:
-    scenarios("../../features/connectors/datadog.feature")
+    scenarios("../features/connectors/datadog.feature")
 except (FileNotFoundError, OSError):
     pass
 
@@ -4623,7 +4623,7 @@ def step_datadog_monitor_status_updated(ctx):
 # connectors/connector_decrypt_error.feature  —  2 scenarios
 # ============================================================================
 try:
-    scenarios("../../features/connectors/connector_decrypt_error.feature")
+    scenarios("../features/connectors/connector_decrypt_error.feature")
 except (FileNotFoundError, OSError):
     pass
 

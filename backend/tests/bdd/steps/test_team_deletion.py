@@ -7,7 +7,7 @@ import pytest
 from pytest_bdd import given, parsers, scenarios, then, when
 
 try:
-    scenarios("../../features/teams/team_deletion.feature")
+    scenarios("../features/teams/team_deletion.feature")
 except (FileNotFoundError, OSError):
     pass
 

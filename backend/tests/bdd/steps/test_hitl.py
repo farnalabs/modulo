@@ -11,11 +11,11 @@ from pytest_bdd import given, parsers, scenarios, then, when
 # Active features
 # ---------------------------------------------------------------------------
 try:
-    scenarios("../../features/hitl/claim.feature")
+    scenarios("../features/hitl/claim.feature")
 except (FileNotFoundError, OSError):
     pass
 try:
-    scenarios("../../features/hitl/approve.feature")
+    scenarios("../features/hitl/approve.feature")
 except (FileNotFoundError, OSError):
     pass
 try:

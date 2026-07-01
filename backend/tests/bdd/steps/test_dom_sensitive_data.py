@@ -15,7 +15,7 @@ from modulo.api.middleware.sensitive_mask import (
 # Register feature file
 # ---------------------------------------------------------------------------
 try:
-    scenarios("../../features/security/dom_sensitive_data.feature")
+    scenarios("../features/security/dom_sensitive_data.feature")
 except (FileNotFoundError, OSError):
     pass
 
