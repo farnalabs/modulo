@@ -264,8 +264,14 @@ async def save_composite_editor_endpoint(
     try:
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
+            template = await get_composite_template(session, template_id)
+            if template is None:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Composite template not found")
+            graph = dict(template.sub_pipeline_graph_json) if template.sub_pipeline_graph_json else {}
+            graph["nodes"] = body.nodes
+            graph["edges"] = body.edges
             template = await update_composite_template(session, template_id, {
-                "sub_pipeline_graph_json": {"nodes": body.nodes, "edges": body.edges},
+                "sub_pipeline_graph_json": graph,
             })
     except ProgrammingError:
         raise HTTPException(

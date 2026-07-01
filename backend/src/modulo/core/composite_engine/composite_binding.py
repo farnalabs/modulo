@@ -19,7 +19,7 @@ class EvalDefinitionConfig(BaseModel):
 class OutputValidation(BaseModel):
     """Configuration for composite output validation."""
 
-    eval_definitions: list[EvalDefinitionConfig] = Field(default_factory=list)
+    eval_definitions: list[EvalDefinitionConfig] = Field(default_factory=list, max_length=20)
     max_validation_retries: int = Field(default=0, ge=0)
 
 
