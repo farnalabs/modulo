@@ -35,6 +35,7 @@ export const usePlanStore = defineStore('plan', () => {
   }
 
   async function fetchPlan() {
+    if (isLoading.value) return
     isLoading.value = true
     error.value = null
     try {
