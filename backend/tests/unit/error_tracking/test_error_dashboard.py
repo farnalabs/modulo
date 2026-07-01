@@ -163,7 +163,10 @@ class TestPatchErrorGroup:
 
     def test_not_found(self):
         with (
-            patch("modulo.api.routes.errors.update_error_group", AsyncMock(side_effect=ValueError("ErrorGroup not found"))),
+            patch(
+                "modulo.api.routes.errors.update_error_group",
+                AsyncMock(side_effect=ValueError("ErrorGroup not found")),
+            ),
             patch("modulo.api.routes.errors.set_rls_org", AsyncMock()),
         ):
             client = TestClient(_make_app())

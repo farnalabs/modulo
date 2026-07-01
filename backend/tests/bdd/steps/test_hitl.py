@@ -440,7 +440,7 @@ def response_has_feedback_item(request):
 def patch_feedback_status(request, new_status: str, client, ctx):
     from unittest.mock import AsyncMock, MagicMock, patch
 
-    _VALID_TRANSITIONS = {
+    valid_transitions = {
         "pending": {"routing", "correcting", "dismissed"},
         "routing": {"escalated", "correcting", "resolved"},
         "correcting": {"correcting", "resolved", "escalated"},
@@ -451,7 +451,7 @@ def patch_feedback_status(request, new_status: str, client, ctx):
     record_id = ctx.get("feedback_record_id") or ctx.get("feedback_record", {}).get("id", str(uuid.uuid4()))
     current_status = ctx.get("feedback_status", ctx.get("feedback_record", {}).get("feedback_status", "pending"))
 
-    allowed = _VALID_TRANSITIONS.get(current_status, set())
+    allowed = valid_transitions.get(current_status, set())
     if new_status not in allowed:
         request.node._resp = MagicMock()
         request.node._resp.status_code = 422

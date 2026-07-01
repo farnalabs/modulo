@@ -198,7 +198,10 @@ class TestChangePassword:
 
         with (
             patch("modulo.api.routes.me.get_account_by_id", return_value=user),
-            patch("modulo.api.routes.me.list_families_for_account", return_value=[mock_family_1, mock_family_2]) as mock_list,
+            patch(
+                "modulo.api.routes.me.list_families_for_account",
+                return_value=[mock_family_1, mock_family_2],
+            ) as mock_list,
             patch("modulo.api.routes.me.blacklist_family", return_value=True) as mock_blacklist,
         ):
             resp = client.put(

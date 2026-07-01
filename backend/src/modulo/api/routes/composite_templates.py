@@ -109,7 +109,7 @@ async def list_composite_templates_endpoint(
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
-        )
+        ) from None
     return CompositeTemplateListResponse(
         items=[CompositeTemplateResponse.model_validate(t) for t in result.items],
         total=result.total,
@@ -144,7 +144,7 @@ async def create_composite_template_endpoint(
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
-        )
+        ) from None
 
 
 @router.get("/{template_id}", response_model=CompositeTemplateResponse)
@@ -161,7 +161,7 @@ async def get_composite_template_endpoint(
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
-        )
+        ) from None
     if template is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Composite template not found")
     return CompositeTemplateResponse.model_validate(template)
@@ -188,7 +188,7 @@ async def update_composite_template_endpoint(
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
-        )
+        ) from None
     if template is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Composite template not found")
     return CompositeTemplateResponse.model_validate(template)
@@ -208,7 +208,7 @@ async def delete_composite_template_endpoint(
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
-        )
+        ) from None
     if not deleted:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Composite template not found")
 
@@ -244,7 +244,7 @@ async def get_composite_editor_endpoint(
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
-        )
+        ) from None
     if template is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Composite template not found")
     graph = template.sub_pipeline_graph_json
@@ -271,7 +271,7 @@ async def save_composite_editor_endpoint(
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
-        )
+        ) from None
     if template is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Composite template not found")
     return EditorGraphResponse(
@@ -336,7 +336,7 @@ async def publish_composite_endpoint(
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
-        )
+        ) from None
     if template is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Composite template not found")
     return PublishResponse(id=template.id, version=template.version, published=True)

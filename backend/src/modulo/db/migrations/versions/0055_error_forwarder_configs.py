@@ -20,7 +20,11 @@ def upgrade() -> None:
     op.create_table(
         "error_forwarder_configs",
         sa.Column("id", sa.Uuid(), primary_key=True, server_default=sa.text("gen_random_uuid()")),
-        sa.Column("organisation_id", sa.Uuid(), sa.ForeignKey("organisations.id", ondelete="CASCADE"), nullable=False, index=True),
+        sa.Column(
+            "organisation_id", sa.Uuid(),
+            sa.ForeignKey("organisations.id", ondelete="CASCADE"),
+            nullable=False, index=True,
+        ),
         sa.Column("forwarder_type", sa.String(50), nullable=False),
         sa.Column("enabled", sa.Boolean(), nullable=False, server_default=sa.text("false")),
         sa.Column("config_json", sa.JSONB(), nullable=True),

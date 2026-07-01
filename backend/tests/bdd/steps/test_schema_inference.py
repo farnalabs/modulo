@@ -461,6 +461,7 @@ def step_response_has_suggestion_name(request):
 
 @then("the schema is structurally valid")
 def step_schema_is_structurally_valid(request):
+    import pytest
     from jsonschema import Draft202012Validator, ValidationError
     definition = getattr(request.node, "_schema_definition", {})
     try:

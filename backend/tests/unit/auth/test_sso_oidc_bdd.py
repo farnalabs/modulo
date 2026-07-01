@@ -266,7 +266,9 @@ class TestCallbackStateValidation:
 class TestEnterpriseGate:
     def test_oidc_login_blocked_without_license(self, client: TestClient) -> None:
         _app.dependency_overrides[get_settings] = lambda: _oidc_settings(license_key="")
-        _app.dependency_overrides[get_plan_context] = lambda: DbPlanContext(FeatureFlagRegistry(current_tier="community"))
+        _app.dependency_overrides[get_plan_context] = lambda: DbPlanContext(
+            FeatureFlagRegistry(current_tier="community")
+        )
         get_settings.cache_clear()
 
         resp = client.get("/api/v1/auth/oidc/google/login", follow_redirects=False)
@@ -276,7 +278,9 @@ class TestEnterpriseGate:
 
     def test_oidc_callback_blocked_without_license(self, client: TestClient) -> None:
         _app.dependency_overrides[get_settings] = lambda: _oidc_settings(license_key="")
-        _app.dependency_overrides[get_plan_context] = lambda: DbPlanContext(FeatureFlagRegistry(current_tier="community"))
+        _app.dependency_overrides[get_plan_context] = lambda: DbPlanContext(
+            FeatureFlagRegistry(current_tier="community")
+        )
         get_settings.cache_clear()
 
         resp = client.get("/api/v1/auth/oidc/google/callback?code=c&state=s", follow_redirects=False)
@@ -286,7 +290,9 @@ class TestEnterpriseGate:
 
     def test_sso_providers_blocked_without_license(self, client: TestClient) -> None:
         _app.dependency_overrides[get_settings] = lambda: _oidc_settings(license_key="")
-        _app.dependency_overrides[get_plan_context] = lambda: DbPlanContext(FeatureFlagRegistry(current_tier="community"))
+        _app.dependency_overrides[get_plan_context] = lambda: DbPlanContext(
+            FeatureFlagRegistry(current_tier="community")
+        )
         get_settings.cache_clear()
 
         resp = client.get("/api/v1/auth/sso/providers")

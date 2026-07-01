@@ -37,9 +37,9 @@ def test_fireworks_base_url_constant():
 
 
 def test_chat_openai_uses_fireworks_base_url():
-    with patch("modulo.model_backends.fireworks.ChatOpenAI") as MockChatOpenAI:
+    with patch("modulo.model_backends.fireworks.ChatOpenAI") as mock_chat_openai:
         FireworksBackend(api_key="test-key", model_id="accounts/fireworks/models/llama-v3p1-8b")
-        MockChatOpenAI.assert_called_once_with(
+        mock_chat_openai.assert_called_once_with(
             model="accounts/fireworks/models/llama-v3p1-8b",
             api_key="test-key",
             base_url=FIREWORKS_BASE_URL,

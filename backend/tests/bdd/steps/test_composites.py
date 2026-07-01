@@ -227,7 +227,13 @@ def composite_template_required_param(param_name: str, request: pytest.FixtureRe
     request.node._mock_template = _make_template(
         name="required-param-composite",
         sub_pipeline_graph_json={
-            "nodes": [{"id": str(uuid.uuid4()), "agent_id": str(uuid.uuid4()), "prompt": f"{{{{parameter.{param_name}}}}}"}],
+            "nodes": [
+                {
+                    "id": str(uuid.uuid4()),
+                    "agent_id": str(uuid.uuid4()),
+                    "prompt": f"{{{{parameter.{param_name}}}}}",
+                }
+            ],
             "edges": [],
         },
         parameter_ports_json=[{"id": str(uuid.uuid4()), "name": param_name, "type": "string", "required": True}],
@@ -394,7 +400,11 @@ def community_primitive_exists(request: pytest.FixtureRequest) -> None:
 # ===================================================================
 
 
-@when(parsers.parse('I POST /api/composite-templates with name "{name}" and a sub-pipeline containing agent "{agent_name}"'))
+@when(
+    parsers.parse(
+        'I POST /api/composite-templates with name "{name}" and a sub-pipeline containing agent "{agent_name}"'
+    )
+)
 def crud_post_composite(client, name: str, agent_name: str, request: pytest.FixtureRequest, patches: list[Any]) -> None:
 
     actual_url = _map_url("/api/composite-templates")
@@ -423,7 +433,11 @@ def crud_post_composite(client, name: str, agent_name: str, request: pytest.Fixt
                 "label": "Tone",
                 "type": "string",
                 "required": False,
-                "target_injection": {"mode": "prompt_replace", "node_id": agent_id, "injection_point": "prompt_template"},
+                "target_injection": {
+                    "mode": "prompt_replace",
+                    "node_id": agent_id,
+                    "injection_point": "prompt_template",
+                },
             },
         ],
     }
@@ -454,7 +468,11 @@ def crud_post_composite_invalid_port(client, request: pytest.FixtureRequest, pat
                 "name": "bad",
                 "label": "Bad",
                 "type": "blob",
-                "target_injection": {"mode": "prompt_replace", "node_id": str(uuid.uuid4()), "injection_point": "prompt_template"},
+                "target_injection": {
+                    "mode": "prompt_replace",
+                    "node_id": str(uuid.uuid4()),
+                    "injection_point": "prompt_template",
+                },
             },
         ],
     }
@@ -505,7 +523,9 @@ def crud_get_composite(client, template_id: str, request: pytest.FixtureRequest,
 
 
 @when(parsers.parse('I PATCH /api/composite-templates/{template_id} with new name "{new_name}"'))
-def crud_patch_composite(client, template_id: str, new_name: str, request: pytest.FixtureRequest, patches: list[Any]) -> None:
+def crud_patch_composite(
+    client, template_id: str, new_name: str, request: pytest.FixtureRequest, patches: list[Any]
+) -> None:
     actual_url = _map_url(f"/api/composite-templates/{template_id}")
     _patch_set_rls(patches, "modulo.api.routes.composite_templates.set_rls_org")
 
@@ -724,7 +744,9 @@ def when_browse_composites(client, primitive_type: str, request: pytest.FixtureR
     _patch_set_rls(patches, "modulo.api.routes.library.set_rls_user_context")
 
     mock_primitives = getattr(request.node, "_mock_primitives", [])
-    page_result = PageResult(items=mock_primitives, total=len(mock_primitives), page=1, page_size=20, next_cursor=None, has_more=False)
+    page_result = PageResult(
+        items=mock_primitives, total=len(mock_primitives), page=1, page_size=20, next_cursor=None, has_more=False
+    )
     patcher = patch(
         "modulo.api.routes.library.list_primitives",
         new_callable=AsyncMock,

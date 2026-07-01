@@ -35,7 +35,6 @@ from modulo.model_backends.localai import LocalAIBackend
 from modulo.model_backends.mistral import MistralBackend
 from modulo.model_backends.ollama import OllamaBackend
 from modulo.model_backends.openai import OpenAIBackend
-from modulo.model_backends.openrouter import OpenRouterBackend
 from modulo.model_backends.perplexity import PerplexityBackend
 from modulo.model_backends.qwen import QwenBackend
 from modulo.model_backends.tgi import TgiBackend
@@ -331,7 +330,9 @@ def _build_backend(
             )
         case "watsonx":
             if "project_id" not in creds:
-                raise ValueError(f"Missing 'project_id' in credentials for provider 'watsonx'. Got keys: {sorted(creds)}")
+                raise ValueError(
+                    f"Missing 'project_id' in credentials for provider 'watsonx'. Got keys: {sorted(creds)}"
+                )
             return WatsonXBackend(
                 api_key=creds["api_key"],
                 model_id=model_id,

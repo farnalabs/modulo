@@ -37,9 +37,9 @@ def test_groq_base_url_constant():
 
 
 def test_chat_openai_uses_groq_base_url():
-    with patch("modulo.model_backends.groq.ChatOpenAI") as MockChatOpenAI:
+    with patch("modulo.model_backends.groq.ChatOpenAI") as mock_chat_openai:
         GroqBackend(api_key="test-key", model_id="llama3-70b-8192")
-        MockChatOpenAI.assert_called_once_with(
+        mock_chat_openai.assert_called_once_with(
             model="llama3-70b-8192",
             api_key="test-key",
             base_url=GROQ_BASE_URL,

@@ -63,16 +63,22 @@ async def start_schedulers(
     return tasks
 
 
+_cron_tasks: set[asyncio.Task] = set()
+_polling_tasks: set[asyncio.Task] = set()
+
+
 async def _cron_scheduler_loop(factory: async_sessionmaker) -> None:
     """Poll for due cron triggers and fire them."""
     while True:
         try:
             due = await _fetch_due_cron_triggers(factory)
             for trigger_info in due:
-                asyncio.create_task(
+                task = asyncio.create_task(
                     _fire_cron_wrapper(factory, trigger_info),
                     name=f"cron-fire-{trigger_info['id']}",
                 )
+                _cron_tasks.add(task)
+                task.add_done_callback(_cron_tasks.discard)
         except asyncio.CancelledError:
             break
         except Exception:
@@ -86,10 +92,12 @@ async def _polling_scheduler_loop(factory: async_sessionmaker) -> None:
         try:
             due = await _fetch_due_polling_triggers(factory)
             for trigger_info in due:
-                asyncio.create_task(
+                task = asyncio.create_task(
                     _fire_polling_wrapper(factory, trigger_info),
                     name=f"polling-fire-{trigger_info['id']}",
                 )
+                _polling_tasks.add(task)
+                task.add_done_callback(_polling_tasks.discard)
         except asyncio.CancelledError:
             break
         except Exception:

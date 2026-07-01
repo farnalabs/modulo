@@ -27,6 +27,7 @@ __all__ = [
     "AzureOpenAIBackend",
     "DeepSeekBackend",
     "FireworksBackend",
+    "GrokBackend",
     "GroqBackend",
     "HealthResult",
     "JanBackend",

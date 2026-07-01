@@ -156,7 +156,15 @@ class TestDashboardSummary:
         response = client.get("/api/v1/dashboard/summary")
         assert response.status_code == 200
         body = response.json()
-        expected = {"total_runs", "active_pipelines", "run_counts_by_status", "teams", "eval_pass_rate", "trend", "recent_runs"}
+        expected = {
+            "total_runs",
+            "active_pipelines",
+            "run_counts_by_status",
+            "teams",
+            "eval_pass_rate",
+            "trend",
+            "recent_runs",
+        }
         assert set(body.keys()) == expected
 
     def test_requires_auth(self, unauth_client: TestClient) -> None:
