@@ -4,7 +4,7 @@ from datetime import UTC, date, datetime, timedelta
 from typing import Any
 
 from fastapi import APIRouter, Depends, Query
-from sqlalchemy import case, func, select
+from sqlalchemy import Date, case, cast, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.api.dependencies import get_db_session
@@ -36,66 +36,89 @@ async def dashboard_summary(
 
         org_id = principal.organisation_id
 
-        total_runs_result = await session.execute(select(func.count()).select_from(Run))
+        total_runs_result = await session.execute(
+            select(func.count()).select_from(Run).where(Run.organisation_id == org_id)
+        )
         total_runs = int(total_runs_result.scalar_one())
 
-        active_pipelines_result = await session.execute(select(func.count()).select_from(Pipeline))
+        active_pipelines_result = await session.execute(
+            select(func.count()).select_from(Pipeline).where(Pipeline.organisation_id == org_id)
+        )
         active_pipelines = int(active_pipelines_result.scalar_one())
 
-        status_counts: dict[str, int] = {}
-        for status in _TRACKED_STATUSES:
-            count_result = await session.execute(select(func.count()).select_from(Run).where(Run.status == status))
-            status_counts[status] = int(count_result.scalar_one())
-
-        idle_result = await session.execute(
-            select(func.count()).select_from(Run).where(Run.status.not_in(_ACTIVE_RUN_STATUSES))
+        status_count_query = (
+            select(
+                Run.status,
+                func.count().label("cnt"),
+            )
+            .where(Run.organisation_id == org_id)
+            .group_by(Run.status)
         )
-        status_counts["idle"] = int(idle_result.scalar_one())
+        status_count_rows = (await session.execute(status_count_query)).all()
+        status_counts = {row.status: int(row.cnt) for row in status_count_rows}
+
+        for status in _TRACKED_STATUSES:
+            status_counts.setdefault(status, 0)
+
+        active_count = sum(status_counts.get(s, 0) for s in _ACTIVE_RUN_STATUSES if s != "idle")
+        status_counts["idle"] = total_runs - active_count
 
         teams_result = await session.execute(select(Team).where(Team.organisation_id == org_id).order_by(Team.name))
         teams = list(teams_result.scalars().all())
 
+        team_run_query = (
+            select(
+                Run.owner_team_id,
+                Run.status,
+                func.count().label("cnt"),
+            )
+            .where(
+                Run.organisation_id == org_id,
+                Run.owner_team_id.is_not(None),
+            )
+            .group_by(Run.owner_team_id, Run.status)
+        )
+        team_run_rows = (await session.execute(team_run_query)).all()
+
+        team_pipeline_query = (
+            select(
+                Run.owner_team_id,
+                func.count(func.distinct(Run.pipeline_id)).label("pipeline_cnt"),
+            )
+            .where(
+                Run.organisation_id == org_id,
+                Run.owner_team_id.is_not(None),
+            )
+            .group_by(Run.owner_team_id)
+        )
+        team_pipeline_rows = (await session.execute(team_pipeline_query)).all()
+
+        team_run_data: dict[str, dict[str, int]] = {}
+        for row in team_run_rows:
+            tid = str(row.owner_team_id)
+            team_run_data.setdefault(tid, {})[row.status] = int(row.cnt)
+
+        team_pipeline_data: dict[str, int] = {}
+        for row in team_pipeline_rows:
+            team_pipeline_data[str(row.owner_team_id)] = int(row.pipeline_cnt)
+
         team_metrics: list[dict[str, Any]] = []
         for team in teams:
-            team_where = [Run.owner_team_id == team.id, Run.organisation_id == org_id]
-
-            team_total = int(
-                (await session.execute(select(func.count()).select_from(Run).where(*team_where))).scalar_one()
-            )
-
-            team_pipelines_result = await session.execute(
-                select(func.count(func.distinct(Run.pipeline_id))).select_from(Run).where(*team_where)
-            )
-            team_pipelines = int(team_pipelines_result.scalar_one())
-
+            tid = str(team.id)
+            run_data = team_run_data.get(tid, {})
+            team_total = sum(run_data.values())
             team_statuses: dict[str, int] = {}
             for status in _TRACKED_STATUSES:
-                cnt = int(
-                    (
-                        await session.execute(
-                            select(func.count()).select_from(Run).where(*team_where, Run.status == status)
-                        )
-                    ).scalar_one()
-                )
-                team_statuses[status] = cnt
-
-            team_idle = int(
-                (
-                    await session.execute(
-                        select(func.count())
-                        .select_from(Run)
-                        .where(*team_where, Run.status.not_in(_ACTIVE_RUN_STATUSES))
-                    )
-                ).scalar_one()
-            )
-            team_statuses["idle"] = team_idle
+                team_statuses[status] = run_data.get(status, 0)
+            team_active = sum(run_data.get(s, 0) for s in _ACTIVE_RUN_STATUSES if s != "idle")
+            team_statuses["idle"] = team_total - team_active
 
             team_metrics.append(
                 {
-                    "id": str(team.id),
+                    "id": tid,
                     "name": team.name,
                     "total_runs": team_total,
-                    "active_pipelines": team_pipelines,
+                    "active_pipelines": team_pipeline_data.get(tid, 0),
                     "run_counts_by_status": team_statuses,
                 }
             )
@@ -228,16 +251,16 @@ async def dashboard_summary(
 
         daily_eval_query = (
             select(
-                func.date(EvalResult.evaluated_at).label("eval_date"),
+                cast(EvalResult.evaluated_at, Date).label("eval_date"),
                 func.count().label("total"),
                 func.sum(case((EvalResult.passed == True, 1), else_=0)).label("passed"),  # noqa: E712
             )
             .where(
                 EvalResult.organisation_id == org_id,
-                func.date(EvalResult.evaluated_at) >= seven_days_ago,
+                EvalResult.evaluated_at >= seven_days_ago,
             )
-            .group_by(func.date(EvalResult.evaluated_at))
-            .order_by(func.date(EvalResult.evaluated_at))
+            .group_by(cast(EvalResult.evaluated_at, Date))
+            .order_by(cast(EvalResult.evaluated_at, Date))
         )
         daily_eval_rows = (await session.execute(daily_eval_query)).all()
         daily_eval_map: dict[date, float | None] = {}
@@ -308,33 +331,18 @@ async def dashboard_trends(
         today = datetime.now(UTC).date()
         start_date = today - timedelta(days=days - 1)
 
-        counts_query = (
-            select(
-                OrgDailyRunCount.run_date,
-                func.sum(OrgDailyRunCount.run_count).label("run_count"),
-            )
-            .where(
-                OrgDailyRunCount.organisation_id == org_id,
-                OrgDailyRunCount.run_date >= start_date,
-            )
-            .group_by(OrgDailyRunCount.run_date)
-            .order_by(OrgDailyRunCount.run_date)
-        )
-        counts_result = await session.execute(counts_query)
-        run_counts = [{"date": str(row.run_date), "run_count": int(row.run_count)} for row in counts_result.all()]
-
         eval_query = (
             select(
-                func.date(EvalResult.evaluated_at).label("eval_date"),
+                cast(EvalResult.evaluated_at, Date).label("eval_date"),
                 func.count().label("total"),
                 func.sum(case((EvalResult.passed == True, 1), else_=0)).label("passed"),  # noqa: E712
             )
             .where(
                 EvalResult.organisation_id == org_id,
-                func.date(EvalResult.evaluated_at) >= start_date,
+                EvalResult.evaluated_at >= start_date,
             )
-            .group_by(func.date(EvalResult.evaluated_at))
-            .order_by(func.date(EvalResult.evaluated_at))
+            .group_by(cast(EvalResult.evaluated_at, Date))
+            .order_by(cast(EvalResult.evaluated_at, Date))
         )
         eval_result = await session.execute(eval_query)
         eval_rates: list[dict[str, Any]] = []
@@ -350,9 +358,10 @@ async def dashboard_trends(
                 }
             )
 
-        spend_query = (
+        daily_query = (
             select(
                 OrgDailyRunCount.run_date,
+                func.sum(OrgDailyRunCount.run_count).label("run_count"),
                 func.sum(OrgDailyRunCount.total_spend_usd).label("total_spend"),
             )
             .where(
@@ -362,10 +371,12 @@ async def dashboard_trends(
             .group_by(OrgDailyRunCount.run_date)
             .order_by(OrgDailyRunCount.run_date)
         )
-        spend_result = await session.execute(spend_query)
+        daily_result = await session.execute(daily_query)
+        all_rows = daily_result.all()
+        run_counts = [{"date": str(row.run_date), "run_count": int(row.run_count)} for row in all_rows]
         token_spend = [
             {"date": str(row.run_date), "total_spend_usd": float(row.total_spend) if row.total_spend else 0.0}
-            for row in spend_result.all()
+            for row in all_rows
         ]
 
         # ------------------------------------------------------------------
@@ -374,7 +385,7 @@ async def dashboard_trends(
 
         hitl_decision_query = (
             select(
-                func.date(HitlClaim.decision_at).label("decision_date"),
+                cast(HitlClaim.decision_at, Date).label("decision_date"),
                 func.count().label("total_decisions"),
                 func.sum(case((HitlClaim.decision == "approved", 1), else_=0)).label("approved_count"),
                 func.sum(case((HitlClaim.decision == "rejected", 1), else_=0)).label("rejected_count"),
@@ -388,8 +399,8 @@ async def dashboard_trends(
                 HitlClaim.decision_at.is_not(None),
                 HitlClaim.created_at >= start_date,
             )
-            .group_by(func.date(HitlClaim.decision_at))
-            .order_by(func.date(HitlClaim.decision_at))
+            .group_by(cast(HitlClaim.decision_at, Date))
+            .order_by(cast(HitlClaim.decision_at, Date))
         )
         hitl_rows = (await session.execute(hitl_decision_query)).all()
 
@@ -456,17 +467,17 @@ async def dashboard_trends(
         # Feedback-record volume (by date created)
         feedback_volume_query = (
             select(
-                func.date(FeedbackRecord.created_at).label("feedback_date"),
+                cast(FeedbackRecord.created_at, Date).label("feedback_date"),
                 func.count().label("feedback_count"),
                 func.sum(case((FeedbackRecord.feedback_status == "resolved", 1), else_=0)).label("resolved_count"),
                 func.sum(case((FeedbackRecord.feedback_status == "correcting", 1), else_=0)).label("correcting_count"),
             )
             .where(
                 FeedbackRecord.organisation_id == org_id,
-                func.date(FeedbackRecord.created_at) >= start_date,
+                FeedbackRecord.created_at >= start_date,
             )
-            .group_by(func.date(FeedbackRecord.created_at))
-            .order_by(func.date(FeedbackRecord.created_at))
+            .group_by(cast(FeedbackRecord.created_at, Date))
+            .order_by(cast(FeedbackRecord.created_at, Date))
         )
         feedback_rows = (await session.execute(feedback_volume_query)).all()
         feedback_by_date: dict[str, dict[str, Any]] = {}
