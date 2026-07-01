@@ -36,7 +36,7 @@ def sample_record() -> FeedbackRecord:
     r.organisation_id = _ORG_ID
     r.run_id = _RUN_ID
     r.gate_id = _GATE_ID
-    r.rejected_by = _USER_ID
+    r.account_id = _USER_ID
     r.rejection_reason = "Output did not match requirements"
     r.rejected_output = {"result": "wrong answer"}
     r.producing_node_id = "node-b"
@@ -66,7 +66,7 @@ class TestCreateFeedbackRecord:
         record = await mgr.create_feedback_record(
             run_id=_RUN_ID,
             gate_id=_GATE_ID,
-            rejected_by=_USER_ID,
+            account_id=_USER_ID,
             rejection_reason="Wrong output",
             rejected_output={"result": "bad"},
             producing_node_id="node-b",
@@ -90,7 +90,7 @@ class TestCreateFeedbackRecord:
             record = await mgr.create_feedback_record(
                 run_id=_RUN_ID,
                 gate_id=_GATE_ID,
-                rejected_by=_USER_ID,
+                account_id=_USER_ID,
                 rejection_reason="Bad output",
                 rejected_output={},
                 producing_node_id="node-b",
@@ -107,7 +107,7 @@ class TestCreateFeedbackRecord:
             record = await mgr.create_feedback_record(
                 run_id=_RUN_ID,
                 gate_id=_GATE_ID,
-                rejected_by=_USER_ID,
+                account_id=_USER_ID,
                 rejection_reason="Needs review",
                 rejected_output={},
                 producing_node_id="node-b",
@@ -124,7 +124,7 @@ class TestCreateFeedbackRecord:
             record = await mgr.create_feedback_record(
                 run_id=_RUN_ID,
                 gate_id=_GATE_ID,
-                rejected_by=_USER_ID,
+                account_id=_USER_ID,
                 rejection_reason="Auto-fix this",
                 rejected_output={"result": "bad"},
                 producing_node_id="node-b",
@@ -145,7 +145,7 @@ class TestCreateFeedbackRecord:
             record = await mgr.create_feedback_record(
                 run_id=_RUN_ID,
                 gate_id=_GATE_ID,
-                rejected_by=_USER_ID,
+                account_id=_USER_ID,
                 rejection_reason="Auto-fix then show",
                 rejected_output={"result": "bad"},
                 producing_node_id="node-b",
@@ -166,7 +166,7 @@ class TestCreateFeedbackRecord:
             await mgr.create_feedback_record(
                 run_id=_RUN_ID,
                 gate_id=_GATE_ID,
-                rejected_by=_USER_ID,
+                account_id=_USER_ID,
                 rejection_reason="Manual review",
                 rejected_output={"result": "bad"},
                 producing_node_id="node-b",
@@ -513,7 +513,7 @@ class TestRunPostCorrectionEval:
         r.organisation_id = _ORG_ID
         r.run_id = uuid.uuid4()
         r.gate_id = _GATE_ID
-        r.rejected_by = _USER_ID
+        r.account_id = _USER_ID
         r.rejection_reason = "bad output"
         r.rejected_output = {"result": "bad"}
         r.producing_node_id = "node-b"
