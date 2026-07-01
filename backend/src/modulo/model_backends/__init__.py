@@ -6,6 +6,7 @@ from modulo.model_backends.deepseek import DeepSeekBackend
 from modulo.model_backends.fireworks import FireworksBackend
 from modulo.model_backends.grok import GrokBackend
 from modulo.model_backends.groq import GroqBackend
+from modulo.model_backends.openrouter import OpenRouterBackend
 from modulo.model_backends.jan import JanBackend
 from modulo.model_backends.llamacpp import LLamaCppBackend
 from modulo.model_backends.lm_studio import LmStudioBackend
@@ -27,6 +28,7 @@ __all__ = [
     "AzureOpenAIBackend",
     "DeepSeekBackend",
     "FireworksBackend",
+    "GrokBackend",
     "GroqBackend",
     "HealthResult",
     "JanBackend",
