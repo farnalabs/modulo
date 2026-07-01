@@ -1078,6 +1078,65 @@ def run_status_waiting_for_approval(request: pytest.FixtureRequest) -> None:
     )
 
 
+# ---------------------------------------------------------------------------
+#  Node timeout scenario steps
+# ---------------------------------------------------------------------------
+
+
+@given(parsers.parse("a running pipeline with a node timeout of {timeout} seconds"))
+def pipeline_with_node_timeout(timeout: float, request: pytest.FixtureRequest) -> None:
+    from tests.bdd.conftest import make_mock_pipeline, make_mock_run
+
+    mock_pipeline = make_mock_pipeline(name="timeout-pipeline")
+    request.node._mock_pipeline = mock_pipeline
+    mock_run = make_mock_run(status="running", pipeline_id=mock_pipeline.id)
+    request.node._mock_run = mock_run
+    request.node._run_status = "running"
+    request.node._node_timeout = timeout
+
+
+@when("the node runs longer than the timeout")
+def node_timeout_expires(request: pytest.FixtureRequest) -> None:
+    mock_run = getattr(request.node, "_mock_run", None)
+    if mock_run is not None:
+        mock_run.status = "failed"
+        mock_run.error_detail = "node_timeout"
+    request.node._run_status = "failed"
+    request.node._error_code = "node_timeout"
+
+
+# ---------------------------------------------------------------------------
+#  Conditional gate scenario steps
+# ---------------------------------------------------------------------------
+
+
+@given("a running pipeline with a conditional HITL gate")
+def pipeline_with_conditional_hitl(request: pytest.FixtureRequest) -> None:
+    from tests.bdd.conftest import make_mock_pipeline, make_mock_run
+
+    mock_pipeline = make_mock_pipeline(name="conditional-hitl-pipeline")
+    request.node._mock_pipeline = mock_pipeline
+    mock_run = make_mock_run(status="running", pipeline_id=mock_pipeline.id)
+    request.node._mock_run = mock_run
+    request.node._gate_skipped = False
+
+
+@given("the gate condition evaluates to false")
+def gate_condition_false(request: pytest.FixtureRequest) -> None:
+    request.node._gate_skipped = True
+
+
+@then("the gate is skipped")
+def gate_is_skipped(request: pytest.FixtureRequest) -> None:
+    skipped = getattr(request.node, "_gate_skipped", False)
+    assert skipped, "Expected gate to be skipped"
+
+
+@then("the run continues to the next node")
+def run_continues_to_next(request: pytest.FixtureRequest) -> None:
+    run_continues(request)
+
+
 # ===================================================================
 #  Internal helpers
 # ===================================================================
