@@ -70,13 +70,13 @@ class E2BRuntimeProvider(RuntimeProvider):
 
         sandbox = await AsyncSandbox.create(template=template_id)
 
-        self._sandboxes[sandbox.id] = sandbox
+        self._sandboxes[sandbox.sandbox_id] = sandbox
 
         repo_url = spec.labels.get("repo_url", "")
         if repo_url:
             await self._clone_repo(sandbox, repo_url, spec.labels)
 
-        result = sandbox.id
+        result = sandbox.sandbox_id
         assert isinstance(result, str)
         return result
 
