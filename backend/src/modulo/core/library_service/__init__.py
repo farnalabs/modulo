@@ -533,52 +533,67 @@ _MODULO_PRIMITIVES: list[LibraryPrimitive] = [
     _make_modulo(
         pid="00000000-0000-0000-0000-000000000092",
         primitive_type="composite",
-        name="d20",
-        slug="d20",
-        description="Rolls a d20 (1-20). Output is always an integer 1-20. Self-corrects on hallucination.",
+        name="Devil\u2019s Advocate",
+        slug="devils-advocate",
+        description="Takes a position, argues for it, then argues against it. Synthesises both sides into balanced advice. Use when you need rigorous critique of a plan.",
         content_json={
             "parameter_ports": [
-                {"name": "system_prompt", "label": "System Prompt", "type": "string", "required": True,
-                 "description": "Instructions for the dice roll context",
-                 "default_value": (
-                     "You roll a 20-sided die. Respond with just"
-                     " a number between 1 and 20."
-                 ),
+                {"name": "position", "label": "Position to Challenge", "type": "string", "required": True,
+                 "description": "The plan, argument, or decision to scrutinise",
+                 "default_value": "We should migrate our monolith to microservices.",
                  "target_injection": {
                      "mode": "prompt_replace",
-                     "node_id": "roll-agent",
+                     "node_id": "advocate-for",
+                     "injection_point": "prompt_template",
+                 }},
+                {"name": "advocate_prompt", "label": "Advocate Instructions", "type": "string", "required": False,
+                 "description": "Prompt shaping how the pro side argues",
+                 "default_value": "You are an advocate. Argue strongly in favour of this position: {{parameter.position}}",
+                 "target_injection": {
+                     "mode": "prompt_replace",
+                     "node_id": "advocate-for",
+                     "injection_point": "prompt_template",
+                 }},
+                {"name": "critic_prompt", "label": "Critic Instructions", "type": "string", "required": False,
+                 "description": "Prompt shaping how the con side argues",
+                 "default_value": "You are a critic. Argue strongly against this position: {{parameter.position}}",
+                 "target_injection": {
+                     "mode": "prompt_replace",
+                     "node_id": "advocate-against",
+                     "injection_point": "prompt_template",
+                 }},
+                {"name": "mediator_prompt", "label": "Mediator Instructions", "type": "string", "required": False,
+                 "description": "Prompt shaping how the mediator synthesises",
+                 "default_value": "You are a mediator. Below are two arguments about: {{parameter.position}}\n\n--- PRO ---\n{{nodes.advocate-for.output}}\n\n--- CON ---\n{{nodes.advocate-against.output}}\n\nSynthesise both sides into balanced, actionable advice.",
+                 "target_injection": {
+                     "mode": "prompt_replace",
+                     "node_id": "mediator",
                      "injection_point": "prompt_template",
                  }},
             ],
             "sub_pipeline_graph_json": {
-                "nodes": [{"id": "roll-agent", "node_type": "agent", "label": "Dice Roll Agent"}],
-                "edges": [],
+                "nodes": [
+                    {"id": "advocate-for", "node_type": "agent", "label": "Advocate For"},
+                    {"id": "advocate-against", "node_type": "agent", "label": "Advocate Against"},
+                    {"id": "mediator", "node_type": "agent", "label": "Mediator"},
+                ],
+                "edges": [
+                    {"source": "advocate-for", "target": "mediator", "edge_type": "normal"},
+                    {"source": "advocate-against", "target": "mediator", "edge_type": "normal"},
+                ],
             },
             "input_schema_id": None,
             "output_schema": {
                 "type": "object",
                 "properties": {
-                    "roll": {"type": "integer", "minimum": 1, "maximum": 20},
+                    "synthesis": {"type": "string"},
+                    "pro_arguments": {"type": "string"},
+                    "con_arguments": {"type": "string"},
                 },
-                "required": ["roll"],
-            },
-            "output_validation": {
-                "eval_definitions": [{
-                    "name": "roll_in_range",
-                    "type": "json_schema",
-                    "config": {
-                        "schema": {
-                            "type": "object",
-                            "properties": {"roll": {"type": "integer", "minimum": 1, "maximum": 20}},
-                            "required": ["roll"],
-                        },
-                    },
-                    "failure_behaviour": "retry",
-                }],
-                "max_validation_retries": 3,
+                "required": ["synthesis"],
             },
         },
-        tags=["composite", "dice", "random", "game"],
+        tags=["composite", "devils-advocate", "critique", "decision", "strategy"],
     ),
     _make_modulo(
         pid="00000000-0000-0000-0000-000000000093",
@@ -625,6 +640,201 @@ _MODULO_PRIMITIVES: list[LibraryPrimitive] = [
             },
         },
         tags=["composite", "triage", "classification", "bug", "feature"],
+    ),
+    _make_modulo(
+        pid="00000000-0000-0000-0000-000000000094",
+        primitive_type="composite",
+        name="LLM Council",
+        slug="llm-council",
+        description="Runs N parallel LLM calls with the same prompt, then a mediator synthesises their responses into a single output. Configure model count and backends.",
+        content_json={
+            "parameter_ports": [
+                {"name": "council_prompt", "label": "Council Prompt", "type": "string", "required": True,
+                 "description": "The prompt each council member responds to",
+                 "default_value": "Analyse the following and provide your best recommendation.",
+                 "target_injection": {
+                     "mode": "prompt_replace",
+                     "node_id": "member-1",
+                     "injection_point": "prompt_template",
+                 }},
+                {"name": "member_count", "label": "Number of Members", "type": "number", "required": True,
+                 "description": "How many LLM calls to run in parallel (1-5)",
+                 "default_value": 3,
+                 "target_injection": {"mode": "run_context_key", "key": "council_member_count"}},
+                {"name": "mediator_instructions", "label": "Mediator Instructions", "type": "string", "required": False,
+                 "description": "How the mediator should combine responses",
+                 "default_value": "Below are {{council_member_count}} responses from different AI council members.\n\n{{nodes.council.output}}\n\nSynthesise them into a single coherent recommendation, noting areas of agreement and disagreement.",
+                 "target_injection": {
+                     "mode": "prompt_replace",
+                     "node_id": "council-mediator",
+                     "injection_point": "prompt_template",
+                 }},
+            ],
+            "sub_pipeline_graph_json": {
+                "nodes": [
+                    {"id": "member-1", "node_type": "agent", "label": "Council Member 1"},
+                    {"id": "member-2", "node_type": "agent", "label": "Council Member 2"},
+                    {"id": "member-3", "node_type": "agent", "label": "Council Member 3"},
+                    {"id": "council-mediator", "node_type": "agent", "label": "Council Mediator"},
+                ],
+                "edges": [
+                    {"source": "member-1", "target": "council-mediator", "edge_type": "normal"},
+                    {"source": "member-2", "target": "council-mediator", "edge_type": "normal"},
+                    {"source": "member-3", "target": "council-mediator", "edge_type": "normal"},
+                ],
+            },
+            "input_schema_id": None,
+            "output_schema": {
+                "type": "object",
+                "properties": {
+                    "synthesis": {"type": "string"},
+                    "agreement_points": {"type": "array", "items": {"type": "string"}},
+                    "disagreement_points": {"type": "array", "items": {"type": "string"}},
+                    "member_count": {"type": "integer"},
+                },
+                "required": ["synthesis"],
+            },
+        },
+        tags=["composite", "llm-council", "ensemble", "consensus", "decision"],
+    ),
+    _make_modulo(
+        pid="00000000-0000-0000-0000-000000000093",
+        primitive_type="composite",
+        name="Triage",
+        slug="triage",
+        description="Classifies into BUG, FEATURE, INFRA, DOCS. First word is forced to one of the four.",
+        content_json={
+            "parameter_ports": [
+                {"name": "system_prompt", "label": "System Prompt", "type": "string", "required": True,
+                 "description": "Instructions for the triage classification",
+                 "default_value": (
+                     "You are a triage classifier. Respond with one of"
+                     " BUG, FEATURE, INFRA, or DOCS as the first word,"
+                     " followed by your reasoning."
+                 ),
+                 "target_injection": {
+                     "mode": "prompt_replace",
+                     "node_id": "classifier-agent",
+                     "injection_point": "prompt_template",
+                 }},
+            ],
+            "sub_pipeline_graph_json": {
+                "nodes": [{"id": "classifier-agent", "node_type": "agent", "label": "Classifier Agent"}],
+                "edges": []
+            },
+            "input_schema_id": None,
+            "output_schema": {
+                "type": "object",
+                "properties": {
+                    "result": {"type": "string"},
+                    "reasoning": {"type": "string"},
+                },
+                "required": ["result"],
+            },
+            "output_validation": {
+                "eval_definitions": [{
+                    "name": "first_word_category",
+                    "type": "regex",
+                    "config": {"pattern": "^(BUG|FEATURE|INFRA|DOCS)\\b", "field": "result"},
+                    "failure_behaviour": "retry",
+                }],
+                "max_validation_retries": 2,
+            },
+        },
+        tags=["composite", "triage", "classification", "bug", "feature"],
+    ),
+    _make_modulo(
+        pid="00000000-0000-0000-0000-000000000095",
+        primitive_type="composite",
+        name="Structured Output Enforcer",
+        slug="structured-output-enforcer",
+        description="Takes free-form text and restructures it according to a target JSON Schema. Retries if the output doesn\u2019t conform. Use when you need guaranteed structural consistency.",
+        content_json={
+            "parameter_ports": [
+                {"name": "system_prompt", "label": "System Prompt", "type": "string", "required": True,
+                 "description": "Instructions describing how to structure the output",
+                 "default_value": "Restructure the input text into the required JSON format. Ensure all required fields are present and correctly typed.",
+                 "target_injection": {
+                     "mode": "prompt_replace",
+                     "node_id": "structurer",
+                     "injection_point": "prompt_template",
+                 }},
+            ],
+            "sub_pipeline_graph_json": {
+                "nodes": [{"id": "structurer", "node_type": "agent", "label": "Structurer"}],
+                "edges": [],
+            },
+            "input_schema_id": None,
+            "output_schema": {
+                "type": "object",
+                "properties": {
+                    "structured": {"type": "object"},
+                    "original": {"type": "string"},
+                },
+                "required": ["structured"],
+            },
+            "output_validation": {
+                "eval_definitions": [{
+                    "name": "valid_json_schema",
+                    "type": "json_schema",
+                    "config": {
+                        "schema": {
+                            "type": "object",
+                            "properties": {
+                                "structured": {"type": "object"},
+                                "original": {"type": "string"},
+                            },
+                            "required": ["structured"],
+                        },
+                    },
+                    "failure_behaviour": "retry",
+                }],
+                "max_validation_retries": 3,
+            },
+        },
+        tags=["composite", "structuring", "json", "schema", "enforcer"],
+    ),
+    _make_modulo(
+        pid="00000000-0000-0000-0000-000000000096",
+        primitive_type="composite",
+        name="Complexity Estimator",
+        slug="complexity-estimator",
+        description="Estimates work complexity as XS, S, M, L, or XL with structured reasoning. Forces a valid size as the first word. Self-corrects on invalid output.",
+        content_json={
+            "parameter_ports": [
+                {"name": "system_prompt", "label": "System Prompt", "type": "string", "required": True,
+                 "description": "Instructions describing what to estimate complexity for",
+                 "default_value": "Analyse the following work item and estimate its complexity. Respond with exactly one of XS, S, M, L, or XL as the first word, followed by your reasoning.",
+                 "target_injection": {
+                     "mode": "prompt_replace",
+                     "node_id": "estimator",
+                     "injection_point": "prompt_template",
+                 }},
+            ],
+            "sub_pipeline_graph_json": {
+                "nodes": [{"id": "estimator", "node_type": "agent", "label": "Estimator"}],
+                "edges": [],
+            },
+            "input_schema_id": None,
+            "output_schema": {
+                "type": "object",
+                "properties": {
+                    "result": {"type": "string"},
+                    "reasoning": {"type": "string"},
+                },
+                "required": ["result"],
+            },
+            "output_validation": {
+                "eval_definitions": [{
+                    "name": "valid_complexity_size",
+                    "type": "regex",
+                    "config": {"pattern": "^(XS|S|M|L|XL)\\b", "field": "result"},
+                    "failure_behaviour": "retry",
+                }],
+                "max_validation_retries": 2,
+            },
+        },
+        tags=["composite", "complexity", "estimation", "sizing", "planning"],
     ),
 ]
 
