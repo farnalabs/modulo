@@ -35,7 +35,7 @@ function doConnect(): void {
     try {
       data = JSON.parse(event.data)
     } catch (e) {
-      console.warn('[EventBus] Failed to parse event', e instanceof SyntaxError ? e.message : String(e))
+      console.warn('[EventBus] Failed to parse event', e instanceof Error ? e.message : String(e))
       return
     }
     const typeHandlers = handlers.get(data.type)

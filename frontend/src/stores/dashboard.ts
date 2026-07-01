@@ -115,7 +115,7 @@ export const useDashboardStore = defineStore('dashboard', () => {
     try {
       const { data: result, error: err } = await api.GET('/api/v1/dashboard/summary')
       if (err) {
-        error.value = String(err)
+        error.value = typeof err === 'object' && err !== null && 'detail' in err ? String((err as { detail: string }).detail) : String(err)
       } else {
         summary.value = validateDashboardSummary(result)
       }
@@ -143,11 +143,13 @@ export const useDashboardStore = defineStore('dashboard', () => {
       })
       if (err) {
         console.warn('[Dashboard] fetchTrends failed:', err)
+        error.value = typeof err === 'object' && err !== null && 'detail' in err ? String((err as { detail: string }).detail) : String(err)
       } else if (result) {
-        trends.value = result as any
+        trends.value = result
       }
     } catch (e: unknown) {
       console.warn('[Dashboard] fetchTrends error:', e)
+      error.value = e instanceof Error ? e.message : String(e)
     } finally {
       trendsLoading.value = false
     }
