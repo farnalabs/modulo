@@ -113,7 +113,7 @@ class LibraryPrimitiveListResponse(BaseModel):
 
 
 class LibraryPrimitiveCreate(BaseModel):
-    primitive_type: str = Field(pattern=r"^(schema|workflow|agent|integration|test_fixture)$")
+    primitive_type: str = Field(pattern=r"^(schema|workflow|agent|integration|test_fixture|composite)$")
     name: str = Field(min_length=1, max_length=255)
     slug: str = Field(min_length=1, max_length=255)
     description: str | None = None
