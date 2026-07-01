@@ -54,7 +54,7 @@ class EvalDefinitionResponse(BaseModel):
     failure_behaviour: str
     pass_threshold: float | None = None
     suite_id: str | None = None
-    created_by: uuid.UUID
+    created_by: uuid.UUID = Field(validation_alias="account_id")
 
 
 class EvalResultResponse(BaseModel):

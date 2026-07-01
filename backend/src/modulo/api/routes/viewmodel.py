@@ -110,7 +110,7 @@ class ViewInfo(BaseModel):
     columns: list[str] | None
     sort_by: str | None
     sort_order: str
-    created_by: uuid.UUID
+    created_by: uuid.UUID = Field(validation_alias="account_id")
     created_by_me: bool
     created_at: datetime
     updated_at: datetime

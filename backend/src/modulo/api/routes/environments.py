@@ -88,7 +88,7 @@ class ProfileResponse(BaseModel):
     resource_limits: dict[str, Any]
     persistence_policy: dict[str, Any]
     is_active: bool
-    created_by: str | None
+    created_by: str | None = Field(default=None, validation_alias="account_id")
     created_at: str | None
     updated_at: str | None
 

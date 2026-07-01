@@ -87,7 +87,7 @@ class AgentResponse(BaseModel):
     token_budget: int | None
     max_input_length: int | None
     library_id: uuid.UUID | None
-    created_by: uuid.UUID
+    created_by: uuid.UUID = Field(validation_alias="account_id")
     created_at: datetime
     updated_at: datetime
 

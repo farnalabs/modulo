@@ -714,7 +714,7 @@ class SnapshotResponse(BaseModel):
     tag: str | None
     notes: str | None
     created_at: datetime | None
-    created_by: uuid.UUID | None
+    created_by: uuid.UUID | None = Field(default=None, validation_alias="account_id")
 
     model_config = {"from_attributes": True}
 
