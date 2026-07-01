@@ -401,7 +401,7 @@ class TestPatchEdgeCases:
         assert resp.status_code == 200
         assert mock_user.active is False
 
-    def test_patch_user_unsupported_op_is_ignored(self, client: TestClient) -> None:
+    def test_patch_user_unsupported_op_returns_400(self, client: TestClient) -> None:
         mock_user = MagicMock(
             id=_USER_ID,
             organisation_id=_ORG_ID,
@@ -429,7 +429,39 @@ class TestPatchEdgeCases:
                 json=body,
                 headers={"Authorization": f"Bearer {_SCIM_TOKEN}"},
             )
-        assert resp.status_code == 200
+        assert resp.status_code == 400
+
+    def test_patch_user_invalid_op_returns_400(self, client: TestClient) -> None:
+        mock_user = MagicMock(
+            id=_USER_ID,
+            organisation_id=_ORG_ID,
+            email="jane@example.com",
+            display_name="Jane Doe",
+            active=True,
+            org_role="runner",
+            auth_provider="scim",
+            created_at=_NOW,
+            updated_at=_NOW,
+        )
+        body = {
+            "schemas": ["urn:ietf:params:scim:api:messages:2.0:PatchOp"],
+            "Operations": [{"op": "invalidOp"}],
+        }
+        with (
+            patch(
+                "modulo.api.routes.scim.scim_get_user",
+                return_value=mock_user,
+            ),
+            patch("modulo.api.routes.scim.set_rls_org"),
+        ):
+            resp = client.patch(
+                f"/scim/v2/Users/{_USER_ID}",
+                json=body,
+                headers={"Authorization": f"Bearer {_SCIM_TOKEN}"},
+            )
+        assert resp.status_code == 400
+        data = resp.json()
+        assert "detail" in data
 
     def test_patch_user_add_username(self, client: TestClient) -> None:
         mock_user = MagicMock(
@@ -534,7 +566,7 @@ class TestPatchEdgeCases:
             )
         assert resp.status_code == 200
 
-    def test_patch_group_unsupported_op_is_ignored(self, client: TestClient) -> None:
+    def test_patch_group_unsupported_op_returns_400(self, client: TestClient) -> None:
         mock_team = MagicMock()
         mock_team.id = _TEAM_ID
         mock_team.organisation_id = _ORG_ID
@@ -563,7 +595,39 @@ class TestPatchEdgeCases:
                 json=body,
                 headers={"Authorization": f"Bearer {_SCIM_TOKEN}"},
             )
-        assert resp.status_code == 200
+        assert resp.status_code == 400
+
+    def test_patch_group_invalid_op_returns_400(self, client: TestClient) -> None:
+        mock_team = MagicMock()
+        mock_team.id = _TEAM_ID
+        mock_team.organisation_id = _ORG_ID
+        mock_team.name = "Engineering"
+        mock_team.created_by = _USER_ID
+        mock_team.created_at = _NOW
+        mock_team.updated_at = _NOW
+        body = {
+            "schemas": ["urn:ietf:params:scim:api:messages:2.0:PatchOp"],
+            "Operations": [{"op": "invalidOp"}],
+        }
+        with (
+            patch(
+                "modulo.api.routes.scim.scim_get_group",
+                return_value=mock_team,
+            ),
+            patch(
+                "modulo.api.routes.scim.scim_list_group_members",
+                return_value=_MOCK_MEMBERSHIPS,
+            ),
+            patch("modulo.api.routes.scim.set_rls_org"),
+        ):
+            resp = client.patch(
+                f"/scim/v2/Groups/{_TEAM_ID}",
+                json=body,
+                headers={"Authorization": f"Bearer {_SCIM_TOKEN}"},
+            )
+        assert resp.status_code == 400
+        data = resp.json()
+        assert "detail" in data
 
     def test_replace_group_clear_members(self, client: TestClient) -> None:
         """PUT Group with empty members list removes all members."""
@@ -686,6 +750,14 @@ class TestServiceProviderConfig:
         data = resp.json()
         assert data["schemas"] == ["urn:ietf:params:scim:schemas:core:2.0:ServiceProviderConfig"]
         assert data["patch"]["supported"] is True
+
+    def test_service_provider_config_without_public_url(self, client: TestClient) -> None:
+        """ServiceProviderConfig should not crash when modulo_public_url is unset."""
+        resp = client.get(
+            "/scim/v2/ServiceProviderConfig",
+            headers={"Authorization": f"Bearer {_SCIM_TOKEN}"},
+        )
+        assert resp.status_code == 200
 
 
 # ── User endpoints ───────────────────────────────────────────────────
