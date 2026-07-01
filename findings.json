@@ -1,0 +1,34 @@
+{
+  "findings": [
+    {
+      "file": "backend/src/modulo/api/routes/library.py",
+      "line": 91,
+      "description": "LibraryPrimitiveResponse._compute_trust_tier model_validator('before') only handles dict input (isinstance(data, dict) check on line 94); when model_validate(orm_instance) is called with from_attributes=True (lines 280, 308, 349, 366, 411, 716, 741), the ORM object is passed as data, the isinstance check fails, and trust_tier is never computed — always None for every API response",
+      "severity": "critical"
+    },
+    {
+      "file": "backend/src/modulo/api/routes/library.py",
+      "line": 121,
+      "description": "LibraryPrimitiveCreate.description has no max_length constraint; DB column is String(2000)",
+      "severity": "major"
+    },
+    {
+      "file": "backend/src/modulo/api/routes/library.py",
+      "line": 133,
+      "description": "LibraryPrimitiveUpdate.description has no max_length constraint; DB column is String(2000)",
+      "severity": "major"
+    },
+    {
+      "file": "backend/src/modulo/api/routes/library.py",
+      "line": 139,
+      "description": "RatingSubmit.comment has no max_length constraint, allowing unbounded text input stored in a Text column",
+      "severity": "minor"
+    },
+    {
+      "file": "frontend/src/views/LibraryView.vue",
+      "line": 144,
+      "description": "Frontend LibraryPrimitive interface missing 11 fields from the backend LibraryPrimitiveResponse: content_json, source_url, checksum, ed25519_signature, verified, trust_tier, download_count, average_rating, review_count, owner_team_id, created_by",
+      "severity": "minor"
+    }
+  ]
+}
