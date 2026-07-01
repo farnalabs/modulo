@@ -27,6 +27,7 @@ _MAX_CONNECTIONS_PER_ORG = 100
 _MAX_CONNECTIONS_PER_USER = 10
 
 _active_connections: dict[str, set[asyncio.Queue]] = {}
+_queue_users: dict[int, str] = {}  # id(q) -> user_id
 _active_connections_lock: asyncio.Lock = asyncio.Lock()
 
 
@@ -41,7 +42,7 @@ async def _track_connection(org_id: str, user_id: str, queue: asyncio.Queue) -> 
                 f"Limit is {_MAX_CONNECTIONS_PER_ORG} concurrent streams.",
             )
         user_count = sum(
-            1 for q in active if getattr(q, "_user_id", None) == user_id
+            1 for q in active if _queue_users.get(id(q)) == user_id
         )
         if user_count >= _MAX_CONNECTIONS_PER_USER:
             raise HTTPException(
@@ -49,13 +50,14 @@ async def _track_connection(org_id: str, user_id: str, queue: asyncio.Queue) -> 
                 detail="Too many SSE connections from this user. "
                 f"Limit is {_MAX_CONNECTIONS_PER_USER} concurrent streams per user.",
             )
-        queue._user_id = user_id
+        _queue_users[id(queue)] = user_id
         active.add(queue)
 
 
 async def _untrack_connection(org_id: str, queue: asyncio.Queue) -> None:
     """Remove a connection from the active set."""
     async with _active_connections_lock:
+        _queue_users.pop(id(queue), None)
         active = _active_connections.get(org_id)
         if active:
             active.discard(queue)
