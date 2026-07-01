@@ -18,7 +18,9 @@ status: partial
 
 # OTel Config UI
 
-Per-org OpenTelemetry exporter configuration: OTLP endpoint, dynamic headers, export interval, and LangSmith toggle + API key. Stored in `organisations.otel_config_json`. Settings page at `/settings/observability`.
+Per-org OpenTelemetry exporter configuration: OTLP endpoint, dynamic headers, export
+interval, and LangSmith toggle + API key. Stored in `organisations.otel_config_json`.
+Settings page at `/settings/observability`.
 
 ## Behaviours
 
@@ -90,7 +92,8 @@ Per-org OpenTelemetry exporter configuration: OTLP endpoint, dynamic headers, ex
 
 ## Known Gaps
 
-- **BDD placeholder:** `backend/tests/bdd/features/observability/otel_traces.feature` has zero scenarios; step definitions in `test_observability.py` all just `pass`
+- **BDD placeholder:** `backend/tests/bdd/features/observability/otel_traces.feature`
+  has zero scenarios; step definitions in `test_observability.py` all just `pass`
 - **ExportPreview not wired:** `GET /api/v1/settings/observability/preview` endpoint exists but frontend never calls it — no "preview config" button or display
 - **SimpleSpanProcessor:** Uses synchronous per-span export instead of production-grade BatchSpanProcessor with buffering, batching, and backpressure
 - **No sampling config:** No UI field or DB schema for trace sampling rate — every span is either exported or not
