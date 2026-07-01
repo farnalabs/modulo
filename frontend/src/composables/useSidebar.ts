@@ -7,7 +7,12 @@ const OLD_COLLAPSED_KEY = 'modulo-sidebar-collapsed-groups'
 const viewMode = ref<'simple' | 'advanced'>('simple')
 const groupPrefs = ref<Record<string, boolean>>({})
 
+let initialized = false
+
 function init() {
+  if (initialized) return
+  initialized = true
+
   const saved = localStorage.getItem(VIEW_MODE_KEY)
   if (saved === 'simple' || saved === 'advanced') {
     viewMode.value = saved
@@ -34,6 +39,7 @@ function init() {
             migrated[id] = true
           }
           groupPrefs.value = migrated
+          save()
         }
       } catch {
         // ignore

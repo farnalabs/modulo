@@ -25,9 +25,12 @@
     <!-- Mobile header -->
     <header class="md:hidden fixed top-0 left-0 right-0 z-50 flex items-center justify-between border-b bg-background px-4 h-14">
       <button
+        ref="mobileButtonRef"
         @click="mobileOpen = !mobileOpen"
         class="rounded-md p-2 text-muted-foreground hover:text-foreground hover:bg-muted transition-colors"
         :aria-label="mobileOpen ? 'Close navigation' : 'Open navigation'"
+        :aria-expanded="mobileOpen"
+        aria-controls="mobile-sidebar"
       >
         <svg v-if="!mobileOpen" xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
           <line x1="3" y1="6" x2="21" y2="6"/>
@@ -52,12 +55,16 @@
       v-if="mobileOpen"
       class="md:hidden fixed inset-0 z-30 bg-black/50"
       @click="mobileOpen = false"
+      aria-hidden="true"
     />
 
     <!-- Mobile sidebar -->
     <aside
+      id="mobile-sidebar"
+      ref="mobileSidebarRef"
       class="md:hidden fixed top-14 left-0 z-40 h-[calc(100vh-3.5rem)] w-64 border-r bg-background p-4 flex flex-col transition-transform"
       :class="mobileOpen ? 'translate-x-0' : '-translate-x-full'"
+      @keydown.escape="mobileOpen = false"
     >
       <SidebarNav :is-system-admin="isSystemAdmin" @navigate="mobileOpen = false" />
 
@@ -85,7 +92,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, onMounted, watch, nextTick } from 'vue'
 import { getAccessToken, clearAccessToken } from '../lib/api/client'
 import { usePlanStore } from '../stores/planStore'
 import LogoMark from './LogoMark.vue'
@@ -99,6 +106,8 @@ const { viewMode, setViewMode } = useSidebar()
 const planStore = usePlanStore()
 
 const mobileOpen = ref(false)
+const mobileSidebarRef = ref<HTMLElement | null>(null)
+const mobileButtonRef = ref<HTMLElement | null>(null)
 
 const isLight = ref(document.documentElement.classList.contains('light'))
 
@@ -114,14 +123,34 @@ function logout() {
   window.location.reload()
 }
 
+function decodeBase64Url(s: string): string {
+  s = s.replace(/-/g, '+').replace(/_/g, '/')
+  const pad = s.length % 4
+  if (pad) s += '='.repeat(4 - pad)
+  return atob(s)
+}
+
 const jwtPayload = computed(() => {
   const token = getAccessToken()
   if (!token) return null
   try {
-    return JSON.parse(atob(token.split('.')[1]))
+    return JSON.parse(decodeBase64Url(token.split('.')[1]))
   } catch {
     return null
   }
+})
+
+watch(mobileOpen, (open) => {
+  nextTick(() => {
+    if (open && mobileSidebarRef.value) {
+      const firstFocusable = mobileSidebarRef.value!.querySelector<HTMLElement>(
+        'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])'
+      )
+      firstFocusable?.focus()
+    } else if (!open && mobileButtonRef.value) {
+      mobileButtonRef.value.focus()
+    }
+  })
 })
 
 const userEmail = computed(() => jwtPayload.value?.sub || '')

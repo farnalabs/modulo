@@ -33,6 +33,7 @@
 
     <div class="flex items-center gap-2">
       <button
+        type="button"
         @click="$emit('setViewMode', viewMode === 'simple' ? 'advanced' : 'simple')"
         class="text-xs text-muted-foreground hover:text-foreground transition-colors flex items-center gap-1.5"
       >
@@ -52,9 +53,9 @@
           <svg v-else xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>
           <span>{{ isLight ? 'Light' : 'Dark' }}</span>
         </span>
-        <input type="checkbox" class="hidden" @change="$emit('toggleTheme')" :checked="isLight" />
+        <input type="checkbox" class="sr-only" @change="$emit('toggleTheme')" :checked="isLight" />
       </label>
-      <button @click="$emit('logout')" class="text-xs text-muted-foreground hover:text-foreground transition-colors">Sign out</button>
+      <button type="button" @click="$emit('logout')" class="text-xs text-muted-foreground hover:text-foreground transition-colors">Sign out</button>
     </div>
   </div>
 </template>
