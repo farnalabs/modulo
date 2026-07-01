@@ -24,6 +24,7 @@ const formDefaults = {
   type: 'string' as ParameterPortType,
   required: false,
   default: '',
+  multiline: false,
 }
 
 const form = ref({ ...formDefaults })
@@ -50,6 +51,7 @@ function openEditForm(index: number) {
     type: p.type,
     required: p.required,
     default: p.default !== undefined && p.default !== null ? String(p.default) : '',
+    multiline: p.multiline || false,
   }
   showAddForm.value = true
   formError.value = null
@@ -75,6 +77,7 @@ function savePort() {
     type: form.value.type,
     required: form.value.required,
     default: form.value.type === 'number' ? Number(form.value.default) : form.value.default || undefined,
+    multiline: form.value.multiline,
   }
 
   const updated = [...props.ports]
@@ -240,6 +243,14 @@ async function detectPlaceholders() {
             class="h-4 w-4 rounded border-gray-300 text-indigo-500 focus:ring-indigo-500"
           />
           <label class="text-xs text-muted-foreground">Required</label>
+        </div>
+        <div v-if="form.type === 'string'" class="flex items-center gap-2">
+          <input
+            v-model="form.multiline"
+            type="checkbox"
+            class="h-4 w-4 rounded border-gray-300 text-indigo-500 focus:ring-indigo-500"
+          />
+          <label class="text-xs text-muted-foreground">Multiline</label>
         </div>
         <div v-if="form.type !== 'boolean'">
           <label class="mb-1 block text-xs font-medium text-muted-foreground">Default Value</label>
