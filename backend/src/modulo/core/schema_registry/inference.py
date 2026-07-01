@@ -1,13 +1,12 @@
 """Schema inference service - uses an LLM to infer JSON Schema from sample data."""
 
-import asyncio
 import json
 import logging
-import re
 from typing import Any
 
 from langchain_core.messages import BaseMessage, HumanMessage, SystemMessage
 
+from modulo.core.schema_registry._common import invoke_and_parse
 from modulo.model_backends.base import ModelBackendBase
 
 _log = logging.getLogger(__name__)
@@ -30,8 +29,6 @@ _INFERENCE_SYSTEM_PROMPT = (
 _MAX_SAMPLE_RECORDS = 50
 _INFER_TIMEOUT = 60.0
 
-_FENCE_RE = re.compile(r"^```(?:\w+)?\s*\n(.*?)\n```", re.DOTALL)
-
 
 def _build_infer_prompt(
     samples: list[dict[str, Any]],
@@ -46,19 +43,6 @@ def _build_infer_prompt(
         SystemMessage(content=system_prompt or _INFERENCE_SYSTEM_PROMPT),
         HumanMessage(content=message_text),
     ]
-
-
-def _parse_schema_from_response(response_text: str) -> dict[str, Any]:
-    text = response_text.strip()
-    m = _FENCE_RE.search(text)
-    if m:
-        text = m.group(1).strip()
-    schema = json.loads(text)
-    if not isinstance(schema, dict):
-        raise ValueError("LLM response is not a JSON object")
-    schema.setdefault("type", "object")
-    schema.setdefault("properties", {})
-    return schema
 
 
 class SchemaInferenceError(Exception):
@@ -86,27 +70,10 @@ class SchemaInferenceService:
             raise ValueError("samples must be a list of dicts")
 
         messages = _build_infer_prompt(samples, self._system_prompt)
-        try:
-            response = await asyncio.wait_for(
-                self._backend.invoke(messages),
-                timeout=self._timeout,
-            )
-        except TimeoutError:
-            _log.error("Schema inference timed out after %ss", self._timeout)
-            raise SchemaInferenceError(f"LLM call timed out after {self._timeout}s") from None
-        except Exception as exc:
-            _log.exception("LLM call failed during schema inference")
-            raise SchemaInferenceError("LLM call failed") from exc
-
-        if not hasattr(response, "content"):
-            raise SchemaInferenceError("Backend returned unexpected response type")
-
-        content = response.content
-        if not isinstance(content, str):
-            raise SchemaInferenceError(f"Expected string response, got {type(content).__name__}")
-
-        try:
-            return _parse_schema_from_response(content)
-        except (json.JSONDecodeError, ValueError) as exc:
-            _log.exception("Failed to parse inferred schema from LLM response")
-            raise SchemaInferenceError("Failed to parse inferred schema from LLM response") from exc
+        return await invoke_and_parse(
+            self._backend,
+            messages,
+            self._timeout,
+            SchemaInferenceError,
+            "inference",
+        )
