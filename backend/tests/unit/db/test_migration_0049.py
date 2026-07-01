@@ -65,7 +65,7 @@ class TestMigration0049Upgrade:
         assert "ix_remy_skills_organisation_id" in index_names
         assert "ix_remy_skills_user_id" in index_names
 
-    def test_upgrade_creates_owner_check_constraint(self, migration) -> None:
+    def test_upgrade_creates_two_check_constraints(self, migration) -> None:
         mock_op = MagicMock()
 
         with patch("alembic.op.create_table", mock_op.create_table):
@@ -74,10 +74,10 @@ class TestMigration0049Upgrade:
                     with patch.object(migration, "op", mock_op, create=True):
                         migration.upgrade()
 
-        assert mock_op.create_check_constraint.call_count == 1
-        name, table = mock_op.create_check_constraint.call_args[0][:2]
-        assert name == "ck_remy_skills_owner"
-        assert table == "remy_skills"
+        assert mock_op.create_check_constraint.call_count == 2
+        names = [call[0][0] for call in mock_op.create_check_constraint.call_args_list]
+        assert "ck_remy_skills_owner" in names
+        assert "ck_chat_messages_role" in names
 
     def test_upgrade_chat_sessions_has_all_columns(self, migration) -> None:
         mock_op = MagicMock()
@@ -106,12 +106,26 @@ class TestMigration0049Upgrade:
 
 
 class TestMigration0049Downgrade:
+    def test_downgrade_drops_constraints_before_tables(self, migration) -> None:
+        mock_op = MagicMock()
+
+        with patch("alembic.op.drop_constraint", mock_op.drop_constraint):
+            with patch("alembic.op.drop_table", mock_op.drop_table):
+                with patch.object(migration, "op", mock_op, create=True):
+                    migration.downgrade()
+
+        assert mock_op.drop_constraint.call_count == 2
+        constraint_names = [call[0][0] for call in mock_op.drop_constraint.call_args_list]
+        assert "ck_chat_messages_role" in constraint_names
+        assert "ck_remy_skills_owner" in constraint_names
+
     def test_downgrade_drops_tables_in_reverse_order(self, migration) -> None:
         mock_op = MagicMock()
 
-        with patch("alembic.op.drop_table", mock_op.drop_table):
-            with patch.object(migration, "op", mock_op, create=True):
-                migration.downgrade()
+        with patch("alembic.op.drop_constraint", mock_op.drop_constraint):
+            with patch("alembic.op.drop_table", mock_op.drop_table):
+                with patch.object(migration, "op", mock_op, create=True):
+                    migration.downgrade()
 
         assert mock_op.drop_table.call_count == 3
         table_names = [call[0][0] for call in mock_op.drop_table.call_args_list]

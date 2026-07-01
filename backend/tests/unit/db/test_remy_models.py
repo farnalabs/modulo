@@ -92,6 +92,35 @@ class TestChatMessage:
         col = Base.metadata.tables["chat_messages"].c["role"]
         assert not col.nullable
 
+    def test_role_check_constraint_exists(self) -> None:
+        table = Base.metadata.tables["chat_messages"]
+        check = next(
+            (
+                c
+                for c in table.constraints
+                if isinstance(c, CheckConstraint) and c.name == "ck_chat_messages_role"
+            ),
+            None,
+        )
+        assert check is not None, "Missing ck_chat_messages_role CHECK constraint"
+
+    def test_role_check_allows_valid_roles(self) -> None:
+        table = Base.metadata.tables["chat_messages"]
+        check = next(
+            c for c in table.constraints if isinstance(c, CheckConstraint) and c.name == "ck_chat_messages_role"
+        )
+        sql = str(check.sqltext)
+        for role in ("user", "assistant", "tool_use", "tool_result", "summary"):
+            assert f"'{role}'" in sql
+
+    def test_role_check_rejects_invalid_roles(self) -> None:
+        table = Base.metadata.tables["chat_messages"]
+        check = next(
+            c for c in table.constraints if isinstance(c, CheckConstraint) and c.name == "ck_chat_messages_role"
+        )
+        sql = str(check.sqltext)
+        assert "IN" in sql
+
 
 class TestRemySkill:
     def test_table_exists(self) -> None:

@@ -73,8 +73,16 @@ def upgrade() -> None:
         ),
     )
 
+    op.create_check_constraint(
+        "ck_chat_messages_role",
+        "chat_messages",
+        sa.text("role IN ('user', 'assistant', 'tool_use', 'tool_result', 'summary')"),
+    )
+
 
 def downgrade() -> None:
+    op.drop_constraint("ck_chat_messages_role", "chat_messages", type_="check")
+    op.drop_constraint("ck_remy_skills_owner", "remy_skills", type_="check")
     op.drop_table("remy_skills")
     op.drop_table("chat_messages")
     op.drop_table("chat_sessions")
