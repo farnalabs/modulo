@@ -1,11 +1,14 @@
 """GitLab CI runner — triggers and observes pipeline runs via the GitLab API."""
 
+import logging
 from typing import Any
 
 import httpx
 
 from modulo.connectors.base import CIRun, CIRunLog, CIRunStatus, HealthResult
 from modulo.connectors.ci_runner.base import CIRunnerBase
+
+logger = logging.getLogger(__name__)
 
 _GITLAB_API_DEFAULT = "https://gitlab.com/api/v4"
 
@@ -60,13 +63,16 @@ class GitLabCIRunner(CIRunnerBase):
         )
 
     async def health_check(self) -> HealthResult:
-        async with self._client() as client:
-            r = await client.get("/projects?per_page=1")
-        if r.status_code == 200:
-            return HealthResult(ok=True)
-        if r.status_code in (401, 403):
-            return HealthResult(ok=False, detail="Authentication failed: invalid or expired token")
-        return HealthResult(ok=False, detail=f"HTTP {r.status_code}: {r.text[:200]}")
+        try:
+            async with self._client() as client:
+                r = await client.get("/projects?per_page=1")
+                if r.status_code == 200:
+                    return HealthResult(ok=True)
+                if r.status_code in (401, 403):
+                    return HealthResult(ok=False, detail="Authentication failed: invalid or expired token")
+                return HealthResult(ok=False, detail=f"HTTP {r.status_code}: {r.text[:200]}")
+        except httpx.HTTPError as exc:
+            return HealthResult(ok=False, detail=f"HTTP error: {exc}")
 
     async def trigger_run(
         self,
@@ -74,56 +80,87 @@ class GitLabCIRunner(CIRunnerBase):
         branch: str = "",
         variables: dict[str, str] | None = None,
     ) -> CIRun:
+        if not pipeline_id:
+            raise ValueError("pipeline_id is required")
         project_id = pipeline_id
         body: dict[str, Any] = {"ref": branch or "main"}
         if variables:
             body["variables"] = [{"key": k, "value": v} for k, v in variables.items()]
 
-        async with self._client() as client:
-            r = await client.post(f"/projects/{project_id}/pipeline", json=body)
-            r.raise_for_status()
-            data: dict[str, Any] = r.json()
-            return self._parse_run(data)
+        try:
+            async with self._client() as client:
+                r = await client.post(f"/projects/{project_id}/pipeline", json=body)
+                r.raise_for_status()
+                data: dict[str, Any] = r.json()
+                return self._parse_run(data)
+        except httpx.HTTPStatusError as exc:
+            raise ValueError(f"GitLab API error ({exc.response.status_code}): {exc.response.text[:200]}") from exc
+        except httpx.HTTPError as exc:
+            raise ValueError(f"GitLab API connection error: {exc}") from exc
 
     async def get_run_status(self, run_id: str) -> CIRun:
         project_id, _, pipeline_id = run_id.partition("/")
         if not pipeline_id:
             raise ValueError(f"Invalid run_id format: {run_id!r}. Expected 'project_id/pipeline_id'.")
-        async with self._client() as client:
-            r = await client.get(f"/projects/{project_id}/pipelines/{pipeline_id}")
-            r.raise_for_status()
-            return self._parse_run(r.json())
+        if not project_id:
+            raise ValueError("project_id is required in run_id")
+        try:
+            async with self._client() as client:
+                r = await client.get(f"/projects/{project_id}/pipelines/{pipeline_id}")
+                r.raise_for_status()
+                return self._parse_run(r.json())
+        except httpx.HTTPStatusError as exc:
+            raise ValueError(f"GitLab API error ({exc.response.status_code}): {exc.response.text[:200]}") from exc
+        except httpx.HTTPError as exc:
+            raise ValueError(f"GitLab API connection error: {exc}") from exc
 
     async def get_run_logs(self, run_id: str, cursor: str | None = None) -> CIRunLog:
         project_id, _, pipeline_id = run_id.partition("/")
         if not pipeline_id:
             raise ValueError(f"Invalid run_id format: {run_id!r}. Expected 'project_id/pipeline_id'.")
-        async with self._client() as client:
-            jobs_r = await client.get(
-                f"/projects/{project_id}/pipelines/{pipeline_id}/jobs",
-                params={"per_page": 100},
-            )
-            jobs_r.raise_for_status()
-            jobs = jobs_r.json()
-
-            all_lines: list[str] = []
-            for job in jobs:
-                job_id = job.get("id")
-                trace_r = await client.get(
-                    f"/projects/{project_id}/jobs/{job_id}/trace",
-                    headers={"Accept": "text/plain"},
+        if not project_id:
+            raise ValueError("project_id is required in run_id")
+        try:
+            async with self._client() as client:
+                offset = int(cursor) if cursor else 0
+                jobs_r = await client.get(
+                    f"/projects/{project_id}/pipelines/{pipeline_id}/jobs",
+                    params={"per_page": 100, "page": (offset // 100) + 1},
                 )
-                if trace_r.status_code == 200:
-                    job_lines = trace_r.text.splitlines()
-                    all_lines.append(f"--- Job {job.get('name', job_id)} ---")
-                    all_lines.extend(job_lines)
-                    all_lines.append("")
+                jobs_r.raise_for_status()
+                jobs = jobs_r.json()
 
-            return CIRunLog(
-                run_id=run_id,
-                lines=all_lines,
-                next_cursor=str(len(all_lines)) if cursor else None,
-            )
+                all_lines: list[str] = []
+                for job in jobs:
+                    job_id = job.get("id")
+                    if not job_id:
+                        logger.warning("Skipping job with missing id in pipeline %s", pipeline_id)
+                        continue
+                    trace_r = await client.get(
+                        f"/projects/{project_id}/jobs/{job_id}/trace",
+                        headers={"Accept": "text/plain"},
+                    )
+                    if trace_r.status_code == 200:
+                        job_lines = trace_r.text.splitlines()
+                        all_lines.append(f"--- Job {job.get('name', job_id)} ---")
+                        all_lines.extend(job_lines)
+                        all_lines.append("")
+                    else:
+                        logger.warning(
+                            "Failed to fetch trace for job %s (HTTP %s) — skipping",
+                            job_id,
+                            trace_r.status_code,
+                        )
+
+                return CIRunLog(
+                    run_id=run_id,
+                    lines=all_lines,
+                    next_cursor=str(len(all_lines)) if cursor is not None else None,
+                )
+        except httpx.HTTPStatusError as exc:
+            raise ValueError(f"GitLab API error ({exc.response.status_code}): {exc.response.text[:200]}") from exc
+        except httpx.HTTPError as exc:
+            raise ValueError(f"GitLab API connection error: {exc}") from exc
 
     async def list_runs(
         self,
@@ -131,6 +168,8 @@ class GitLabCIRunner(CIRunnerBase):
         status: CIRunStatus | None = None,
         limit: int = 20,
     ) -> list[CIRun]:
+        if not pipeline_id:
+            raise ValueError("pipeline_id is required for list_runs")
         params: dict[str, Any] = {"per_page": limit, "order_by": "updated_at", "sort": "desc"}
         if status:
             status_map: dict[CIRunStatus, str] = {
@@ -140,18 +179,26 @@ class GitLabCIRunner(CIRunnerBase):
                 CIRunStatus.SUCCESS: "success",
                 CIRunStatus.FAILURE: "failed",
                 CIRunStatus.CANCELLED: "canceled",
+                CIRunStatus.TIMED_OUT: "canceled",
             }
             gl_status = status_map.get(status)
             if gl_status:
                 params["status"] = gl_status
+            elif status == CIRunStatus.UNKNOWN:
+                logger.warning("Cannot filter by UNKNOWN status — returning all runs")
+            else:
+                logger.warning("No GitLab mapping for status %s — returning all runs", status)
 
-        project_id = pipeline_id or ""
-
-        async with self._client() as client:
-            r = await client.get(f"/projects/{project_id}/pipelines", params=params)
-            r.raise_for_status()
-            raw_runs: list[dict[str, Any]] = r.json()
-            return [self._parse_run(run) for run in raw_runs]
+        try:
+            async with self._client() as client:
+                r = await client.get(f"/projects/{pipeline_id}/pipelines", params=params)
+                r.raise_for_status()
+                raw_runs: list[dict[str, Any]] = r.json()
+                return [self._parse_run(run) for run in raw_runs]
+        except httpx.HTTPStatusError as exc:
+            raise ValueError(f"GitLab API error ({exc.response.status_code}): {exc.response.text[:200]}") from exc
+        except httpx.HTTPError as exc:
+            raise ValueError(f"GitLab API connection error: {exc}") from exc
 
 
 class _GitLabCITestDouble(GitLabCIRunner):
