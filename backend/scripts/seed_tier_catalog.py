@@ -116,7 +116,25 @@ FLAGS = [
     {
         "name": "model-backend-management",
         "description": "Manage LLM backend connections and credentials",
-        "tier_id": "team",
+        "tier_id": "community",
+        "depends_on": None,
+    },
+    {
+        "name": "polling_trigger",
+        "description": "Trigger pipelines by polling external endpoints",
+        "tier_id": "community",
+        "depends_on": None,
+    },
+    {
+        "name": "agent_signal_trigger",
+        "description": "Trigger pipelines via agent-to-agent signals",
+        "tier_id": "community",
+        "depends_on": None,
+    },
+    {
+        "name": "helm_deployment",
+        "description": "Helm chart for production Kubernetes deployment",
+        "tier_id": "community",
         "depends_on": None,
     },
     {
