@@ -186,7 +186,8 @@ class LangGraphOtelBridge(BaseCallbackHandler):
         parent_run_id: UUID | None = None,
         **kwargs: Any,
     ) -> None:
-        span = self._spans.get(str(run_id))
+        with self._lock:
+            span = self._spans.get(str(run_id))
         if span is not None and response.llm_output:
             usage = response.llm_output.get("token_usage") or {}
             if isinstance(usage, dict):
@@ -249,7 +250,8 @@ class LangGraphOtelBridge(BaseCallbackHandler):
         parent_run_id: UUID | None = None,
         **kwargs: Any,
     ) -> None:
-        span = self._spans.get(str(run_id))
+        with self._lock:
+            span = self._spans.get(str(run_id))
         if span is not None and response.llm_output:
             usage = response.llm_output.get("token_usage") or {}
             if isinstance(usage, dict):
