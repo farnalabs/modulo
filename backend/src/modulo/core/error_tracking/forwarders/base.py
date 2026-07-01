@@ -24,10 +24,3 @@ class BaseForwarder(ABC):
         config: dict[str, Any],
     ) -> bool:
         ...
-
-    def _safe_call(self, coro: Any) -> bool:
-        try:
-            return coro
-        except Exception:
-            _log.exception("forwarder.forward_failed")
-            return False
