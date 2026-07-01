@@ -84,3 +84,63 @@ class ErrorIngestResponse(BaseModel):
 class SessionKeyResponse(BaseModel):
     key: str
     expires_in_seconds: int = 3600
+
+
+# ---------------------------------------------------------------------------
+# Error dashboard / admin schemas
+# ---------------------------------------------------------------------------
+
+
+class ErrorGroupSummary(BaseModel):
+    id: str
+    fingerprint: str
+    status: str
+    level_peak: str
+    count: int
+    first_seen: str
+    last_seen: str
+    sample_message: str
+
+
+class ErrorEventDetail(BaseModel):
+    id: str
+    level: str
+    message: str
+    stacktrace: str | None = None
+    context_json: dict[str, Any] | None = None
+    source: str
+    environment: str | None = None
+    version: str | None = None
+    breadcrumbs: list[dict[str, Any]] | None = None
+    created_at: str
+
+
+class ErrorGroupDetail(BaseModel):
+    id: str
+    fingerprint: str
+    status: str
+    level_peak: str
+    count: int
+    first_seen: str
+    last_seen: str
+    sample_event: ErrorEventDetail | None = None
+    assigned_to: str | None = None
+
+
+class ErrorGroupUpdate(BaseModel):
+    status: str | None = None
+    assigned_to: str | None = None
+
+
+class ErrorListResponse(BaseModel):
+    items: list[ErrorGroupSummary]
+    total: int
+    limit: int
+    offset: int
+
+
+class ErrorEventListResponse(BaseModel):
+    items: list[ErrorEventDetail]
+    total: int
+    limit: int
+    offset: int
