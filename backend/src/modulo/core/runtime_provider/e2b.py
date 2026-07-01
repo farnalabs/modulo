@@ -9,7 +9,6 @@ Usage:
 
 from __future__ import annotations
 
-import asyncio
 import logging
 import os
 import shlex
@@ -38,6 +37,8 @@ class E2BRuntimeProvider(RuntimeProvider):
         self._api_key = api_key or os.environ.get("MODULO_E2B_API_KEY")
         if not self._api_key:
             raise ValueError("E2B API key is required. Pass api_key= or set MODULO_E2B_API_KEY.")
+        if not os.environ.get("E2B_API_KEY"):
+            os.environ["E2B_API_KEY"] = self._api_key
         self._sandboxes: dict[str, Any] = {}
 
     # ------------------------------------------------------------------
@@ -63,13 +64,11 @@ class E2BRuntimeProvider(RuntimeProvider):
         ``labels`` dict contains ``repo_url`` the repository is cloned into
         ``/home/user/repo`` and optionally checked out to ``repo_ref``.
         """
-        from e2b import Sandbox  # type: ignore[import-untyped]
+        from e2b import AsyncSandbox  # type: ignore[import-untyped]
 
-        template_id = spec.image_ref.strip() if spec.image_ref else "default"
+        template_id = spec.image_ref.strip() if spec.image_ref else "base"
 
-        sandbox = await asyncio.to_thread(
-            lambda: Sandbox(api_key=self._api_key, template=template_id),
-        )
+        sandbox = await AsyncSandbox.create(template=template_id)
 
         self._sandboxes[sandbox.id] = sandbox
 
@@ -90,16 +89,12 @@ class E2BRuntimeProvider(RuntimeProvider):
     ) -> ExecResult:
         """Execute a shell command inside the sandbox.
 
-        The command is run via the E2B process API. *timeout* is in seconds.
+        The command is run via the E2B commands API. *timeout* is in seconds.
         """
         sandbox = self._get_sandbox(provider_ref)
         cmd_str = " ".join(shlex.quote(c) for c in command)
 
-        proc = await asyncio.to_thread(
-            sandbox.process.start_and_wait,
-            cmd_str,
-            timeout=timeout or 60,
-        )
+        proc = await sandbox.commands.run(cmd_str, timeout=timeout or 60)
 
         return ExecResult(
             exit_code=getattr(proc, "exit_code", 0) or 0,
@@ -116,7 +111,7 @@ class E2BRuntimeProvider(RuntimeProvider):
         sandbox = self._sandboxes.pop(provider_ref, None)
         if sandbox is not None:
             try:
-                await asyncio.to_thread(sandbox.kill)
+                await sandbox.kill()
             except Exception:
                 _log.exception("Failed to kill E2B sandbox %s", provider_ref)
 
@@ -124,11 +119,10 @@ class E2BRuntimeProvider(RuntimeProvider):
         """Return the current status of the sandbox."""
         sandbox = self._get_sandbox(provider_ref)
         try:
-            if hasattr(sandbox, "get_info"):
-                info = await asyncio.to_thread(sandbox.get_info)
-                return getattr(info, "status", "running")
+            running = await sandbox.is_running()
+            return "running" if running else "stopped"
         except Exception:
-            _log.debug("Failed to get info for sandbox %s", provider_ref)
+            _log.debug("Failed to get status for sandbox %s", provider_ref)
         return "running"
 
     # ------------------------------------------------------------------
@@ -148,7 +142,7 @@ class E2BRuntimeProvider(RuntimeProvider):
         if repo_ref != "main":
             cmds.append(f"cd /home/user/repo && git checkout {shlex.quote(repo_ref)}")
         combined = " && ".join(cmds)
-        result = await asyncio.to_thread(sandbox.commands.run, combined)
+        result = await sandbox.commands.run(combined)
         exit_code = getattr(result, "exit_code", None)
         if exit_code is not None and exit_code != 0:
             stderr = getattr(result, "stderr", "") or ""

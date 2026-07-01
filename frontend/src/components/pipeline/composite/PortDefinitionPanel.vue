@@ -14,6 +14,10 @@ const emit = defineEmits<{
 
 const { post } = useApi()
 
+function portRef(port: { name: string }) {
+  return '{{parameter.' + port.name + '}}'
+}
+
 const showAddForm = ref(false)
 const editingIndex = ref<number | null>(null)
 
@@ -158,7 +162,7 @@ async function detectPlaceholders() {
             <span class="rounded bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground">{{ port.type }}</span>
           </div>
           <p v-if="port.description" class="mt-0.5 text-xs text-muted-foreground">{{ port.description }}</p>
-          <code class="mt-1 block text-[10px] text-indigo-400">{'{{'}}parameter.{{ port.name }}{{'}}'}</code>
+          <code class="mt-1 block text-[10px] text-indigo-400">{{ portRef(port) }}</code>
         </div>
         <div class="ml-2 flex flex-col gap-1">
           <button
