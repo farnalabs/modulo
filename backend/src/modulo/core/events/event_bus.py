@@ -10,7 +10,7 @@ from modulo.core.events.redis_broker import RedisEventBroker
 
 _log = logging.getLogger(__name__)
 
-_background_tasks: set[asyncio.Task] = set()
+_background_tasks: set[asyncio.Task[Any]] = set()
 
 
 class EventBus:
@@ -29,7 +29,7 @@ class EventBus:
     """
 
     def __init__(self, redis_broker: RedisEventBroker | None = None) -> None:
-        self._subscribers: dict[str, list[asyncio.Queue]] = {}
+        self._subscribers: dict[str, list[asyncio.Queue[dict[str, Any]]]] = {}
         self._redis_broker = redis_broker
         self._lock: asyncio.Lock = asyncio.Lock()
 
@@ -50,7 +50,7 @@ class EventBus:
             "org_id": org_id,
         }
         queues = list(self._subscribers.get(org_id, []))
-        dead: list[asyncio.Queue] = []
+        dead: list[asyncio.Queue[dict[str, Any]]] = []
         for q in queues:
             try:
                 q.put_nowait(event)
@@ -61,33 +61,34 @@ class EventBus:
                 self._subscribers[org_id].remove(q)
             except ValueError:
                 pass
-        if self._redis_broker is not None:
+        broker = self._redis_broker
+        if broker is not None:
             try:
                 asyncio.get_running_loop()
             except RuntimeError:
                 _log.warning("event_bus.no_running_loop", extra={"org_id": org_id})
             else:
-                _task = asyncio.create_task(self._redis_broadcast(org_id, event))
+                _task = asyncio.create_task(self._redis_broadcast(broker, org_id, event))
                 _background_tasks.add(_task)
                 _task.add_done_callback(_background_tasks.discard)
 
-    async def _redis_broadcast(self, org_id: str, event: dict[str, Any]) -> None:
+    async def _redis_broadcast(self, broker: RedisEventBroker, org_id: str, event: dict[str, Any]) -> None:
         """Fire-and-forget: publish event to Redis channel (best-effort)."""
         try:
-            await self._redis_broker.publish(f"resource:{org_id}", event)
+            await broker.publish(f"resource:{org_id}", event)
         except Exception:
-            _log.warning("event_bus.redis_broadcast_failed", extra={"org_id": org_id})
+            _log.exception("event_bus.redis_broadcast_failed", extra={"org_id": org_id})
 
-    async def subscribe(self, org_id: str) -> asyncio.Queue:
+    async def subscribe(self, org_id: str) -> asyncio.Queue[dict[str, Any]]:
         """Return a queue that receives resource-change events for the org."""
         async with self._lock:
-            q: asyncio.Queue = asyncio.Queue()
+            q: asyncio.Queue[dict[str, Any]] = asyncio.Queue()
             if org_id not in self._subscribers:
                 self._subscribers[org_id] = []
             self._subscribers[org_id].append(q)
             return q
 
-    async def unsubscribe(self, org_id: str, queue: asyncio.Queue) -> None:
+    async def unsubscribe(self, org_id: str, queue: asyncio.Queue[dict[str, Any]]) -> None:
         """Remove a subscriber queue from the org's fan-out set."""
         async with self._lock:
             try:
