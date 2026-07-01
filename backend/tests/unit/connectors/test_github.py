@@ -112,6 +112,82 @@ def test_connector_type(connector):
 
 
 # ---------------------------------------------------------------------------
+# Issue operation tests — query and write via respx-mocked HTTP
+# ---------------------------------------------------------------------------
+
+
+@respx.mock
+async def test_query_issues(connector):
+    issues = [{"number": 1, "title": "Bug found", "state": "open"}, {"number": 2, "title": "Feature request", "state": "open"}]
+    respx.get("https://api.github.com/repos/owner/repo/issues").mock(return_value=httpx.Response(200, json=issues))
+    result = await connector.query(ConnectorQuery(resource="issues", filters={"repo": "owner/repo"}))
+    assert len(result.records) == 2
+    assert result.records[0]["number"] == 1
+
+
+@respx.mock
+async def test_query_single_issue(connector):
+    issue = {"number": 42, "title": "Critical bug", "state": "open"}
+    respx.get("https://api.github.com/repos/owner/repo/issues/42").mock(return_value=httpx.Response(200, json=issue))
+    result = await connector.query(ConnectorQuery(resource="issue", filters={"repo": "owner/repo", "issue_number": 42}))
+    assert result.records[0]["number"] == 42
+
+
+@respx.mock
+async def test_write_issue(connector):
+    created = {"number": 100, "title": "New feature", "html_url": "https://github.com/owner/repo/issues/100"}
+    respx.post("https://api.github.com/repos/owner/repo/issues").mock(return_value=httpx.Response(201, json=created))
+    result = await connector.write(
+        ConnectorPayload(resource="issue", data={"repo": "owner/repo", "title": "New feature", "body": "Details here"})
+    )
+    assert result["number"] == 100
+
+
+@respx.mock
+async def test_write_issue_comment(connector):
+    comment = {"id": 1, "body": "Looking into this"}
+    respx.post("https://api.github.com/repos/owner/repo/issues/42/comments").mock(return_value=httpx.Response(201, json=comment))
+    result = await connector.write(
+        ConnectorPayload(resource="issue_comment", data={"repo": "owner/repo", "issue_number": 42, "body": "Looking into this"})
+    )
+    assert result["id"] == 1
+
+
+@respx.mock
+async def test_write_issue_update(connector):
+    updated = {"number": 42, "state": "closed", "title": "Fixed bug"}
+    respx.patch("https://api.github.com/repos/owner/repo/issues/42").mock(return_value=httpx.Response(200, json=updated))
+    result = await connector.write(
+        ConnectorPayload(resource="issue_update", data={"repo": "owner/repo", "issue_number": 42, "state": "closed"})
+    )
+    assert result["number"] == 42
+
+
+@respx.mock
+async def test_write_issue_label(connector):
+    label_result = [{"id": 1, "name": "bug", "color": "d73a4a"}]
+    respx.post("https://api.github.com/repos/owner/repo/issues/42/labels").mock(return_value=httpx.Response(200, json=label_result))
+    result = await connector.write(
+        ConnectorPayload(resource="issue_label", data={"repo": "owner/repo", "issue_number": 42, "labels": ["bug"]})
+    )
+    assert result[0]["name"] == "bug"
+
+
+@respx.mock
+async def test_query_issues_missing_repo_filter(connector):
+    with pytest.raises(KeyError):
+        await connector.query(ConnectorQuery(resource="issues"))
+
+
+@respx.mock
+async def test_write_issue_missing_title(connector):
+    with pytest.raises(KeyError):
+        await connector.write(
+            ConnectorPayload(resource="issue", data={"repo": "owner/repo"})
+        )
+
+
+# ---------------------------------------------------------------------------
 # Error path tests — HTTP errors on query/write operations
 # ---------------------------------------------------------------------------
 
