@@ -47,20 +47,12 @@ class ContextManager:
 
     @staticmethod
     def count_tokens(text: str, provider: str = "anthropic") -> int:
-        """Count tokens using tiktoken if available, else estimate (len/4).
-
-        For Anthropic uses cl100k_base encoding; for OpenAI attempts the
-        model-specific encoding and falls back to cl100k_base.
-        """
         if not text:
             return 0
 
         if HAS_TIKTOKEN:
             try:
-                if provider in ("anthropic", "google-gemini", "deepseek"):
-                    encoding = tiktoken.get_encoding("cl100k_base")
-                else:
-                    encoding = tiktoken.get_encoding("cl100k_base")
+                encoding = tiktoken.get_encoding("cl100k_base")
                 return len(encoding.encode(text))
             except Exception:
                 logger.debug("tiktoken encoding failed, falling back to heuristic")

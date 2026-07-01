@@ -13,6 +13,21 @@ export function useRemyStream() {
     connected.value = true
     store.isStreaming = true
 
+    const session = store.sessions.find(s => s.id === sessionId)
+    if (!session) {
+      store.error = 'Session not found'
+      store.isStreaming = false
+      connected.value = false
+      return
+    }
+
+    const lastMsg = store.messages[store.messages.length - 1]
+    if (!lastMsg || !lastMsg.content) {
+      store.isStreaming = false
+      connected.value = false
+      return
+    }
+
     const token = getAccessToken()
 
     try {
@@ -22,19 +37,27 @@ export function useRemyStream() {
           'Content-Type': 'application/json',
           ...(token ? { Authorization: `Bearer ${token}` } : {}),
         },
-        body: JSON.stringify({}),
+        body: JSON.stringify({
+          content: lastMsg.content,
+          provider: session.provider,
+          model: session.model,
+          context_window_tokens: session.context_window_tokens,
+          api_key: '',
+        }),
         signal: abortController.signal,
       })
 
       if (!response.ok || !response.body) {
         store.isStreaming = false
         connected.value = false
+        store.error = response.statusText || 'Stream connection failed'
         return
       }
 
       const reader = response.body.getReader()
       const decoder = new TextDecoder()
       let buffer = ''
+      let currentEvent = ''
 
       while (true) {
         const { done, value } = await reader.read()
@@ -45,7 +68,9 @@ export function useRemyStream() {
         buffer = lines.pop() ?? ''
 
         for (const line of lines) {
-          if (line.startsWith('data: ')) {
+          if (line.startsWith('event: ')) {
+            currentEvent = line.slice(7).trim()
+          } else if (line.startsWith('data: ')) {
             const data = line.slice(6)
             if (data === '[DONE]') {
               store.isStreaming = false
@@ -53,10 +78,12 @@ export function useRemyStream() {
             }
             try {
               const parsed = JSON.parse(data)
-              if (parsed.type === 'token' && parsed.text) {
-                store.appendToken(parsed.text)
-              } else if (parsed.type === 'error') {
-                store.error = parsed.message ?? 'Stream error'
+              if (currentEvent === 'token' && parsed.token) {
+                store.appendToken(parsed.token)
+              } else if (currentEvent === 'error' || (parsed.detail)) {
+                store.error = parsed.detail ?? parsed.message ?? 'Stream error'
+                store.isStreaming = false
+              } else if (currentEvent === 'done' && parsed.message_id) {
                 store.isStreaming = false
               }
             } catch {

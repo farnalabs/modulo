@@ -75,7 +75,7 @@ const form = ref({ name: '', description: '', triggersText: '', body: '' })
 
 async function fetchSkills() {
   try {
-    const { data, error: err } = await api.GET('/api/v1/remy/skills')
+    const { data, error: err } = await api.GET('/api/v1/me/remy/skills')
     if (!err && data) {
       skills.value = (data as any)?.items ?? (data as any) ?? []
     }
@@ -114,13 +114,13 @@ async function saveSkill() {
 
   try {
     if (editingId.value) {
-      const { error: err } = await api.PUT('/api/v1/remy/skills/{id}', {
+      const { error: err } = await api.PUT('/api/v1/me/remy/skills/{id}', {
         params: { path: { id: editingId.value } },
         body: payload,
       })
       if (err) return
     } else {
-      const { data, error: err } = await api.POST('/api/v1/remy/skills', { body: payload })
+      const { data, error: err } = await api.POST('/api/v1/me/remy/skills', { body: payload })
       if (err || !data) return
       const created = data as UserSkill
       skills.value.push(created)
@@ -133,7 +133,7 @@ async function saveSkill() {
 
 async function deleteSkill(id: string) {
   try {
-    const { error: err } = await api.DELETE('/api/v1/remy/skills/{id}', {
+    const { error: err } = await api.DELETE('/api/v1/me/remy/skills/{id}', {
       params: { path: { id } },
     })
     if (!err) {
