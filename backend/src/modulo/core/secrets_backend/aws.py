@@ -23,7 +23,7 @@ _MODULE_AVAILABLE: bool = True
 _boto3: Any = None
 
 try:
-    import boto3  # type: ignore[import-not-found]
+    import boto3  # type: ignore[import-untyped]
 
     _boto3 = boto3
 except ImportError:
@@ -52,8 +52,9 @@ class AWSSecretsManagerBackend(SecretsBackend):
         self._secret_key: str | None = os.environ.get("AWS_SECRET_ACCESS_KEY") or None
 
         self._client: Any = None
+        self._client_lock: asyncio.Lock = asyncio.Lock()
 
-    def _ensure_client(self) -> Any:
+    async def _ensure_client(self) -> Any:
         if not _MODULE_AVAILABLE:
             raise RuntimeError(
                 "The 'boto3' package is required for AWSSecretsManagerBackend. Install it with: pip install boto3"
@@ -61,20 +62,24 @@ class AWSSecretsManagerBackend(SecretsBackend):
         if self._client is not None:
             return self._client
 
-        session_kwargs: dict[str, Any] = {"region_name": self._region}
+        async with self._client_lock:
+            if self._client is not None:
+                return self._client
 
-        if self._profile:
-            session_kwargs["profile_name"] = self._profile
-        elif self._access_key and self._secret_key:
-            session_kwargs["aws_access_key_id"] = self._access_key
-            session_kwargs["aws_secret_access_key"] = self._secret_key
+            session_kwargs: dict[str, Any] = {"region_name": self._region}
 
-        session = _boto3.Session(**session_kwargs)
-        self._client = session.client("secretsmanager")
-        return self._client
+            if self._profile:
+                session_kwargs["profile_name"] = self._profile
+            elif self._access_key and self._secret_key:
+                session_kwargs["aws_access_key_id"] = self._access_key
+                session_kwargs["aws_secret_access_key"] = self._secret_key
+
+            session = _boto3.Session(**session_kwargs)
+            self._client = session.client("secretsmanager")
+            return self._client
 
     async def get_secret(self, key: str) -> str:
-        client = self._ensure_client()
+        client = await self._ensure_client()
 
         try:
             response = await asyncio.to_thread(client.get_secret_value, SecretId=key)
@@ -94,7 +99,7 @@ class AWSSecretsManagerBackend(SecretsBackend):
         raise KeyError(key)
 
     async def set_secret(self, key: str, value: str) -> None:
-        client = self._ensure_client()
+        client = await self._ensure_client()
 
         try:
             await asyncio.to_thread(
@@ -111,7 +116,7 @@ class AWSSecretsManagerBackend(SecretsBackend):
             )
 
     async def delete_secret(self, key: str) -> None:
-        client = self._ensure_client()
+        client = await self._ensure_client()
 
         try:
             await asyncio.to_thread(
