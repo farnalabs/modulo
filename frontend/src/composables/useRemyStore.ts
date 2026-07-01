@@ -74,7 +74,7 @@ export const useRemyStore = defineStore('remy', () => {
     error.value = null
     try {
       const { data, error: err } = await api.POST('/api/v1/remy/sessions', {
-        body: { name: null, provider: 'default', model: 'default' },
+        body: { name: null, provider: 'anthropic', model: 'claude-sonnet-4-20250514', context_window_tokens: 200000 },
       })
       if (err) throw new Error(String(err))
       const session = data as ChatSession
