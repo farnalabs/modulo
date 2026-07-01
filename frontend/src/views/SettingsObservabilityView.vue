@@ -199,7 +199,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted } from 'vue'
+import { ref, onMounted, onBeforeUnmount } from 'vue'
 import { api } from '../lib/api/client'
 import type { components } from '../lib/api/client'
 import { usePlanStore } from '../stores/planStore'
@@ -237,6 +237,8 @@ const formSuccess = ref<string | null>(null)
 
 const testing = ref(false)
 const testResult = ref<TestSpanResult | null>(null)
+let observabilityFormTimeout: ReturnType<typeof setTimeout> | null = null
+let observabilityTestTimeout: ReturnType<typeof setTimeout> | null = null
 
 const savedOtlpHeaders = ref<Record<string, string>>({})
 
@@ -351,7 +353,8 @@ async function saveSettings() {
       envOverrideActive.value = s.env_override_active
       effectiveOtlpEndpoint.value = s.effective_otlp_endpoint
       formSuccess.value = 'Settings saved successfully.'
-      setTimeout(() => { formSuccess.value = null }, 3000)
+      if (observabilityFormTimeout) clearTimeout(observabilityFormTimeout)
+      observabilityFormTimeout = setTimeout(() => { formSuccess.value = null }, 3000)
     }
   } catch (e: unknown) {
     formError.value = `Save failed: ${e instanceof Error ? e.message : String(e)}`
@@ -372,7 +375,8 @@ async function testConnection() {
       testResult.value = { success: false, message: String(err) }
     } else if (data) {
       testResult.value = data as unknown as TestSpanResult
-      setTimeout(() => { testResult.value = null }, 10000)
+      if (observabilityTestTimeout) clearTimeout(observabilityTestTimeout)
+      observabilityTestTimeout = setTimeout(() => { testResult.value = null }, 10000)
     }
   } catch (e: unknown) {
     testResult.value = { success: false, message: e instanceof Error ? e.message : String(e) }
@@ -380,6 +384,11 @@ async function testConnection() {
     testing.value = false
   }
 }
+
+onBeforeUnmount(() => {
+  if (observabilityFormTimeout) clearTimeout(observabilityFormTimeout)
+  if (observabilityTestTimeout) clearTimeout(observabilityTestTimeout)
+})
 
 onMounted(() => {
   planStore.fetchPlan()

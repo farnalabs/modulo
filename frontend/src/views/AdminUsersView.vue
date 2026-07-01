@@ -201,7 +201,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted } from 'vue'
+import { ref, onMounted, onBeforeUnmount } from 'vue'
 import { useApi } from '../composables/useApi'
 import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
 
@@ -227,7 +227,7 @@ const { get, put: httpPut, post } = useApi()
 
 const users = ref<UserItem[]>([])
 const loading = ref(true)
-const error = ref('')
+const error = ref<string | null>(null)
 const page = ref(1)
 const pageSize = ref(50)
 const total = ref(0)
@@ -246,7 +246,7 @@ function initialOf(name: string): string {
 
 async function loadUsers() {
   loading.value = true
-  error.value = ''
+  error.value = null
   try {
     const data = await get<UserListResponse>(`/api/v1/admin/users?page=${page.value}&page_size=${pageSize.value}`)
     if (data && Array.isArray(data.items)) {
@@ -337,5 +337,8 @@ async function createUser() {
   }
 }
 
+onBeforeUnmount(() => {
+  if (copyTimeout) clearTimeout(copyTimeout)
+})
 onMounted(loadUsers)
 </script>
