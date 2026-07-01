@@ -72,7 +72,7 @@ class SchemaResponse(BaseModel):
     name: str
     description: str | None
     abstract_name: str | None
-    created_by: uuid.UUID
+    created_by: uuid.UUID = Field(validation_alias="account_id")
     created_at: datetime
     updated_at: datetime
     deprecated: bool = False
@@ -108,7 +108,7 @@ class SchemaVersionResponse(BaseModel):
     version_number: int
     definition_json: dict[str, Any]
     published: bool
-    created_by: uuid.UUID
+    created_by: uuid.UUID = Field(validation_alias="account_id")
     created_at: datetime
     updated_at: datetime
 

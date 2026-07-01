@@ -65,7 +65,7 @@ class ModelBackendResponse(BaseModel):
     default_params: dict[str, Any]
     visibility: str
     fallback_backend_ids: list[uuid.UUID] | None = None
-    created_by: uuid.UUID
+    created_by: uuid.UUID = Field(validation_alias="account_id")
     created_at: datetime
     updated_at: datetime
 

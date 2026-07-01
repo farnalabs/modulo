@@ -81,7 +81,7 @@ class LibraryPrimitiveResponse(BaseModel):
     review_count: int | None
     owner_team_id: uuid.UUID | None
     visibility: str
-    created_by: uuid.UUID | None
+    created_by: uuid.UUID | None = Field(default=None, validation_alias="account_id")
     auto_update: bool = True
     created_at: datetime
     updated_at: datetime

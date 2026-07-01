@@ -156,7 +156,7 @@ class VersionResponse(BaseModel):
     contribution_status: str | None
     name: str
     slug: str
-    created_by: str | None = None
+    created_by: str | None = Field(default=None, validation_alias="account_id")
 
 
 class VersionListResponse(BaseModel):
