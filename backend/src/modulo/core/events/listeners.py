@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from collections.abc import Callable
 from typing import Any
 
 from sqlalchemy import event
@@ -43,7 +44,7 @@ _ACTION_MAP: dict[str, str] = {
 }
 
 
-def _make_listener(action: str):
+def _make_listener(action: str) -> Callable[[Any, Any, Any], None]:
     """Factory: return an event-listener function for the given SQLAlchemy action."""
 
     def listener(mapper: Any, connection: Any, target: Any) -> None:
