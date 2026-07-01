@@ -17,6 +17,7 @@ from sqlalchemy import event
 from sqlalchemy.orm.mapper import Mapper
 
 from modulo.db.models.audit_event import AuditEvent
+from modulo.db.models.error_event import ErrorEvent
 
 _log = logging.getLogger(__name__)
 
@@ -44,3 +45,21 @@ def register_append_only_guard() -> None:
         raise RuntimeError(f"AuditEvent {target.id} cannot be deleted: audit_events are append-only")
 
     _log.info("Registered append-only guard on AuditEvent (UPDATE/DELETE blocked)")
+
+    @event.listens_for(ErrorEvent, "before_update")
+    def _block_error_event_update(
+        mapper: Mapper[ErrorEvent],
+        connection: object,
+        target: ErrorEvent,
+    ) -> None:
+        raise RuntimeError(f"ErrorEvent {target.id} cannot be updated: error_events are append-only")
+
+    @event.listens_for(ErrorEvent, "before_delete")
+    def _block_error_event_delete(
+        mapper: Mapper[ErrorEvent],
+        connection: object,
+        target: ErrorEvent,
+    ) -> None:
+        raise RuntimeError(f"ErrorEvent {target.id} cannot be deleted: error_events are append-only")
+
+    _log.info("Registered append-only guard on ErrorEvent (UPDATE/DELETE blocked)")
