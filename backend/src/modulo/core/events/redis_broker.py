@@ -59,7 +59,6 @@ class RedisEventBroker:
         async with self._lock:
             if self._pub is None:
                 self._pub = aioredis.from_url(self._redis_url, decode_responses=True)
-                self._sub = aioredis.from_url(self._redis_url, decode_responses=True)
             pub = self._pub
         await pub.publish(f"{CHANNEL_PREFIX}{channel}", json.dumps(data))
 
@@ -73,7 +72,6 @@ class RedisEventBroker:
         async with self._lock:
             if self._sub is None:
                 self._sub = aioredis.from_url(self._redis_url, decode_responses=True)
-                self._pub = aioredis.from_url(self._redis_url, decode_responses=True)
             sub = self._sub
         pubsub = sub.pubsub()
         await pubsub.subscribe(f"{CHANNEL_PREFIX}{channel}")
