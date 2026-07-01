@@ -296,7 +296,49 @@ class TestMaskOutputValue:
     def test_limits_recursion_depth(self) -> None:
         from modulo.api.routes.runs import _mask_output_value
 
-        deep = {"a": {"b": {"c": {"d": {"e": {"f": {"g": {"h": {"i": {"j": {"k": {"l": {"m": {"n": {"o": {"p": {"q": {"r": {"s": {"t": {"u": {"api_key": "deep"}}}}}}}}}}}}}}}}}}}}}}
+        deep = {
+            "a": {
+                "b": {
+                    "c": {
+                        "d": {
+                            "e": {
+                                "f": {
+                                    "g": {
+                                        "h": {
+                                            "i": {
+                                                "j": {
+                                                    "k": {
+                                                        "l": {
+                                                            "m": {
+                                                                "n": {
+                                                                    "o": {
+                                                                        "p": {
+                                                                            "q": {
+                                                                                "r": {
+                                                                                    "s": {
+                                                                                        "t": {
+                                                                                            "u": {"api_key": "deep"},
+                                                                                        },
+                                                                                    },
+                                                                                },
+                                                                            },
+                                                                        },
+                                                                    },
+                                                                },
+                                                            },
+                                                        },
+                                                    },
+                                                },
+                                            },
+                                        },
+                                    },
+                                },
+                            },
+                        },
+                    },
+                },
+            },
+        }
         result = _mask_output_value(deep)
         # At depth 20+, the value passes through without masking
         deep_ref = result

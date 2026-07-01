@@ -20,7 +20,11 @@ def upgrade() -> None:
     op.create_table(
         "error_notification_rules",
         sa.Column("id", sa.Uuid(), primary_key=True, server_default=sa.text("gen_random_uuid()")),
-        sa.Column("organisation_id", sa.Uuid(), sa.ForeignKey("organisations.id", ondelete="CASCADE"), nullable=False, index=True),
+        sa.Column(
+            "organisation_id", sa.Uuid(),
+            sa.ForeignKey("organisations.id", ondelete="CASCADE"),
+            nullable=False, index=True,
+        ),
         sa.Column("name", sa.String(100), nullable=False),
         sa.Column("enabled", sa.Boolean(), nullable=False, server_default=sa.text("true")),
         sa.Column("condition_level", sa.String(20), nullable=False, server_default=sa.text("'error'")),

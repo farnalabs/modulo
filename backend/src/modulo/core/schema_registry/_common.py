@@ -31,15 +31,14 @@ def parse_schema_from_response(response_text: str) -> dict[str, Any]:
 async def invoke_and_parse(
     backend: ModelBackendBase,
     messages: list[BaseMessage],
-    timeout: float,
+    *,
+    timeout: float,  # noqa: ASYNC109
     error_cls: type[Exception],
     context: str,
 ) -> dict[str, Any]:
     try:
-        response = await asyncio.wait_for(
-            backend.invoke(messages),
-            timeout=timeout,
-        )
+        async with asyncio.timeout(timeout):
+            response = await backend.invoke(messages)
     except TimeoutError:
         _log.error("Schema %s timed out after %ss", context, timeout)
         raise error_cls(f"LLM call timed out after {timeout}s") from None

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import uuid
 from dataclasses import dataclass
-from typing import Any, Protocol
+from typing import Any, ClassVar, Protocol
 
 
 @dataclass
@@ -86,7 +86,10 @@ _KNOWN_FLAGS: list[FeatureFlag] = [
     ),
     FeatureFlag(
         name="view_modes",
-        description="Multiple named UI views with admin-defined feature visibility per view and user/team/role assignment",
+        description=(
+            "Multiple named UI views with admin-defined feature visibility"
+            " per view and user/team/role assignment"
+        ),
         tier="team",
     ),
     # ── v1 tier ────────────────────────────────────────────────────────
@@ -236,7 +239,7 @@ class FeatureFlagRegistry:
     has not been loaded.  Call ``load_from_db()`` to replace with catalog data.
     """
 
-    _overrides: dict[str, bool] = {}
+    _overrides: ClassVar[dict[str, bool]] = {}
 
     def __init__(self, current_tier: str = "community", has_license_key: bool = False) -> None:
         self._current_tier = current_tier

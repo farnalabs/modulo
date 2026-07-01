@@ -43,7 +43,11 @@ class TestAlertEngineEvaluate:
     async def test_level_match_triggers_alert(self) -> None:
         engine = AlertEngine()
         session = AsyncMock()
-        session.execute = AsyncMock(return_value=MagicMock(scalars=MagicMock(return_value=MagicMock(all=MagicMock(return_value=[_make_rule()])))))
+        session.execute = AsyncMock(
+            return_value=MagicMock(
+                scalars=MagicMock(return_value=MagicMock(all=MagicMock(return_value=[_make_rule()])))
+            )
+        )
 
         alerts = await engine.evaluate(
             org_id=_ORG_ID,
@@ -59,7 +63,11 @@ class TestAlertEngineEvaluate:
     async def test_level_mismatch_skips(self) -> None:
         engine = AlertEngine()
         session = AsyncMock()
-        session.execute = AsyncMock(return_value=MagicMock(scalars=MagicMock(return_value=MagicMock(all=MagicMock(return_value=[_make_rule()])))))
+        session.execute = AsyncMock(
+            return_value=MagicMock(
+                scalars=MagicMock(return_value=MagicMock(all=MagicMock(return_value=[_make_rule()])))
+            )
+        )
 
         alerts = await engine.evaluate(
             org_id=_ORG_ID,
@@ -75,7 +83,11 @@ class TestAlertEngineEvaluate:
         rule = _make_rule(condition_min_count=5)
         engine = AlertEngine()
         session = AsyncMock()
-        session.execute = AsyncMock(return_value=MagicMock(scalars=MagicMock(return_value=MagicMock(all=MagicMock(return_value=[rule])))))
+        session.execute = AsyncMock(
+            return_value=MagicMock(
+                scalars=MagicMock(return_value=MagicMock(all=MagicMock(return_value=[rule])))
+            )
+        )
 
         alerts = await engine.evaluate(
             org_id=_ORG_ID,
@@ -91,7 +103,11 @@ class TestAlertEngineEvaluate:
         rule = _make_rule(condition_min_count=5)
         engine = AlertEngine()
         session = AsyncMock()
-        session.execute = AsyncMock(return_value=MagicMock(scalars=MagicMock(return_value=MagicMock(all=MagicMock(return_value=[rule])))))
+        session.execute = AsyncMock(
+            return_value=MagicMock(
+                scalars=MagicMock(return_value=MagicMock(all=MagicMock(return_value=[rule])))
+            )
+        )
 
         alerts = await engine.evaluate(
             org_id=_ORG_ID,
@@ -108,7 +124,11 @@ class TestAlertEngineEvaluate:
         r2 = _make_rule(name="Rule B", condition_level="error")
         engine = AlertEngine()
         session = AsyncMock()
-        session.execute = AsyncMock(return_value=MagicMock(scalars=MagicMock(return_value=MagicMock(all=MagicMock(return_value=[r1, r2])))))
+        session.execute = AsyncMock(
+            return_value=MagicMock(
+                scalars=MagicMock(return_value=MagicMock(all=MagicMock(return_value=[r1, r2])))
+            )
+        )
 
         alerts = await engine.evaluate(
             org_id=_ORG_ID,
@@ -124,7 +144,11 @@ class TestAlertEngineEvaluate:
         rule = _make_rule(enabled=False)
         engine = AlertEngine()
         session = AsyncMock()
-        session.execute = AsyncMock(return_value=MagicMock(scalars=MagicMock(return_value=MagicMock(all=MagicMock(return_value=[rule])))))
+        session.execute = AsyncMock(
+            return_value=MagicMock(
+                scalars=MagicMock(return_value=MagicMock(all=MagicMock(return_value=[rule])))
+            )
+        )
 
         alerts = await engine.evaluate(
             org_id=_ORG_ID,
@@ -139,7 +163,11 @@ class TestAlertEngineEvaluate:
     async def test_no_rules_for_org_returns_empty(self) -> None:
         engine = AlertEngine()
         session = AsyncMock()
-        session.execute = AsyncMock(return_value=MagicMock(scalars=MagicMock(return_value=MagicMock(all=MagicMock(return_value=[])))))
+        session.execute = AsyncMock(
+            return_value=MagicMock(
+                scalars=MagicMock(return_value=MagicMock(all=MagicMock(return_value=[])))
+            )
+        )
 
         alerts = await engine.evaluate(
             org_id=_ORG_ID,
@@ -161,7 +189,11 @@ class TestAlertEngineCooldown:
     async def test_same_rule_group_does_not_duplicate_within_cooldown(self) -> None:
         engine = AlertEngine()
         session = AsyncMock()
-        session.execute = AsyncMock(return_value=MagicMock(scalars=MagicMock(return_value=MagicMock(all=MagicMock(return_value=[_make_rule()])))))
+        session.execute = AsyncMock(
+            return_value=MagicMock(
+                scalars=MagicMock(return_value=MagicMock(all=MagicMock(return_value=[_make_rule()])))
+            )
+        )
 
         # First call — should fire
         alerts1 = await engine.evaluate(
@@ -188,7 +220,11 @@ class TestAlertEngineCooldown:
     async def test_different_group_not_affected_by_cooldown(self) -> None:
         engine = AlertEngine()
         session = AsyncMock()
-        session.execute = AsyncMock(return_value=MagicMock(scalars=MagicMock(return_value=MagicMock(all=MagicMock(return_value=[_make_rule()])))))
+        session.execute = AsyncMock(
+            return_value=MagicMock(
+                scalars=MagicMock(return_value=MagicMock(all=MagicMock(return_value=[_make_rule()])))
+            )
+        )
 
         other_group_id = uuid.UUID("00000000-0000-0000-0000-000000000099")
 
@@ -216,7 +252,11 @@ class TestAlertEngineCooldown:
         r2 = _make_rule(name="Rule B", condition_min_count=5)
         engine = AlertEngine()
         session = AsyncMock()
-        session.execute = AsyncMock(return_value=MagicMock(scalars=MagicMock(return_value=MagicMock(all=MagicMock(return_value=[r1, r2])))))
+        session.execute = AsyncMock(
+            return_value=MagicMock(
+                scalars=MagicMock(return_value=MagicMock(all=MagicMock(return_value=[r1, r2])))
+            )
+        )
 
         # First call — only r1 fires (count=1 < r2's min_count=5)
         await engine.evaluate(
@@ -249,7 +289,15 @@ class TestAlertEngineCooldown:
 class TestDispatchWebhook:
     async def test_slack_format(self) -> None:
         result = _format_slack_payload(
-            payload={"rule": "Critical Alert", "group_id": "g-123", "level": "critical", "count": 5, "message": "DB down", "environment": "production", "url": "/admin/errors/g-123"},
+            payload={
+            "rule": "Critical Alert",
+            "group_id": "g-123",
+            "level": "critical",
+            "count": 5,
+            "message": "DB down",
+            "environment": "production",
+            "url": "/admin/errors/g-123",
+        },
             emoji="\U0001f534",
         )
         assert "\U0001f534" in result["text"]

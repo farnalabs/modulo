@@ -42,9 +42,15 @@ SCHEMAS: list[dict[str, object]] = [
                 "context": {"type": "string", "description": "Context and motivation"},
                 "decision": {"type": "string", "description": "The decision made"},
                 "consequences": {"type": "string", "description": "Consequences of the decision"},
-                "alternatives": {"type": "array", "items": {"type": "string"}, "description": "Alternatives considered"},
+                "alternatives": {
+                    "type": "array", "items": {"type": "string"},
+                    "description": "Alternatives considered",
+                },
                 "date": {"type": "string", "format": "date", "description": "Decision date"},
-                "deciders": {"type": "array", "items": {"type": "string"}, "description": "People who made the decision"},
+                "deciders": {
+                    "type": "array", "items": {"type": "string"},
+                    "description": "People who made the decision",
+                },
             },
             "required": ["title", "status", "decision"],
         },

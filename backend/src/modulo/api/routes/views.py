@@ -9,8 +9,6 @@ from pydantic import BaseModel, Field
 from sqlalchemy.exc import ProgrammingError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-logger = logging.getLogger(__name__)
-
 from modulo.api.dependencies import get_db_session
 from modulo.auth.dependencies import get_current_user
 from modulo.auth.jwt import AuthenticatedPrincipal
@@ -22,6 +20,8 @@ from modulo.db.crud.view import (
     update_view,
 )
 from modulo.db.rls import set_rls_org, set_rls_user_context
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/v1/views", tags=["views"])
 
@@ -90,7 +90,7 @@ async def list_views_endpoint(
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="The saved_views feature is not available. Run database migrations to enable it.",
-        )
+        ) from None
     return ViewListResponse(
         items=[ViewResponse.model_validate(v) for v in result.items],
         total=result.total,
@@ -126,7 +126,7 @@ async def create_view_endpoint(
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="The saved_views feature is not available. Run database migrations to enable it.",
-        )
+        ) from None
     return ViewResponse.model_validate(view)
 
 
@@ -146,7 +146,7 @@ async def get_view_endpoint(
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="The saved_views feature is not available. Run database migrations to enable it.",
-        )
+        ) from None
     if view is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="View not found")
     return ViewResponse.model_validate(view)
@@ -170,7 +170,7 @@ async def update_view_endpoint(
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="The saved_views feature is not available. Run database migrations to enable it.",
-        )
+        ) from None
     if view is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="View not found")
     return ViewResponse.model_validate(view)
@@ -192,6 +192,6 @@ async def delete_view_endpoint(
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="The saved_views feature is not available. Run database migrations to enable it.",
-        )
+        ) from None
     if not deleted:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="View not found")

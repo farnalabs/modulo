@@ -73,7 +73,13 @@ def _create_node_categories_if_not_exists() -> None:
         )
         """
     )
-    op.create_index(op.f("ix_node_categories_organisation_id"), "node_categories", ["organisation_id"], unique=False, if_not_exists=True)
+    op.create_index(
+        op.f("ix_node_categories_organisation_id"),
+        "node_categories",
+        ["organisation_id"],
+        unique=False,
+        if_not_exists=True,
+    )
 
 
 def downgrade() -> None:

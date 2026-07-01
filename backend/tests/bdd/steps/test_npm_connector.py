@@ -59,8 +59,16 @@ def step_npm_connector(ctx):
                     raise ValueError("npm search query requires 'text' in filters")
                 return ConnectorResult(
                     records=[
-                        {"name": "react", "version": "18.2.0", "description": "A JavaScript library for building UI"},
-                        {"name": "react-dom", "version": "18.2.0", "description": "React package for working with the DOM"},
+                        {
+                            "name": "react",
+                            "version": "18.2.0",
+                            "description": "A JavaScript library for building UI",
+                        },
+                        {
+                            "name": "react-dom",
+                            "version": "18.2.0",
+                            "description": "React package for working with the DOM",
+                        },
                     ],
                     total=2,
                 )

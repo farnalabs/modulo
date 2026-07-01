@@ -611,7 +611,7 @@ def test_diff_node_output_success(client: TestClient) -> None:
     assert body["run_id_b"] == str(run_id_b)
     assert body["node_output_a"] == {"result": "hello"}
     assert body["node_output_b"] == {"result": "world"}
-    types = [l["type"] for l in body["diff_lines"]]
+    types = [line["type"] for line in body["diff_lines"]]
     assert "added" in types
     assert "removed" in types
     assert "unchanged" in types
