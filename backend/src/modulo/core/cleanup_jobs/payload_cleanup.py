@@ -3,7 +3,7 @@
 import logging
 from datetime import UTC, datetime, timedelta
 
-from sqlalchemy import update
+from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.db.models.run import Run
@@ -21,21 +21,32 @@ async def cleanup_retained_payloads(
     """Null out retained payloads for runs older than *retention_days*.
 
     Affects the ``input_payload`` and ``outputs_json`` columns on runs
-    whose ``created_at`` is before the computed cutoff.  The caller is
-    responsible for setting up any required RLS context.
+    whose ``created_at`` is before the computed cutoff.  Uses batched
+    select-then-update to avoid long-held row locks.
+    The caller is responsible for setting up any required RLS context.
 
     Returns the number of rows updated.
     """
     cutoff = datetime.now(UTC) - timedelta(days=retention_days)
+    total = 0
 
-    result = await db_session.execute(
-        update(Run)
-        .where(Run.created_at < cutoff)
-        .values(input_payload=None, outputs_json=None)
-    )
-    await db_session.commit()
+    while True:
+        result = await db_session.execute(
+            select(Run.id).where(Run.created_at < cutoff).limit(BATCH_SIZE)
+        )
+        ids = result.scalars().all()
+        if not ids:
+            break
 
-    count = result.rowcount
-    if count > 0:
-        _log.info("Cleaned up retained payloads for %d runs (retention: %d days)", count, retention_days)
-    return count
+        await db_session.execute(
+            update(Run).where(Run.id.in_(ids)).values(input_payload=None, outputs_json=None)
+        )
+        await db_session.commit()
+        total += len(ids)
+
+        if len(ids) < BATCH_SIZE:
+            break
+
+    if total > 0:
+        _log.info("Cleaned up retained payloads for %d runs (retention: %d days)", total, retention_days)
+    return total
