@@ -26,7 +26,9 @@ status: partial
 
 # Run Trace Observability
 
-LangGraph→OpenTelemetry bridge, run-level trace ID for external correlation, per-node token consumption and cost in the run detail view, OTel exporter configuration API.
+LangGraph→OpenTelemetry bridge, run-level trace ID for external correlation,
+per-node token consumption and cost in the run detail view, OTel exporter
+configuration API.
 
 ## Behaviours
 
@@ -128,7 +130,9 @@ LangGraph→OpenTelemetry bridge, run-level trace ID for external correlation, p
 
 ## Known Gaps
 
-- ~~LangGraphOtelBridge is never wired into PipelineExecutor~~ — RESOLVED: bridge is now instantiated (`executor.py:174`) and wired as a LangGraph callback in `astream_events` config (`executor.py:648`).
+- ~~LangGraphOtelBridge is never wired into PipelineExecutor~~ — RESOLVED: bridge is
+  now instantiated (`executor.py:174`) and wired as a LangGraph callback in
+  `astream_events` config (`executor.py:648`).
 - No organisation_id or pipeline_id set on OTel span attributes.
 - Frontend runTimestamps return all dashes — not wired to real data from the API.
 - Frontend per-node duration is always '—' (no duration tracking per node).
