@@ -1,9 +1,10 @@
 # Modulo — Product Requirements Document
 
-**Version**: 0.23  
-**Date**: 2026-06-29  
+**Version**: 0.25  
+**Date**: 2026-07-01  
 **Status**: Pre-development  
 **Changelog**:  
+- v0.25 — §8.22 SSE Event Bus (Real-Time Frontend Sync): in-memory EventBus with optional Redis overlay for multi-worker, SSE endpoint at GET /api/v1/events, SQLAlchemy event listeners for automatic publishing, frontend EventSource composable with dirtyIds conflict detection pattern.
 - v0.24 — Tier rename: free→Community, enterprise→Team across all UI text, API responses, backend code, docs, and tests. Community Edition (free, no license key) and Team Edition (self-serve paid, feature-gated, no SLA/support commitment). §6.2 updated to reflect new naming; §6.2.1 Tier System Architecture added describing the future-state flexible tier catalog.
 - v0.23 — §8.21 View Modes (Enterprise): multiple named UI views with admin-defined feature visibility per view, assignment to users/teams/org roles, enforcement, self-lockout prevention guards; `view_modes` enterprise feature flag replaces previously planned `view_mode` + `view_mode_enforcement`
 - v0.22 — Enterprise tier clarified: no SLAs, no dedicated support, no bespoke services. Enterprise = self-serve feature gate only (SSO, RBAC, audit viewer, admin spend limits). Pricing page updated. BSL 1.1 LICENSE file created at repo root; `Dev-Harness/tools/release.ps1` release script created with placeholder steps for Docker Hub, GitHub release, etc.
@@ -1719,6 +1720,94 @@ An admin cannot remove their own access to view management:
 #### No State Mutation on Switch
 
 The view toggle is a **display filter only**. It must never change selection, reset form state, clear store state (beyond mounting/unmounting), trigger API calls beyond initial hydration, or modify server resources.
+
+---
+
+### 8.22 SSE Event Bus (Real-Time Frontend Sync)
+
+The SSE Event Bus provides a push-based mechanism for the frontend to detect backend data changes without polling. When any resource is mutated — by the MCP server, a webhook-triggered run, a background job, or a direct API call — the backend publishes an event that all connected frontend sessions receive in real time.
+
+This is a cross-cutting **platform capability**, not a feature the user directly interacts with. It eliminates the need for per-view polling loops and ensures the UI reflects the current backend state without manual refreshes.
+
+#### Transport
+
+- **Endpoint**: `GET /api/v1/events` — Server-Sent Events (text/event-stream)
+- **Auth**: Standard Bearer JWT or API key (same as all other endpoints)
+- **Auto-reconnect**: Native `EventSource` browser behaviour — the frontend never implements reconnection logic
+- **No Redis requirement**: The default `EventBus` implementation is a purely in-memory `asyncio.Queue`-based pub/sub, identical to the existing `RunEventBroker`. When `settings.redis_url` is configured, a `RedisEventBroker` overlay broadcasts across multiple uvicorn workers (already exists as `core/events/redis_broker.py` — just needs wiring in `_lifespan()`). Single-worker deployments (dev, test, simple self-hosted) use the in-memory backend with zero infrastructure.
+
+#### Event Format
+
+Each SSE message has this shape:
+
+```
+event: resource_changed
+data: {"type":"run","id":"uuid","action":"updated","version":42,"org_id":"uuid"}
+```
+
+| Field | Type | Description |
+|---|---|---|
+| `type` | string | Resource type: `run`, `pipeline`, `agent`, `schema`, `connector`, `model_backend`, `team`, `trigger`, `eval`, `feedback` |
+| `id` | string | Resource UUID |
+| `action` | string | `created` | `updated` | `deleted` |
+| `version` | int | Monotonically increasing per-org version counter (enables client-side gap detection) |
+| `org_id` | string | Organisation UUID — clients filter by their own org server-side |
+
+#### Backend Architecture
+
+**EventBus (in-memory)**:
+- Module-level singleton scoped to the FastAPI process
+- `publish(resource_type, resource_id, action)` → fan-out to all subscriber `asyncio.Queue` instances
+- `subscribe()` → returns queue, used by the SSE endpoint per-connection
+- **No persistence** — events are fire-and-forget. A frontend that connects mid-stream receives only subsequent events. The existing REST API is always the authoritative state source.
+
+**Publishing**:
+- Via **SQLAlchemy `after_insert` / `after_update` / `after_delete` event listeners** on key ORM models (Run, Pipeline, Agent, Schema, ConnectorInstance, ModelBackend, Team, Trigger, EvalDefinition, FeedbackRecord, LibraryPrimitive)
+- Listeners are registered in a central module and fire on any mutation, regardless of origin (REST API, MCP, Celery task, CLI script)
+- Each listener constructs the event and calls `EventBus.publish()`
+- `ProgrammingError` is caught gracefully — if the EventBus table/mechanism doesn't exist yet, the listener is a no-op (safe for migrations)
+
+**SSE Endpoint**:
+- FastAPI route at `GET /api/v1/events`
+- Authenticates via standard `get_current_user` dependency
+- Subscribes to `EventBus`, loops on `queue.get()`, yields SSE-formatted messages
+- Filters by `org_id` before sending (each subscriber receives only their own org's events)
+- Cleans up the subscription on client disconnect or connection error
+
+#### Frontend Integration
+
+**EventSource Composable** (`useEventStream`):
+- Connects to `/api/v1/events` with the existing auth token
+- Parses incoming `resource_changed` events
+- Dispatches to the correct Pinia store or composable via a lightweight registry
+
+**Conflict Detection (`dirtyIds` Pattern)**:
+- Each store maintains a `dirtyIds: Set<string>` of locally-edited entities
+- When an SSE event arrives for an entity in `dirtyIds`, the event is **silently dropped** — the user's in-progress edit takes priority
+- When the user saves or discards, the entity leaves `dirtyIds`
+- When an SSE event arrives for a non-dirty entity, the store re-fetches it via its normal `api.GET()` call (single resource, not a full-page refresh)
+
+**Store Integration**:
+- The existing `planStore` and `dashboardStore` subscribe to their relevant event types
+- Individual view components that manage their own local state via `ref()` can optionally opt in via `useEventStream({ resourceType: 'run', onEvent: ... })`
+
+#### Testing
+
+**Backend**: pytest with `httpx.AsyncClient` — open an SSE connection, publish an event, verify the stream delivers it. Test auth, org filtering, and cleanup on disconnect.
+
+**Frontend**: Vitest with mocked `EventSource` — verify the composable parses events correctly and dispatches to the right store. Test the `dirtyIds` conflict pattern.
+
+**Integration**: No browser needed. A test can use the MCP server or API to create a resource, open an SSE stream, and verify the event arrives.
+
+#### Delivery Dependencies
+
+- No new dependencies (SSE is built-in; `EventBus` uses `asyncio.Queue`)
+- The existing `RedisEventBroker` in `core/events/redis_broker.py` provides the multi-worker overlay — it already exists, just needs `configure_registry()` called in `_lifespan()`
+- The existing `RunEventBroker` pattern in `core/pipeline_engine/event_broker.py` serves as the reference implementation
+
+#### Flag / Gating
+
+This feature is **free-tier** (no enterprise gate). Real-time sync is a UX baseline, not a premium feature.
 
 ---
 
