@@ -14,7 +14,7 @@
     </button>
     <Transition name="fade">
       <div
-        v-if="!collapsed"
+        v-show="!collapsed"
         :id="`sidebar-group-${id}`"
         class="sidebar-group-items"
         role="region"
@@ -64,6 +64,11 @@ defineEmits<{
   color: hsl(var(--foreground));
 }
 
+.sidebar-group-header:focus-visible {
+  outline: 2px solid hsl(var(--primary));
+  outline-offset: 2px;
+}
+
 .sidebar-group-label {
   display: flex;
   align-items: center;
@@ -89,14 +94,13 @@ defineEmits<{
 
 .fade-enter-active,
 .fade-leave-active {
-  transition: opacity 0.15s ease, max-height 0.2s ease;
-  max-height: 600px;
+  transition: opacity 0.15s ease, transform 0.15s ease;
   overflow: hidden;
 }
 
 .fade-enter-from,
 .fade-leave-to {
   opacity: 0;
-  max-height: 0;
+  transform: translateY(-4px);
 }
 </style>
