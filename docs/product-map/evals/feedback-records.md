@@ -7,6 +7,7 @@ bdd:
 code:
   - backend/src/modulo/core/feedback_manager/__init__.py
   - backend/src/modulo/api/routes/feedback.py
+unit-tests: []
 depends-on: [feat-core-run-context, feat-evals-eval-engine]
 status: partial
 ---

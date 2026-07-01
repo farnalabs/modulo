@@ -16,6 +16,7 @@ code:
   - backend/src/modulo/db/models/eval_result.py
   - backend/src/modulo/api/routes/evals.py
   - backend/src/modulo/core/eval_engine/__init__.py
+unit-tests: []
 depends-on: [feat-pipelines-core]
 status: covered
 ---
@@ -46,14 +47,18 @@ Eval definitions describe automated quality checks that run as a post-node step 
 - [x] Non-admin cannot update eval definition
 - [x] Non-admin cannot delete eval definition
 - [ ] Eval definition "from-run" endpoint creates a definition pre-populated from run output with type-specific config stubs
-- [ ] Eval coverage endpoint returns per-node coverage map for a pipeline ### Eval Definition Fields
+- [ ] Eval coverage endpoint returns per-node coverage map for a pipeline
+
+### Eval Definition Fields
 - [x] Eval definition has fields: id, organisation_id, pipeline_id, name, eval_type, config_json, failure_behaviour, created_by
 - [x] Optional fields: node_id, pass_threshold, suite_id
 - [x] eval_type must be one of: llm_judge, regex, json_schema, custom_function (DB CHECK constraint)
 - [x] failure_behaviour must be one of: warn, block (DB CHECK constraint)
 - [x] pass_threshold is a nullable float (0.0–1.0)
 - [x] suite_id is a nullable string for grouping evals into suites
-- [x] eval_definitions cascade-delete when parent pipeline is deleted ### Eval Engine — Regex
+- [x] eval_definitions cascade-delete when parent pipeline is deleted
+
+### Eval Engine — Regex
 - [x] Regex pattern matched on output field returns passed=true with score 1.0
 - [x] Regex pattern not matched on output field returns passed=false with score 0.0
 - [x] Regex eval on a nested/missing field coerces value to string
@@ -66,7 +71,9 @@ Eval definitions describe automated quality checks that run as a post-node step 
 - [x] Case-insensitive flag (i) is supported
 - [x] Multi-line flag (m) is supported
 - [x] Empty output field defaults to empty string for regex matching
-- [x] Numeric field is coerced to string for regex matching ### Eval Engine — LLM Judge
+- [x] Numeric field is coerced to string for regex matching
+
+### Eval Engine — LLM Judge
 - [x] LLM judge returns score and passed based on rubric callable
 - [x] Score above pass_threshold marks eval as passed
 - [x] Score below pass_threshold marks eval as failed
@@ -77,26 +84,34 @@ Eval definitions describe automated quality checks that run as a post-node step 
 - [x] LLM judge callable raises exception returns passed=false with score 0.0
 - [x] LLM judge content too long returns passed=false with error detail
 - [x] LLM judge non-numeric score is handled gracefully (score=None)
-- [x] LLM judge with block behaviour raises EvalBlockedError when eval fails ### Eval Engine — JSON Schema
+- [x] LLM judge with block behaviour raises EvalBlockedError when eval fails
+
+### Eval Engine — JSON Schema
 - [x] JSON Schema validation on output field passes when data matches schema
 - [x] JSON Schema validation fails with descriptive message when data does not match
 - [x] JSON Schema field-scoped validation validates only the nested field
 - [x] JSON Schema without additionalProperties allows extra fields
 - [x] JSON Schema with additionalProperties=false rejects extra fields
 - [x] JSON Schema without field validates the entire output dict
-- [ ] JSON Schema eval with no schema defined returns appropriate failure ### Eval Engine — Custom Function
+- [ ] JSON Schema eval with no schema defined returns appropriate failure
+
+### Eval Engine — Custom Function
 - [x] Custom function from registry is called with output and config
 - [x] Missing function in registry returns passed=false
 - [x] Custom function exception returns passed=false with error detail
 - [x] Custom function can return passed, score, and detail
 - [x] Custom function receives function_config from eval config
-- [x] Custom function with block behaviour raises EvalBlockedError when result=fail ### Failure Behaviour
+- [x] Custom function with block behaviour raises EvalBlockedError when result=fail
+
+### Failure Behaviour
 - [x] failure_behaviour="block" raises EvalBlockedError when eval fails
 - [x] EvalBlockedError is caught by pipeline executor and run transitions to "eval_failed" with error_code "eval_blocked"
 - [x] Block failure is recorded in AuditEvent with type "eval_blocked"
 - [x] Multiple evals on one node — first block failure halts evaluation of remaining evals
 - [x] failure_behaviour="warn" logs a warning and pipeline execution continues
-- [x] Warn failure does not transition run to "eval_failed" ### Suite-Level Aggregation
+- [x] Warn failure does not transition run to "eval_failed"
+
+### Suite-Level Aggregation
 - [x] evaluate_suite aggregates individual eval results into aggregate score
 - [x] Aggregate score below pass_threshold marks suite as failed
 - [x] Suite pass threshold met allows run to complete successfully
@@ -104,11 +119,15 @@ Eval definitions describe automated quality checks that run as a post-node step 
 - [x] Suite with no eval results returns aggregate_score=1.0
 - [x] Suite threshold zero always passes (>= 0.0)
 - [x] Suite threshold one requires perfect score
-- [x] Empty suite passes with aggregate_score=1.0 ### Eval Run Lifecycle
+- [x] Empty suite passes with aggregate_score=1.0
+
+### Eval Run Lifecycle
 - [x] Triggering an eval run returns 202 with status "pending"
 - [x] Eval run with all cases scored produces an aggregate score
 - [x] Eval run scoring below suite pass_threshold results in status "failed"
-- [x] Completed eval run results are visible per-case with aggregate score ### Conditional HITL Gating (v1)
+- [x] Completed eval run results are visible per-case with aggregate score
+
+### Conditional HITL Gating (v1)
 - [x] Eval score below HITL gate threshold triggers NodeInterrupt, run transitions to "awaiting_human"
 - [x] Eval score above HITL gate threshold skips the gate, execution continues without interrupt
 - [x] Gate artifact contains "condition_skipped" when eval condition is false
@@ -116,11 +135,15 @@ Eval definitions describe automated quality checks that run as a post-node step 
 - [x] Eval block failure takes priority over HITL interrupt — run goes to "eval_failed", no interrupt
 - [x] Gate resume from interrupt does not re-evaluate condition or re-run evals
 - [x] HITL gate condition references eval by id with threshold and operator (lt)
-- [x] Reject routing from conditional HITL gate routes to reject_target ### Auth & Org Scoping
+- [x] Reject routing from conditional HITL gate routes to reject_target
+
+### Auth & Org Scoping
 - [x] All eval definition operations enforce org-level RLS
 - [x] All eval result queries enforce org-level RLS
 - [x] Admin role required for create, update, delete
-- [x] Any authenticated user can list and read eval definitions within their org ### Edge Cases
+- [x] Any authenticated user can list and read eval definitions within their org
+
+### Edge Cases
 - [ ] Eval definition with empty config_json defaults to empty dict
 - [ ] Eval definition node_id can be null (pipeline-level eval, not node-specific)
 - [ ] Deleted eval definition cascades to delete associated eval_results
