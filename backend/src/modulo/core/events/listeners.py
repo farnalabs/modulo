@@ -1,0 +1,93 @@
+"""SQLAlchemy event listeners that publish resource-change events to the EventBus."""
+
+from __future__ import annotations
+
+import logging
+from typing import Any
+
+import sqlalchemy
+from sqlalchemy import event
+
+from modulo.core.events.event_bus import get_event_bus
+from modulo.db.models.agent import Agent
+from modulo.db.models.connector_instance import ConnectorInstance
+from modulo.db.models.eval_definition import EvalDefinition
+from modulo.db.models.feedback_record import FeedbackRecord
+from modulo.db.models.library_primitive import LibraryPrimitive
+from modulo.db.models.model_backend import ModelBackend
+from modulo.db.models.pipeline import Pipeline
+from modulo.db.models.run import Run
+from modulo.db.models.schema import Schema
+from modulo.db.models.team import Team
+from modulo.db.models.trigger import Trigger
+
+_log = logging.getLogger(__name__)
+
+_RESOURCE_TYPES: dict[type, str] = {
+    Run: "run",
+    Pipeline: "pipeline",
+    Agent: "agent",
+    Schema: "schema",
+    ConnectorInstance: "connector",
+    ModelBackend: "model_backend",
+    Team: "team",
+    Trigger: "trigger",
+    EvalDefinition: "eval",
+    FeedbackRecord: "feedback",
+    LibraryPrimitive: "library",
+}
+
+_ACTION_MAP: dict[str, str] = {
+    "after_insert": "created",
+    "after_update": "updated",
+    "after_delete": "deleted",
+}
+
+
+def _make_listener(action: str):
+    """Factory: return an event-listener function for the given SQLAlchemy action."""
+
+    def listener(mapper: Any, connection: Any, target: Any) -> None:  # noqa: ANN401
+        resource_type = _RESOURCE_TYPES.get(type(target))
+        if resource_type is None:
+            return
+
+        action_name = _ACTION_MAP.get(action)
+        if action_name is None:
+            return
+
+        try:
+            org_id = str(target.organisation_id)
+        except AttributeError:
+            _log.warning(
+                "event_listener.no_org_id",
+                extra={"resource_type": resource_type, "action": action_name},
+            )
+            return
+
+        try:
+            get_event_bus().publish(
+                org_id=org_id,
+                resource_type=resource_type,
+                resource_id=str(target.id),
+                action=action_name,
+                version=0,
+            )
+        except Exception:
+            _log.warning(
+                "event_listener.publish_failed",
+                extra={"resource_type": resource_type, "action": action_name, "org_id": org_id},
+                exc_info=True,
+            )
+
+    return listener
+
+
+def register_listeners() -> None:
+    """Register all model event listeners. Call once at startup."""
+    models = list(_RESOURCE_TYPES)
+    for action in ("after_insert", "after_update", "after_delete"):
+        listener_fn = _make_listener(action)
+        for model in models:
+            event.listen(model, action, listener_fn)
+    _log.info("event_listeners.registered", extra={"model_count": len(models)})
