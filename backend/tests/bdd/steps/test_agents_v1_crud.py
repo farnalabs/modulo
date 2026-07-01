@@ -26,7 +26,8 @@ def _make_mock_agent(name: str = "test") -> MagicMock:
     a.id = uuid.uuid4()
     a.organisation_id = uuid.uuid4()
     a.name = name
-    a.description = None
+    a.description = "Test agent description"
+    a.is_executable = True
     a.input_schema_id = uuid.uuid4()
     a.input_schema_version = "1.0"
     a.output_schema_id = uuid.uuid4()
@@ -56,6 +57,7 @@ def _agent_exists(client, request, name: str) -> None:
 def _non_existent_agent(request) -> None:
     global _AGENT_ID
     _AGENT_ID = uuid.uuid4()
+    request.node._nonexistent = True
 
 
 @when("I GET /api/v1/agents")
@@ -104,10 +106,10 @@ def _create_library_agent(client, request) -> None:
 @when("I GET the agent by ID")
 def _get_agent(client, request) -> None:
     agent_id = _AGENT_ID or uuid.uuid4()
-    mock_agent = _make_mock_agent(name="test-agent")
-    mock_agent.id = agent_id
+    nonexistent = getattr(request.node, "_nonexistent", False)
+    return_val = None if nonexistent else _make_mock_agent(name="test-agent")
     with (
-        patch("modulo.api.routes.agents.get_agent", return_value=mock_agent),
+        patch("modulo.api.routes.agents.get_agent", return_value=return_val),
         patch("modulo.api.routes.agents.set_rls_org"),
     ):
         resp = client.get(f"/api/v1/agents/{agent_id}")
@@ -131,8 +133,9 @@ def _update_agent(client, request, name: str) -> None:
 @when("I delete the agent")
 def _delete_agent(client, request) -> None:
     agent_id = _AGENT_ID or uuid.uuid4()
+    nonexistent = getattr(request.node, "_nonexistent", False)
     with (
-        patch("modulo.api.routes.agents.delete_agent", return_value=True),
+        patch("modulo.api.routes.agents.delete_agent", return_value=not nonexistent),
         patch("modulo.api.routes.agents.set_rls_org"),
     ):
         resp = client.delete(f"/api/v1/agents/{agent_id}")
