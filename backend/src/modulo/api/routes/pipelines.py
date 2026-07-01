@@ -130,7 +130,7 @@ class PipelineGraphNode(BaseModel):
     position: GraphPosition
     connector_binding: ConnectorBinding | None = None
     output_schema_id: uuid.UUID | None = None
-    label: str | None = Field(default=None, min_length=1, max_length=255)
+    label: str | None = Field(default=None, max_length=255)
     role: str | None = None
     autonomy_recommendation: str | None = None
 

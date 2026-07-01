@@ -45,6 +45,7 @@ class Pipeline(OrgScoped):
     max_steps: Mapped[int | None] = mapped_column(Integer, nullable=True)
     token_budget: Mapped[int | None] = mapped_column(Integer, nullable=True)
     run_context_defaults: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False, default=dict)
+    default_autonomy_level: Mapped[str | None] = mapped_column(String(30), server_default="manual_approval")
     graph_nodes_json: Mapped[list[dict[str, Any]]] = mapped_column(
         JSON,
         nullable=False,
