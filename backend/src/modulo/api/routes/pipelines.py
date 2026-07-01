@@ -780,36 +780,43 @@ async def trigger_quality_report(
     session: AsyncSession = Depends(get_db_session),
     principal: AuthenticatedPrincipal = Depends(get_current_user),
 ) -> QualityReportResponse:
-    async with session.begin():
-        await set_rls_org(session, principal.organisation_id)
-        await set_rls_user_context(session, principal.account_id, principal.org_role)
+    try:
+        async with session.begin():
+            await set_rls_org(session, principal.organisation_id)
+            await set_rls_user_context(session, principal.account_id, principal.org_role)
 
-        pipeline = await get_pipeline(session, pipeline_id)
-        if pipeline is None:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Pipeline not found")
+            pipeline = await get_pipeline(session, pipeline_id)
+            if pipeline is None:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Pipeline not found")
 
-        report = await generate_quality_report(session, principal.organisation_id)
+            report = await generate_quality_report(session, principal.organisation_id)
 
-        endpoints = (
-            await session.execute(
-                select(NotificationEndpoint).where(
-                    NotificationEndpoint.organisation_id == principal.organisation_id,
+            endpoints = (
+                await session.execute(
+                    select(NotificationEndpoint).where(
+                        NotificationEndpoint.organisation_id == principal.organisation_id,
+                    )
                 )
-            )
-        ).scalars()
+            ).scalars()
 
-        recipient_urls: list[str] = []
-        for ep in endpoints:
-            try:
-                events = json.loads(ep.events) if ep.events else []
-            except (json.JSONDecodeError, TypeError):
-                events = []
-            if "quality_report" in events:
-                recipient_urls.append(ep.url)
+            recipient_urls: list[str] = []
+            for ep in endpoints:
+                try:
+                    events = json.loads(ep.events) if ep.events else []
+                except (json.JSONDecodeError, TypeError):
+                    events = []
+                if "quality_report" in events:
+                    recipient_urls.append(ep.url)
 
-        deliveries: list[dict[str, Any]] = []
-        if recipient_urls:
-            deliveries = await deliver_quality_report(report, recipient_urls)
+            deliveries: list[dict[str, Any]] = []
+            if recipient_urls:
+                deliveries = await deliver_quality_report(report, {"webhook_urls": recipient_urls})
+
+    except ProgrammingError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="Feature is not available. Run database migrations to enable it.",
+        ) from exc
 
     return QualityReportResponse(
         period=report["period"],
