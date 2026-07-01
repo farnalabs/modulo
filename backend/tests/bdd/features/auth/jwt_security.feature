@@ -51,3 +51,4 @@ Feature: JWT Security
     Given I have a JWT with alg=none for org "acme"
     When I make an authenticated request to /api/auth/me
     Then the response status is 401
+

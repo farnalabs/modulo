@@ -15,8 +15,8 @@ from datetime import UTC, datetime, timedelta
 from jose import JWTError, jwt
 
 _ALGORITHM = "HS256"
-_ACCESS_TOKEN_MINUTES = 60
-_REFRESH_TOKEN_HOURS = 24
+_ACCESS_TOKEN_MINUTES = 15
+_REFRESH_TOKEN_HOURS = 168
 _WS_TOKEN_MINUTES = 15
 
 
@@ -49,7 +49,7 @@ def create_access_token(
     is_system_admin: bool = False,
     user_id: str = "",
 ) -> str:
-    """1-hour access token."""
+    """15-minute access token."""
     resolved_account_id = _resolve_account_id(account_id=account_id, user_id=user_id)
     now = datetime.now(UTC)
     claims = {
@@ -76,7 +76,7 @@ def create_refresh_token(
     token_sequence: int,
     user_id: str = "",
 ) -> str:
-    """24-hour refresh token with family+sequence for rotation detection."""
+    """7-day refresh token with family+sequence for rotation detection."""
     resolved_account_id = _resolve_account_id(account_id=account_id, user_id=user_id)
     now = datetime.now(UTC)
     claims = {
@@ -95,7 +95,7 @@ def create_refresh_token(
 
 
 def refresh_access_token(refresh_token: str, secret_key: str) -> str:
-    """Validate a refresh token and issue a new 1-hour access token."""
+    """Validate a refresh token and issue a new access token."""
     principal = decode_principal(refresh_token, secret_key, allowed_purposes=["refresh"])
     return create_access_token(
         principal.username,
@@ -154,8 +154,9 @@ def create_ws_token(
     org_role: str,
     is_system_admin: bool = False,
     user_id: str = "",
+    ttl_minutes: int | None = None,
 ) -> str:
-    """Short-lived JWT for WebSocket authentication (15 minute TTL)."""
+    """Short-lived JWT for WebSocket authentication (15 minute TTL by default)."""
     resolved_account_id = _resolve_account_id(account_id=account_id, user_id=user_id)
     now = datetime.now(UTC)
     claims = {
@@ -166,7 +167,7 @@ def create_ws_token(
         "is_system_admin": is_system_admin,
         "purpose": "ws",
         "iat": now,
-        "exp": now + timedelta(minutes=_WS_TOKEN_MINUTES),
+        "exp": now + timedelta(minutes=ttl_minutes if ttl_minutes is not None else _WS_TOKEN_MINUTES),
     }
     return str(jwt.encode(claims, secret_key, algorithm=_ALGORITHM))
 
