@@ -2799,6 +2799,119 @@ Compatible schemas (identical structure) auto-map with a "Passthrough" badge. In
 
 Schema inference (§8.16) can suggest initial mappings when the composite is first dropped.
 
+#### Composite Output Validation and Retry
+
+##### Concept
+
+Every composite node produces output through its `output_mapping` boundary. This output can be validated against the declared `output_schema_id` plus additional eval definitions (regex, JSON Schema, llm_judge). If validation fails, the composite's **internal sub-pipeline can be re-executed** up to a configurable maximum, enabling self-correcting pattern components like "Approver" (must start with APPROVED/REJECTED), "Booleaner" (must start with TRUE/FALSE), "d20" (must output a valid dice roll), or any user-defined validator gate.
+
+This extends the existing per-node eval system (§8.17) and retry policy (§8.9) to work at the **composite boundary** rather than only at individual agent nodes.
+
+##### Data Model
+
+Extend `CompositeBinding` (stored in `PipelineSnapshot.composite_bindings_json`) with:
+
+```json
+{
+  "composite_template_id": "uuid",
+  "composite_version": "1.0.0",
+  "parameter_values": {...},
+  "input_mapping": {...},
+  "output_mapping": {...},
+  "output_validation": {
+    "eval_definitions": [
+      {
+        "id": "uuid",
+        "name": "first_word_approved_rejected",
+        "type": "regex",
+        "config": {
+          "pattern": "^(APPROVED|REJECTED)\\b",
+          "field": "result"
+        },
+        "failure_behaviour": "retry"
+      },
+      {
+        "id": "uuid",
+        "name": "output_schema_conformant",
+        "type": "json_schema",
+        "config": {
+          "schema_ref": "<schema_id@version>"
+        },
+        "failure_behaviour": "block"
+      }
+    ],
+    "max_validation_retries": 2
+  }
+}
+```
+
+| Field | Type | Description |
+|---|---|---|
+| `eval_definitions` | array | List of eval configurations executed against the composite's mapped output. Each follows the same shape as §8.17 eval definitions. |
+| `max_validation_retries` | int | How many times to re-run the composite's full internal sub-pipeline on validation failure. Default 0 (no retry). Min 0. Max 5. |
+
+Each eval definition carries a `failure_behaviour`:
+- `retry` — if this eval fails, the composite re-executes (up to `max_validation_retries`)
+- `block` — if this eval fails, the composite node transitions to `eval_failed` terminal state immediately, regardless of retry budget
+- `warn` — log the failure, pass the output through regardless
+
+The `block` behaviour exists for hard schema constraints (e.g. "output must match this JSON Schema for downstream compatibility") where retrying is pointless because the output shape itself is structurally wrong. The `retry` behaviour is for soft or pattern constraints where another LLM generation attempt might succeed.
+
+##### Runtime Execution
+
+After the composite's internal sub-pipeline completes and `output_mapping` transforms the result, before the output is presented to the parent pipeline:
+
+1. **Run output evals**: execute each eval definition in order against the mapped output. Same `EvalEngine` as §8.17 — `_evaluate_regex()`, `_evaluate_json_schema()`, `_evaluate_llm()`.
+2. **Check results**: if any eval with `failure_behaviour: block` fails → composite node transitions to `eval_failed`. Run stops.
+3. **Retry check**: if any eval with `failure_behaviour: retry` fails → increment retry counter. If `retry_count < max_validation_retries`, **reset the composite's internal sub-pipeline state and re-execute**. If retry budget exhausted → composite node transitions to `eval_failed`.
+4. **All pass**: output is promoted to the parent pipeline. Composite node execution is complete.
+
+##### Reset Mechanics
+
+A retry reset means:
+1. The composite's internal state (sub-pipeline checkpoint) is rolled back to the state before the composite started execution
+2. All parameter values are re-injected identically (they are snapshot-pinned)
+3. The input mapping is re-applied from the original parent input
+4. The internal sub-pipeline runs from the start again
+
+This is not a correction run (§8.20) — it is a full re-execution with identical inputs. The existing `checkpoint_blobs` cleanup is reused.
+
+##### Graph Validator
+
+The graph validator (§8.4) gains checks:
+- `max_validation_retries` must be 0–5 (inclusive)
+- Each eval definition must have a valid `type` and `config` that matches that type
+- `failure_behaviour` must be one of `retry`, `block`, `warn`
+- Regex patterns must be valid Python regexes (compiled at validation time)
+- JSON Schema eval config must reference an existing schema
+
+##### Integration with Existing System
+
+| Component | What changes |
+|---|---|
+| `CompositeBinding` Pydantic model | New `output_validation` field |
+| `EvalEngine` | No changes — reused as-is with existing `_evaluate_*` methods |
+| `Composite expander` | Post-execution eval step + retry loop around sub-pipeline re-entry |
+| `PipelineSnapshot` | `composite_bindings_json` already stores per-node bindings; `output_validation` is part of that |
+| `Graph validator` | New checks for validation config validity |
+| `PipelineGraphNode` Pydantic | No changes — `output_validation` lives on the binding, not the node definition |
+| Frontend `CompositeConfigPanel` | New "Output Validation" tab: add/remove eval configs, set retry count, regex/pattern editor |
+| Run inspection | Validation results shown per-composite: eval scores, retry count, final pass/fail |
+
+##### Library Primitive Patterns
+
+With output validation and retry, users can build and save reusable pattern components:
+
+**Approver**: composite with one agent node + output evals enforcing `result` starts with `APPROVED` or `REJECTED`. Retry on regex fail. Drag into any pipeline where you need a governed binary decision.
+
+**Booleaner**: composite enforcing output starts with `TRUE` or `FALSE`. Useful for conditional edges downstream.
+
+**d20**: composite with `output_schema` `{"roll": {"type": "integer", "minimum": 1, "maximum": 20}}`. Retry on schema validation failure (the LLM occasionally hallucinates numbers outside the range).
+
+**Triage**: composite enforcing first word is one of `BUG|FEATURE|INFRA|DOCS`. Retry on mismatch.
+
+All of these are just composites with pre-configured evals. The creator designs the internal prompt, sets the constraints, and publishes to the library. Consumers drag them in, configure the input prompt, and get enforced output contracts for free.
+
 #### Composite Authoring Flow
 
 Creating a composite is a multi-step process available from the library:
@@ -2835,7 +2948,7 @@ Existing snapshots without `composite_bindings_json` are handled by backward-com
 
 **Alpha scope**: CompositeTemplate CRUD, ParameterPort definition, library save as `composite` primitive, basic parameter injection (`prompt_replace` mode only), single-passthrough mapping (compatible schemas), canvas rendering as composite node, version pinning in snapshots. No schema mapping UI in alpha — passthrough only. No test-run flow. No community registry.
 
-**V1 Extended scope**: Full schema mapping UI (field-pairing drag-and-drop), `model_backend_ref` and `schema_ref` port types, `run_context_key` and `node_field` injection modes, test-run flow for composite templates, auto-detect parameter placeholders on "Save as composite", version diff panel, update-available indicator.
+**V1 Extended scope**: Full schema mapping UI (field-pairing drag-and-drop), `model_backend_ref` and `schema_ref` port types, `run_context_key` and `node_field` injection modes, test-run flow for composite templates, auto-detect parameter placeholders on "Save as composite", version diff panel, update-available indicator. Composite output validation with evals at the composite boundary and configurable retry (§8.24 Composite Output Validation and Retry).
 
 **V2 scope**: Community registry for composites, nested composites (composite containing composites), output-only composites (no input mapping — self-contained generators).
 
@@ -2850,6 +2963,7 @@ The feature decomposes into these delivery tasks:
 5. `task-nv30-composite-authoring-flow` (L) — Composite template editor sub-pipeline mode, port definition UI, publish flow
 6. `task-nv30-composite-schema-mapping` (L) — Schema mapping UI (drag-and-drop field pairing), inference-assisted mapping (v1-extended)
 7. `task-nv30-composite-bdd-tests` (L) — BDD feature files for all composite behaviours, step definitions
+8. `task-nv31-composite-validation-retry` (M) — Output validation evals at the composite boundary, retry loop on failure, output_validation field on CompositeBinding, graph validator checks for eval config, frontend "Output Validation" tab, library primitive patterns (Approver, Booleaner, d20)
 
 **Phase**: `phase-nv30` (new)
 
