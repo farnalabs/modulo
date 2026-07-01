@@ -1,12 +1,13 @@
 # improve-architecture Tracker
 
-Current index: 22
-Last updated: 2026-07-01T20:15:00Z
+Current index: 26
+Last updated: 2026-07-01T22:45:00Z
 
 ## In-flight
 - (none)
 
 ## History
+- 2026-07-01: feat-connectors-linear → complete, cross-cutting QA: fixed frontmatter (added unit-tests), removed outdated known gaps #7 (BDD placeholder → 5 real scenarios) and #8 (unit tests exist), added 3 BDD error-path scenarios + step definitions, added 4 unit tests (missing id, update failure, GraphQL error), fixed search to respect q.limit via first:$limit, consolidated gaps from 9→9 with updated descriptions. 17/17 unit tests pass; 11 pre-existing BDD failures unchanged.
 - 2026-07-01: feat-auth-sso-provider-ui → complete, cross-cutting QA: added audit event dispatching to SSO provider CRUD (create/update/delete/toggle), added duplicate name check on create (409 Conflict), added FeatureGate wrapper to SettingsSsoView.vue, added bdd:/unit-tests: frontmatter, marked 3 behaviours [ ]→[x] (FeatureGate, duplicate name, SAML 402), fixed SAML status 403→402 in product map, added 4 new known gaps (no admin CRUD BDD, nav entry not gated, no SAML integration test, no enterprise gate on nav entry)
 
 ## History
