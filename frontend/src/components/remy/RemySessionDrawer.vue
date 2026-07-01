@@ -1,19 +1,47 @@
 <template>
   <div class="remy-sessions">
     <div class="flex items-center justify-between p-3 border-b">
-      <h3 class="text-xs font-semibold uppercase tracking-wider text-muted-foreground">Sessions</h3>
-      <Button variant="ghost" size="icon" @click="handleNewSession" title="New session">
-        <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+      <h3
+        class="text-xs font-semibold uppercase tracking-wider text-muted-foreground"
+      >
+        Sessions
+      </h3>
+      <Button
+        variant="ghost"
+        size="icon"
+        @click="handleNewSession"
+        title="New session"
+      >
+        <svg
+          xmlns="http://www.w3.org/2000/svg"
+          width="14"
+          height="14"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="2"
+        >
+          <line x1="12" y1="5" x2="12" y2="19" />
+          <line x1="5" y1="12" x2="19" y2="12" />
+        </svg>
       </Button>
     </div>
 
-    <div v-if="store.sessionsLoading" class="flex items-center justify-center py-8">
+    <div
+      v-if="store.sessionsLoading"
+      class="flex items-center justify-center py-8"
+    >
       <span class="text-sm text-muted-foreground">Loading...</span>
     </div>
 
-    <div v-else-if="store.sortedSessions.length === 0" class="flex flex-col items-center justify-center py-8 px-4 text-center">
+    <div
+      v-else-if="store.sortedSessions.length === 0"
+      class="flex flex-col items-center justify-center py-8 px-4 text-center"
+    >
       <p class="text-sm text-muted-foreground">No sessions yet</p>
-      <Button variant="link" size="sm" @click="handleNewSession" class="mt-2">Start a new chat</Button>
+      <Button variant="link" size="sm" @click="handleNewSession" class="mt-2"
+        >Start a new chat</Button
+      >
     </div>
 
     <div v-else class="divide-y">
@@ -33,13 +61,30 @@
             @click.stop="handleDelete(session.id)"
             title="Delete"
           >
-            <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
+            <svg
+              xmlns="http://www.w3.org/2000/svg"
+              width="12"
+              height="12"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="2"
+            >
+              <polyline points="3 6 5 6 21 6" />
+              <path
+                d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"
+              />
+            </svg>
           </button>
         </div>
         <div class="flex items-center gap-2 mt-1">
-          <span class="text-xs text-muted-foreground">{{ session.message_count }} msgs</span>
+          <span class="text-xs text-muted-foreground"
+            >{{ session.message_count }} msgs</span
+          >
           <span class="text-xs text-muted-foreground">&middot;</span>
-          <span class="text-xs text-muted-foreground">{{ formatTime(session.updated_at) }}</span>
+          <span class="text-xs text-muted-foreground">{{
+            formatTime(session.updated_at)
+          }}</span>
         </div>
       </button>
     </div>
@@ -47,46 +92,48 @@
 </template>
 
 <script setup lang="ts">
-import { useRemyStore } from '@/composables/useRemyStore'
-import Button from '@/components/ui/button/Button.vue'
+import { useRemyStore } from "@/composables/useRemyStore";
+import Button from "@/components/ui/button/Button.vue";
 
 const emit = defineEmits<{
-  close: []
-  selectSession: []
-}>()
+  close: [];
+  selectSession: [];
+}>();
 
-const store = useRemyStore()
+const store = useRemyStore();
 
 function selectSession(id: string) {
-  store.loadSession(id)
-  emit('selectSession')
+  store.loadSession(id);
+  emit("selectSession");
 }
 
 async function handleNewSession() {
-  const session = await store.createSession()
+  const session = await store.createSession();
   if (session) {
-    emit('selectSession')
+    emit("selectSession");
   }
 }
 
 async function handleDelete(id: string) {
-  await store.deleteSession(id)
+  await store.deleteSession(id);
 }
 
 function formatTime(iso: string): string {
   try {
-    const d = new Date(iso)
-    const now = new Date()
-    const diffMs = now.getTime() - d.getTime()
-    const diffMin = Math.floor(diffMs / 60000)
-    if (diffMin < 1) return 'just now'
-    if (diffMin < 60) return `${diffMin}m ago`
-    const diffHr = Math.floor(diffMin / 60)
-    if (diffHr < 24) return `${diffHr}h ago`
-    const diffDay = Math.floor(diffHr / 24)
-    if (diffDay < 7) return `${diffDay}d ago`
-    return d.toLocaleDateString()
-  } catch { return iso }
+    const d = new Date(iso);
+    const now = new Date();
+    const diffMs = now.getTime() - d.getTime();
+    const diffMin = Math.floor(diffMs / 60000);
+    if (diffMin < 1) return "just now";
+    if (diffMin < 60) return `${diffMin}m ago`;
+    const diffHr = Math.floor(diffMin / 60);
+    if (diffHr < 24) return `${diffHr}h ago`;
+    const diffDay = Math.floor(diffHr / 24);
+    if (diffDay < 7) return `${diffDay}d ago`;
+    return d.toLocaleDateString();
+  } catch {
+    return iso;
+  }
 }
 </script>
 

@@ -1,7 +1,11 @@
 <template>
   <div class="relative" data-testid="feature-gate">
     <slot v-if="enabled" />
-    <div v-else class="flex items-center justify-center py-16" data-testid="feature-gate-lock">
+    <div
+      v-else
+      class="flex items-center justify-center py-16"
+      data-testid="feature-gate-lock"
+    >
       <div class="text-center space-y-4">
         <LockIcon :locked="true" :tooltip="tooltipText" />
         <div>
@@ -23,23 +27,23 @@
 </template>
 
 <script setup lang="ts">
-import { computed } from 'vue'
-import { usePlanStore } from '../stores/planStore'
-import LockIcon from './LockIcon.vue'
+import { computed } from "vue";
+import { usePlanStore } from "../stores/planStore";
+import LockIcon from "./LockIcon.vue";
 
 const props = defineProps<{
-  featureName: string
-  requiredTier?: string
-}>()
+  featureName: string;
+  requiredTier?: string;
+}>();
 
-const planStore = usePlanStore()
+const planStore = usePlanStore();
 
-const enabled = computed(() => planStore.featureEnabled(props.featureName))
+const enabled = computed(() => planStore.featureEnabled(props.featureName));
 
 const tooltipText = computed(() => {
   if (props.requiredTier) {
-    return `Available on ${planStore.getTierLabel(props.requiredTier)} plan`
+    return `Available on ${planStore.getTierLabel(props.requiredTier)} plan`;
   }
-  return 'Available on higher plan tier'
-})
+  return "Available on higher plan tier";
+});
 </script>

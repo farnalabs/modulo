@@ -9,7 +9,19 @@
     >
       <span class="sidebar-group-label">{{ label }}</span>
       <span class="sidebar-group-chevron" :class="{ rotated: !collapsed }">
-        <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg>
+        <svg
+          xmlns="http://www.w3.org/2000/svg"
+          width="14"
+          height="14"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="2"
+          stroke-linecap="round"
+          stroke-linejoin="round"
+        >
+          <polyline points="6 9 12 15 18 9" />
+        </svg>
       </span>
     </button>
     <Transition name="fade">
@@ -28,14 +40,14 @@
 
 <script setup lang="ts">
 defineProps<{
-  id: string
-  label: string
-  collapsed: boolean
-}>()
+  id: string;
+  label: string;
+  collapsed: boolean;
+}>();
 
 defineEmits<{
-  toggle: []
-}>()
+  toggle: [];
+}>();
 </script>
 
 <style scoped>
@@ -53,7 +65,9 @@ defineEmits<{
   text-align: left;
   cursor: pointer;
   border-radius: var(--radius-md);
-  transition: background-color 150ms ease, color 150ms ease;
+  transition:
+    background-color 150ms ease,
+    color 150ms ease;
   border: none;
   background: transparent;
   margin-bottom: 0.25rem;
@@ -94,7 +108,9 @@ defineEmits<{
 
 .fade-enter-active,
 .fade-leave-active {
-  transition: opacity 0.15s ease, transform 0.15s ease;
+  transition:
+    opacity 0.15s ease,
+    transform 0.15s ease;
   overflow: hidden;
 }
 

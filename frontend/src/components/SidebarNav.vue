@@ -21,27 +21,27 @@
 </template>
 
 <script setup lang="ts">
-import { computed } from 'vue'
-import SidebarLink from './SidebarLink.vue'
-import SidebarGroup from './SidebarGroup.vue'
-import { navGroups } from '../config/navigation'
-import { useSidebar } from '../composables/useSidebar'
+import { computed } from "vue";
+import SidebarLink from "./SidebarLink.vue";
+import SidebarGroup from "./SidebarGroup.vue";
+import { navGroups } from "../config/navigation";
+import { useSidebar } from "../composables/useSidebar";
 
 const props = defineProps<{
-  isSystemAdmin: boolean
-}>()
+  isSystemAdmin: boolean;
+}>();
 
 defineEmits<{
-  navigate: []
-}>()
+  navigate: [];
+}>();
 
-const { viewMode, toggleGroup, isGroupCollapsed } = useSidebar()
+const { viewMode, toggleGroup, isGroupCollapsed } = useSidebar();
 
 const filteredGroups = computed(() =>
   navGroups.filter(
     (g) =>
-      (g.simpleMode || viewMode.value === 'advanced') &&
+      (g.simpleMode || viewMode.value === "advanced") &&
       (!g.systemAdminOnly || props.isSystemAdmin),
   ),
-)
+);
 </script>
