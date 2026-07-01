@@ -300,10 +300,10 @@ def _setup_session_for_polling(
             return rls_result
         if "for update" in stmt_str or "from triggers" in stmt_str:
             return trigger_result
-        if "count" in stmt_str:
-            return count_result
         if "connector_instance" in stmt_str:
             return ci_result
+        if "count(*)" in stmt_str:
+            return count_result
         if "update" in stmt_str:
             return count_result
         return rls_result
@@ -658,3 +658,84 @@ class TestPollingFireTask:
         assert PollingFireTask.autoretry_for == (Exception,)
         assert PollingFireTask.max_retries == 2
         assert PollingFireTask.default_retry_delay == 30
+
+
+    async def test_fire_trigger_connector_init_failed(
+        self,
+        mock_db_components,
+        mock_secrets_backend,
+    ) -> None:
+        """Connector init failure → status=error reason=connector_init_failed."""
+        session = mock_db_components
+        trigger = _make_trigger(config={"snapshot_id": str(uuid.uuid4()), "poll_interval_seconds": 60})
+        _setup_session_for_polling(session, trigger, connector_instance=MagicMock(), active_run_count=0)
+
+        with patch("modulo.core.trigger_engine.polling._build_polling_connector") as mock_build:
+            mock_build.side_effect = ValueError("missing creds")
+            result = await _fire_polling_trigger(
+                trigger_id=_TRIGGER_ID,
+                org_id=_ORG_ID,
+                pipeline_id=_PIPELINE_ID,
+                connector_instance_id=_CI_ID,
+                poll_query="select * from issues",
+                condition_expression=None,
+            )
+
+        assert result["status"] == "error"
+        assert result["reason"] == "connector_init_failed"
+
+    async def test_fire_trigger_query_failed(
+        self,
+        mock_db_components,
+        mock_secrets_backend,
+        mock_connector,
+    ) -> None:
+        """Poll query failure → status=error reason=query_failed."""
+        session = mock_db_components
+        _, connector = mock_connector
+        connector.query.side_effect = RuntimeError("API timeout")
+
+        trigger = _make_trigger(config={"snapshot_id": str(uuid.uuid4()), "poll_interval_seconds": 60})
+        _setup_session_for_polling(session, trigger, connector_instance=MagicMock(), active_run_count=0)
+
+        result = await _fire_polling_trigger(
+            trigger_id=_TRIGGER_ID,
+            org_id=_ORG_ID,
+            pipeline_id=_PIPELINE_ID,
+            connector_instance_id=_CI_ID,
+            poll_query="select * from issues",
+            condition_expression=None,
+        )
+
+        assert result["status"] == "error"
+        assert result["reason"] == "query_failed"
+
+    async def test_fire_trigger_already_fired(
+        self,
+        mock_db_components,
+    ) -> None:
+        """next_fire_at in future → skipped, already_fired_this_cycle."""
+        session = mock_db_components
+        trigger = _make_trigger()
+        trigger.next_fire_at = datetime.datetime.now(datetime.UTC) + datetime.timedelta(hours=1)
+        _setup_session_for_polling(session, trigger)
+
+        result = await _fire_polling_trigger(
+            trigger_id=_TRIGGER_ID,
+            org_id=_ORG_ID,
+            pipeline_id=_PIPELINE_ID,
+            connector_instance_id=_CI_ID,
+            poll_query="query",
+            condition_expression=None,
+        )
+
+        assert result["status"] == "skipped"
+        assert result["reason"] == "already_fired_this_cycle"
+
+
+class TestBuildPollingConnectorExtended:
+    """Additional _build_polling_connector edge cases."""
+
+    def test_jira_missing_instance(self) -> None:
+        with pytest.raises(ValueError, match="requires 'instance'"):
+            _build_polling_connector("jira", {}, {"token": "x"})
