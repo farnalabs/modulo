@@ -400,12 +400,10 @@
 <script setup lang="ts">
 import { ref, reactive, computed, onMounted, watch } from 'vue'
 import { api } from '../lib/api/client'
-import { useApi } from '../composables/useApi'
 import type { components } from '../lib/api/client'
 
 type ConnectorItem = components['schemas']['ConnectorItem']
 type SchemaInferResponse = components['schemas']['SchemaInferResponse']
-const { get, post } = useApi()
 
 const steps = [
   { title: 'Welcome', subtitle: 'Get started with SDLC onboarding' },
@@ -573,9 +571,9 @@ async function loadLibrary() {
   loadingLibrary.value = true
   libraryError.value = null
   try {
-    const params = new URLSearchParams({ page: '1', page_size: '50' })
-    const data = await get<{ items: LibraryPrimitive[]; total: number }>(`/api/v1/libraries?${params}`)
-    libraryItems.value = data.items
+    const { data, error: err } = await api.GET('/api/v1/libraries', { params: { query: { page: 1, page_size: 50 } } })
+    if (err) throw err
+    libraryItems.value = data!.items
   } catch (e) {
     libraryError.value = e instanceof Error ? e.message : 'Failed to load library'
   } finally {
@@ -588,12 +586,15 @@ async function createPipeline() {
   creatingPipeline.value = true
   pipelineCreateError.value = null
   try {
-    const data = await post<{ id: string; name: string }>('/api/v1/pipelines', {
-      name: wizardState.pipelineName.trim(),
-      description: wizardState.pipelineDescription.trim() || null,
+    const { data, error: err } = await api.POST('/api/v1/pipelines', {
+      body: {
+        name: wizardState.pipelineName.trim(),
+        description: wizardState.pipelineDescription.trim() || null,
+      },
     })
-    wizardState.createdPipelineId = data.id
-    wizardState.createdPipelineName = data.name
+    if (err) throw err
+    wizardState.createdPipelineId = data!.id
+    wizardState.createdPipelineName = data!.name
   } catch (e) {
     pipelineCreateError.value = e instanceof Error ? e.message : 'Failed to create pipeline'
   } finally {
@@ -607,7 +608,8 @@ async function runPipeline() {
   pipelineRunError.value = null
   runResult.value = null
   try {
-    await post(`/api/v1/pipelines/${wizardState.createdPipelineId}/run`)
+    const { error: err } = await api.POST(`/api/v1/pipelines/${wizardState.createdPipelineId}/run`, {})
+    if (err) throw err
     runResult.value = 'Pipeline started successfully.'
   } catch (e) {
     pipelineRunError.value = e instanceof Error ? e.message : 'Failed to start pipeline'

@@ -140,7 +140,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted } from 'vue'
+import { ref, onMounted, onBeforeUnmount } from 'vue'
 import { useRouter } from 'vue-router'
 import { useApi } from '../composables/useApi'
 
@@ -261,5 +261,8 @@ async function toggleAutoUpdate(prim: LibraryPrimitive) {
   }
 }
 
+onBeforeUnmount(() => {
+  if (searchTimer) clearTimeout(searchTimer)
+})
 onMounted(loadPrimitives)
 </script>

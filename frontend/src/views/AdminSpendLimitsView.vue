@@ -176,8 +176,6 @@ const costsError = ref<string | null>(null)
 const orgTotalCost = ref(0)
 const teamCosts = ref<TeamCostItem[]>([])
 
-const orgLimitValue = computed(() => orgLimit.value)
-
 function overageClass(cost: number, limit: number | null): string {
   if (limit === null || limit <= 0) return ''
   return cost > limit ? 'text-destructive' : 'text-success'

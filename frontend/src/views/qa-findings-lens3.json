@@ -1,0 +1,65 @@
+[
+  {
+    "severity": "major",
+    "file": "AdminPluginsView.vue",
+    "line": 205,
+    "finding": "`togglePlugin()` switches `activeStates[id]` between `true`/`false` locally but never calls the API to persist the change. The toggle is purely visual — reverting on page reload, and never taking effect server-side.",
+    "fix": "Add an API call (e.g. `api.PUT('/api/v1/plugins/{id}/toggle')`) inside `togglePlugin()` to persist the new active state, and only update the local ref after the API succeeds."
+  },
+  {
+    "severity": "major",
+    "file": "AgentOutputDiffView.vue",
+    "line": 189,
+    "finding": "`JSON.stringify(err)` in the error path will throw `TypeError: Converting circular structure to JSON` when `err` is an Axios-style error object (which contains circular references via `request` and `response` properties).",
+    "fix": "Use a safe serializer — replace `JSON.stringify(err)` with `e instanceof Error ? e.message : String(e)` like every other view does, or wrap in try/catch and fall back to `String(err)`."
+  },
+  {
+    "severity": "major",
+    "file": "AdminCostBreakdownView.vue",
+    "line": 211,
+    "finding": "`dismissAnomaly()` uses an HTTP GET request (`(api as any).GET(...)`) to mutate server state (dismiss an anomaly). GET requests must be idempotent and side-effect-free per HTTP spec; using GET for state mutation can cause accidental re-execution by browsers, proxies, or prefetch scanners.",
+    "fix": "Replace `(api as any).GET(...)` with `(api as any).POST(...)` or `(api as any).PATCH(...)` and update the API route to accept the appropriate HTTP method."
+  },
+  {
+    "severity": "major",
+    "file": "AdminUsersView.vue",
+    "line": 304,
+    "finding": "`copyPassword()` calls `navigator.clipboard.writeText()` without error handling. If clipboard access is denied (user gesture lost, permissions revoked), the returned promise rejects with a `DOMException` that is unhandled, causing an unhandled promise rejection.",
+    "fix": "Convert to `async` and wrap in try/catch, or add `.catch(() => {})`: `try { await navigator.clipboard.writeText(...) } catch { /* clipboard unavailable */ }`."
+  },
+  {
+    "severity": "major",
+    "file": "SettingsTeamsView.vue",
+    "line": 339,
+    "finding": "`membersError[teamId]` is set to error string on API failure, but `memberActionError[teamId]` is used for the inline error display template (line 300-302). If `membersError` is populated but `memberActionError` is not, the error remains invisible to the user.",
+    "fix": "Reconcile the two error-tracking objects: either use only `memberActionError` for inline display, or ensure every error-setting codepath populates the same error ref that the template reads."
+  },
+  {
+    "severity": "minor",
+    "file": "MyProfileView.vue",
+    "line": 21,
+    "finding": "`{{ new Date(profile.created_at).toLocaleDateString() }}` in template renders 'Invalid Date' when `profile.created_at` is an empty string (the initial value). The profile object is initialised with `created_at: ''` on line 89, so before the API resolves, the user sees 'Invalid Date'.",
+    "fix": "Guard with a check: `{{ profile.created_at ? new Date(profile.created_at).toLocaleDateString() : '—' }}`, or add a try/catch wrapper in a helper function."
+  },
+  {
+    "severity": "minor",
+    "file": "AdminUsersView.vue",
+    "line": 82,
+    "finding": "`{{ u.created_at ? new Date(u.created_at).toLocaleDateString() : '—' }}` is guarded for null but `new Date()` can still throw for malformed date strings. If the API returns an unparseable date, the template crashes with an unhandled error.",
+    "fix": "Create a reusable `formatDate()` helper with a try/catch and use it consistently instead of inline `new Date()` in templates."
+  },
+  {
+    "severity": "minor",
+    "file": "SchemaEditorView.vue",
+    "line": 487,
+    "finding": "`selectSchema()` calls `loadLatestVersion(id)` and `loadVersions(id)` as fire-and-forget promises inside a synchronous function. Both are async and can reject on network error. Their rejections are unhandled (though each has internal try/catch, the returned promise is still dangling).",
+    "fix": "Either await them (making `selectSchema` async) or attach `.catch()` to suppress the unhandled rejection warning."
+  },
+  {
+    "severity": "minor",
+    "file": "OnboardingWizard.vue",
+    "line": 636,
+    "finding": "Watch handler on `currentStep` calls `loadConnectors()` and `loadLibrary()` (both async) without awaiting their returned promises. If either rejects, the rejection is unhandled.",
+    "fix": "Attach `.catch(() => {})` to each async call, or wrap the body in an async IIFE with try/catch."
+  }
+]

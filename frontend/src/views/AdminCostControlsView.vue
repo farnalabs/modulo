@@ -233,7 +233,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, onMounted, onBeforeUnmount } from 'vue'
 import { api } from '../lib/api/client'
 import { usePlanStore } from '../stores/planStore'
 import FeatureGate from '../components/FeatureGate.vue'
@@ -486,6 +486,10 @@ async function saveSettingsField(field: Partial<ControlsSettings>) {
     }
   }, 500)
 }
+
+onBeforeUnmount(() => {
+  if (saveSettingsTimeout) clearTimeout(saveSettingsTimeout)
+})
 
 onMounted(() => {
   planStore.fetchPlan()
