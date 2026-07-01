@@ -9,21 +9,18 @@ Usage:
     # After __aexit__: all backend references discarded, API keys gone.
 """
 
-import asyncio
 import json
 import uuid
 from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass
 from typing import Any
 
-from langchain_core.messages import HumanMessage
-
 from modulo.core.plugin_registry import get_plugin_registry
 from modulo.core.secrets_backend import SecretsBackend
 from modulo.model_backends.ai21 import Ai21Backend
 from modulo.model_backends.anthropic import AnthropicBackend
 from modulo.model_backends.azure_openai import AzureOpenAIBackend
-from modulo.model_backends.base import ModelBackendBase
+from modulo.model_backends.base import HealthResult, ModelBackendBase
 from modulo.model_backends.bedrock import BedrockBackend
 from modulo.model_backends.cohere import CohereBackend
 from modulo.model_backends.deepseek import DeepSeekBackend
@@ -46,12 +43,6 @@ from modulo.model_backends.togetherai import TogetherAIBackend
 from modulo.model_backends.vertexai import VertexAIBackend
 from modulo.model_backends.vllm import VllmBackend
 from modulo.model_backends.watsonx import WatsonXBackend
-
-
-@dataclass
-class HealthResult:
-    ok: bool
-    detail: str = ""
 
 
 @dataclass
@@ -201,23 +192,13 @@ class ModelBackendHub:
     CONNECTOR_TIMEOUT: float = 60.0
 
     async def health_check(self, backend_id: uuid.UUID) -> HealthResult:
-        """Check backend health with a minimal ping; update health state."""
+        """Check backend health; delegates to the backend's own health check."""
         if backend_id not in self._backends:
             return HealthResult(ok=False, detail="Backend not registered")
         backend = self._backends[backend_id]
-        try:
-            await asyncio.wait_for(
-                backend.invoke([HumanMessage(content="ping")], max_tokens=1),
-                timeout=self.CONNECTOR_TIMEOUT,
-            )
-            self._healthy[backend_id] = True
-            return HealthResult(ok=True)
-        except TimeoutError:
-            self._healthy[backend_id] = False
-            return HealthResult(ok=False, detail="Health check timed out")
-        except Exception as exc:
-            self._healthy[backend_id] = False
-            return HealthResult(ok=False, detail=str(exc)[:500])
+        result = await backend.health_check()
+        self._healthy[backend_id] = result.ok
+        return result
 
     def mark_unhealthy(self, backend_id: uuid.UUID) -> None:
         """Explicitly mark a backend as unhealthy (e.g. after a node-level error)."""
