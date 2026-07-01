@@ -109,7 +109,7 @@ def login_jwt(email: str, password: str, request: Any, ctx: dict[str, Any], toke
     mock_user.active = True
 
     with (
-        patch("modulo.api.routes.auth.get_user_by_email", new=AsyncMock(return_value=mock_user)),
+        patch("modulo.api.routes.auth.get_account_by_email", new=AsyncMock(return_value=mock_user)),
         patch("modulo.api.routes.auth.authenticate_db_user", return_value=True),
         patch("modulo.api.routes.auth.update_last_login", new=AsyncMock()),
     ):
@@ -217,7 +217,7 @@ def authenticated_request_me(request: Any, ctx: dict[str, Any], token_client: Te
     mock_user.active = True
     mock_user.created_at = datetime.now(UTC)
 
-    with patch("modulo.api.routes.auth.get_user_by_id", new=AsyncMock(return_value=mock_user)):
+    with patch("modulo.api.routes.auth.get_account_by_id", new=AsyncMock(return_value=mock_user)):
         resp = token_client.get(
             "/api/v1/auth/me",
             headers={"Authorization": f"Bearer {token}"},
@@ -254,7 +254,7 @@ def logged_in_as(email: str, request: Any, ctx: dict[str, Any], token_client: Te
     mock_user.active = True
 
     with (
-        patch("modulo.api.routes.auth.get_user_by_email", new=AsyncMock(return_value=mock_user)),
+        patch("modulo.api.routes.auth.get_account_by_email", new=AsyncMock(return_value=mock_user)),
         patch("modulo.api.routes.auth.authenticate_db_user", return_value=True),
         patch("modulo.api.routes.auth.update_last_login", new=AsyncMock()),
         patch("modulo.api.routes.auth.create_family", new=AsyncMock(return_value=mock_family)),

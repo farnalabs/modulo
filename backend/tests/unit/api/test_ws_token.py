@@ -212,6 +212,21 @@ def test_ws_token_decodes_correctly(client: TestClient) -> None:
     assert principal.account_id == _USER_ID
 
 
+def test_ws_token_jwt_expiry_matches_settings(client: TestClient) -> None:
+    """The JWT WS token's actual expiry should match the configured TTL."""
+    resp = client.post("/api/v1/auth/ws-token")
+    body = resp.json()
+    token = body["ws_token"]
+    settings = _make_settings()
+    from jose import jwt
+
+    payload = jwt.decode(token, settings.secret_key, algorithms=["HS256"])
+    exp = datetime.fromtimestamp(payload["exp"], tz=UTC)
+    iat = datetime.fromtimestamp(payload["iat"], tz=UTC)
+    ttl_seconds = (exp - iat).total_seconds()
+    assert 50 <= ttl_seconds <= 70, f"Expected ~60s TTL, got {ttl_seconds}s"
+
+
 def test_ws_token_endpoint_unauthenticated_returns_4xx() -> None:
     app.dependency_overrides[get_settings] = _make_settings
     app.dependency_overrides.pop(get_current_user, None)  # remove override
