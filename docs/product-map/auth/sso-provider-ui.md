@@ -42,7 +42,7 @@ Admin settings page for configuring OIDC and SAML 2.0 identity providers. Enterp
 - [ ] Test connection on OIDC provider with invalid/unreachable discovery URL shows error inline
 - [ ] Test connection on SAML provider with invalid/empty metadata shows error inline
 - [ ] Delete provider warns about effect on active user sessions
-- [ ] SAML endpoints return 403 when enterprise license is absent
+- [ ] SAML endpoints return 402 when enterprise license is absent
 - [ ] Form state is preserved on validation failure (no page loss)
 - [ ] Test connection results show success or failure details inline (no page navigation)
 
