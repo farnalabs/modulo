@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import uuid
 from typing import Any
 
@@ -8,6 +9,8 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.db.models.remy_skill import RemySkill
+
+logger = logging.getLogger(__name__)
 
 
 class SkillEntry(BaseModel):
@@ -24,22 +27,30 @@ class SkillLoader:
         self._session = session
 
     async def get_org_skills(self, org_id: uuid.UUID) -> list[SkillEntry]:
-        result = await self._session.execute(
-            select(RemySkill).where(
-                RemySkill.organisation_id == org_id,
-                RemySkill.active.is_(True),
+        try:
+            result = await self._session.execute(
+                select(RemySkill).where(
+                    RemySkill.organisation_id == org_id,
+                    RemySkill.active.is_(True),
+                )
             )
-        )
-        return [self._to_entry(s) for s in result.scalars().all()]
+            return [self._to_entry(s) for s in result.scalars().all()]
+        except Exception:
+            logger.exception("Failed to load org skills for org %s", org_id)
+            return []
 
     async def get_user_skills(self, user_id: uuid.UUID) -> list[SkillEntry]:
-        result = await self._session.execute(
-            select(RemySkill).where(
-                RemySkill.user_id == user_id,
-                RemySkill.active.is_(True),
+        try:
+            result = await self._session.execute(
+                select(RemySkill).where(
+                    RemySkill.user_id == user_id,
+                    RemySkill.active.is_(True),
+                )
             )
-        )
-        return [self._to_entry(s) for s in result.scalars().all()]
+            return [self._to_entry(s) for s in result.scalars().all()]
+        except Exception:
+            logger.exception("Failed to load user skills for user %s", user_id)
+            return []
 
     async def build_system_prompt(
         self,

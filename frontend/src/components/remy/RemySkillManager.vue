@@ -35,10 +35,12 @@
       </div>
     </div>
 
-    <div class="flex-1 overflow-auto divide-y">
-      <div v-if="skills.length === 0 && !showForm" class="flex items-center justify-center py-12">
-        <p class="text-sm text-muted-foreground">No skills yet</p>
-      </div>
+      <div v-if="skillError" class="px-3 py-2 text-sm text-destructive">{{ skillError }}</div>
+
+      <div class="flex-1 overflow-auto divide-y">
+        <div v-if="skills.length === 0 && !showForm" class="flex items-center justify-center py-12">
+          <p class="text-sm text-muted-foreground">No skills yet</p>
+        </div>
       <div v-for="skill in skills" :key="skill.id" class="remy-skill-item p-3">
         <div class="flex items-start justify-between gap-2">
           <div class="flex-1 min-w-0">
@@ -72,14 +74,21 @@ const skills = ref<UserSkill[]>([])
 const showForm = ref(false)
 const editingId = ref<string | null>(null)
 const form = ref({ name: '', description: '', triggersText: '', body: '' })
+const skillError = ref<string | null>(null)
+const skillSaving = ref(false)
 
 async function fetchSkills() {
+  skillError.value = null
   try {
     const { data, error: err } = await api.GET('/api/v1/me/remy/skills')
-    if (!err && data) {
+    if (err) {
+      skillError.value = `Failed to load skills: ${err}`
+    } else if (data) {
       skills.value = (data as any)?.items ?? (data as any) ?? []
     }
-  } catch { /* ignore */ }
+  } catch (e: unknown) {
+    skillError.value = e instanceof Error ? e.message : 'Failed to load skills'
+  }
 }
 
 function openCreateForm() {
@@ -112,34 +121,51 @@ async function saveSkill() {
     body: form.value.body,
   }
 
+  skillSaving.value = true
+  skillError.value = null
   try {
     if (editingId.value) {
       const { error: err } = await api.PUT('/api/v1/me/remy/skills/{id}', {
         params: { path: { id: editingId.value } },
         body: payload,
       })
-      if (err) return
+      if (err) {
+        skillError.value = `Failed to update skill: ${err}`
+        return
+      }
     } else {
       const { data, error: err } = await api.POST('/api/v1/me/remy/skills', { body: payload })
-      if (err || !data) return
+      if (err || !data) {
+        skillError.value = `Failed to create skill: ${err}`
+        return
+      }
       const created = data as UserSkill
       skills.value.push(created)
     }
     showForm.value = false
     editingId.value = null
     await fetchSkills()
-  } catch { /* ignore */ }
+  } catch (e: unknown) {
+    skillError.value = e instanceof Error ? e.message : 'Failed to save skill'
+  } finally {
+    skillSaving.value = false
+  }
 }
 
 async function deleteSkill(id: string) {
+  skillError.value = null
   try {
     const { error: err } = await api.DELETE('/api/v1/me/remy/skills/{id}', {
       params: { path: { id } },
     })
-    if (!err) {
+    if (err) {
+      skillError.value = `Failed to delete skill: ${err}`
+    } else {
       skills.value = skills.value.filter(s => s.id !== id)
     }
-  } catch { /* ignore */ }
+  } catch (e: unknown) {
+    skillError.value = e instanceof Error ? e.message : 'Failed to delete skill'
+  }
 }
 
 onMounted(() => {
