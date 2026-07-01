@@ -31,8 +31,9 @@ def _extract_type(prop: dict[str, Any]) -> str:
     if isinstance(raw, list):
         if len(raw) == 1:
             val = raw[0]
-            assert isinstance(val, str)
-            return val
+            if isinstance(val, str):
+                return val
+            return "mixed"
         return "mixed"
     if prop.get("oneOf") or prop.get("anyOf"):
         return "union"
