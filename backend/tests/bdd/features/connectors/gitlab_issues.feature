@@ -110,6 +110,18 @@ Feature: GitLab Issues Connector
     When I write GitLab pipeline_run with project "group/project" and ref "main"
     Then the write succeeds
 
+  Scenario: Health check with invalid token returns error
+    Given a GitLab connector with invalid token
+    When I check the connector health
+    Then the health result ok is false
+    And the health result detail describes the error
+
+  Scenario: Health check with network error returns error
+    Given a GitLab connector with valid token
+    When the GitLab API is unreachable
+    Then the health result ok is false
+    And the health result detail describes the error
+
   Scenario: Unsupported resource raises error
     Given a GitLab connector with valid token
     When I query resource "unsupported_resource"

@@ -4,7 +4,10 @@ prd: 8.6
 delivery-tasks: []
 bdd:
   - backend/tests/bdd/features/connectors/connector_health.feature
-unit-tests: []
+  - backend/tests/bdd/features/connectors/gitlab_issues.feature
+unit-tests:
+  - backend/tests/unit/connectors/test_gitlab.py
+  - backend/tests/unit/connectors/test_gitlab_issues.py
 code:
   - backend/src/modulo/connectors/gitlab/__init__.py
   - backend/src/modulo/connectors/base.py
@@ -33,7 +36,7 @@ Async GitLab REST API v4 connector implementing `ConnectorBase`. Provides read/w
 ### OAuth Scopes — capability verification
 
 - [x] Declare required scopes: `read_api`, `write_repository`, `api` (code constant)
-- [ ] Verify `read_api` scope by probing `GET /projects` during health check
+- [x] Verify `read_api` scope by probing `GET /projects` during health check
 - [ ] Verify `write_repository` scope during health check — not probed
 - [ ] Verify `api` scope during health check — not probed
 - [ ] Report missing scopes individually in health check detail
@@ -46,7 +49,7 @@ Async GitLab REST API v4 connector implementing `ConnectorBase`. Provides read/w
 - [x] Raise `ValueError` for unsupported resources in `query()`
 - [ ] Support pagination cursor via `Link` header or pagination query params
 - [ ] Filter projects by membership, visibility, or ownership
-- [ ] Support `limit` parameter in project queries
+- [x] Support `limit` parameter in project queries
 
 ### File Operations — read and write via Repository Files API
 
@@ -94,6 +97,14 @@ Async GitLab REST API v4 connector implementing `ConnectorBase`. Provides read/w
 - [ ] Per-operation scope verification — no granular check before `write()` calls
 - [ ] Report self-hosted GitLab version for diagnostic purposes
 
+### Error Handling
+
+- [ ] Missing required filter key raises ValueError with descriptive message (currently raises raw KeyError)
+- [ ] API error (non-2xx response) raises httpx.HTTPStatusError via raise_for_status()
+- [ ] Network/socket error propagates as httpx exception during health check
+- [ ] Missing token during construction is not validated until first API call
+- [ ] Project path encoding fails gracefully on malformed project IDs (e.g. None, numbers)
+
 ## Known Gaps
 
 - [ ] **No self-hosted GitLab support**: API base URL is hard-coded to `https://gitlab.com/api/v4`
@@ -101,7 +112,7 @@ Async GitLab REST API v4 connector implementing `ConnectorBase`. Provides read/w
 - [ ] **MR operations limited**: only listing and creation work — no comments, merges, approvals, or labels
 - [ ] **Scope verification incomplete**: health check doesn't verify individual scopes
 - [ ] **No pagination**: `query("projects")` and `query("mrs")` don't return `next_cursor`
-- [ ] **No BDD scenarios**: GitLab has no dedicated feature file — only `connector_health.feature` (shared) covers GitLab
-- [ ] **No unit tests**: `unit-tests` field is empty
+- [x] **BDD scenarios**: `gitlab_issues.feature` (25 scenarios) covers GitLab operations + `connector_health.feature` (shared) for health checks
+- [x] **Unit tests**: `test_gitlab.py` and `test_gitlab_issues.py` cover connector behaviour
 - [ ] **No rate-limit handling**: no 429 retry, no GitLab `RateLimit-*` header inspection
 
