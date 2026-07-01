@@ -10,8 +10,9 @@ import asyncio
 import json
 import logging
 
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import StreamingResponse
+from starlette import status
 
 from modulo.auth.dependencies import get_current_user
 from modulo.auth.jwt import AuthenticatedPrincipal
@@ -22,6 +23,33 @@ _log = logging.getLogger(__name__)
 router = APIRouter(tags=["events"])
 
 _ZOMBIE_TIMEOUT = 2.0
+_MAX_CONNECTIONS_PER_ORG = 100
+
+_active_connections: dict[str, set[asyncio.Queue]] = {}
+_active_connections_lock: asyncio.Lock = asyncio.Lock()
+
+
+async def _track_connection(org_id: str, queue: asyncio.Queue) -> None:
+    """Register a connection, raising 429 if the per-org limit is exceeded."""
+    async with _active_connections_lock:
+        active = _active_connections.setdefault(org_id, set())
+        if len(active) >= _MAX_CONNECTIONS_PER_ORG:
+            raise HTTPException(
+                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                detail="Too many SSE connections for this organisation. "
+                f"Limit is {_MAX_CONNECTIONS_PER_ORG} concurrent streams.",
+            )
+        active.add(queue)
+
+
+async def _untrack_connection(org_id: str, queue: asyncio.Queue) -> None:
+    """Remove a connection from the active set."""
+    async with _active_connections_lock:
+        active = _active_connections.get(org_id)
+        if active:
+            active.discard(queue)
+            if not active:
+                del _active_connections[org_id]
 
 
 @router.get("/api/v1/events")
@@ -39,8 +67,15 @@ async def sse_event_stream(
         curl -N -H "Authorization: Bearer <token>" http://localhost:8000/api/v1/events
     """
     org_id = str(principal.organisation_id) if principal.organisation_id else ""
+    if not org_id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Cannot open SSE stream: user is not assigned to an organisation.",
+        )
+
     event_bus = get_event_bus()
-    queue = event_bus.subscribe(org_id)
+    queue = await event_bus.subscribe(org_id)
+    await _track_connection(org_id, queue)
 
     headers = {
         "Cache-Control": "no-cache",
@@ -66,13 +101,14 @@ async def sse_event_stream(
                     event = await asyncio.wait_for(queue.get(), timeout=_ZOMBIE_TIMEOUT)
                     yield f"event: resource_changed\ndata: {json.dumps(event)}\n\n"
                 except TimeoutError:
-                    continue
+                    yield ": keepalive\n\n"
         except asyncio.CancelledError:
             pass
         except Exception:
             _log.warning("sse.event_loop_error", exc_info=True)
         finally:
-            event_bus.unsubscribe(org_id, queue)
+            await event_bus.unsubscribe(org_id, queue)
+            await _untrack_connection(org_id, queue)
 
     return StreamingResponse(
         _pump(),
