@@ -6,6 +6,7 @@ from typing import Any, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, Field
+from sqlalchemy.exc import ProgrammingError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.api.dependencies import get_db_session
@@ -23,6 +24,11 @@ from modulo.db.rls import set_rls_org
 router = APIRouter(prefix="/api/v1/composite-templates", tags=["composite-templates"])
 
 
+class SelectOption(BaseModel):
+    label: str
+    value: str
+
+
 class TargetInjection(BaseModel):
     mode: str = "prompt_replace"
     node_id: str
@@ -37,7 +43,8 @@ class ParameterPort(BaseModel):
     type: Literal["string", "number", "boolean", "select", "model_backend_ref", "schema_ref"]
     required: bool = False
     default_value: Any = None
-    options: list[str] | None = None
+    multiline: bool = False
+    options: list[SelectOption] | None = None
     target_injection: TargetInjection
 
 
@@ -92,10 +99,16 @@ async def list_composite_templates_endpoint(
     session: AsyncSession = Depends(get_db_session),
     principal: AuthenticatedPrincipal = Depends(get_current_user),
 ) -> CompositeTemplateListResponse:
-    async with session.begin():
-        await set_rls_org(session, principal.organisation_id)
-        result = await list_composite_templates(
-            session, org_id=principal.organisation_id, page=page, page_size=page_size,
+    try:
+        async with session.begin():
+            await set_rls_org(session, principal.organisation_id)
+            result = await list_composite_templates(
+                session, org_id=principal.organisation_id, page=page, page_size=page_size,
+            )
+    except ProgrammingError:
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="Feature is not available. Run database migrations to enable it.",
         )
     return CompositeTemplateListResponse(
         items=[CompositeTemplateResponse.model_validate(t) for t in result.items],
@@ -111,21 +124,27 @@ async def create_composite_template_endpoint(
     session: AsyncSession = Depends(get_db_session),
     principal: AuthenticatedPrincipal = Depends(get_current_user),
 ) -> CompositeTemplateResponse:
-    async with session.begin():
-        await set_rls_org(session, principal.organisation_id)
-        template = await create_composite_template(
-            session,
-            org_id=principal.organisation_id,
-            account_id=principal.account_id,
-            name=body.name,
-            description=body.description,
-            sub_pipeline_graph_json=body.sub_pipeline_graph_json,
-            parameter_ports_json=[p.model_dump() for p in body.parameter_ports_json],
-            input_schema_id=body.input_schema_id,
-            output_schema_id=body.output_schema_id,
-            version=body.version,
+    try:
+        async with session.begin():
+            await set_rls_org(session, principal.organisation_id)
+            template = await create_composite_template(
+                session,
+                org_id=principal.organisation_id,
+                account_id=principal.account_id,
+                name=body.name,
+                description=body.description,
+                sub_pipeline_graph_json=body.sub_pipeline_graph_json,
+                parameter_ports_json=[p.model_dump() for p in body.parameter_ports_json],
+                input_schema_id=body.input_schema_id,
+                output_schema_id=body.output_schema_id,
+                version=body.version,
+            )
+        return CompositeTemplateResponse.model_validate(template)
+    except ProgrammingError:
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="Feature is not available. Run database migrations to enable it.",
         )
-    return CompositeTemplateResponse.model_validate(template)
 
 
 @router.get("/{template_id}", response_model=CompositeTemplateResponse)
@@ -134,9 +153,15 @@ async def get_composite_template_endpoint(
     session: AsyncSession = Depends(get_db_session),
     principal: AuthenticatedPrincipal = Depends(get_current_user),
 ) -> CompositeTemplateResponse:
-    async with session.begin():
-        await set_rls_org(session, principal.organisation_id)
-        template = await get_composite_template(session, template_id)
+    try:
+        async with session.begin():
+            await set_rls_org(session, principal.organisation_id)
+            template = await get_composite_template(session, template_id)
+    except ProgrammingError:
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="Feature is not available. Run database migrations to enable it.",
+        )
     if template is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Composite template not found")
     return CompositeTemplateResponse.model_validate(template)
@@ -150,14 +175,20 @@ async def update_composite_template_endpoint(
     principal: AuthenticatedPrincipal = Depends(get_current_user),
 ) -> CompositeTemplateResponse:
     updates: dict[str, Any] = {}
-    for k, v in body.model_dump(exclude_none=True).items():
+    for k, v in body.model_dump(exclude_unset=True).items():
         if k == "parameter_ports_json" and v is not None:
             updates[k] = [p.model_dump() if isinstance(p, BaseModel) else p for p in v]
         else:
             updates[k] = v
-    async with session.begin():
-        await set_rls_org(session, principal.organisation_id)
-        template = await update_composite_template(session, template_id, updates)
+    try:
+        async with session.begin():
+            await set_rls_org(session, principal.organisation_id)
+            template = await update_composite_template(session, template_id, updates)
+    except ProgrammingError:
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="Feature is not available. Run database migrations to enable it.",
+        )
     if template is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Composite template not found")
     return CompositeTemplateResponse.model_validate(template)
@@ -169,9 +200,15 @@ async def delete_composite_template_endpoint(
     session: AsyncSession = Depends(get_db_session),
     principal: AuthenticatedPrincipal = Depends(get_current_user),
 ) -> None:
-    async with session.begin():
-        await set_rls_org(session, principal.organisation_id)
-        deleted = await delete_composite_template(session, template_id)
+    try:
+        async with session.begin():
+            await set_rls_org(session, principal.organisation_id)
+            deleted = await delete_composite_template(session, template_id)
+    except ProgrammingError:
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="Feature is not available. Run database migrations to enable it.",
+        )
     if not deleted:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Composite template not found")
 
@@ -199,9 +236,15 @@ async def get_composite_editor_endpoint(
     session: AsyncSession = Depends(get_db_session),
     principal: AuthenticatedPrincipal = Depends(get_current_user),
 ) -> EditorGraphResponse:
-    async with session.begin():
-        await set_rls_org(session, principal.organisation_id)
-        template = await get_composite_template(session, template_id)
+    try:
+        async with session.begin():
+            await set_rls_org(session, principal.organisation_id)
+            template = await get_composite_template(session, template_id)
+    except ProgrammingError:
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="Feature is not available. Run database migrations to enable it.",
+        )
     if template is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Composite template not found")
     graph = template.sub_pipeline_graph_json
@@ -218,11 +261,17 @@ async def save_composite_editor_endpoint(
     session: AsyncSession = Depends(get_db_session),
     principal: AuthenticatedPrincipal = Depends(get_current_user),
 ) -> EditorGraphResponse:
-    async with session.begin():
-        await set_rls_org(session, principal.organisation_id)
-        template = await update_composite_template(session, template_id, {
-            "sub_pipeline_graph_json": {"nodes": body.nodes, "edges": body.edges},
-        })
+    try:
+        async with session.begin():
+            await set_rls_org(session, principal.organisation_id)
+            template = await update_composite_template(session, template_id, {
+                "sub_pipeline_graph_json": {"nodes": body.nodes, "edges": body.edges},
+            })
+    except ProgrammingError:
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="Feature is not available. Run database migrations to enable it.",
+        )
     if template is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Composite template not found")
     return EditorGraphResponse(
@@ -254,9 +303,15 @@ async def publish_composite_endpoint(
     principal: AuthenticatedPrincipal = Depends(get_current_user),
 ) -> PublishResponse:
     version = body.version or "1.0.0"
-    async with session.begin():
-        await set_rls_org(session, principal.organisation_id)
-        template = await update_composite_template(session, template_id, {"version": version})
+    try:
+        async with session.begin():
+            await set_rls_org(session, principal.organisation_id)
+            template = await update_composite_template(session, template_id, {"version": version})
+    except ProgrammingError:
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="Feature is not available. Run database migrations to enable it.",
+        )
     if template is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Composite template not found")
     return PublishResponse(id=template.id, version=template.version, published=True)

@@ -15,6 +15,7 @@ const props = defineProps<{
 
 const emit = defineEmits<{
   (e: 'update:parameterValues', values: Record<string, unknown>): void
+  (e: 'apply'): void
 }>()
 
 const compositeStore = useCompositeStore()
@@ -95,7 +96,7 @@ function updatePortValue(portName: string, value: unknown) {
             <button
               :disabled="hasRequiredErrors"
               class="rounded-lg bg-indigo-600 px-4 py-2 text-sm font-medium text-white hover:bg-indigo-500 disabled:opacity-50"
-              @click="$emit('update:parameterValues', { ...localValues })"
+              @click="$emit('apply')"
             >
               Apply
             </button>

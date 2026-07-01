@@ -109,7 +109,7 @@ function moveDown(index: number) {
 
 async function detectPlaceholders() {
   try {
-    const result = await post<{ ports: ParameterPort[] }>('/api/v1/composites/detect-params', { node_ids: props.nodeIds })
+    const result = await post<{ ports: ParameterPort[] }>('/api/v1/composite-templates/detect-params', { node_ids: props.nodeIds })
     if (result.ports && result.ports.length > 0) {
       const existing = new Set(props.ports.map(p => p.name))
       const newPorts = result.ports.filter(p => !existing.has(p.name))
@@ -155,7 +155,7 @@ async function detectPlaceholders() {
             <span class="rounded bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground">{{ port.type }}</span>
           </div>
           <p v-if="port.description" class="mt-0.5 text-xs text-muted-foreground">{{ port.description }}</p>
-          <code class="mt-1 block text-[10px] text-indigo-400">\#{'{{'}parameter.{{ port.name }}\{'}}'}</code>
+          <code class="mt-1 block text-[10px] text-indigo-400">{'{{'}}parameter.{{ port.name }}{{'}}'}</code>
         </div>
         <div class="ml-2 flex flex-col gap-1">
           <button

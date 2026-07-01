@@ -99,8 +99,9 @@ def _remap_edge_refs(
 ) -> list[dict[str, Any]]:
     """Remap edge source/target references relative to expanded nodes.
 
-    This is a placeholder for future edge remapping logic when composite
-    nodes produce cross-node edges that need parent-relative IDs.
-    Currently returns edges as-is.
+    TODO: This is a placeholder. Cross-node edges from composite templates
+    are returned as-is without parent-relative ID remapping. When composite
+    nodes produce edges referencing internal node IDs, those IDs need
+    prefixing with the parent node ID to avoid collisions after expansion.
     """
     return edges

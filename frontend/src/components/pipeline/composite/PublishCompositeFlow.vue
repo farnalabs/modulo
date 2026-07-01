@@ -34,7 +34,7 @@ const version = ref('1.0.0')
 
 const steps = computed(() => [
   { num: 1, label: 'Name & Description', done: !!name.value.trim() },
-  { num: 2, label: 'Review Ports', done: true },
+  { num: 2, label: 'Review Ports', done: false },
   { num: 3, label: 'Version', done: !!version.value.trim() },
   { num: 4, label: 'Confirm', done: false },
 ])
@@ -164,7 +164,7 @@ function goToLibrary() {
             <span class="rounded bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground">{{ port.type }}</span>
           </div>
           <p v-if="port.description" class="mt-0.5 text-xs text-muted-foreground">{{ port.description }}</p>
-          <code class="mt-1 block text-[10px] text-indigo-400">\#{{ '{{' }}parameter.{{ port.name }}{{ '}}' }}</code>
+          <code class="mt-1 block text-[10px] text-indigo-400">{{ '{{' }}parameter.{{ port.name }}{{ '}}' }}</code>
         </div>
       </div>
 
