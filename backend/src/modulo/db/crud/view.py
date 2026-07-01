@@ -22,7 +22,7 @@ async def create_view(
     view_type: str,
     account_id: uuid.UUID,
     description: str | None = None,
-    filters: dict | None = None,
+    filters: dict[str, Any] | None = None,
     columns: list[str] | None = None,
     sort_by: str | None = None,
     sort_order: str = "desc",

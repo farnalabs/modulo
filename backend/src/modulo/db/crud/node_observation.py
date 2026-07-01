@@ -30,7 +30,7 @@ async def observe_node(
             NodeObservation.run_id == run_id,
             NodeObservation.node_id == node_id,
             NodeObservation.organisation_id == organisation_id,
-        )
+        ).with_for_update()
     )
     existing = result.scalar_one_or_none()
     if existing is not None:

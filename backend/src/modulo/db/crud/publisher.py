@@ -120,9 +120,6 @@ async def update_publisher(
         elif tier != TRUST_TIER_GREEN:
             updates["verified_since"] = None
 
-    if "public_key_hex" in updates:
-        updates["public_key_hex"] = updates["public_key_hex"]
-
     apply_updates(publisher, updates)
     await session.flush()
     return publisher

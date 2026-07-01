@@ -5,6 +5,7 @@ All functions require RLS org context to be set by the caller.
 
 import uuid
 from collections.abc import Sequence
+from datetime import datetime
 
 from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -22,7 +23,7 @@ async def create_scheduled_report(
     recipients: list[str],
     schedule_type: str,
     created_by: uuid.UUID,
-    next_run_at: object | None = None,
+    next_run_at: datetime | None = None,
 ) -> ScheduledReport:
     report = ScheduledReport(
         organisation_id=organisation_id,

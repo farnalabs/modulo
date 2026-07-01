@@ -107,7 +107,10 @@ async def delete_variant_group(session: AsyncSession, group_id: uuid.UUID) -> bo
 
 
 async def increment_run_count(session: AsyncSession, group_id: uuid.UUID) -> VariantGroup | None:
-    group = await get_variant_group(session, group_id)
+    result = await session.execute(
+        select(VariantGroup).where(VariantGroup.id == group_id).with_for_update()
+    )
+    group = result.scalar_one_or_none()
     if group is None:
         return None
     group.run_count = (group.run_count or 0) + 1
@@ -163,7 +166,16 @@ async def run_variant_weighted(
     """Select a variant, merge its run_context_overrides, and create a run.
 
     Returns dict with run_id, variant, merged_payload, or None if quota exceeded.
+    Locks the variant group row to prevent concurrent quota races.
     """
+    result = await session.execute(
+        select(VariantGroup).where(VariantGroup.id == group.id).with_for_update()
+    )
+    locked = result.scalar_one_or_none()
+    if locked is None:
+        return None
+    group = locked
+
     if not await check_pipeline_run_quota(session, group):
         return None
 

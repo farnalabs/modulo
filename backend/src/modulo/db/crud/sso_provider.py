@@ -1,3 +1,5 @@
+"""CRUD for SSO provider configuration."""
+
 import json
 import uuid
 
@@ -6,6 +8,20 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.core.audit_logger import append_audit_event
 from modulo.db.models.sso_provider import SsoProvider
+
+_UPDATABLE_SSO_FIELDS = frozenset({
+    "client_id",
+    "client_secret",
+    "discovery_url",
+    "metadata_url",
+    "metadata_xml",
+    "entity_id",
+    "scopes",
+    "enabled",
+    "name",
+    "auto_provision",
+    "default_role",
+})
 
 
 async def list_providers(session: AsyncSession) -> list[SsoProvider]:
@@ -36,9 +52,11 @@ async def create_provider(
     org_id: uuid.UUID,
     actor_user_id: uuid.UUID | None = None,
 ) -> SsoProvider:
-    result = await session.execute(select(exists().where(SsoProvider.name == name)))
+    result = await session.execute(
+        select(exists().where(SsoProvider.name == name, SsoProvider.organisation_id == org_id)).with_for_update()
+    )
     if result.scalar():
-        raise ValueError(f"An SSO provider with name '{name}' already exists")
+        raise ValueError(f"An SSO provider with name '{name}' already exists in this organisation")
 
     provider = SsoProvider(
         provider_type=provider_type,
@@ -85,9 +103,11 @@ async def update_provider(
         updates["scopes"] = json.dumps(updates["scopes"])
 
     for key, value in updates.items():
-        if value is not None and hasattr(provider, key):
+        if key not in _UPDATABLE_SSO_FIELDS:
+            continue
+        if value is not None:
             setattr(provider, key, value)
-        elif key in updates and updates[key] is None:
+        else:
             setattr(provider, key, None)
 
     await session.flush()

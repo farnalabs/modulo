@@ -4,7 +4,6 @@ import uuid
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
-from fastapi import HTTPException, status
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -12,6 +11,23 @@ from modulo.db.crud.base import PageResult
 from modulo.db.models.library_primitive import LibraryPrimitive
 from modulo.db.models.primitive_abuse_report import PrimitiveAbuseReport
 from modulo.db.models.primitive_rating import PrimitiveRating
+
+# ---------------------------------------------------------------------------
+# Domain exceptions (decoupled from web framework)
+# ---------------------------------------------------------------------------
+
+
+class SelfRatingError(Exception):
+    """Raised when a user tries to rate their own primitive."""
+
+
+class RatingCooldownError(Exception):
+    """Raised when a user tries to rate too soon after their last rating."""
+
+
+class CopyToAdaptError(Exception):
+    """Raised when a user rates a primitive they have not copied."""
+
 
 # ---------------------------------------------------------------------------
 # Validation guards
@@ -28,10 +44,7 @@ async def _guard_self_rating(session: AsyncSession, primitive_id: uuid.UUID, acc
     result = await session.execute(stmt)
     prim = result.scalar_one_or_none()
     if prim is not None and prim.account_id == account_id:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="You cannot rate your own primitive",
-        )
+        raise SelfRatingError("You cannot rate your own primitive")
 
 
 async def _guard_cooldown(
@@ -53,10 +66,7 @@ async def _guard_cooldown(
     )
     recent_count = (await session.execute(stmt)).scalar_one()
     if recent_count > 0:
-        raise HTTPException(
-            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-            detail=f"Please wait {_COOLDOWN_MINUTES} minutes before rating this primitive again",
-        )
+        raise RatingCooldownError(f"Please wait {_COOLDOWN_MINUTES} minutes before rating this primitive again")
 
 
 async def _guard_copy_to_adapt(
@@ -76,10 +86,7 @@ async def _guard_copy_to_adapt(
     )
     copy_count = (await session.execute(stmt)).scalar_one()
     if copy_count == 0:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="You must copy this primitive before rating it",
-        )
+        raise CopyToAdaptError("You must copy this primitive before rating it")
 
 
 # ---------------------------------------------------------------------------
