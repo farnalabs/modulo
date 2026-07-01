@@ -3,6 +3,7 @@ from modulo.db.models.agent import Agent
 from modulo.db.models.api_key import OrgApiKey
 from modulo.db.models.audit_event import AuditChainHead, AuditEvent
 from modulo.db.models.base import Base, OrgScoped, TimestampMixin
+from modulo.db.models.composite_template import CompositeTemplate
 from modulo.db.models.connector_instance import ConnectorInstance
 from modulo.db.models.daily_run_count import OrgDailyRunCount
 from modulo.db.models.environment_profile import EnvironmentProfile
@@ -55,6 +56,7 @@ __all__ = [
     "AuditChainHead",
     "AuditEvent",
     "Base",
+    "CompositeTemplate",
     "ConnectorInstance",
     "EnvironmentProfile",
     "EvalDefinition",
