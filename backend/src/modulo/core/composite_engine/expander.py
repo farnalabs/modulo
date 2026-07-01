@@ -181,10 +181,6 @@ def execute_composite_with_retry(
             raise CompositeValidationError(blocking_failures, retry_count)
 
         if not retry_eligible_failures:
-            logger.warning(
-                "Composite output validation warnings (non-retryable): %s",
-                "; ".join(result.failures),
-            )
             result.retry_count = retry_count
             return mapped_output
 
