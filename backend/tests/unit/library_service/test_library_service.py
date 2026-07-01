@@ -6,11 +6,11 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from modulo.core.library_service import (
-    _COMMUNITY_BY_ID,
-    _COMMUNITY_PRIMITIVES,
-    COMMUNITY_ORG_ID,
+    _MODULO_BY_ID,
+    _MODULO_PRIMITIVES,
+    MODULO_ORG_ID,
     CommunityPrimitiveReadOnlyError,
-    _filter_community,
+    _filter_modulo,
     copy_to_adapt,
     get_primitive,
     list_primitives,
@@ -59,39 +59,39 @@ def _mock_session() -> MagicMock:
 
 
 # ---------------------------------------------------------------------------
-# _filter_community
+# _filter_modulo
 # ---------------------------------------------------------------------------
 
 
-def test_filter_community_no_filters():
-    results = _filter_community(primitive_type=None, search=None)
-    assert len(results) == len(_COMMUNITY_PRIMITIVES)
+def test_filter_modulo_no_filters():
+    results = _filter_modulo(primitive_type=None, search=None)
+    assert len(results) == len(_MODULO_PRIMITIVES)
 
 
-def test_filter_community_by_type():
-    schemas = _filter_community(primitive_type="schema", search=None)
+def test_filter_modulo_by_type():
+    schemas = _filter_modulo(primitive_type="schema", search=None)
     assert all(p.primitive_type == "schema" for p in schemas)
     assert len(schemas) == 7
 
 
-def test_filter_community_by_type_agent():
-    agents = _filter_community(primitive_type="agent", search=None)
+def test_filter_modulo_by_type_agent():
+    agents = _filter_modulo(primitive_type="agent", search=None)
     assert len(agents) == 7
 
 
-def test_filter_community_by_type_workflow():
-    workflows = _filter_community(primitive_type="workflow", search=None)
+def test_filter_modulo_by_type_workflow():
+    workflows = _filter_modulo(primitive_type="workflow", search=None)
     assert len(workflows) == 2
 
 
-def test_filter_community_by_search():
-    results = _filter_community(primitive_type=None, search="PRD")
+def test_filter_modulo_by_search():
+    results = _filter_modulo(primitive_type=None, search="PRD")
     assert len(results) >= 1
     assert all("prd" in p.name.lower() or "prd" in (p.description or "").lower() for p in results)
 
 
-def test_filter_community_no_match():
-    results = _filter_community(primitive_type=None, search="zzz_no_match_zzz")
+def test_filter_modulo_no_match():
+    results = _filter_modulo(primitive_type=None, search="zzz_no_match_zzz")
     assert results == []
 
 
@@ -101,19 +101,19 @@ def test_filter_community_no_match():
 
 
 def test_community_primitives_have_correct_visibiliy():
-    for p in _COMMUNITY_PRIMITIVES:
+    for p in _MODULO_PRIMITIVES:
         assert p.visibility == "community"
-        assert p.organisation_id == COMMUNITY_ORG_ID
+        assert p.organisation_id == MODULO_ORG_ID
 
 
 def test_community_primitives_count():
     # 7 schemas + 7 agents + 2 workflows + 1 fixture + 3 pipeline_templates
-    assert len(_COMMUNITY_PRIMITIVES) == 20
+    assert len(_MODULO_PRIMITIVES) == 24
 
 
 def test_community_by_id_index():
-    for p in _COMMUNITY_PRIMITIVES:
-        assert _COMMUNITY_BY_ID[p.id] is p
+    for p in _MODULO_PRIMITIVES:
+        assert _MODULO_BY_ID[p.id] is p
 
 
 # ---------------------------------------------------------------------------
@@ -122,7 +122,7 @@ def test_community_by_id_index():
 
 
 def test_dogfood_schemas_exist():
-    schemas = _filter_community(primitive_type="schema", search=None)
+    schemas = _filter_modulo(primitive_type="schema", search=None)
     dogfood = [p for p in schemas if "dogfood" in (p.tags or [])]
     assert len(dogfood) == 5
 
@@ -137,7 +137,7 @@ def test_dogfood_schemas_exist():
 
 
 def test_dogfood_agents_exist():
-    agents = _filter_community(primitive_type="agent", search=None)
+    agents = _filter_modulo(primitive_type="agent", search=None)
     dogfood = [p for p in agents if "dogfood" in (p.tags or [])]
     assert len(dogfood) == 5
 
@@ -152,7 +152,7 @@ def test_dogfood_agents_exist():
 
 
 def test_dogfood_workflow_exists():
-    workflows = _filter_community(primitive_type="workflow", search=None)
+    workflows = _filter_modulo(primitive_type="workflow", search=None)
     dogfood = [p for p in workflows if "dogfood" in (p.tags or [])]
     assert len(dogfood) == 1
 
@@ -162,7 +162,7 @@ def test_dogfood_workflow_exists():
 
 
 def test_dogfood_workflow_has_correct_nodes():
-    workflows = _filter_community(primitive_type="workflow", search="dogfood")
+    workflows = _filter_modulo(primitive_type="workflow", search="dogfood")
     assert len(workflows) == 1
     nodes = workflows[0].content_json["nodes"]
     node_ids = {n["id"] for n in nodes}
@@ -170,7 +170,7 @@ def test_dogfood_workflow_has_correct_nodes():
 
 
 def test_dogfood_workflow_has_correct_edges():
-    workflows = _filter_community(primitive_type="workflow", search="dogfood")
+    workflows = _filter_modulo(primitive_type="workflow", search="dogfood")
     assert len(workflows) == 1
     edges = workflows[0].content_json["edges"]
     assert len(edges) == 4
@@ -185,7 +185,7 @@ def test_dogfood_workflow_has_correct_edges():
 
 
 def test_dogfood_workflow_has_hitl_gate():
-    workflows = _filter_community(primitive_type="workflow", search="dogfood")
+    workflows = _filter_modulo(primitive_type="workflow", search="dogfood")
     edges = workflows[0].content_json["edges"]
     hitl_edge = edges[3]
     assert "hitl_gate_config" in hitl_edge
@@ -196,12 +196,12 @@ def test_dogfood_workflow_has_hitl_gate():
 
 
 def test_dogfood_workflow_entry_point():
-    workflows = _filter_community(primitive_type="workflow", search="dogfood")
+    workflows = _filter_modulo(primitive_type="workflow", search="dogfood")
     assert workflows[0].content_json["entry"] == "issue-reader"
 
 
 def test_dogfood_agents_reference_correct_schemas():
-    agents = _filter_community(primitive_type="agent", search=None)
+    agents = _filter_modulo(primitive_type="agent", search=None)
     dogfood_agents = {a.slug: a for a in agents if "dogfood" in (a.tags or [])}
 
     assert dogfood_agents["issue-reader"].content_json["input_schema"] == "github-issue-input"
@@ -217,7 +217,7 @@ def test_dogfood_agents_reference_correct_schemas():
 
 
 def test_dogfood_agents_have_connector_refs():
-    agents = _filter_community(primitive_type="agent", search=None)
+    agents = _filter_modulo(primitive_type="agent", search=None)
     dogfood_agents = {a.slug: a for a in agents if "dogfood" in (a.tags or [])}
 
     assert dogfood_agents["issue-reader"].content_json["connector_type_refs"] == [
@@ -236,7 +236,7 @@ def test_dogfood_agents_have_connector_refs():
 
 
 def test_dogfood_agents_have_environment_capabilities():
-    agents = _filter_community(primitive_type="agent", search=None)
+    agents = _filter_modulo(primitive_type="agent", search=None)
     dogfood_agents = {a.slug: a for a in agents if "dogfood" in (a.tags or [])}
 
     assert dogfood_agents["issue-reader"].content_json["required_environment_capabilities"] == ["egress:github.com"]
@@ -272,7 +272,7 @@ async def test_get_primitive_found_in_org():
 async def test_get_primitive_falls_back_to_community():
     session = _mock_session()
     org_id = uuid.uuid4()
-    community_prim = _COMMUNITY_PRIMITIVES[0]
+    community_prim = _MODULO_PRIMITIVES[0]
 
     with (
         patch("modulo.core.library_service.set_rls_org", new_callable=AsyncMock),
@@ -362,7 +362,7 @@ async def test_list_primitives_type_filter_propagated():
 async def test_copy_to_adapt_community_via_mcp_raises():
     session = _mock_session()
     org_id = uuid.uuid4()
-    community_prim = _COMMUNITY_PRIMITIVES[0]
+    community_prim = _MODULO_PRIMITIVES[0]
 
     with (
         patch("modulo.core.library_service.set_rls_org", new_callable=AsyncMock),
@@ -375,7 +375,7 @@ async def test_copy_to_adapt_community_via_mcp_raises():
 async def test_copy_to_adapt_community_via_browser_succeeds():
     session = _mock_session()
     org_id = uuid.uuid4()
-    community_prim = _COMMUNITY_PRIMITIVES[0]
+    community_prim = _MODULO_PRIMITIVES[0]
     copied = _fake_primitive()
 
     with (

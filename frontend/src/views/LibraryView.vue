@@ -54,8 +54,8 @@
               </span>
               <h3 class="mt-2 text-base font-medium text-foreground">{{ prim.name }}</h3>
             </div>
-            <div v-if="prim.visibility === 'community'" class="text-xs text-primary font-medium bg-primary/10 px-2 py-0.5 rounded">
-              Community
+            <div v-if="prim.source === 'modulo'" class="text-xs text-primary font-medium bg-primary/10 px-2 py-0.5 rounded">
+              Modulo
             </div>
           </div>
 
