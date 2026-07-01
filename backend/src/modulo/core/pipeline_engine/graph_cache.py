@@ -20,6 +20,7 @@ from langgraph.graph import StateGraph
 
 from modulo.core.eval_engine import EvalDefinition
 from modulo.core.pipeline_engine.node_runner import (
+    _is_truthy,
     make_hitl_gate_fn,
     make_manual_node_fn,
     make_node_fn,
@@ -74,21 +75,6 @@ def _make_gate_id(source: str, target: str) -> str:
 # ---------------------------------------------------------------------------
 # Conditional edge routing
 # ---------------------------------------------------------------------------
-
-
-def _is_truthy(value: Any) -> bool:
-    """Match the truthiness semantics used by polling.py JMESPath evaluation."""
-    if value is None:
-        return False
-    if isinstance(value, bool):
-        return value
-    if isinstance(value, (int, float)):
-        return value != 0
-    if isinstance(value, (list, dict)):
-        return len(value) > 0
-    if isinstance(value, str):
-        return len(value) > 0
-    return True
 
 
 def _make_gate_kickback_router(
