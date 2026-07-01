@@ -21,6 +21,7 @@
         <SidebarLink to="/variants/compare" icon="GitFork" label="Variants" />
 
         <div class="sidebar-section-header">Settings</div>
+        <SidebarLink to="/settings/error-forwarders" icon="AlertTriangle" label="Error Forwarders" />
         <SidebarLink to="/settings/observability" icon="Eye" label="Observability" />
         <SidebarLink to="/settings/teams" icon="Users" label="Teams" />
         <SidebarLink to="/settings/sso" icon="Shield" label="SSO" />
@@ -160,6 +161,7 @@
         <SidebarLink to="/variants/compare" icon="GitFork" label="Variants" @click="mobileOpen = false" />
 
         <div class="sidebar-section-header">Settings</div>
+        <SidebarLink to="/settings/error-forwarders" icon="AlertTriangle" label="Error Forwarders" @click="mobileOpen = false" />
         <SidebarLink to="/settings/observability" icon="Eye" label="Observability" @click="mobileOpen = false" />
         <SidebarLink to="/settings/teams" icon="Users" label="Teams" @click="mobileOpen = false" />
         <SidebarLink to="/settings/sso" icon="Shield" label="SSO" @click="mobileOpen = false" />

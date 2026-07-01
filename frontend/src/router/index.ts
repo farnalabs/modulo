@@ -60,6 +60,7 @@ import AdminRemyView from '../views/AdminRemyView.vue'
 import AdminErrorsView from '../views/AdminErrorsView.vue'
 import AdminErrorDetailView from '../views/AdminErrorDetailView.vue'
 import UserRemySkillsView from '../views/UserRemySkillsView.vue'
+import SettingsErrorForwardersView from '../views/SettingsErrorForwardersView.vue'
 
 const router = createRouter({
   history: createWebHistory(),
@@ -88,6 +89,11 @@ const router = createRouter({
       name: 'library-pipeline-wizard',
       component: LibraryPipelineWizard,
       props: true,
+    },
+    {
+      path: '/settings/error-forwarders',
+      name: 'settings-error-forwarders',
+      component: SettingsErrorForwardersView,
     },
     {
       path: '/settings/observability',
