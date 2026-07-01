@@ -275,24 +275,29 @@ class PipelineExecutor:
         snapshot_id = run.snapshot_id
         thread_id = run.langgraph_thread_id
 
-        # Load pipeline for runaway protection limits.
-        pipeline_result = await session.execute(select(Pipeline).where(Pipeline.id == pipeline_id))
-        pipeline = pipeline_result.scalar_one_or_none()
-        if pipeline is None:
-            raise RunNotFoundError(run_id)
-        guard = RunawayGuard(
-            max_duration_seconds=pipeline.max_duration_seconds,
-            max_steps=pipeline.max_steps,
-            token_budget=pipeline.token_budget,
-        )
+        async with self._session_factory() as session:
+            async with session.begin():
+                await set_rls_org(session, org_id)
 
-        # Load eval definitions for eval-before-interrupt (resume path).
-        eval_stmt = select(EvalDefinition).where(
-            EvalDefinition.pipeline_id == pipeline_id,
-            EvalDefinition.node_id.isnot(None),
-        )
-        eval_rows = (await session.execute(eval_stmt)).scalars().all()
-        resume_eval_defs_by_node: dict[str, list[EvalDefDTO]] = {}
+                # Load pipeline for runaway protection limits.
+                pipeline_result = await session.execute(select(Pipeline).where(Pipeline.id == pipeline_id))
+                pipeline = pipeline_result.scalar_one_or_none()
+                if pipeline is None:
+                    raise RunNotFoundError(run_id)
+
+                guard = RunawayGuard(
+                    max_duration_seconds=pipeline.max_duration_seconds,
+                    max_steps=pipeline.max_steps,
+                    token_budget=pipeline.token_budget,
+                )
+
+                # Load eval definitions for eval-before-interrupt (resume path).
+                eval_stmt = select(EvalDefinition).where(
+                    EvalDefinition.pipeline_id == pipeline_id,
+                    EvalDefinition.node_id.isnot(None),
+                )
+                eval_rows = (await session.execute(eval_stmt)).scalars().all()
+                resume_eval_defs_by_node: dict[str, list[EvalDefDTO]] = {}
         for e in eval_rows:
             node_key = str(e.node_id) if e.node_id else ""
             if node_key:
@@ -436,11 +441,14 @@ class PipelineExecutor:
         thread_id = run.langgraph_thread_id
 
         # Load eval definitions for conditional HITL gating (eval-before-interrupt).
-        eval_stmt = select(EvalDefinition).where(
-            EvalDefinition.pipeline_id == pipeline_id,
-            EvalDefinition.node_id.isnot(None),
-        )
-        eval_rows = (await session.execute(eval_stmt)).scalars().all()
+        async with self._session_factory() as session:
+            async with session.begin():
+                await set_rls_org(session, org_id)
+                eval_stmt = select(EvalDefinition).where(
+                    EvalDefinition.pipeline_id == pipeline_id,
+                    EvalDefinition.node_id.isnot(None),
+                )
+                eval_rows = (await session.execute(eval_stmt)).scalars().all()
         eval_defs_by_node: dict[str, list[EvalDefDTO]] = {}
         for e in eval_rows:
             node_key = str(e.node_id) if e.node_id else ""
@@ -639,8 +647,6 @@ class PipelineExecutor:
         with a pass_threshold, aggregates their results, and returns
         SuiteEvalResult for each suite.
         """
-        from sqlalchemy import select
-
         stmt = (
             select(EvalDefinition)
             .where(

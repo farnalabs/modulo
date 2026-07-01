@@ -80,7 +80,7 @@ class RunEventBroker:
         for q in self._subscribers:
             q.put_nowait(event)
         if self._redis_broker is not None:
-            asyncio.ensure_future(self._redis_broker.publish(str(self._run_id), event.to_json()))  # noqa: RUF006
+            asyncio.create_task(self._redis_broker.publish(str(self._run_id), event.to_json()))  # noqa: RUF006
         return event
 
     def subscribe(self) -> asyncio.Queue[RunEvent | None]:
@@ -112,7 +112,7 @@ class RunEventBroker:
             q.put_nowait(None)
         self._subscribers.clear()
         if self._redis_broker is not None:
-            asyncio.ensure_future(self._redis_broker.close())  # noqa: RUF006
+            asyncio.create_task(self._redis_broker.close())  # noqa: RUF006
 
     @property
     def is_closed(self) -> bool:
