@@ -1,6 +1,8 @@
 import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
 import { api } from '../lib/api/client'
+import { registerHandler } from './syncRegistry'
+import type { EventBusEvent } from '@/types/events'
 
 interface TeamMetrics {
   id: string
@@ -60,6 +62,7 @@ export const useDashboardStore = defineStore('dashboard', () => {
   const summary = ref<DashboardSummary | null>(null)
   const loading = ref(false)
   const error = ref<string | null>(null)
+  const dirtyIds = ref(new Set<string>())
 
   const totalSpend = computed(() => {
     if (!summary.value?.trend) return 0
@@ -83,5 +86,14 @@ export const useDashboardStore = defineStore('dashboard', () => {
     }
   }
 
-  return { summary, loading, error, totalSpend, fetchSummary }
+  function handleSyncEvent(event: EventBusEvent): void {
+    if ((event.type === 'run' || event.type === 'pipeline') && !dirtyIds.value.has(event.id)) {
+      fetchSummary()
+    }
+  }
+
+  registerHandler('run', handleSyncEvent)
+  registerHandler('pipeline', handleSyncEvent)
+
+  return { summary, loading, error, totalSpend, fetchSummary, dirtyIds, handleSyncEvent }
 })

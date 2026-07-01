@@ -2,6 +2,8 @@ import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
 import { api } from '../lib/api/client'
 import { formatApiError } from '../lib/api/formatError'
+import { registerHandler } from './syncRegistry'
+import type { EventBusEvent } from '@/types/events'
 
 interface FlagItem {
   name: string
@@ -50,6 +52,7 @@ export const usePlanStore = defineStore('plan', () => {
   const orgName = ref<string | null>(null)
   const tierLabels = ref<Record<string, string>>({})
   const tierRanks = ref<Record<string, number>>({})
+  const dirtyIds = ref(new Set<string>())
 
   const isTeam = computed(() => currentTier.value === 'team')
 
@@ -111,5 +114,15 @@ export const usePlanStore = defineStore('plan', () => {
     }
   }
 
-  return { currentTier, features, isLoading, error, isTeam, expiresAt, orgName, tierLabels, tierRanks, fetchPlan, featureEnabled, getTierLabel, isAtMinimumTier }
+  function handleSyncEvent(event: EventBusEvent): void {
+    if (event.type === 'team' || event.type === 'license' || event.type === 'plan') {
+      if (!dirtyIds.value.has(event.id)) fetchPlan()
+    }
+  }
+
+  registerHandler('team', handleSyncEvent)
+  registerHandler('license', handleSyncEvent)
+  registerHandler('plan', handleSyncEvent)
+
+  return { currentTier, features, isLoading, error, isTeam, expiresAt, orgName, tierLabels, tierRanks, fetchPlan, featureEnabled, getTierLabel, isAtMinimumTier, dirtyIds, handleSyncEvent }
 })
