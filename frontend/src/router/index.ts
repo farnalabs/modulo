@@ -55,6 +55,8 @@ import AdminNotificationDeliveryLogView from '../views/AdminNotificationDelivery
 import AdminEnvironmentProfilesView from '../views/AdminEnvironmentProfilesView.vue'
 import AdminSystemOrgsView from '../views/AdminSystemOrgsView.vue'
 import AdminSystemConfigView from '../views/AdminSystemConfigView.vue'
+import AdminRemyView from '../views/AdminRemyView.vue'
+import UserRemySkillsView from '../views/UserRemySkillsView.vue'
 
 const router = createRouter({
   history: createWebHistory(),
@@ -128,6 +130,11 @@ const router = createRouter({
       path: '/settings/hitl-review',
       name: 'settings-hitl-review',
       component: SettingsHitlReviewView,
+    },
+    {
+      path: '/settings/remy',
+      name: 'settings-remy',
+      component: UserRemySkillsView,
     },
     {
       path: '/schemas',
@@ -285,6 +292,11 @@ const router = createRouter({
       name: 'admin-system-config',
       component: AdminSystemConfigView,
       meta: { requiresSystemAdmin: true },
+    },
+    {
+      path: '/admin/remy',
+      name: 'admin-remy',
+      component: AdminRemyView,
     },
     {
       path: '/stages',
