@@ -120,7 +120,11 @@
             data-testid="hitl-review-toggle-expand"
             class="flex cursor-pointer items-center gap-4 p-4"
             :class="{ 'border-b': expandedKey === expandKey(gate) }"
+            role="button"
+            tabindex="0"
             @click="toggleExpand(gate)"
+            @keydown.enter="toggleExpand(gate)"
+            @keydown.space.prevent="toggleExpand(gate)"
           >
             <svg
               class="h-4 w-4 flex-shrink-0 text-muted-foreground transition-transform"

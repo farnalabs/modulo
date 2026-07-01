@@ -109,7 +109,10 @@
               :key="group.id"
               class="cursor-pointer transition-colors hover:bg-muted/30"
               role="button"
+              tabindex="0"
               @click="navigateToDetail(group.id)"
+              @keydown.enter="navigateToDetail(group.id)"
+              @keydown.space.prevent="navigateToDetail(group.id)"
             >
               <td class="px-4 py-3">
                 <span :class="levelBadgeClass(group.level_peak)">

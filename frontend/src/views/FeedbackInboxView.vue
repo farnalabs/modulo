@@ -95,7 +95,11 @@
             data-testid="feedback-inbox-toggle-expand"
             class="flex cursor-pointer items-center gap-4 p-4"
             :class="{ 'border-b': expandedId === record.id }"
+            role="button"
+            tabindex="0"
             @click="toggleExpand(record.id)"
+            @keydown.enter="toggleExpand(record.id)"
+            @keydown.space.prevent="toggleExpand(record.id)"
           >
             <svg
               class="h-4 w-4 flex-shrink-0 text-muted-foreground transition-transform"
