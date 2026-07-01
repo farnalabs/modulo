@@ -125,7 +125,7 @@ class GitLabConnector(ConnectorBase):
                         info["content"] = base64.b64decode(info["content"]).decode("utf-8")
                     return ConnectorResult(records=[info])
                 case "mrs" | "merge_requests":
-                    project = q.filters["project"]
+                    project = self._require_filter(q.filters, "project", q.resource)
                     encoded = _project_path(project)
                     params: dict[str, Any] = {"per_page": q.limit}
                     if "state" in q.filters:
@@ -142,8 +142,8 @@ class GitLabConnector(ConnectorBase):
                     mrs: list[dict[str, Any]] = r.json()
                     return ConnectorResult(records=mrs, total=len(mrs))
                 case "merge_request":
-                    project = q.filters["project"]
-                    mr_iid = q.filters["iid"]
+                    project = self._require_filter(q.filters, "project", q.resource)
+                    mr_iid = self._require_filter(q.filters, "iid", q.resource)
                     encoded = _project_path(project)
                     r = await client.get(
                         f"/projects/{encoded}/merge_requests/{mr_iid}",
@@ -151,7 +151,7 @@ class GitLabConnector(ConnectorBase):
                     r.raise_for_status()
                     return ConnectorResult(records=[r.json()])
                 case "issues":
-                    project = q.filters["project"]
+                    project = self._require_filter(q.filters, "project", q.resource)
                     encoded = _project_path(project)
                     params = {"per_page": q.limit}
                     for key in ("state", "labels", "milestone", "search", "sort", "order_by", "assignee_id"):
@@ -165,8 +165,8 @@ class GitLabConnector(ConnectorBase):
                     issues: list[dict[str, Any]] = r.json()
                     return ConnectorResult(records=issues, total=len(issues))
                 case "issue":
-                    project = q.filters["project"]
-                    issue_iid = q.filters["iid"]
+                    project = self._require_filter(q.filters, "project", q.resource)
+                    issue_iid = self._require_filter(q.filters, "iid", q.resource)
                     encoded = _project_path(project)
                     r = await client.get(
                         f"/projects/{encoded}/issues/{issue_iid}",
@@ -174,7 +174,7 @@ class GitLabConnector(ConnectorBase):
                     r.raise_for_status()
                     return ConnectorResult(records=[r.json()])
                 case "labels":
-                    project = q.filters["project"]
+                    project = self._require_filter(q.filters, "project", q.resource)
                     encoded = _project_path(project)
                     r = await client.get(
                         f"/projects/{encoded}/labels",
@@ -184,8 +184,8 @@ class GitLabConnector(ConnectorBase):
                     labels: list[dict[str, Any]] = r.json()
                     return ConnectorResult(records=labels, total=len(labels))
                 case "label":
-                    project = q.filters["project"]
-                    label_id = q.filters["label_id"]
+                    project = self._require_filter(q.filters, "project", q.resource)
+                    label_id = self._require_filter(q.filters, "label_id", q.resource)
                     encoded = _project_path(project)
                     r = await client.get(
                         f"/projects/{encoded}/labels/{label_id}",
@@ -193,7 +193,7 @@ class GitLabConnector(ConnectorBase):
                     r.raise_for_status()
                     return ConnectorResult(records=[r.json()])
                 case "milestones":
-                    project = q.filters["project"]
+                    project = self._require_filter(q.filters, "project", q.resource)
                     encoded = _project_path(project)
                     r = await client.get(
                         f"/projects/{encoded}/milestones",
@@ -203,8 +203,8 @@ class GitLabConnector(ConnectorBase):
                     milestones: list[dict[str, Any]] = r.json()
                     return ConnectorResult(records=milestones, total=len(milestones))
                 case "issue_notes":
-                    project = q.filters["project"]
-                    issue_iid = q.filters["iid"]
+                    project = self._require_filter(q.filters, "project", q.resource)
+                    issue_iid = self._require_filter(q.filters, "iid", q.resource)
                     encoded = _project_path(project)
                     params = {"per_page": q.limit}
                     for key in ("sort", "order_by"):
@@ -218,8 +218,8 @@ class GitLabConnector(ConnectorBase):
                     notes: list[dict[str, Any]] = r.json()
                     return ConnectorResult(records=notes, total=len(notes))
                 case "issue_discussions":
-                    project = q.filters["project"]
-                    issue_iid = q.filters["iid"]
+                    project = self._require_filter(q.filters, "project", q.resource)
+                    issue_iid = self._require_filter(q.filters, "iid", q.resource)
                     encoded = _project_path(project)
                     r = await client.get(
                         f"/projects/{encoded}/issues/{issue_iid}/discussions",
@@ -229,8 +229,8 @@ class GitLabConnector(ConnectorBase):
                     discussions: list[dict[str, Any]] = r.json()
                     return ConnectorResult(records=discussions, total=len(discussions))
                 case "branch":
-                    project = q.filters["project"]
-                    branch_name = q.filters["name"]
+                    project = self._require_filter(q.filters, "project", q.resource)
+                    branch_name = self._require_filter(q.filters, "name", q.resource)
                     encoded = _project_path(project)
                     r = await client.get(
                         f"/projects/{encoded}/repository/branches/{quote(branch_name, safe='')}",
@@ -238,7 +238,7 @@ class GitLabConnector(ConnectorBase):
                     r.raise_for_status()
                     return ConnectorResult(records=[r.json()])
                 case "branches":
-                    project = q.filters["project"]
+                    project = self._require_filter(q.filters, "project", q.resource)
                     encoded = _project_path(project)
                     r = await client.get(
                         f"/projects/{encoded}/repository/branches",
@@ -248,7 +248,7 @@ class GitLabConnector(ConnectorBase):
                     branches: list[dict[str, Any]] = r.json()
                     return ConnectorResult(records=branches, total=len(branches))
                 case "tags":
-                    project = q.filters["project"]
+                    project = self._require_filter(q.filters, "project", q.resource)
                     encoded = _project_path(project)
                     r = await client.get(
                         f"/projects/{encoded}/repository/tags",
@@ -258,7 +258,7 @@ class GitLabConnector(ConnectorBase):
                     tags: list[dict[str, Any]] = r.json()
                     return ConnectorResult(records=tags, total=len(tags))
                 case "pipelines":
-                    project = q.filters["project"]
+                    project = self._require_filter(q.filters, "project", q.resource)
                     encoded = _project_path(project)
                     r = await client.get(
                         f"/projects/{encoded}/pipelines",
@@ -268,8 +268,8 @@ class GitLabConnector(ConnectorBase):
                     pipelines: list[dict[str, Any]] = r.json()
                     return ConnectorResult(records=pipelines, total=len(pipelines))
                 case "jobs":
-                    project = q.filters["project"]
-                    pipeline_id = q.filters["pipeline_id"]
+                    project = self._require_filter(q.filters, "project", q.resource)
+                    pipeline_id = self._require_filter(q.filters, "pipeline_id", q.resource)
                     encoded = _project_path(project)
                     r = await client.get(
                         f"/projects/{encoded}/pipelines/{pipeline_id}/jobs",
@@ -302,12 +302,14 @@ class GitLabConnector(ConnectorBase):
                     result: dict[str, Any] = r.json()
                     return result
                 case "mr" | "merge_request":
-                    project = payload.data["project"]
+                    project = self._require_filter(payload.data, "project", payload.resource)
+                    source_branch = self._require_filter(payload.data, "source_branch", payload.resource)
+                    title = self._require_filter(payload.data, "title", payload.resource)
                     encoded = _project_path(project)
                     body = {
-                        "source_branch": payload.data["source_branch"],
+                        "source_branch": source_branch,
                         "target_branch": payload.data.get("target_branch", "main"),
-                        "title": payload.data["title"],
+                        "title": title,
                     }
                     if "description" in payload.data:
                         body["description"] = payload.data["description"]
@@ -319,10 +321,11 @@ class GitLabConnector(ConnectorBase):
                     mr: dict[str, Any] = r.json()
                     return mr
                 case "issue":
-                    project = payload.data["project"]
+                    project = self._require_filter(payload.data, "project", payload.resource)
+                    title = self._require_filter(payload.data, "title", payload.resource)
                     encoded = _project_path(project)
                     body = {
-                        "title": payload.data["title"],
+                        "title": title,
                     }
                     if "description" in payload.data:
                         body["description"] = payload.data["description"]
@@ -340,8 +343,8 @@ class GitLabConnector(ConnectorBase):
                     issue: dict[str, Any] = r.json()
                     return issue
                 case "issue_update":
-                    project = payload.data["project"]
-                    issue_iid = payload.data["iid"]
+                    project = self._require_filter(payload.data, "project", payload.resource)
+                    issue_iid = self._require_filter(payload.data, "iid", payload.resource)
                     encoded = _project_path(project)
                     body = {}
                     for key in ("state_event", "title", "description"):
@@ -355,11 +358,12 @@ class GitLabConnector(ConnectorBase):
                     updated: dict[str, Any] = r.json()
                     return updated
                 case "issue_note":
-                    project = payload.data["project"]
-                    issue_iid = payload.data["iid"]
+                    project = self._require_filter(payload.data, "project", payload.resource)
+                    issue_iid = self._require_filter(payload.data, "iid", payload.resource)
                     encoded = _project_path(project)
+                    body = self._require_filter(payload.data, "body", payload.resource)
                     body = {
-                        "body": payload.data["body"],
+                        "body": body,
                     }
                     r = await client.post(
                         f"/projects/{encoded}/issues/{issue_iid}/notes",
@@ -369,11 +373,12 @@ class GitLabConnector(ConnectorBase):
                     note: dict[str, Any] = r.json()
                     return note
                 case "issue_label":
-                    project = payload.data["project"]
-                    issue_iid = payload.data["iid"]
+                    project = self._require_filter(payload.data, "project", payload.resource)
+                    issue_iid = self._require_filter(payload.data, "iid", payload.resource)
                     encoded = _project_path(project)
+                    labels = self._require_filter(payload.data, "labels", payload.resource)
                     body = {
-                        "labels": payload.data["labels"],
+                        "labels": labels,
                     }
                     r = await client.put(
                         f"/projects/{encoded}/issues/{issue_iid}",
@@ -383,10 +388,11 @@ class GitLabConnector(ConnectorBase):
                     labeled: dict[str, Any] = r.json()
                     return labeled
                 case "label":
-                    project = payload.data["project"]
+                    project = self._require_filter(payload.data, "project", payload.resource)
+                    name = self._require_filter(payload.data, "name", payload.resource)
                     encoded = _project_path(project)
                     body = {
-                        "name": payload.data["name"],
+                        "name": name,
                         "color": payload.data.get("color", "#428BCA"),
                     }
                     if "description" in payload.data:
@@ -399,10 +405,11 @@ class GitLabConnector(ConnectorBase):
                     label_res: dict[str, Any] = r.json()
                     return label_res
                 case "milestone":
-                    project = payload.data["project"]
+                    project = self._require_filter(payload.data, "project", payload.resource)
+                    title = self._require_filter(payload.data, "title", payload.resource)
                     encoded = _project_path(project)
                     body = {
-                        "title": payload.data["title"],
+                        "title": title,
                     }
                     if "description" in payload.data:
                         body["description"] = payload.data["description"]
@@ -416,10 +423,11 @@ class GitLabConnector(ConnectorBase):
                     ms: dict[str, Any] = r.json()
                     return ms
                 case "pipeline_run":
-                    project = payload.data["project"]
+                    project = self._require_filter(payload.data, "project", payload.resource)
+                    ref = self._require_filter(payload.data, "ref", payload.resource)
                     encoded = _project_path(project)
                     body = {
-                        "ref": payload.data["ref"],
+                        "ref": ref,
                     }
                     if "variables" in payload.data:
                         body["variables"] = payload.data["variables"]
