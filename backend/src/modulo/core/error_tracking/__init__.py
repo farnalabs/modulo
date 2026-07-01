@@ -10,6 +10,8 @@ import secrets
 import time
 from typing import Any
 
+from modulo.core.error_tracking.alerting import AlertEngine
+from modulo.core.error_tracking.metrics import init_metrics, record_error_ingest
 from modulo.db.crud.error_tracking import (
     create_error_event,
     get_error_group_by_fingerprint,
@@ -20,6 +22,9 @@ _log = logging.getLogger(__name__)
 
 _STACKTRACE_FILE_RE = re.compile(r'File "[^"]+", line \d+,')
 _HMAC_KEY_TTL = 3600
+
+# Module-level alert engine (lazy-initialised)
+_alert_engine: AlertEngine | None = None
 
 
 def _normalize_stacktrace(stacktrace: str) -> str:
@@ -35,11 +40,15 @@ class FingerprintError(Exception):
 
 
 class ErrorIngestionService:
-    """Creates error events, upserts groups, batches.
+    """Creates error events, upserts groups, batches, and evaluates alert rules.
 
     All methods accept a SQLAlchemy ``AsyncSession`` (or any compatible
     async session) and an ``org_id`` (typically ``uuid.UUID``).
     """
+
+    def __init__(self, redis_client: Any | None = None) -> None:
+        self._redis = redis_client
+        _metrics_initialised = False
 
     @staticmethod
     def fingerprint(message: str, stacktrace: str | None = None, source: str = "") -> str:
@@ -47,6 +56,12 @@ class ErrorIngestionService:
         normalised = _normalize_stacktrace(stacktrace or "")
         raw = f"{message}|{normalised}|{source}"
         return hashlib.sha256(raw.encode()).hexdigest()
+
+    async def _ensure_alert_engine(self) -> AlertEngine:
+        global _alert_engine
+        if _alert_engine is None:
+            _alert_engine = AlertEngine(redis_client=self._redis)
+        return _alert_engine
 
     async def ingest(
         self,
@@ -59,16 +74,20 @@ class ErrorIngestionService:
             stacktrace=event_data.get("stacktrace"),
             source=event_data["source"],
         )
+        level = event_data["level"]
+        source = event_data["source"]
+        environment = event_data.get("environment")
+
         event = await create_error_event(
             session=session,
             org_id=org_id,
             fingerprint=fp,
-            level=event_data["level"],
+            level=level,
             message=event_data["message"],
-            source=event_data["source"],
+            source=source,
             stacktrace=event_data.get("stacktrace"),
             context_json=event_data.get("context_json"),
-            environment=event_data.get("environment"),
+            environment=environment,
             version=event_data.get("version"),
         )
         existing = await get_error_group_by_fingerprint(session=session, org_id=org_id, fingerprint=fp)
@@ -76,9 +95,36 @@ class ErrorIngestionService:
             session=session,
             org_id=org_id,
             fingerprint=fp,
-            level=event_data["level"],
+            level=level,
             sample_event_id=event.id,
         )
+
+        # Record Prometheus metrics
+        init_metrics()
+        record_error_ingest(level, source, environment)
+
+        # Fire-and-forget alert evaluation
+        try:
+            engine = await self._ensure_alert_engine()
+            alerts = await engine.evaluate(
+                org_id=org_id,
+                session=session,
+                error_group_id=group.id,
+                fingerprint=fp,
+                level=level,
+                count=group.count,
+                environment=environment,
+            )
+            if alerts:
+                await engine.dispatch_all(
+                    org_id=org_id,
+                    alerts=alerts,
+                    session=session,
+                    error_group=group,
+                )
+        except Exception:
+            _log.exception("error_tracking.alert_evaluation_failed")
+
         return {"group_id": str(group.id), "is_new": existing is None}
 
     async def ingest_batch(
