@@ -30,7 +30,6 @@ _log = logging.getLogger(__name__)
 _ALGORITHM = "HS256"
 _CODE_LENGTH = 64
 _CODE_TTL_MINUTES = 10
-_ACCESS_TOKEN_MINUTES = 60
 
 VALID_SCOPES = frozenset({"trigger:run", "hitl:review", "library:browse"})
 
@@ -123,6 +122,7 @@ async def create_oauth_client(
 
 
 async def get_oauth_client_by_client_id(session: AsyncSession, client_id: str) -> OAuthClient | None:
+    """Look up an OAuth client by its client_id. Returns None if not found."""
     result = await session.execute(select(OAuthClient).where(OAuthClient.client_id == client_id))
     return result.scalar_one_or_none()
 
@@ -140,6 +140,7 @@ async def validate_client_secret(session: AsyncSession, client_id: str, client_s
 
 
 async def list_oauth_clients(session: AsyncSession, org_id: uuid.UUID) -> list[dict[str, Any]]:
+    """List OAuth clients for an organisation."""
     result = await session.execute(
         select(OAuthClient).where(OAuthClient.organisation_id == org_id).order_by(OAuthClient.created_at.desc())
     )
@@ -149,15 +150,16 @@ async def list_oauth_clients(session: AsyncSession, org_id: uuid.UUID) -> list[d
             "id": str(c.id),
             "client_id": c.client_id,
             "name": c.name,
-            "scopes": c.scopes.split(),
-            "redirect_uris": c.redirect_uris.split(),
-            "created_at": c.created_at.isoformat(),
+            "scopes": c.scopes.split() if c.scopes else [],
+            "redirect_uris": c.redirect_uris.split() if c.redirect_uris else [],
+            "created_at": c.created_at.isoformat() if c.created_at else "",
         }
         for c in clients
     ]
 
 
 async def delete_oauth_client(session: AsyncSession, client_id: str, org_id: uuid.UUID) -> bool:
+    """Delete an OAuth client and cascade its auth codes and token families."""
     result = await session.execute(
         select(OAuthClient).where(
             OAuthClient.client_id == client_id,
@@ -236,7 +238,9 @@ async def consume_authorization_code(
     """
     await validate_client_secret(session, client_id, client_secret)
 
-    result = await session.execute(select(OAuthAuthorizationCode).where(OAuthAuthorizationCode.code == code))
+    result = await session.execute(
+        select(OAuthAuthorizationCode).where(OAuthAuthorizationCode.code == code).with_for_update()
+    )
     auth_code = result.scalar_one_or_none()
     if auth_code is None:
         raise InvalidGrantError("Authorization code not found")
@@ -349,6 +353,22 @@ def decode_oauth_access_token(token: str, secret_key: str) -> OAuthAccessTokenCl
 # ---------------------------------------------------------------------------
 
 
+async def _get_token_family(session: AsyncSession, family_id: str, client_id: str, org_id: uuid.UUID) -> OAuthTokenFamily | None:
+    """Look up a token family by ID, client, and org."""
+    try:
+        fid = uuid.UUID(family_id)
+    except ValueError:
+        raise InvalidGrantError(f"Invalid token family ID: '{family_id}'")
+    result = await session.execute(
+        select(OAuthTokenFamily).where(
+            OAuthTokenFamily.family_id == fid,
+            OAuthTokenFamily.client_id == client_id,
+            OAuthTokenFamily.organisation_id == org_id,
+        )
+    )
+    return result.scalar_one_or_none()
+
+
 async def create_oauth_token_family(
     session: AsyncSession,
     *,
@@ -380,15 +400,7 @@ async def rotate_oauth_token_family(
     family is blacklisted (token theft detected) and an InvalidGrantError
     is raised.
     """
-    fid = uuid.UUID(family_id)
-    result = await session.execute(
-        select(OAuthTokenFamily).where(
-            OAuthTokenFamily.family_id == fid,
-            OAuthTokenFamily.client_id == client_id,
-            OAuthTokenFamily.organisation_id == org_id,
-        )
-    )
-    family = result.scalar_one_or_none()
+    family = await _get_token_family(session, family_id, client_id, org_id)
     if family is None:
         raise InvalidGrantError("Token family not found")
 
@@ -426,15 +438,7 @@ async def blacklist_oauth_token_family(
     org_id: uuid.UUID,
 ) -> None:
     """Explicitly invalidate a token family (logout equivalent)."""
-    fid = uuid.UUID(family_id)
-    result = await session.execute(
-        select(OAuthTokenFamily).where(
-            OAuthTokenFamily.family_id == fid,
-            OAuthTokenFamily.client_id == client_id,
-            OAuthTokenFamily.organisation_id == org_id,
-        )
-    )
-    family = result.scalar_one_or_none()
+    family = await _get_token_family(session, family_id, client_id, org_id)
     if family is not None and not family.is_blacklisted:
         family.is_blacklisted = True
         family.blacklisted_at = datetime.now(UTC)
@@ -449,16 +453,8 @@ async def check_oauth_token_family_valid(
     org_id: uuid.UUID,
 ) -> bool:
     """Check whether a token family is still valid (not blacklisted)."""
-    fid = uuid.UUID(family_id)
-    result = await session.execute(
-        select(OAuthTokenFamily).where(
-            OAuthTokenFamily.family_id == fid,
-            OAuthTokenFamily.client_id == client_id,
-            OAuthTokenFamily.organisation_id == org_id,
-            OAuthTokenFamily.is_blacklisted.is_(False),
-        )
-    )
-    return result.scalar_one_or_none() is not None
+    family = await _get_token_family(session, family_id, client_id, org_id)
+    return family is not None and not family.is_blacklisted
 
 
 # ---------------------------------------------------------------------------
@@ -472,7 +468,7 @@ def normalize_scopes(requested: str) -> list[str]:
     Returns the sorted list of valid scopes. Raises InvalidScopeError if
     any requested scope is not in VALID_SCOPES.
     """
-    if not requested.strip():
+    if not requested or not requested.strip():
         return []
     parts = requested.strip().split()
     for s in parts:

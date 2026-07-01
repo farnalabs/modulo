@@ -8,11 +8,14 @@ number is incremented. If a stale sequence is presented (token theft), the entir
 family is blacklisted. On logout, the family is explicitly invalidated.
 """
 
+import logging
 import uuid
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 
 from jose import JWTError, jwt
+
+_log = logging.getLogger(__name__)
 
 _ALGORITHM = "HS256"
 _ACCESS_TOKEN_MINUTES = 15
@@ -120,6 +123,7 @@ def decode_principal(token: str, secret_key: str, allowed_purposes: list[str] | 
     if not isinstance(account_id, str):
         raise JWTError("Token missing or invalid 'account_id' claim")
     if not isinstance(is_system_admin, bool):
+        _log.warning("jwt.non_bool_is_system_admin", extra={"value": str(is_system_admin)})
         is_system_admin = False
     if allowed_purposes is not None:
         purpose = payload.get("purpose")
@@ -136,6 +140,8 @@ def decode_principal(token: str, secret_key: str, allowed_purposes: list[str] | 
         except ValueError:
             pass
     parsed_org_role: str | None = org_role if isinstance(org_role, str) and org_role else None
+    if org_id is not None and parsed_org_id is None and isinstance(org_id, str):
+        _log.warning("jwt.malformed_org_id", extra={"org_id": org_id})
     return AuthenticatedPrincipal(
         username=sub,
         organisation_id=parsed_org_id,
