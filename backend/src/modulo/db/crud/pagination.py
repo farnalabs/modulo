@@ -12,7 +12,7 @@ Usage::
 import base64
 import uuid
 from datetime import datetime
-from typing import Any, Generic, TypeVar
+from typing import TYPE_CHECKING, Any, Generic, TypeVar
 
 from pydantic import BaseModel
 from sqlalchemy import Select, func, literal, select
@@ -21,10 +21,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import DeclarativeBase
 
 T = TypeVar("T")
-_ModelT = TypeVar("_ModelT", bound=DeclarativeBase)
+_ModelT = TypeVar("_ModelT")  # bound=DeclarativeBase — omitted for pydantic compatibility
 
 
 class CursorPage(BaseModel, Generic[T]):  # noqa: UP046
+    model_config = {"arbitrary_types_allowed": True}
     items: list[T]
     next_cursor: str | None = None
     total: int | None = None

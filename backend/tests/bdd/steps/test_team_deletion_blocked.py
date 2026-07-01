@@ -40,33 +40,25 @@ def team_exists(team_name: str, ctx) -> None:
     ctx["teams"][team_name] = {"id": str(uuid.uuid4()), "name": team_name}
 
 
-@given(
-    parsers.parse('a pipeline "{name}" is owned by team "{team_name}"')
-)
+@given(parsers.parse('a pipeline "{name}" is owned by team "{team_name}"'))
 def pipeline_owned_by_team(name: str, team_name: str, ctx) -> None:
     team_id = ctx["teams"].get(team_name, {}).get("id", str(uuid.uuid4()))
     ctx["pipelines"][name] = {"id": str(uuid.uuid4()), "name": name, "owner_team_id": team_id}
 
 
-@given(
-    parsers.parse('connector "{name}" is owned by team "{team_name}"')
-)
+@given(parsers.parse('connector "{name}" is owned by team "{team_name}"'))
 def connector_owned_by_team(name: str, team_name: str, ctx) -> None:
     team_id = ctx["teams"].get(team_name, {}).get("id", str(uuid.uuid4()))
     ctx["connectors"][name] = {"id": str(uuid.uuid4()), "name": name, "owner_team_id": team_id}
 
 
-@given(
-    parsers.parse('stage "{name}" is owned by team "{team_name}"')
-)
+@given(parsers.parse('stage "{name}" is owned by team "{team_name}"'))
 def stage_owned_by_team(name: str, team_name: str, ctx) -> None:
     team_id = ctx["teams"].get(team_name, {}).get("id", str(uuid.uuid4()))
     ctx["stages"][name] = {"id": str(uuid.uuid4()), "name": name, "owner_team_id": team_id}
 
 
-@given(
-    parsers.parse('model backend "{name}" is owned by team "{team_name}"')
-)
+@given(parsers.parse('model backend "{name}" is owned by team "{team_name}"'))
 def model_backend_owned_by_team(name: str, team_name: str, ctx) -> None:
     team_id = ctx["teams"].get(team_name, {}).get("id", str(uuid.uuid4()))
     ctx["model_backends"][name] = {"id": str(uuid.uuid4()), "name": name, "owner_team_id": team_id}
@@ -89,28 +81,42 @@ def delete_team(team_name: str, request, ctx) -> None:
         request.node._resp = resp
         return
 
-    resources = []
-    for pname, pdata in ctx["pipelines"].items():
-        if str(pdata.get("owner_team_id")) == str(team.get("id")):
-            resources.append(f"pipeline '{pname}'")
-    for cname, cdata in ctx["connectors"].items():
-        if str(cdata.get("owner_team_id")) == str(team.get("id")):
-            resources.append(f"connector '{cname}'")
-    for sname, sdata in ctx["stages"].items():
-        if str(sdata.get("owner_team_id")) == str(team.get("id")):
-            resources.append(f"stage '{sname}'")
-    for mname, mdata in ctx["model_backends"].items():
-        if str(mdata.get("owner_team_id")) == str(team.get("id")):
-            resources.append(f"model backend '{mname}'")
+    if team is None:
+        resp = MagicMock()
+        resp.status_code = 404
+        resp.json = lambda: {"detail": "Team not found"}
+        request.node._resp = resp
+        return
 
-    if resources:
+    has_resources = False
+    for key in ("pipelines", "connectors", "stages", "model_backends"):
+        for data in ctx.get(key, {}).values():
+            if str(data.get("owner_team_id")) == str(team.get("id")):
+                has_resources = True
+                break
+        if has_resources:
+            break
+
+    if has_resources:
+        resource_types = []
+        for pname in ctx.get("pipelines", {}):
+            resource_types.append("pipeline")
+        for cname in ctx.get("connectors", {}):
+            resource_types.append("connector")
+        for sname in ctx.get("stages", {}):
+            resource_types.append("stage")
+        for mname in ctx.get("model_backends", {}):
+            resource_types.append("model backend")
+
+        details = ", ".join(f"{rt}(s)" for rt in set(resource_types))
         resp = MagicMock()
         resp.status_code = 409
-        resp.json = lambda: {"detail": f"Cannot delete team: still has resources: {', '.join(resources)}"}
+        resp.json = lambda d=f"Cannot delete team: still has resources — {details}": {"detail": d}
+        request.node._resp = resp
     else:
         resp = MagicMock()
         resp.status_code = 204
-    request.node._resp = resp
+        request.node._resp = resp
 
 
 @when("I reassign all resources from team {team_name} to org-wide")
@@ -141,4 +147,3 @@ def error_msg_contains_pipeline(request) -> None:
 def error_msg_contains_connector(request) -> None:
     data = request.node._resp.json()
     assert "connector" in data.get("detail", "").lower()
-
