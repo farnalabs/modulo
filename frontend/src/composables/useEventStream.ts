@@ -141,6 +141,8 @@ export function useEventStream(options?: { resourceType?: string; onEvent?: Even
   return { connected }
 }
 
+export { dispatchToStore }
+
 if (import.meta.hot) {
   import.meta.hot.dispose(() => {
     cleanup()
