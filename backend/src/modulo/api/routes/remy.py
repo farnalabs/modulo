@@ -493,13 +493,15 @@ async def stream_chat(
         try:
             # Use a single DB session for all operations inside the generator
             async with AsyncSession(session.bind) as db_session:
-                # 1. Construct system prompt from config + skills
-                skill_loader = SkillLoader(db_session)
-                system_prompt = await skill_loader.build_system_prompt(
-                    org_id=principal.organisation_id,
-                    user_id=principal.account_id,
-                    page_context=body.page_context,
-                )
+                # 1. Construct system prompt from config + skills (with RLS)
+                async with db_session.begin():
+                    await set_rls_org(db_session, principal.organisation_id)
+                    skill_loader = SkillLoader(db_session)
+                    system_prompt = await skill_loader.build_system_prompt(
+                        org_id=principal.organisation_id,
+                        user_id=principal.account_id,
+                        page_context=body.page_context,
+                    )
                 if body.system_prompt:
                     system_prompt = body.system_prompt
 

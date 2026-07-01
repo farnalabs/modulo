@@ -78,27 +78,15 @@ const userInitial = computed(() => {
   return email.charAt(0).toUpperCase()
 })
 
-watch(
-  () => store.messages.length,
-  () => {
-    nextTick(() => {
-      if (scrollRef.value) {
-        scrollRef.value.scrollTop = scrollRef.value.scrollHeight
-      }
-    })
-  },
-)
+function scrollToBottom() {
+  nextTick(() => {
+    if (scrollRef.value) {
+      scrollRef.value.scrollTop = scrollRef.value.scrollHeight
+    }
+  })
+}
 
-watch(
-  () => store.isStreaming,
-  () => {
-    nextTick(() => {
-      if (scrollRef.value) {
-        scrollRef.value.scrollTop = scrollRef.value.scrollHeight
-      }
-    })
-  },
-)
+watch(() => [store.messages.length, store.isStreaming], scrollToBottom)
 
 async function handleSend() {
   const text = inputText.value.trim()
