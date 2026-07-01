@@ -290,7 +290,7 @@ async def list_library_primitives_endpoint(
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
-        )
+        ) from None
     try:
         items = [LibraryPrimitiveResponse.model_validate(p) for p in result.items]
     except Exception:
@@ -323,7 +323,7 @@ async def get_library_primitive_endpoint(
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
-        )
+        ) from None
     if primitive is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -383,7 +383,7 @@ async def create_library_primitive_endpoint(
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
-        )
+        ) from None
     return LibraryPrimitiveResponse.model_validate(prim)
 
 
@@ -404,7 +404,7 @@ async def update_library_primitive_endpoint(
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
-        )
+        ) from None
     if prim is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -428,7 +428,7 @@ async def delete_library_primitive_endpoint(
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
-        )
+        ) from None
     if not deleted:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -472,7 +472,7 @@ async def copy_to_adapt_endpoint(
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
-        )
+        ) from None
     return LibraryPrimitiveResponse.model_validate(result)
 
 
@@ -496,7 +496,7 @@ async def export_pipeline_endpoint(
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
-        )
+        ) from None
     if pipeline is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -509,7 +509,7 @@ async def export_pipeline_endpoint(
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
-        )
+        ) from None
     safe_name = "".join(c if c.isalnum() or c in "-_." else "_" for c in pipeline.name)
     return Response(
         content=bundle_bytes,
@@ -626,7 +626,7 @@ async def _analyse_bundle(
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
-        )
+        ) from None
 
     available_teams = [{"id": str(t.id), "name": t.name} for t in teams]
 
@@ -739,7 +739,7 @@ async def confirm_import_endpoint(
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
-        )
+        ) from None
 
     return {
         "status": "imported",
@@ -775,7 +775,7 @@ async def list_ratings_endpoint(
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
-        )
+        ) from None
     return RatingListResponse(
         items=[RatingResponse.model_validate(r) for r in result.items],
         total=result.total,
@@ -797,7 +797,7 @@ async def get_rating_aggregate_endpoint(
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
-        )
+        ) from None
     return RatingAggregateResponse(
         average_rating=float(avg) if avg is not None else None,
         review_count=count,
@@ -832,7 +832,7 @@ async def submit_rating_endpoint(
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
-        )
+        ) from None
     return RatingResponse.model_validate(rating)
 
 
@@ -863,7 +863,7 @@ async def submit_abuse_report_endpoint(
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
-        )
+        ) from None
     return AbuseReportResponse.model_validate(report)
 
 
@@ -950,7 +950,7 @@ async def create_pipeline_from_template_endpoint(
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
-        )
+        ) from None
     if primitive is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -1006,7 +1006,7 @@ async def create_pipeline_from_template_endpoint(
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
-        )
+        ) from None
 
     return PipelineFromTemplateResponse(
         id=pipeline.id,

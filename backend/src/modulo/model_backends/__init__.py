@@ -6,13 +6,13 @@ from modulo.model_backends.deepseek import DeepSeekBackend
 from modulo.model_backends.fireworks import FireworksBackend
 from modulo.model_backends.grok import GrokBackend
 from modulo.model_backends.groq import GroqBackend
-from modulo.model_backends.openrouter import OpenRouterBackend
 from modulo.model_backends.jan import JanBackend
 from modulo.model_backends.llamacpp import LLamaCppBackend
 from modulo.model_backends.lm_studio import LmStudioBackend
 from modulo.model_backends.localai import LocalAIBackend
 from modulo.model_backends.ollama import OllamaBackend
 from modulo.model_backends.openai import OpenAIBackend
+from modulo.model_backends.openrouter import OpenRouterBackend
 from modulo.model_backends.perplexity import PerplexityBackend
 from modulo.model_backends.qwen import QwenBackend
 from modulo.model_backends.stub import StubModelBackend

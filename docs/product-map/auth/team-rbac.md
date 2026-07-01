@@ -1,6 +1,6 @@
 ---
 id: feat-auth-team-rbac
-prd: [9.2, 9.3]
+prd: 9.2, 9.3
 delivery-tasks: [task-nv1-team-rbac]
 bdd:
   - backend/tests/bdd/features/auth/rbac.feature
