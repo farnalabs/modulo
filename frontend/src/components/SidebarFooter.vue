@@ -65,7 +65,6 @@ import { usePlanStore } from '../stores/planStore'
 defineProps<{
   userEmail: string
   userInitial: string
-  isSystemAdmin: boolean
   viewMode: 'simple' | 'advanced'
   isLight: boolean
 }>()

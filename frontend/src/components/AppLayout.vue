@@ -9,29 +9,11 @@
         <h2 class="text-lg font-bold tracking-tight">Modulo</h2>
       </div>
 
-      <nav class="flex-1 space-y-0.5">
-        <template v-for="group in navGroups" :key="group.id">
-          <SidebarGroup
-            v-if="(group.simpleMode || viewMode === 'advanced') && (!group.systemAdminOnly || isSystemAdmin)"
-            :label="group.label"
-            :collapsed="isGroupCollapsed(group.id, group.defaultCollapsed)"
-            @toggle="toggleGroup(group.id, group.defaultCollapsed)"
-          >
-            <SidebarLink
-              v-for="item in group.items"
-              :key="item.to"
-              :to="item.to"
-              :icon="item.icon"
-              :label="item.label"
-            />
-          </SidebarGroup>
-        </template>
-      </nav>
+      <SidebarNav :is-system-admin="isSystemAdmin" />
 
       <SidebarFooter
         :user-email="userEmail"
         :user-initial="userInitial"
-        :is-system-admin="isSystemAdmin"
         :view-mode="viewMode"
         :is-light="isLight"
         @toggle-theme="toggleTheme"
@@ -77,30 +59,11 @@
       class="md:hidden fixed top-14 left-0 z-40 h-[calc(100vh-3.5rem)] w-64 border-r bg-background p-4 flex flex-col transition-transform"
       :class="mobileOpen ? 'translate-x-0' : '-translate-x-full'"
     >
-      <nav class="flex-1 space-y-0.5">
-        <template v-for="group in navGroups" :key="group.id">
-          <SidebarGroup
-            v-if="(group.simpleMode || viewMode === 'advanced') && (!group.systemAdminOnly || isSystemAdmin)"
-            :label="group.label"
-            :collapsed="isGroupCollapsed(group.id, group.defaultCollapsed)"
-            @toggle="toggleGroup(group.id, group.defaultCollapsed)"
-          >
-            <SidebarLink
-              v-for="item in group.items"
-              :key="item.to"
-              :to="item.to"
-              :icon="item.icon"
-              :label="item.label"
-              @click="mobileOpen = false"
-            />
-          </SidebarGroup>
-        </template>
-      </nav>
+      <SidebarNav :is-system-admin="isSystemAdmin" @navigate="mobileOpen = false" />
 
       <SidebarFooter
         :user-email="userEmail"
         :user-initial="userInitial"
-        :is-system-admin="isSystemAdmin"
         :view-mode="viewMode"
         :is-light="isLight"
         @toggle-theme="toggleTheme"
@@ -127,13 +90,11 @@ import { getAccessToken, clearAccessToken } from '../lib/api/client'
 import { usePlanStore } from '../stores/planStore'
 import LogoMark from './LogoMark.vue'
 import RemyPanel from './remy/RemyPanel.vue'
-import SidebarLink from './SidebarLink.vue'
-import SidebarGroup from './SidebarGroup.vue'
 import SidebarFooter from './SidebarFooter.vue'
-import { navGroups } from '../config/navigation'
+import SidebarNav from './SidebarNav.vue'
 import { useSidebar } from '../composables/useSidebar'
 
-const { viewMode, toggleGroup, isGroupCollapsed, setViewMode } = useSidebar()
+const { viewMode, setViewMode } = useSidebar()
 
 const planStore = usePlanStore()
 
@@ -174,8 +135,8 @@ const userInitial = computed(() => {
 const isSystemAdmin = computed(() => jwtPayload.value?.is_system_admin === true)
 
 onMounted(() => {
-  planStore.fetchPlan().catch(() => {
-    /* plan fetch failure is non-blocking */
+  planStore.fetchPlan().catch((err) => {
+    console.error('Failed to fetch plan:', err)
   })
 })
 </script>
