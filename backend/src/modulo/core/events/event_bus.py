@@ -10,7 +10,7 @@ from modulo.core.events.redis_broker import RedisEventBroker
 
 _log = logging.getLogger(__name__)
 
-_CHANNEL_PREFIX = "modulo:events:resource:"
+
 
 
 class EventBus:
@@ -59,10 +59,15 @@ class EventBus:
         for q in dead:
             try:
                 self._subscribers[org_id].remove(q)
-            except (ValueError, KeyError):
+            except ValueError:
                 pass
         if self._redis_broker is not None:
-            _task = asyncio.ensure_future(self._redis_broadcast(org_id, event))  # noqa: RUF006  # fire-and-forget
+            try:
+                asyncio.get_running_loop()
+            except RuntimeError:
+                _log.warning("event_bus.no_running_loop", extra={"org_id": org_id})
+            else:
+                _task = asyncio.create_task(self._redis_broadcast(org_id, event))  # noqa: RUF006  # fire-and-forget
 
     async def _redis_broadcast(self, org_id: str, event: dict[str, Any]) -> None:
         """Fire-and-forget: publish event to Redis channel (best-effort)."""
