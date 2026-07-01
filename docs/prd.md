@@ -1,9 +1,10 @@
 # Modulo — Product Requirements Document
 
-**Version**: 0.26  
+**Version**: 0.27  
 **Date**: 2026-07-01  
 **Status**: Pre-development  
 **Changelog**:  
+- v0.27 — §8.25 Native Error Tracking: backend + frontend error capture, Postgres-backed storage, fingerprinting/dedup, admin dashboard, built-in alerting, Prometheus metrics, external forwarders to Sentry/DataDog/PagerDuty/Rollbar/OpsGenie/Grafana Loki; Community tier for core, Team tier for integrations.
 - v0.26 — §8.23 Remy In-App AI Assistant: floating draggable/dockable/maximisable chat panel on every page, page awareness via `useRemyContext()`, Multi-window independent sessions with last-activity-winner, tool execution via ViewModel API + MCP server, Markdown skill loading from `remy_skills` table (org-level admin-managed + user-level self-service), context-window-aware conversation reconstruction with automatic pruning and summarization, `chat_sessions` + `chat_messages` + `remy_skills` data model, full CRUD API + SSE streaming endpoint, admin config page at `/admin/remy`, Team-tier feature gate with org-level access list.
 - v0.25 — §8.22 SSE Event Bus (Real-Time Frontend Sync): in-memory EventBus with optional Redis overlay for multi-worker, SSE endpoint at GET /api/v1/events, SQLAlchemy event listeners for automatic publishing, frontend EventSource composable with dirtyIds conflict detection pattern.
 - v0.24 — Tier rename: free→Community, enterprise→Team across all UI text, API responses, backend code, docs, and tests. Community Edition (free, no license key) and Team Edition (self-serve paid, feature-gated, no SLA/support commitment). §6.2 updated to reflect new naming; §6.2.1 Tier System Architecture added describing the future-state flexible tier catalog.
@@ -2016,6 +2017,114 @@ Remy is a **Team-tier** feature (enterprise-gated via `remy` feature flag). The 
 
 ---
 
+### 8.25 Error Tracking (Native)
+
+Modulo ships a **built-in error tracking system** that captures backend and frontend errors, deduplicates them, and surfaces them in an error dashboard — no external service required. External integrations (Sentry, DataDog, PagerDuty, Rollbar, OpsGenie, Grafana Loki) are available as Team-tier forwarders for users who want to pipe errors into their existing monitoring.
+
+**Why native first**: Users deploying Modulo in air-gapped or VPC-isolated environments should not need a Sentry account to know when their platform crashes. The native system is simpler, self-contained, and always available. External integrations layer on top for users who already have an observability stack.
+
+#### Data Model
+
+Two tables, both immutable append-only (same pattern as `audit_events`):
+
+**`error_events`** — raw error occurrences:
+- `id`, `org_id`, `fingerprint` (SHA-256 of dedup key)
+- `level`: `error` | `warning` | `critical`
+- `message`, `stacktrace`, `context_json` (request URL, user agent, user_id, breadcrumbs)
+- `source`: `backend` | `frontend` | `celery`
+- `environment`, `version`
+- `status`: `new` | `acknowledged` | `resolved` | `archived`
+- `created_at`, `resolved_at`
+
+**`error_groups`** — deduplicated aggregates:
+- `id`, `org_id`, `fingerprint`, `status`
+- `first_seen`, `last_seen`, `count`
+- `level_peak` (highest severity seen)
+- `sample_event_id` (FK)
+- `assigned_to` (nullable user_id)
+
+#### Ingestion Pipeline
+
+| Source | Mechanism |
+|---|---|
+| Backend unhandled exceptions | `CatchAllMiddleware` — pipes 500s to `ErrorIngestionService` |
+| Backend ERROR+ log records | Custom `LogHandler` forwards structured JSON records |
+| Celery task failures | Task failure handler captures exception + context |
+| Frontend JS errors | `window.onerror` + `onunhandledrejection` |
+| Frontend Vue errors | `app.config.errorHandler` + `warnHandler` |
+| Frontend breadcrumbs | Last 50 user actions: click, navigation, API call, route change |
+
+**Fingerprinting**: SHA-256 of `(message + normalized_stacktrace_top_5_frames + source)`. Groups identical root causes into a single `error_group`.
+
+**Frontend SDK**: `createErrorTracker()` singleton with auto-install of error handlers, breadcrumb collector (last 50 actions), batching (flush every 5s/10 errors), retry with backoff (3 retries), rate limiting (10 req/min per session), HMAC-signed transport.
+
+#### API Endpoints
+
+| Method | Path | Purpose |
+|---|---|---|
+| `POST` | `/api/v1/errors/ingest` | Ingest single or batch error events (HMAC-signed) |
+| `GET` | `/api/v1/errors` | List error groups with pagination/filtering |
+| `GET` | `/api/v1/errors/{id}` | Error group detail + event stream |
+| `PATCH` | `/api/v1/errors/{id}` | Update status, assignee |
+| `GET` | `/api/v1/errors/{id}/events` | Raw events in this group |
+
+#### Dashboard (`/admin/errors`)
+
+- List view: fingerprint preview, level badge, count, first/last seen, status, assignee. Sortable, filterable (level, status, source, environment, date range, free-text search).
+- Detail view: full stacktrace (collapsible, syntax-highlighted), context JSON viewer, breadcrumb trail timeline, raw event stream.
+- Actions: acknowledge, resolve, archive, assign to user, add internal note.
+- Charts: error rate over time (24h/7d/30d, stacked by level), top 10 errors with trend direction.
+
+#### Built-in Alerting
+
+Configurable per-org notification rules:
+
+| Condition | Actions |
+|---|---|
+| `level = critical AND count > N in 5 min` | In-app bell badge, email (org admins), webhook (Slack format) |
+| `level = error AND count > N in 1 hour` | In-app bell badge |
+| `level = warning AND count > N in 24 hours` | In-app bell badge |
+
+Per-rule cooldown (default 5 min) prevents alert fatigue. Max 10 rules per org (Community: 3 max, no webhook).
+
+#### Prometheus Metrics
+
+- `modulo_errors_total{level, source, environment}` — counter
+- `modulo_error_groups_active{level}` — gauge
+- Exported via existing OTel → Prometheus bridge (no new exporter)
+
+#### External Integrations (Team tier)
+
+| Integration | Mechanism | Existing connector? |
+|---|---|---|
+| **Sentry** | Forward via existing SentryConnector | ✓ |
+| **DataDog** | Forward via existing DatadogConnector | ✓ |
+| **PagerDuty** | Trigger Events API v2 via existing PagerDutyConnector | ✓ |
+| **Rollbar** | POST `/api/1/item/` | New |
+| **OpsGenie** | Alert creation API | New |
+| **Grafana Loki** | `POST /loki/api/v1/push` | New |
+
+Each forwarder: per-org enable/disable toggle, test-connection button, status indicator. Forwarder failures logged but do not block local ingest (store-local-first architecture).
+
+#### Feature Gating
+
+| Feature | Tier |
+|---|---|
+| Error ingestion (backend + frontend) | Community |
+| Error dashboard list + detail | Community |
+| Basic filters (level, status, date) | Community |
+| Acknowledge, resolve | Community |
+| Built-in notification rules (max 3, no webhook) | Community |
+| Advanced filters (source, environment, search, assignee) | Team |
+| CSV export | Team |
+| Error rate charts | Team |
+| Annotations | Team |
+| External forwarders (all 6) | Team |
+| Extended retention (>30 days) | Team |
+| Rules max 10 + webhook action | Team |
+
+---
+
 ## 9. User Management & Access Control
 
 ### 9.1 User Model
@@ -2457,6 +2566,292 @@ These are not required for the initial release but should follow shortly after.
 - Multi-region data residency architecture
 - Team / org management UI
 - Usage tracking + cost attribution per team (SaaS billing consumer added to event bus)
+
+---
+
+### 8.24 Parameterizable Composite Nodes
+
+**Status**: Pre-development  
+**PRD ref**: §8.2 Agent Model, §8.4 Pipeline Builder, §8.14 Community Library  
+**RFC ref**: `docs/proposals/rfc-node-metacategories.md` (§2.5 Composite)
+
+#### Concept
+
+A **parameterizable composite node** is a first-class library primitive that exposes a user-defined internal pipeline as a single, drag-and-drop node with **configurable input ports**. Unlike the existing `parent_node_id` nesting (which is purely visual grouping), a parameterizable composite has:
+
+1. **A defined internal sub-pipeline** — a complete pipeline graph stored as a library primitive
+2. **Parameter ports** — named inputs on the composite's boundary that the parent pipeline author sets when placing the node (e.g. `system_prompt`, `model_selection`, `temperature`, `num_llms`, `output_style`)
+3. **Boundary schema mapping** — how the parent's artifact payload maps to the sub-pipeline's entry schema, and how the sub-pipeline's exit schema maps back
+
+This enables the use case described in §1: a user builds a "Devil's Advocate" composite — a sub-pipeline with two parallel agent nodes (one arguing for, one against) and a mediator node that synthesises both into balanced prose — saves it to the library, then drops it into any pipeline with different input prompts and output schemas.
+
+#### Data Model
+
+##### CompositeTemplate
+
+A `composite_template` entity stores the reusable sub-pipeline definition:
+
+| Field | Type | Description |
+|---|---|---|
+| `id` | UUID | PK |
+| `organisation_id` | UUID | FK → organisations |
+| `name` | string | Human-readable (e.g. "Devil's Advocate Council") |
+| `description` | text | What this composite does |
+| `sub_pipeline_graph_json` | JSON | The full internal pipeline: nodes (agent_id, position, connector_binding), edges (source, target, edge_type, hitl_gate_config). Same shape as `PipelineSnapshot.graph_json`. |
+| `parameter_ports_json` | JSON | Array of `ParameterPort` definitions (see below). |
+| `input_schema_id` | UUID, nullable | The entry schema of the sub-pipeline (first node's input_schema). Null until first save. |
+| `output_schema_id` | UUID, nullable | The exit schema of the sub-pipeline (last node's output_schema). Null until first save. |
+| `created_at`, `updated_at` | timestamps | |
+| `account_id` | UUID | FK → accounts (creator) |
+
+The `sub_pipeline_graph_json` references agent IDs by UUID, model backends by UUID, and schemas by UUID — all resolved at run-start from the PipelineSnapshot.
+
+##### ParameterPort
+
+Each port is a named, typed configuration knob exposed on the composite's boundary:
+
+```json
+{
+  "id": "uuid",
+  "name": "system_prompt",
+  "label": "System Prompt",
+  "description": "The core instruction given to each LLM in the council",
+  "type": "string",
+  "required": true,
+  "default_value": "You are a helpful assistant. Analyze the input and provide thoughtful advice.",
+  "target_injection": {
+    "mode": "prompt_replace",        // "prompt_replace" | "prompt_append" | "run_context_key" | "node_field"
+    "node_id": "uuid",               // which internal node to inject into
+    "injection_point": "prompt_template"  // where in the target node
+  }
+}
+```
+
+`type` is a JSON Schema type (`string`, `number`, `boolean`, `select`, `model_backend_ref`, `schema_ref`). `model_backend_ref` and `schema_ref` are special types rendered as pickers (model backend selector, schema picker) instead of text inputs.
+
+Default behaviour when `target_injection.mode = "prompt_replace"`: the composite renders the internal node's prompt template, then replaces the `{{parameter.<name>}}` placeholder in the rendered prompt with the port's value. This is the simplest and most common pattern — the composite author writes placeholders in the internal prompts.
+
+##### CompositeBinding (on PipelineSnapshot)
+
+When a pipeline author places a composite node and configures its ports, a `CompositeBinding` is stored in the PipelineSnapshot:
+
+```json
+{
+  "composite_template_id": "uuid",
+  "parameter_values": {
+    "system_prompt": "You are a strict code reviewer...",
+    "num_llms": 3,
+    "model_backend": "<model_backend_uuid>"
+  },
+  "input_mapping": {
+    "source_schema_id": "<node's input schema UUID>",
+    "target_schema_id": "<sub-pipeline entry schema UUID>",
+    "field_map": {"title": "prd_title", "body": "prd_body"}
+  },
+  "output_mapping": {
+    "source_schema_id": "<sub-pipeline exit schema UUID>",
+    "target_schema_id": "<node's output schema UUID>",
+    "field_map": {"advice": "result", "confidence": "score"}
+  }
+}
+```
+
+Field mapping uses JMESPath expressions (same mechanism as webhook `payload_mapping` in §8.5). When `source_schema_id` and `target_schema_id` are identical (compatible schemas), mapping is passthrough — no field_map required.
+
+##### PipelineGraphNode Extension
+
+The existing `PipelineGraphNode` Pydantic model (§2.5 of RFC) gains:
+
+```python
+class PipelineGraphNode(BaseModel):
+    # ...existing fields...
+    composite_ref: uuid.UUID | None = None          # references a CompositeTemplate
+    composite_parameter_values: dict[str, Any] | None = None  # port name → value
+    composite_input_mapping: FieldMapping | None = None
+    composite_output_mapping: FieldMapping | None = None
+```
+
+These fields are mutually exclusive with `agent_id` — a node is either a simple agent or a composite reference, never both.
+
+#### Library Integration
+
+##### New Primitive Type
+
+Add `composite` to the `LibraryPrimitive.primitive_type` CHECK constraint:
+
+```sql
+CONSTRAINT ck_library_primitives_type CHECK (
+    primitive_type IN ('schema', 'workflow', 'agent', 'integration', 'test_fixture', 'pipeline_template', 'composite')
+)
+```
+
+A `composite` library entry serialises the `CompositeTemplate` definition in `content_json`:
+
+```json
+{
+  "name": "Devil's Advocate Council",
+  "description": "Two LLMs argue opposite positions, a mediator synthesises advice",
+  "sub_pipeline_graph_json": {...},
+  "parameter_ports_json": [...],
+  "input_schema_id": "...",
+  "output_schema_id": "..."
+}
+```
+
+##### Copy-to-Adapt
+
+Copying a composite primitive from the library works like any other primitive: creates a local editable copy with `forked_from` provenance. The local copy is a fully independent `CompositeTemplate`. The CopyToAdaptWizard gains an optional step for parameter port review — showing default values and descriptions before confirming.
+
+##### Versioning
+
+CompositeTemplates are versioned independently (same semver model as schemas). When a new version is published: existing PipelineSnapshots continue using the pinned version (snapshot captures `composite_template_id + version`). Users see an "update available" indicator in the pipeline editor if a newer version exists, with a diff of changed parameter ports.
+
+#### Runtime Execution
+
+##### Graph Expansion
+
+When a run reaches a composite node, the executor **expands** the composite in-line into the parent LangGraph StateGraph — it does not run the sub-pipeline as a separate thread/run. This means:
+
+- The composite's internal nodes execute within the same run, same thread ID, same checkpoint scope
+- The parent artifact is transformed through `input_mapping` before entering the first composite node
+- The composite's output is transformed through `output_mapping` before being presented as the composite node's output
+- HITL gates inside the composite appear in the parent run's HITL queue normally
+- All internal nodes appear in run inspection at the same level as parent nodes (no separate drill-down in alpha — the phantom flow approach from the run state modelling)
+
+This is the same approach as LangGraph's sub-graph support (a LangGraph node returning a `Command` with a sub-graph). The parameter values are injected into the sub-graph's state as `run_context.composite_parameters`.
+
+##### Schema Mapping
+
+Field mapping follows the same pattern as webhook payload mapping (§8.5):
+
+```python
+def apply_field_mapping(source: dict, field_map: dict[str, str]) -> dict:
+    """Apply JMESPath field mapping. Returns mapped dict."""
+    result = {}
+    for target_field, source_expression in field_map.items():
+        result[target_field] = jmespath.search(source_expression, source)
+    return result
+```
+
+Passthrough (no field_map, compatible schemas): entire payload passes through unchanged. Partial mapping: unmapped fields in the target are omitted unless the target schema marks them optional. A strict mode (`mapping_must_cover_all_required: bool`) can be set on the binding to reject mappings that leave required fields unmapped.
+
+##### Parameter Injection at Runtime
+
+At graph expansion time, the executor:
+
+1. Reads `composite_parameter_values` from the PipelineGraphNode
+2. For each parameter port with a `target_injection` specifying a node and `prompt_replace`/`prompt_append` mode: re-renders the target node's prompt template with the port value injected
+3. For `run_context_key` mode: writes the parameter into `run_context` before the sub-pipeline executes (readable by all internal nodes via `{{ run_context.parameter.<name> }}`)
+4. For `node_field` mode: directly sets a field on the target node's config (e.g. `model_backend_id`, `temperature`)
+
+Parameters are snapshot-pinned: the parameter values at run-start are captured in the PipelineSnapshot's `composite_bindings_json`. A long-running composite that pauses at an internal HITL gate resumes with the same parameter values, even if the parent pipeline author changes them in the editor.
+
+#### Semantic Versioning for Composites
+
+| Version change | What it means |
+|---|---|
+| **Major** | Breaking change to parameter ports (removed port, changed type, changed required status). Introduces or removes internal nodes. Changes entry/exit schema. |
+| **Minor** | New optional parameter port added. New internal path added (no mandatory change to existing pipelines). |
+| **Patch** | Internal prompt template tweaks, parameter default value changes, bug fixes. No behavioural change observable from the outside. |
+
+The pipeline editor surfaces an "Update available" badge when the pinned composite version is behind the latest, with a version diff panel showing added/removed/changed parameter ports and a one-click "Update to vN" action. Updating bumps the pin in the snapshot; the pipeline author reviews and confirms.
+
+#### Frontend: Composite Node Rendering
+
+##### Canvas Appearance
+
+A composite node on the Vue Flow canvas has:
+- **Double border** (matching the RFC's composite category visual: indigo, thick/double border)
+- **Expand/collapse affordance**: clicking drills into a read-only view of the sub-pipeline (same drill-down pattern as existing nesting, per RFC §2.5)
+- **Port indicator badge**: shows how many parameters are configured (e.g. "3/5 ports set")
+
+##### Parameter Configuration Panel
+
+When a composite node is selected, the properties sidebar shows a **Parameters** tab with one form field per `ParameterPort`:
+
+| Port type | UI control |
+|---|---|
+| `string` | Text input (or textarea if `multiline: true`) |
+| `number` | Number input |
+| `boolean` | Toggle/switch |
+| `select` | Dropdown with `options` from the port definition |
+| `model_backend_ref` | Model backend picker (same component as agent config) |
+| `schema_ref` | Schema picker |
+
+Each field shows the port's label, description, and default value. Required ports are marked with `*`. Validation runs before the pipeline can be saved (required fields filled, types match).
+
+##### Pipeline Library Browser
+
+The library browser gains a "Composites" tab alongside the existing Agents/Schemas/Workflows. Each composite card shows:
+- Name, description, author
+- Port count + input/output schema names
+- Version badge
+- "Add to pipeline" button (same flow as agent picker)
+
+#### Schema Mapping UI
+
+When a composite node is placed and the parent pipeline has a preceding node, the properties sidebar shows a **Mapping** tab:
+
+1. **Input mapping**: the preceding node's output schema on the left, the composite's entry schema on the right. The user pairs fields via drag-and-drop or a picker.
+2. **Output mapping**: the composite's exit schema on the left, the expected downstream schema on the right. Same pairing UX.
+
+Compatible schemas (identical structure) auto-map with a "Passthrough" badge. Incompatible schemas show warning badges but don't block saving (the user can map manually or adjust schemas).
+
+Schema inference (§8.16) can suggest initial mappings when the composite is first dropped.
+
+#### Composite Authoring Flow
+
+Creating a composite is a multi-step process available from the library:
+
+1. **Design sub-pipeline**: open the pipeline editor within a composite template scope. Build the internal graph with agents, edges, HITL gates — same full editor.
+2. **Define ports**: in a sidebar panel, add parameter ports — name, type, default, required, and the target injection configuration. Each port shows a preview of how it will inject into the internal prompts.
+3. **Test**: run the composite with test parameter values and sample input. All internal nodes execute in a temporary run scope.
+4. **Publish**: save as library primitive with version, description, tags. Published to the local library immediately; optionally contribute to community registry (v2).
+
+Existing pipelines can be promoted to composites: "Save as composite template" extracts the selected subgraph into a template with auto-detected parameter placeholders.
+
+#### Snapshot and Migration
+
+The PipelineSnapshot entity gains:
+
+```json
+{
+  "composite_bindings_json": [
+    {
+      "node_id": "uuid",
+      "composite_template_id": "uuid",
+      "composite_version": "1.2.0",
+      "parameter_values": {...},
+      "input_mapping": {...},
+      "output_mapping": {...}
+    }
+  ]
+}
+```
+
+Existing snapshots without `composite_bindings_json` are handled by backward-compat shim (empty list = no composites). The GraphValidator checks composite version pins at run-start: if the pinned version has been deleted, the run is blocked with `composite_version_deleted`.
+
+#### Scope and Delivery
+
+**Alpha scope**: CompositeTemplate CRUD, ParameterPort definition, library save as `composite` primitive, basic parameter injection (`prompt_replace` mode only), single-passthrough mapping (compatible schemas), canvas rendering as composite node, version pinning in snapshots. No schema mapping UI in alpha — passthrough only. No test-run flow. No community registry.
+
+**V1 Extended scope**: Full schema mapping UI (field-pairing drag-and-drop), `model_backend_ref` and `schema_ref` port types, `run_context_key` and `node_field` injection modes, test-run flow for composite templates, auto-detect parameter placeholders on "Save as composite", version diff panel, update-available indicator.
+
+**V2 scope**: Community registry for composites, nested composites (composite containing composites), output-only composites (no input mapping — self-contained generators).
+
+#### Delivery Tasks
+
+The feature decomposes into these delivery tasks:
+
+1. `task-nv30-composite-data-model` (L) — CompositeTemplate entity, ParameterPort model, migration, CRUD service + API routes
+2. `task-nv30-composite-library` (M) — `composite` library primitive type, library browser tab, copy-to-adapt composite flow
+3. `task-nv30-composite-runtime` (XL) — Graph expansion executor, parameter injection, schema mapping passthrough, snapshot composite_bindings_json, graph validator composite checks
+4. `task-nv30-composite-frontend` (L) — Canvas rendering (double border, drill-down), parameter configuration panel, library composable picker
+5. `task-nv30-composite-authoring-flow` (L) — Composite template editor sub-pipeline mode, port definition UI, publish flow
+6. `task-nv30-composite-schema-mapping` (L) — Schema mapping UI (drag-and-drop field pairing), inference-assisted mapping (v1-extended)
+7. `task-nv30-composite-bdd-tests` (L) — BDD feature files for all composite behaviours, step definitions
+
+**Phase**: `phase-nv30` (new)
 
 ---
 
