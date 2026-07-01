@@ -27,8 +27,8 @@ vi.mock('../../composables/useApi', () => ({
 vi.mock('@vue-flow/core', () => ({
   useNode: vi.fn(() => ({
     id: 'test-node',
-    data: {
-      value: {
+    node: {
+      data: {
         label: 'Test Composite',
         compositeRef: 'comp-1',
         compositeParameterValues: { model: 'gpt-4' },
