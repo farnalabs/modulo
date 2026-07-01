@@ -13,8 +13,10 @@ code:
   - backend/src/modulo/db/crud/pipeline.py
   - frontend/src/views/PipelineEditorView.vue
 depends-on: [feat-core-pipeline-execution]
+unit-tests: []
 status: partial
 ---
+
 # Replace Step Agent
 
 Replacing a manual placeholder node with an AI agent node (and reverting from agent back to manual). Powers the SDLC onboarding path where teams model their existing process in Modulo and progressively replace manual steps with AI agents.
@@ -22,6 +24,7 @@ Replacing a manual placeholder node with an AI agent node (and reverting from ag
 ## Behaviours
 
 ### Manual Node Runtime
+
 - [x] Manual node compiles successfully in a pipeline graph via build_graph_from_json
 - [x] Manual node raises NodeInterrupt on first invocation with manual=True payload
 - [x] Manual node awaits human input until _hitl_decision is provided on resume
@@ -32,20 +35,29 @@ Replacing a manual placeholder node with an AI agent node (and reverting from ag
 - [x] Manual node passes output_schema_id in the interrupt payload for UI rendering
 - [x] Manual node logs completion to artifacts with status "completed"
 - [x] Mixed manual + agent graph compiles and runs successfully
-- [x] Nodes without explicit node_type default to "agent" ### Convert Manual → Agent
+- [x] Nodes without explicit node_type default to "agent"
+
+### Convert Manual → Agent
+
 - [x] POST /{pipeline_id}/nodes/{node_id}/convert-to-agent accepts agent_id, connector_binding, model_backend_id
 - [x] Validates agent exists and belongs to the same org
 - [x] Validates connector instance exists and connector_type matches binding
 - [x] Validates model backend exists
 - [x] Sets node_type to "agent", populates agent_id and connector_binding
-- [x] Removes output_schema_id from the node after conversion ### Revert Agent → Manual
+- [x] Removes output_schema_id from the node after conversion
+
+### Revert Agent → Manual
+
 - [x] POST /{pipeline_id}/nodes/{node_id}/revert-to-manual requires snapshot_id query param
 - [x] Validates snapshot exists
 - [x] Validates snapshot contains the node with node_type "manual"
 - [x] Validates snapshot node has an output_schema_id
 - [x] Restores node_type to "manual" and output_schema_id from snapshot
 - [x] Removes agent_id, connector_binding from the node
-- [x] Falls back to snapshot node label when current label is empty ### Frontend — Pipeline Editor
+- [x] Falls back to snapshot node label when current label is empty
+
+### Frontend — Pipeline Editor
+
 - [x] Manual nodes rendered with amber border/styling and MANUAL badge
 - [x] Agent nodes rendered with sky border/styling and AGENT badge
 - [x] Node properties panel displays type-specific fields (output_schema for manual; agent_id, connector_binding for agent)
@@ -60,7 +72,10 @@ Replacing a manual placeholder node with an AI agent node (and reverting from ag
 - [x] "Revert" button disabled until a snapshot is selected
 - [x] Revert calls POST endpoint and refreshes the graph
 - [x] Pipeline saves successfully after conversion
-- [x] Pipeline saves successfully after reversion ### Error States
+- [x] Pipeline saves successfully after reversion
+
+### Error States
+
 - [x] 404 when converting on a non-existent pipeline
 - [x] 404 when converting a non-existent node
 - [x] 422 when converting an already-agent node ("Only manual nodes can be converted to agent")
@@ -76,14 +91,19 @@ Replacing a manual placeholder node with an AI agent node (and reverting from ag
 - [x] 422 when snapshot node was not of type "manual"
 - [x] 422 when snapshot node has no output_schema_id
 - [x] Manual node raises ValueError when required schema fields are missing in human output
-- [x] Concurrent graph replacement uses row-level locking (SELECT FOR UPDATE) ### Alice Persona Scenarios
+- [x] Concurrent graph replacement uses row-level locking (SELECT FOR UPDATE)
+
+### Alice Persona Scenarios
+
 - [x] Create a pipeline with mixed manual and HITL nodes representing an existing SDLC
 - [x] Execute the pipeline with no AI agents configured (all manual)
 - [x] Each manual node produces a log entry when completed
 - [x] Replace a manual QA step with an agent by changing node type, assigning schema, binding connector
 - [x] Pipeline saves and executes the replaced step as an agent on next run
 - [x] Revert a step replacement back to manual when the agent underperforms
-- [x] Restore a previous pipeline snapshot to roll back the replacement entirely ## Known Gaps - BDD feature files (`node_types.feature`, `manual_node.feature`, `pipeline_builder.feature`) are placeholders with no scenarios
+- [x] Restore a previous pipeline snapshot to roll back the replacement entirely
+
+## Known Gaps - BDD feature files (`node_types.feature`, `manual_node.feature`, `pipeline_builder.feature`) are placeholders with no scenarios
 - No BDD step definitions exist for the convert-to-agent or revert-to-manual endpoints
 - Persona Gherkin scenarios (alice-devx-sme.feature: `@goal-alice-replace-step`, `@goal-alice-rollback-step`) are tagged @delivered but have no step definitions
 - No unit tests for the convert-to-agent and revert-to-manual API endpoints

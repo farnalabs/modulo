@@ -2,7 +2,8 @@
 id: feat-core-oidc-integration
 prd: 9.4, 6.2, 9.2
 delivery-tasks: [task-nv6-oidc-integration]
-bdd: backend/tests/bdd/features/auth/sso_oidc.feature
+bdd:
+  - backend/tests/bdd/features/auth/sso_oidc.feature
 depends-on: [feat-core-saml-integration, feat-auth-sso-provider-ui, feat-auth-team-rbac]
 code:
   - backend/src/modulo/auth/sso.py
@@ -19,11 +20,13 @@ unit-tests:
 
 status: covered
 ---
+
 # OIDC Integration — OpenID Connect SSO with authorization code flow, discovery document parsing, JIT user provisioning, and group-to-team mapping.
 
 ## Behaviours
 
 ### Provider configuration (env-var seeding)
+
 - [x] One-time migration from `MODULO_OIDC_PROVIDERS` env var to `sso_providers` DB table on startup — `main.py:_seed_sso_providers`
 - [x] Migration skips when env var is empty or `[]`
 - [x] Migration skips when providers already exist in DB
@@ -31,11 +34,13 @@ status: covered
 - [x] Seeded providers get scopes `["openid", "profile", "email"]` and default role from `modulo_sso_default_role`
 
 ### SSO providers endpoint
+
 - [x] `GET /api/v1/auth/sso/providers` returns list of configured OIDC providers with `provider_id`
 - [x] Returns `saml: bool` alongside OIDC list
 - [x] SAML is reported as enabled only when license present + SAML configured
 
 ### Authorization redirect
+
 - [x] `GET /api/v1/auth/oidc/{provider}/login` returns HTTP 307 redirect to IdP authorization endpoint
 - [x] Redirect URL includes `client_id`, `response_type=code`, `scope=openid email profile`, `redirect_uri`, signed `state`
 - [x] State is HMAC-SHA256 signed for CSRF protection
@@ -45,6 +50,7 @@ status: covered
 - [x] Fetches discovery document from provider's `discovery_url` via HTTPS
 
 ### Callback / code exchange
+
 - [x] `GET /api/v1/auth/oidc/{provider}/callback` accepts `code` and `state` query params
 - [x] Returns 400 when `code` or `state` is missing
 - [x] Returns 401 when state signature verification fails (tampered/CSRF)
@@ -54,6 +60,7 @@ status: covered
 - [x] Token exchange uses `grant_type=authorization_code` with client credentials
 
 ### ID token processing
+
 - [x] Decodes ID token JWT payload (base64, no signature verification) when no JWKS endpoint available
 - [x] Full JWT signature verification when JWKS URI and issuer are present in discovery document — `oidc_verify.py:verify_id_token`
 - [x] JWKS in-memory cache with 1-hour TTL
@@ -63,6 +70,7 @@ status: covered
 - [x] Falls back to `preferred_username` then email prefix as display name
 
 ### JIT user provisioning
+
 - [x] Existing user matched by email gets `sso_subject` and `auth_provider` updated to `oidc`
 - [x] New user created with `auth_provider='oidc'`, `password_hash=None`
 - [x] New user placed in first org (by `created_at`) or custom `default_org_id`
@@ -72,6 +80,7 @@ status: covered
 - [x] Custom `default_org_id` bypasses org lookup
 
 ### Group-to-team mapping
+
 - [x] Extracts `groups` claim from ID token
 - [x] Looks up DB provider by `client_id` for group mapping configuration
 - [x] Applies group mappings: matching groups create or update team membership
@@ -82,6 +91,7 @@ status: covered
 - [x] Skip group mapping when no group mappings configured on provider
 
 ### Token issuance
+
 - [x] Issues JWT access token (15-min TTL) on successful OIDC login
 - [x] Issues JWT refresh token (7-day TTL) with token family rotation
 - [x] Tokens carry `org_role` claim
@@ -89,6 +99,7 @@ status: covered
 - [x] Frontend base URL derived from first `CORS_ORIGINS` origin
 
 ### SSO provider admin CRUD
+
 - [x] Admin can create OIDC provider with `discovery_url`, `client_id`, `client_secret`
 - [x] Admin can update OIDC provider fields
 - [x] Admin can delete OIDC provider
@@ -100,6 +111,7 @@ status: covered
 - [x] `GET /api/v1/admin/sso/providers` lists all SSO providers
 
 ### Connection testing
+
 - [x] Admin can test OIDC provider connection
 - [x] Test fetches discovery document from provider URL
 - [x] Test validates presence of `authorization_endpoint` in discovery document
@@ -108,16 +120,19 @@ status: covered
 - [x] Client ID is included in test results for validation info when present
 
 ### Group mapping admin
+
 - [x] Admin can set group mappings per provider: `PUT /api/v1/admin/sso/providers/{id}/group-mappings`
 - [x] Admin can read group mappings per provider: `GET /api/v1/admin/sso/providers/{id}/group-mappings`
 - [x] Group mapping format: `{idp_group, team_id, team_role}`
 
 ### Enterprise feature gating
+
 - [x] SSO is flagged as enterprise-tier feature through `require_feature("sso")` dependency
 - [x] OIDC login/callback does not require license key (unlike SAML)
 - [x] Admin SSO endpoints all require admin `org_role`
 
 ### Error paths (discovered during audit)
+
 - [x] Invalid JSON in `MODULO_OIDC_PROVIDERS` returns empty list with warning
 - [x] Malformed ID token (not 3 parts) returns empty claims dict
 - [x] Non-decodable ID token payload returns empty claims dict

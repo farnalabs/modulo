@@ -8,13 +8,17 @@ code:
   - backend/src/modulo/core/reports/quality_report.py
   - backend/src/modulo/core/reports/__init__.py
 depends-on: [feat-core-notifications, feat-evals-eval-engine]
+unit-tests: []
 status: partial
 ---
+
 # Quality Report Slack Delivery
 
 Weekly quality report generated from run volume, eval pass rate, and cost data, formatted as Slack Block Kit and delivered to configured Slack webhook URLs.
 
-## Behaviours - [x] `generate_quality_report` queries OrgDailyRunCount for 7-day run volume and total spend
+## Behaviours
+
+- [x] `generate_quality_report` queries OrgDailyRunCount for 7-day run volume and total spend
 - [x] `generate_quality_report` queries EvalResult for 7-day eval pass rate (passed/total)
 - [x] `generate_quality_report` computes week-over-week deltas (runs, eval pass rate, cost)
 - [x] `generate_quality_report` builds daily trend array (date, run_count, eval_pass_rate, token_spend_usd)
@@ -39,7 +43,9 @@ Weekly quality report generated from run volume, eval pass rate, and cost data, 
 - [x] Cost values default to 0.0 when row has no spend data
 - [x] `generate_quality_report` requires an active transaction with RLS org context
 - [x] Webhook delivery uses 30-second timeout per POST
-- [x] Error text truncated to 200 characters in delivery results ## Missing / Issues - ~~No API endpoint calls `generate_quality_report` or `deliver_quality_report`~~ — RESOLVED: `POST /{pipeline_id}/quality-report` now triggers report generation and delivery via NotificationEndpoint webhook config (`pipelines.py:569`). Scheduled task still absent.
+- [x] Error text truncated to 200 characters in delivery results
+
+## Missing / Issues - ~~No API endpoint calls `generate_quality_report` or `deliver_quality_report`~~ — RESOLVED: `POST /{pipeline_id}/quality-report` now triggers report generation and delivery via NotificationEndpoint webhook config (`pipelines.py:569`). Scheduled task still absent.
 - No unit tests exist for `quality_report.py`
 - No BDD feature files exist for notification webhooks (steps exist at `test_alpha_notifications.py` but `.feature` files are missing)
 - Slack connector BDD feature is a placeholder only

@@ -5,6 +5,9 @@ delivery-tasks: [task-nv9-migration-cli]
 code:
   - backend/src/modulo/cli/migrate.py
   - backend/src/modulo/cli/migrate_org.py
+bdd: []
+depends-on: []
+unit-tests: []
 status: partial
 ---
 

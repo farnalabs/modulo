@@ -17,6 +17,7 @@ code:
 depends-on: [feat-teams-team-crud]
 status: partial
 ---
+
 # Core Notifications
 
 Outbound webhook notifications for pipeline lifecycle events, with HMAC signing, retry, dead-letter tracking, and auto-disable.
@@ -24,6 +25,7 @@ Outbound webhook notifications for pipeline lifecycle events, with HMAC signing,
 ## Behaviours
 
 ### Event dispatch
+
 - [x] `hitl_awaiting` event dispatches when a run reaches a HITL gate
 - [x] `run_failed` event dispatches when a pipeline node raises an unhandled exception
 - [x] `claim_expired` event dispatches when a HITL claim expires (via ClaimExpiryJob) — Notifier.dispatch_event called in ClaimExpiryJob._expire_once
@@ -38,6 +40,7 @@ Outbound webhook notifications for pipeline lifecycle events, with HMAC signing,
 - [ ] `Notifier._record_delivery` wraps session operations in try/except — DB failure on delivery recording propagates unhandled
 
 ### HMAC signing
+
 - [x] Outbound webhook includes `X-Modulo-Signature: sha256=<hmac>` header
 - [x] Signature is HMAC-SHA256 over the JSON payload body
 - [x] Signature uses per-endpoint secret, not a global secret
@@ -59,6 +62,7 @@ Outbound webhook notifications for pipeline lifecycle events, with HMAC signing,
 - [ ] PRD §8.11 specifies 5 consecutive failures within 24h triggers auto-disable; code uses 10 consecutive with no time window — documented gap
 
 ### Delivery log
+
 - [x] Every dispatch attempt recorded in `notification_delivery_log` — _record_delivery called after every dispatch attempt
 - [x] Delivery log stores event_type, endpoint_id, run_id, status, attempt_count, response_code, last_error — via NotificationDeliveryLog model
 - [ ] Failed deliveries for `hitl_awaiting` trigger in-app alert to org admins — no in-app alert mechanism exists yet
@@ -67,6 +71,7 @@ Outbound webhook notifications for pipeline lifecycle events, with HMAC signing,
 - [x] Filtering by status, endpoint_id, date range on delivery log — /deliveries supports status, endpoint_id, event_type, date_from, date_to
 
 ### Admin API (CRUD)
+
 - [x] Admin can create webhook endpoint with URL, optional secret, event subscription list, and description — POST /webhooks
 - [x] Creating endpoint with non-http/https URL returns 422 — field_validator on WebhookCreate.url
 - [x] Creating endpoint with unknown event type returns 422 — field_validator checks against AVAILABLE_EVENTS
@@ -83,6 +88,7 @@ Outbound webhook notifications for pipeline lifecycle events, with HMAC signing,
 - [ ] All admin notification routes catch `sqlalchemy.exc.ProgrammingError` and return 501 Not Implemented — list_webhooks, create_webhook, get_webhook, update_webhook, delete_webhook, test_webhook, re_enable_webhook, list_deliveries, retry_delivery, retry_all_failed_deliveries, list_available_events lack the catch (only list_all_deliveries has it)
 
 ### Team-scoped dispatch
+
 - [x] When `team_id` is provided, dispatch routes to team-specific endpoints — implemented in _get_subscribed_endpoints (line 182-196)
 - [x] When team has no endpoints, falls back to org-wide endpoints — falls back to `team_id IS NULL` query
 - [x] When `team_id` is None, only org-wide endpoints are returned — queries `team_id.is_(None)`
@@ -90,6 +96,7 @@ Outbound webhook notifications for pipeline lifecycle events, with HMAC signing,
 - [ ] Team notification endpoint configuration via admin API is v1 per PRD — code supports team_id on NotificationEndpoint model but create/update routes have no team_id field
 
 ### Claim expiry background job
+
 - [x] Expiry job polls every 60s for expired HITL claims — POLL_INTERVAL = 60.0 in expiry_job.py
 - [x] Expired claims reset: claimed_by=null, claim_token=null, expires_at=null, claimed_at=null — batch UPDATE in _expire_once
 - [x] Affected runs transition from "claimed" to "awaiting_human" — UPDATE Run SET status='awaiting_human' WHERE status='claimed'
@@ -99,6 +106,7 @@ Outbound webhook notifications for pipeline lifecycle events, with HMAC signing,
 - [x] Job cancels cleanly on application shutdown — _stop_event + task.cancel() pattern
 
 ### Security
+
 - [x] All admin notification routes require admin role — _require_admin guard on every route
 - [x] RLS applied per-transaction with `set_rls_org`
 - [x] URL validated to be absolute http/https — field_validator on WebhookCreate/WebhookUpdate
@@ -106,12 +114,14 @@ Outbound webhook notifications for pipeline lifecycle events, with HMAC signing,
 - [x] Payloads optionally encrypted in delivery log — Fernet.encrypt when retain_payload=True
 
 ### Concurrency
+
 - [x] Dispatch to each endpoint is sequential (no concurrent deliveries to same endpoint in one call) — `for ep in endpoints: await self._dispatch_to_endpoint(...)`
 - [x] Multiple endpoints in one dispatch_event are processed sequentially
 - [x] Claim expiry job runs as asyncio task (not Celery) in alpha — asyncio.create_task in ClaimExpiryJob.start
 - [ ] Multi-worker advisory lock for expiry job specified in PRD §8.11 but not yet implemented — documented gap
 
 ### Backward compatibility
+
 - [x] Empty events list on endpoint treated as no subscription (valid, no-op) — json.loads returns [] which fails event_type in [] check
 - [x] Malformed events JSON is skipped (not crashed) — try/except json.JSONDecodeError, TypeError in _get_subscribed_endpoints
 - [x] Null secret_ciphertext produces empty signature — _sign_payload returns "" when endpoint.secret_ciphertext is None
