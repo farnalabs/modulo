@@ -1,6 +1,6 @@
 """YouTrackConnector — async YouTrack REST API connector."""
 
-from typing import Any
+from typing import Any, cast
 
 import httpx
 
@@ -134,7 +134,7 @@ class YouTrackConnector(ConnectorBase):
                 async with self._client() as client:
                     r = await client.post("/issues", json=payload.data)
                     r.raise_for_status()
-                    return r.json()
+                    return cast("dict[str, Any]", r.json())
 
             case "issue_update":
                 issue_id = payload.data.get("id")
@@ -144,7 +144,7 @@ class YouTrackConnector(ConnectorBase):
                 async with self._client() as client:
                     r = await client.post(f"/issues/{issue_id}", json=update_data)
                     r.raise_for_status()
-                    return r.json()
+                    return cast("dict[str, Any]", r.json())
 
             case "comment":
                 issue_id = payload.data.get("issue_id")
@@ -155,7 +155,7 @@ class YouTrackConnector(ConnectorBase):
                 async with self._client() as client:
                     r = await client.post(f"/issues/{issue_id}/comments", json=comment_data)
                     r.raise_for_status()
-                    return r.json()
+                    return cast("dict[str, Any]", r.json())
 
             case _:
                 raise ValueError(f"Unsupported YouTrack write resource: {payload.resource!r}")

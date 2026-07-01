@@ -229,7 +229,11 @@ class N8NConnector(ConnectorBase):
         name = data.get("name")
         if not name:
             raise ValueError("n8n workflow creation requires 'name' in data")
-        body: dict[str, Any] = {"name": name, "nodes": data.get("nodes", []), "connections": data.get("connections", {})}
+        body: dict[str, Any] = {
+            "name": name,
+            "nodes": data.get("nodes", []),
+            "connections": data.get("connections", {}),
+        }
         if "settings" in data:
             body["settings"] = data["settings"]
         if "staticData" in data:
