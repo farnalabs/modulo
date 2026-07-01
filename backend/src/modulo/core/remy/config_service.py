@@ -1,18 +1,23 @@
 from __future__ import annotations
 
+import logging
 import uuid
 from typing import Any
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.db.crud.system_config import get_config, set_config
+
+logger = logging.getLogger(__name__)
 
 
 class RemyConfig(BaseModel):
     system_prompt: str = ""
     additional_guidance: str = ""
-    access_list: dict[str, list[Any]] = {"user_ids": [], "team_ids": [], "org_roles": ["admin"]}
+    access_list: dict[str, list[Any]] = Field(
+        default_factory=lambda: {"user_ids": [], "team_ids": [], "org_roles": ["admin"]}
+    )
     default_provider: str = "anthropic"
     default_model: str = "claude-sonnet-4-20250514"
     default_context_window: int = 200000
@@ -32,7 +37,11 @@ class RemyConfigService:
         if row is None:
             return RemyConfig()
         if isinstance(row.value, dict):
-            return RemyConfig(**row.value)
+            try:
+                return RemyConfig(**row.value)
+            except Exception:
+                logger.exception("Failed to parse stored Remy config for org %s, falling back to defaults", org_id)
+                return RemyConfig()
         return RemyConfig()
 
     async def update_config(self, org_id: uuid.UUID, config: RemyConfig) -> None:
