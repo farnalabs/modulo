@@ -34,6 +34,7 @@ import ApiChangelogView from '../views/ApiChangelogView.vue'
 import TeamComparisonView from '../views/TeamComparisonView.vue'
 import StageBoardView from '../views/StageBoardView.vue'
 import PipelineEditorView from '../views/PipelineEditorView.vue'
+import CompositeEditorView from '../views/pipeline/CompositeEditorView.vue'
 import CopyPipelineWizard from '../views/CopyPipelineWizard.vue'
 import PipelineTemplateGallery from '../views/PipelineTemplateGallery.vue'
 import AdminUsersView from '../views/AdminUsersView.vue'
@@ -321,6 +322,11 @@ const router = createRouter({
       path: '/pipelines/:id/editor',
       name: 'pipeline-editor',
       component: PipelineEditorView,
+    },
+    {
+      path: '/composites/:id/editor',
+      name: 'composite-editor',
+      component: CompositeEditorView,
     },
   ],
 })
