@@ -31,7 +31,7 @@ pytestmark = pytest.mark.integration
 
 
 async def _make_prerequisites(
-    session: AsyncSession, test_org: uuid.UUID, test_user: uuid.UUID
+    session: AsyncSession, test_org: uuid.UUID, test_user: uuid.UUID,
 ) -> tuple[uuid.UUID, str, uuid.UUID]:
     """Return (schema_id, version_string, model_backend_id) for agent creation."""
     schema = await create_schema(

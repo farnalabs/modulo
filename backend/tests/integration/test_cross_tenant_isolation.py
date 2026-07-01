@@ -31,64 +31,61 @@ _VALID_32 = "a" * 32
 
 async def _seed_org(db_engine: AsyncEngine, name: str) -> uuid.UUID:
     org_id = uuid.uuid4()
-    async with db_engine.connect() as conn:
-        async with conn.begin():
-            await conn.execute(
-                text(
-                    "INSERT INTO organisations (id, name, slug, settings_json) "
-                    "VALUES (:id, :name, :slug, '{}'::json)"
-                ),
-                {
-                    "id": str(org_id),
-                    "name": name,
-                    "slug": f"{name}-{org_id.hex[:8]}",
-                },
-            )
+    async with db_engine.connect() as conn, conn.begin():
+        await conn.execute(
+            text(
+                "INSERT INTO organisations (id, name, slug, settings_json) "
+                "VALUES (:id, :name, :slug, '{}'::json)",
+            ),
+            {
+                "id": str(org_id),
+                "name": name,
+                "slug": f"{name}-{org_id.hex[:8]}",
+            },
+        )
     return org_id
 
 
 async def _seed_user(db_engine: AsyncEngine, org_id: uuid.UUID, email: str) -> uuid.UUID:
     user_id = uuid.uuid4()
-    async with db_engine.connect() as conn:
-        async with conn.begin():
-            await conn.execute(
-                text(
-                    "INSERT INTO users (id, organisation_id, email, display_name, "
-                    "org_role, auth_provider, active, password_hash) "
-                    "VALUES (:id, :oid, :email, :name, 'admin', 'local', true, 'hash')"
-                ),
-                {
-                    "id": str(user_id),
-                    "oid": str(org_id),
-                    "email": email,
-                    "name": f"Admin {email}",
-                },
-            )
+    async with db_engine.connect() as conn, conn.begin():
+        await conn.execute(
+            text(
+                "INSERT INTO users (id, organisation_id, email, display_name, "
+                "org_role, auth_provider, active, password_hash) "
+                "VALUES (:id, :oid, :email, :name, 'admin', 'local', true, 'hash')",
+            ),
+            {
+                "id": str(user_id),
+                "oid": str(org_id),
+                "email": email,
+                "name": f"Admin {email}",
+            },
+        )
     return user_id
 
 
 async def _seed_pipeline(
-    db_engine: AsyncEngine, org_id: uuid.UUID, user_id: uuid.UUID, name: str
+    db_engine: AsyncEngine, org_id: uuid.UUID, user_id: uuid.UUID, name: str,
 ) -> uuid.UUID:
     pipeline_id = uuid.uuid4()
-    async with db_engine.connect() as conn:
-        async with conn.begin():
-            await conn.execute(
-                text(
-                    "INSERT INTO pipelines (id, organisation_id, name, description, created_by, "
-                    "max_concurrent_runs, lock_wait_timeout_seconds, node_timeout_seconds, "
-                    "run_context_defaults, graph_nodes_json, default_autonomy_level, visibility) "
-                    "VALUES (:id, :oid, :name, :desc, :uid, 5, 30, 300, "
-                    "'{}'::json, '[]'::json, 'manual_approval', 'org')"
-                ),
-                {
-                    "id": str(pipeline_id),
-                    "oid": str(org_id),
-                    "name": name,
-                    "desc": f"Pipeline for {name}",
-                    "uid": str(user_id),
-                },
-            )
+    async with db_engine.connect() as conn, conn.begin():
+        await conn.execute(
+            text(
+                "INSERT INTO pipelines (id, organisation_id, name, description, created_by, "
+                "max_concurrent_runs, lock_wait_timeout_seconds, node_timeout_seconds, "
+                "run_context_defaults, graph_nodes_json, default_autonomy_level, visibility) "
+                "VALUES (:id, :oid, :name, :desc, :uid, 5, 30, 300, "
+                "'{}'::json, '[]'::json, 'manual_approval', 'org')",
+            ),
+            {
+                "id": str(pipeline_id),
+                "oid": str(org_id),
+                "name": name,
+                "desc": f"Pipeline for {name}",
+                "uid": str(user_id),
+            },
+        )
     return pipeline_id
 
 
@@ -99,7 +96,7 @@ async def _seed_pipeline(
 
 @pytest_asyncio.fixture
 async def integration_client(
-    db_url: str, db_engine: AsyncEngine
+    db_url: str, db_engine: AsyncEngine,
 ) -> AsyncClient:
     from modulo.api.dependencies import _get_engine, get_db_session
     from modulo.api.main import app
@@ -179,14 +176,14 @@ async def user_b(db_engine: AsyncEngine, org_b: uuid.UUID) -> uuid.UUID:
 
 @pytest_asyncio.fixture(scope="module")
 async def pipeline_a(
-    db_engine: AsyncEngine, org_a: uuid.UUID, user_a: uuid.UUID
+    db_engine: AsyncEngine, org_a: uuid.UUID, user_a: uuid.UUID,
 ) -> uuid.UUID:
     return await _seed_pipeline(db_engine, org_a, user_a, "CrossTenant-PipelineA")
 
 
 @pytest_asyncio.fixture(scope="module")
 async def pipeline_b(
-    db_engine: AsyncEngine, org_b: uuid.UUID, user_b: uuid.UUID
+    db_engine: AsyncEngine, org_b: uuid.UUID, user_b: uuid.UUID,
 ) -> uuid.UUID:
     return await _seed_pipeline(db_engine, org_b, user_b, "CrossTenant-PipelineB")
 

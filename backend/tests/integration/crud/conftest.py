@@ -17,18 +17,17 @@ from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 async def test_org(db_engine: AsyncEngine) -> uuid.UUID:
     """Committed organisation row available for the whole test session."""
     org_id = uuid.uuid4()
-    async with db_engine.connect() as conn:
-        async with conn.begin():
-            await conn.execute(
-                text(
-                    "INSERT INTO organisations (id, name, slug, settings_json) VALUES (:id, :name, :slug, '{}'::json)"
-                ),
-                {
-                    "id": str(org_id),
-                    "name": "CRUD Test Org",
-                    "slug": f"crud-test-{org_id.hex[:8]}",
-                },
-            )
+    async with db_engine.connect() as conn, conn.begin():
+        await conn.execute(
+            text(
+                "INSERT INTO organisations (id, name, slug, settings_json) VALUES (:id, :name, :slug, '{}'::json)",
+            ),
+            {
+                "id": str(org_id),
+                "name": "CRUD Test Org",
+                "slug": f"crud-test-{org_id.hex[:8]}",
+            },
+        )
     return org_id
 
 
@@ -36,19 +35,18 @@ async def test_org(db_engine: AsyncEngine) -> uuid.UUID:
 async def test_user(db_engine: AsyncEngine, test_org: uuid.UUID) -> uuid.UUID:
     """Committed user row in test_org, available for the whole test session."""
     user_id = uuid.uuid4()
-    async with db_engine.connect() as conn:
-        async with conn.begin():
-            await conn.execute(
-                text(
-                    "INSERT INTO users (id, organisation_id, email, display_name) VALUES (:id, :org_id, :email, :name)"
-                ),
-                {
-                    "id": str(user_id),
-                    "org_id": str(test_org),
-                    "email": "crud-test@example.com",
-                    "name": "CRUD Test User",
-                },
-            )
+    async with db_engine.connect() as conn, conn.begin():
+        await conn.execute(
+            text(
+                "INSERT INTO users (id, organisation_id, email, display_name) VALUES (:id, :org_id, :email, :name)",
+            ),
+            {
+                "id": str(user_id),
+                "org_id": str(test_org),
+                "email": "crud-test@example.com",
+                "name": "CRUD Test User",
+            },
+        )
     return user_id
 
 
