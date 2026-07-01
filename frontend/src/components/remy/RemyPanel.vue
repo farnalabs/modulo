@@ -29,6 +29,10 @@
       </div>
     </div>
 
+    <div v-if="store.error" class="flex items-center justify-between px-3 py-2 text-sm text-destructive bg-destructive/5 border-b">
+      <span>{{ store.error }}</span>
+      <button class="text-destructive hover:brightness-110 shrink-0 ml-2" @click="store.error = null">&times;</button>
+    </div>
     <div class="remy-body">
       <div class="remy-sidebar" :class="{ open: showSidebar }">
         <RemySessionDrawer @close="showSidebar = false" @select-session="showSidebar = false" />
