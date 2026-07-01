@@ -17,10 +17,6 @@ logger = logging.getLogger(__name__)
 
 _PARAM_PLACEHOLDER_RE = re.compile(r"\{\{parameter\.(\w+)\}\}")
 
-_LLMJudgeCallable = (
-    "A callable that receives (output: dict, eval_def_config: dict) and returns dict with 'passed' bool"
-)
-
 
 def run_output_validation(
     mapped_output: dict[str, Any],
@@ -48,14 +44,21 @@ def run_output_validation(
         match eval_def.type:
             case "regex":
                 pattern = config.get("pattern", "")
+                if not isinstance(pattern, str):
+                    failures.append(f"Eval '{eval_def.name}': 'pattern' must be a string")
+                    continue
                 if not pattern:
                     failures.append(f"Eval '{eval_def.name}': missing 'pattern' in config")
                     continue
                 field = config.get("field", "")
+                if not isinstance(field, str):
+                    failures.append(f"Eval '{eval_def.name}': 'field' must be a string")
+                    continue
                 if not field:
                     failures.append(f"Eval '{eval_def.name}': missing 'field' in config")
                     continue
-                value = str(mapped_output.get(field, ""))
+                raw = mapped_output.get(field)
+                value = "" if raw is None else str(raw)
                 try:
                     flags = 0
                     flags_str = config.get("flags", "")
@@ -161,22 +164,23 @@ def execute_composite_with_retry(
         blocking_failures: list[str] = []
         for eval_def in output_validation.eval_definitions:
             eval_failures = [
-                f for f in result.failures if f.startswith(f"Eval '{eval_def.name}'")
+                f for f in result.failures if f.startswith(f"Eval '{eval_def.name}':")
             ]
             if eval_failures:
                 if eval_def.failure_behaviour == "block":
                     blocking_failures.extend(eval_failures)
                 elif eval_def.failure_behaviour == "retry":
                     retry_eligible_failures.extend(eval_failures)
+                else:
+                    logger.warning(
+                        "Composite output validation warn: %s",
+                        "; ".join(eval_failures),
+                    )
 
         if blocking_failures:
             raise CompositeValidationError(blocking_failures, retry_count)
 
         if not retry_eligible_failures:
-            logger.warning(
-                "Composite output validation warnings (non-retryable): %s",
-                "; ".join(result.failures),
-            )
             result.retry_count = retry_count
             return mapped_output
 
