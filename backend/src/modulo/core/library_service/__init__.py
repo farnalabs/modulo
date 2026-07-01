@@ -535,7 +535,10 @@ _MODULO_PRIMITIVES: list[LibraryPrimitive] = [
         primitive_type="composite",
         name="Devil\u2019s Advocate",
         slug="devils-advocate",
-        description="Takes a position, argues for it, then argues against it. Synthesises both sides into balanced advice. Use when you need rigorous critique of a plan.",
+        description=(
+            "Takes a position, argues for it, then argues against it. Synthesises both sides"
+            " into balanced advice. Use when you need rigorous critique of a plan."
+        ),
         content_json={
             "parameter_ports": [
                 {"name": "position", "label": "Position to Challenge", "type": "string", "required": True,
@@ -548,7 +551,10 @@ _MODULO_PRIMITIVES: list[LibraryPrimitive] = [
                  }},
                 {"name": "advocate_prompt", "label": "Advocate Instructions", "type": "string", "required": False,
                  "description": "Prompt shaping how the pro side argues",
-                 "default_value": "You are an advocate. Argue strongly in favour of this position: {{parameter.position}}",
+                 "default_value": (
+                     "You are an advocate. Argue strongly in favour of this position:"
+                     " {{parameter.position}}"
+                 ),
                  "target_injection": {
                      "mode": "prompt_replace",
                      "node_id": "advocate-for",
@@ -564,7 +570,12 @@ _MODULO_PRIMITIVES: list[LibraryPrimitive] = [
                  }},
                 {"name": "mediator_prompt", "label": "Mediator Instructions", "type": "string", "required": False,
                  "description": "Prompt shaping how the mediator synthesises",
-                 "default_value": "You are a mediator. Below are two arguments about: {{parameter.position}}\n\n--- PRO ---\n{{nodes.advocate-for.output}}\n\n--- CON ---\n{{nodes.advocate-against.output}}\n\nSynthesise both sides into balanced, actionable advice.",
+                 "default_value": (
+                     "You are a mediator. Below are two arguments about: {{parameter.position}}"
+                     "\n\n--- PRO ---\n{{nodes.advocate-for.output}}"
+                     "\n\n--- CON ---\n{{nodes.advocate-against.output}}"
+                     "\n\nSynthesise both sides into balanced, actionable advice."
+                 ),
                  "target_injection": {
                      "mode": "prompt_replace",
                      "node_id": "mediator",
@@ -646,7 +657,10 @@ _MODULO_PRIMITIVES: list[LibraryPrimitive] = [
         primitive_type="composite",
         name="LLM Council",
         slug="llm-council",
-        description="Runs N parallel LLM calls with the same prompt, then a mediator synthesises their responses into a single output. Configure model count and backends.",
+        description=(
+            "Runs N parallel LLM calls with the same prompt, then a mediator synthesises their"
+            " responses into a single output. Configure model count and backends."
+        ),
         content_json={
             "parameter_ports": [
                 {"name": "council_prompt", "label": "Council Prompt", "type": "string", "required": True,
@@ -663,7 +677,11 @@ _MODULO_PRIMITIVES: list[LibraryPrimitive] = [
                  "target_injection": {"mode": "run_context_key", "key": "council_member_count"}},
                 {"name": "mediator_instructions", "label": "Mediator Instructions", "type": "string", "required": False,
                  "description": "How the mediator should combine responses",
-                 "default_value": "Below are {{council_member_count}} responses from different AI council members.\n\n{{nodes.council.output}}\n\nSynthesise them into a single coherent recommendation, noting areas of agreement and disagreement.",
+                 "default_value": (
+                     "Below are {{council_member_count}} responses from different AI council"
+                     " members.\n\n{{nodes.council.output}}\n\nSynthesise them into a single"
+                     " coherent recommendation, noting areas of agreement and disagreement."
+                 ),
                  "target_injection": {
                      "mode": "prompt_replace",
                      "node_id": "council-mediator",
@@ -698,62 +716,23 @@ _MODULO_PRIMITIVES: list[LibraryPrimitive] = [
         tags=["composite", "llm-council", "ensemble", "consensus", "decision"],
     ),
     _make_modulo(
-        pid="00000000-0000-0000-0000-000000000093",
-        primitive_type="composite",
-        name="Triage",
-        slug="triage",
-        description="Classifies into BUG, FEATURE, INFRA, DOCS. First word is forced to one of the four.",
-        content_json={
-            "parameter_ports": [
-                {"name": "system_prompt", "label": "System Prompt", "type": "string", "required": True,
-                 "description": "Instructions for the triage classification",
-                 "default_value": (
-                     "You are a triage classifier. Respond with one of"
-                     " BUG, FEATURE, INFRA, or DOCS as the first word,"
-                     " followed by your reasoning."
-                 ),
-                 "target_injection": {
-                     "mode": "prompt_replace",
-                     "node_id": "classifier-agent",
-                     "injection_point": "prompt_template",
-                 }},
-            ],
-            "sub_pipeline_graph_json": {
-                "nodes": [{"id": "classifier-agent", "node_type": "agent", "label": "Classifier Agent"}],
-                "edges": []
-            },
-            "input_schema_id": None,
-            "output_schema": {
-                "type": "object",
-                "properties": {
-                    "result": {"type": "string"},
-                    "reasoning": {"type": "string"},
-                },
-                "required": ["result"],
-            },
-            "output_validation": {
-                "eval_definitions": [{
-                    "name": "first_word_category",
-                    "type": "regex",
-                    "config": {"pattern": "^(BUG|FEATURE|INFRA|DOCS)\\b", "field": "result"},
-                    "failure_behaviour": "retry",
-                }],
-                "max_validation_retries": 2,
-            },
-        },
-        tags=["composite", "triage", "classification", "bug", "feature"],
-    ),
-    _make_modulo(
         pid="00000000-0000-0000-0000-000000000095",
         primitive_type="composite",
         name="Structured Output Enforcer",
         slug="structured-output-enforcer",
-        description="Takes free-form text and restructures it according to a target JSON Schema. Retries if the output doesn\u2019t conform. Use when you need guaranteed structural consistency.",
+        description=(
+            "Takes free-form text and restructures it according to a target JSON Schema."
+            " Retries if the output doesn\u2019t conform."
+            " Use when you need guaranteed structural consistency."
+        ),
         content_json={
             "parameter_ports": [
                 {"name": "system_prompt", "label": "System Prompt", "type": "string", "required": True,
                  "description": "Instructions describing how to structure the output",
-                 "default_value": "Restructure the input text into the required JSON format. Ensure all required fields are present and correctly typed.",
+                 "default_value": (
+                     "Restructure the input text into the required JSON format."
+                     " Ensure all required fields are present and correctly typed."
+                 ),
                  "target_injection": {
                      "mode": "prompt_replace",
                      "node_id": "structurer",
@@ -799,12 +778,19 @@ _MODULO_PRIMITIVES: list[LibraryPrimitive] = [
         primitive_type="composite",
         name="Complexity Estimator",
         slug="complexity-estimator",
-        description="Estimates work complexity as XS, S, M, L, or XL with structured reasoning. Forces a valid size as the first word. Self-corrects on invalid output.",
+        description=(
+            "Estimates work complexity as XS, S, M, L, or XL with structured reasoning."
+            " Forces a valid size as the first word. Self-corrects on invalid output."
+        ),
         content_json={
             "parameter_ports": [
                 {"name": "system_prompt", "label": "System Prompt", "type": "string", "required": True,
                  "description": "Instructions describing what to estimate complexity for",
-                 "default_value": "Analyse the following work item and estimate its complexity. Respond with exactly one of XS, S, M, L, or XL as the first word, followed by your reasoning.",
+                 "default_value": (
+                     "Analyse the following work item and estimate its complexity."
+                     " Respond with exactly one of XS, S, M, L, or XL as the first word,"
+                     " followed by your reasoning."
+                 ),
                  "target_injection": {
                      "mode": "prompt_replace",
                      "node_id": "estimator",
