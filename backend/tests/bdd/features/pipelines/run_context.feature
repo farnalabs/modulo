@@ -67,3 +67,35 @@ Feature: Run Context — Seeding, Write Guard, and Audit
     Then a warning is logged containing "run_context.violation"
     And the warning includes the node name "bad-actor"
     And the warning includes the attempted fields
+
+  Scenario: Autonomy recommendation overrides pipeline default
+    Given pipeline "deploy-service" has autonomy default "manual_approval"
+    And run_context contains "autonomy_recommendation" = "fully_autonomous"
+    When a HITL gate checks the autonomy level
+    Then the gate is skipped
+    And no human interrupt is raised
+
+  Scenario: Invalid autonomy recommendation falls back to pipeline default
+    Given pipeline "deploy-service" has autonomy default "fully_autonomous"
+    And run_context contains "autonomy_recommendation" = "bogus_value"
+    When a HITL gate checks the autonomy level
+    Then the gate uses the pipeline default "fully_autonomous"
+
+  Scenario: No autonomy configured falls back to manual_approval
+    Given pipeline "deploy-service" has no autonomy defaults
+    When a HITL gate checks the autonomy level
+    Then the gate interrupts for human review
+
+  Scenario: Context-setter changes autonomy level mid-run
+    Given pipeline "deploy-service" has autonomy default "manual_approval"
+    And run_context contains "autonomy_recommendation" = "fully_autonomous"
+    When a context-setter node changes autonomy_recommendation to "notify_on_complete"
+    Then the next HITL gate checks the new autonomy level
+    And the gate uses "notify_on_complete"
+
+  Scenario: Context-setter writes empty dict — no-op
+    Given pipeline "deploy-service" with a context_setter node "reviewer"
+    And I am authenticated in org "acme"
+    When the context_setter node "reviewer" writes nothing to run_context
+    Then the write is accepted
+    And run_context is unchanged
