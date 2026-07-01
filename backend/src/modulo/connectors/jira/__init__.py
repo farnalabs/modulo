@@ -119,6 +119,8 @@ class JiraConnector(ConnectorBase):
                     created: dict[str, Any] = r.json()
                     return created
                 case "issue_update":
+                    if "issue_key" not in payload.data:
+                        raise ValueError("Jira issue update requires 'issue_key' in data")
                     issue_key = payload.data["issue_key"]
                     fields: dict[str, Any] = payload.data["fields"]
                     r = await client.put(f"/issue/{issue_key}", json={"fields": fields})

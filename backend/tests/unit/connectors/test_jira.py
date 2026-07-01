@@ -126,3 +126,40 @@ def test_connector_type(connector):
 def test_missing_credentials_raises():
     with pytest.raises(ValueError, match="Jira credentials must contain"):
         JiraConnector(instance=_INSTANCE, creds={})
+
+
+@respx.mock
+async def test_query_issue_http_error(connector):
+    respx.get(f"{_BASE}/issue/NONEXISTENT").mock(return_value=httpx.Response(404))
+    with pytest.raises(httpx.HTTPStatusError):
+        await connector.query(ConnectorQuery(resource="issue", filters={"issue_key": "NONEXISTENT"}))
+
+
+@respx.mock
+async def test_query_search_http_error(connector):
+    respx.post(f"{_BASE}/search").mock(return_value=httpx.Response(400, json={"errorMessages": ["Field 'xyz' does not exist"]}))
+    with pytest.raises(httpx.HTTPStatusError):
+        await connector.query(ConnectorQuery(resource="search", filters={"jql": "invalid jql"}))
+
+
+@respx.mock
+async def test_write_create_issue_http_error(connector):
+    respx.post(f"{_BASE}/issue").mock(return_value=httpx.Response(400, json={"errors": {"summary": "Operation blocked"}}))
+    with pytest.raises(httpx.HTTPStatusError):
+        await connector.write(
+            ConnectorPayload(
+                resource="issue",
+                data={"project": {"key": "PROJ"}, "summary": "Bad data", "issuetype": {"name": "Task"}},
+            )
+        )
+
+
+@respx.mock
+async def test_write_update_missing_key(connector):
+    with pytest.raises(ValueError, match="requires 'issue_key'"):
+        await connector.write(
+            ConnectorPayload(
+                resource="issue_update",
+                data={"fields": {"summary": "No key provided"}},
+            )
+        )
