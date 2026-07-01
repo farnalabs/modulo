@@ -69,6 +69,7 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
     RULES: ClassVar[list[tuple[str, int, int]]] = [
         ("/api/v1/runs", 60, 60),         # PRD §7.18: POST /api/v1/runs — 60/min
         ("/api/v1/triggers", 100, 60),    # PRD §7.18: webhook POST — 100/min
+        ("/api/v1/errors/ingest", 10, 60), # PRD §7.18: error ingest — 10/min per session
         ("/mcp", 200, 60),                # PRD §7.18: general MCP tools — 200/min
         # NOTE: MCP trigger_pipeline tool has a separate 60/min limit enforced
         # in mcp_server.py at the application level since all MCP tools share
