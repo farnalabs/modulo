@@ -17,7 +17,10 @@ context-setter agent (via autonomy_recommendation in run_context).
 from __future__ import annotations
 
 import enum
+import logging
 from typing import Any
+
+_log = logging.getLogger(__name__)
 
 
 class AutonomyLevel(enum.StrEnum):
@@ -33,10 +36,12 @@ class AutonomyLevel(enum.StrEnum):
             for member in cls:
                 if member.value == value.lower().replace("-", "_"):
                     return member
-        raise ValueError(f"Invalid autonomy level: {value!r}")
+        msg = f"Invalid autonomy level: {value!r}"
+        raise ValueError(msg)
 
     @classmethod
     def default(cls) -> AutonomyLevel:
+        """Return the safest autonomy level (manual_approval)."""
         return cls.MANUAL_APPROVAL
 
 
@@ -58,18 +63,24 @@ def effective_autonomy_level(
             try:
                 return AutonomyLevel(rec)
             except ValueError:
-                pass
+                _log.warning(
+                    "Invalid run_context autonomy_recommendation %r — falling back to pipeline default",
+                    rec,
+                )
     if pipeline_default:
         try:
             return AutonomyLevel(pipeline_default)
         except ValueError:
-            pass
+            _log.warning(
+                "Invalid pipeline_default_autonomy_level %r — falling back to manual_approval",
+                pipeline_default,
+            )
     return AutonomyLevel.default()
 
 
 def should_skip_hitl_gate(autonomy: AutonomyLevel) -> bool:
     """Return True if the HITL gate should be bypassed at graph-build time."""
-    return autonomy in (AutonomyLevel.FULLY_AUTONOMOUS,)
+    return autonomy == AutonomyLevel.FULLY_AUTONOMOUS
 
 
 def should_notify_on_complete(autonomy: AutonomyLevel) -> bool:
@@ -81,6 +92,7 @@ def autonomy_change_payload(
     previous: str | None,
     current: str | None,
 ) -> dict[str, Any]:
+    """Build a payload recording an autonomy level change."""
     return {
         "previous_level": previous,
         "new_level": current,
