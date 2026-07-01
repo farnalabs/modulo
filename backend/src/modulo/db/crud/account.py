@@ -5,6 +5,7 @@ Accounts are global entities (not org-scoped).
 
 import uuid
 from datetime import UTC, datetime
+from typing import Any
 
 from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -75,7 +76,7 @@ async def list_accounts(
     page_size: int = 20,
     search: str | None = None,
 ) -> PageResult[Account]:
-    conditions: list[object] = []
+    conditions: list[Any] = []
     if search:
         conditions.append(Account.email.ilike(f"%{search}%"))
 
