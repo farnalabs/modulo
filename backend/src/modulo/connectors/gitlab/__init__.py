@@ -63,6 +63,12 @@ class GitLabConnector(ConnectorBase):
     def __init__(self, token: str) -> None:
         self._token = token
 
+    def _require_filter(self, filters: dict[str, Any], key: str, resource: str) -> Any:
+        try:
+            return filters[key]
+        except KeyError:
+            raise ValueError(f"Missing required filter {key!r} for GitLab resource {resource!r}")
+
     @property
     def connector_type(self) -> ConnectorType:
         return ConnectorType.GITLAB
@@ -77,21 +83,24 @@ class GitLabConnector(ConnectorBase):
         return httpx.AsyncClient(base_url=_GITLAB_API, headers=self._headers(), timeout=30)
 
     async def health_check(self) -> HealthResult:
-        async with self._client() as client:
-            r = await client.get("/user")
+        try:
+            async with self._client() as client:
+                r = await client.get("/user")
 
-        if r.status_code != 200:
-            return HealthResult(ok=False, detail=f"HTTP {r.status_code}: {r.text[:200]}")
+            if r.status_code != 200:
+                return HealthResult(ok=False, detail=f"HTTP {r.status_code}: {r.text[:200]}")
 
-        user_info = r.json()
-        username = user_info.get("username", "")
+            user_info = r.json()
+            username = user_info.get("username", "")
 
-        async with self._client() as client:
-            projects_r = await client.get("/projects", params={"per_page": 1})
-            if projects_r.status_code in (401, 403):
-                return HealthResult(ok=False, detail="Missing scopes: API access not granted")
+            async with self._client() as client:
+                projects_r = await client.get("/projects", params={"per_page": 1})
+                if projects_r.status_code in (401, 403):
+                    return HealthResult(ok=False, detail="Missing scopes: API access not granted")
 
-        return HealthResult(ok=True, detail=username)
+            return HealthResult(ok=True, detail=username)
+        except httpx.RequestError as e:
+            return HealthResult(ok=False, detail=str(e))
 
     async def query(self, q: ConnectorQuery) -> ConnectorResult:
         async with self._client() as client:
@@ -102,8 +111,8 @@ class GitLabConnector(ConnectorBase):
                     data: list[dict[str, Any]] = r.json()
                     return ConnectorResult(records=data, total=len(data))
                 case "file":
-                    project = q.filters["project"]
-                    path = q.filters["path"]
+                    project = self._require_filter(q.filters, "project", q.resource)
+                    path = self._require_filter(q.filters, "path", q.resource)
                     ref = q.filters.get("ref", "main")
                     encoded = _project_path(project)
                     r = await client.get(
@@ -276,8 +285,8 @@ class GitLabConnector(ConnectorBase):
         async with self._client() as client:
             match payload.resource:
                 case "file":
-                    project = payload.data["project"]
-                    path = payload.data["path"]
+                    project = self._require_filter(payload.data, "project", payload.resource)
+                    path = self._require_filter(payload.data, "path", payload.resource)
                     encoded = _project_path(project)
                     body: dict[str, Any] = {
                         "content": payload.data["content"],

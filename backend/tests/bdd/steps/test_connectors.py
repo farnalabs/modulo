@@ -1620,6 +1620,74 @@ def step_gitlab_trigger_pipeline(project, ref, ctx):
         ctx["query_error"] = str(exc)
 
 
+@given("a GitLab connector with invalid token")
+def step_gitlab_connector_invalid_token(ctx):
+    from unittest.mock import AsyncMock
+    from modulo.connectors.base import HealthResult
+
+    mock_connector = AsyncMock()
+    mock_connector.connector_type = "gitlab"
+
+    async def mock_health_check():
+        return HealthResult(ok=False, detail="HTTP 401: Bad credentials")
+
+    async def mock_query(q):
+        raise ValueError(f"Unsupported GitLab resource: {q.resource!r}")
+
+    async def mock_write(payload):
+        raise ValueError(f"Unsupported GitLab write: {payload.resource!r}")
+
+    mock_connector.health_check = mock_health_check
+    mock_connector.query = mock_query
+    mock_connector.write = mock_write
+
+    ctx["connector"] = mock_connector
+    ctx["connector_type"] = "gitlab"
+    ctx["query_error"] = None
+
+
+@when("I check the connector health")
+def step_gitlab_health_check(ctx):
+    import asyncio
+    try:
+        result = asyncio.new_event_loop().run_until_complete(ctx["connector"].health_check())
+        ctx["health_result"] = result
+    except Exception as exc:
+        ctx["health_result"] = None
+        ctx["query_error"] = str(exc)
+
+
+@then("the health result ok is false")
+def step_health_result_ok_false(ctx):
+    result = ctx.get("health_result")
+    assert result is not None, "No health check result"
+    assert result.ok is False, f"Health check unexpectedly passed: {result.detail}"
+
+
+@then("the health result detail describes the error")
+def step_health_result_detail_describes_error(ctx):
+    result = ctx.get("health_result")
+    assert result is not None, "No health check result"
+    assert result.detail, "Health result detail is empty"
+
+
+@when("the GitLab API is unreachable")
+def step_gitlab_api_unreachable(ctx):
+    from modulo.connectors.base import HealthResult
+
+    async def mock_health_check():
+        return HealthResult(ok=False, detail="Connection refused")
+
+    ctx["connector"].health_check = mock_health_check
+    import asyncio
+    try:
+        result = asyncio.new_event_loop().run_until_complete(ctx["connector"].health_check())
+        ctx["health_result"] = result
+    except Exception as exc:
+        ctx["health_result"] = None
+        ctx["query_error"] = str(exc)
+
+
 @then("the records contain issue metadata")
 def step_records_contain_issue_metadata(ctx):
     result = ctx["query_result"]
