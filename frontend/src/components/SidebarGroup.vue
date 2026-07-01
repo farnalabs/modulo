@@ -1,13 +1,25 @@
 <template>
   <div>
-    <button type="button" @click="$emit('toggle')" class="sidebar-group-header">
+    <button
+      type="button"
+      :aria-expanded="!collapsed"
+      :aria-controls="`sidebar-group-${label.replace(/\s+/g, '-').toLowerCase()}`"
+      @click="$emit('toggle')"
+      class="sidebar-group-header"
+    >
       <span class="sidebar-group-label">{{ label }}</span>
       <span class="sidebar-group-chevron" :class="{ rotated: !collapsed }">
         <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg>
       </span>
     </button>
     <Transition name="fade">
-      <div v-if="!collapsed" class="sidebar-group-items">
+      <div
+        v-if="!collapsed"
+        :id="`sidebar-group-${label.replace(/\s+/g, '-').toLowerCase()}`"
+        class="sidebar-group-items"
+        role="region"
+        :aria-label="label"
+      >
         <slot />
       </div>
     </Transition>
@@ -43,7 +55,6 @@ defineEmits<{
   transition: background-color 150ms ease, color 150ms ease;
   border: none;
   background: transparent;
-  margin-top: 1.5rem;
   margin-bottom: 0.25rem;
 }
 

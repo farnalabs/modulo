@@ -1,4 +1,4 @@
-import { ref } from 'vue'
+import { ref, readonly } from 'vue'
 
 const VIEW_MODE_KEY = 'modulo-sidebar-view-mode'
 const PREF_KEY = 'modulo-sidebar-group-prefs'
@@ -55,8 +55,7 @@ function save() {
 }
 
 function toggleGroup(id: string, defaultCollapsed: boolean) {
-  const pref = groupPrefs.value[id]
-  groupPrefs.value[id] = pref === undefined ? !defaultCollapsed : !pref
+  groupPrefs.value[id] = !isGroupCollapsed(id, defaultCollapsed)
   save()
 }
 
@@ -74,7 +73,7 @@ export function useSidebar() {
   init()
   return {
     viewMode,
-    groupPrefs,
+    groupPrefs: readonly(groupPrefs),
     toggleGroup,
     isGroupCollapsed,
     setViewMode,
