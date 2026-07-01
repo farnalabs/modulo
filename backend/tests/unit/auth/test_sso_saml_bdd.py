@@ -2,7 +2,7 @@
 
 import base64
 import uuid
-from collections.abc import Generator
+from collections.abc import AsyncGenerator, Generator
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -105,7 +105,7 @@ def _clear_cache() -> Generator[None, None, None]:
 def client() -> Generator[TestClient, None, None]:
     mock_session = AsyncMock(spec=AsyncSession)
 
-    async def _override_session() -> AsyncMock:
+    async def _override_session() -> AsyncGenerator[AsyncMock, None]:
         yield mock_session
 
     _app.dependency_overrides[get_settings] = lambda: _saml_settings()

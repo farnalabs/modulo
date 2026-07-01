@@ -16,6 +16,7 @@ full middleware → registry integration path (still with a mock registry).
 
 from __future__ import annotations
 
+from collections.abc import Generator
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -35,7 +36,7 @@ _ORIGINAL_RULES: list[tuple[str, int, int]] | None = None
 
 
 @pytest.fixture(autouse=True)
-def _save_restore_rules() -> None:
+def _save_restore_rules() -> Generator[None, None, None]:
     global _ORIGINAL_RULES
     if _ORIGINAL_RULES is None:
         _ORIGINAL_RULES = list(RateLimitMiddleware.RULES)

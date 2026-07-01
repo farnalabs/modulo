@@ -108,8 +108,9 @@ def client() -> Generator[TestClient, None, None]:
     global _mock_session
     _mock_session = _make_mock_session()
 
+    session = _mock_session
     async def override_session() -> AsyncGenerator[AsyncMock, None]:
-        yield _mock_session
+        yield session
 
     app.dependency_overrides[get_settings] = _make_settings
     app.dependency_overrides[get_db_session] = override_session
@@ -258,6 +259,7 @@ class TestSaveAsComposite:
             patch("modulo.api.routes.pipelines.set_rls_user_context"),
             patch("modulo.api.routes.pipelines.create_composite_template", return_value=template),
         ):
+            assert _mock_session is not None
             _mock_session.execute = AsyncMock(return_value=empty_execute)
             resp = client.post(
                 f"/api/v1/pipelines/{_PIPELINE_ID}/save-as-composite",
@@ -288,6 +290,7 @@ class TestSaveAsComposite:
             patch("modulo.api.routes.pipelines.set_rls_user_context"),
             patch("modulo.api.routes.pipelines.create_composite_template", return_value=template),
         ):
+            assert _mock_session is not None
             _mock_session.execute = AsyncMock(return_value=scalars_result)
             resp = client.post(
                 f"/api/v1/pipelines/{_PIPELINE_ID}/save-as-composite",
