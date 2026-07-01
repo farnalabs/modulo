@@ -61,7 +61,7 @@ export const useRemyStore = defineStore('remy', () => {
       if (err) {
         error.value = String(err)
       } else {
-        sessions.value = (data as any)?.items ?? (data as any) ?? []
+        sessions.value = (data as any) ?? []
       }
     } catch (e: unknown) {
       error.value = e instanceof Error ? e.message : String(e)
@@ -100,7 +100,7 @@ export const useRemyStore = defineStore('remy', () => {
       if (err) {
         error.value = String(err)
       } else {
-        messages.value = (data as any)?.items ?? (data as any) ?? []
+        messages.value = (data as any) ?? []
       }
     } catch (e: unknown) {
       error.value = e instanceof Error ? e.message : String(e)

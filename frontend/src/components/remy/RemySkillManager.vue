@@ -75,7 +75,6 @@ const showForm = ref(false)
 const editingId = ref<string | null>(null)
 const form = ref({ name: '', description: '', triggersText: '', body: '' })
 const skillError = ref<string | null>(null)
-const skillSaving = ref(false)
 
 async function fetchSkills() {
   skillError.value = null
@@ -84,7 +83,7 @@ async function fetchSkills() {
     if (err) {
       skillError.value = `Failed to load skills: ${err}`
     } else if (data) {
-      skills.value = (data as any)?.items ?? (data as any) ?? []
+      skills.value = (data as UserSkill[]) ?? []
     }
   } catch (e: unknown) {
     skillError.value = e instanceof Error ? e.message : 'Failed to load skills'
@@ -121,7 +120,6 @@ async function saveSkill() {
     body: form.value.body,
   }
 
-  skillSaving.value = true
   skillError.value = null
   try {
     if (editingId.value) {
@@ -145,8 +143,6 @@ async function saveSkill() {
     await fetchSkills()
   } catch (e: unknown) {
     skillError.value = e instanceof Error ? e.message : 'Failed to save skill'
-  } finally {
-    skillSaving.value = false
   }
 }
 

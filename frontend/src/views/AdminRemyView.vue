@@ -346,27 +346,25 @@ function toggleRole(role: string) {
   }
 }
 
+async function putConfig(body: Record<string, unknown>): Promise<string | null> {
+  try {
+    const { error: err } = await (api as any).PUT('/api/v1/admin/remy/config', { body })
+    return err ? String(err) : null
+  } catch (e: unknown) {
+    return e instanceof Error ? e.message : String(e)
+  }
+}
+
 async function saveAccessList() {
   accessSaving.value = true
   accessError.value = null
-  try {
-    const userIds = accessList.userIds.split(/[\n,]+/).map(s => s.trim()).filter(Boolean)
-    const teamIds = accessList.teamIds.split(/[\n,]+/).map(s => s.trim()).filter(Boolean)
-    const { error: err } = await (api as any).PUT('/api/v1/admin/remy/config', {
-      body: {
-        access_list: { user_ids: userIds, team_ids: teamIds, org_roles: accessList.selectedRoles },
-      },
-    })
-    if (err) {
-      accessError.value = `Failed to save access list: ${err}`
-    } else {
-      accessError.value = null
-    }
-  } catch (e: unknown) {
-    accessError.value = `Failed to save access list: ${e instanceof Error ? e.message : String(e)}`
-  } finally {
-    accessSaving.value = false
-  }
+  const userIds = accessList.userIds.split(/[\n,]+/).map(s => s.trim()).filter(Boolean)
+  const teamIds = accessList.teamIds.split(/[\n,]+/).map(s => s.trim()).filter(Boolean)
+  const err = await putConfig({
+    access_list: { user_ids: userIds, team_ids: teamIds, org_roles: accessList.selectedRoles },
+  })
+  if (err) accessError.value = `Failed to save access list: ${err}`
+  accessSaving.value = false
 }
 
 // Model config
@@ -394,27 +392,16 @@ function toggleAllowedProvider(provider: string) {
 async function saveModelConfig() {
   modelSaving.value = true
   modelError.value = null
-  try {
-    const allowedModels = modelConfig.allowedModels.split(/[\s,]+/).map(s => s.trim()).filter(Boolean)
-    const { error: err } = await (api as any).PUT('/api/v1/admin/remy/config', {
-      body: {
-        default_provider: modelConfig.defaultProvider,
-        default_model: modelConfig.defaultModel,
-        default_context_window: modelConfig.contextWindow,
-        allowed_providers: modelConfig.allowedProviders,
-        allowed_models: allowedModels,
-      },
-    })
-    if (err) {
-      modelError.value = `Failed to save model config: ${err}`
-    } else {
-      modelError.value = null
-    }
-  } catch (e: unknown) {
-    modelError.value = `Failed to save model config: ${e instanceof Error ? e.message : String(e)}`
-  } finally {
-    modelSaving.value = false
-  }
+  const allowedModels = modelConfig.allowedModels.split(/[\s,]+/).map(s => s.trim()).filter(Boolean)
+  const err = await putConfig({
+    default_provider: modelConfig.defaultProvider,
+    default_model: modelConfig.defaultModel,
+    default_context_window: modelConfig.contextWindow,
+    allowed_providers: modelConfig.allowedProviders,
+    allowed_models: allowedModels,
+  })
+  if (err) modelError.value = `Failed to save model config: ${err}`
+  modelSaving.value = false
 }
 
 // System prompt
@@ -425,20 +412,9 @@ const promptError = ref<string | null>(null)
 async function saveSystemPrompt() {
   promptSaving.value = true
   promptError.value = null
-  try {
-    const { error: err } = await (api as any).PUT('/api/v1/admin/remy/config', {
-      body: { system_prompt: systemPrompt.value },
-    })
-    if (err) {
-      promptError.value = `Failed to save system prompt: ${err}`
-    } else {
-      promptError.value = null
-    }
-  } catch (e: unknown) {
-    promptError.value = `Failed to save system prompt: ${e instanceof Error ? e.message : String(e)}`
-  } finally {
-    promptSaving.value = false
-  }
+  const err = await putConfig({ system_prompt: systemPrompt.value })
+  if (err) promptError.value = `Failed to save system prompt: ${err}`
+  promptSaving.value = false
 }
 
 // Guidance
@@ -449,20 +425,9 @@ const guidanceError = ref<string | null>(null)
 async function saveGuidance() {
   guidanceSaving.value = true
   guidanceError.value = null
-  try {
-    const { error: err } = await (api as any).PUT('/api/v1/admin/remy/config', {
-      body: { additional_guidance: guidance.value },
-    })
-    if (err) {
-      guidanceError.value = `Failed to save guidance: ${err}`
-    } else {
-      guidanceError.value = null
-    }
-  } catch (e: unknown) {
-    guidanceError.value = `Failed to save guidance: ${e instanceof Error ? e.message : String(e)}`
-  } finally {
-    guidanceSaving.value = false
-  }
+  const err = await putConfig({ additional_guidance: guidance.value })
+  if (err) guidanceError.value = `Failed to save guidance: ${err}`
+  guidanceSaving.value = false
 }
 
 // Skills
@@ -489,7 +454,7 @@ async function loadSkills() {
     if (err) {
       loadError.value = `Failed to load skills: ${err}`
     } else if (data) {
-      skills.value = (data as { items: SkillItem[] }).items || (data as SkillItem[])
+      skills.value = (data as SkillItem[]) ?? []
     }
   } catch (e: unknown) {
     loadError.value = `Failed to load skills: ${e instanceof Error ? e.message : String(e)}`

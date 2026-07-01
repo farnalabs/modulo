@@ -562,7 +562,11 @@ async def stream_chat(
                         return
                     api_key = resolved
 
-                backend = _build_backend(body.provider, body.model, api_key)
+                try:
+                    backend = _build_backend(body.provider, body.model, api_key)
+                except HTTPException as exc:
+                    yield f"event: error\ndata: {json.dumps({'detail': exc.detail})}\n\n"
+                    return
 
                 # 7. Stream tokens from the LLM
                 full_content = ""
@@ -676,8 +680,9 @@ async def stream_chat(
             # 11. Send done event
             yield f"event: done\ndata: {json.dumps({'message_id': msg_id})}\n\n"
 
-        except HTTPException:
-            raise
+        except HTTPException as exc:
+            yield f"event: error\ndata: {json.dumps({'detail': exc.detail})}\n\n"
+            return
         except ProgrammingError:
             logger.exception("Remy streaming error — missing DB table or schema")
             yield (
