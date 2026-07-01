@@ -126,6 +126,33 @@ export const useDashboardStore = defineStore('dashboard', () => {
     }
   }
 
+  const trends = ref<{
+    run_counts: Array<{ date: string; run_count: number }>
+    eval_pass_rates: Array<{ date: string; total_evals: number; passed_evals: number; pass_rate: number | null }>
+    token_spend: Array<{ date: string; total_spend_usd: number }>
+  } | null>(null)
+
+  const trendsLoading = ref(false)
+
+  async function fetchTrends(days: number) {
+    if (trendsLoading.value) return
+    trendsLoading.value = true
+    try {
+      const { data: result, error: err } = await api.GET('/api/v1/dashboard/trends', {
+        params: { query: { days } },
+      })
+      if (err) {
+        console.warn('[Dashboard] fetchTrends failed:', err)
+      } else if (result) {
+        trends.value = result as any
+      }
+    } catch (e: unknown) {
+      console.warn('[Dashboard] fetchTrends error:', e)
+    } finally {
+      trendsLoading.value = false
+    }
+  }
+
   function handleSyncEvent(event: EventBusEvent): void {
     if (!syncingIds.value.has(event.id)) {
       syncingIds.value.add(event.id)
@@ -150,5 +177,5 @@ export const useDashboardStore = defineStore('dashboard', () => {
     syncingIds.value.clear()
   }
 
-  return { summary, loading, error, totalSpend, fetchSummary, disposeHandlers }
+  return { summary, trends, loading, trendsLoading, error, totalSpend, fetchSummary, fetchTrends, disposeHandlers }
 })
