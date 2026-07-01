@@ -36,6 +36,20 @@ def _make_connector(name: str) -> MagicMock:
     return ci
 
 
+def _make_connector_of_type(name: str, type_id: str) -> MagicMock:
+    ci = MagicMock()
+    ci.id = uuid.uuid4()
+    ci.name = name
+    ci.organisation_id = _ORG_ID
+    ci.connector_type_id = type_id
+    ci.config_json = {}
+    ci.credentials_ciphertext = b"encrypted"
+    ci.visibility = "org"
+    ci.allowed_operations = None
+    _CONNECTOR_INSTANCES[name] = {"mock": ci, "id": ci.id, "name": name}
+    return ci
+
+
 def _make_backend() -> MagicMock:
     mb = MagicMock()
     mb.id = uuid.uuid4()
@@ -47,7 +61,10 @@ def _make_backend() -> MagicMock:
 
 
 def _base_infer_patches(mock_ci, mock_mb, records, expected_schema, backend_id=None):
-    page_result = MagicMock(items=[mock_mb], total=1, page=1, page_size=1)
+    if mock_mb is None:
+        page_result = MagicMock(items=[], total=0, page=1, page_size=1)
+    else:
+        page_result = MagicMock(items=[mock_mb], total=1, page=1, page_size=1)
     if backend_id is None:
         backend_id = uuid.uuid4()
 
@@ -65,6 +82,7 @@ def _base_infer_patches(mock_ci, mock_mb, records, expected_schema, backend_id=N
         ),
         patch("modulo.api.routes.schemas.ModelBackendHub.get", return_value=MagicMock()),
         patch("modulo.api.routes.schemas.create_secrets_backend"),
+        patch("modulo.core.audit_logger.append_audit_event"),
     ]
 
 
@@ -76,6 +94,16 @@ def step_connector_with_samples(name: str, request):
     request.node._records = [
         {"id": 1, "title": "Fix login bug", "completed": False, "priority": 3},
         {"id": 2, "title": "Add tests", "completed": True, "priority": 1},
+    ]
+
+
+@given(parsers.parse('a connector instance "{name}" with connector type "{type_id}"'))
+def step_connector_with_type(name: str, type_id: str, request):
+    mock_ci = _make_connector_of_type(name, type_id)
+    request.node._connector_name = name
+    request.node._mock_ci = mock_ci
+    request.node._records = [
+        {"id": 1, "title": "Test item", "completed": False},
     ]
 
 
@@ -150,12 +178,13 @@ def step_infer_schema(request, client):
         "properties": {"title": {"type": "string"}, "completed": {"type": "boolean"}},
         "required": ["title"],
     })
+    ci_id = str(mock_ci.id) if mock_ci is not None else str(uuid.uuid4())
 
     with contextlib_patch_multi(_base_infer_patches(mock_ci, mock_mb, records, expected_schema)):
         resp = client.post(
             "/api/v1/schemas/infer",
             json={
-                "connector_instance_id": str(mock_ci.id),
+                "connector_instance_id": ci_id,
                 "sample_query": {"resource": "issues", "filters": {}, "limit": 10},
             },
         )
@@ -194,6 +223,7 @@ def step_infer_schema_no_limit(request, client):
         ),
         patch("modulo.api.routes.schemas.ModelBackendHub.get", return_value=MagicMock()),
         patch("modulo.api.routes.schemas.create_secrets_backend"),
+        patch("modulo.core.audit_logger.append_audit_event"),
     ):
         resp = client.post(
             "/api/v1/schemas/infer",
@@ -394,11 +424,18 @@ def step_connector_with_samples_unnamed(request):
 def step_non_existent_connector(request):
     request.node._mock_ci = None
     request.node._connector_name = None
+    request.node._records = []
+    request.node._model_backend = _make_backend()
 
 
 @given("no model backends are configured")
 def step_no_model_backends(request):
     request.node._model_backend = None
+    request.node._expected_schema = {
+        "type": "object",
+        "properties": {"title": {"type": "string"}, "completed": {"type": "boolean"}},
+        "required": ["title"],
+    }
 
 
 @given("a generated schema definition")

@@ -31,3 +31,9 @@ Feature: Schema Inference
     Given a source schema and a target schema
     When I POST /api/v1/schemas/migrate/plan with both definitions
     Then the response contains field_additions and field_removals
+
+  Scenario: Schema inference rejects unsupported connector types
+    Given a connector instance "unsupported-app" with connector type "custom"
+    And a model backend is configured
+    When I POST /api/v1/schemas/infer with the connector instance
+    Then the response status is 400
