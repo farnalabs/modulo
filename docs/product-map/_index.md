@@ -232,79 +232,6 @@ status: covered | partial | gap    # auto-updated by graph-validate
 - [feat-variants-variant-ab-testing](variants/variant-ab-testing.md) => PRD delivery-tasks: [task-nv3-ab-test-models]
 - [feat-variants-variant-compare-ui](variants/variant-compare-ui.md) => PRD delivery-tasks: [task-nv3-variant-compare-ui]
 
-
-### Core Platform
-- [Pipeline Execution](core/pipeline-execution.md) — §8.4
-- [Schema System](core/schema-system.md) — §8.3
-- [Agent Model](core/agent-model.md) — §8.2
-- [Trigger System](core/trigger-system.md) — §8.5
-- [Run Context Propagation](core/run-context.md) — §8.18
-- [Run Variants & A/B Testing](core/run-variants.md) — §8.19
-- [Error Handling](core/error-handling.md) — §8.9
-- [Cost Controls / Cost Breakdown](core/cost-breakdown.md) — §8.10
-- [Notifications](core/notifications.md) — §8.11
-- [Audit Trail](core/audit-trail.md) — §8.12
-- [Pipeline Versioning](core/pipeline-versioning.md) — §8.13
-
-### Auth & Security
-- [SCIM Provisioning](auth/scim-provisioning.md) — §9.2, §9.4
-- [JWT Auth](auth/jwt-auth.md) — §7.10
-- [API Keys](auth/api-keys.md) — §9.4
-- [RBAC](auth/rbac.md) — §9.2
-- [SSO / OIDC](core/oidc-integration.md) — §9.4
-- [Rate Limiting](auth/rate-limiting.md) — §7.18
-
-### Teams
-- [Team CRUD](teams/team-crud.md) — §9.3
-- [Team Isolation (RLS)](teams/team-isolation.md) — §9.3
-- [Team RBAC](teams/team-rbac.md) — §9.3
-- [Team API Keys](teams/team-api-keys.md) — §9.3
-- [Team HITL Gates](teams/team-hitl-gates.md) — §9.3
-- [Team Notifications](teams/team-notifications.md) — §9.3
-- [User Offboarding](teams/user-offboarding.md) — §9.4
-- [Ownership Picker](teams/ownership-picker.md) — §9.3
-
-### Evals & Feedback
-- [Eval Definitions](evals/eval-definitions.md) — §8.17
-- [Eval Engine](evals/eval-engine.md) — §8.17
-- [Eval Gates](evals/eval-gates.md) — §8.17
-- [Feedback System](evals/feedback-system.md) — §8.20
-- [Eval Coverage Gap](evals/eval-coverage-gap.md) — §8.19
-
-### Connectors
-- [Connector Hub](connectors/connector-hub.md) — §8.6
-- [GitHub Connector](connectors/github-connector.md) — §8.6
-- [GitLab Connector](connectors/gitlab-connector.md) — §8.6
-- [Jira Connector](connectors/jira-connector.md) — §8.6
-- [Linear Connector](connectors/linear-connector.md) — §8.6
-- [Slack Connector](connectors/slack-connector.md) — §8.6
-- [Schema Inference](connectors/schema-inference.md) — §8.16
-
-### Pipelines
-- [Pipeline CRUD](pipelines/pipeline-crud.md) — §8.4
-- [Pipeline Library](pipelines/pipeline-library.md) — §8.14
-- [Workflow Bundles](pipelines/workflow-bundles.md) — §8.15
-- [HITL Gates](pipelines/hitl-gates.md) — §8.8
-- [Run Lifecycle](pipelines/run-lifecycle.md) — §8.7
-
-### Model Backends
-- [Model Backend Management](model-backends/model-backend-management.md) — §8.1
-- [Model Backend Hub](model-backends/model-backend-hub.md) — §8.1
-
-### Frontend
-- [Views](frontend/views.md) — §6.3
-- [Stores](frontend/stores.md) — §6.3
-- [Pipeline Canvas](frontend/pipeline-canvas.md) — §6.3
-- [Dashboard](frontend/dashboard.md) — §14
-- [Theme System](frontend/theme.md) — §6.3
-
-### Observability
-- [OTel Bridge](observability/otel-bridge.md)
-- [Audit Events](observability/audit-events.md) — §8.12
-- [Dashboard Metrics](observability/dashboard-metrics.md) — §14
-
----
-
 ## Legend
 
 | Status | Meaning |
@@ -316,8 +243,3 @@ status: covered | partial | gap    # auto-updated by graph-validate
 Run `..\..\Dev-Harness\tools\graph-validate.ps1` to check graph integrity.
 Run `..\..\Dev-Harness\tools\graph-query.ps1 --uncovered` to list entries needing attention.
 Run `..\..\Dev-Harness\tools\graph-query.ps1 --impact feat-<id>` to see downstream dependents.
-
-
-
-
-
