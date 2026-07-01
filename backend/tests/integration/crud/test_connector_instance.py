@@ -37,7 +37,7 @@ async def test_create_connector_instance(rls_session: AsyncSession, test_org: uu
 
 
 async def test_get_connector_instance_returns_existing(
-    rls_session: AsyncSession, test_org: uuid.UUID, test_user: uuid.UUID
+    rls_session: AsyncSession, test_org: uuid.UUID, test_user: uuid.UUID,
 ) -> None:
     ci = await create_connector_instance(rls_session, **_ci_kwargs(test_org, test_user, suffix="-fetch"))
     fetched = await get_connector_instance(rls_session, ci.id)
@@ -52,7 +52,7 @@ async def test_get_connector_instance_returns_none_for_unknown(
 
 
 async def test_list_connector_instances_pagination(
-    rls_session: AsyncSession, test_org: uuid.UUID, test_user: uuid.UUID
+    rls_session: AsyncSession, test_org: uuid.UUID, test_user: uuid.UUID,
 ) -> None:
     for i in range(3):
         await create_connector_instance(

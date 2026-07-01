@@ -1,4 +1,5 @@
 import uuid
+from typing import Any
 
 import pytest
 from alembic.autogenerate import compare_metadata
@@ -38,14 +39,14 @@ async def test_migrated_schema_matches_orm_metadata(db_engine: AsyncEngine) -> N
     """Migration-only PostgreSQL triggers are intentionally outside ORM metadata."""
     async with db_engine.connect() as connection:
         differences = await connection.run_sync(
-            lambda sync_connection: compare_metadata(MigrationContext.configure(sync_connection), Base.metadata)
+            lambda sync_connection: compare_metadata(MigrationContext.configure(sync_connection), Base.metadata),
         )
 
     assert differences == []
 
 
 async def test_persisted_factories_insert_valid_relationships(db_engine: AsyncEngine) -> None:
-    def insert_graph(connection) -> tuple[object, object]:  # type: ignore[no-untyped-def]
+    def insert_graph(connection: Any) -> tuple[object, object]:
         session = Session(bind=connection)
         factories = (
             OrganisationFactory,
@@ -87,7 +88,7 @@ async def test_library_fork_provenance_is_registry_only_and_immutable(
                 name="Fork test",
                 slug=f"fork-test-{organisation_id}",
                 settings_json={},
-            )
+            ),
         )
         await connection.execute(
             LibraryPrimitive.__table__.insert().values(
@@ -108,7 +109,7 @@ async def test_library_fork_provenance_is_registry_only_and_immutable(
                 average_rating=1,
                 review_count=0,
                 **common,
-            )
+            ),
         )
         await connection.execute(
             LibraryPrimitive.__table__.insert().values(
@@ -122,7 +123,7 @@ async def test_library_fork_provenance_is_registry_only_and_immutable(
                 version="1.0.0",
                 visibility="org",
                 **common,
-            )
+            ),
         )
 
     with pytest.raises(DBAPIError):
@@ -140,7 +141,7 @@ async def test_library_fork_provenance_is_registry_only_and_immutable(
                     visibility="org",
                     forked_from=local_id,
                     **common,
-                )
+                ),
             )
 
     async with db_engine.begin() as connection:
@@ -157,11 +158,11 @@ async def test_library_fork_provenance_is_registry_only_and_immutable(
                 visibility="org",
                 forked_from=registry_id,
                 **common,
-            )
+            ),
         )
 
     with pytest.raises(DBAPIError):
         async with db_engine.begin() as connection:
             await connection.execute(
-                update(LibraryPrimitive).where(LibraryPrimitive.id == fork_id).values(forked_from=None)
+                update(LibraryPrimitive).where(LibraryPrimitive.id == fork_id).values(forked_from=None),
             )

@@ -21,50 +21,48 @@ pytestmark = [
 
 async def _create_org(db_engine: AsyncEngine, slug: str) -> uuid.UUID:
     org_id = uuid.uuid4()
-    async with db_engine.connect() as conn:
-        async with conn.begin():
-            await conn.execute(
-                text(
-                    "INSERT INTO organisations (id, name, slug, settings_json) VALUES (:id, :name, :slug, '{}'::json)"
-                ),
-                {
-                    "id": str(org_id),
-                    "name": f"Org {slug}",
-                    "slug": slug,
-                },
-            )
+    async with db_engine.connect() as conn, conn.begin():
+        await conn.execute(
+            text(
+                "INSERT INTO organisations (id, name, slug, settings_json) VALUES (:id, :name, :slug, '{}'::json)",
+            ),
+            {
+                "id": str(org_id),
+                "name": f"Org {slug}",
+                "slug": slug,
+            },
+        )
     return org_id
 
 
 async def _create_user_in_org(db_engine: AsyncEngine, org_id: uuid.UUID, email: str, role: str = "runner") -> uuid.UUID:
     pw_hash = hash_password("CorrectHorseBattery99!")
     user_id = uuid.uuid4()
-    async with db_engine.connect() as conn:
-        async with conn.begin():
-            await conn.execute(
-                text(
-                    "INSERT INTO accounts (id, email, display_name, "
-                    "password_hash, auth_provider, active) "
-                    "VALUES (:id, :email, :name, :pw_hash, 'local', true)"
-                ),
-                {
-                    "id": str(user_id),
-                    "email": email,
-                    "name": email.split("@")[0],
-                    "pw_hash": pw_hash,
-                },
-            )
-            await conn.execute(
-                text(
-                    "INSERT INTO org_memberships (organisation_id, account_id, role) "
-                    "VALUES (:org_id, :account_id, :role)"
-                ),
-                {
-                    "org_id": str(org_id),
-                    "account_id": str(user_id),
-                    "role": role,
-                },
-            )
+    async with db_engine.connect() as conn, conn.begin():
+        await conn.execute(
+            text(
+                "INSERT INTO accounts (id, email, display_name, "
+                "password_hash, auth_provider, active) "
+                "VALUES (:id, :email, :name, :pw_hash, 'local', true)",
+            ),
+            {
+                "id": str(user_id),
+                "email": email,
+                "name": email.split("@", maxsplit=1)[0],
+                "pw_hash": pw_hash,
+            },
+        )
+        await conn.execute(
+            text(
+                "INSERT INTO org_memberships (organisation_id, account_id, role) "
+                "VALUES (:org_id, :account_id, :role)",
+            ),
+            {
+                "org_id": str(org_id),
+                "account_id": str(user_id),
+                "role": role,
+            },
+        )
     return user_id
 
 
@@ -74,7 +72,7 @@ async def _create_user_in_org(db_engine: AsyncEngine, org_id: uuid.UUID, email: 
 
 
 async def _accounts_for_memberships(
-    session: AsyncSession, memberships: list
+    session: AsyncSession, memberships: list,
 ) -> list:
     result = []
     for m in memberships:

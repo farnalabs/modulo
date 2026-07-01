@@ -43,7 +43,7 @@ async def seeded_db(db_session: AsyncSession) -> AsyncSession:
     await db_session.execute(
         text(
             "INSERT INTO organisations (id, name, slug, settings_json) "
-            "VALUES (:id, :name, :slug, '{}'::json) ON CONFLICT (id) DO NOTHING"
+            "VALUES (:id, :name, :slug, '{}'::json) ON CONFLICT (id) DO NOTHING",
         ),
         {"id": str(_ORG_ID), "name": "Integration Org", "slug": "int-org"},
     )
@@ -53,7 +53,7 @@ async def seeded_db(db_session: AsyncSession) -> AsyncSession:
             "INSERT INTO users (id, organisation_id, email, display_name, "
             "org_role, auth_provider, active, password_hash) "
             "VALUES (:id, :oid, :email, :name, 'admin', 'local', true, 'hash') "
-            "ON CONFLICT (id) DO NOTHING"
+            "ON CONFLICT (id) DO NOTHING",
         ),
         {
             "id": str(_USER_ID),
@@ -68,7 +68,7 @@ async def seeded_db(db_session: AsyncSession) -> AsyncSession:
             "INSERT INTO pipelines (id, organisation_id, name, created_by, "
             "visibility, run_context_defaults) "
             "VALUES (:id, :oid, :name, :uid, 'org', '{}'::json) "
-            "ON CONFLICT (id) DO NOTHING"
+            "ON CONFLICT (id) DO NOTHING",
         ),
         {
             "id": str(_PIPELINE_ID),
@@ -86,7 +86,7 @@ async def seeded_db(db_session: AsyncSession) -> AsyncSession:
             "run_context_defaults) "
             "VALUES (:id, :pid, :oid, 1, '{}'::json, '[]'::json, "
             "'[]'::json, '[]'::json, '[]'::json, '{}'::json) "
-            "ON CONFLICT (id) DO NOTHING"
+            "ON CONFLICT (id) DO NOTHING",
         ),
         {
             "id": str(_SNAPSHOT_ID),
@@ -102,7 +102,7 @@ async def seeded_db(db_session: AsyncSession) -> AsyncSession:
             "allowed_operations, credentials_ciphertext) "
             "VALUES (:id, :oid, :uid, 'stub', 'Stub CI', "
             "'{}'::json, 'org', '[\"query\"]'::json, 'ciphertext') "
-            "ON CONFLICT (id) DO NOTHING"
+            "ON CONFLICT (id) DO NOTHING",
         ),
         {
             "id": str(_CI_ID),
@@ -127,7 +127,7 @@ async def polling_trigger(seeded_db: AsyncSession) -> dict[str, Any]:
             "VALUES (:id, :oid, :pid, 'polling', true, 5, "
             "(:config)::json, :uid, NULL, NULL, NULL, "
             "NOW() - INTERVAL '1 minute') "
-            "ON CONFLICT (id) DO UPDATE SET next_fire_at = NOW() - INTERVAL '1 minute'"
+            "ON CONFLICT (id) DO UPDATE SET next_fire_at = NOW() - INTERVAL '1 minute'",
         ),
         {
             "id": str(_TRIGGER_ID),
@@ -206,33 +206,32 @@ async def test_polling_trigger_happy_path(
     # Query the DB to verify the run exists
     engine = create_async_engine(db_url)
     factory = async_sessionmaker(engine, expire_on_commit=False)
-    async with factory() as session:
-        async with session.begin():
-            await set_rls_org(session, _ORG_ID)
+    async with factory() as session, session.begin():
+        await set_rls_org(session, _ORG_ID)
 
-            run_result = await session.execute(select(Run).where(Run.id == run_id))
-            run = run_result.scalar_one_or_none()
-            assert run is not None, f"Run {run_id} not found in DB"
-            assert run.trigger_type == "polling"
-            assert run.organisation_id == _ORG_ID
-            assert run.pipeline_id == _PIPELINE_ID
+        run_result = await session.execute(select(Run).where(Run.id == run_id))
+        run = run_result.scalar_one_or_none()
+        assert run is not None, f"Run {run_id} not found in DB"
+        assert run.trigger_type == "polling"
+        assert run.organisation_id == _ORG_ID
+        assert run.pipeline_id == _PIPELINE_ID
 
-            event_result = await session.execute(
-                select(TriggerEvent).where(
-                    TriggerEvent.trigger_id == _TRIGGER_ID,
-                    TriggerEvent.run_id == run_id,
-                )
-            )
-            event = event_result.scalar_one_or_none()
-            assert event is not None, "TriggerEvent not found"
-            assert event.validation_result == "condition_met"
-            assert event.trigger_type == "polling"
-            assert event.run_id == run_id
+        event_result = await session.execute(
+            select(TriggerEvent).where(
+                TriggerEvent.trigger_id == _TRIGGER_ID,
+                TriggerEvent.run_id == run_id,
+            ),
+        )
+        event = event_result.scalar_one_or_none()
+        assert event is not None, "TriggerEvent not found"
+        assert event.validation_result == "condition_met"
+        assert event.trigger_type == "polling"
+        assert event.run_id == run_id
 
-            trigger_result = await session.execute(select(Trigger).where(Trigger.id == _TRIGGER_ID))
-            trigger = trigger_result.scalar_one_or_none()
-            assert trigger is not None
-            assert trigger.last_fired_at is not None
+        trigger_result = await session.execute(select(Trigger).where(Trigger.id == _TRIGGER_ID))
+        trigger = trigger_result.scalar_one_or_none()
+        assert trigger is not None
+        assert trigger.last_fired_at is not None
 
     await engine.dispose()
 
@@ -277,23 +276,22 @@ async def test_polling_trigger_no_match(
     # Verify no run was created and a no_match event was logged
     engine = create_async_engine(db_url)
     factory = async_sessionmaker(engine, expire_on_commit=False)
-    async with factory() as session:
-        async with session.begin():
-            await set_rls_org(session, _ORG_ID)
+    async with factory() as session, session.begin():
+        await set_rls_org(session, _ORG_ID)
 
-            runs_result = await session.execute(select(Run).where(Run.trigger_id == _TRIGGER_ID))
-            runs = runs_result.scalars().all()
-            assert len(runs) == 0
+        runs_result = await session.execute(select(Run).where(Run.trigger_id == _TRIGGER_ID))
+        runs = runs_result.scalars().all()
+        assert len(runs) == 0
 
-            event_result = await session.execute(
-                select(TriggerEvent).where(
-                    TriggerEvent.trigger_id == _TRIGGER_ID,
-                    TriggerEvent.validation_result == "no_match",
-                )
-            )
-            event = event_result.scalar_one_or_none()
-            assert event is not None, "Expected no_match TriggerEvent"
-            assert event.run_id is None
+        event_result = await session.execute(
+            select(TriggerEvent).where(
+                TriggerEvent.trigger_id == _TRIGGER_ID,
+                TriggerEvent.validation_result == "no_match",
+            ),
+        )
+        event = event_result.scalar_one_or_none()
+        assert event is not None, "Expected no_match TriggerEvent"
+        assert event.run_id is None
 
     await engine.dispose()
 
@@ -326,7 +324,7 @@ async def test_polling_trigger_concurrency_limit(
                         "snapshot_id, trigger_type, status, "
                         "input_hash, langgraph_thread_id, trigger_id) "
                         "VALUES (:rid, :oid, :pid, :sid, 'polling', 'running', "
-                        "'abcd1234', :thread_id, :tid)"
+                        "'abcd1234', :thread_id, :tid)",
                     ),
                     {
                         "rid": str(uuid.uuid4()),
@@ -360,17 +358,16 @@ async def test_polling_trigger_concurrency_limit(
     assert result["active_runs"] == 2
 
     # Verify a concurrency_limit_reached event was logged
-    async with factory() as session:
-        async with session.begin():
-            await set_rls_org(session, _ORG_ID)
-            event_result = await session.execute(
-                select(TriggerEvent).where(
-                    TriggerEvent.trigger_id == _TRIGGER_ID,
-                    TriggerEvent.validation_result == "concurrency_limit_reached",
-                )
-            )
-            event = event_result.scalar_one_or_none()
-            assert event is not None, "Expected concurrency_limit_reached TriggerEvent"
+    async with factory() as session, session.begin():
+        await set_rls_org(session, _ORG_ID)
+        event_result = await session.execute(
+            select(TriggerEvent).where(
+                TriggerEvent.trigger_id == _TRIGGER_ID,
+                TriggerEvent.validation_result == "concurrency_limit_reached",
+            ),
+        )
+        event = event_result.scalar_one_or_none()
+        assert event is not None, "Expected concurrency_limit_reached TriggerEvent"
 
     await engine.dispose()
 
