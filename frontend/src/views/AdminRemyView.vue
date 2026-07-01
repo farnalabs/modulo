@@ -319,6 +319,7 @@ import ErrorAlert from '../components/shared/ErrorAlert.vue'
 import FeatureGate from '../components/FeatureGate.vue'
 import LockIcon from '../components/LockIcon.vue'
 import RemySkillDialog from '../components/remy/RemySkillDialog.vue'
+import type { SkillItem } from '../types/remy'
 
 const planStore = usePlanStore()
 
@@ -326,15 +327,6 @@ const loading = ref(true)
 const loadError = ref<string | null>(null)
 
 const orgRoles = ['admin', 'operator', 'runner', 'viewer']
-
-interface SkillItem {
-  id: string
-  name: string
-  description?: string
-  triggers?: string[]
-  body?: string
-  active: boolean
-}
 
 // Access list
 const accessList = reactive({
@@ -530,9 +522,10 @@ async function loadConfig() {
       systemPrompt.value = cfg.system_prompt || ''
       guidance.value = cfg.additional_guidance || ''
     }
-  } catch {
-    // Non-critical
-  }
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : String(e)
+      console.warn('Failed to load Remy config:', msg)
+    }
 }
 
 async function loadAll() {

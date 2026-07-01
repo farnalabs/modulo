@@ -326,7 +326,7 @@ async def delete_org_skill(
 # ── User-level helper (reused by me.py) ────────────────────────────────
 
 
-async def get_user_skills(session: AsyncSession, user_id: uuid.UUID, org_id: uuid.UUID) -> list[RemySkill]:
+async def get_user_skills(session: AsyncSession, user_id: uuid.UUID) -> list[RemySkill]:
     result = await session.execute(
         select(RemySkill)
         .where(
