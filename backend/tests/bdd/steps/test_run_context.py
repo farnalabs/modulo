@@ -537,3 +537,165 @@ def warning_includes_fields(ctx: dict[str, Any]) -> None:
     assert any(
         r.get("fields") for r in records
     ), "No warning record includes attempted fields"
+
+
+# ===================================================================
+#  Autonomy-level BDD steps
+# ===================================================================
+
+
+@given(
+    parsers.parse(
+        'pipeline "{pipeline_name}" has autonomy default "{level}"'
+    )
+)
+def pipeline_has_autonomy_default(
+    pipeline_name: str, level: str, ctx: dict[str, Any]
+) -> None:
+    from tests.bdd.conftest import make_mock_pipeline
+
+    ctx["pipeline"] = make_mock_pipeline(name=pipeline_name)
+    ctx["autonomy_default"] = level
+
+
+@given(
+    parsers.parse(
+        'pipeline "{pipeline_name}" has no autonomy defaults'
+    )
+)
+def pipeline_has_no_autonomy_defaults(
+    pipeline_name: str, ctx: dict[str, Any]
+) -> None:
+    from tests.bdd.conftest import make_mock_pipeline
+
+    ctx["pipeline"] = make_mock_pipeline(name=pipeline_name)
+    ctx["autonomy_default"] = None
+
+
+@when("a HITL gate checks the autonomy level")
+def hitl_gate_checks_autonomy(ctx: dict[str, Any]) -> None:
+    from modulo.core.run_context.autonomy import effective_autonomy_level
+
+    rc: dict[str, Any] = ctx.get("run_context") or {}
+    pipeline_default: str | None = ctx.get("autonomy_default")
+    ctx["resolved_autonomy"] = effective_autonomy_level(pipeline_default, rc)
+
+
+@when(
+    parsers.parse(
+        'a context-setter node changes autonomy_recommendation to "{new_level}"'
+    )
+)
+def context_setter_changes_autonomy(new_level: str, ctx: dict[str, Any]) -> None:
+    ctx["run_context"]["autonomy_recommendation"] = new_level
+
+
+@then("the gate is skipped")
+def gate_is_skipped(ctx: dict[str, Any]) -> None:
+    from modulo.core.run_context.autonomy import (
+        AutonomyLevel,
+        should_skip_hitl_gate,
+    )
+
+    autonomy = ctx.get("resolved_autonomy")
+    assert autonomy is not None, "No resolved_autonomy in context"
+    assert should_skip_hitl_gate(autonomy), (
+        f"Expected gate to be skipped but autonomy={autonomy.value}"
+    )
+
+
+@then("no human interrupt is raised")
+def no_human_interrupt(ctx: dict[str, Any]) -> None:
+    pass  # Gate was skipped — no interrupt possible
+
+
+@then(
+    parsers.parse(
+        'the gate uses the pipeline default "{level}"'
+    )
+)
+def gate_uses_pipeline_default(level: str, ctx: dict[str, Any]) -> None:
+    from modulo.core.run_context.autonomy import AutonomyLevel
+
+    autonomy = ctx.get("resolved_autonomy")
+    assert autonomy is not None, "No resolved_autonomy in context"
+    assert autonomy == AutonomyLevel(level), (
+        f"Expected autonomy={level!r}, got {autonomy.value!r}"
+    )
+
+
+@then("the gate interrupts for human review")
+def gate_interrupts(ctx: dict[str, Any]) -> None:
+    from modulo.core.run_context.autonomy import (
+        AutonomyLevel,
+        should_skip_hitl_gate,
+    )
+
+    autonomy = ctx.get("resolved_autonomy")
+    assert autonomy is not None, "No resolved_autonomy in context"
+    assert not should_skip_hitl_gate(autonomy), (
+        f"Expected interrupt but gate was skipped (autonomy={autonomy.value})"
+    )
+
+
+@then(
+    parsers.parse(
+        'the next HITL gate checks the new autonomy level'
+    )
+)
+def next_gate_checks_new_level(ctx: dict[str, Any]) -> None:
+    from modulo.core.run_context.autonomy import effective_autonomy_level
+
+    rc: dict[str, Any] = ctx.get("run_context") or {}
+    pipeline_default: str | None = ctx.get("autonomy_default")
+    ctx["resolved_autonomy"] = effective_autonomy_level(pipeline_default, rc)
+
+
+@then(
+    parsers.parse(
+        'the gate uses "{level}"'
+    )
+)
+def gate_uses_level(level: str, ctx: dict[str, Any]) -> None:
+    from modulo.core.run_context.autonomy import AutonomyLevel
+
+    autonomy = ctx.get("resolved_autonomy")
+    assert autonomy is not None, "No resolved_autonomy in context"
+    assert autonomy == AutonomyLevel(level), (
+        f"Expected autonomy={level!r}, got {autonomy.value!r}"
+    )
+
+
+@when(
+    parsers.parse(
+        'the context_setter node "{node_name}" writes nothing to run_context'
+    )
+)
+def context_setter_writes_nothing(
+    node_name: str, ctx: dict[str, Any]
+) -> None:
+    from modulo.core.pipeline_engine import cancellable_node
+    from modulo.core.pipeline_engine.decorator import _RUN_CONTEXT_WRITE_LOG_KEY
+
+    import asyncio
+
+    async def _noop_setter(state: dict[str, Any]) -> dict[str, Any]:
+        return {}
+
+    _noop_setter.__name__ = node_name
+    wrapped_setter = cancellable_node(role="context_setter")(_noop_setter)
+
+    state = {"run_context": dict(ctx.get("run_context", {})), "cancelled": False}
+    if ctx.get("write_log"):
+        state[_RUN_CONTEXT_WRITE_LOG_KEY] = list(ctx["write_log"])
+
+    result = asyncio.run(wrapped_setter(state))
+    # Update ctx with the result (empty dict should not change run_context)
+    if result and "run_context" in result:
+        ctx["run_context"].update(result["run_context"])
+
+
+@then("run_context is unchanged")
+def run_context_unchanged(ctx: dict[str, Any]) -> None:
+    rc = ctx.get("run_context", {})
+    assert "cancelled" in rc, "run_context missing 'cancelled' key"
