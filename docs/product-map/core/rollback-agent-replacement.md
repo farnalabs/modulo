@@ -43,7 +43,7 @@ status: partial
 - [x] Output is validated against restored output_schema_id
 - [x] Pipeline continues after manual output is provided
 - [x] Mixed graph of reverted manual + other agent nodes compiles and runs ### Snapshot Interactions
-- [x] Revert-to-manual creates a new snapshot of the reverted graph state
+- [ ] Revert-to-manual creates a new snapshot of the reverted graph state
 - [ ] Full pipeline snapshot rollback (POST /rollback) can undo the revert entirely
 - [ ] Snapshot diff shows before/after of the converted node ### Alice Persona Scenario (@goal-alice-rollback-step)
 - [x] Given an agent node, revert it back to manual type
@@ -57,3 +57,6 @@ status: partial
 - Frontend snapshot picker does not show snapshot creation date or diff preview
 - No visual diff between current agent config and selected snapshot's manual config
 - Revert confirmation has no "are you sure?" step before execution
+- Missing ProgrammingError catch (501 Not Implemented) — FIXED in this commit
+- Missing audit event after revert — FIXED in this commit
+- Revert-to-manual does not create a new snapshot (the code updates the graph in-place but does not create a PipelineSnapshot)
