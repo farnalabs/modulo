@@ -16,6 +16,12 @@ from modulo.db.models.daily_run_count import OrgDailyRunCount
 from modulo.db.models.organisation import Organisation
 from modulo.db.models.team import Team
 
+__all__ = [
+    "get_or_create_daily_count",
+    "check_and_record_spend",
+    "get_cost_report",
+]
+
 
 async def get_or_create_daily_count(
     session: AsyncSession,
@@ -26,7 +32,8 @@ async def get_or_create_daily_count(
 ) -> OrgDailyRunCount:
     """Get today's run count row (org-level or team-level), creating it if missing.
 
-    Uses SELECT FOR UPDATE to block concurrent spend operations.
+    The caller is expected to SELECT FOR UPDATE on the returned row
+    before mutating it (see check_and_record_spend).
     """
     q = (
         select(OrgDailyRunCount)
@@ -52,15 +59,6 @@ async def get_or_create_daily_count(
     )
     session.add(row)
     await session.flush()
-
-    q = (
-        select(OrgDailyRunCount)
-        .where(
-            OrgDailyRunCount.id == row.id,
-        )
-        .with_for_update()
-    )
-    await session.execute(q)
     return row
 
 
@@ -219,7 +217,7 @@ async def get_cost_report(
         {
             "entity_id": str(org_id),
             "entity_name": org_name,
-            "total_spend_usd": float(row.total_spend_usd) if row.total_spend_usd else 0.0,
-            "total_runs": int(row.total_runs) if row.total_runs else 0,
+            "total_spend_usd": float(row.total_spend_usd) if row.total_spend_usd is not None else 0.0,
+            "total_runs": int(row.total_runs) if row.total_runs is not None else 0,
         }
     ]
