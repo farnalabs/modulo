@@ -70,7 +70,6 @@ Async Linear GraphQL API connector implementing `ConnectorBase`. BDD coverage: 8
 - [x] `ConnectorType.LINEAR.capabilities` returns `{ISSUE_READ, ISSUE_WRITE, ISSUE_SEARCH}` in `base.py`
 - [x] `LinearConnector.connector_type` returns `ConnectorType.LINEAR`
 
-
 ### Health Check — connectivity and credential validation
 
 - [x] Validate API key by executing viewer query — fail on GraphQL errors
@@ -94,7 +93,6 @@ Async Linear GraphQL API connector implementing `ConnectorBase`. BDD coverage: 8
 - [ ] **No cycle/sprint awareness**: cannot read or set issue cycle assignment
 - [ ] **No pagination**: `query("search")` results are limited by default with no cursor-based continuation
 - [ ] **No rate-limit handling**: no GraphQL query cost measurement, no 429 handling
-
 
 ## QA History
 - 2026-07-01: Cross-cutting QA: fixed frontmatter (added unit-tests), removed outdated known gaps #7 (BDD placeholder → 5 real scenarios) and #8 (unit tests exist), added 3 BDD error-path scenarios + step definitions, added 4 unit tests (missing id, update failure, GraphQL error), fixed search to respect `q.limit` via `first:$limit`, consolidated gaps from 9→7

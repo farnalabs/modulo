@@ -2,6 +2,7 @@
 id: feat-teams-sso-team-mapping
 prd: 9.4, 6.2, 9.2
 delivery-tasks: [task-nv6-sso-team-mapping]
+bdd: []
 code:
   - backend/src/modulo/auth/sso.py
   - backend/src/modulo/api/routes/admin_sso.py
@@ -13,7 +14,9 @@ unit-tests:
 depends-on: [feat-teams-team-crud, feat-auth-sso-provider-ui]
 status: partial
 ---
-# SSO Team Mapping Group-to-team mapping from OIDC/SAML identity provider group claims to Modulo team memberships, configured per SSO provider and applied at JIT user provisioning.
+# SSO Team Mapping
+
+Group-to-team mapping from OIDC/SAML identity provider group claims to Modulo team memberships, configured per SSO provider and applied at JIT user provisioning.
 
 ## Behaviours
 
@@ -53,7 +56,8 @@ status: partial
 - [ ] Group mapping admin endpoints require admin `org_role`
 - [ ] Group mapping only available when enterprise license key is present
 
-### Known Gaps
-- [ ] No BDD `.feature` files exist for SSO group-to-team mapping
-- [ ] SSO provider lookup during OIDC callback uses `client_id` — no fallback if provider has empty/null `client_id`
-- [ ] `MODULO_OIDC_PROVIDERS` env var approach deprecated in favour of DB-backed admin UI — migration layer may lose group mapping config 
+## Known Gaps
+
+- No BDD `.feature` files exist for SSO group-to-team mapping
+- SSO provider lookup during OIDC callback uses `client_id` — no fallback if provider has empty/null `client_id`
+- `MODULO_OIDC_PROVIDERS` env var approach deprecated in favour of DB-backed admin UI — migration layer may lose group mapping config 
