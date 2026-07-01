@@ -58,8 +58,9 @@ class VaultSecretsBackend(SecretsBackend):
         self._path_prefix: str = os.environ.get("VAULT_PATH_PREFIX", "modulo/secrets")
 
         self._client: Any = None
+        self._client_lock: asyncio.Lock = asyncio.Lock()
 
-    def _ensure_client(self) -> Any:
+    async def _ensure_client(self) -> Any:
         """Return a configured hvac client, creating one if needed."""
         if not _MODULE_AVAILABLE:
             raise RuntimeError(
@@ -68,26 +69,30 @@ class VaultSecretsBackend(SecretsBackend):
         if self._client is not None:
             return self._client
 
-        client = _hvac.Client(url=self._addr)
+        async with self._client_lock:
+            if self._client is not None:
+                return self._client
 
-        if self._token:
-            client.token = self._token
-        elif self._role_id and self._secret_id:
-            client.auth.approle.login(
-                role_id=self._role_id,
-                secret_id=self._secret_id,
-            )
-        else:
-            raise RuntimeError("VaultSecretsBackend: neither VAULT_TOKEN nor VAULT_ROLE_ID+VAULT_SECRET_ID are set")
+            client = _hvac.Client(url=self._addr)
 
-        self._client = client
-        return client
+            if self._token:
+                client.token = self._token
+            elif self._role_id and self._secret_id:
+                client.auth.approle.login(
+                    role_id=self._role_id,
+                    secret_id=self._secret_id,
+                )
+            else:
+                raise RuntimeError("VaultSecretsBackend: neither VAULT_TOKEN nor VAULT_ROLE_ID+VAULT_SECRET_ID are set")
+
+            self._client = client
+            return self._client
 
     def _secret_path(self, key: str) -> str:
         return f"{self._path_prefix}/{key}"
 
     async def get_secret(self, key: str) -> str:
-        client = self._ensure_client()
+        client = await self._ensure_client()
         path = self._secret_path(key)
 
         try:
@@ -111,7 +116,7 @@ class VaultSecretsBackend(SecretsBackend):
         return str(value)
 
     async def set_secret(self, key: str, value: str) -> None:
-        client = self._ensure_client()
+        client = await self._ensure_client()
         path = self._secret_path(key)
 
         await asyncio.to_thread(
@@ -122,7 +127,7 @@ class VaultSecretsBackend(SecretsBackend):
         )
 
     async def delete_secret(self, key: str) -> None:
-        client = self._ensure_client()
+        client = await self._ensure_client()
         path = self._secret_path(key)
 
         try:
