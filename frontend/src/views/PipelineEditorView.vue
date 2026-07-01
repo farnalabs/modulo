@@ -8,6 +8,32 @@
     </div>
     <template v-else>
       <div class="relative flex-1">
+        <!-- Toolbar -->
+        <div class="absolute left-4 top-4 z-10 flex items-center gap-2 rounded-lg border bg-card px-3 py-2 shadow-sm">
+          <h2 class="text-sm font-semibold">Pipeline Editor</h2>
+          <span class="mx-2 h-4 w-px bg-border" />
+          <div class="relative" @click.stop>
+            <button
+              class="rounded-md bg-indigo-600 px-3 py-1 text-xs font-medium text-white hover:bg-indigo-500"
+              @click="showSaveAsDropdown = !showSaveAsDropdown"
+            >
+              Save as template
+            </button>
+            <div
+              v-if="showSaveAsDropdown"
+              class="absolute left-0 top-full mt-1 w-48 rounded-lg border bg-card py-1 shadow-lg"
+            >
+              <button
+                class="flex w-full items-center gap-2 px-3 py-2 text-left text-sm hover:bg-accent"
+                @click="openSaveAsComposite"
+              >
+                <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4 text-indigo-400" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2v8M4.93 10.93 12 18l7.07-7.07"/><path d="M4 20h16"/></svg>
+                Composite
+              </button>
+            </div>
+          </div>
+        </div>
+
         <VueFlow
           v-model:nodes="flowNodes"
           v-model:edges="flowEdges"
@@ -393,12 +419,82 @@
         </div>
       </div>
     </div>
+
+    <!-- Save as composite dialog -->
+    <div
+      v-if="showSaveAsComposite"
+      class="fixed inset-0 z-50 flex items-center justify-center bg-black/50"
+      @click.self="showSaveAsComposite = false"
+    >
+      <div class="w-full max-w-lg rounded-lg border bg-card p-6 shadow-lg">
+        <h3 class="mb-4 text-lg font-semibold">Save as Composite</h3>
+        <p class="mb-4 text-sm text-muted-foreground">
+          Extracts selected nodes from this pipeline into a reusable composite template.
+          Parameter placeholders (&#123;&#123;parameter.*&#125;&#125;) in agent prompts are auto-detected.
+        </p>
+        <div class="space-y-4">
+          <div>
+            <label class="mb-1 block text-sm font-medium">Name *</label>
+            <input
+              v-model="saveAsName"
+              class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm"
+              placeholder="My Composite"
+            />
+          </div>
+          <div>
+            <label class="mb-1 block text-sm font-medium">Description</label>
+            <textarea
+              v-model="saveAsDescription"
+              class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm"
+              rows="3"
+              placeholder="Optional description"
+            />
+          </div>
+          <div>
+            <label class="mb-1 block text-sm font-medium">Selected Nodes</label>
+            <div class="max-h-32 space-y-1 overflow-y-auto">
+              <label
+                v-for="node in rawNodes"
+                :key="node.id"
+                class="flex items-center gap-2 rounded-md bg-muted/30 px-3 py-1.5 text-sm"
+              >
+                <input
+                  v-model="saveAsSelectedNodeIds"
+                  type="checkbox"
+                  :value="node.id"
+                  class="h-4 w-4 rounded border-gray-300 text-indigo-500 focus:ring-indigo-500"
+                />
+                <span>{{ node.label || node.id.slice(0, 8) }}</span>
+              </label>
+            </div>
+          </div>
+          <div v-if="saveAsError" class="rounded-lg border border-destructive/50 bg-destructive/10 p-3 text-sm text-destructive">
+            {{ saveAsError }}
+          </div>
+          <div class="flex justify-end gap-2">
+            <button
+              class="rounded-lg border border-input bg-background px-4 py-2 text-sm hover:bg-accent"
+              @click="showSaveAsComposite = false"
+            >
+              Cancel
+            </button>
+            <button
+              :disabled="!saveAsName || saveAsSelectedNodeIds.length === 0 || saving"
+              class="rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
+              @click="handleSaveAsComposite"
+            >
+              {{ saving ? 'Saving...' : 'Save' }}
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
   </div>
 </template>
 
 <script setup lang="ts">
 import { ref, computed, reactive, onMounted } from 'vue'
-import { useRoute } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 import { VueFlow } from '@vue-flow/core'
 import { Background } from '@vue-flow/background'
 import { Controls } from '@vue-flow/controls'
@@ -408,6 +504,7 @@ import { useApi } from '../composables/useApi'
 
 const { get, post, patch } = useApi()
 const route = useRoute()
+const router = useRouter()
 const pipelineId = route.params.id as string
 
 const loading = ref(true)
@@ -420,6 +517,7 @@ const flowEdges = ref<any[]>([])
 
 const selectedNodeData = ref<any | null>(null)
 const selectedEdgeData = ref<any | null>(null)
+const showSaveAsDropdown = ref(false)
 const nodeTypes = { agent: 'agent', manual: 'manual' }
 
 const agents = ref<any[]>([])
@@ -430,12 +528,19 @@ const snapshots = ref<any[]>([])
 
 const showAgentPicker = ref(false)
 const showRevertDialog = ref(false)
+const showSaveAsComposite = ref(false)
 const pickerAgentId = ref<string>('')
 const pickerConnectorId = ref<string>('')
 const revertSnapshotId = ref<string>('')
 const convertError = ref<string | null>(null)
 const revertError = ref<string | null>(null)
 const revertLoading = ref(false)
+
+const saveAsName = ref('')
+const saveAsDescription = ref('')
+const saveAsSelectedNodeIds = ref<string[]>([])
+const saveAsError = ref<string | null>(null)
+const saving = ref(false)
 
 const savingEdge = ref(false)
 const edgeSaveError = ref<string | null>(null)
@@ -669,6 +774,7 @@ async function saveEdgeConfig() {
 function onPaneClick() {
   selectedNodeData.value = null
   selectedEdgeData.value = null
+  showSaveAsDropdown.value = false
 }
 
 function openAgentPicker() {
@@ -682,6 +788,34 @@ function openRevertDialog() {
   revertError.value = null
   revertSnapshotId.value = ''
   showRevertDialog.value = true
+}
+
+function openSaveAsComposite() {
+  showSaveAsDropdown.value = false
+  saveAsName.value = ''
+  saveAsDescription.value = ''
+  saveAsSelectedNodeIds.value = rawNodes.value.map((n: any) => n.id)
+  saveAsError.value = null
+  showSaveAsComposite.value = true
+}
+
+async function handleSaveAsComposite() {
+  if (!saveAsName.value || saveAsSelectedNodeIds.value.length === 0) return
+  saving.value = true
+  saveAsError.value = null
+  try {
+    await post(`/api/v1/pipelines/${pipelineId}/save-as-composite`, {
+      name: saveAsName.value,
+      description: saveAsDescription.value || null,
+      selected_node_ids: saveAsSelectedNodeIds.value,
+    })
+    showSaveAsComposite.value = false
+    router.push({ name: 'library' })
+  } catch (e: unknown) {
+    saveAsError.value = e instanceof Error ? e.message : String(e)
+  } finally {
+    saving.value = false
+  }
 }
 
 function onAgentChange() {

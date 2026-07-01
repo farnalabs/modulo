@@ -7,6 +7,7 @@ pipeline row serialises concurrent graph writes within a serialisable transactio
 
 import json
 import logging
+import re
 import uuid
 from datetime import datetime
 from typing import Any, Literal
@@ -28,6 +29,7 @@ from modulo.core.reports.quality_report import (
 from modulo.core.run_context.autonomy import (
     autonomy_change_payload,
 )
+from modulo.db.crud.composite_template import create_composite_template
 from modulo.db.crud.pipeline import (
     check_pipeline_name_available,
     clone_pipeline,
@@ -51,6 +53,7 @@ from modulo.db.models.agent import Agent
 from modulo.db.models.connector_instance import ConnectorInstance
 from modulo.db.models.model_backend import ModelBackend
 from modulo.db.models.notification_endpoint import NotificationEndpoint
+from modulo.db.models.pipeline_edge import PipelineEdge
 from modulo.db.models.schema import Schema
 from modulo.db.rls import set_rls_org, set_rls_user_context
 
@@ -647,6 +650,110 @@ async def clone_pipeline_endpoint(
 
     _log.info("Copy complete: %s -> %s (%s)", pipeline_id, cloned.id, target_name)
     return PipelineResponse.model_validate(cloned)
+
+
+# ---------------------------------------------------------------------------
+# Save as composite
+# ---------------------------------------------------------------------------
+
+
+class SaveAsCompositeRequest(BaseModel):
+    name: str = Field(min_length=1, max_length=255)
+    description: str | None = Field(None, max_length=2000)
+    selected_node_ids: list[uuid.UUID] = Field(min_length=1)
+
+
+_PARAM_PATTERN = re.compile(r"\{\{parameter\.(\w+)\}\}")
+
+
+@router.post("/{pipeline_id}/save-as-composite", status_code=status.HTTP_201_CREATED)
+async def save_as_composite_endpoint(
+    pipeline_id: uuid.UUID,
+    body: SaveAsCompositeRequest,
+    session: AsyncSession = Depends(get_db_session),
+    principal: AuthenticatedPrincipal = Depends(get_current_user),
+) -> dict[str, Any]:
+    async with session.begin():
+        await set_rls_org(session, principal.organisation_id)
+        await set_rls_user_context(session, principal.account_id, principal.org_role)
+
+        pipeline = await get_pipeline(session, pipeline_id)
+        if pipeline is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Pipeline not found")
+
+        all_nodes = pipeline.graph_nodes_json
+        selected_ids_str = {str(nid) for nid in body.selected_node_ids}
+        sub_nodes = [n for n in all_nodes if str(n.get("id")) in selected_ids_str]
+        if not sub_nodes:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="No valid nodes selected",
+            )
+
+        sub_node_ids_str = {str(n.get("id")) for n in sub_nodes}
+
+        # Auto-detect parameter placeholders: scan all agent prompts referenced by selected nodes
+        agent_ids = {n.get("agent_id") for n in sub_nodes if n.get("agent_id") is not None}
+        detected_ports: list[dict[str, Any]] = []
+        if agent_ids:
+            agents_result = await session.execute(
+                select(Agent).where(Agent.id.in_(agent_ids), Agent.organisation_id == principal.organisation_id)
+            )
+            for agent in agents_result.scalars().all():
+                matches = _PARAM_PATTERN.findall(agent.prompt_template or "")
+                for param_name in matches:
+                    # Avoid duplicates
+                    if not any(p.get("name") == param_name for p in detected_ports):
+                        detected_ports.append({
+                            "id": str(uuid.uuid4()),
+                            "name": param_name,
+                            "label": param_name.replace("_", " ").title(),
+                            "description": None,
+                            "type": "string",
+                            "required": False,
+                            "default_value": None,
+                            "options": None,
+                            "target_injection": {
+                                "mode": "prompt_replace",
+                                "node_id": str(agent.id),
+                                "injection_point": "prompt_template",
+                            },
+                        })
+
+        # Extract edges that connect selected nodes
+        all_edges_raw = await session.execute(
+            select(PipelineEdge).where(PipelineEdge.pipeline_id == pipeline_id)
+        )
+        sub_edges = []
+        for edge in all_edges_raw.scalars().all():
+            if str(edge.source_node_id) in sub_node_ids_str and str(edge.target_node_id) in sub_node_ids_str:
+                sub_edges.append({
+                    "id": str(edge.id),
+                    "source_node_id": str(edge.source_node_id),
+                    "target_node_id": str(edge.target_node_id),
+                    "edge_type": edge.edge_type,
+                    "condition_expression": edge.condition_expression,
+                    "hitl_gate_config": edge.hitl_gate_config,
+                })
+
+        # Create the composite template
+        template = await create_composite_template(
+            session,
+            org_id=principal.organisation_id,
+            account_id=principal.account_id,
+            name=body.name,
+            description=body.description,
+            sub_pipeline_graph_json={"nodes": [dict(n) for n in sub_nodes], "edges": sub_edges},
+            parameter_ports_json=detected_ports,
+            version="0.1.0",
+        )
+
+    return {
+        "id": str(template.id),
+        "name": template.name,
+        "version": template.version,
+        "parameter_ports": detected_ports,
+    }
 
 
 # ---------------------------------------------------------------------------
