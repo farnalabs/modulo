@@ -1058,8 +1058,14 @@ def step_slack_connector(ctx):
             case _:
                 raise ValueError(f"Unsupported Slack write: {payload.resource!r}")
 
+    async def mock_health_check():
+        from modulo.connectors.base import HealthResult
+
+        return HealthResult(ok=True)
+
     mock_connector.query = mock_query
     mock_connector.write = mock_write
+    mock_connector.health_check = mock_health_check
     ctx["connector"] = mock_connector
     ctx["query_error"] = None
 
@@ -1259,6 +1265,24 @@ def step_health_result_indicates_failure(ctx):
     result = ctx.get("health_result")
     assert result is not None, "No health check result"
     assert result.ok is False, "Health check should have failed but passed"
+
+
+@when("the API returns non-JSON response")
+def step_slack_non_json_response(ctx):
+    from modulo.connectors.base import HealthResult
+
+    async def mock_health_check():
+        return HealthResult(ok=False, detail="Non-JSON response from Slack API")
+
+    ctx["connector"].health_check = mock_health_check
+    import asyncio
+
+    try:
+        result = asyncio.new_event_loop().run_until_complete(ctx["connector"].health_check())
+        ctx["health_result"] = result
+    except Exception as exc:
+        ctx["health_result"] = None
+        ctx["query_error"] = str(exc)
 
 
 # ============================================================================
