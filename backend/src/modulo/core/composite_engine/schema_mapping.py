@@ -8,7 +8,7 @@ import jmespath
 logger = logging.getLogger(__name__)
 
 
-def apply_field_mapping(source: dict[str, Any], field_map: dict | None) -> dict[str, Any]:
+def apply_field_mapping(source: dict[str, Any], field_map: dict[str, Any] | None) -> dict[str, Any]:
     """Apply a field mapping from a source dict to produce a target dict.
 
     The mapping follows the same JMESPath-based pattern as webhook
@@ -48,7 +48,7 @@ def apply_field_mapping(source: dict[str, Any], field_map: dict | None) -> dict[
             compiled = jmespath.compile(expression)
             value = compiled.search(source)
             result[target_key] = value
-        except Exception as exc:
+        except jmespath.exceptions.JMESPathError as exc:
             logger.warning("Field mapping JMESPath error for '%s': %s", target_key, exc)
             result[target_key] = None
 
