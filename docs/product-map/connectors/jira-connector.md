@@ -5,7 +5,7 @@ delivery-tasks: []
 bdd:
   - backend/tests/bdd/features/connectors/connector_health.feature
   - backend/tests/bdd/features/connectors/jira_connector.feature
-unit-tests: []
+unit-tests: [backend/tests/unit/connectors/test_jira.py]
 code:
   - backend/src/modulo/connectors/jira/__init__.py
   - backend/src/modulo/connectors/base.py
@@ -51,7 +51,7 @@ Async Jira Cloud REST API v3 connector implementing `ConnectorBase`. Provides re
 - [ ] List issue comments — not implemented
 - [ ] Delete issue — not implemented
 - [ ] JQL search does not support pagination cursor — `next_cursor` always `None`
-- [ ] JQL search does not return total count
+- [x] JQL search returns total count
 
 ### Project Operations — discovery and metadata
 
@@ -89,7 +89,5 @@ Async Jira Cloud REST API v3 connector implementing `ConnectorBase`. Provides re
 - [ ] **No project discovery**: `query("projects")` not implemented, agents cannot enumerate accessible projects at runtime
 - [ ] **No field metadata**: agents cannot discover custom fields, available issue types, or statuses for a given project
 - [ ] **No pagination**: JQL search results are limited to `maxResults` with no cursor-based continuation
-- [ ] **BDD placeholder**: `backend/tests/bdd/features/connectors/jira_connector.feature` is a 3-line placeholder with no real scenarios
-- [ ] **No unit tests**: `unit-tests` field is empty
 - [ ] **No rate-limit handling**: no 429 retry, no `X-RateLimit-*` header inspection
 
