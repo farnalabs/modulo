@@ -1,174 +1,185 @@
 <template>
-  <div class="mx-auto max-w-4xl space-y-8 p-6">
-    <header class="flex items-center justify-between">
-      <div>
-        <h1 class="text-3xl font-bold tracking-tight">SSO Providers</h1>
-        <p class="mt-1 text-muted-foreground">Manage OIDC and SAML single sign-on providers</p>
-      </div>
-      <button
-        class="btn-glow rounded-lg bg-primary px-4 py-2 text-sm font-semibold text-primary-foreground border border-primary/30 hover:border-primary/60 hover:brightness-110 transition-all duration-150"
-        data-testid="settings-sso-add-provider"
-        @click="openAddForm"
-      >
-        Add Provider
-      </button>
-    </header>
-
-    <LoadingSpinner v-if="loading" />
-
-    <ErrorAlert v-else-if="error" :message="error" :on-retry="loadProviders" :retryable="errorRetryable" />
-
-    <template v-else>
-      <div v-if="formMode === 'add'" class="card p-6">
-        <h2 class="mb-4 text-lg font-semibold">New SSO Provider</h2>
-        <SsoProviderForm
-          :data="formData"
-          :saving="saving"
-          :submit-label="'Create'"
-          :saving-label="'Creating...'"
-          :error="formError"
-          @update:data="onFormUpdate($event)"
-          @submit="createProvider"
-          @cancel="closeForm"
-        />
-      </div>
-
-      <div v-if="providers.length === 0" class="card p-8 text-center">
-        <p class="text-lg font-medium">No SSO providers configured</p>
-        <p class="mt-1 text-sm text-muted-foreground">
-          Add an OIDC or SAML provider to enable single sign-on for your organisation.
-        </p>
-      </div>
-
-      <div class="space-y-3">
-        <div
-          v-for="provider in providers"
-          :key="provider.id"
-          class="card"
-        >
-          <div class="flex items-center justify-between p-4">
-            <div class="flex items-center gap-3">
-              <div
-                class="flex h-10 w-10 items-center justify-center rounded-lg text-sm font-bold"
-                :class="provider.provider_type === 'oidc' ? 'badge badge-context-blue' : 'badge badge-context-amber'"
-              >
-                {{ provider.provider_type === 'oidc' ? 'O' : 'S' }}
-              </div>
-              <div>
-                <p class="font-medium">{{ provider.name }}</p>
-                <p class="text-sm text-muted-foreground">
-                  {{ provider.provider_type.toUpperCase() }}
-                  <span v-if="provider.client_id" class="ml-2">&middot; {{ provider.client_id }}</span>
-                  <span v-if="provider.entity_id" class="ml-2">&middot; {{ provider.entity_id }}</span>
-                </p>
-              </div>
-            </div>
-            <div class="flex items-center gap-2">
-              <button
-                :disabled="testingId === provider.id"
-                class="rounded-lg border border-input bg-background px-3 py-1.5 text-xs font-medium hover:bg-accent disabled:opacity-50"
-                data-testid="settings-sso-test"
-                title="Test connection"
-                @click="testConnection(provider.id)"
-              >
-                {{ testingId === provider.id ? 'Testing...' : 'Test' }}
-              </button>
-              <button
-                class="rounded p-1 text-muted-foreground hover:bg-accent"
-                data-testid="settings-sso-edit"
-                :aria-label="'Edit provider'"
-                title="Edit provider"
-                @click="openEditForm(provider)"
-              >
-                <svg class="h-4 w-4" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                  <path d="M17 3a2.85 2.85 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z" />
-                </svg>
-              </button>
-              <button
-                class="rounded p-1 text-destructive hover:bg-destructive/10"
-                data-testid="settings-sso-delete"
-                :aria-label="'Delete provider'"
-                title="Delete provider"
-                @click="confirmDelete(provider)"
-              >
-                <svg class="h-4 w-4" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                  <path d="M3 6h18" /><path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6" /><path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2" />
-                </svg>
-              </button>
-              <label
-                class="relative inline-flex cursor-pointer items-center"
-                data-testid="settings-sso-toggle"
-                :aria-label="'Toggle provider'"
-                role="switch"
-                @click.prevent.stop="toggleProvider(provider)"
-              >
-                <div
-                  class="h-6 w-11 rounded-full transition-colors"
-                  :class="provider.enabled ? 'bg-primary' : 'bg-input'"
-                >
-                  <div
-                    class="h-5 w-5 rounded-full bg-white shadow-sm transition-transform"
-                    :class="provider.enabled ? 'translate-x-[1.375rem]' : 'translate-x-0.5'"
-                    style="margin-top: 2px;"
-                  />
-                </div>
-              </label>
-            </div>
-          </div>
-
-          <div v-if="editProviderId === provider.id" class="border-t p-4">
-            <SsoProviderForm
-              :data="formData"
-              :saving="saving"
-              :submit-label="'Save'"
-              :saving-label="'Saving...'"
-              :error="formError"
-              @update:data="onFormUpdate($event)"
-              @submit="updateProvider"
-              @cancel="closeEditForm"
-            />
-          </div>
-
-          <div v-if="deleteConfirmProviderId === provider.id" class="border-t border-destructive/50 bg-destructive/10 p-4">
-            <p class="text-sm font-medium text-destructive">Delete "{{ provider.name }}"?</p>
-            <p class="mt-1 text-sm text-destructive/80">This action cannot be undone.</p>
-            <div class="mt-3 flex items-center gap-2">
-              <button
-                :disabled="deleting"
-                data-testid="settings-sso-delete-confirm"
-                class="rounded-lg bg-destructive px-4 py-2 text-sm font-medium text-destructive-foreground hover:brightness-110 disabled:opacity-50 transition-all"
-                @click="deleteProvider(provider.id)"
-              >
-                {{ deleting ? 'Deleting...' : 'Delete' }}
-              </button>
-              <button
-                class="rounded-lg border border-input bg-background px-4 py-2 text-sm font-medium hover:bg-accent"
-                data-testid="settings-sso-delete-cancel"
-                @click="deleteConfirmProviderId = null"
-              >
-                Cancel
-              </button>
-            </div>
-            <div v-if="deleteError" class="mt-2 text-sm text-destructive">{{ deleteError }}</div>
-          </div>
-
-          <div v-if="testResultProviderId === provider.id" class="border-t p-4">
-              <div
-                class="rounded-lg p-3 text-sm"
-                :class="testResult?.success ? 'bg-success/10 text-success' : 'bg-destructive/10 text-destructive'"
-              >
-              <p class="font-medium">{{ testResult?.success ? 'Connection successful' : 'Connection failed' }}</p>
-              <p class="mt-1">{{ testResult?.message }}</p>
-              <pre
-                v-if="testResult?.provider_info"
-                class="mt-2 overflow-auto rounded bg-background/50 p-2 text-xs"
-              >{{ JSON.stringify(testResult?.provider_info, null, 2) }}</pre>
-            </div>
-          </div>
+  <FeatureGate feature-name="sso" required-tier="team">
+    <template #locked="{ tooltip }">
+      <div class="mx-auto max-w-4xl space-y-8 p-6">
+        <div class="mb-4 flex items-center gap-2 rounded-lg border border-warning/30 bg-warning/5 p-4 text-sm text-warning">
+          <LockIcon :locked="true" :tooltip="tooltip" />
+          <span>SSO provider management is not available on your current plan.</span>
         </div>
       </div>
     </template>
-  </div>
+
+    <div class="mx-auto max-w-4xl space-y-8 p-6">
+      <header class="flex items-center justify-between">
+        <div>
+          <h1 class="text-3xl font-bold tracking-tight">SSO Providers</h1>
+          <p class="mt-1 text-muted-foreground">Manage OIDC and SAML single sign-on providers</p>
+        </div>
+        <button
+          class="btn-glow rounded-lg bg-primary px-4 py-2 text-sm font-semibold text-primary-foreground border border-primary/30 hover:border-primary/60 hover:brightness-110 transition-all duration-150"
+          data-testid="settings-sso-add-provider"
+          @click="openAddForm"
+        >
+          Add Provider
+        </button>
+      </header>
+
+      <LoadingSpinner v-if="loading" />
+
+      <ErrorAlert v-else-if="error" :message="error" :on-retry="loadProviders" :retryable="errorRetryable" />
+
+      <template v-else>
+        <div v-if="formMode === 'add'" class="card p-6">
+          <h2 class="mb-4 text-lg font-semibold">New SSO Provider</h2>
+          <SsoProviderForm
+            :data="formData"
+            :saving="saving"
+            :submit-label="'Create'"
+            :saving-label="'Creating...'"
+            :error="formError"
+            @update:data="onFormUpdate($event)"
+            @submit="createProvider"
+            @cancel="closeForm"
+          />
+        </div>
+
+        <div v-if="providers.length === 0" class="card p-8 text-center">
+          <p class="text-lg font-medium">No SSO providers configured</p>
+          <p class="mt-1 text-sm text-muted-foreground">
+            Add an OIDC or SAML provider to enable single sign-on for your organisation.
+          </p>
+        </div>
+
+        <div class="space-y-3">
+          <div
+            v-for="provider in providers"
+            :key="provider.id"
+            class="card"
+          >
+            <div class="flex items-center justify-between p-4">
+              <div class="flex items-center gap-3">
+                <div
+                  class="flex h-10 w-10 items-center justify-center rounded-lg text-sm font-bold"
+                  :class="provider.provider_type === 'oidc' ? 'badge badge-context-blue' : 'badge badge-context-amber'"
+                >
+                  {{ provider.provider_type === 'oidc' ? 'O' : 'S' }}
+                </div>
+                <div>
+                  <p class="font-medium">{{ provider.name }}</p>
+                  <p class="text-sm text-muted-foreground">
+                    {{ provider.provider_type.toUpperCase() }}
+                    <span v-if="provider.client_id" class="ml-2">&middot; {{ provider.client_id }}</span>
+                    <span v-if="provider.entity_id" class="ml-2">&middot; {{ provider.entity_id }}</span>
+                  </p>
+                </div>
+              </div>
+              <div class="flex items-center gap-2">
+                <button
+                  :disabled="testingId === provider.id"
+                  class="rounded-lg border border-input bg-background px-3 py-1.5 text-xs font-medium hover:bg-accent disabled:opacity-50"
+                  data-testid="settings-sso-test"
+                  title="Test connection"
+                  @click="testConnection(provider.id)"
+                >
+                  {{ testingId === provider.id ? 'Testing...' : 'Test' }}
+                </button>
+                <button
+                  class="rounded p-1 text-muted-foreground hover:bg-accent"
+                  data-testid="settings-sso-edit"
+                  :aria-label="'Edit provider'"
+                  title="Edit provider"
+                  @click="openEditForm(provider)"
+                >
+                  <svg class="h-4 w-4" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <path d="M17 3a2.85 2.85 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z" />
+                  </svg>
+                </button>
+                <button
+                  class="rounded p-1 text-destructive hover:bg-destructive/10"
+                  data-testid="settings-sso-delete"
+                  :aria-label="'Delete provider'"
+                  title="Delete provider"
+                  @click="confirmDelete(provider)"
+                >
+                  <svg class="h-4 w-4" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <path d="M3 6h18" /><path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6" /><path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2" />
+                  </svg>
+                </button>
+                <label
+                  class="relative inline-flex cursor-pointer items-center"
+                  data-testid="settings-sso-toggle"
+                  :aria-label="'Toggle provider'"
+                  role="switch"
+                  @click.prevent.stop="toggleProvider(provider)"
+                >
+                  <div
+                    class="h-6 w-11 rounded-full transition-colors"
+                    :class="provider.enabled ? 'bg-primary' : 'bg-input'"
+                  >
+                    <div
+                      class="h-5 w-5 rounded-full bg-white shadow-sm transition-transform"
+                      :class="provider.enabled ? 'translate-x-[1.375rem]' : 'translate-x-0.5'"
+                      style="margin-top: 2px;"
+                    />
+                  </div>
+                </label>
+              </div>
+            </div>
+
+            <div v-if="editProviderId === provider.id" class="border-t p-4">
+              <SsoProviderForm
+                :data="formData"
+                :saving="saving"
+                :submit-label="'Save'"
+                :saving-label="'Saving...'"
+                :error="formError"
+                @update:data="onFormUpdate($event)"
+                @submit="updateProvider"
+                @cancel="closeEditForm"
+              />
+            </div>
+
+            <div v-if="deleteConfirmProviderId === provider.id" class="border-t border-destructive/50 bg-destructive/10 p-4">
+              <p class="text-sm font-medium text-destructive">Delete "{{ provider.name }}"?</p>
+              <p class="mt-1 text-sm text-destructive/80">This action cannot be undone.</p>
+              <div class="mt-3 flex items-center gap-2">
+                <button
+                  :disabled="deleting"
+                  data-testid="settings-sso-delete-confirm"
+                  class="rounded-lg bg-destructive px-4 py-2 text-sm font-medium text-destructive-foreground hover:brightness-110 disabled:opacity-50 transition-all"
+                  @click="deleteProvider(provider.id)"
+                >
+                  {{ deleting ? 'Deleting...' : 'Delete' }}
+                </button>
+                <button
+                  class="rounded-lg border border-input bg-background px-4 py-2 text-sm font-medium hover:bg-accent"
+                  data-testid="settings-sso-delete-cancel"
+                  @click="deleteConfirmProviderId = null"
+                >
+                  Cancel
+                </button>
+              </div>
+              <div v-if="deleteError" class="mt-2 text-sm text-destructive">{{ deleteError }}</div>
+            </div>
+
+            <div v-if="testResultProviderId === provider.id" class="border-t p-4">
+                <div
+                  class="rounded-lg p-3 text-sm"
+                  :class="testResult?.success ? 'bg-success/10 text-success' : 'bg-destructive/10 text-destructive'"
+                >
+                <p class="font-medium">{{ testResult?.success ? 'Connection successful' : 'Connection failed' }}</p>
+                <p class="mt-1">{{ testResult?.message }}</p>
+                <pre
+                  v-if="testResult?.provider_info"
+                  class="mt-2 overflow-auto rounded bg-background/50 p-2 text-xs"
+                >{{ JSON.stringify(testResult?.provider_info, null, 2) }}</pre>
+              </div>
+            </div>
+          </div>
+        </div>
+      </template>
+    </div>
+  </FeatureGate>
 </template>
 
 <script setup lang="ts">
@@ -178,6 +189,8 @@ import type { components } from '../lib/api/client'
 import SsoProviderForm from '../components/SsoProviderForm.vue'
 import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
+import FeatureGate from '../components/FeatureGate.vue'
+import LockIcon from '../components/LockIcon.vue'
 import { formatError } from '../lib/utils'
 
 type SsoProviderResponse = components['schemas']['SsoProviderResponse']
