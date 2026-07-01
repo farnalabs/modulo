@@ -25,8 +25,7 @@ def extract_orm_entity(stmt: Select[Any]) -> type | None:
     """
     for desc in stmt.column_descriptions:
         entity = desc.get("entity")
-        if entity is not None:
-            assert isinstance(entity, type)
+        if entity is not None and isinstance(entity, type):
             return entity
     return None
 

@@ -1,5 +1,4 @@
 import uuid
-from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -11,8 +10,8 @@ async def get_effective_setting(
     session: AsyncSession,
     org_id: uuid.UUID | None,
     key: str,
-    default: Any = None,
-) -> Any:
+    default: object = None,
+) -> object:
     """Resolve a setting: org.settings_json → SystemConfig → default."""
     if org_id is not None:
         org = await get_organisation(session, org_id)
