@@ -1,0 +1,44 @@
+{"findings": [
+  {
+    "file": "frontend/src/views/LibraryView.vue",
+    "line": 228,
+    "description": "Both createPipeline (L228) and viewPrimitive (L232) navigate to the same route 'library-pipeline-wizard' with identical logic — either dead code (one should be removed) or a bug (viewPrimitive should target a different route like 'library-primitive-detail').",
+    "severity": "major"
+  },
+  {
+    "file": "backend/src/modulo/api/routes/library.py",
+    "line": 259,
+    "description": "import logging and logger init inside function body (list_library_primitives_endpoint). Should be at module level for consistency and to avoid repeated imports.",
+    "severity": "major"
+  },
+  {
+    "file": "backend/src/modulo/core/library_service/__init__.py",
+    "line": 1,
+    "description": "No __all__ defined in this __init__.py which defines 12+ public functions, 3 exception classes, and 3 constants. Star imports are unpredictable without it.",
+    "severity": "major"
+  },
+  {
+    "file": "backend/src/modulo/core/library_service/__init__.py",
+    "line": 963,
+    "description": "Duplicated version-bump logic (lines 963-968 in copy_to_adapt and 1609-1614 in submit_contribution_version) — identical 6-line block for splitting, incrementing, and joining version strings. Extract to a shared helper.",
+    "severity": "minor"
+  },
+  {
+    "file": "backend/src/modulo/api/routes/library.py",
+    "line": 447,
+    "description": "_analyse_bundle is ~110 lines handling 4+ distinct resolution concerns (schemas, connectors, model backends, agent name conflicts, overrides, team listing). Should be factored into smaller helpers.",
+    "severity": "minor"
+  },
+  {
+    "file": "backend/src/modulo/core/library_service/__init__.py",
+    "line": 940,
+    "description": "Repetitive None-field pattern in create_library_primitive calls — copy_to_adapt (L970-996), contribute_fixture (L1430-1453), and submit_contribution_version (L1635-1658) all pass ~10 identical None keyword args. Extract default kwargs into a shared dict or helper.",
+    "severity": "minor"
+  },
+  {
+    "file": "backend/src/modulo/core/library_service/__init__.py",
+    "line": 89,
+    "description": "ContributionInvalidTransitionError extends ValueError while ContributionNotFoundError (L84) extends LookupError — inconsistent exception base class choice for sibling contribution errors.",
+    "severity": "minor"
+  }
+]}

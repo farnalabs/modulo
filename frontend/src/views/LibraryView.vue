@@ -239,7 +239,7 @@ async function toggleAutoUpdate(prim: LibraryPrimitive) {
     await patch<LibraryPrimitive>(`/api/v1/libraries/${prim.id}`, { auto_update: newValue })
     prim.auto_update = newValue
   } catch (e) {
-    console.error('Failed to toggle auto-update', e)
+    error.value = 'Failed to toggle auto-update. Please try again.'
   }
 }
 
