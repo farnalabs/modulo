@@ -18,7 +18,9 @@ _MIN_ENTROPY_BITS = 30
 
 
 def hash_password(password: str) -> str:
-    """Hash a password with bcrypt."""
+    """Hash a password with bcrypt. Raises ValueError if >72 bytes (bcrypt truncation)."""
+    if len(password.encode("utf-8")) > 72:
+        raise ValueError("Password exceeds 72 bytes — bcrypt would silently truncate")
     return _bcrypt_lib.hashpw(password.encode(), _bcrypt_lib.gensalt()).decode()
 
 

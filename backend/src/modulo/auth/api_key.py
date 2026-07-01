@@ -147,6 +147,7 @@ async def revoke_api_key(
     key_id: uuid.UUID,
     org_id: uuid.UUID,
 ) -> bool:
+    """Revoke an API key. Returns True if the key was found and revoked."""
     result = await session.execute(
         select(OrgApiKey).where(
             OrgApiKey.id == key_id,
@@ -183,6 +184,7 @@ async def list_api_keys(
     org_id: uuid.UUID,
     include_revoked: bool = False,
 ) -> list[dict[str, Any]]:
+    """List API keys for an organisation, ordered by creation date descending."""
     stmt = select(OrgApiKey).where(OrgApiKey.organisation_id == org_id)
     if not include_revoked:
         stmt = stmt.where(OrgApiKey.revoked_at.is_(None))
@@ -202,6 +204,7 @@ async def update_api_key(
     team_id: uuid.UUID | None = None,
     expires_at: datetime | None = None,
 ) -> OrgApiKey | None:
+    """Update an API key's metadata. Returns None if the key was not found."""
     stmt = select(OrgApiKey).where(
         OrgApiKey.id == key_id,
         OrgApiKey.organisation_id == org_id,

@@ -149,15 +149,11 @@ async def apply_group_mappings(
 
 
 async def _lookup_provider_by_client_id(session: AsyncSession, client_id: str) -> SsoProvider | None:
-    from sqlalchemy import select
-
     result = await session.execute(select(SsoProvider).where(SsoProvider.client_id == client_id).limit(1))
     return result.scalar_one_or_none()
 
 
 async def _lookup_provider_by_entity_id(session: AsyncSession, entity_id: str) -> SsoProvider | None:
-    from sqlalchemy import select
-
     result = await session.execute(select(SsoProvider).where(SsoProvider.entity_id == entity_id).limit(1))
     return result.scalar_one_or_none()
 
@@ -259,14 +255,16 @@ async def oidc_process_callback(
 
     jwks_uri = disc.get("jwks_uri", "")
     issuer = disc.get("issuer", "")
-    if jwks_uri and issuer:
-        try:
-            claims = await verify_id_token(id_token, jwks_uri, provider["client_id"], issuer)
-        except OidcVerifyError as exc:
-            raise ValueError(str(exc)) from None
-    else:
-        claims = _decode_id_token_claims(id_token)
-        _log.warning("sso.oidc_no_discovery_metadata", extra={"provider_id": provider_id})
+    if not jwks_uri or not issuer:
+        raise ValueError(
+            "OIDC provider discovery document is missing jwks_uri or issuer — "
+            "cannot verify ID token signature. Check provider configuration."
+        )
+
+    try:
+        claims = await verify_id_token(id_token, jwks_uri, provider["client_id"], issuer)
+    except OidcVerifyError as exc:
+        raise ValueError(str(exc)) from None
 
     email = claims.get("email", "") or claims.get("sub", "")
     name = claims.get("name", "") or claims.get("preferred_username", "") or email.split("@")[0]
@@ -349,9 +347,10 @@ def _decode_id_token_claims(id_token: str) -> dict[str, Any]:
     if len(parts) != 3:
         return {}
     try:
-        padded = parts[1] + "=" * (4 - len(parts[1]) % 4)
+        pad = (4 - len(parts[1]) % 4) % 4
+        padded = parts[1] + "=" * pad
         return json.loads(base64.urlsafe_b64decode(padded))
-    except Exception:
+    except (ValueError, json.JSONDecodeError):
         return {}
 
 
@@ -433,21 +432,21 @@ async def saml_process_response(
         issue_instant_str = assertion.get("IssueInstant", "")
         if not_before_str:
             try:
-                not_before = datetime.fromisoformat(not_before_str.replace("Z", "+00:00"))
+                not_before = _parse_saml_datetime(not_before_str)
                 if now_utc < not_before:
                     raise ValueError("SAML assertion used before NotBefore time")
             except ValueError as exc:
                 raise ValueError("Invalid SAML Conditions NotBefore format") from exc
         if not_on_or_after_str:
             try:
-                not_on_or_after = datetime.fromisoformat(not_on_or_after_str.replace("Z", "+00:00"))
+                not_on_or_after = _parse_saml_datetime(not_on_or_after_str)
                 if now_utc >= not_on_or_after:
                     raise ValueError("SAML assertion has expired (NotOnOrAfter)")
             except ValueError as exc:
                 raise ValueError("Invalid SAML Conditions NotOnOrAfter format") from exc
         if issue_instant_str:
             try:
-                issue_instant = datetime.fromisoformat(issue_instant_str.replace("Z", "+00:00"))
+                issue_instant = _parse_saml_datetime(issue_instant_str)
                 if now_utc < issue_instant - timedelta(minutes=5):
                     _log.warning(
                         "sso.saml_clock_skew",
@@ -489,6 +488,19 @@ async def saml_process_response(
             await apply_group_mappings(session, account, org_id, saml_groups, db_provider.group_mappings)
 
     return await issue_sso_tokens(account, org_id, org_role, session, settings)
+
+
+def _parse_saml_datetime(value: str) -> datetime:
+    """Parse a SAML timestamp, handling both timezone-aware and naive formats.
+
+    SAML 2.0 timestamps SHOULD include timezone (``Z`` suffix or offset),
+    but some IdPs omit it. We treat a naive timestamp as UTC.
+    """
+    normalized = value.replace("Z", "+00:00")
+    dt = datetime.fromisoformat(normalized)
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=UTC)
+    return dt
 
 
 async def _saml_fetch_idp_metadata(settings: Settings) -> str:
