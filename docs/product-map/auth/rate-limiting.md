@@ -99,13 +99,12 @@ status: partial
 - [x] TokenBucket thread-safe via `asyncio.Lock`
 
 ## Known Gaps
-- BDD feature file at `backend/tests/bdd/features/model_backends/rate_limiting.feature` is a placeholder — no real scenarios
-- No BDD coverage for any rate limit endpoint or behaviour
+- BDD feature file at `backend/tests/bdd/features/model_backends/rate_limiting.feature` — **partially fixed**: 11 real scenarios written covering PRD §7.18 endpoints, bypass token, runtime config, admin auth, empty rules, Redis fallback, SQLite disable. Still needs step definitions wired.
+- No unit-test-level step definitions for the BDD scenarios (unit tests exist via `test_rate_limiting_bdd.py` but are not wired as BDD step definitions)
 - No integration/E2E test that exercises Redis sliding window against a real Redis
 - MCP-specific rate limit rules (`trigger_pipeline` vs general MCP calls) are not differentiated in middleware — all `/mcp` paths share 200 req/min rule (trigger_pipeline has a separate 60/min limit at the application level in `mcp_server.py`)
 - HITL review rate limit (20/min per PRD §7.18) is not enforced as a separate rule — `/api/v1/runs` catch-all covers HITL paths at 60/min instead of the specified 20/min 
 - **MCP trigger_pipeline 60/min rate limit NOT implemented**: The product map entry incorrectly claimed `[x]` — there is no TokenBucket or application-level rate limiting for trigger_pipeline. Only the generic `/mcp` 200/min middleware limit applies.
-- **BDD feature file in wrong directory**: The file lives at `backend/tests/bdd/features/model_backends/rate_limiting.feature` under `model_backends/` instead of a proper `rate_limiting/` directory.
-- **In-memory TokenBucket fallback uses hardcoded defaults**: `RateLimiterRegistry` creates TokenBuckets with `rate=10.0, burst=20` regardless of the configured rule — when Redis is unavailable, the rate limit enforcement uses these defaults instead of the actual rule's max_requests/window_s.
 - **HITL review rate limit (20/min per PRD §7.18) not separately enforced**: Covered only by the `/api/v1/runs` catch-all at 60/min.
 - **No integration/E2E test**: No test exercises Redis sliding window against an actual Redis instance.
+- **In-memory TokenBucket fallback — FIXED**: `TokenBucket` now computes `rate`/`burst` from `max_requests`/`window_s` instead of hardcoded defaults. `RateLimiterRegistry` creates buckets from the rule's configured params.
