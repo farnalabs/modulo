@@ -57,6 +57,8 @@ import AdminEnvironmentProfilesView from '../views/AdminEnvironmentProfilesView.
 import AdminSystemOrgsView from '../views/AdminSystemOrgsView.vue'
 import AdminSystemConfigView from '../views/AdminSystemConfigView.vue'
 import AdminRemyView from '../views/AdminRemyView.vue'
+import AdminErrorsView from '../views/AdminErrorsView.vue'
+import AdminErrorDetailView from '../views/AdminErrorDetailView.vue'
 import UserRemySkillsView from '../views/UserRemySkillsView.vue'
 
 const router = createRouter({
@@ -293,6 +295,16 @@ const router = createRouter({
       name: 'admin-system-config',
       component: AdminSystemConfigView,
       meta: { requiresSystemAdmin: true },
+    },
+    {
+      path: '/admin/errors',
+      name: 'admin-errors',
+      component: AdminErrorsView,
+    },
+    {
+      path: '/admin/errors/:id',
+      name: 'admin-error-detail',
+      component: AdminErrorDetailView,
     },
     {
       path: '/admin/remy',

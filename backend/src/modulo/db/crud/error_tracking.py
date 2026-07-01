@@ -9,7 +9,7 @@ import uuid
 from datetime import UTC, datetime
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.db.models.error_event import ErrorEvent
@@ -96,6 +96,8 @@ async def get_error_groups(
     status: str | None = None,
     level: str | None = None,
     source: str | None = None,
+    environment: str | None = None,
+    search: str | None = None,
     limit: int = 50,
     offset: int = 0,
 ) -> list[ErrorGroup]:
@@ -105,20 +107,57 @@ async def get_error_groups(
         q = q.where(ErrorGroup.status == status)
     if level is not None:
         q = q.where(ErrorGroup.level_peak == level)
-    if source is not None:
-        q = q.where(
-            ErrorGroup.sample_event_id.isnot(None),
-            ErrorGroup.sample_event_id.in_(
-                select(ErrorEvent.id).where(
-                    ErrorEvent.organisation_id == org_id,
-                    ErrorEvent.source == source,
-                )
-            ),
+
+    has_event_filters = source is not None or environment is not None or search is not None
+    if has_event_filters:
+        event_sub = select(ErrorEvent.fingerprint).where(
+            ErrorEvent.organisation_id == org_id,
         )
+        if source is not None:
+            event_sub = event_sub.where(ErrorEvent.source == source)
+        if environment is not None:
+            event_sub = event_sub.where(ErrorEvent.environment == environment)
+        if search is not None:
+            event_sub = event_sub.where(ErrorEvent.message.ilike(f"%{search}%"))
+        q = q.where(ErrorGroup.fingerprint.in_(event_sub))
 
     q = q.order_by(ErrorGroup.last_seen.desc()).offset(offset).limit(limit)
     result = await session.execute(q)
     return list(result.scalars().all())
+
+
+async def count_error_groups(
+    session: AsyncSession,
+    *,
+    org_id: uuid.UUID,
+    status: str | None = None,
+    level: str | None = None,
+    source: str | None = None,
+    environment: str | None = None,
+    search: str | None = None,
+) -> int:
+    q = select(func.count(ErrorGroup.id)).where(ErrorGroup.organisation_id == org_id)
+
+    if status is not None:
+        q = q.where(ErrorGroup.status == status)
+    if level is not None:
+        q = q.where(ErrorGroup.level_peak == level)
+
+    has_event_filters = source is not None or environment is not None or search is not None
+    if has_event_filters:
+        event_sub = select(ErrorEvent.fingerprint).where(
+            ErrorEvent.organisation_id == org_id,
+        )
+        if source is not None:
+            event_sub = event_sub.where(ErrorEvent.source == source)
+        if environment is not None:
+            event_sub = event_sub.where(ErrorEvent.environment == environment)
+        if search is not None:
+            event_sub = event_sub.where(ErrorEvent.message.ilike(f"%{search}%"))
+        q = q.where(ErrorGroup.fingerprint.in_(event_sub))
+
+    result = await session.execute(q)
+    return result.scalar_one() or 0
 
 
 async def get_error_group(
@@ -160,6 +199,24 @@ async def get_error_events_by_group(
     )
     result = await session.execute(q)
     return list(result.scalars().all())
+
+
+async def count_error_events_by_group(
+    session: AsyncSession,
+    *,
+    org_id: uuid.UUID,
+    group_id: uuid.UUID,
+) -> int:
+    group = await get_error_group(session=session, org_id=org_id, group_id=group_id)
+    if group is None:
+        return 0
+
+    q = select(func.count(ErrorEvent.id)).where(
+        ErrorEvent.organisation_id == org_id,
+        ErrorEvent.fingerprint == group.fingerprint,
+    )
+    result = await session.execute(q)
+    return result.scalar_one() or 0
 
 
 async def update_error_group(
