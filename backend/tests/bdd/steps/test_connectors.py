@@ -623,6 +623,12 @@ def step_write_succeeds(ctx):
     assert result is not None, "Write result is None"
 
 
+@then("the write fails")
+def step_write_fails(ctx):
+    result = ctx.get("write_result")
+    assert result is None, f"Expected write to fail but got: {result}"
+
+
 @then("the result is an error")
 def step_result_is_error(ctx):
     assert ctx.get("query_error") is not None, "Expected an error but query succeeded"
@@ -924,6 +930,30 @@ def step_linear_create_issue(resource, title, team, ctx):
     except Exception as exc:
         ctx["write_result"] = None
         ctx["query_error"] = str(exc)
+
+
+@given("a Linear connector that returns API errors")
+def step_linear_connector_api_errors(ctx):
+    from unittest.mock import AsyncMock
+    from modulo.connectors.base import HealthResult
+
+    mock_connector = AsyncMock()
+    mock_connector.connector_type = "linear"
+
+    async def mock_query(q):
+        raise ValueError("Linear API error: [{'message': 'Internal error'}]")
+
+    async def mock_write(payload):
+        return {"success": False, "issue": None}
+
+    async def mock_health_check():
+        return HealthResult(ok=False, detail="API error")
+
+    mock_connector.query = mock_query
+    mock_connector.write = mock_write
+    mock_connector.health_check = mock_health_check
+    ctx["connector"] = mock_connector
+    ctx["query_error"] = None
 
 
 @when(
