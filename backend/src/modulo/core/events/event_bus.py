@@ -12,6 +12,8 @@ if TYPE_CHECKING:
 
 _log = logging.getLogger(__name__)
 
+type _SubscriberMap = dict[str, list[asyncio.Queue[dict[str, Any]]]]
+
 _background_tasks: set[asyncio.Task[Any]] = set()
 
 
@@ -32,7 +34,7 @@ class EventBus:
 
     def __init__(self, redis_broker: RedisEventBroker | None = None) -> None:
         """Initialize with an optional Redis broker for cross-worker broadcast."""
-        self._subscribers: dict[str, list[asyncio.Queue[dict[str, Any]]]] = {}
+        self._subscribers: _SubscriberMap = {}
         self._redis_broker = redis_broker
         self._lock: asyncio.Lock = asyncio.Lock()
 
@@ -138,7 +140,8 @@ def get_event_bus() -> EventBus:
     """Return the module-level EventBus singleton (lazy init)."""
     if _event_bus is None:
         _set_event_bus(EventBus())
-    assert _event_bus is not None
+    if _event_bus is None:
+        raise RuntimeError("EventBus singleton accessed before initialization")
     return _event_bus
 
 
