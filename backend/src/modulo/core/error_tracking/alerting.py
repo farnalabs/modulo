@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import logging
 import time
 import uuid
@@ -90,7 +91,7 @@ class AlertEngine:
                 continue
 
             ck = _CooldownKey(rule_id=rule.id, group_id=error_group_id)
-            last_fired = self._get_last_fired(ck)
+            last_fired = await self._get_last_fired(ck)
             if last_fired is not None and (now - last_fired) < rule.cooldown_seconds:
                 _log.debug(
                     "alert.cooldown_skip",
@@ -98,7 +99,7 @@ class AlertEngine:
                 )
                 continue
 
-            self._set_last_fired(ck, now)
+            await self._set_last_fired(ck, now)
 
             triggered.append(
                 TriggeredAlert(
@@ -138,11 +139,9 @@ class AlertEngine:
                     extra={"rule_id": str(alert.rule_id), "group_id": str(alert.error_group_id)},
                 )
 
-    def _get_last_fired(self, key: _CooldownKey) -> float | None:
+    async def _get_last_fired(self, key: _CooldownKey) -> float | None:
         if self._redis is not None:
-            import json
-
-            raw = self._redis.get(str(key))
+            raw = await self._redis.get(str(key))
             if raw:
                 try:
                     return json.loads(raw)
@@ -151,10 +150,8 @@ class AlertEngine:
             return None
         return self._cooldowns.get(key)
 
-    def _set_last_fired(self, key: _CooldownKey, value: float) -> None:
+    async def _set_last_fired(self, key: _CooldownKey, value: float) -> None:
         if self._redis is not None:
-            import json
-
-            self._redis.setex(str(key), 86400, json.dumps(value))
+            await self._redis.setex(str(key), 86400, json.dumps(value))
         else:
             self._cooldowns[key] = value

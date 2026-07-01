@@ -221,10 +221,10 @@ async def list_error_groups(
             search=search,
         )
 
-    items = []
-    for g in groups:
-        sample = await _fetch_sample_event(session, org_id, g)
-        items.append(_serialize_error_group_summary(g, sample))
+        items = []
+        for g in groups:
+            sample = await _fetch_sample_event(session, org_id, g)
+            items.append(_serialize_error_group_summary(g, sample))
 
     return {"items": items, "total": total, "limit": limit, "offset": offset}
 
@@ -242,11 +242,10 @@ async def get_error_group_detail(
     async with session.begin():
         await set_rls_org(session, org_id)
         group = await get_error_group(session=session, org_id=org_id, group_id=error_id)
+        if group is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Error group not found")
+        sample = await _fetch_sample_event(session, org_id, group)
 
-    if group is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Error group not found")
-
-    sample = await _fetch_sample_event(session, org_id, group)
     return {
         "id": str(group.id),
         "fingerprint": group.fingerprint,
@@ -284,7 +283,8 @@ async def patch_error_group(
         except ValueError as exc:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
 
-    sample = await _fetch_sample_event(session, org_id, group)
+        sample = await _fetch_sample_event(session, org_id, group)
+
     return {
         "id": str(group.id),
         "fingerprint": group.fingerprint,
