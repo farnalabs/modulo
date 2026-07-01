@@ -58,3 +58,16 @@ Feature: Pipeline Error Recovery
     And I POST /api/runs/{run_id}/resume
     Then the run restarts from node 2
     And node 1 is not re-executed
+
+  Scenario: Node timeout marks run failed
+    Given a running pipeline with a node timeout of 0.1 seconds
+    When the node runs longer than the timeout
+    Then the run status becomes "failed"
+    And the error_code is "node_timeout"
+
+  Scenario: Conditional gate skips on falsy condition
+    Given a running pipeline with a conditional HITL gate
+    And the gate condition evaluates to false
+    When the run reaches the gate
+    Then the gate is skipped
+    And the run continues to the next node
