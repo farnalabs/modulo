@@ -1117,6 +1117,77 @@ export interface paths {
       }
     }
   }
+  '/api/v1/errors': {
+    get: {
+      parameters: {
+        query: {
+          status?: string
+          level?: string
+          source?: string
+          environment?: string
+          search?: string
+          limit?: number
+          offset?: number
+        }
+      }
+      responses: {
+        200: {
+          content: {
+            'application/json': components['schemas']['ErrorListResponse']
+          }
+        }
+      }
+    }
+  }
+  '/api/v1/errors/{error_id}': {
+    get: {
+      parameters: {
+        path: { error_id: string }
+      }
+      responses: {
+        200: {
+          content: {
+            'application/json': components['schemas']['ErrorGroupDetail']
+          }
+        }
+      }
+    }
+    patch: {
+      parameters: {
+        path: { error_id: string }
+      }
+      requestBody: {
+        content: {
+          'application/json': components['schemas']['ErrorGroupUpdate']
+        }
+      }
+      responses: {
+        200: {
+          content: {
+            'application/json': components['schemas']['ErrorGroupDetail']
+          }
+        }
+      }
+    }
+  }
+  '/api/v1/errors/{error_id}/events': {
+    get: {
+      parameters: {
+        path: { error_id: string }
+        query: {
+          limit?: number
+          offset?: number
+        }
+      }
+      responses: {
+        200: {
+          content: {
+            'application/json': components['schemas']['ErrorEventListResponse']
+          }
+        }
+      }
+    }
+  }
   '/api/v1/admin/tiers': {
     get: {
       responses: {
@@ -1882,6 +1953,55 @@ export interface components {
         label: string
         rank: number
       }>
+    }
+    ErrorGroupSummary: {
+      id: string
+      fingerprint: string
+      status: string
+      level_peak: string
+      count: number
+      first_seen: string
+      last_seen: string
+      sample_message: string
+    }
+    ErrorGroupDetail: {
+      id: string
+      fingerprint: string
+      status: string
+      level_peak: string
+      count: number
+      first_seen: string
+      last_seen: string
+      sample_event: components['schemas']['ErrorEventDetail'] | null
+      assigned_to: string | null
+    }
+    ErrorEventDetail: {
+      id: string
+      level: string
+      message: string
+      stacktrace: string | null
+      context_json: { [key: string]: unknown } | null
+      source: string
+      environment: string | null
+      version: string | null
+      breadcrumbs: Array<{ [key: string]: unknown }> | null
+      created_at: string
+    }
+    ErrorGroupUpdate: {
+      status?: string | null
+      assigned_to?: string | null
+    }
+    ErrorListResponse: {
+      items: components['schemas']['ErrorGroupSummary'][]
+      total: number
+      limit: number
+      offset: number
+    }
+    ErrorEventListResponse: {
+      items: components['schemas']['ErrorEventDetail'][]
+      total: number
+      limit: number
+      offset: number
     }
   }
 }
