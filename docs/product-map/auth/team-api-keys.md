@@ -36,11 +36,11 @@ Per-org, role-scoped API keys for CI/CD pipelines and external agents, with opti
 ### Role enforcement
 
 - [x] Valid roles: `operator` and `runner` only
-- [ ] `admin` role is rejected with 422 on create and update
+- [x] `admin` role is rejected with 422 on create and update
 - [x] `viewer` role is not valid for API keys
-- [ ] Runner-scoped key: trigger runs and read endpoints only — cannot approve HITL, access connector settings, or modify pipelines
-- [ ] Operator-scoped key: trigger runs, approve HITL gates (subject to `human_only` and `required_team_id`), and all read endpoints
-- [ ] Role enforced at the ViewModel command layer (same enforcement path as JWT roles)
+- [x] Runner-scoped key: trigger runs and read endpoints only — cannot approve HITL, access connector settings, or modify pipelines
+- [x] Operator-scoped key: trigger runs, approve HITL gates (subject to `human_only` and `required_team_id`), and all read endpoints
+- [x] Role enforced at the ViewModel command layer (same enforcement path as JWT roles)
 - [x] DB CHECK constraint (`ck_org_api_keys_role`) enforces role values at the database level
 
 ### Team-scoped API keys
@@ -48,8 +48,8 @@ Per-org, role-scoped API keys for CI/CD pipelines and external agents, with opti
 - [x] API key carries optional `team_id` FK to `teams.id` (nullable, CASCADE on team delete)
 - [ ] Team-scoped API key is restricted to resources accessible to that team under the key's embedded role
 - [ ] Org-wide API key (NULL `team_id`) respects org-level role only — no team boundary
-- [x] Team-scoped API keys cannot have `admin` role — `_validate_team_key_role` helper defined (but currently unused — dead code)
-- [ ] Admin required to set or update `team_id` on create/PUT (403 for non-admin)
+- [x] Team-scoped API keys cannot have `admin` role — `_validate_team_key_role` helper enforces this on both create and update
+- [x] Admin required to set or update `team_id` on create/PUT (403 for non-admin)
 - [x] `team_id` is serialised in list/response payloads
 
 ### CRUD lifecycle
@@ -58,12 +58,12 @@ Per-org, role-scoped API keys for CI/CD pipelines and external agents, with opti
 - [x] GET `/api/v1/api-keys` lists active keys (or all including revoked) for the org
 - [x] PUT `/api/v1/api-keys/{key_id}` updates name, role, team_id, expires_at
 - [x] DELETE `/api/v1/api-keys/{key_id}` sets `revoked_at` (soft-delete)
-- [ ] GET `/api/v1/api-keys/mcp-config` returns MCP URL and Claude Desktop / Cursor config snippet
-- [ ] All API key management endpoints set RLS org context (`set_rls_org`) and user context (`set_rls_user_context`)
-- [ ] API key not found returns 404 on update/revoke
-- [ ] Updates to `team_id` require admin privilege (403 otherwise)
-- [ ] Roles restricted to `operator`/`runner` on update — `admin` returns 422
-- [ ] Key name minimum length 1 character
+- [x] GET `/api/v1/api-keys/mcp-config` returns MCP URL and Claude Desktop / Cursor config snippet
+- [x] All API key management endpoints set RLS org context (`set_rls_org`) and user context (`set_rls_user_context`)
+- [x] API key not found returns 404 on update/revoke
+- [x] Updates to `team_id` require admin privilege (403 otherwise)
+- [x] Roles restricted to `operator`/`runner` on update — `admin` returns 422
+- [x] Key name minimum length 1 character
 
 ### Validation
 
@@ -73,7 +73,7 @@ Per-org, role-scoped API keys for CI/CD pipelines and external agents, with opti
 - [x] Key from wrong org returns `ApiKeyInvalidError`
 - [x] Hash mismatch returns `ApiKeyInvalidError` (constant-time compare)
 - [x] `last_used_at` updated on every successful validation
-- [ ] `expires_at` and `revoked_at` are nullable — permanent keys if both are null
+- [x] `expires_at` and `revoked_at` are nullable — permanent keys if both are null
 
 ### MCP auth integration
 
@@ -85,12 +85,13 @@ Per-org, role-scoped API keys for CI/CD pipelines and external agents, with opti
 
 ### Enterprise gating
 
-- [ ] Team RBAC toggle controls whether team-scoped API keys are usable
+- [x] Team RBAC toggle controls whether team-scoped API keys are usable
 
 ## Known Gaps
 
 - **MCP middleware does not propagate `team_id` to request context.** The `_ctx_team_id` ContextVar does not exist — tool handlers have no way to know which team scope an API key was issued for. Team-scoped enforcement at the MCP layer is incomplete.
-- **`_validate_team_key_role` is dead code.** Defined in `modulo/auth/api_key.py:64` but never called. Team-scoped keys with admin role are only blocked by the REST route validation (422), not by this dedicated validation function.
-- **No BDD scenarios exist.** `backend/tests/bdd/features/auth/api_keys.feature` is a placeholder with a single trivially-passing scenario.
+- **`_validate_team_key_role` was previously dead code but is now called** on both create and update in `api_key.py`. Team-scoped keys with admin role are now caught both at the route level (422) and by this dedicated validation function.
+- **BDD coverage is incomplete.** Feature file at `backend/tests/bdd/features/auth/api_keys.feature` has 5 real scenarios (happy path, create, list, revoke, invalid, reject) but is missing scenarios for: admin role rejection, team-scoped key creation, MCP auth validation, role-scope enforcement, MCP config endpoint, not-found handling, unauthenticated access, soft-delete revocation.
 - **No team-scoped enforcement unit tests.** `test_api_key.py` does not test validation of team-scoped keys — no tests verify that a team-scoped key cannot access resources outside its team boundary.
 - **No RLS policy on `org_api_keys` table for team isolation.** When querying API keys via MCP, a team-scoped key could theoretically enumerate org-wide keys via the list endpoint — the list endpoint filters by `organisation_id` only, not by the requesting key's `team_id`.
+- **`update_api_key` endpoint does not support updating `expires_at` in the route layer.** The `update_api_key` function in `api_key.py` accepts `expires_at`, and the route now parses it from the request body (Fix C), but no test coverage exists for the new field on the update path.
