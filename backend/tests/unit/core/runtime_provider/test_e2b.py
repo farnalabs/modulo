@@ -5,7 +5,7 @@ from __future__ import annotations
 import os
 import uuid
 from collections.abc import Generator
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -33,8 +33,8 @@ def mock_sandbox() -> MagicMock:
 
 @pytest.fixture
 def mock_sandbox_cls(mock_sandbox: MagicMock) -> Generator[MagicMock, None, None]:
-    with patch("e2b.Sandbox") as mock_cls:
-        mock_cls.return_value = mock_sandbox
+    with patch("e2b.AsyncSandbox") as mock_cls:
+        mock_cls.create = AsyncMock(return_value=mock_sandbox)
         yield mock_cls
 
 
@@ -119,10 +119,7 @@ async def test_create_workspace_creates_sandbox(
     ref = await provider.create_workspace(workspace_spec)
 
     assert ref == "sbx-e2b-test-001"
-    mock_sandbox_cls.assert_called_once_with(
-        api_key="sk-test",
-        template="ubuntu-22.04",
-    )
+    mock_sandbox_cls.create.assert_called_once_with(template="ubuntu-22.04")
 
 
 @pytest.mark.asyncio
@@ -134,10 +131,7 @@ async def test_create_workspace_default_template(mock_sandbox_cls: MagicMock) ->
         image_ref="",
     )
     await provider.create_workspace(spec)
-    mock_sandbox_cls.assert_called_once_with(
-        api_key="sk-test",
-        template="default",
-    )
+    mock_sandbox_cls.create.assert_called_once_with(template="base")
 
 
 @pytest.mark.asyncio
@@ -216,7 +210,7 @@ async def test_exec_command_returns_exec_result(
     proc_result.exit_code = 0
     proc_result.stdout = "Python 3.12.0\n"
     proc_result.stderr = ""
-    mock_sandbox.process.start_and_wait.return_value = proc_result
+    mock_sandbox.commands.run.return_value = proc_result
 
     provider = E2BRuntimeProvider(api_key="sk-test")
     ref = await provider.create_workspace(workspace_spec)
@@ -243,14 +237,14 @@ async def test_exec_command_passes_timeout(
     workspace_spec: WorkspaceSpec,
 ) -> None:
     proc_result = MagicMock(exit_code=0, stdout="", stderr="")
-    mock_sandbox.process.start_and_wait.return_value = proc_result
+    mock_sandbox.commands.run.return_value = proc_result
 
     provider = E2BRuntimeProvider(api_key="sk-test")
     ref = await provider.create_workspace(workspace_spec)
     await provider.exec_command(ref, ["sleep", "1"], timeout=30)
 
-    mock_sandbox.process.start_and_wait.assert_called_once()
-    _args, kwargs = mock_sandbox.process.start_and_wait.call_args
+    mock_sandbox.commands.run.assert_called_once()
+    _args, kwargs = mock_sandbox.commands.run.call_args
     assert kwargs.get("timeout") == 30
 
 
@@ -264,7 +258,7 @@ async def test_exec_command_non_zero_exit(
     proc_result.exit_code = 127
     proc_result.stdout = ""
     proc_result.stderr = "command not found"
-    mock_sandbox.process.start_and_wait.return_value = proc_result
+    mock_sandbox.commands.run.return_value = proc_result
 
     provider = E2BRuntimeProvider(api_key="sk-test")
     ref = await provider.create_workspace(workspace_spec)
@@ -280,7 +274,7 @@ async def test_exec_command_handles_proc_without_attributes(
     mock_sandbox: MagicMock,
     workspace_spec: WorkspaceSpec,
 ) -> None:
-    mock_sandbox.process.start_and_wait.return_value = object()
+    mock_sandbox.commands.run.return_value = object()
 
     provider = E2BRuntimeProvider(api_key="sk-test")
     ref = await provider.create_workspace(workspace_spec)
@@ -298,14 +292,14 @@ async def test_exec_command_default_timeout_when_none(
     workspace_spec: WorkspaceSpec,
 ) -> None:
     proc_result = MagicMock(exit_code=0, stdout="", stderr="")
-    mock_sandbox.process.start_and_wait.return_value = proc_result
+    mock_sandbox.commands.run.return_value = proc_result
 
     provider = E2BRuntimeProvider(api_key="sk-test")
     ref = await provider.create_workspace(workspace_spec)
     await provider.exec_command(ref, ["echo", "hi"], timeout=None)
 
-    mock_sandbox.process.start_and_wait.assert_called_once()
-    _args, kwargs = mock_sandbox.process.start_and_wait.call_args
+    mock_sandbox.commands.run.assert_called_once()
+    _args, kwargs = mock_sandbox.commands.run.call_args
     assert kwargs.get("timeout") == 60
 
 
@@ -316,14 +310,14 @@ async def test_exec_command_shell_quoting(
     workspace_spec: WorkspaceSpec,
 ) -> None:
     proc_result = MagicMock(exit_code=0, stdout="", stderr="")
-    mock_sandbox.process.start_and_wait.return_value = proc_result
+    mock_sandbox.commands.run.return_value = proc_result
 
     provider = E2BRuntimeProvider(api_key="sk-test")
     ref = await provider.create_workspace(workspace_spec)
     await provider.exec_command(ref, ["echo", "hello world", "$VAR"])
 
-    mock_sandbox.process.start_and_wait.assert_called_once()
-    call_str = mock_sandbox.process.start_and_wait.call_args[0][0]
+    mock_sandbox.commands.run.assert_called_once()
+    call_str = mock_sandbox.commands.run.call_args[0][0]
     assert "'hello world'" in call_str
     assert "'$VAR'" in call_str
 
@@ -403,7 +397,7 @@ async def test_get_workspace_status(
     mock_sandbox: MagicMock,
     workspace_spec: WorkspaceSpec,
 ) -> None:
-    mock_sandbox.get_info.return_value = MagicMock(status="running")
+    mock_sandbox.is_running = AsyncMock(return_value=True)
 
     provider = E2BRuntimeProvider(api_key="sk-test")
     ref = await provider.create_workspace(workspace_spec)
@@ -412,12 +406,26 @@ async def test_get_workspace_status(
 
 
 @pytest.mark.asyncio
+async def test_get_workspace_status_not_running(
+    mock_sandbox_cls: MagicMock,
+    mock_sandbox: MagicMock,
+    workspace_spec: WorkspaceSpec,
+) -> None:
+    mock_sandbox.is_running = AsyncMock(return_value=False)
+
+    provider = E2BRuntimeProvider(api_key="sk-test")
+    ref = await provider.create_workspace(workspace_spec)
+    status = await provider.get_workspace_status(ref)
+    assert status == "stopped"
+
+
+@pytest.mark.asyncio
 async def test_get_workspace_status_fallback(
     mock_sandbox_cls: MagicMock,
     mock_sandbox: MagicMock,
     workspace_spec: WorkspaceSpec,
 ) -> None:
-    del mock_sandbox.get_info
+    del mock_sandbox.is_running
 
     provider = E2BRuntimeProvider(api_key="sk-test")
     ref = await provider.create_workspace(workspace_spec)
@@ -433,12 +441,12 @@ async def test_get_workspace_status_unknown_sandbox() -> None:
 
 
 @pytest.mark.asyncio
-async def test_get_workspace_status_get_info_raises(
+async def test_get_workspace_status_is_running_raises(
     mock_sandbox_cls: MagicMock,
     mock_sandbox: MagicMock,
     workspace_spec: WorkspaceSpec,
 ) -> None:
-    mock_sandbox.get_info.side_effect = RuntimeError("API unavailable")
+    mock_sandbox.is_running = AsyncMock(side_effect=RuntimeError("API unavailable"))
 
     provider = E2BRuntimeProvider(api_key="sk-test")
     ref = await provider.create_workspace(workspace_spec)
@@ -447,12 +455,12 @@ async def test_get_workspace_status_get_info_raises(
 
 
 @pytest.mark.asyncio
-async def test_get_workspace_status_sandbox_without_get_info(
+async def test_get_workspace_status_sandbox_without_is_running(
     mock_sandbox_cls: MagicMock,
     mock_sandbox: MagicMock,
     workspace_spec: WorkspaceSpec,
 ) -> None:
-    mock_sandbox.get_info = None
+    mock_sandbox.is_running = None
 
     provider = E2BRuntimeProvider(api_key="sk-test")
     ref = await provider.create_workspace(workspace_spec)
@@ -474,10 +482,10 @@ async def test_create_workspace_sandbox_constructor_raises() -> None:
         image_ref="bad-template",
     )
     with (
-        patch("e2b.Sandbox") as mock_cls,
+        patch("e2b.AsyncSandbox") as mock_cls,
         pytest.raises(Exception),
     ):
-        mock_cls.side_effect = RuntimeError("E2B API unavailable")
+        mock_cls.create = AsyncMock(side_effect=RuntimeError("E2B API unavailable"))
         await provider.create_workspace(spec)
 
 
@@ -517,7 +525,7 @@ async def test_multiple_workspaces_independent(
     sbx2.process = MagicMock()
     sbx2.commands = MagicMock()
 
-    mock_sandbox_cls.side_effect = [sbx1, sbx2]
+    mock_sandbox_cls.create = AsyncMock(side_effect=[sbx1, sbx2])
 
     spec1 = WorkspaceSpec(
         environment_profile_id=uuid.uuid4(),

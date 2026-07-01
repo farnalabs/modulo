@@ -55,6 +55,8 @@ class Settings(BaseSettings):
 
     modulo_ratelimit_bypass_token: str = Field("")
 
+    modulo_max_local_concurrency: int = Field(2)
+
     # Auth-specific rate limiting
     modulo_auth_rate_limit_enabled: bool = Field(True)
     modulo_auth_max_attempts: int = Field(10)

@@ -72,6 +72,10 @@ async function nextStep() {
   }
 }
 
+function portRef(port: { name: string }) {
+  return '{{parameter.' + port.name + '}}'
+}
+
 function prevStep() {
   if (step.value > 1) step.value--
 }
@@ -164,7 +168,7 @@ function goToLibrary() {
             <span class="rounded bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground">{{ port.type }}</span>
           </div>
           <p v-if="port.description" class="mt-0.5 text-xs text-muted-foreground">{{ port.description }}</p>
-          <code class="mt-1 block text-[10px] text-indigo-400">{{ '{{' }}parameter.{{ port.name }}{{ '}}' }}</code>
+          <code class="mt-1 block text-[10px] text-indigo-400">{{ portRef(port) }}</code>
         </div>
       </div>
 
