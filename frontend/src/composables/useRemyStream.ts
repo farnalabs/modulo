@@ -2,6 +2,8 @@ import { ref, onUnmounted } from 'vue'
 import { useRemyStore } from './useRemyStore'
 import { getAccessToken } from '@/lib/api/client'
 
+const MAX_BUFFER_SIZE = 1024 * 1024
+
 export interface ToolCallEvent {
   tool_call_id: string
   tool_name: string
@@ -79,12 +81,18 @@ export function useRemyStream() {
       const decoder = new TextDecoder()
       let buffer = ''
       let currentEvent = ''
+      let streaming = true
 
-      while (true) {
+      while (streaming) {
         const { done, value } = await reader.read()
-        if (done) break
+        if (done) { streaming = false; continue }
 
         buffer += decoder.decode(value, { stream: true })
+        if (buffer.length > MAX_BUFFER_SIZE) {
+          store.error = 'Stream buffer overflow'
+          store.isStreaming = false
+          break
+        }
         const lines = buffer.split('\n')
         buffer = lines.pop() ?? ''
 
