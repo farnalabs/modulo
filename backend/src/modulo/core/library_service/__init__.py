@@ -6,8 +6,30 @@ import uuid
 from datetime import UTC, datetime
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import select, update as sa_update
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.exc import ProgrammingError
+
+__all__ = [
+    "CommunityPrimitiveReadOnlyError",
+    "ContributionNotFoundError",
+    "ContributionInvalidTransitionError",
+    "MODULO_ORG_ID",
+    "list_primitives",
+    "get_primitive",
+    "get_primitive_by_slug",
+    "copy_to_adapt",
+    "contribute_fixture",
+    "submit_contribution_for_review",
+    "publish_contribution",
+    "list_contributions",
+    "submit_contribution_version",
+    "list_contribution_versions",
+    "notify_importers_of_update",
+    "CONTRIBUTION_DRAFT",
+    "CONTRIBUTION_REVIEW_QUEUE",
+    "CONTRIBUTION_PUBLISHED",
+]
 
 from modulo.db.crud.base import PageResult
 from modulo.db.crud.library_primitive import (
@@ -18,7 +40,7 @@ from modulo.db.crud.library_primitive import (
     update_library_primitive,
 )
 from modulo.db.models.library_primitive import LibraryPrimitive
-from modulo.db.rls import set_rls_org
+from modulo.db.rls import set_rls_org, set_rls_user_context
 
 # Fixed sentinel used as organisation_id for modulo (built-in) primitives.
 MODULO_ORG_ID: uuid.UUID = uuid.UUID("00000000-0000-0000-0000-000000000001")
@@ -895,9 +917,12 @@ async def get_primitive(
 
     Checks the org-scoped DB first, then falls back to in-memory modulo primitives.
     """
-    async with session.begin():
-        await set_rls_org(session, org_id)
-        item = await get_library_primitive(session, primitive_id)
+    try:
+        async with session.begin():
+            await set_rls_org(session, org_id)
+            item = await get_library_primitive(session, primitive_id)
+    except ProgrammingError:
+        return None
     if item is not None:
         return item
     return _MODULO_BY_ID.get(primitive_id)
@@ -913,14 +938,17 @@ async def get_primitive_by_slug(
 
     Checks the org-scoped DB first, then falls back to in-memory modulo primitives.
     """
-    async with session.begin():
-        await set_rls_org(session, org_id)
-        stmt = select(LibraryPrimitive).where(
-            LibraryPrimitive.primitive_type == primitive_type,
-            LibraryPrimitive.slug == slug,
-        )
-        result = await session.execute(stmt)
-        item = result.scalar_one_or_none()
+    try:
+        async with session.begin():
+            await set_rls_org(session, org_id)
+            stmt = select(LibraryPrimitive).where(
+                LibraryPrimitive.primitive_type == primitive_type,
+                LibraryPrimitive.slug == slug,
+            )
+            result = await session.execute(stmt)
+            item = result.scalar_one_or_none()
+    except ProgrammingError:
+        return None
     if item is not None:
         return item
     return _MODULO_BY_SLUG.get((primitive_type, slug))
@@ -933,6 +961,7 @@ async def copy_to_adapt(
     *,
     target_team_id: uuid.UUID | None = None,
     created_by: uuid.UUID | None = None,
+    org_role: str = "admin",
     via_mcp: bool = False,
 ) -> LibraryPrimitive:
     """Clone a primitive into the org workspace.
@@ -949,14 +978,16 @@ async def copy_to_adapt(
             "Community primitives may only be adapted via the browser UI, not via MCP."
         )
 
-    # Increment download count on registry/community primitives.
-    if source.source in ("registry", "modulo") and source.download_count is not None:
+    # Increment download count atomically on registry primitives.
+    if source.source == "registry":
         async with session.begin():
             await set_rls_org(session, org_id)
-            await update_library_primitive(
-                session,
-                source.id,
-                {"download_count": source.download_count + 1},
+            if created_by is not None:
+                await set_rls_user_context(session, created_by, org_role)
+            await session.execute(
+                sa_update(LibraryPrimitive)
+                .where(LibraryPrimitive.id == source.id)
+                .values(download_count=LibraryPrimitive.download_count + 1)
             )
 
     # Bump the minor version for the copy.
@@ -969,6 +1000,8 @@ async def copy_to_adapt(
 
     async with session.begin():
         await set_rls_org(session, org_id)
+        if created_by is not None:
+            await set_rls_user_context(session, created_by, org_role)
         result = await create_library_primitive(
             session,
             org_id=org_id,
@@ -980,7 +1013,7 @@ async def copy_to_adapt(
             author=source.author,
             version=new_version,
             tags=list(source.tags or []),
-            content_json=dict(source.content_json),
+            content_json=dict(source.content_json) if source.content_json is not None else {},
             source_url=None,
             forked_from=source.id,
             checksum=None,

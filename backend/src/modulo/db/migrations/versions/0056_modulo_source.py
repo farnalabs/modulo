@@ -39,6 +39,7 @@ def upgrade() -> None:
 
 def downgrade() -> None:
     op.execute("ALTER TABLE library_primitives DROP CONSTRAINT IF EXISTS ck_library_primitives_source_fields")
+    op.execute("UPDATE library_primitives SET source = 'local' WHERE source = 'modulo'")
     op.execute("""ALTER TABLE library_primitives ADD CONSTRAINT ck_library_primitives_source_fields CHECK (
         (source = 'local' AND source_url IS NULL AND checksum IS NULL
          AND ed25519_signature IS NULL AND verified IS NULL
