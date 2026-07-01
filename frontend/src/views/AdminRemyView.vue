@@ -297,6 +297,7 @@
               </tbody>
             </table>
           </div>
+          <div v-if="skillError" class="px-3 pt-2 text-sm text-destructive">{{ skillError }}</div>
         </div>
 
         <RemySkillDialog
@@ -467,19 +468,24 @@ async function saveGuidance() {
 
 // Skills
 const skills = ref<SkillItem[]>([])
+const skillError = ref<string | null>(null)
 const skillDialogRef = ref<InstanceType<typeof RemySkillDialog> | null>(null)
 
 async function toggleSkillActive(skill: SkillItem) {
   const newActive = !skill.active
+  skillError.value = null
   try {
     const { error: err } = await (api as any).PUT('/api/v1/admin/remy/skills/{skill_id}', {
       params: { path: { skill_id: skill.id } },
       body: { active: newActive },
     })
-    if (err) return
+    if (err) {
+      skillError.value = `Failed to toggle skill: ${err}`
+      return
+    }
     skill.active = newActive
-  } catch {
-    // ignore
+  } catch (e: unknown) {
+    skillError.value = `Failed to toggle skill: ${e instanceof Error ? e.message : String(e)}`
   }
 }
 
