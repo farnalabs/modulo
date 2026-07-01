@@ -128,5 +128,33 @@ async def test_unsupported_write_resource(connector):
         await connector.write(ConnectorPayload(resource="branch", data={}))
 
 
+@respx.mock
+async def test_health_check_network_error(connector):
+    respx.get(f"{_API}/user").mock(side_effect=httpx.ConnectError("Connection refused"))
+    result = await connector.health_check()
+    assert result.ok is False
+    assert "Connection refused" in result.detail
+
+
+@respx.mock
+async def test_health_check_timeout(connector):
+    respx.get(f"{_API}/user").mock(side_effect=httpx.TimeoutException("Request timed out"))
+    result = await connector.health_check()
+    assert result.ok is False
+    assert "timed out" in result.detail.lower() or "Timeout" in result.detail
+
+
+@respx.mock
+async def test_query_missing_project_filter(connector):
+    with pytest.raises(ValueError, match="Missing required filter"):
+        await connector.query(ConnectorQuery(resource="file", filters={}))
+
+
+@respx.mock
+async def test_write_missing_project_data(connector):
+    with pytest.raises(ValueError, match="Missing required filter"):
+        await connector.write(ConnectorPayload(resource="file", data={}))
+
+
 def test_connector_type(connector):
     assert connector.connector_type == ConnectorType.GITLAB
