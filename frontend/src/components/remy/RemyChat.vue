@@ -54,10 +54,12 @@
 <script setup lang="ts">
 import { ref, watch, nextTick, computed } from 'vue'
 import { useRemyStore } from '@/composables/useRemyStore'
+import { useRemyStream } from '@/composables/useRemyStream'
 import Button from '@/components/ui/button/Button.vue'
 import { getAccessToken } from '@/lib/api/client'
 
 const store = useRemyStore()
+const { connectStream } = useRemyStream()
 const scrollRef = ref<HTMLDivElement | null>(null)
 const inputText = ref('')
 
@@ -103,6 +105,9 @@ async function handleSend() {
   if (!text || store.isStreaming) return
   inputText.value = ''
   await store.sendMessage(text)
+  if (store.activeSessionId) {
+    connectStream(store.activeSessionId)
+  }
 }
 
 function copyMessage(text: string) {

@@ -29,6 +29,7 @@ export function useRemyStream() {
     }
 
     const token = getAccessToken()
+    const pageCtx = store.pageContext
 
     try {
       const response = await fetch(`/api/v1/remy/sessions/${sessionId}/stream`, {
@@ -43,6 +44,7 @@ export function useRemyStream() {
           model: session.model,
           context_window_tokens: session.context_window_tokens,
           api_key: '',
+          page_context: pageCtx.route ? `${pageCtx.route}${pageCtx.params.id ? ` / ${pageCtx.params.id}` : ''}` : undefined,
         }),
         signal: abortController.signal,
       })
