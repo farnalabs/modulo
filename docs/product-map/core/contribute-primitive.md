@@ -10,8 +10,11 @@ code:
   - backend/src/modulo/core/library_service/__init__.py
   - backend/src/modulo/api/routes/contributions.py
 
+depends-on: []
+unit-tests: []
 status: partial
 ---
+
 # Contribute Primitive
 
 Users can create draft fixture contributions, submit them for review, and (as an admin/owner) publish them to the community library. Currently scoped to `test_fixture` primitive type only.
@@ -45,7 +48,9 @@ Users can create draft fixture contributions, submit them for review, and (as an
 - [ ] Contribution has contribution_status field for workflow state tracking
 - [ ] Published contribution is reassigned to community sentinel org
 - [ ] notify_importers_of_update is called on publish
-- [ ] Non-test_fixture primitive types (schema, workflow, agent, integration) cannot be contributed ## Known Gaps - No BDD feature file exists for the contribution flow (only browse, copy-to-adapt, and ratings)
+- [ ] Non-test_fixture primitive types (schema, workflow, agent, integration) cannot be contributed
+
+## Known Gaps - No BDD feature file exists for the contribution flow (only browse, copy-to-adapt, and ratings)
 - Only `test_fixture` primitive type is supported — schema, workflow, agent, and integration contributions not yet implemented
 - No trust tier / Ed25519 signing integration for published contributions
 - No contribution rejection / feedback workflow

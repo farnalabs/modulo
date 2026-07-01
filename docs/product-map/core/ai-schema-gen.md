@@ -11,6 +11,7 @@ code:
 depends-on: [feat-core-schema-inference]
 status: partial
 ---
+
 # AI Schema Inference & Generation
 
 Schema Inference (8.16) samples records from a connected tool and uses an LLM to produce a draft JSON Schema. Schema Generation takes a natural-language description plus optional examples and produces a draft schema. Both are read-only, LLM-assisted drafting tools — output always goes through human review before publishing.
@@ -75,7 +76,9 @@ Schema Inference (8.16) samples records from a connected tool and uses an LLM to
 - [ ] Sandboxed LLM prompt (`SandboxedEnvironment`) for untrusted record data
 - [ ] Sampled data not stored after inference completes (data lifecycle statement)
 - [ ] SDLC onboarding path: connect, infer, review, publish, browse library, wire agents #### BDD coverage
-- [ ] Gherkin scenarios in `schema_inference.feature` — file is a TODO placeholder, no scenarios ## Known Gaps - **BDD placeholder:** `backend/tests/bdd/features/connectors/schema_inference.feature` has zero scenarios
+- [ ] Gherkin scenarios in `schema_inference.feature` — file is a TODO placeholder, no scenarios
+
+## Known Gaps - **BDD placeholder:** `backend/tests/bdd/features/connectors/schema_inference.feature` has zero scenarios
 - **Sample cap mismatch:** Code hardcodes 50 max samples; PRD specifies default 200
 - **No enum/rare-field logic:** Inference prompt doesn't instruct for enum detection or rare-field flagging (8.16)
 - **No `abstract_name` inference:** Required for community library compatibility browsing (8.16 step 4)

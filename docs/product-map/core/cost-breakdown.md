@@ -10,8 +10,10 @@ unit-tests:
   - backend/tests/unit/core/cost_controller/test_cost_controller.py
   - backend/tests/unit/api/test_costs.py
   - backend/tests/integration/crud/test_cost_attribution.py
+bdd: []
 status: partial
 ---
+
 # Cost Breakdown
 
 Discovered from 1 completed delivery tasks.
@@ -30,22 +32,38 @@ Discovered from 1 completed delivery tasks.
 - [ ] Edge case: no `team_id` skips all team-level checks
 - [ ] Concurrency: `SELECT FOR UPDATE` used for atomic check-and-increment
 - [ ] Happy path: `run_count` and `total_spend_usd` both incremented on approval
-- [ ] Edge case: no mutation of counts when spend rejected ### Daily Count Management (`get_or_create_daily_count`) - [ ] Happy path: returns existing `OrgDailyRunCount` row when present
+- [ ] Edge case: no mutation of counts when spend rejected
+
+### Daily Count Management (`get_or_create_daily_count`)
+
+- [ ] Happy path: returns existing `OrgDailyRunCount` row when present
 - [ ] Happy path: creates new row with zero defaults when missing
 - [ ] Edge case: creates new team-scoped row when `team_id` provided
-- [ ] Concurrency: both read and create paths use `SELECT FOR UPDATE` ### Cost Reporting (`get_cost_report`) - [ ] Happy path: report by team aggregates correctly
+- [ ] Concurrency: both read and create paths use `SELECT FOR UPDATE`
+
+### Cost Reporting (`get_cost_report`)
+
+- [ ] Happy path: report by team aggregates correctly
 - [ ] Happy path: report by org aggregates correctly (excludes team rows)
 - [ ] Boundary: all period values accepted (day, week, month, year)
 - [ ] Edge case: soft-deleted or unknown team name shown as "Unknown"
 - [ ] Edge case: zero spend returns 0.0 / 0 in report
 - [ ] Edge case: no rows in period returns empty report
 - [ ] Error: invalid `group_by` value raises `ValueError`
-- [ ] Error: invalid `period` value raises `ValueError` ### API — Cost Report Endpoints (`GET /api/v1/admin/costs`) - [ ] Happy path: returns cost report with period, group_by, items
+- [ ] Error: invalid `period` value raises `ValueError`
+
+### API — Cost Report Endpoints (`GET /api/v1/admin/costs`)
+
+- [ ] Happy path: returns cost report with period, group_by, items
 - [ ] Happy path: defaults to `group_by=team, period=month`
 - [ ] Error: invalid `group_by` returns 422
 - [ ] Error: invalid `period` returns 422
 - [ ] Auth: unauthenticated returns 401/403
-- [ ] Auth: operator (non-admin) returns 403 ### API — Spend Limit Endpoints - [ ] `GET /limits` returns org + team spend limits
+- [ ] Auth: operator (non-admin) returns 403
+
+### API — Spend Limit Endpoints
+
+- [ ] `GET /limits` returns org + team spend limits
 - [ ] `GET /limits` returns `None` when limits not set, empty list when no teams
 - [ ] `PUT /limits/org` sets org daily spend limit
 - [ ] `PUT /limits/org` clears limit (set to null)
@@ -56,27 +74,45 @@ Discovered from 1 completed delivery tasks.
 - [ ] `PUT /limits/teams/{id}` with invalid UUID returns 422
 - [ ] `PUT /limits/teams/{id}` with negative value returns 422
 - [ ] `PUT /limits/teams/{id}` when team not found returns 404
-- [ ] Auth: all limit endpoints admin-only (operator returns 403) ### API — Cost Export (`GET /api/v1/admin/costs/export`) - [ ] Happy path: returns CSV with headers and row data
+- [ ] Auth: all limit endpoints admin-only (operator returns 403)
+
+### API — Cost Export (`GET /api/v1/admin/costs/export`)
+
+- [ ] Happy path: returns CSV with headers and row data
 - [ ] Error: invalid period returns 422
-- [ ] Auth: unauthenticated returns 401/403 ### API — Scheduled Reports - [ ] `POST /reports` creates a scheduled report
+- [ ] Auth: unauthenticated returns 401/403
+
+### API — Scheduled Reports
+
+- [ ] `POST /reports` creates a scheduled report
 - [ ] `POST /reports` with empty recipients returns 422
 - [ ] `GET /reports` lists reports for the org
 - [ ] `GET /reports` returns empty list when none exist
 - [ ] `DELETE /reports/{id}` deletes a report
 - [ ] `DELETE /reports/{id}` when not found returns 404
-- [ ] Auth: all report endpoints admin-only ### API — Spend Anomalies - [ ] `GET /anomalies` returns computed anomalies (spend >2x rolling 7-day avg)
+- [ ] Auth: all report endpoints admin-only
+
+### API — Spend Anomalies
+
+- [ ] `GET /anomalies` returns computed anomalies (spend >2x rolling 7-day avg)
 - [ ] `GET /anomalies` includes stored anomalies merged with computed
 - [ ] `GET /anomalies` returns empty list when no anomalies
 - [ ] `GET /anomalies/dismiss/{id}` dismisses an anomaly
 - [ ] `GET /anomalies/dismiss/{id}` when not found returns 404
-- [ ] Auth: anomaly endpoints admin-only ### PRD — Missing from code (future scope) - [ ] Per-agent `token_budget` enforcement → `budget_exceeded` terminal state
+- [ ] Auth: anomaly endpoints admin-only
+
+### PRD — Missing from code (future scope)
+
+- [ ] Per-agent `token_budget` enforcement → `budget_exceeded` terminal state
 - [ ] Per-run `run_budget` hard stop
 - [ ] Per-trigger `daily_spend_limit` pauses trigger for the day
 - [ ] Circuit breaker permanently pauses trigger until admin re-enables
 - [ ] Configurable currency per organisation (default USD)
 - [ ] `cost_tracking: disabled` skips token accumulation for self-hosted models
 - [ ] Token-level cost accumulation via `on_llm_end` callback
-- [ ] Pricing table in `config/model_pricing.yaml` ## Known Gaps - No BDD feature files exist for cost controls or spend limits
+- [ ] Pricing table in `config/model_pricing.yaml`
+
+## Known Gaps - No BDD feature files exist for cost controls or spend limits
 - Per-agent `token_budget` and per-run `run_budget` (PRD 8.10) not yet implemented
 - Per-trigger `daily_spend_limit` pause behaviour not implemented
 - Circuit breaker not implemented

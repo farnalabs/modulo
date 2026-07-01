@@ -10,8 +10,11 @@ code:
   - frontend/src/views/ApiChangelogView.vue
   - backend/docs/operations/api-versioning.md
 
+depends-on: []
+unit-tests: []
 status: partial
 ---
+
 # API Versioning
 
 URL-path versioning (`/api/v1/`, `/api/v2/`, etc.). Policy document at `backend/docs/operations/api-versioning.md`. Changelog endpoint at `GET /api/v1/changelog`. Deprecation headers via `DeprecationHeaderMiddleware`.
@@ -39,7 +42,9 @@ URL-path versioning (`/api/v1/`, `/api/v2/`, etc.). Policy document at `backend/
 - [ ] Major version deprecation is announced in the changelog and via admin UI notification
 - [ ] `/api/v1/changelog` endpoint has unit tests
 - [ ] `DeprecationHeaderMiddleware` has unit tests
-- [ ] BDD feature files exist for versioning/deprecation behaviour ## Known Gaps - No dedicated PRD section for API versioning — policy lives in `backend/docs/operations/api-versioning.md` only
+- [ ] BDD feature files exist for versioning/deprecation behaviour
+
+## Known Gaps - No dedicated PRD section for API versioning — policy lives in `backend/docs/operations/api-versioning.md` only
 - `DeprecationHeaderMiddleware.deprecate()` is never called — no real endpoint is registered as deprecated
 - No version routing mechanism exists — `/api/v1/` is hardcoded in every router's `APIRouter(prefix="/api/v1/...")`, making parallel version support impossible without significant refactoring
 - No migration guides exist at `docs/operations/migrations/`
