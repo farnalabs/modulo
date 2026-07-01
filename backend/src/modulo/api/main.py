@@ -54,6 +54,7 @@ from modulo.api.routes.deployment import router as deployment_router
 from modulo.api.routes.determination import router as determination_router
 from modulo.api.routes.environments import router as environments_router
 from modulo.api.routes.evals import router as evals_router
+from modulo.api.routes.events import router as events_router
 from modulo.api.routes.feedback import router as feedback_router
 from modulo.api.routes.health import router as health_router
 from modulo.api.routes.hitl import router as hitl_router
@@ -82,6 +83,8 @@ from modulo.api.routes.variants import router as variants_router
 from modulo.api.routes.viewmodel import router as viewmodel_router
 from modulo.api.routes.views import router as views_router
 from modulo.api.routes.webhooks import router as webhooks_router
+from modulo.core.events.event_bus import configure_event_bus
+from modulo.core.events.listeners import register_listeners
 from modulo.core.graceful_shutdown import ShutdownManager, ShutdownMiddleware
 from modulo.core.hitl_manager.expiry_job import ClaimExpiryJob
 from modulo.core.in_process_scheduler import dispose_scheduler_engine, start_schedulers
@@ -473,6 +476,16 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
     # Start the run retention background loop.
     retention_task = asyncio.create_task(_run_retention_loop())
 
+    # Register SQLAlchemy event listeners for resource-change events.
+    register_listeners()
+
+    # Configure the EventBus with Redis broker if Redis is available.
+    if settings.redis_url:
+        from modulo.core.events.redis_broker import RedisEventBroker
+        redis_broker = RedisEventBroker(settings.redis_url)
+        configure_event_bus(redis_broker=redis_broker)
+        logger.info("startup.event_bus_redis_enabled")
+
     # Start the HITL claim expiry background job.
     _claim_expiry_job = ClaimExpiryJob(db_engine)
     await _claim_expiry_job.start()
@@ -583,6 +596,7 @@ app.include_router(stages_router)
 app.include_router(templates_router)
 app.include_router(onboarding_router)
 app.include_router(environments_router)
+app.include_router(events_router)
 
 # Remote MCP server — mounted as a Starlette sub-app at /mcp.
 # Auth is enforced by McpAuthMiddleware inside the sub-app.
