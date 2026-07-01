@@ -15,11 +15,13 @@ from datetime import datetime
 from typing import Any, Generic, TypeVar
 
 from pydantic import BaseModel
-from sqlalchemy import Select, func, select
+from sqlalchemy import Select, func, literal, select
 from sqlalchemy import tuple_ as sa_tuple
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import DeclarativeBase
 
 T = TypeVar("T")
+_ModelT = TypeVar("_ModelT", bound=DeclarativeBase)
 
 
 class CursorPage(BaseModel, Generic[T]):  # noqa: UP046
@@ -66,15 +68,15 @@ class CursorPaginator:
     async def paginate(
         self,
         session: AsyncSession,
-        stmt: Select,
+        stmt: Select[Any],
         *,
         cursor: str | None = None,
         limit: int = 20,
         sort_field: str | None = None,
         sort_dir: str | None = None,
-        model: type,
+        model: type[_ModelT],
         compute_total: bool = False,
-    ) -> CursorPage:
+    ) -> CursorPage[_ModelT]:
         """Apply keyset pagination to *stmt* and return a CursorPage.
 
         When *cursor* is ``None``, returns the first page sorted by
@@ -103,19 +105,21 @@ class CursorPaginator:
         sd = sort_dir or self.sort_dir
 
         sort_col = getattr(model, sf)
-        id_col = model.id
+        id_col = model.id  # type: ignore[attr-defined]
 
         if cursor:
             cursor_value_str, cursor_id = self.decode_cursor(cursor)
             cursor_value = self._parse_cursor_value(cursor_value_str)
 
+            bound_cursor = literal(cursor_value)
+            bound_id = literal(cursor_id)
             if sd == "desc":
                 stmt = stmt.where(
-                    sa_tuple(sort_col, id_col) < sa_tuple(cursor_value, cursor_id)
+                    sa_tuple(sort_col, id_col) < sa_tuple(bound_cursor, bound_id)
                 )
             else:
                 stmt = stmt.where(
-                    sa_tuple(sort_col, id_col) > sa_tuple(cursor_value, cursor_id)
+                    sa_tuple(sort_col, id_col) > sa_tuple(bound_cursor, bound_id)
                 )
 
         order_col = sort_col.desc() if sd == "desc" else sort_col.asc()

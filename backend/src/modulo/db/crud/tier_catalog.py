@@ -1,10 +1,14 @@
+"""CRUD for TierCatalog and FeatureFlagCatalog."""
+
+from typing import Any
+
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.db.models.tier_catalog import FeatureFlagCatalog, TierCatalog
 
 
-async def get_tier(tier_id: str, session: AsyncSession) -> dict | None:
+async def get_tier(tier_id: str, session: AsyncSession) -> dict[str, Any] | None:
     result = await session.execute(
         select(TierCatalog).where(TierCatalog.tier_id == tier_id)
     )
@@ -20,7 +24,7 @@ async def get_tier(tier_id: str, session: AsyncSession) -> dict | None:
     }
 
 
-async def list_tiers(session: AsyncSession) -> list[dict]:
+async def list_tiers(session: AsyncSession) -> list[dict[str, Any]]:
     result = await session.execute(
         select(TierCatalog).order_by(TierCatalog.rank)
     )
@@ -36,7 +40,7 @@ async def list_tiers(session: AsyncSession) -> list[dict]:
     ]
 
 
-async def get_feature_flag(name: str, session: AsyncSession) -> dict | None:
+async def get_feature_flag(name: str, session: AsyncSession) -> dict[str, Any] | None:
     result = await session.execute(
         select(FeatureFlagCatalog).where(FeatureFlagCatalog.name == name)
     )
@@ -52,7 +56,7 @@ async def get_feature_flag(name: str, session: AsyncSession) -> dict | None:
     }
 
 
-async def list_feature_flags(session: AsyncSession) -> list[dict]:
+async def list_feature_flags(session: AsyncSession) -> list[dict[str, Any]]:
     result = await session.execute(
         select(FeatureFlagCatalog).order_by(FeatureFlagCatalog.name)
     )
@@ -68,7 +72,7 @@ async def list_feature_flags(session: AsyncSession) -> list[dict]:
     ]
 
 
-async def list_feature_flags_by_tier(tier_id: str, session: AsyncSession) -> list[dict]:
+async def list_feature_flags_by_tier(tier_id: str, session: AsyncSession) -> list[dict[str, Any]]:
     result = await session.execute(
         select(FeatureFlagCatalog)
         .where(FeatureFlagCatalog.tier_id == tier_id)

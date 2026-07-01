@@ -3,15 +3,19 @@
 All functions require RLS org context to be set by the caller.
 """
 
+import logging
 import uuid
 from typing import Any
 
 from sqlalchemy import func, select
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.db.crud.base import PageResult, apply_updates
 from modulo.db.crud.pagination import CursorPaginator
 from modulo.db.models.library_primitive import LibraryPrimitive
+
+logger = logging.getLogger(__name__)
 
 
 async def copy_to_adapt(
@@ -80,8 +84,7 @@ async def list_library_primitives(
     search: str | None = None,
     cursor: str | None = None,
 ) -> PageResult[LibraryPrimitive]:
-    import logging
-    _log = logging.getLogger(__name__)
+
     conditions = []
 
     if org_id is not None:
@@ -121,8 +124,8 @@ async def list_library_primitives(
         if conditions:
             count_stmt = count_stmt.where(*conditions)
         total = (await session.execute(count_stmt)).scalar_one()
-    except Exception:
-        _log.exception("count query failed")
+    except SQLAlchemyError:
+        logger.exception("count query failed")
         raise
 
     try:
@@ -136,8 +139,8 @@ async def list_library_primitives(
             items_stmt = items_stmt.where(*conditions)
 
         items = list((await session.execute(items_stmt)).scalars())
-    except Exception:
-        _log.exception("items query failed")
+    except SQLAlchemyError:
+        logger.exception("items query failed")
         raise
 
     return PageResult(items=items, total=total, page=page, page_size=page_size)

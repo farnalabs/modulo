@@ -26,12 +26,16 @@ async def set_parent_node(
     parent_id: uuid.UUID | None,
 ) -> Node | None:
     """Set the parent of a node, returning the updated node or None if not found."""
-    node = await session.get(Node, node_id)
+    node = (
+        await session.execute(select(Node).where(Node.id == node_id).with_for_update())
+    ).scalar_one_or_none()
     if node is None:
         return None
 
     if parent_id is not None:
-        parent = await session.get(Node, parent_id)
+        parent = (
+            await session.execute(select(Node).where(Node.id == parent_id).with_for_update())
+        ).scalar_one_or_none()
         if parent is None:
             return None
 

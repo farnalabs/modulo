@@ -19,7 +19,6 @@ from typing import Any
 from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from modulo.db.crud.organisation import get_organisation
 from modulo.db.models.audit_event import AuditEvent
 from modulo.db.models.connector_instance import ConnectorInstance
 from modulo.db.models.library_primitive import LibraryPrimitive
@@ -117,7 +116,10 @@ async def request_org_deletion(
 
     Returns a dict with ``token``, ``token_expires_at``, and ``export`` keys.
     """
-    org = await get_organisation(session, org_id)
+    result = await session.execute(
+        select(Organisation).where(Organisation.id == org_id).with_for_update()
+    )
+    org = result.scalar_one_or_none()
     if org is None:
         raise ValueError("Organisation not found")
     if org.status == "deleted":
@@ -158,7 +160,10 @@ async def confirm_org_deletion(
     Before hard-deleting the org, terminal runs older than 30 days are
     batch-deleted. The remaining cascade is handled by Postgres FK constraints.
     """
-    org = await get_organisation(session, org_id)
+    result = await session.execute(
+        select(Organisation).where(Organisation.id == org_id).with_for_update()
+    )
+    org = result.scalar_one_or_none()
     if org is None:
         raise ValueError("Organisation not found")
 
@@ -193,7 +198,10 @@ async def cancel_org_deletion(
     The org must be in 'deleted' status with a valid deletion_token set.
     Clears the soft-delete fields and restores the organisation to active state.
     """
-    org = await get_organisation(session, org_id)
+    result = await session.execute(
+        select(Organisation).where(Organisation.id == org_id).with_for_update()
+    )
+    org = result.scalar_one_or_none()
     if org is None:
         raise ValueError("Organisation not found")
     if org.status != "deleted" or org.deletion_token is None:
@@ -214,7 +222,10 @@ async def export_org_data(
     org_id: uuid.UUID,
 ) -> dict[str, Any]:
     """Return the export bundle for an org (captures live data if none exists)."""
-    org = await get_organisation(session, org_id)
+    result = await session.execute(
+        select(Organisation).where(Organisation.id == org_id).with_for_update()
+    )
+    org = result.scalar_one_or_none()
     if org is None:
         raise ValueError("Organisation not found")
 

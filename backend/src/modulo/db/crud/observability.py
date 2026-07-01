@@ -1,3 +1,5 @@
+"""CRUD for organisation observability/OTel config stored on Organisation."""
+
 import uuid
 from typing import Any
 
@@ -18,7 +20,10 @@ async def update_otel_config(
     org_id: uuid.UUID,
     config: dict[str, Any],
 ) -> dict[str, Any]:
-    org = await session.get(Organisation, org_id)
+    result = await session.execute(
+        select(Organisation).where(Organisation.id == org_id).with_for_update()
+    )
+    org = result.scalar_one_or_none()
     if org is None:
         raise ValueError("Organisation not found")
     merged = {**org.otel_config_json, **config}

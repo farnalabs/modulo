@@ -1,3 +1,5 @@
+"""CRUD for SystemConfig key-value settings."""
+
 import uuid
 from typing import Any
 
@@ -18,11 +20,14 @@ async def set_config(
     value: Any,
     updated_by: uuid.UUID | None = None,
 ) -> SystemConfig:
-    existing = await get_config(session, key)
-    if existing is not None:
-        existing.value = value
-        existing.updated_by = updated_by
-        entity = existing
+    existing = await session.execute(
+        select(SystemConfig).where(SystemConfig.key == key).with_for_update()
+    )
+    existing_row = existing.scalar_one_or_none()
+    if existing_row is not None:
+        existing_row.value = value
+        existing_row.updated_by = updated_by
+        entity = existing_row
     else:
         entity = SystemConfig(key=key, value=value, updated_by=updated_by)
         session.add(entity)

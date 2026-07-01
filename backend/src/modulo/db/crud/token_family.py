@@ -12,7 +12,7 @@ from modulo.db.models.token_family import TokenFamily
 async def get_or_create_family(
     session: AsyncSession, family_id: uuid.UUID, account_id: uuid.UUID, org_id: uuid.UUID | None
 ) -> TokenFamily:
-    result = await session.execute(select(TokenFamily).where(TokenFamily.family_id == family_id))
+    result = await session.execute(select(TokenFamily).where(TokenFamily.family_id == family_id).with_for_update())
     family = result.scalar_one_or_none()
     if family is None:
         family = TokenFamily(
@@ -66,7 +66,7 @@ async def advance_sequence(session: AsyncSession, family_id: uuid.UUID, expected
 
 
 async def blacklist_family(session: AsyncSession, family_id: uuid.UUID) -> bool:
-    result = await session.execute(select(TokenFamily).where(TokenFamily.family_id == family_id))
+    result = await session.execute(select(TokenFamily).where(TokenFamily.family_id == family_id).with_for_update())
     family = result.scalar_one_or_none()
     if family is None:
         return False
