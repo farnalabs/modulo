@@ -117,7 +117,7 @@ class ConnectorType(StrEnum):
             case ConnectorType.ASANA:
                 return frozenset({Capability.READ, Capability.WRITE})
             case ConnectorType.SLACK:
-                return frozenset({Capability.READ, Capability.WRITE})
+                return frozenset({Capability.MESSAGING, Capability.READ, Capability.WRITE})
             case ConnectorType.SHELL:
                 return frozenset({Capability.READ, Capability.WRITE})
             case ConnectorType.MONDAY:
