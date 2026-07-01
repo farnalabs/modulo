@@ -3,19 +3,36 @@ import os
 from logging.config import fileConfig
 
 from alembic import context
-from sqlalchemy import create_engine
+from alembic.config import Config
+from sqlalchemy import Connection, create_engine
 from sqlalchemy.pool import NullPool
 
 from modulo.db.models import Base
 
 _log = logging.getLogger(__name__)
 
+
+def _to_sync_url(url: str) -> str:
+    if url.startswith("postgresql+asyncpg://"):
+        url = url.replace("postgresql+asyncpg://", "postgresql+psycopg2://", 1)
+    elif url.startswith("mysql+asyncmy://"):
+        url = url.replace("mysql+asyncmy://", "mysql+pymysql://", 1)
+    elif url.startswith("postgresql://"):
+        url = url.replace("postgresql://", "postgresql+psycopg2://", 1)
+    elif url.startswith("postgres://"):
+        url = url.replace("postgres://", "postgresql+psycopg2://", 1)
+    elif url.startswith("mysql://"):
+        url = url.replace("mysql://", "mysql+pymysql://", 1)
+    url = url.replace("?sslmode=disable", "").replace("&sslmode=disable", "")
+    url = url.replace("?ssl=disable", "").replace("&ssl=disable", "")
+    return url
+
 target_metadata = Base.metadata
 
 # Module-level Alembic setup — only safe when context is properly configured
 # (i.e. when env.py is executed via command.upgrade, not imported as a module).
 try:
-    config = context.config  # type: ignore[has-type]
+    config: Config | None = context.config
 except AttributeError:
     config = None
 if config is not None:
@@ -25,22 +42,7 @@ if config is not None:
     # Allow DATABASE_URL env var to override the alembic.ini connection string.
     _db_url = os.environ.get("DATABASE_URL")
     if _db_url:
-        # Convert any async driver prefix to a sync driver prefix.
-        # Alembic env.py runs in a sync context (thread pool or CLI),
-        # so a sync engine avoids all event-loop conflicts.
-        if _db_url.startswith("postgresql+asyncpg://"):
-            _db_url = _db_url.replace("postgresql+asyncpg://", "postgresql+psycopg2://", 1)
-        elif _db_url.startswith("mysql+asyncmy://"):
-            _db_url = _db_url.replace("mysql+asyncmy://", "mysql+pymysql://", 1)
-        elif _db_url.startswith("postgresql://"):
-            _db_url = _db_url.replace("postgresql://", "postgresql+psycopg2://", 1)
-        elif _db_url.startswith("postgres://"):
-            _db_url = _db_url.replace("postgres://", "postgresql+psycopg2://", 1)
-        elif _db_url.startswith("mysql://"):
-            _db_url = _db_url.replace("mysql://", "mysql+pymysql://", 1)
-        _db_url = _db_url.replace("?sslmode=disable", "")
-        _db_url = _db_url.replace("&sslmode=disable", "")
-        config.set_main_option("sqlalchemy.url", _db_url)
+        config.set_main_option("sqlalchemy.url", _to_sync_url(_db_url))
 
 
 def _detect_backend(url: str) -> str:
@@ -54,7 +56,8 @@ def _detect_backend(url: str) -> str:
 
 
 def run_migrations_offline() -> None:
-    url = config.get_main_option("sqlalchemy.url")
+    assert config is not None
+    url = config.get_main_option("sqlalchemy.url") or ""
     backend = _detect_backend(url)
     _log.info("Running migrations offline for %s backend", backend)
 
@@ -69,7 +72,7 @@ def run_migrations_offline() -> None:
         context.run_migrations()
 
 
-def do_run_migrations(connection):
+def do_run_migrations(connection: Connection) -> None:
     backend = _detect_backend(str(connection.engine.url))
     _log.info("Running migrations for %s backend", backend)
 
@@ -88,16 +91,9 @@ def run_migrations_online() -> None:
     env.py runs in a thread pool (asyncio.to_thread), so a sync engine
     avoids all event-loop conflicts with the main async context.
     """
-    url = config.get_main_option("sqlalchemy.url")
-
-    sync_url = url
-    if "+async" in sync_url:
-        if sync_url.startswith("postgresql+asyncpg://"):
-            sync_url = sync_url.replace("postgresql+asyncpg://", "postgresql+psycopg2://", 1)
-        elif sync_url.startswith("mysql+asyncmy://"):
-            sync_url = sync_url.replace("mysql+asyncmy://", "mysql+pymysql://", 1)
-    # Strip ssl=disable — psycopg2 uses sslmode=, not ssl=
-    sync_url = sync_url.replace("?ssl=disable", "").replace("&ssl=disable", "")
+    assert config is not None
+    url = config.get_main_option("sqlalchemy.url") or ""
+    sync_url = _to_sync_url(url)
 
     engine = create_engine(sync_url, poolclass=NullPool)
     try:

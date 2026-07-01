@@ -3,16 +3,22 @@ from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 from typing import Any
 
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker, create_async_engine
 
 from modulo.core.audit_logger.append_only import register_append_only_guard
 from modulo.db.rls import register_rls_reset_hook, register_tenant_filter
 from modulo.settings import get_settings
 
+__all__ = [
+    "AsyncSessionLocal",
+    "engine",
+    "get_session",
+]
+
 _log = logging.getLogger(__name__)
 
 
-def _build_engine() -> Any:
+def _build_engine() -> AsyncEngine:
     """Build and configure the async engine from settings.
 
     Extracted into a function so tests can replace it without patching
