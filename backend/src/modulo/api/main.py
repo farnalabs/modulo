@@ -47,6 +47,7 @@ from modulo.api.routes.api_keys import router as api_keys_router
 from modulo.api.routes.audit import router as audit_router
 from modulo.api.routes.auth import router as auth_router
 from modulo.api.routes.changelog import router as changelog_router
+from modulo.api.routes.composite_templates import router as composite_templates_router
 from modulo.api.routes.connectors import router as connectors_router
 from modulo.api.routes.contributions import router as contributions_router
 from modulo.api.routes.costs import router as costs_router
@@ -567,6 +568,7 @@ app.include_router(hitl_router)
 app.include_router(schemas_router)
 app.include_router(model_backends_router)
 app.include_router(node_categories_router)
+app.include_router(composite_templates_router)
 app.include_router(connectors_router)
 app.include_router(contributions_router)
 app.include_router(runs_router)
