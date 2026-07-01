@@ -11,6 +11,7 @@ Run a worker with::
 """
 
 from celery import Celery  # type: ignore[import-untyped]
+from celery.signals import task_failure  # type: ignore[import-untyped]
 
 from modulo.settings import get_settings
 
@@ -37,3 +38,8 @@ celery_app.conf.update(
     enable_utc=True,
     beat_scheduler="modulo.core.composite_scheduler:CompositeScheduler",
 )
+
+# Wire task failure handler
+from modulo.core.error_tracking.celery_hooks import celery_task_failure_handler
+
+task_failure.connect(celery_task_failure_handler)
