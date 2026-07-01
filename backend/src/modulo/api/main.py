@@ -55,6 +55,7 @@ from modulo.api.routes.dashboard import router as dashboard_router
 from modulo.api.routes.deployment import router as deployment_router
 from modulo.api.routes.determination import router as determination_router
 from modulo.api.routes.environments import router as environments_router
+from modulo.api.routes.error_notification_rules import router as error_notification_rules_router
 from modulo.api.routes.errors import router as errors_router
 from modulo.api.routes.evals import router as evals_router
 from modulo.api.routes.events import router as events_router
@@ -603,6 +604,7 @@ app.include_router(templates_router)
 app.include_router(onboarding_router)
 app.include_router(environments_router)
 app.include_router(errors_router)
+app.include_router(error_notification_rules_router)
 app.include_router(events_router)
 app.include_router(remy_router)
 
