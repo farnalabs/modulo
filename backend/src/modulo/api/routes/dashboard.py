@@ -1,5 +1,8 @@
 """GET /api/v1/dashboard/summary — org-level dashboard widgets."""
 
+import json
+import logging
+import time as _time
 from datetime import UTC, date, datetime, timedelta
 from typing import Any
 
@@ -10,19 +13,71 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from modulo.api.dependencies import get_db_session
 from modulo.auth.dependencies import get_current_user
 from modulo.auth.jwt import AuthenticatedPrincipal
+from modulo.core.remy.config_service import RemyConfigService
 from modulo.db.models.daily_run_count import OrgDailyRunCount
 from modulo.db.models.eval_result import EvalResult
 from modulo.db.models.feedback_record import FeedbackRecord
 from modulo.db.models.hitl_claim import HitlClaim
+from modulo.db.models.model_backend import ModelBackend
 from modulo.db.models.pipeline import Pipeline
 from modulo.db.models.run import Run
 from modulo.db.models.team import Team
 from modulo.db.rls import set_rls_org
+from modulo.settings import get_settings
+
+_log = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/v1/dashboard", tags=["dashboard"])
 
 _ACTIVE_RUN_STATUSES = frozenset({"pending", "running", "awaiting_human", "claimed", "waiting_for_lock"})
 _TRACKED_STATUSES = ("running", "awaiting_human", "failed", "idle")
+
+_DASHBOARD_CACHE_TTL = 60  # seconds — dashboard summary cached to avoid repeated aggregate queries
+_in_memory_cache: dict[str, tuple[float, dict[str, Any]]] = {}
+
+
+async def _get_cached_dashboard(org_id: str) -> dict[str, Any] | None:
+    """Try Redis then in-memory cache."""
+    settings = get_settings()
+    if settings.redis_url:
+        redis: Any = None
+        try:
+            from redis.asyncio import Redis
+
+            redis = Redis.from_url(settings.redis_url, decode_responses=True)
+            key = f"dashboard:summary:{org_id}"
+            cached = await redis.get(key)
+            if cached:
+                cached_data: dict[str, Any] = json.loads(cached)
+                return cached_data
+        except Exception as exc:
+            _log.warning("dashboard.cache_read_failed — %s", exc)
+        finally:
+            if redis is not None:
+                await redis.aclose()
+    entry = _in_memory_cache.get(org_id)
+    if entry is not None and (_time.monotonic() - entry[0]) < _DASHBOARD_CACHE_TTL:
+        return entry[1]
+    return None
+
+
+async def _set_cached_dashboard(org_id: str, data: dict[str, Any]) -> None:
+    settings = get_settings()
+    if settings.redis_url:
+        redis: Any = None
+        try:
+            from redis.asyncio import Redis
+
+            redis = Redis.from_url(settings.redis_url, decode_responses=True)
+            key = f"dashboard:summary:{org_id}"
+            await redis.setex(key, _DASHBOARD_CACHE_TTL, json.dumps(data, default=str))
+            return
+        except Exception as exc:
+            _log.warning("dashboard.cache_write_failed — %s", exc)
+        finally:
+            if redis is not None:
+                await redis.aclose()
+    _in_memory_cache[org_id] = (_time.monotonic(), data)
 
 
 @router.get("/summary")
@@ -31,15 +86,18 @@ async def dashboard_summary(
     principal: AuthenticatedPrincipal = Depends(get_current_user),
 ) -> dict[str, Any]:
     """Org-level dashboard summary with counts, team breakdown, eval pass rate, and 7-day trend."""
+    org_id_str = str(principal.organisation_id)
+
+    cached = await _get_cached_dashboard(org_id_str)
+    if cached is not None:
+        return cached
+
     async with session.begin():
         await set_rls_org(session, principal.organisation_id)
 
         org_id = principal.organisation_id
 
-        total_runs_result = await session.execute(
-            select(func.count()).select_from(Run).where(Run.organisation_id == org_id)
-        )
-        total_runs = int(total_runs_result.scalar_one())
+        # --- Queries that can all run independently (no dependencies between them) ---
 
         active_pipelines_result = await session.execute(
             select(func.count()).select_from(Pipeline).where(Pipeline.organisation_id == org_id)
@@ -60,8 +118,10 @@ async def dashboard_summary(
         for status in _TRACKED_STATUSES:
             status_counts.setdefault(status, 0)
 
-        active_count = sum(status_counts.get(s, 0) for s in _ACTIVE_RUN_STATUSES if s != "idle")
-        status_counts["idle"] = total_runs - active_count
+        total_tracked = sum(status_counts.get(s, 0) for s in _TRACKED_STATUSES)
+        active_in_tracked = sum(status_counts.get(s, 0) for s in ("running", "awaiting_human"))
+        failed_count = status_counts.get("failed", 0)
+        status_counts["idle"] = total_tracked - active_in_tracked - failed_count
 
         teams_result = await session.execute(select(Team).where(Team.organisation_id == org_id).order_by(Team.name))
         teams = list(teams_result.scalars().all())
@@ -94,24 +154,25 @@ async def dashboard_summary(
         team_pipeline_rows = (await session.execute(team_pipeline_query)).all()
 
         team_run_data: dict[str, dict[str, int]] = {}
-        for row in team_run_rows:
-            tid = str(row.owner_team_id)
-            team_run_data.setdefault(tid, {})[row.status] = int(row.cnt)
+        for tr_row in team_run_rows:
+            tid = str(tr_row.owner_team_id)
+            team_run_data.setdefault(tid, {})[tr_row.status] = int(tr_row.cnt)
 
         team_pipeline_data: dict[str, int] = {}
-        for row in team_pipeline_rows:
-            team_pipeline_data[str(row.owner_team_id)] = int(row.pipeline_cnt)
+        for tp_row in team_pipeline_rows:
+            team_pipeline_data[str(tp_row.owner_team_id)] = int(tp_row.pipeline_cnt)
 
         team_metrics: list[dict[str, Any]] = []
         for team in teams:
             tid = str(team.id)
             run_data = team_run_data.get(tid, {})
-            team_total = sum(run_data.values())
+            team_total = sum(run_data.get(s, 0) for s in _TRACKED_STATUSES)
             team_statuses: dict[str, int] = {}
             for status in _TRACKED_STATUSES:
                 team_statuses[status] = run_data.get(status, 0)
-            team_active = sum(run_data.get(s, 0) for s in _ACTIVE_RUN_STATUSES if s != "idle")
-            team_statuses["idle"] = team_total - team_active
+            team_active_in_tracked = sum(run_data.get(s, 0) for s in ("running", "awaiting_human"))
+            team_failed = run_data.get("failed", 0)
+            team_statuses["idle"] = team_total - team_active_in_tracked - team_failed
 
             team_metrics.append(
                 {
@@ -123,46 +184,20 @@ async def dashboard_summary(
                 }
             )
 
-        eval_total_result = await session.execute(
-            select(func.count()).select_from(EvalResult).where(EvalResult.organisation_id == org_id)
-        )
-        eval_total = int(eval_total_result.scalar_one())
-
-        eval_passed_result = await session.execute(
-            select(func.count())
-            .select_from(EvalResult)
-            .where(
-                EvalResult.organisation_id == org_id,
-                EvalResult.passed == True,  # noqa: E712
-            )
-        )
-        eval_passed = int(eval_passed_result.scalar_one())
-
-        per_team_eval_query = (
+        # --- Single merged eval query ---
+        eval_totals_query = (
             select(
-                Run.owner_team_id,
                 func.count().label("total"),
                 func.sum(case((EvalResult.passed == True, 1), else_=0)).label("passed"),  # noqa: E712
             )
             .select_from(EvalResult)
-            .join(Run, EvalResult.run_id == Run.id)
-            .where(
-                EvalResult.organisation_id == org_id,
-                Run.owner_team_id.is_not(None),
-            )
-            .group_by(Run.owner_team_id)
+            .where(EvalResult.organisation_id == org_id)
         )
-        per_team_eval_rows = (await session.execute(per_team_eval_query)).all()
-        per_team_eval: dict[str, dict[str, Any]] = {}
-        for row in per_team_eval_rows:
-            total = int(row.total)
-            passed = int(row.passed)
-            per_team_eval[str(row.owner_team_id)] = {
-                "total_evals": total,
-                "passed_evals": passed,
-                "pass_rate": round(passed / total * 100, 1) if total > 0 else 0.0,
-            }
+        eval_totals_row = (await session.execute(eval_totals_query)).one()
+        eval_total = int(eval_totals_row.total)
+        eval_passed = int(eval_totals_row.passed)
 
+        # --- Superset query: per-team-pipeline eval breakdown; derive per-team and per-pipeline client-side ---
         per_team_pipeline_query = (
             select(
                 Run.owner_team_id,
@@ -180,39 +215,38 @@ async def dashboard_summary(
         )
         per_team_pipeline_rows = (await session.execute(per_team_pipeline_query)).all()
         per_team_pipeline: dict[str, dict[str, dict[str, Any]]] = {}
+        per_team_eval: dict[str, dict[str, Any]] = {}
+        per_pipeline: dict[str, dict[str, Any]] = {}
         for row in per_team_pipeline_rows:
             team_id = str(row.owner_team_id)
             pipeline_id = str(row.pipeline_id)
             total = int(row.total)
             passed = int(row.passed)
+            pr = round(passed / total * 100, 1) if total > 0 else 0.0
             per_team_pipeline.setdefault(team_id, {})[pipeline_id] = {
                 "total_evals": total,
                 "passed_evals": passed,
-                "pass_rate": round(passed / total * 100, 1) if total > 0 else 0.0,
+                "pass_rate": pr,
             }
+            # Derive per-team aggregates
+            team_entry = per_team_eval.setdefault(team_id, {"total_evals": 0, "passed_evals": 0, "pass_rate": 0.0})
+            team_entry["total_evals"] += total
+            team_entry["passed_evals"] += passed
+            team_entry["pass_rate"] = (
+                round(team_entry["passed_evals"] / team_entry["total_evals"] * 100, 1)
+                if team_entry["total_evals"] > 0 else 0.0
+            )
+            # Derive per-pipeline aggregates
+            pipe_entry = per_pipeline.setdefault(pipeline_id, {"total_evals": 0, "passed_evals": 0, "pass_rate": 0.0})
+            pipe_entry["total_evals"] += total
+            pipe_entry["passed_evals"] += passed
+            pipe_entry["pass_rate"] = (
+                round(pipe_entry["passed_evals"] / pipe_entry["total_evals"] * 100, 1)
+                if pipe_entry["total_evals"] > 0 else 0.0
+            )
 
         eval_pass_rate: dict[str, Any] | None = None
         if eval_total > 0:
-            per_pipeline_query = (
-                select(
-                    Run.pipeline_id,
-                    func.count().label("total"),
-                    func.sum(case((EvalResult.passed == True, 1), else_=0)).label("passed"),  # noqa: E712
-                )
-                .select_from(EvalResult)
-                .join(Run, EvalResult.run_id == Run.id)
-                .where(EvalResult.organisation_id == org_id)
-                .group_by(Run.pipeline_id)
-            )
-            per_pipeline_rows = (await session.execute(per_pipeline_query)).all()
-            per_pipeline: dict[str, dict[str, Any]] = {}
-            for row in per_pipeline_rows:
-                per_pipeline[str(row.pipeline_id)] = {
-                    "total_evals": int(row.total),
-                    "passed_evals": int(row.passed),
-                    "pass_rate": round(int(row.passed) / int(row.total) * 100, 1) if int(row.total) > 0 else 0.0,
-                }
-
             eval_pass_rate = {
                 "overall_pass_rate": round(eval_passed / eval_total * 100, 1),
                 "total_evals": eval_total,
@@ -243,10 +277,10 @@ async def dashboard_summary(
         )
         daily_rows = (await session.execute(daily_query)).all()
         daily_map: dict[date, tuple[int, float]] = {}
-        for row in daily_rows:
-            daily_map[row.run_date] = (
-                int(row.run_count) if row.run_count else 0,
-                float(row.total_spend) if row.total_spend else 0.0,
+        for dr_row in daily_rows:
+            daily_map[dr_row.run_date] = (
+                int(dr_row.run_count) if dr_row.run_count else 0,
+                float(dr_row.total_spend) if dr_row.total_spend else 0.0,
             )
 
         daily_eval_query = (
@@ -264,10 +298,10 @@ async def dashboard_summary(
         )
         daily_eval_rows = (await session.execute(daily_eval_query)).all()
         daily_eval_map: dict[date, float | None] = {}
-        for row in daily_eval_rows:
-            total = int(row.total)
-            passed = int(row.passed)
-            daily_eval_map[row.eval_date] = round(passed / total * 100, 1) if total > 0 else None
+        for de_row in daily_eval_rows:
+            total = int(de_row.total)
+            passed = int(de_row.passed)
+            daily_eval_map[de_row.eval_date] = round(passed / total * 100, 1) if total > 0 else None
 
         trend: list[dict[str, Any]] = []
         for i in range(7):
@@ -291,6 +325,7 @@ async def dashboard_summary(
                 Run.trigger_type,
             )
             .join(Pipeline, Run.pipeline_id == Pipeline.id)
+            .where(Run.organisation_id == org_id)
             .order_by(Run.created_at.desc())
             .limit(10)
         )
@@ -306,7 +341,56 @@ async def dashboard_summary(
             for row in recent_runs_rows
         ]
 
-    return {
+        # ── Config warnings ───────────────────────────────────────────
+        config_warnings: list[dict[str, Any]] = []
+
+        try:
+            mb_with_creds_result = await session.execute(
+                select(func.count()).select_from(ModelBackend).where(
+                    ModelBackend.organisation_id == org_id,
+                    ModelBackend.credentials_ciphertext.is_not(None),
+                )
+            )
+            mb_with_creds = int(mb_with_creds_result.scalar_one())
+        except Exception:
+            mb_with_creds = 0
+
+        if mb_with_creds == 0:
+            config_warnings.append(
+                {
+                    "type": "no_model_backends",
+                    "severity": "high",
+                    "message": "No AI providers configured. Add a model backend with API credentials to run pipelines.",
+                    "action_label": "Configure provider",
+                    "action_url": "/admin/model-backends",
+                }
+            )
+        else:
+            try:
+                remy_config = await RemyConfigService(session).get_config(org_id)
+                default_provider = remy_config.default_provider
+                provider_creds_result = await session.execute(
+                    select(func.count()).select_from(ModelBackend).where(
+                        ModelBackend.organisation_id == org_id,
+                        ModelBackend.provider == default_provider,
+                        ModelBackend.credentials_ciphertext.is_not(None),
+                    )
+                )
+                provider_count = int(provider_creds_result.scalar_one())
+                if provider_count == 0:
+                    config_warnings.append(
+                        {
+                            "type": "remy_provider_not_configured",
+                            "severity": "high",
+                            "message": f"Remy is configured to use {default_provider} but no API key has been set for that provider.",
+                            "action_label": f"Configure {default_provider}",
+                            "action_url": "/admin/model-backends",
+                        }
+                    )
+            except Exception:
+                _log.warning("dashboard.config_warnings.remy_failed", exc_info=True)
+
+    result = {
         "total_runs": total_runs,
         "active_pipelines": active_pipelines,
         "run_counts_by_status": status_counts,
@@ -314,7 +398,11 @@ async def dashboard_summary(
         "eval_pass_rate": eval_pass_rate,
         "trend": trend,
         "recent_runs": recent_runs,
+        "config_warnings": config_warnings,
     }
+
+    await _set_cached_dashboard(org_id_str, result)
+    return result
 
 
 @router.get("/trends")
@@ -528,23 +616,23 @@ async def daily_run_counts(
 
         result = await session.execute(
             select(
-                func.date_trunc("day", Run.created_at).label("day"),
+                cast(Run.created_at, Date).label("day"),
                 Run.status,
-                func.count().label("count"),
+                func.count().label("cnt"),
             )
             .where(
                 Run.organisation_id == principal.organisation_id,
                 Run.created_at >= cutoff,
             )
-            .group_by("day", Run.status)
-            .order_by("day")
+            .group_by(cast(Run.created_at, Date), Run.status)
+            .order_by(cast(Run.created_at, Date))
         )
 
     daily: dict[str, dict[str, int]] = {}
-    for row in result:
-        day = row.day.isoformat()
+    for dr_row in result:
+        day = dr_row.day.isoformat()
         if day not in daily:
             daily[day] = {}
-        daily[day][row.status] = row.count
+        daily[day][dr_row.status] = dr_row.cnt
 
     return {"daily_counts": daily, "days": days}
