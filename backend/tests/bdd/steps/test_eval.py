@@ -384,7 +384,7 @@ def step_unknown_eval_type_error(ctx):
 # eval/eval_suite_crud.feature  —  5 scenarios
 # ============================================================================
 try:
-    scenarios("../../features/eval/eval_suite_crud.feature")
+    scenarios("../features/eval/eval_suite_crud.feature")
 except (FileNotFoundError, OSError):
     pass
 
@@ -493,7 +493,7 @@ def step_response_contains_eval_def(name, request, ctx):
 # eval/feedback_system.feature  —  5 scenarios
 # ============================================================================
 try:
-    scenarios("../../features/eval/feedback_system.feature")
+    scenarios("../features/eval/feedback_system.feature")
 except (FileNotFoundError, OSError):
     pass
 

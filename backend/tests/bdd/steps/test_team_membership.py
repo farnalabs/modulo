@@ -1,4 +1,4 @@
-﻿"""BDD step definitions: Team membership management."""
+"""BDD step definitions: Team membership management."""
 
 import uuid
 from typing import Any
@@ -14,7 +14,7 @@ from modulo.settings import get_settings
 from tests.bdd.conftest import make_settings
 
 try:
-    scenarios("../../features/teams/team_membership.feature")
+    scenarios("../features/teams/team_membership.feature")
 except (FileNotFoundError, OSError):
     pass
 

@@ -5,9 +5,9 @@ from unittest.mock import MagicMock, patch
 
 from pytest_bdd import given, parsers, scenarios, then, when
 
-scenarios("../../features/model_backends/configure.feature")
-scenarios("../../features/model_backends/rotation.feature")
-scenarios("../../features/model_backends/health_check.feature")
+scenarios("../features/model_backends/configure.feature")
+scenarios("../features/model_backends/rotation.feature")
+scenarios("../features/model_backends/health_check.feature")
 
 
 @given(parsers.parse('I configure an OpenAI model backend with model "{model}" and API key "{key}"'))

@@ -6,7 +6,7 @@ from unittest.mock import MagicMock, patch
 
 from pytest_bdd import given, parsers, scenarios, then, when
 
-scenarios("../../features/agents/crud.feature")
+scenarios("../features/agents/crud.feature")
 
 _AGENT_ID: uuid.UUID | None = None
 _AGENT_BODY: dict = {

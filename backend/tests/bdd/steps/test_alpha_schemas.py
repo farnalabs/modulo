@@ -5,9 +5,9 @@ from unittest.mock import MagicMock, patch
 
 from pytest_bdd import given, parsers, scenarios, then, when
 
-scenarios("../../features/schemas/create.feature")
-scenarios("../../features/schemas/version.feature")
-scenarios("../../features/schemas/deletion_protection.feature")
+scenarios("../features/schemas/create.feature")
+scenarios("../features/schemas/version.feature")
+scenarios("../features/schemas/deletion_protection.feature")
 
 
 @when(parsers.parse('I POST /api/schemas with name "{name}" and valid JSON Schema'))

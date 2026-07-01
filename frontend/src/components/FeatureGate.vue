@@ -1,7 +1,7 @@
 <template>
   <div class="relative" data-testid="feature-gate">
     <slot v-if="enabled" />
-    <div v-else class="flex items-center justify-center py-16">
+    <div v-else class="flex items-center justify-center py-16" data-testid="feature-gate-lock">
       <div class="text-center space-y-4">
         <LockIcon :locked="true" :tooltip="tooltipText" />
         <div>

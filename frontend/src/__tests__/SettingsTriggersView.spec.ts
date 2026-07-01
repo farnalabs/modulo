@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { mount } from '@vue/test-utils'
+import { createPinia, setActivePinia } from 'pinia'
 import { nextTick } from 'vue'
 
 vi.mock('../lib/api/client', () => ({
@@ -17,9 +18,11 @@ vi.mock('../lib/api/schema', () => ({}))
 import SettingsTriggersView from '../views/SettingsTriggersView.vue'
 
 const dialogStubs = ['Dialog', 'DialogContent', 'DialogDescription', 'DialogFooter', 'DialogHeader', 'DialogTitle']
+const featureGateStub = { template: '<div><slot /></div>' }
 
 describe('SettingsTriggersView', () => {
   beforeEach(() => {
+    setActivePinia(createPinia())
     vi.clearAllMocks()
   })
 
@@ -28,7 +31,7 @@ describe('SettingsTriggersView', () => {
     (api.GET as any).mockResolvedValue({ data: { items: [], total: 0, page: 1, page_size: 100 }, error: undefined })
 
     const wrapper = mount(SettingsTriggersView, {
-      global: { stubs: dialogStubs },
+      global: { stubs: { ...dialogStubs.reduce((a, k) => ({ ...a, [k]: true }), {}), FeatureGate: featureGateStub } },
     })
     await nextTick()
     await nextTick()
@@ -42,7 +45,7 @@ describe('SettingsTriggersView', () => {
     (api.GET as any).mockReturnValue(new Promise(() => {}))
 
     const wrapper = mount(SettingsTriggersView, {
-      global: { stubs: dialogStubs },
+      global: { stubs: { ...dialogStubs.reduce((a, k) => ({ ...a, [k]: true }), {}), FeatureGate: featureGateStub } },
     })
     await nextTick()
     expect(wrapper.find('.animate-spin').exists()).toBe(true)

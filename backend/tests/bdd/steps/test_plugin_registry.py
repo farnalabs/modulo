@@ -13,7 +13,7 @@ from pytest_bdd import given, parsers, scenarios, then, when
 
 from modulo.core.plugin_registry import PluginHealth
 
-scenarios("../../features/plugins/plugin_registry.feature")
+scenarios("../features/plugins/plugin_registry.feature")
 
 # ---------------------------------------------------------------------------
 # Test data

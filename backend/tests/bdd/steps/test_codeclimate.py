@@ -7,7 +7,7 @@ from modulo.connectors.base import ConnectorPayload, ConnectorQuery
 from modulo.connectors.codeclimate import CodeClimateConnector
 
 try:
-    scenarios("../../features/connectors/codeclimate.feature")
+    scenarios("../features/connectors/codeclimate.feature")
 except Exception:
     pass
 

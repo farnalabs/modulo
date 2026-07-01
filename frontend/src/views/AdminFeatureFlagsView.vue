@@ -206,7 +206,7 @@ const enabledCount = computed(() => {
   return Object.values(planStore.features).filter(Boolean).length
 })
 
-const allFlagsCount = computed(() => flags.value.length)
+const allFlagsCount = computed(() => (flags.value ?? []).length)
 
 interface FlagItem {
   name: string
@@ -245,12 +245,13 @@ const pageSize = 10
 
 const filteredFlags = computed(() => {
   const query = searchQuery.value.toLowerCase().trim()
+  const items = flags.value ?? []
   return query
-    ? flags.value.filter(f =>
+    ? items.filter(f =>
         f.name.toLowerCase().includes(query) ||
         f.description.toLowerCase().includes(query)
       )
-    : flags.value
+    : items
 })
 
 const totalPages = computed(() => Math.max(1, Math.ceil(filteredFlags.value.length / pageSize)))
@@ -286,8 +287,9 @@ const paginatedGroups = computed(() => {
 
 const filteredWouldActivate = computed(() => {
   const query = searchQuery.value.toLowerCase().trim()
-  if (!query) return wouldActivate.value
-  return wouldActivate.value.filter(f =>
+  const items = wouldActivate.value ?? []
+  if (!query) return items
+  return items.filter(f =>
     f.name.toLowerCase().includes(query) ||
     f.description.toLowerCase().includes(query)
   )

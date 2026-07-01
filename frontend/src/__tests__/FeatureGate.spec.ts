@@ -32,7 +32,7 @@ describe('FeatureGate', () => {
     })
 
     expect(wrapper.find('[data-testid="feature-gate-lock"]').exists()).toBe(true)
-    expect(wrapper.text()).toContain('Gated Content')
+    expect(wrapper.find('[data-testid="feature-gate-lock"]').text()).toContain('Team Feature')
   })
 
   it('uses custom requiredTier in tooltip', () => {
@@ -45,7 +45,7 @@ describe('FeatureGate', () => {
     })
 
     const lock = wrapper.find('[data-testid="feature-gate-lock"]')
-    expect(lock.find('[data-testid="lock-icon"]').attributes('title')).toBe('Available on team plan')
+    expect(lock.find('[data-testid="lock-icon"]').attributes('title')).toBe('Available on Team plan')
   })
 
   it('renders locked slot when feature is disabled', () => {

@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { mount } from '@vue/test-utils'
+import { createPinia, setActivePinia } from 'pinia'
 import { nextTick } from 'vue'
 
 vi.mock('../lib/api/client', () => ({
@@ -14,11 +15,14 @@ import EvalProposalsQueueView from '../views/EvalProposalsQueueView.vue'
 
 describe('EvalProposalsQueueView', () => {
   beforeEach(() => {
+    setActivePinia(createPinia())
     vi.clearAllMocks()
   })
 
   it('renders without crashing', async () => {
-    const wrapper = mount(EvalProposalsQueueView)
+    const wrapper = mount(EvalProposalsQueueView, {
+      global: { stubs: { FeatureGate: { template: '<div><slot /></div>' } } },
+    })
     await nextTick()
     expect(wrapper.exists()).toBe(true)
     expect(wrapper.text()).toContain('Eval Proposals Queue')
