@@ -23,7 +23,8 @@ class LibraryPrimitive(OrgScoped):
     __table_args__ = (
         CheckConstraint("source IN ('local', 'registry')", name="ck_library_primitives_source"),
         CheckConstraint(
-            "primitive_type IN ('schema', 'workflow', 'agent', 'integration', 'test_fixture', 'pipeline_template')",
+            "primitive_type IN ('schema', 'workflow', 'agent', 'integration', "
+            "'test_fixture', 'pipeline_template', 'composite')",
             name="ck_library_primitives_type",
         ),
         CheckConstraint(
