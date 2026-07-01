@@ -14,6 +14,8 @@ code:
 depends-on:
   - feat-connectors-hub
 status: partial
+qa-history:
+  - 2026-07-01: improve-architecture (index 33) — fixed raw KeyError in 14 query + 8 write case branches by replacing bare dict["key"] with _require_filter(). Added 9 missing-filter error-path unit tests. Marked [ ]→[x] for "Missing required filter raises ValueError". Updated capabilities description to reflect ISSUE_READ, ISSUE_WRITE, ISSUE_SEARCH, TRIGGER_RUN. 62/62 unit tests pass.
 ---
 
 # GitLab Connector
@@ -84,7 +86,7 @@ Async GitLab REST API v4 connector implementing `ConnectorBase`. Provides read/w
 
 - [x] `ConnectorType.GITLAB` defined in `base.py` enum
 - [x] `GitLabConnector.connector_type` returns `ConnectorType.GITLAB`
-- [x] `ConnectorType.GITLAB.capabilities` returns `{read, write, git_push, create_pr}` in `base.py`
+- [x] `ConnectorType.GITLAB.capabilities` returns `{read, write, git_push, create_pr, issue_read, issue_write, issue_search, trigger_run}` in `base.py`
 
 
 ### Health Check — connectivity and credential validation
@@ -99,7 +101,7 @@ Async GitLab REST API v4 connector implementing `ConnectorBase`. Provides read/w
 
 ### Error Handling
 
-- [ ] Missing required filter key raises ValueError with descriptive message (currently raises raw KeyError)
+- [x] Missing required filter key raises ValueError with descriptive message
 - [ ] API error (non-2xx response) raises httpx.HTTPStatusError via raise_for_status()
 - [ ] Network/socket error propagates as httpx exception during health check
 - [ ] Missing token during construction is not validated until first API call
