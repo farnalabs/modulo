@@ -9,6 +9,9 @@ code:
   - backend/tests/features/personas/elena-engineering-director.feature
   - backend/tests/features/personas/duncan-solo-developer.feature
   - backend/tests/features/personas/alice-devx-sme.feature
+bdd: []
+depends-on: []
+unit-tests: []
 status: partial
 ---
 

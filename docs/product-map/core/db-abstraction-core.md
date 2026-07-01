@@ -4,10 +4,12 @@ prd: 8.17
 delivery-tasks: []
 code:
 depends-on: []
+bdd: []
+unit-tests: []
 status: gap
 ---
 
-# Core Db Abstraction Core
+# DB Abstraction Core
 
 Stub entry created for graph integrity. Needs generate-behaviours enrichment.
 

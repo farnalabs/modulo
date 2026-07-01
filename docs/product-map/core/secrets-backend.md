@@ -13,6 +13,8 @@ code:
   - backend/tests/unit/secrets_backend/test_fernet_backend.py
   - backend/tests/unit/secrets_backend/test_vault_backend.py
   - backend/tests/unit/secrets_backend/test_aws_backend.py
+depends-on: []
+unit-tests: []
 status: partial
 ---
 

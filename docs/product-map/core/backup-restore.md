@@ -4,6 +4,9 @@ prd: 6.2
 delivery-tasks: [task-nv12-backup-restore]
 code:
   - backend/src/modulo/cli/backup.py
+bdd: []
+depends-on: []
+unit-tests: []
 status: partial
 ---
 

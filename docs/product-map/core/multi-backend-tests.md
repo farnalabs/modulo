@@ -21,9 +21,18 @@ unit-tests:
   - backend/tests/unit/db/test_repositories_generic.py
   - backend/tests/unit/db/test_repositories_locks.py
 
+delivery-tasks: []
+depends-on: []
 status: partial
 ---
-# Multi-backend database test suite Tests that verify Modulo's database abstraction layer works across all three supported backends: PostgreSQL, SQLite, and MariaDB/MySQL. Includes settings config, RLS dispatch, RepositoryHub, generic lock services, and integration tests for tenant isolation. ## Behaviours - [x] Settings model parses `MODULO_DB` for postgres, sqlite, mariadb
+
+# Multi-backend database test suite
+
+Tests that verify Modulo's database abstraction layer works across all three supported backends: PostgreSQL, SQLite, and MariaDB/MySQL. Includes settings config, RLS dispatch, RepositoryHub, generic lock services, and integration tests for tenant isolation.
+
+## Behaviours
+
+- [x] Settings model parses `MODULO_DB` for postgres, sqlite, mariadb
 - [x] Settings model normalises case (POSTGRES, SQLite, MariaDB)
 - [x] Settings model raises on invalid backend string
 - [x] Settings model rewrites DATABASE_URL when backend is sqlite or mariadb
@@ -91,7 +100,9 @@ status: partial
 - [ ] BDD feature file for multi-backend behaviour
 - [ ] Alembic migration conditional DDL for non-Postgres backends
 - [ ] API behaviour difference tests for sqlite/mariadb (pool config, rate limiter)
-- [ ] Cross-tenant isolation integration tests for GenericRepository (WHERE-clause filtering) ## Known Gaps - No RepositoryHub construction/dispatch unit test exists
+- [ ] Cross-tenant isolation integration tests for GenericRepository (WHERE-clause filtering)
+
+## Known Gaps - No RepositoryHub construction/dispatch unit test exists
 - `register_tenant_filter()` has no direct unit test — only its inner listener is tested via `_inject_tenant_filter` tests
 - `register_rls_reset_hook` skip path for non-postgres backends is untested
 - `_build_engine()` has no tests for sqlite or mariadb configurations

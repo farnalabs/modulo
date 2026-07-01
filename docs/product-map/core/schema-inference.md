@@ -18,9 +18,19 @@ code:
   - backend/src/modulo/core/schema_registry/migration.py
   - backend/src/modulo/api/routes/schemas.py
 
+depends-on: []
 status: partial
 ---
-# Schema Inference LLM-assisted JSON Schema draft from sampled connector data. Entry point for SDLC onboarding. ## Behaviours ### LLM Inference — `SchemaInferenceService.infer()` - [x] Accept a list of sample record dicts and return an inferred JSON Schema
+
+# Schema Inference
+
+LLM-assisted JSON Schema draft from sampled connector data. Entry point for SDLC onboarding.
+
+## Behaviours
+
+### LLM Inference — `SchemaInferenceService.infer()`
+
+- [x] Accept a list of sample record dicts and return an inferred JSON Schema
 - [x] Build prompt with system instructions and sample data as human message
 - [x] Truncate samples to `_MAX_SAMPLE_RECORDS` (50) before sending to LLM
 - [x] Send samples as formatted JSON block in the human message
@@ -38,7 +48,11 @@ status: partial
 - [x] Raise `ValueError` when samples contains non-dict items
 - [x] Accept nested object structures in samples
 - [x] Accept fields with mixed presence across records (not required)
-- [x] Handle all-null records (fields omitted from schema) ### API Endpoint — `POST /api/v1/schemas/infer` - [x] Accept `connector_instance_id` and `sample_query` (resource, filters, limit)
+- [x] Handle all-null records (fields omitted from schema)
+
+### API Endpoint — `POST /api/v1/schemas/infer`
+
+- [x] Accept `connector_instance_id` and `sample_query` (resource, filters, limit)
 - [x] Default `filters` to `{}` and `limit` to 10 when omitted
 - [x] Validate `resource` is non-empty (422 on empty string)
 - [x] Reject `limit` < 1 or > 100 (422)
@@ -52,7 +66,11 @@ status: partial
 - [x] Handle inference failure → return 502 with "Schema inference failed"
 - [x] Return 200 with `definition_json`, `sample_count`, `suggestion_name`, `suggestion_description`
 - [x] Include connector name in `suggestion_name` ("Inferred from {name}")
-- [x] Include connector name, resource, and sample count in `suggestion_description` ### Schema Validation — structural checks - [x] Validate `oneOf`/`anyOf` is a non-empty array
+- [x] Include connector name, resource, and sample count in `suggestion_description`
+
+### Schema Validation — structural checks
+
+- [x] Validate `oneOf`/`anyOf` is a non-empty array
 - [x] Reject `oneOf`/`anyOf` alongside `type` at the same level — use wrapping object
 - [x] Reject variant entries that aren't JSON Schema objects
 - [x] Reject variants missing `type` or composition keywords
@@ -61,7 +79,11 @@ status: partial
 - [x] Validate array `items` object specifies type, composition, or `$ref`
 - [x] Validate tuple-style `items` (list) entries are valid schemas
 - [x] Validate `contains` and `prefixItems` sub-schemas recursively
-- [x] Handle `anyOf`/`oneOf` at root level (no `type`) ### Schema Migration — version diffs - [x] Detect added fields between old and new schema
+- [x] Handle `anyOf`/`oneOf` at root level (no `type`)
+
+### Schema Migration — version diffs
+
+- [x] Detect added fields between old and new schema
 - [x] Detect removed fields between old and new schema
 - [x] Detect type changes (string → integer, string → union, string → array, etc.)
 - [x] Detect renames (same type, one removed + one added → linked)
@@ -71,7 +93,10 @@ status: partial
 - [x] Apply migration: add missing fields (set to null), remove deleted, apply renames
 - [x] Migration is idempotent
 - [x] Migration does not mutate original data
-- [x] `transform_field` applies a callable to a single field ### Known Gaps — PRD 8.16 requirements not yet implemented
+- [x] `transform_field` applies a callable to a single field
+
+### Known Gaps — PRD 8.16 requirements not yet implemented
+
 - [ ] **Sampled record default (200)**: PRD says default 200 records, code caps at 50 in prompt builder, API default limit is 10, max is 100 — no sample count displayed in UI
 - [ ] **Rare-field exclusion**: PRD says fields appearing in <10% of samples should be flagged and excluded from draft — not implemented anywhere
 - [ ] **`abstract_name` inference**: PRD says inferred `abstract_name` suggestion per resource type — not implemented; only static string "Inferred from {name}"

@@ -5,6 +5,7 @@ delivery-tasks: [task-prd-viewmodel-current-endpoint]
 code:
   - backend/src/modulo/api/routes/viewmodel.py
 depends-on: [feat-auth-jwt-auth]
+unit-tests: []
 status: partial
 bdd:
   - backend/tests/unit/api/test_viewmodel_endpoint.py
