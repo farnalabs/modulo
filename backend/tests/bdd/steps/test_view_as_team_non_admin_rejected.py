@@ -1,4 +1,4 @@
-﻿"""BDD step definitions: View as team â€” non-admin rejection."""
+"""BDD step definitions: View as team â€” non-admin rejection."""
 
 import uuid
 from typing import Any
@@ -14,7 +14,7 @@ from modulo.settings import get_settings
 from tests.bdd.conftest import make_settings
 
 try:
-    scenarios("../../features/teams/view_as_team_non_admin_rejected.feature")
+    scenarios("../features/teams/view_as_team_non_admin_rejected.feature")
 except (FileNotFoundError, OSError):
     pass
 

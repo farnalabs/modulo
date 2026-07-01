@@ -52,7 +52,7 @@ describe('AppLayout', () => {
     await nextTick()
     await nextTick()
 
-    expect(wrapper.text()).toContain('Free')
+    expect(wrapper.text()).toContain('Community')
     expect(wrapper.text()).not.toContain('Enterprise')
   })
 

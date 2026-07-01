@@ -119,7 +119,7 @@ function globalStubs() {
       CardTitle: { template: '<div><slot /></div>' },
       CardDescription: { template: '<div><slot /></div>' },
       CardContent: { template: '<div><slot /></div>' },
-      Input: { template: '<input /><slot /></div>' },
+      Input: { template: '<input v-bind="$attrs" /><slot /></div>' },
       Button: { template: '<button><slot /></button>' },
       OwnershipPicker: true,
       SsoProviderForm: true,

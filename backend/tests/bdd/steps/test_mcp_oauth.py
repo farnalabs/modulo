@@ -13,7 +13,7 @@ from modulo.auth.jwt import AuthenticatedPrincipal
 from modulo.core.rate_limiter import RateLimiterRegistry
 from tests.bdd.conftest import ORG_ID, USER_ID
 
-scenarios("../../features/mcp/mcp_oauth.feature")
+scenarios("../features/mcp/mcp_oauth.feature")
 
 
 # --------------------------------------------------------------------------

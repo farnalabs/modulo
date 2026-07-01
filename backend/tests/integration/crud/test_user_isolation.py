@@ -8,14 +8,11 @@ import uuid
 
 import pytest
 from sqlalchemy import text
-from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker
+from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
 from modulo.auth.passwords import hash_password, password_entropy_bits, validate_password_strength
-from modulo.db.crud.user import (
-    get_user_by_email,
-    get_user_by_id_org,
-    list_users_for_org,
-)
+from modulo.db.crud.account import get_account_by_email, get_account_by_id
+from modulo.db.crud.org_membership import get_membership_by_account_and_org, list_memberships_for_org
 
 pytestmark = [
     pytest.mark.integration,
@@ -46,16 +43,25 @@ async def _create_user_in_org(db_engine: AsyncEngine, org_id: uuid.UUID, email: 
         async with conn.begin():
             await conn.execute(
                 text(
-                    "INSERT INTO users (id, organisation_id, email, display_name, "
-                    "password_hash, org_role, auth_provider, active) "
-                    "VALUES (:id, :org_id, :email, :name, :pw_hash, :role, 'local', true)"
+                    "INSERT INTO accounts (id, email, display_name, "
+                    "password_hash, auth_provider, active) "
+                    "VALUES (:id, :email, :name, :pw_hash, 'local', true)"
                 ),
                 {
                     "id": str(user_id),
-                    "org_id": str(org_id),
                     "email": email,
                     "name": email.split("@")[0],
                     "pw_hash": pw_hash,
+                },
+            )
+            await conn.execute(
+                text(
+                    "INSERT INTO org_memberships (organisation_id, account_id, role) "
+                    "VALUES (:org_id, :account_id, :role)"
+                ),
+                {
+                    "org_id": str(org_id),
+                    "account_id": str(user_id),
                     "role": role,
                 },
             )
@@ -65,6 +71,17 @@ async def _create_user_in_org(db_engine: AsyncEngine, org_id: uuid.UUID, email: 
 # ---------------------------------------------------------------------------
 # RLS-based cross-org user isolation
 # ---------------------------------------------------------------------------
+
+
+async def _accounts_for_memberships(
+    session: AsyncSession, memberships: list
+) -> list:
+    result = []
+    for m in memberships:
+        acct = await get_account_by_id(session, m.account_id)
+        if acct is not None:
+            result.append(acct)
+    return result
 
 
 async def test_users_in_different_orgs_are_isolated(db_engine: AsyncEngine) -> None:
@@ -83,11 +100,12 @@ async def test_users_in_different_orgs_are_isolated(db_engine: AsyncEngine) -> N
             text("SELECT set_config('app.organisation_id', :oid, true)"),
             {"oid": str(org_a)},
         )
-        users = await list_users_for_org(session, org_a)
-        emails = [u.email for u in users]
+        memberships = await list_memberships_for_org(session, org_a)
+        accounts = await _accounts_for_memberships(session, memberships)
+        emails = [a.email for a in accounts]
         assert "alice@iso-test.com" in emails
         assert "bob@iso-test.com" not in emails
-        assert len(users) == 1
+        assert len(accounts) == 1
 
     # Query as org_b — should only see bob
     async with factory() as session:
@@ -95,15 +113,16 @@ async def test_users_in_different_orgs_are_isolated(db_engine: AsyncEngine) -> N
             text("SELECT set_config('app.organisation_id', :oid, true)"),
             {"oid": str(org_b)},
         )
-        users = await list_users_for_org(session, org_b)
-        emails = [u.email for u in users]
+        memberships = await list_memberships_for_org(session, org_b)
+        accounts = await _accounts_for_memberships(session, memberships)
+        emails = [a.email for a in accounts]
         assert "bob@iso-test.com" in emails
         assert "alice@iso-test.com" not in emails
-        assert len(users) == 1
+        assert len(accounts) == 1
 
 
 async def test_get_user_by_id_org_respects_rls(db_engine: AsyncEngine) -> None:
-    """get_user_by_id_org must return None when the user is in a different org."""
+    """get_membership_by_account_and_org must return None when the user is in a different org."""
     org_a = await _create_org(db_engine, f"rls-a-{uuid.uuid4().hex[:8]}")
     org_b = await _create_org(db_engine, f"rls-b-{uuid.uuid4().hex[:8]}")
     user_a = await _create_user_in_org(db_engine, org_a, "charlie@rls-test.com")
@@ -116,8 +135,8 @@ async def test_get_user_by_id_org_respects_rls(db_engine: AsyncEngine) -> None:
             text("SELECT set_config('app.organisation_id', :oid, true)"),
             {"oid": str(org_b)},
         )
-        found = await get_user_by_id_org(session, user_a, org_b)
-        assert found is None, "Should not find user from another org via RLS-scoped query"
+        found = await get_membership_by_account_and_org(session, user_a, org_b)
+        assert found is None, "Should not find membership from another org via RLS-scoped query"
 
     # Query from correct org should work
     async with factory() as session:
@@ -125,13 +144,15 @@ async def test_get_user_by_id_org_respects_rls(db_engine: AsyncEngine) -> None:
             text("SELECT set_config('app.organisation_id', :oid, true)"),
             {"oid": str(org_a)},
         )
-        found = await get_user_by_id_org(session, user_a, org_a)
-        assert found is not None
-        assert found.email == "charlie@rls-test.com"
+        membership = await get_membership_by_account_and_org(session, user_a, org_a)
+        assert membership is not None
+        acct = await get_account_by_id(session, membership.account_id)
+        assert acct is not None
+        assert acct.email == "charlie@rls-test.com"
 
 
 async def test_login_bypasses_rls(db_engine: AsyncEngine) -> None:
-    """get_user_by_email must work across orgs (login flow needs no RLS)."""
+    """get_account_by_email must work across orgs (login flow needs no RLS)."""
     org_a = await _create_org(db_engine, f"login-a-{uuid.uuid4().hex[:8]}")
     org_b = await _create_org(db_engine, f"login-b-{uuid.uuid4().hex[:8]}")
 
@@ -142,7 +163,7 @@ async def test_login_bypasses_rls(db_engine: AsyncEngine) -> None:
 
     # Login should find the user regardless of org context
     async with factory() as session:
-        found = await get_user_by_email(session, "dave-a@login-test.com")
+        found = await get_account_by_email(session, "dave-a@login-test.com")
         assert found is not None
         assert found.email == "dave-a@login-test.com"
 

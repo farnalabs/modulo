@@ -5,8 +5,8 @@ from unittest.mock import MagicMock, patch
 
 from pytest_bdd import given, parsers, scenarios, then, when
 
-scenarios("../../features/pipelines/create.feature")
-scenarios("../../features/pipelines/concurrency.feature")
+scenarios("../features/pipelines/create.feature")
+scenarios("../features/pipelines/concurrency.feature")
 
 from tests.bdd.conftest import make_mock_pipeline  # noqa: E402
 

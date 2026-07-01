@@ -5,9 +5,9 @@ from unittest.mock import MagicMock, patch
 
 from pytest_bdd import given, parsers, scenarios, then, when
 
-scenarios("../../features/users/basic_auth.feature")
-scenarios("../../features/users/roles.feature")
-scenarios("../../features/users/runner_role.feature")
+scenarios("../features/users/basic_auth.feature")
+scenarios("../features/users/roles.feature")
+scenarios("../features/users/runner_role.feature")
 
 
 @given("I am authenticated as a viewer in org {org}")

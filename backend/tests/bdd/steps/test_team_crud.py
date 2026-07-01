@@ -14,7 +14,7 @@ from modulo.settings import get_settings
 from tests.bdd.conftest import make_settings
 
 try:
-    scenarios("../../features/teams/team_crud.feature")
+    scenarios("../features/teams/team_crud.feature")
 except (FileNotFoundError, OSError):
     pass
 

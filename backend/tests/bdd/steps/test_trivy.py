@@ -7,7 +7,7 @@ from modulo.connectors.base import ConnectorPayload, ConnectorQuery
 from modulo.connectors.trivy import TrivyConnector
 
 try:
-    scenarios("../../features/connectors/trivy.feature")
+    scenarios("../features/connectors/trivy.feature")
 except Exception:
     pass
 

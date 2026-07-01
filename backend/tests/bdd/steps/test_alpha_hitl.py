@@ -5,11 +5,11 @@ from unittest.mock import patch
 
 from pytest_bdd import given, parsers, scenarios, then, when
 
-scenarios("../../features/hitl/claim.feature")
-scenarios("../../features/hitl/approve.feature")
-scenarios("../../features/hitl/reject.feature")
-scenarios("../../features/hitl/human_only_gate.feature")
-scenarios("../../features/hitl/overdue_warning.feature")
+scenarios("../features/hitl/claim.feature")
+scenarios("../features/hitl/approve.feature")
+scenarios("../features/hitl/reject.feature")
+scenarios("../features/hitl/human_only_gate.feature")
+scenarios("../features/hitl/overdue_warning.feature")
 
 
 @given("a run is waiting at gate {gate}")

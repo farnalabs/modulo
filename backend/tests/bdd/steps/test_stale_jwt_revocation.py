@@ -1,4 +1,4 @@
-﻿"""BDD step definitions: Stale JWT team membership revocation."""
+"""BDD step definitions: Stale JWT team membership revocation."""
 
 import uuid
 from typing import Any
@@ -14,7 +14,7 @@ from modulo.settings import get_settings
 from tests.bdd.conftest import make_settings
 
 try:
-    scenarios("../../features/teams/stale_jwt_revocation.feature")
+    scenarios("../features/teams/stale_jwt_revocation.feature")
 except (FileNotFoundError, OSError):
     pass
 
