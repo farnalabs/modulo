@@ -944,7 +944,7 @@ def step_linear_connector_api_errors(ctx):
         raise ValueError("Linear API error: [{'message': 'Internal error'}]")
 
     async def mock_write(payload):
-        return {"success": False, "issue": None}
+        raise ValueError("Failed to create Linear issue: API error")
 
     async def mock_health_check():
         return HealthResult(ok=False, detail="API error")
