@@ -1,5 +1,5 @@
 <template>
-  <router-link :to="to" :class="`sidebar-link ${isActive ? 'active' : ''}`" v-bind="$attrs">
+  <router-link :to="to" :class="`sidebar-link ${isActive ? 'active' : ''}`" :aria-current="isActive ? 'page' : undefined" v-bind="$attrs">
     <span class="h-4 w-4 shrink-0"><SvgIcon :name="icon" /></span>
     <span class="truncate">{{ label }}</span>
   </router-link>
