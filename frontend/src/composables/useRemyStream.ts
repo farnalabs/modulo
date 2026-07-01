@@ -31,6 +31,7 @@ export function useRemyStream() {
 
     const lastMsg = store.messages[store.messages.length - 1]
     if (!lastMsg || !lastMsg.content) {
+      store.removeLastUserMessage()
       store.isStreaming = false
       connected.value = false
       return
@@ -53,6 +54,7 @@ export function useRemyStream() {
           model: session.model,
           context_window_tokens: session.context_window_tokens,
           api_key: '',
+          mcp_api_key: token || '',
           page_context: (() => {
             if (!pageCtx.route) return undefined
             let ctx = `Page: ${pageCtx.route}`
