@@ -1,22 +1,22 @@
 import { ref } from 'vue'
 
 const VIEW_MODE_KEY = 'modulo-sidebar-view-mode'
-const COLLAPSED_KEY = 'modulo-sidebar-collapsed-groups'
+const PREF_KEY = 'modulo-sidebar-group-prefs'
 
 const viewMode = ref<'simple' | 'advanced'>('simple')
-const collapsedGroups = ref<Set<string>>(new Set())
+const groupPrefs = ref<Record<string, boolean>>({})
 
 function init() {
   const saved = localStorage.getItem(VIEW_MODE_KEY)
   if (saved === 'simple' || saved === 'advanced') {
     viewMode.value = saved
   }
-  const collapsed = localStorage.getItem(COLLAPSED_KEY)
-  if (collapsed) {
+  const prefs = localStorage.getItem(PREF_KEY)
+  if (prefs) {
     try {
-      const arr = JSON.parse(collapsed)
-      if (Array.isArray(arr)) {
-        collapsedGroups.value = new Set(arr)
+      const obj = JSON.parse(prefs)
+      if (typeof obj === 'object' && obj !== null) {
+        groupPrefs.value = obj
       }
     } catch {
       // ignore
@@ -26,22 +26,18 @@ function init() {
 
 function save() {
   localStorage.setItem(VIEW_MODE_KEY, viewMode.value)
-  localStorage.setItem(COLLAPSED_KEY, JSON.stringify(Array.from(collapsedGroups.value)))
+  localStorage.setItem(PREF_KEY, JSON.stringify(groupPrefs.value))
 }
 
-function toggleGroup(id: string) {
-  if (collapsedGroups.value.has(id)) {
-    collapsedGroups.value.delete(id)
-  } else {
-    collapsedGroups.value.add(id)
-  }
+function toggleGroup(id: string, defaultCollapsed: boolean) {
+  const pref = groupPrefs.value[id]
+  groupPrefs.value[id] = pref === undefined ? !defaultCollapsed : !pref
   save()
 }
 
 function isGroupCollapsed(id: string, defaultCollapsed: boolean): boolean {
-  if (collapsedGroups.value.has(id)) return true
-  if (!collapsedGroups.value.has(id) && collapsedGroups.value.size > 0) return false
-  return defaultCollapsed
+  const pref = groupPrefs.value[id]
+  return pref !== undefined ? pref : defaultCollapsed
 }
 
 function setViewMode(mode: 'simple' | 'advanced') {
@@ -53,7 +49,7 @@ export function useSidebar() {
   init()
   return {
     viewMode,
-    collapsedGroups,
+    groupPrefs,
     toggleGroup,
     isGroupCollapsed,
     setViewMode,

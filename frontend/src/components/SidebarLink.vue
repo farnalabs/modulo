@@ -18,7 +18,7 @@ const props = defineProps<{
 const route = useRoute()
 
 const isActive = computed(() => {
-  return route.path === props.to || (props.to !== '/' && route.path.startsWith(props.to + '/'))
+  return route.path === props.to || (props.to !== '/' && route.path.startsWith(props.to + '/') && route.path.charAt(props.to.length) === '/')
 })
 
 const iconSvgs: Record<string, string> = {
