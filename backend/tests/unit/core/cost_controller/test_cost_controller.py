@@ -25,7 +25,9 @@ _TODAY = date(2026, 6, 24)
 
 @pytest.fixture()
 def mock_session() -> AsyncMock:
-    return AsyncMock()
+    s = AsyncMock()
+    s.add = MagicMock()
+    return s
 
 
 def _make_daily_count_row(**kw: object) -> MagicMock:
