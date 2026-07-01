@@ -13,6 +13,11 @@ class RemyConfig(BaseModel):
     system_prompt: str = ""
     additional_guidance: str = ""
     access_list: dict[str, list[Any]] = {"user_ids": [], "team_ids": [], "org_roles": ["admin"]}
+    default_provider: str = "anthropic"
+    default_model: str = "claude-sonnet-4-20250514"
+    default_context_window: int = 200000
+    allowed_providers: list[str] = ["anthropic", "openai", "google-gemini", "deepseek", "groq"]
+    allowed_models: list[str] = []  # empty = all models for allowed providers
 
 
 _CONFIG_KEY_PREFIX = "remy_config:"
