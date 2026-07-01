@@ -9,50 +9,56 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-from collections.abc import AsyncGenerator
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import StreamingResponse
 from starlette import status
 
 from modulo.auth.dependencies import get_current_user
-from modulo.auth.jwt import AuthenticatedPrincipal
 from modulo.core.events.event_bus import get_event_bus
 from modulo.settings import Settings, get_settings
+
+if TYPE_CHECKING:
+    from collections.abc import AsyncGenerator
+
+    from modulo.auth.jwt import AuthenticatedPrincipal
 
 _log = logging.getLogger(__name__)
 
 router = APIRouter(tags=["events"])
 
 _active_connections: dict[str, set[asyncio.Queue[dict[str, Any]]]] = {}
-_queue_users: dict[int, str] = {}  # id(q) -> user_id
+_queue_users: dict[int, str] = {}
 _active_connections_lock: asyncio.Lock = asyncio.Lock()
+
+
+def _reset_connections() -> None:
+    """Clear all tracked SSE connections. Used in tests to prevent state leakage."""
+    _active_connections.clear()
+    _queue_users.clear()
 
 
 async def _track_connection(
     org_id: str,
     user_id: str,
     queue: asyncio.Queue[dict[str, Any]],
-    settings: Settings,
+    max_org: int,
+    max_user: int,
 ) -> None:
     """Register a connection, raising 429 if the per-org or per-user limit is exceeded."""
     async with _active_connections_lock:
         active = _active_connections.setdefault(org_id, set())
-        if len(active) >= settings.modulo_sse_max_connections_per_org:
+        if len(active) >= max_org:
             raise HTTPException(
                 status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-                detail="Too many SSE connections for this organisation. "
-                f"Limit is {settings.modulo_sse_max_connections_per_org} concurrent streams.",
+                detail=f"Too many SSE connections for this organisation. Limit is {max_org} concurrent streams.",
             )
-        user_count = sum(
-            1 for q in active if _queue_users.get(id(q)) == user_id
-        )
-        if user_count >= settings.modulo_sse_max_connections_per_user:
+        user_count = sum(1 for q in active if _queue_users.get(id(q)) == user_id)
+        if user_count >= max_user:
             raise HTTPException(
                 status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-                detail="Too many SSE connections from this user. "
-                f"Limit is {settings.modulo_sse_max_connections_per_user} concurrent streams per user.",
+                detail=f"Too many SSE connections from this user. Limit is {max_user} concurrent streams per user.",
             )
         _queue_users[id(queue)] = user_id
         active.add(queue)
@@ -98,7 +104,13 @@ async def sse_event_stream(
     event_bus = get_event_bus()
     queue = await event_bus.subscribe(org_id, maxsize=256)
     try:
-        await _track_connection(org_id, str(principal.user_id), queue, settings)
+        await _track_connection(
+            org_id,
+            str(principal.user_id),
+            queue,
+            settings.modulo_sse_max_connections_per_org,
+            settings.modulo_sse_max_connections_per_user,
+        )
     except HTTPException:
         await event_bus.unsubscribe(org_id, queue)
         raise
@@ -117,11 +129,10 @@ async def sse_event_stream(
         Two cleanup paths:
           1. **Graceful disconnect** — ASGI sends CancelledError when the
              client closes the connection. Caught here.
-          2. **Zombie disconnect** — 2s keepalive poll catches hard drops
-             (network failure, killed tab). Also: since ``queue.get()``
-             returns the instant an event is published, the 2s timer only
-             fires when *nothing is changing* — zero wakeups during active
-             use.
+          2. **Zombie disconnect** — keepalive heartbeat catches hard drops
+             (network failure, killed tab). Since ``queue.get()`` returns the
+             instant an event is published, the timer only fires when nothing
+             is changing — zero wakeups during active use.
         """
         yield ": connected\n\n"
         try:
@@ -130,7 +141,7 @@ async def sse_event_stream(
                     event = await asyncio.wait_for(queue.get(), timeout=zombie_timeout)
                     yield f"event: resource_changed\ndata: {json.dumps(event)}\n\n"
                 except TimeoutError:
-                    yield "data: \n\n"
+                    yield ": heartbeat\n\n"
         except asyncio.CancelledError:
             pass
         except Exception:

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from collections.abc import Callable
 from typing import Any
@@ -43,11 +44,13 @@ _ACTION_MAP: dict[str, str] = {
     "after_delete": "deleted",
 }
 
+_background_tasks: set[asyncio.Task[Any]] = set()
+
 
 def _make_listener(action: str) -> Callable[[Any, Any, Any], None]:
-    """Factory: return an event-listener function for the given SQLAlchemy action."""
+    """Return an event-listener function for the given SQLAlchemy action."""
 
-    def listener(mapper: Any, connection: Any, target: Any) -> None:
+    def listener(_mapper: object, _connection: object, target: Any) -> None:
         resource_type = _RESOURCE_TYPES.get(type(target))
         if resource_type is None:
             _log.warning(
@@ -74,19 +77,25 @@ def _make_listener(action: str) -> Callable[[Any, Any, Any], None]:
             return
 
         try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            _log.warning(
+                "event_listener.no_running_loop",
+                extra={"resource_type": resource_type, "action": action_name},
+            )
+            return
+
+        task = loop.create_task(
             get_event_bus().publish(
                 org_id=org_id,
                 resource_type=resource_type,
                 resource_id=str(target.id),
                 action=action_name,
                 version=0,
-            )
-        except Exception:
-            _log.warning(
-                "event_listener.publish_failed",
-                extra={"resource_type": resource_type, "action": action_name, "org_id": org_id},
-                exc_info=True,
-            )
+            ),
+        )
+        _background_tasks.add(task)
+        task.add_done_callback(_background_tasks.discard)
 
     return listener
 
