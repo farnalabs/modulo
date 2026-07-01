@@ -35,6 +35,7 @@ export const usePlanStore = defineStore('plan', () => {
   }
 
   async function fetchPlan() {
+    if (isLoading.value) return
     isLoading.value = true
     error.value = null
     try {
@@ -67,7 +68,7 @@ export const usePlanStore = defineStore('plan', () => {
           if (licResp.data.tier) currentTier.value = licResp.data.tier
         }
       } catch (e: unknown) {
-        // License is optional; don't overwrite main error
+        console.warn('[PlanStore] License fetch failed', e instanceof Error ? e.message : String(e))
       }
 
       // Tiers
@@ -84,7 +85,7 @@ export const usePlanStore = defineStore('plan', () => {
           tierRanks.value = ranks
         }
       } catch (e: unknown) {
-        // Tiers is optional; don't overwrite main error
+        console.warn('[PlanStore] Tiers fetch failed', e instanceof Error ? e.message : String(e))
       }
     } finally {
       isLoading.value = false
@@ -95,7 +96,9 @@ export const usePlanStore = defineStore('plan', () => {
     if (event.type === 'team' || event.type === 'license' || event.type === 'plan') {
       if (!syncingIds.value.has(event.id)) {
         syncingIds.value.add(event.id)
-        fetchPlan()
+        void fetchPlan().finally(() => {
+          syncingIds.value.delete(event.id)
+        })
       }
     }
   }
@@ -104,11 +107,15 @@ export const usePlanStore = defineStore('plan', () => {
   unsubHandlers.push(registerHandler('license', handleSyncEvent))
   unsubHandlers.push(registerHandler('plan', handleSyncEvent))
 
+  if (import.meta.hot) {
+    import.meta.hot.dispose(() => { disposeHandlers() })
+  }
+
   function disposeHandlers(): void {
     for (const unsub of unsubHandlers) unsub()
     unsubHandlers.length = 0
     syncingIds.value.clear()
   }
 
-  return { currentTier, features, isLoading, error, isTeam, expiresAt, orgName, tierLabels, tierRanks, fetchPlan, featureEnabled, getTierLabel, isAtMinimumTier, syncingIds, handleSyncEvent, disposeHandlers }
+  return { currentTier, features, isLoading, error, isTeam, expiresAt, orgName, tierLabels, tierRanks, fetchPlan, featureEnabled, getTierLabel, isAtMinimumTier, disposeHandlers }
 })

@@ -1,4 +1,4 @@
-import { ref } from 'vue'
+import { ref, triggerRef } from 'vue'
 import type { EventBusEvent } from '@/types/events'
 
 export interface SyncableStore {
@@ -13,7 +13,9 @@ export function createSyncAdapter(store: SyncableStore) {
     if (event.action === 'deleted') {
       store.remove(event.id)
     } else {
-      store.fetch(event.id)
+      store.fetch(event.id).catch((err: unknown) => {
+        console.error('[SyncAdapter] fetch error', err)
+      })
     }
   }
 }
@@ -23,10 +25,12 @@ export function useDirtyTracker() {
 
   function markDirty(id: string): void {
     dirtyIds.value.add(id)
+    triggerRef(dirtyIds)
   }
 
   function markClean(id: string): void {
     dirtyIds.value.delete(id)
+    triggerRef(dirtyIds)
   }
 
   function isDirty(id: string): boolean {
