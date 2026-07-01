@@ -1,7 +1,7 @@
 <template>
-  <div class="flex min-h-screen">
+  <div class="flex items-start min-h-screen">
     <!-- Sidebar -->
-    <aside class="hidden md:flex w-64 border-r bg-background p-4 flex-col">
+    <aside class="hidden md:flex w-64 border-r bg-background p-4 flex-col min-h-screen">
       <div class="mb-6 flex items-center gap-2.5 pl-1">
         <div
           class="flex items-center justify-center rounded-lg bg-gradient-to-br from-teal-500/20 to-transparent p-1.5"
@@ -11,15 +11,19 @@
         <h2 class="text-lg font-bold tracking-tight">Modulo</h2>
       </div>
 
+      <ViewModeToggle
+        :model-value="viewMode"
+        :options="[{ label: 'Essentials', value: 'simple' }, { label: 'All Features', value: 'advanced' }]"
+        @update:model-value="setViewMode"
+      />
+
       <SidebarNav :is-system-admin="isSystemAdmin" />
 
       <SidebarFooter
         :user-email="userEmail"
         :user-initial="userInitial"
-        :view-mode="viewMode"
         :is-light="isLight"
         @toggle-theme="toggleTheme"
-        @set-view-mode="setViewMode"
         @logout="logout"
       />
     </aside>
@@ -86,10 +90,16 @@
     <aside
       id="mobile-sidebar"
       ref="mobileSidebarRef"
-      class="md:hidden fixed top-14 left-0 z-40 h-[calc(100vh-3.5rem)] w-64 border-r bg-background p-4 flex flex-col transition-transform"
+      class="md:hidden fixed top-14 left-0 z-40 h-[calc(100vh-3.5rem)] w-64 border-r bg-background p-4 flex flex-col transition-transform overflow-y-auto"
       :class="mobileOpen ? 'translate-x-0' : '-translate-x-full'"
       @keydown.escape="mobileOpen = false"
     >
+      <ViewModeToggle
+        :model-value="viewMode"
+        :options="[{ label: 'Essentials', value: 'simple' }, { label: 'All Features', value: 'advanced' }]"
+        @update:model-value="setViewMode"
+      />
+
       <SidebarNav
         :is-system-admin="isSystemAdmin"
         @navigate="mobileOpen = false"
@@ -98,10 +108,8 @@
       <SidebarFooter
         :user-email="userEmail"
         :user-initial="userInitial"
-        :view-mode="viewMode"
         :is-light="isLight"
         @toggle-theme="toggleTheme"
-        @set-view-mode="setViewMode"
         @logout="logout"
       />
     </aside>
@@ -126,6 +134,7 @@ import LogoMark from "./LogoMark.vue";
 import RemyPanel from "./remy/RemyPanel.vue";
 import SidebarFooter from "./SidebarFooter.vue";
 import SidebarNav from "./SidebarNav.vue";
+import ViewModeToggle from "./ViewModeToggle.vue";
 import { useSidebar } from "../composables/useSidebar";
 
 const { viewMode, setViewMode } = useSidebar();
