@@ -8,15 +8,18 @@ Configures python-json-logger with:
 - Sensitive field redaction (keys, secrets, tokens → "***")
 """
 
+import asyncio
 import logging
 import os
 import sys
+import traceback as tb_module
 from contextvars import ContextVar
 from typing import Any
 
 from pythonjsonlogger import jsonlogger
 
 correlation_id_var: ContextVar[str | None] = ContextVar("correlation_id", default=None)
+org_id_var: ContextVar[str | None] = ContextVar("org_id", default=None)
 
 _SENSITIVE_KEYS: frozenset[str] = frozenset(
     {
@@ -86,6 +89,91 @@ def _resolve_log_level(module_name: str) -> str:
     return os.environ.get("MODULO_LOG_LEVEL", "INFO").upper()
 
 
+def _log_async_emit_error(future: asyncio.Task[None]) -> None:
+    """Log any unhandled exception from ErrorTrackingLogHandler's async emit."""
+    exc = future.exception()
+    if exc is not None:
+        _log = logging.getLogger(__name__)
+        _log.error("ErrorTrackingLogHandler.async_emit_failed", exc_info=exc)
+
+
+class ErrorTrackingLogHandler(logging.Handler):
+    """Forward ERROR+ log records to ErrorIngestionService."""
+
+    def __init__(self, level: int = logging.ERROR) -> None:
+        super().__init__(level=level)
+
+    def emit(self, record: logging.LogRecord) -> None:
+        if record.levelno < self.level:
+            return
+        try:
+            loop = asyncio.get_running_loop()
+            task = loop.create_task(self._async_emit(record))
+            task.add_done_callback(_log_async_emit_error)
+        except RuntimeError:
+            pass
+
+    async def _async_emit(self, record: logging.LogRecord) -> None:
+        """Async emit — creates a DB session and calls ErrorIngestionService."""
+        try:
+            from modulo.api.dependencies import (
+                get_or_create_engine,
+                get_or_create_session_factory,
+            )
+            from modulo.core.error_tracking import ErrorIngestionService
+            from modulo.db.rls import set_rls_org
+            from modulo.settings import get_settings
+            from modulo.version import get_version
+
+            settings = get_settings()
+            engine = get_or_create_engine(settings)
+            factory = get_or_create_session_factory(engine)
+
+            org_id = org_id_var.get()
+            if org_id is None:
+                return
+
+            message = record.getMessage()
+            level = "error"
+            if record.levelno >= logging.CRITICAL:
+                level = "critical"
+            elif record.levelno >= logging.WARNING:
+                level = "warning"
+
+            stacktrace = None
+            if record.exc_text:
+                stacktrace = record.exc_text
+            elif record.exc_info:
+                stacktrace = "".join(
+                    tb_module.format_exception(*record.exc_info)
+                )
+
+            event_data: dict[str, Any] = {
+                "level": level,
+                "message": message,
+                "source": "backend",
+                "stacktrace": stacktrace,
+                "context_json": {
+                    "logger": record.name,
+                    "module": record.module,
+                    "function": record.funcName,
+                    "line": record.lineno,
+                    "correlation_id": correlation_id_var.get(),
+                },
+                "environment": os.environ.get("MODULO_ENV", "development"),
+                "version": get_version(),
+            }
+
+            service = ErrorIngestionService()
+            async with factory() as session:
+                await set_rls_org(session, org_id)
+                async with session.begin():
+                    await service.ingest(session, org_id, event_data)
+        except Exception:
+            _log = logging.getLogger(__name__)
+            _log.exception("ErrorTrackingLogHandler.ingest_failed")
+
+
 def configure_logging() -> None:
     """Configure the root logger for structured JSON output.
 
@@ -115,6 +203,7 @@ def configure_logging() -> None:
     handler.addFilter(SensitiveFieldFilter())
 
     root_logger.addHandler(handler)
+    root_logger.addHandler(ErrorTrackingLogHandler())
 
     _apply_per_module_levels()
 
