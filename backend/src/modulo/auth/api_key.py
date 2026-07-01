@@ -94,6 +94,8 @@ async def create_api_key(
         expires_at=expires_at,
     )
     session.add(key)
+    if team_id is not None:
+        _validate_team_key_role(key)
     await session.flush()
     return key, full_key
 
@@ -220,6 +222,7 @@ async def update_api_key(
         key.role = role
     if team_id is not None:
         key.team_id = team_id
+        _validate_team_key_role(key)
     if expires_at is not None:
         key.expires_at = expires_at
     await session.flush()
