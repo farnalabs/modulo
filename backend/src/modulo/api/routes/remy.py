@@ -220,6 +220,19 @@ async def _call_mcp_tool(
         return resp.json()
 
 
+def _reconstruct_tool_calls(buffers: dict[int, dict[str, Any]]) -> list[dict[str, Any]]:
+    tool_calls: list[dict[str, Any]] = []
+    for idx in sorted(buffers):
+        buf = buffers[idx]
+        try:
+            parsed_args = json.loads(buf["args"]) if buf["args"] else {}
+        except json.JSONDecodeError:
+            logger.warning("Failed to parse tool call args for %r: %r", buf["name"], buf["args"][:200])
+            parsed_args = {}
+        tool_calls.append({"id": buf["id"], "name": buf["name"], "args": parsed_args})
+    return tool_calls
+
+
 async def _reconstruct_messages(session: AsyncSession, session_id: uuid.UUID) -> list[BaseMessage]:
     result = await session.execute(
         select(ChatMessage)
@@ -596,19 +609,7 @@ async def stream_chat(
                     return
 
                 # 8. Reconstruct tool calls from accumulated chunks
-                tool_calls = []
-                for idx in sorted(tool_call_buffers.keys()):
-                    buf = tool_call_buffers[idx]
-                    try:
-                        parsed_args = json.loads(buf["args"]) if buf["args"] else {}
-                    except json.JSONDecodeError:
-                        logger.warning("Failed to parse tool call args for %r: %r", buf["name"], buf["args"][:200])
-                        parsed_args = {}
-                    tool_calls.append({
-                        "id": buf["id"],
-                        "name": buf["name"],
-                        "args": parsed_args,
-                    })
+                tool_calls = _reconstruct_tool_calls(tool_call_buffers)
 
                 # 9. Execute tool calls via MCP
                 tool_results: list[dict[str, Any]] = []
