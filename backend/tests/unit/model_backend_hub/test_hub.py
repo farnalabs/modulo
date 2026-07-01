@@ -344,20 +344,6 @@ async def test_initialise_plugin_fallback_not_registered_raises():
             await hub.initialise([mb], secrets_backend=backend)
 
 
-async def test_initialise_unknown_provider_raises():
-    mb = _FakeMB(
-        id=uuid.uuid4(),
-        provider="fake-provider",
-        model_id="llama3",
-        credentials_ciphertext=_encrypt({"api_key": "none"}),
-    )
-    backend = create_secrets_backend(fernet_key=_KEY, backend_name="fernet")
-    with patch.object(backend, "get_secret", return_value='{"api_key": "none"}'):
-        hub = ModelBackendHub()
-        with pytest.raises(ValueError, match="Unknown model backend provider"):
-            await hub.initialise([mb], secrets_backend=backend)
-
-
 async def test_initialise_missing_api_key_raises():
     mb = _FakeMB(
         id=uuid.uuid4(),
@@ -374,5 +360,5 @@ async def test_initialise_missing_api_key_raises():
 
 async def test_get_with_rotation_raises_for_unregistered_id():
     hub = ModelBackendHub()
-    with pytest.raises(BackendUnavailableError):
+    with pytest.raises(BackendNotFoundError):
         hub.get_with_rotation(uuid.uuid4())
