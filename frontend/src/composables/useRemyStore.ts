@@ -1,0 +1,225 @@
+import { defineStore } from 'pinia'
+import { ref, computed } from 'vue'
+import { api } from '@/lib/api/client'
+import type { ChatSession, ChatMessage, PageContext } from '@/types/remy'
+
+const POSITION_KEY = 'remy_panel_position'
+const SIZE_KEY = 'remy_panel_size'
+
+function loadPosition(): { x: number; y: number } {
+  try {
+    const raw = localStorage.getItem(POSITION_KEY)
+    if (raw) return JSON.parse(raw)
+  } catch { /* ignore */ }
+  return { x: window.innerWidth - 460, y: 80 }
+}
+
+function loadSize(): { width: number; height: number } {
+  try {
+    const raw = localStorage.getItem(SIZE_KEY)
+    if (raw) return JSON.parse(raw)
+  } catch { /* ignore */ }
+  return { width: 440, height: 600 }
+}
+
+export const useRemyStore = defineStore('remy', () => {
+  const sessions = ref<ChatSession[]>([])
+  const activeSessionId = ref<string | null>(null)
+  const messages = ref<ChatMessage[]>([])
+  const panelState = ref<'closed' | 'floating' | 'docked' | 'maximised'>('closed')
+  const panelPosition = ref(loadPosition())
+  const panelSize = ref(loadSize())
+  const isStreaming = ref(false)
+  const pageContext = ref<PageContext>({ route: '', params: {}, entities: [] })
+  const loading = ref(false)
+  const error = ref<string | null>(null)
+  const sessionsLoading = ref(false)
+
+  const activeSession = computed(() =>
+    sessions.value.find(s => s.id === activeSessionId.value) ?? null,
+  )
+
+  const sortedSessions = computed(() =>
+    [...sessions.value].sort(
+      (a, b) => new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime(),
+    ),
+  )
+
+  function persistPosition() {
+    localStorage.setItem(POSITION_KEY, JSON.stringify(panelPosition.value))
+  }
+
+  function persistSize() {
+    localStorage.setItem(SIZE_KEY, JSON.stringify(panelSize.value))
+  }
+
+  async function fetchSessions() {
+    sessionsLoading.value = true
+    error.value = null
+    try {
+      const { data, error: err } = await api.GET('/api/v1/remy/sessions')
+      if (err) {
+        error.value = String(err)
+      } else {
+        sessions.value = (data as any)?.items ?? (data as any) ?? []
+      }
+    } catch (e: unknown) {
+      error.value = e instanceof Error ? e.message : String(e)
+    } finally {
+      sessionsLoading.value = false
+    }
+  }
+
+  async function createSession() {
+    error.value = null
+    try {
+      const { data, error: err } = await api.POST('/api/v1/remy/sessions', {
+        body: { name: null, provider: 'default', model: 'default' },
+      })
+      if (err) throw new Error(String(err))
+      const session = data as ChatSession
+      sessions.value.unshift(session)
+      activeSessionId.value = session.id
+      messages.value = []
+      return session
+    } catch (e: unknown) {
+      error.value = e instanceof Error ? e.message : String(e)
+      return null
+    }
+  }
+
+  async function loadSession(id: string) {
+    loading.value = true
+    error.value = null
+    activeSessionId.value = id
+    messages.value = []
+    try {
+      const { data, error: err } = await api.GET('/api/v1/remy/sessions/{id}/messages', {
+        params: { path: { id } },
+      })
+      if (err) {
+        error.value = String(err)
+      } else {
+        messages.value = (data as any)?.items ?? (data as any) ?? []
+      }
+    } catch (e: unknown) {
+      error.value = e instanceof Error ? e.message : String(e)
+    } finally {
+      loading.value = false
+    }
+  }
+
+  async function deleteSession(id: string) {
+    error.value = null
+    try {
+      const { error: err } = await api.DELETE('/api/v1/remy/sessions/{id}', {
+        params: { path: { id } },
+      })
+      if (err) throw new Error(String(err))
+      sessions.value = sessions.value.filter(s => s.id !== id)
+      if (activeSessionId.value === id) {
+        activeSessionId.value = null
+        messages.value = []
+      }
+    } catch (e: unknown) {
+      error.value = e instanceof Error ? e.message : String(e)
+    }
+  }
+
+  async function sendMessage(text: string) {
+    if (!activeSessionId.value) return
+    const tempId = `temp-${Date.now()}`
+    const userMsg: ChatMessage = {
+      id: tempId,
+      session_id: activeSessionId.value,
+      role: 'user',
+      content: text,
+      token_count: null,
+      created_at: new Date().toISOString(),
+    }
+    messages.value.push(userMsg)
+
+    try {
+      const { data, error: err } = await api.POST('/api/v1/remy/sessions/{id}/messages', {
+        params: { path: { id: activeSessionId.value } },
+        body: { content: text, page_context: pageContext.value },
+      })
+      if (err) throw new Error(String(err))
+      const saved = data as ChatMessage
+      userMsg.id = saved.id
+      userMsg.token_count = saved.token_count
+
+      const { data: replyData, error: replyErr } = await api.POST(
+        '/api/v1/remy/sessions/{id}/chat',
+        { params: { path: { id: activeSessionId.value } }, body: { content: text } },
+      )
+      if (replyErr) throw new Error(String(replyErr))
+      const reply = replyData as ChatMessage
+      messages.value.push(reply)
+    } catch (e: unknown) {
+      error.value = e instanceof Error ? e.message : String(e)
+    }
+  }
+
+  function setPanelState(state: 'closed' | 'floating' | 'docked' | 'maximised') {
+    panelState.value = state
+  }
+
+  function updatePosition(pos: { x: number; y: number }) {
+    panelPosition.value = pos
+    persistPosition()
+  }
+
+  function updateSize(size: { width: number; height: number }) {
+    panelSize.value = size
+    persistSize()
+  }
+
+  function setPageContext(ctx: PageContext) {
+    pageContext.value = ctx
+  }
+
+  function appendToken(text: string) {
+    const lastMsg = messages.value[messages.value.length - 1]
+    if (lastMsg && lastMsg.role === 'assistant') {
+      lastMsg.content = (lastMsg.content ?? '') + text
+    } else {
+      messages.value.push({
+        id: `stream-${Date.now()}`,
+        session_id: activeSessionId.value ?? '',
+        role: 'assistant',
+        content: text,
+        token_count: null,
+        created_at: new Date().toISOString(),
+      })
+    }
+  }
+
+  return {
+    sessions,
+    activeSessionId,
+    messages,
+    panelState,
+    panelPosition,
+    panelSize,
+    isStreaming,
+    pageContext,
+    loading,
+    error,
+    sessionsLoading,
+    activeSession,
+    sortedSessions,
+    fetchSessions,
+    createSession,
+    loadSession,
+    deleteSession,
+    sendMessage,
+    setPanelState,
+    updatePosition,
+    updateSize,
+    setPageContext,
+    appendToken,
+    persistPosition,
+    persistSize,
+  }
+})
