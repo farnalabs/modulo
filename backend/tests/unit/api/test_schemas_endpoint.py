@@ -179,6 +179,39 @@ def test_delete_schema_deletion_protected_returns_409(client: TestClient) -> Non
     assert resp.status_code == 409
 
 
+def test_delete_schema_force_returns_204(client: TestClient) -> None:
+    """force=True should delete even when references exist."""
+    with (
+        patch("modulo.api.routes.schemas.delete_schema", return_value=True),
+        patch("modulo.api.routes.schemas.set_rls_org"),
+    ):
+        resp = client.delete(f"/api/v1/schemas/{_SCHEMA_ID}?force=true")
+    assert resp.status_code == 204
+
+
+def test_delete_schema_force_skips_protection(client: TestClient) -> None:
+    """delete_schema without force raises error; with force=True passes."""
+    schema_id = uuid.uuid4()
+    # Without force — should raise SchemaDeletionProtectedError
+    with (
+        patch(
+            "modulo.api.routes.schemas.delete_schema",
+            side_effect=SchemaDeletionProtectedError(schema_id),
+        ),
+        patch("modulo.api.routes.schemas.set_rls_org"),
+    ):
+        resp = client.delete(f"/api/v1/schemas/{schema_id}")
+    assert resp.status_code == 409
+
+    # With force=true — should succeed
+    with (
+        patch("modulo.api.routes.schemas.delete_schema", return_value=True),
+        patch("modulo.api.routes.schemas.set_rls_org"),
+    ):
+        resp = client.delete(f"/api/v1/schemas/{schema_id}?force=true")
+    assert resp.status_code == 204
+
+
 # ---------------------------------------------------------------------------
 # SchemaVersion CRUD
 # ---------------------------------------------------------------------------
