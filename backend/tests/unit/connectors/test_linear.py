@@ -204,3 +204,39 @@ async def test_unsupported_write_resource(connector):
 
 def test_connector_type(connector):
     assert connector.connector_type == ConnectorType.LINEAR
+
+
+@respx.mock
+async def test_query_missing_id_raises(connector):
+    with pytest.raises(ValueError, match="requires 'id' filter"):
+        await connector.query(ConnectorQuery(resource="issue", filters={}))
+
+
+@respx.mock
+async def test_write_update_missing_id_raises(connector):
+    with pytest.raises(ValueError, match="Missing 'id' in update payload"):
+        await connector.write(
+            ConnectorPayload(resource="issue_update", data={"title": "No id"})
+        )
+
+
+@respx.mock
+async def test_write_update_failure(connector):
+    respx.post(_GRAPHQL).mock(
+        return_value=httpx.Response(200, json={"data": {"issueUpdate": {"success": False, "issue": None}}})
+    )
+    with pytest.raises(ValueError, match="Failed to update Linear issue"):
+        await connector.write(
+            ConnectorPayload(resource="issue_update", data={"id": "issue-1", "title": "Fail"})
+        )
+
+
+@respx.mock
+async def test_write_graphql_error(connector):
+    respx.post(_GRAPHQL).mock(
+        return_value=httpx.Response(200, json={"errors": [{"message": "Not authorized"}]})
+    )
+    with pytest.raises(ValueError, match="Linear API error"):
+        await connector.write(
+            ConnectorPayload(resource="issue", data={"title": "X", "teamId": "t1"})
+        )

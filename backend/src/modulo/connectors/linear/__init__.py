@@ -60,8 +60,8 @@ mutation($id: String!, $input: IssueUpdateInput!) {{
 """
 
 _SEARCH_ISSUES_QUERY = f"""
-query($query: String!) {{
-  searchIssues(query: $query) {{
+query($query: String!, $limit: Int) {{
+  searchIssues(query: $query, first: $limit) {{
     nodes {{
       {_ISSUE_FIELDS}
     }}
@@ -154,7 +154,7 @@ class LinearConnector(ConnectorBase):
                 return ConnectorResult(records=[issue])
             case "search":
                 query_text = q.filters.get("query", "")
-                data = await self._graphql(_SEARCH_ISSUES_QUERY, {"query": query_text})
+                data = await self._graphql(_SEARCH_ISSUES_QUERY, {"query": query_text, "limit": q.limit})
                 nodes = data.get("searchIssues", {}).get("nodes", [])
                 return ConnectorResult(records=nodes, total=len(nodes))
             case _:
