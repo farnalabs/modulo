@@ -26,6 +26,7 @@ unit-tests:
 depends-on: [feat-evals-eval-engine]
 status: partial
 ---
+
 # Eval Gates
 
 Conditional HITL gating and eval-before-interrupt for pipeline nodes. A HITL gate can be made conditional via a JMESPath `condition` expression on the gate config. Additionally, node-scoped eval definitions are evaluated after the condition check but before the interrupt — block-level eval failures raise `EvalBlockedError`, preventing the interrupt entirely. Post-run, eval suites with `pass_threshold` are checked and can transition the run to `eval_failed`.
@@ -57,19 +58,28 @@ Conditional HITL gating and eval-before-interrupt for pipeline nodes. A HITL gat
 - [ ] Resume from interrupt: rejected decision routes via reject edge if configured
 - [ ] `list_pending` returns all unclaimed, undecided gates for an org
 - [ ] `list_overdue` returns gates whose `claimed_at` exceeds the overdue threshold
-- [ ] `count_overdue` returns count of overdue gates ### Conditional Gating (8.17) - [ ] JMESPath `condition` on gate config evaluated against LangGraph state
+- [ ] `count_overdue` returns count of overdue gates
+
+### Conditional Gating (8.17)
+- [ ] JMESPath `condition` on gate config evaluated against LangGraph state
 - [ ] Condition evaluates to truthy value → gate proceeds to autonomy check (may fire interrupt)
 - [ ] Condition evaluates to falsy value → gate skipped with `condition_skipped` artifact
 - [ ] Condition `null` or absent → gate proceeds normally (non-conditional)
 - [ ] Eval-definitions evaluated after condition check but before interrupt
 - [ ] Eval-definitions on node, not on gate — scoped to upstream node output
-- [ ] Eval-definitions evaluated only on first visit, not on resume (`_hitl_decision` check is first) ### Autonomy Integration - [ ] `manual_approval` autonomy level: gate fires interrupt for human review
+- [ ] Eval-definitions evaluated only on first visit, not on resume (`_hitl_decision` check is first)
+
+### Autonomy Integration
+- [ ] `manual_approval` autonomy level: gate fires interrupt for human review
 - [ ] `notify_on_complete` autonomy level: gate auto-approves without interrupt, records artifact
 - [ ] `fully_autonomous` autonomy level: gate silently skipped
 - [ ] `human_only` flag on gate config overrides autonomy — always interrupts
 - [ ] Autonomy level read from `run_context._pipeline_default_autonomy` at runtime
 - [ ] `should_skip_hitl_gate` returns true for `fully_autonomous`
-- [ ] `should_notify_on_complete` returns true for `notify_on_complete` ### HITL Claim Lifecycle - [ ] Create gate with required_team_id — stored on HitlClaim row (used to scope claimants)
+- [ ] `should_notify_on_complete` returns true for `notify_on_complete`
+
+### HITL Claim Lifecycle
+- [ ] Create gate with required_team_id — stored on HitlClaim row (used to scope claimants)
 - [ ] Claim requires JWT or opaque token (secret_key at construction determines which)
 - [ ] Claim pre-checks: gate exists, not already decided, not already claimed, team membership if team-scoped
 - [ ] Claim race condition: concurrent claims on same gate — exactly one wins, others get `AlreadyClaimedError`
@@ -86,14 +96,20 @@ Conditional HITL gating and eval-before-interrupt for pipeline nodes. A HITL gat
 - [ ] Approve/reject with expired token → `ClaimTokenExpiredError`
 - [ ] Expire stale: resets claims with `expires_at < NOW()` and `decision IS NULL`
 - [ ] Expire stale: returns list of `{run_id, gate_id}` for notification dispatch
-- [ ] Gate with `expires_at=NULL` (defensive guard) → treated as expired on decide attempt ### Eval Suite Post-Run Check - [ ] Executor loads eval definitions with `suite_id` and `pass_threshold` after run completes
+- [ ] Gate with `expires_at=NULL` (defensive guard) → treated as expired on decide attempt
+
+### Eval Suite Post-Run Check
+- [ ] Executor loads eval definitions with `suite_id` and `pass_threshold` after run completes
 - [ ] Suite threshold check aggregates eval results by suite_id
 - [ ] Suite aggregate score above threshold → run stays "complete"
 - [ ] Suite aggregate score at threshold → run stays "complete"
 - [ ] Suite aggregate score below threshold → run transitions to "failed" with `error_code="eval_suite_blocked"`
 - [ ] No suite definitions with threshold → no post-run check
 - [ ] Empty suite (no results) → passes (aggregate_score=1.0)
-- [ ] Multiple suites with thresholds — first failing suite terminates check ### Error States - [ ] Gate not found on claim → `GateNotFoundError`
+- [ ] Multiple suites with thresholds — first failing suite terminates check
+
+### Error States
+- [ ] Gate not found on claim → `GateNotFoundError`
 - [ ] Gate already claimed → `AlreadyClaimedError` (not idempotent)
 - [ ] Gate already decided → `GateAlreadyDecidedError`
 - [ ] Non-team-member tries to claim team-scoped gate → `NotTeamMemberError`
@@ -102,7 +118,10 @@ Conditional HITL gating and eval-before-interrupt for pipeline nodes. A HITL gat
 - [x] `EvalSuiteBlockedError` is raised when suite fails threshold check (raised at executor.py:629, caught at executor.py:502)
 - [ ] Expiry job tick failure logged and recovered on next tick
 - [ ] Cancelled expiry job stops cleanly
-- [ ] DB session failure in expiry job does not crash the background loop ### Edge Cases - [ ] Condition expression runtime error → JMESPath raises, percolates as node error
+- [ ] DB session failure in expiry job does not crash the background loop
+
+### Edge Cases
+- [ ] Condition expression runtime error → JMESPath raises, percolates as node error
 - [ ] Eval definitions list is empty → no eval check performed (gate proceeds)
 - [ ] Eval definition with no node_id (pipeline-level) → not loaded by executor for eval-before-interrupt
 - [ ] Condition value is `False` literal → treated as falsy, gate skipped
@@ -116,14 +135,20 @@ Conditional HITL gating and eval-before-interrupt for pipeline nodes. A HITL gat
 - [ ] _looks_like_jwt heuristic: counts dots — avoids misidentifying opaque tokens as JWTs
 - [ ] create_gate idempotent: duplicate run_id+gate_id returns existing row (no error)
 - [ ] post-run suite check uses `distinct(EvalDefinition.suite_id)` to avoid redundant queries
-- [ ] Post-run suite check uses `pass_threshold` from any definition in suite (first found if multiple) ### Concurrency - [ ] Claim uses atomic `UPDATE ... WHERE claimed_by IS NULL AND decision IS NULL RETURNING`
+- [ ] Post-run suite check uses `pass_threshold` from any definition in suite (first found if multiple)
+
+### Concurrency
+- [ ] Claim uses atomic `UPDATE ... WHERE claimed_by IS NULL AND decision IS NULL RETURNING`
 - [ ] Race between pre-check SELECT and UPDATE → second claimant gets `AlreadyClaimedError` from RETURNING
 - [ ] HITLManager is stateless — safe for concurrent use with separate sessions
 - [ ] Expiry job uses per-org transactions with RLS `SET LOCAL` — no cross-org data leaks
 - [ ] Expiry job iterates orgs sequentially, not in parallel — safe but potentially slow with many orgs
 - [ ] Expiry job batch-resets run status via `UPDATE ... WHERE status = "claimed"` — avoids lost updates
 - [ ] Pipeline executor loads eval definitions before claiming capacity slot — stale definitions possible if definition added during capacity wait
-- [ ] _check_eval_suites reads uncommitted results from a fresh session after the streaming session closes ### Security - [ ] Admin role required for eval definition CRUD (403 for runner/operator roles)
+- [ ] _check_eval_suites reads uncommitted results from a fresh session after the streaming session closes
+
+### Security
+- [ ] Admin role required for eval definition CRUD (403 for runner/operator roles)
 - [ ] Unauthenticated requests to eval API endpoints return 401
 - [ ] RLS scopes all hitl_claims queries by organisation_id
 - [ ] RLS scopes all eval_results and eval_definitions queries by organisation_id
@@ -133,14 +158,20 @@ Conditional HITL gating and eval-before-interrupt for pipeline nodes. A HITL gat
 - [ ] Bad signature / scope mismatch raises `ClaimTokenInvalidError` without opaque fallback
 - [ ] Non-JWT token on secret_key-configured manager falls through to opaque comparison (backwards compat)
 - [ ] Expiry job sets RLS per session — each org's claims scoped correctly
-- [ ] Eval-before-interrupt: evaluate output against state before human sees it (no data leak on block) ### Backward Compatibility - [ ] Opaque claim tokens accepted alongside JWTs during migration period
+- [ ] Eval-before-interrupt: evaluate output against state before human sees it (no data leak on block)
+
+### Backward Compatibility
+- [ ] Opaque claim tokens accepted alongside JWTs during migration period
 - [ ] create_gate returns existing row if run_id+gate_id already exists — no breaking change for idempotent callers
 - [ ] HitlClaim model columns stable across migrations (expires_at, claim_token, etc.)
 - [ ] Claim without secret_key still generates valid token (alpha mode)
 - [ ] `list_pending` and `list_overdue` API shape unchanged
 - [ ] `_looks_like_jwt` heuristic avoids breaking opaque token consumers
 - [ ] EvalEngine.evaluate() signature stable — `llm_judge_callable` remains optional kwarg
-- [ ] `standalone_evaluate()` provides non-persisted path for backwards compatibility with Feedback System ## Known Gaps - [ ] PRD 8.17 specifies HITL gate `condition` as `{eval_id, threshold, operator}` referencing an eval definition. The code implements condition as a JMESPath expression against state (node_runner.py:128-163), with eval-definitions as a separate array. These are different mechanisms. The BDD `conditional_hitl.feature` includes scenarios for both — the implementation's eval-before-interrupt evaluates ALL eval_definitions against state with no per-eval threshold or operator. The PRD-specified eval-reference format (eval_id + threshold + operator) is not implemented.
+- [ ] `standalone_evaluate()` provides non-persisted path for backwards compatibility with Feedback System
+
+## Known Gaps
+- [ ] PRD 8.17 specifies HITL gate `condition` as `{eval_id, threshold, operator}` referencing an eval definition. The code implements condition as a JMESPath expression against state (node_runner.py:128-163), with eval-definitions as a separate array. These are different mechanisms. The BDD `conditional_hitl.feature` includes scenarios for both — the implementation's eval-before-interrupt evaluates ALL eval_definitions against state with no per-eval threshold or operator. The PRD-specified eval-reference format (eval_id + threshold + operator) is not implemented.
 - [ ] `EvalSuiteBlockedError` is now raised at `executor.py:629` and caught at `executor.py:502`. However, the `for sr in suite_results: if not sr.passed:` branch in the try block (lines 488–500) is dead code — the exception always fires before any non-passing result can be returned from `_check_eval_suites`. One path should be cleaned up.
 - [ ] `node_runner.py:168` — `engine.evaluate(state, eval_def)` return value is discarded. Eval results are not logged or persisted for eval-before-interrupt. Only exceptions are surfaced. Warn-level eval failures produce no output.
 - [ ] `eval_block.feature` scenario "Block failure is recorded in AuditEvent" references AuditEvent recording, but no AuditEvent integration exists in the eval engine or executor. AuditEvent writing for block failures is not implemented.
