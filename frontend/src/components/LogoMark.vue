@@ -1,8 +1,8 @@
 <script setup lang="ts">
 defineProps<{
-  size?: number
-  transparent?: boolean
-}>()
+  size?: number;
+  transparent?: boolean;
+}>();
 </script>
 
 <template>
@@ -17,7 +17,9 @@ defineProps<{
   >
     <rect
       v-if="!transparent"
-      width="100" height="100" rx="12"
+      width="100"
+      height="100"
+      rx="12"
       fill="currentColor"
       class="text-ink-900"
     />

@@ -78,7 +78,13 @@
         class="rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
         @click="save"
       >
-        {{ saving ? 'Saving...' : isEditing ? 'Update Category' : 'Create Category' }}
+        {{
+          saving
+            ? "Saving..."
+            : isEditing
+              ? "Update Category"
+              : "Create Category"
+        }}
       </button>
       <button
         class="rounded-lg border border-input bg-background px-4 py-2 text-sm font-medium hover:bg-accent"
@@ -91,65 +97,65 @@
 </template>
 
 <script setup lang="ts">
-import { ref, reactive, computed, watch } from 'vue'
-import { api } from '../lib/api/client'
+import { ref, reactive, computed, watch } from "vue";
+import { api } from "../lib/api/client";
 
 export interface NodeCategoryForm {
-  name: string
-  description: string
-  color: string
-  icon: string
-  sort_order: number
+  name: string;
+  description: string;
+  color: string;
+  icon: string;
+  sort_order: number;
 }
 
 interface CategoryData {
-  id?: string
-  name?: string
-  description?: string | null
-  color?: string
-  icon?: string | null
-  sort_order?: number
+  id?: string;
+  name?: string;
+  description?: string | null;
+  color?: string;
+  icon?: string | null;
+  sort_order?: number;
 }
 
 const props = defineProps<{
-  category?: CategoryData | null
-}>()
+  category?: CategoryData | null;
+}>();
 
 const emit = defineEmits<{
-  saved: [data: unknown]
-  cancelled: []
-}>()
+  saved: [data: unknown];
+  cancelled: [];
+}>();
 
-const saving = ref(false)
-const error = ref<string | null>(null)
+const saving = ref(false);
+const error = ref<string | null>(null);
 
 const form = reactive<NodeCategoryForm>({
-  name: '',
-  description: '',
-  color: '#6366f1',
-  icon: '',
+  name: "",
+  description: "",
+  color: "#6366f1",
+  icon: "",
   sort_order: 0,
-})
+});
 
-const isEditing = computed(() => !!props.category)
+const isEditing = computed(() => !!props.category);
 
 watch(
   () => props.category,
   (cat) => {
     if (cat) {
-      form.name = cat.name ?? ''
-      form.description = cat.description ?? ''
-      form.color = cat.color ?? '#6366f1'
-      form.icon = cat.icon ?? ''
-      form.sort_order = cat.sort_order ?? 0
+      form.name = cat.name ?? "";
+      form.description = cat.description ?? "";
+      form.color = cat.color ?? "#6366f1";
+      form.icon = cat.icon ?? "";
+      form.sort_order = cat.sort_order ?? 0;
     }
   },
   { immediate: true },
-)
+);
 
 async function save() {
-  saving.value = true
-  error.value = null
+  saving.value = true;
+  error.value = null;
 
   const body = {
     name: form.name.trim(),
@@ -157,35 +163,39 @@ async function save() {
     color: form.color,
     icon: form.icon || null,
     sort_order: form.sort_order,
-  }
+  };
 
   try {
     if (isEditing.value && props.category?.id) {
-      const { data, error: err } = await api.PATCH('/api/v1/node-categories/{category_id}', {
-        params: { path: { category_id: props.category.id } },
-        body,
-      })
+      const { data, error: err } = await api.PATCH(
+        "/api/v1/node-categories/{category_id}",
+        {
+          params: { path: { category_id: props.category.id } },
+          body,
+        },
+      );
       if (err) {
-        throw new Error(String(err))
+        throw new Error(String(err));
       }
       if (data) {
-        emit('saved', data)
+        emit("saved", data);
       }
     } else {
-      const { data, error: err } = await api.POST('/api/v1/node-categories', {
+      const { data, error: err } = await api.POST("/api/v1/node-categories", {
         body,
-      })
+      });
       if (err) {
-        throw new Error(String(err))
+        throw new Error(String(err));
       }
       if (data) {
-        emit('saved', data)
+        emit("saved", data);
       }
     }
   } catch (e) {
-    error.value = e instanceof Error ? e.message : 'An unexpected error occurred'
+    error.value =
+      e instanceof Error ? e.message : "An unexpected error occurred";
   } finally {
-    saving.value = false
+    saving.value = false;
   }
 }
 </script>

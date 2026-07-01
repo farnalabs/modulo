@@ -1,70 +1,73 @@
 <script setup lang="ts">
-import { ref, computed } from 'vue'
-import Button from '../../ui/button/Button.vue'
-import Input from '../../ui/input/Input.vue'
-import Badge from '../../ui/badge/Badge.vue'
+import { ref, computed } from "vue";
+import Button from "../../ui/button/Button.vue";
+import Input from "../../ui/input/Input.vue";
+import Badge from "../../ui/badge/Badge.vue";
 
 interface EvalConfig {
-  id: string
-  name: string
-  type: 'regex' | 'json_schema' | 'llm_judge'
-  config: Record<string, unknown>
-  failure_behaviour: 'retry' | 'block' | 'warn'
+  id: string;
+  name: string;
+  type: "regex" | "json_schema" | "llm_judge";
+  config: Record<string, unknown>;
+  failure_behaviour: "retry" | "block" | "warn";
 }
 
 const props = defineProps<{
-  evalDefinitions: EvalConfig[]
-  maxValidationRetries: number
-}>()
+  evalDefinitions: EvalConfig[];
+  maxValidationRetries: number;
+}>();
 
 const emit = defineEmits<{
-  (e: 'update:evalDefinitions', val: EvalConfig[]): void
-  (e: 'update:maxValidationRetries', val: number): void
-}>()
+  (e: "update:evalDefinitions", val: EvalConfig[]): void;
+  (e: "update:maxValidationRetries", val: number): void;
+}>();
 
-const localRetries = ref(props.maxValidationRetries)
+const localRetries = ref(props.maxValidationRetries);
 
 function addEval() {
   const newEval: EvalConfig = {
     id: crypto.randomUUID(),
-    name: '',
-    type: 'regex',
-    config: { field: '', pattern: '' },
-    failure_behaviour: 'retry',
-  }
-  emit('update:evalDefinitions', [...props.evalDefinitions, newEval])
+    name: "",
+    type: "regex",
+    config: { field: "", pattern: "" },
+    failure_behaviour: "retry",
+  };
+  emit("update:evalDefinitions", [...props.evalDefinitions, newEval]);
 }
 
 function removeEval(id: string) {
-  emit('update:evalDefinitions', props.evalDefinitions.filter((e) => e.id !== id))
+  emit(
+    "update:evalDefinitions",
+    props.evalDefinitions.filter((e) => e.id !== id),
+  );
 }
 
 function updateEval(id: string, patch: Partial<EvalConfig>) {
   emit(
-    'update:evalDefinitions',
+    "update:evalDefinitions",
     props.evalDefinitions.map((e) => (e.id === id ? { ...e, ...patch } : e)),
-  )
+  );
 }
 
 function updateConfig(id: string, configPatch: Record<string, unknown>) {
   emit(
-    'update:evalDefinitions',
+    "update:evalDefinitions",
     props.evalDefinitions.map((e) =>
       e.id === id ? { ...e, config: { ...e.config, ...configPatch } } : e,
     ),
-  )
+  );
 }
 
 function updateRetries(e: Event) {
-  const target = e.target as HTMLInputElement
-  const val = parseInt(target.value, 10)
+  const target = e.target as HTMLInputElement;
+  const val = parseInt(target.value, 10);
   if (!isNaN(val)) {
-    localRetries.value = val
-    emit('update:maxValidationRetries', val)
+    localRetries.value = val;
+    emit("update:maxValidationRetries", val);
   }
 }
 
-const evalCount = computed(() => props.evalDefinitions.length)
+const evalCount = computed(() => props.evalDefinitions.length);
 </script>
 
 <template>
@@ -72,11 +75,14 @@ const evalCount = computed(() => props.evalDefinitions.length)
     <div class="flex items-center justify-between">
       <label class="text-sm font-medium">Output Validation</label>
       <Badge variant="outline" class="text-xs">
-        {{ evalCount }} eval{{ evalCount === 1 ? '' : 's' }} configured
+        {{ evalCount }} eval{{ evalCount === 1 ? "" : "s" }} configured
       </Badge>
     </div>
 
-    <div v-if="evalCount === 0" class="rounded-lg border border-dashed border-muted-foreground/30 p-6 text-center text-sm text-muted-foreground">
+    <div
+      v-if="evalCount === 0"
+      class="rounded-lg border border-dashed border-muted-foreground/30 p-6 text-center text-sm text-muted-foreground"
+    >
       No output validation evals configured.
     </div>
 
@@ -86,7 +92,9 @@ const evalCount = computed(() => props.evalDefinitions.length)
       class="rounded-lg border border-border bg-card p-4 space-y-3"
     >
       <div class="flex items-center justify-between">
-        <span class="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+        <span
+          class="text-xs font-semibold uppercase tracking-wide text-muted-foreground"
+        >
           Eval #{{ idx + 1 }}
         </span>
         <button
@@ -103,7 +111,10 @@ const evalCount = computed(() => props.evalDefinitions.length)
           <Input
             :model-value="evalDef.name"
             placeholder="eval name"
-            @update:model-value="(val: string | number) => updateEval(evalDef.id, { name: String(val) })"
+            @update:model-value="
+              (val: string | number) =>
+                updateEval(evalDef.id, { name: String(val) })
+            "
           />
         </div>
         <div class="space-y-1">
@@ -111,7 +122,13 @@ const evalCount = computed(() => props.evalDefinitions.length)
           <select
             :value="evalDef.type"
             class="bg-background border-input focus-visible:border-ring h-8 w-full rounded-lg border px-2.5 py-1 text-sm"
-            @change="(e: Event) => updateEval(evalDef.id, { type: (e.target as HTMLSelectElement).value as EvalConfig['type'] })"
+            @change="
+              (e: Event) =>
+                updateEval(evalDef.id, {
+                  type: (e.target as HTMLSelectElement)
+                    .value as EvalConfig['type'],
+                })
+            "
           >
             <option value="regex">Regex</option>
             <option value="json_schema">JSON Schema</option>
@@ -125,7 +142,13 @@ const evalCount = computed(() => props.evalDefinitions.length)
         <select
           :value="evalDef.failure_behaviour"
           class="bg-background border-input focus-visible:border-ring h-8 w-full rounded-lg border px-2.5 py-1 text-sm"
-          @change="(e: Event) => updateEval(evalDef.id, { failure_behaviour: (e.target as HTMLSelectElement).value as EvalConfig['failure_behaviour'] })"
+          @change="
+            (e: Event) =>
+              updateEval(evalDef.id, {
+                failure_behaviour: (e.target as HTMLSelectElement)
+                  .value as EvalConfig['failure_behaviour'],
+              })
+          "
         >
           <option value="retry">Retry</option>
           <option value="block">Block</option>
@@ -139,7 +162,10 @@ const evalCount = computed(() => props.evalDefinitions.length)
           <Input
             :model-value="String(evalDef.config.field ?? '')"
             placeholder="output field name"
-            @update:model-value="(val: string | number) => updateConfig(evalDef.id, { field: String(val) })"
+            @update:model-value="
+              (val: string | number) =>
+                updateConfig(evalDef.id, { field: String(val) })
+            "
           />
         </div>
         <div class="space-y-1">
@@ -148,7 +174,12 @@ const evalCount = computed(() => props.evalDefinitions.length)
             :value="String(evalDef.config.pattern ?? '')"
             class="bg-background border-input focus-visible:border-ring h-20 w-full rounded-lg border px-2.5 py-1.5 text-sm font-mono resize-none outline-none"
             placeholder="regex pattern"
-            @change="(e: Event) => updateConfig(evalDef.id, { pattern: (e.target as HTMLTextAreaElement).value })"
+            @change="
+              (e: Event) =>
+                updateConfig(evalDef.id, {
+                  pattern: (e.target as HTMLTextAreaElement).value,
+                })
+            "
           />
         </div>
       </template>
@@ -159,7 +190,10 @@ const evalCount = computed(() => props.evalDefinitions.length)
           <Input
             :model-value="String(evalDef.config.field ?? '')"
             placeholder="output field name (leave blank for entire output)"
-            @update:model-value="(val: string | number) => updateConfig(evalDef.id, { field: String(val) })"
+            @update:model-value="
+              (val: string | number) =>
+                updateConfig(evalDef.id, { field: String(val) })
+            "
           />
         </div>
         <div class="space-y-1">
@@ -168,13 +202,17 @@ const evalCount = computed(() => props.evalDefinitions.length)
             :value="JSON.stringify(evalDef.config.schema ?? {}, null, 2)"
             class="bg-background border-input focus-visible:border-ring h-28 w-full rounded-lg border px-2.5 py-1.5 text-sm font-mono resize-none outline-none"
             placeholder='{ "type": "object", "properties": { ... } }'
-            @change="(e: Event) => {
-              try {
-                updateConfig(evalDef.id, { schema: JSON.parse((e.target as HTMLTextAreaElement).value) })
-              } catch {
-                // invalid JSON — keep current
+            @change="
+              (e: Event) => {
+                try {
+                  updateConfig(evalDef.id, {
+                    schema: JSON.parse((e.target as HTMLTextAreaElement).value),
+                  });
+                } catch {
+                  // invalid JSON — keep current
+                }
               }
-            }"
+            "
           />
         </div>
       </template>
@@ -186,7 +224,12 @@ const evalCount = computed(() => props.evalDefinitions.length)
             :value="String(evalDef.config.rubric ?? '')"
             class="bg-background border-input focus-visible:border-ring h-20 w-full rounded-lg border px-2.5 py-1.5 text-sm resize-none outline-none"
             placeholder="Describe what constitutes a passing evaluation"
-            @change="(e: Event) => updateConfig(evalDef.id, { rubric: (e.target as HTMLTextAreaElement).value })"
+            @change="
+              (e: Event) =>
+                updateConfig(evalDef.id, {
+                  rubric: (e.target as HTMLTextAreaElement).value,
+                })
+            "
           />
         </div>
       </template>
