@@ -30,7 +30,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from jose import ExpiredSignatureError, JWTError
-from sqlalchemy import select, update
+from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.auth.jwt import create_claim_token as _create_claim_jwt
@@ -273,42 +273,16 @@ class HITLManager:
             decision="approved",
         )
 
-        try:
-            await append_audit_event(
-                session,
-                org_id=org_id,
-                event_type="hitl.output_modified",
-                actor_user_id=actor_id,
-                resource_type="hitl_claim",
-                resource_id=gate.id,
-                payload_json={
-                    "pipeline_run_id": str(gate.run_id),
-                    "node_id": gate.gate_id,
-                    "decision": gate.decision,
-                    "modified_output": modified_output,
-                    "team_id": str(gate.required_team_id) if gate.required_team_id else None,
-                },
-            )
-            await append_audit_event(
-                session,
-                org_id=org_id,
-                event_type="hitl.output_delivered",
-                actor_user_id=actor_id,
-                resource_type="hitl_claim",
-                resource_id=gate.id,
-                payload_json={
-                    "pipeline_run_id": str(gate.run_id),
-                    "node_id": gate.gate_id,
-                    "decision": gate.decision,
-                    "team_id": str(gate.required_team_id) if gate.required_team_id else None,
-                    "modified": True,
-                },
-            )
-            gate.delivered_at = datetime.now(UTC)
-            await session.flush()
-        except BaseException:
-            _log.exception("Failed to log audit event for modified approval for claim %s", gate.id)
-            raise
+        await self._log_audit_and_deliver(
+            session,
+            gate,
+            org_id=org_id,
+            actor_id=actor_id,
+            events=[
+                ("hitl.output_modified", self._base_audit_payload(gate, modified_output=modified_output)),
+                ("hitl.output_delivered", self._base_audit_payload(gate, modified=True)),
+            ],
+        )
 
         return gate
 
@@ -337,44 +311,13 @@ class HITLManager:
             decision="approved",
         )
 
-        try:
-            await append_audit_event(
-                session,
-                org_id=org_id,
-                event_type="hitl.output_delivered",
-                actor_user_id=actor_id,
-                resource_type="hitl_claim",
-                resource_id=gate.id,
-                payload_json={
-                    "pipeline_run_id": str(gate.run_id),
-                    "node_id": gate.gate_id,
-                    "decision": gate.decision,
-                    "team_id": str(gate.required_team_id) if gate.required_team_id else None,
-                },
-            )
-            gate.delivered_at = datetime.now(UTC)
-            await session.flush()
-        except BaseException:
-            _log.exception("Failed to log hitl.output_delivered audit event for claim %s", gate.id)
-            try:
-                await append_audit_event(
-                    session,
-                    org_id=org_id,
-                    event_type="hitl.output_delivery_failed",
-                    actor_user_id=actor_id,
-                    resource_type="hitl_claim",
-                    resource_id=gate.id,
-                    payload_json={
-                        "pipeline_run_id": str(gate.run_id),
-                        "node_id": gate.gate_id,
-                        "decision": gate.decision,
-                        "team_id": str(gate.required_team_id) if gate.required_team_id else None,
-                    },
-                )
-                await session.flush()
-            except BaseException:
-                _log.exception("Failed to log hitl.output_delivery_failed audit event for claim %s", gate.id)
-            raise
+        await self._log_audit_and_deliver(
+            session,
+            gate,
+            org_id=org_id,
+            actor_id=actor_id,
+            events=[("hitl.output_delivered", self._base_audit_payload(gate))],
+        )
 
         return gate
 
@@ -428,45 +371,13 @@ class HITLManager:
             decision="deliver_manual",
         )
 
-        try:
-            await append_audit_event(
-                session,
-                org_id=org_id,
-                event_type="hitl.manual_delivery",
-                actor_user_id=actor_id,
-                resource_type="hitl_claim",
-                resource_id=gate.id,
-                payload_json={
-                    "pipeline_run_id": str(gate.run_id),
-                    "node_id": gate.gate_id,
-                    "decision": gate.decision,
-                    "manual_output": output,
-                    "team_id": str(gate.required_team_id) if gate.required_team_id else None,
-                },
-            )
-            gate.delivered_at = datetime.now(UTC)
-            await session.flush()
-        except BaseException:
-            _log.exception("Failed to log hitl.manual_delivery audit event for claim %s", gate.id)
-            try:
-                await append_audit_event(
-                    session,
-                    org_id=org_id,
-                    event_type="hitl.output_delivery_failed",
-                    actor_user_id=actor_id,
-                    resource_type="hitl_claim",
-                    resource_id=gate.id,
-                    payload_json={
-                        "pipeline_run_id": str(gate.run_id),
-                        "node_id": gate.gate_id,
-                        "decision": gate.decision,
-                        "team_id": str(gate.required_team_id) if gate.required_team_id else None,
-                    },
-                )
-                await session.flush()
-            except BaseException:
-                _log.exception("Failed to log hitl.output_delivery_failed audit event for claim %s", gate.id)
-            raise
+        await self._log_audit_and_deliver(
+            session,
+            gate,
+            org_id=org_id,
+            actor_id=actor_id,
+            events=[("hitl.manual_delivery", self._base_audit_payload(gate, manual_output=output))],
+        )
 
         return gate
 
@@ -567,8 +478,18 @@ class HITLManager:
         threshold_minutes: int = 30,
     ) -> int:
         """Return the number of gates that exceed the overdue threshold."""
-        gates = await self.list_overdue(session, org_id, threshold_minutes=threshold_minutes)
-        return len(gates)
+        now = datetime.now(UTC)
+        threshold = timedelta(minutes=threshold_minutes)
+        result = await session.execute(
+            select(func.count()).where(
+                HitlClaim.organisation_id == org_id,
+                HitlClaim.account_id.is_not(None),
+                HitlClaim.decision.is_(None),
+                HitlClaim.claimed_at.is_not(None),
+                HitlClaim.claimed_at < now - threshold,
+            ).select_from(HitlClaim)
+        )
+        return result.scalar() or 0
 
     # ------------------------------------------------------------------
     # Internal
@@ -628,7 +549,7 @@ class HITLManager:
             .values(
                 decision=decision,
                 decision_at=now,
-                claimed_by=None,
+                account_id=None,
                 claim_token=None,
                 expires_at=None,
             )
@@ -656,38 +577,58 @@ class HITLManager:
         """Rough heuristic: a JWT has exactly 2 dots (3 base64 segments)."""
         return token.count(".") == 2
 
-    def _validate_claim_token(
+    @staticmethod
+    def _base_audit_payload(gate: HitlClaim, **extra: Any) -> dict[str, Any]:
+        """Common audit event payload fields for a HITL gate decision."""
+        return {
+            "pipeline_run_id": str(gate.run_id),
+            "node_id": gate.gate_id,
+            "decision": gate.decision,
+            "team_id": str(gate.required_team_id) if gate.required_team_id else None,
+            **extra,
+        }
+
+    async def _log_audit_and_deliver(
         self,
+        session: AsyncSession,
         gate: HitlClaim,
-        claim_token: str,
-        run_id: uuid.UUID,
-        gate_id: str,
+        *,
+        org_id: uuid.UUID,
+        actor_id: uuid.UUID | None,
+        events: list[tuple[str, dict[str, Any]]],
     ) -> None:
-        """Validate ``claim_token`` against the gate's stored token.
+        """Log audit events, mark delivered, and flush.
 
-        When a ``secret_key`` is configured, tries JWT decode first and
-        validates scope (run_id, gate_id).  **JWT decode failures (bad
-        signature, expired, scope mismatch) are authoritative** — the
-        request is rejected without falling through to opaque comparison.
-
-        Opaque-string fallback only applies when the presented token is
-        *not* a JWT (alpha backwards compatibility).
+        On failure, logs ``hitl.output_delivery_failed`` as a fallback and re-raises.
         """
-        if self._secret_key:
-            if self._looks_like_jwt(claim_token):
-                try:
-                    _decode_claim_jwt(
-                        claim_token,
-                        self._secret_key,
-                        run_id=str(run_id),
-                        gate_id=gate_id,
-                    )
-                    return
-                except JWTError:
-                    raise ClaimTokenInvalidError() from None
-            # Not a JWT — try opaque comparison below
+        try:
+            for event_type, payload in events:
+                await append_audit_event(
+                    session,
+                    org_id=org_id,
+                    event_type=event_type,
+                    actor_user_id=actor_id,
+                    resource_type="hitl_claim",
+                    resource_id=gate.id,
+                    payload_json=payload,
+                )
+            gate.delivered_at = datetime.now(UTC)
+            await session.flush()
+        except Exception:
+            _log.exception("Failed to log audit event for claim %s", gate.id)
+            try:
+                await append_audit_event(
+                    session,
+                    org_id=org_id,
+                    event_type="hitl.output_delivery_failed",
+                    actor_user_id=actor_id,
+                    resource_type="hitl_claim",
+                    resource_id=gate.id,
+                    payload_json=self._base_audit_payload(gate),
+                )
+                await session.flush()
+            except Exception:
+                _log.exception("Failed to log hitl.output_delivery_failed audit event for claim %s", gate.id)
+            raise
 
-        if gate.claim_token == claim_token:
-            return
 
-        raise ClaimTokenInvalidError()
