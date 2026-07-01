@@ -10,10 +10,13 @@ code:
   - backend/src/modulo/api/routes/dashboard.py
   - backend/src/modulo/api/routes/admin.py
   - backend/tests/unit/api/test_dashboard.py
+unit-tests: []
 depends-on: [feat-teams-team-crud, feat-evals-eval-engine]
 status: partial
 ---
-# Team Comparison Side-by-side eval pass rates and pipeline metrics across teams. Built on the org dashboard summary API. Route at `/admin/teams/comparison`. Discovered from 1 completed delivery tasks.
+# Team Comparison
+
+Side-by-side eval pass rates and pipeline metrics across teams. Built on the org dashboard summary API. Route at `/admin/teams/comparison`. Discovered from 1 completed delivery tasks.
 
 ## Behaviours
 - [x] Side-by-side eval pass rates across teams with color-coded progress bars (green ≥80%, amber 50–79%, red <50%)
@@ -34,6 +37,7 @@ status: partial
 - [ ] Expand/collapse chevron rotates 180° on open state
 
 ## Known Gaps
+
 - **Per-team eval pass rate now computed**: Backend (dashboard.py:118-141) computes per-team eval pass rates via `per_team_eval_query` grouping EvalResults by `Run.owner_team_id`. The dashboard summary API returns `teams[].eval_pass_rate` with `total_evals`, `passed_evals`, and `pass_rate` per team. Frontend (TeamComparisonView.vue:291) reads `team.eval_pass_rate?.pass_rate` — each team now displays its own pass rate, not the org-wide average. The drill-down per-pipeline data lives in `eval_pass_rate.per_team_pipeline` (TeamComparisonView.vue:301). This gap is **CLOSED**.
 - **No dedicated BDD feature file**: only covered as a persona scenario in `elena-engineering-director.feature` (`@goal-elena-team-comparison`). No standalone BDD in `backend/tests/bdd/features/`.
 - **No frontend unit tests**: `TeamComparisonView.vue` has no corresponding spec file.

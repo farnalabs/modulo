@@ -29,10 +29,13 @@ code:
   - backend/src/modulo/db/migrations/versions/0001_initial_schema.py
   - backend/src/modulo/db/migrations/versions/0025_team_visibility_rls.py
   - backend/src/modulo/db/migrations/versions/0014_team_cost_attribution.py
+unit-tests: []
 depends-on: [feat-teams-team-crud]
 status: partial
 ---
-# Team Ownership (Resource Ownership) Resource-level team ownership model — pipelines, stages, connector instances, model
+# Team Ownership (Resource Ownership)
+
+Resource-level team ownership model — pipelines, stages, connector instances, model
 backends, library primitives, and runs carry `owner_team_id` (nullable FK) and
 `visibility` (`org` | `team`). Controls which team can see and use each resource
 with enforcement via DB constraints, RLS policies, and ViewModel validation.
@@ -123,7 +126,9 @@ with enforcement via DB constraints, RLS policies, and ViewModel validation.
 - [ ] Team rename does not affect resource ownership — `owner_team_id` references team UUID, not name
 - [ ] Multiple resources owned by same team — bulk team deletion blocked until all reassigned
 
-## Known Gaps - No dedicated BDD feature file for team ownership exists — only import/export/copy-to-adapt BDD features cover ownership propagation
+## Known Gaps
+
+- No dedicated BDD feature file for team ownership exists — only import/export/copy-to-adapt BDD features cover ownership propagation
 - No BDD scenarios for `stage_team_mismatch` error path
 - No BDD scenarios for `connector_team_mismatch` error path
 - No BDD scenarios for pipeline ownership change blocked during active runs

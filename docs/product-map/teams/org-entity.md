@@ -2,7 +2,9 @@
 id: feat-teams-org-entity
 prd: 9.1, 6.2
 delivery-tasks: []
+bdd: []
 code: []
+unit-tests: []
 depends-on: []
 status: gap
 ---
