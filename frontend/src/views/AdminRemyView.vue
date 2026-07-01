@@ -368,6 +368,8 @@ async function saveAccessList() {
     })
     if (err) {
       accessError.value = `Failed to save access list: ${err}`
+    } else {
+      accessError.value = null
     }
   } catch (e: unknown) {
     accessError.value = `Failed to save access list: ${e instanceof Error ? e.message : String(e)}`
@@ -414,6 +416,8 @@ async function saveModelConfig() {
     })
     if (err) {
       modelError.value = `Failed to save model config: ${err}`
+    } else {
+      modelError.value = null
     }
   } catch (e: unknown) {
     modelError.value = `Failed to save model config: ${e instanceof Error ? e.message : String(e)}`
@@ -436,6 +440,8 @@ async function saveSystemPrompt() {
     })
     if (err) {
       promptError.value = `Failed to save system prompt: ${err}`
+    } else {
+      promptError.value = null
     }
   } catch (e: unknown) {
     promptError.value = `Failed to save system prompt: ${e instanceof Error ? e.message : String(e)}`
@@ -458,6 +464,8 @@ async function saveGuidance() {
     })
     if (err) {
       guidanceError.value = `Failed to save guidance: ${err}`
+    } else {
+      guidanceError.value = null
     }
   } catch (e: unknown) {
     guidanceError.value = `Failed to save guidance: ${e instanceof Error ? e.message : String(e)}`
