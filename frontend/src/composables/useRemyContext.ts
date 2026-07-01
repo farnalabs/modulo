@@ -10,7 +10,7 @@ export function useRemyContext() {
     entities: [],
   })
 
-  function extractEntities(routeName: string, params: Record<string, string>): string[] {
+  function extractEntities(_routeName: string, params: Record<string, string>): string[] {
     const entities: string[] = []
     if (params.id) entities.push(`run:${params.id}`)
     if (params.teamId) entities.push(`team:${params.teamId}`)

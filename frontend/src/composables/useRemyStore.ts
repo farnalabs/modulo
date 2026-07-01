@@ -57,11 +57,11 @@ export const useRemyStore = defineStore('remy', () => {
     sessionsLoading.value = true
     error.value = null
     try {
-      const { data, error: err } = await api.GET('/api/v1/remy/sessions')
+      const { data, error: err } = await (api as any).GET('/api/v1/remy/sessions')
       if (err) {
         error.value = String(err)
       } else {
-        sessions.value = (data as any)?.items ?? (data as any) ?? []
+        sessions.value = (data as any)?.items ?? []
       }
     } catch (e: unknown) {
       error.value = e instanceof Error ? e.message : String(e)
@@ -73,7 +73,7 @@ export const useRemyStore = defineStore('remy', () => {
   async function createSession() {
     error.value = null
     try {
-      const { data, error: err } = await api.POST('/api/v1/remy/sessions', {
+      const { data, error: err } = await (api as any).POST('/api/v1/remy/sessions', {
         body: { name: null, provider: 'anthropic', model: 'claude-sonnet-4-20250514', context_window_tokens: 200000 },
       })
       if (err) throw new Error(String(err))
@@ -94,13 +94,13 @@ export const useRemyStore = defineStore('remy', () => {
     activeSessionId.value = id
     messages.value = []
     try {
-      const { data, error: err } = await api.GET('/api/v1/remy/sessions/{id}/messages', {
+      const { data, error: err } = await (api as any).GET('/api/v1/remy/sessions/{id}/messages', {
         params: { path: { id } },
       })
       if (err) {
         error.value = String(err)
       } else {
-        messages.value = (data as any)?.items ?? (data as any) ?? []
+        messages.value = (data as any)?.items ?? []
       }
     } catch (e: unknown) {
       error.value = e instanceof Error ? e.message : String(e)
@@ -112,7 +112,7 @@ export const useRemyStore = defineStore('remy', () => {
   async function deleteSession(id: string) {
     error.value = null
     try {
-      const { error: err } = await api.DELETE('/api/v1/remy/sessions/{id}', {
+      const { error: err } = await (api as any).DELETE('/api/v1/remy/sessions/{id}', {
         params: { path: { id } },
       })
       if (err) throw new Error(String(err))
@@ -133,7 +133,10 @@ export const useRemyStore = defineStore('remy', () => {
       session_id: activeSessionId.value,
       role: 'user',
       content: text,
+      tool_calls_json: null,
+      tool_results_json: null,
       token_count: null,
+      parent_id: null,
       created_at: new Date().toISOString(),
     }
     messages.value.push(userMsg)
@@ -175,7 +178,10 @@ export const useRemyStore = defineStore('remy', () => {
         session_id: activeSessionId.value ?? '',
         role: 'assistant',
         content: text,
+        tool_calls_json: null,
+        tool_results_json: null,
         token_count: null,
+        parent_id: null,
         created_at: new Date().toISOString(),
       })
     }
@@ -190,7 +196,10 @@ export const useRemyStore = defineStore('remy', () => {
       session_id: activeSessionId.value ?? '',
       role: 'tool_result',
       content: summary,
+      tool_calls_json: null,
+      tool_results_json: null,
       token_count: null,
+      parent_id: null,
       created_at: new Date().toISOString(),
     })
   }
