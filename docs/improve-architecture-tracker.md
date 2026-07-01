@@ -1,6 +1,6 @@
 # improve-architecture Tracker
 
-Current index: 26
+Current product-map entry index: 26
 Last updated: 2026-07-01T22:45:00Z
 
 ## In-flight
@@ -9,8 +9,6 @@ Last updated: 2026-07-01T22:45:00Z
 ## History
 - 2026-07-01: feat-connectors-linear → complete, cross-cutting QA: fixed frontmatter (added unit-tests), removed outdated known gaps #7 (BDD placeholder → 5 real scenarios) and #8 (unit tests exist), added 3 BDD error-path scenarios + step definitions, added 4 unit tests (missing id, update failure, GraphQL error), fixed search to respect q.limit via first:$limit, consolidated gaps from 9→9 with updated descriptions. 17/17 unit tests pass; 11 pre-existing BDD failures unchanged.
 - 2026-07-01: feat-auth-sso-provider-ui → complete, cross-cutting QA: added audit event dispatching to SSO provider CRUD (create/update/delete/toggle), added duplicate name check on create (409 Conflict), added FeatureGate wrapper to SettingsSsoView.vue, added bdd:/unit-tests: frontmatter, marked 3 behaviours [ ]→[x] (FeatureGate, duplicate name, SAML 402), fixed SAML status 403→402 in product map, added 4 new known gaps (no admin CRUD BDD, nav entry not gated, no SAML integration test, no enterprise gate on nav entry)
-
-## History
 - 2026-07-01: feat-core-saml-integration → complete, cross-cutting QA: fixed frontmatter (added bdd:, depends-on: feat-auth-jwt-auth/feat-teams-team-isolation, test_sso_saml_bdd.py), marked 60+ behaviours [x] (all SAML behaviours implemented in code), removed outdated BDD gap (feature file exists at tests/bdd/features/auth/sso_saml.feature), added 2 new known gaps (no integration test for SAML ACS real XML parsing, login route missing explicit check)
 - 2026-07-01: feat-auth-rate-limiting → complete, cross-cutting QA: fixed trigger_pipeline 60/min rate marked [x]→[ ] (not implemented), rewrote BDD feature file (4→11 scenarios matching PRD §7.18), fixed in-memory TokenBucket to compute params from rule instead of hardcoded defaults, added 5 new known gaps (MCP trigger_pipeline not implemented, HITL 20/min catch-all, missing Redis integration test, BDD file location, fixed TokenBucket defaults), updated product map, updated both trackers
 - 2026-06-30: feat-teams-team-isolation → complete, cross-cutting QA: fixed broken frontmatter (missing bdd:), reformatted markdown, marked 22 [ ] → [x], added 3 integration tests (set_rls_user_context GUCs, pool checkout hook reset, rls_team_isolation policy existence), added 2 BDD scenarios (set_rls_user_context error path, set_rls_user_context correctness), implemented real step definitions for 7 rls_enforcement scenarios, consolidated known gaps from 5→10 with updated descriptions, created website stub
