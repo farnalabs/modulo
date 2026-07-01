@@ -125,7 +125,7 @@ class ConnectorBinding(BaseModel):
 
 class PipelineGraphNode(BaseModel):
     id: uuid.UUID
-    node_type: Literal["agent", "manual"] = "agent"
+    node_type: Literal["agent", "manual", "composite"] = "agent"
     agent_id: uuid.UUID | None = None
     position: GraphPosition
     connector_binding: ConnectorBinding | None = None
@@ -133,6 +133,10 @@ class PipelineGraphNode(BaseModel):
     label: str | None = Field(default=None, max_length=255)
     role: str | None = None
     autonomy_recommendation: str | None = None
+    composite_ref: uuid.UUID | None = None
+    composite_parameter_values: dict[str, Any] | None = None
+    composite_input_mapping: dict | None = None
+    composite_output_mapping: dict | None = None
 
     @model_validator(mode="after")
     def validate_node_type(self) -> "PipelineGraphNode":
@@ -145,6 +149,13 @@ class PipelineGraphNode(BaseModel):
                 raise ValueError("Manual nodes require an output schema")
             if self.label is None:
                 raise ValueError("Manual nodes require a label")
+        elif self.node_type == "composite":
+            if self.composite_ref is None:
+                raise ValueError("Composite nodes require a composite_ref")
+            if self.agent_id is not None:
+                raise ValueError("Composite nodes cannot reference an agent")
+            if self.connector_binding is not None:
+                raise ValueError("Composite nodes cannot have connector bindings")
         elif self.agent_id is None:
             raise ValueError("Agent nodes require an agent")
         return self
