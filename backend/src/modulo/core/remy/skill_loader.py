@@ -31,6 +31,7 @@ class SkillLoader:
         result = await self._session.execute(
             select(RemySkill).where(
                 RemySkill.organisation_id == org_id,
+                RemySkill.user_id.is_(None),
                 RemySkill.active.is_(True),
             )
         )
@@ -40,6 +41,7 @@ class SkillLoader:
         result = await self._session.execute(
             select(RemySkill).where(
                 RemySkill.user_id == user_id,
+                RemySkill.organisation_id.is_(None),
                 RemySkill.active.is_(True),
             )
         )
@@ -50,14 +52,16 @@ class SkillLoader:
         org_id: uuid.UUID,
         user_id: uuid.UUID,
         page_context: str | None = None,
+        system_prompt_override: str | None = None,
     ) -> str:
         config_service = RemyConfigService(self._session)
         config = await config_service.get_config(org_id)
 
         parts: list[str] = []
 
-        if config.system_prompt:
-            parts.append(config.system_prompt)
+        base_prompt = system_prompt_override if system_prompt_override is not None else config.system_prompt
+        if base_prompt:
+            parts.append(base_prompt)
 
         if config.additional_guidance:
             parts.append(config.additional_guidance)

@@ -21,7 +21,7 @@ class RemyConfig(BaseModel):
     default_provider: str = "anthropic"
     default_model: str = "claude-sonnet-4-20250514"
     default_context_window: int = 200000
-    allowed_providers: list[str] = ["anthropic", "openai", "google-gemini", "deepseek", "groq"]
+    allowed_providers: list[str] = ["anthropic", "openai", "gemini", "deepseek", "groq"]
     allowed_models: list[str] = []  # empty = all models for allowed providers
 
 
