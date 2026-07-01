@@ -34,6 +34,7 @@ from starlette.responses import StreamingResponse
 from modulo.api.dependencies import get_db_session
 from modulo.auth.dependencies import get_current_user
 from modulo.auth.jwt import AuthenticatedPrincipal
+from modulo.core.remy.skill_loader import SkillLoader
 from modulo.db.models.model_backend import ModelBackend
 from modulo.db.models.remy_message import ChatMessage
 from modulo.db.models.remy_session import ChatSession
@@ -103,6 +104,7 @@ class StreamRequest(BaseModel):
     api_key: str = Field(default="", description="User's API key for the LLM provider (auto-resolved if empty)")
     mcp_api_key: str | None = Field(None, description="API key for MCP tool execution")
     system_prompt: str | None = Field(None, description="Optional system prompt override")
+    page_context: str | None = Field(None, description="Page context from the frontend")
 
 
 # ── Helpers ──────────────────────────────────────────────────────────────
@@ -151,7 +153,10 @@ def _message_to_langchain(m: ChatMessage) -> BaseMessage:
             if m.tool_results_json:
                 tool_call_id = m.tool_results_json.get("tool_call_id", "")
             return ToolMessage(content=m.content or "", tool_call_id=tool_call_id)
+        case "summary":
+            return SystemMessage(content=m.content or "")
         case _:
+            logger.warning("Unknown message role %r, treating as user message", m.role)
             return HumanMessage(content=m.content or "")
 
 
@@ -421,121 +426,131 @@ async def stream_chat(
         """SSE event generator for the streaming LLM response."""
         msg_id: str | None = None
         try:
-            # 1. Save the user message to DB
-            async with AsyncSession(session.bind) as write_session:
-                async with write_session.begin():
-                    await set_rls_org(write_session, principal.organisation_id)
+            # Use a single DB session for all operations inside the generator
+            async with AsyncSession(session.bind) as db_session:
+                # 1. Construct system prompt from config + skills
+                skill_loader = SkillLoader(db_session)
+                system_prompt = await skill_loader.build_system_prompt(
+                    org_id=principal.organisation_id,
+                    user_id=principal.account_id,
+                    page_context=body.page_context,
+                )
+                if body.system_prompt:
+                    system_prompt = body.system_prompt
+
+                # 2. Save the user message to DB
+                async with db_session.begin():
+                    await set_rls_org(db_session, principal.organisation_id)
                     user_msg = ChatMessage(
                         organisation_id=principal.organisation_id,
                         session_id=session_id,
                         role="user",
                         content=body.content,
                     )
-                    write_session.add(user_msg)
-                    await write_session.flush()
+                    db_session.add(user_msg)
+                    await db_session.flush()
 
-            # 2. Reconstruct conversation from DB
-            async with AsyncSession(session.bind) as read_session:
-                async with read_session.begin():
-                    await set_rls_org(read_session, principal.organisation_id)
-                    langchain_messages = await _reconstruct_messages(read_session, session_id)
+                # 3. Reconstruct conversation from DB
+                async with db_session.begin():
+                    await set_rls_org(db_session, principal.organisation_id)
+                    langchain_messages = await _reconstruct_messages(db_session, session_id)
 
-            # 3. Prepend system prompt if provided
-            if body.system_prompt:
-                langchain_messages.insert(0, SystemMessage(content=body.system_prompt))
+                # 4. Prepend system prompt
+                if system_prompt:
+                    langchain_messages.insert(0, SystemMessage(content=system_prompt))
 
-            # 4. Resolve API key (from request or DB backend)
-            api_key = body.api_key
-            if not api_key:
-                resolved = await _resolve_api_key(
-                    body.provider,
-                    principal.organisation_id,
-                    read_session,
-                    settings.fernet_key,
-                )
-                if resolved is None:
-                    msg = f"No active {body.provider} API key configured. "
-                    msg += "Add one in Settings > Model Backends or provide an api_key."
-                    yield f"event: error\ndata: {json.dumps({'detail': msg})}\n\n"
-                    return
-                api_key = resolved
+                # 5. Resolve API key (from request or DB backend)
+                api_key = body.api_key
+                if not api_key:
+                    resolved = await _resolve_api_key(
+                        body.provider,
+                        principal.organisation_id,
+                        db_session,
+                        settings.fernet_key,
+                    )
+                    if resolved is None:
+                        msg = f"No active {body.provider} API key configured. "
+                        msg += "Add one in Settings > Model Backends or provide an api_key."
+                        yield f"event: error\ndata: {json.dumps({'detail': msg})}\n\n"
+                        return
+                    api_key = resolved
 
-            backend = _build_backend(body.provider, body.model, api_key)
+                backend = _build_backend(body.provider, body.model, api_key)
 
-            # 5. Stream tokens from the LLM
-            full_content = ""
-            tool_call_buffers: dict[int, dict[str, Any]] = {}
+                # 6. Stream tokens from the LLM
+                full_content = ""
+                tool_call_buffers: dict[int, dict[str, Any]] = {}
 
-            async for chunk in backend.stream(langchain_messages):
+                async for chunk in backend.stream(langchain_messages):
+                    if await request.is_disconnected():
+                        break
+                    if isinstance(chunk, AIMessageChunk):
+                        if chunk.content:
+                            full_content += chunk.content
+                            yield f"event: token\ndata: {json.dumps({'token': chunk.content})}\n\n"
+
+                        if chunk.tool_call_chunks:
+                            for tc in chunk.tool_call_chunks:
+                                idx = tc.get("index", 0)
+                                if idx not in tool_call_buffers:
+                                    tool_call_buffers[idx] = {
+                                        "id": tc.get("id", ""),
+                                        "name": tc.get("name", ""),
+                                        "args": tc.get("args", ""),
+                                    }
+                                else:
+                                    tool_call_buffers[idx]["args"] += tc.get("args", "")
+
                 if await request.is_disconnected():
-                    break
-                if isinstance(chunk, AIMessageChunk):
-                    if chunk.content:
-                        full_content += chunk.content
-                        yield f"event: token\ndata: {json.dumps({'token': chunk.content})}\n\n"
+                    return
 
-                    if chunk.tool_call_chunks:
-                        for tc in chunk.tool_call_chunks:
-                            idx = tc.get("index", 0)
-                            if idx not in tool_call_buffers:
-                                tool_call_buffers[idx] = {
-                                    "id": tc.get("id", ""),
-                                    "name": tc.get("name", ""),
-                                    "args": tc.get("args", ""),
-                                }
-                            else:
-                                tool_call_buffers[idx]["args"] += tc.get("args", "")
-
-            if await request.is_disconnected():
-                return
-
-            # 6. Reconstruct tool calls from accumulated chunks
-            tool_calls = []
-            for idx in sorted(tool_call_buffers.keys()):
-                buf = tool_call_buffers[idx]
-                try:
-                    parsed_args = json.loads(buf["args"]) if buf["args"] else {}
-                except json.JSONDecodeError:
-                    parsed_args = {}
-                tool_calls.append({
-                    "id": buf["id"],
-                    "name": buf["name"],
-                    "args": parsed_args,
-                })
-
-            # 7. Execute tool calls via MCP
-            tool_results: list[dict[str, Any]] = []
-            if tool_calls and body.mcp_api_key:
-                for tc in tool_calls:
+                # 7. Reconstruct tool calls from accumulated chunks
+                tool_calls = []
+                for idx in sorted(tool_call_buffers.keys()):
+                    buf = tool_call_buffers[idx]
                     try:
-                        result = await _call_mcp_tool(
-                            tool_name=tc["name"],
-                            arguments=tc["args"],
-                            mcp_api_key=body.mcp_api_key,
-                            base_url=mcp_base_url,
-                        )
-                        tool_results.append({
-                            "tool_call_id": tc["id"],
-                            "tool_name": tc["name"],
-                            "success": True,
-                            "result": result,
-                        })
-                        tc_data = {"tool_call_id": tc["id"], "tool_name": tc["name"], "result": result}
-                        yield f"event: tool_call\ndata: {json.dumps(tc_data)}\n\n"
-                    except Exception as exc:
-                        tool_results.append({
-                            "tool_call_id": tc["id"],
-                            "tool_name": tc["name"],
-                            "success": False,
-                            "error": str(exc),
-                        })
-                        tc_err = {"tool_call_id": tc["id"], "tool_name": tc["name"], "error": str(exc)}
-                        yield f"event: tool_call\ndata: {json.dumps(tc_err)}\n\n"
+                        parsed_args = json.loads(buf["args"]) if buf["args"] else {}
+                    except json.JSONDecodeError:
+                        logger.warning("Failed to parse tool call args for %r: %r", buf["name"], buf["args"][:200])
+                        parsed_args = {}
+                    tool_calls.append({
+                        "id": buf["id"],
+                        "name": buf["name"],
+                        "args": parsed_args,
+                    })
 
-            # 8. Save assistant message to DB
-            async with AsyncSession(session.bind) as save_session:
-                async with save_session.begin():
-                    await set_rls_org(save_session, principal.organisation_id)
+                # 8. Execute tool calls via MCP
+                tool_results: list[dict[str, Any]] = []
+                if tool_calls and body.mcp_api_key:
+                    for tc in tool_calls:
+                        try:
+                            result = await _call_mcp_tool(
+                                tool_name=tc["name"],
+                                arguments=tc["args"],
+                                mcp_api_key=body.mcp_api_key,
+                                base_url=mcp_base_url,
+                            )
+                            tool_results.append({
+                                "tool_call_id": tc["id"],
+                                "tool_name": tc["name"],
+                                "success": True,
+                                "result": result,
+                            })
+                            tc_data = {"tool_call_id": tc["id"], "tool_name": tc["name"], "result": result}
+                            yield f"event: tool_call\ndata: {json.dumps(tc_data)}\n\n"
+                        except Exception as exc:
+                            tool_results.append({
+                                "tool_call_id": tc["id"],
+                                "tool_name": tc["name"],
+                                "success": False,
+                                "error": str(exc),
+                            })
+                            tc_err = {"tool_call_id": tc["id"], "tool_name": tc["name"], "error": str(exc)}
+                            yield f"event: tool_call\ndata: {json.dumps(tc_err)}\n\n"
+
+                # 9. Save assistant message to DB
+                async with db_session.begin():
+                    await set_rls_org(db_session, principal.organisation_id)
                     assistant_msg = ChatMessage(
                         organisation_id=principal.organisation_id,
                         session_id=session_id,
@@ -544,11 +559,10 @@ async def stream_chat(
                         tool_calls_json={"tool_calls": tool_calls} if tool_calls else None,
                         parent_id=user_msg.id,
                     )
-                    save_session.add(assistant_msg)
-                    await save_session.flush()
+                    db_session.add(assistant_msg)
+                    await db_session.flush()
                     msg_id = str(assistant_msg.id)
 
-                    # Save tool result messages
                     for tr in tool_results:
                         tool_msg = ChatMessage(
                             organisation_id=principal.organisation_id,
@@ -558,9 +572,9 @@ async def stream_chat(
                             tool_results_json=tr,
                             parent_id=assistant_msg.id,
                         )
-                        save_session.add(tool_msg)
+                        db_session.add(tool_msg)
 
-            # 9. Send done event
+            # 10. Send done event
             yield f"event: done\ndata: {json.dumps({'message_id': msg_id})}\n\n"
 
         except HTTPException:
