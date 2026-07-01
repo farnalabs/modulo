@@ -1450,8 +1450,6 @@ async def contribute_fixture(
     The fixture is stored as a test_fixture primitive with contribution_status='draft'.
     It is visible only to the submitting org until published to the community library.
     """
-    from modulo.db.crud.library_primitive import create_library_primitive as _create
-
     content: dict[str, Any] = {
         "fixture_map": fixture_map,
         "source_run_id": str(source_run_id) if source_run_id else None,
@@ -1460,7 +1458,7 @@ async def contribute_fixture(
 
     async with session.begin():
         await set_rls_org(session, org_id)
-        prim = await _create(
+        prim = await create_library_primitive(
             session,
             org_id=org_id,
             source="local",
@@ -1623,8 +1621,6 @@ async def submit_contribution_version(
     via version_group_id.  The new version must go through
     review_queue -> published independently.
     """
-    from modulo.db.crud.library_primitive import create_library_primitive as _create
-
     async with session.begin():
         await set_rls_org(session, org_id)
         existing = await get_library_primitive(session, primitive_id)
@@ -1665,7 +1661,7 @@ async def submit_contribution_version(
                 primitive_id,
                 {"version_group_id": group_id},
             )
-        prim = await _create(
+        prim = await create_library_primitive(
             session,
             org_id=org_id,
             source="local",
