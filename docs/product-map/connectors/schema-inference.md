@@ -6,7 +6,10 @@ bdd:
   - backend/tests/bdd/features/connectors/schema_inference.feature
   - backend/tests/bdd/features/schemas/schema_inference.feature
 unit-tests:
-  - backend/tests/bdd/steps/test_schema_inference.py
+  - backend/tests/unit/core/test_schema_inference.py
+  - backend/tests/unit/api/test_schema_infer_endpoint.py
+  - backend/tests/unit/core/test_schema_migration.py
+  - backend/tests/unit/core/test_schema_validation.py
 code:
   - backend/src/modulo/core/connector_hub/__init__.py
   - backend/src/modulo/core/schema_registry/inference.py
