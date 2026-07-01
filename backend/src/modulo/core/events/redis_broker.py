@@ -48,8 +48,10 @@ class RedisEventBroker:
         async with self._lock:
             if self._pub is not None and self._sub is not None:
                 return
-            self._pub = aioredis.from_url(self._redis_url, decode_responses=True)
-            self._sub = aioredis.from_url(self._redis_url, decode_responses=True)
+            if self._pub is None:
+                self._pub = aioredis.from_url(self._redis_url, decode_responses=True)
+            if self._sub is None:
+                self._sub = aioredis.from_url(self._redis_url, decode_responses=True)
             _log.info("RedisEventBroker connected to %s", self._redis_url)
 
     async def publish(self, channel: str, data: dict[str, Any]) -> None:
@@ -58,7 +60,8 @@ class RedisEventBroker:
             if self._pub is None:
                 self._pub = aioredis.from_url(self._redis_url, decode_responses=True)
                 self._sub = aioredis.from_url(self._redis_url, decode_responses=True)
-        await self._pub.publish(f"{CHANNEL_PREFIX}{channel}", json.dumps(data))
+            pub = self._pub
+        await pub.publish(f"{CHANNEL_PREFIX}{channel}", json.dumps(data))
 
     async def subscribe(self, channel: str) -> PubSub:
         """Return a PubSub object subscribed to the given *channel*.
@@ -71,7 +74,8 @@ class RedisEventBroker:
             if self._sub is None:
                 self._sub = aioredis.from_url(self._redis_url, decode_responses=True)
                 self._pub = aioredis.from_url(self._redis_url, decode_responses=True)
-        pubsub = self._sub.pubsub()
+            sub = self._sub
+        pubsub = sub.pubsub()
         await pubsub.subscribe(f"{CHANNEL_PREFIX}{channel}")
         return pubsub
 
@@ -83,7 +87,13 @@ class RedisEventBroker:
             self._pub = None
             self._sub = None
         if pub is not None:
-            await pub.close()
+            try:
+                await pub.close()
+            except Exception:
+                _log.warning("redis_broker.pub_close_failed", exc_info=True)
         if sub is not None:
-            await sub.close()
+            try:
+                await sub.close()
+            except Exception:
+                _log.warning("redis_broker.sub_close_failed", exc_info=True)
         _log.info("RedisEventBroker closed")
