@@ -16,7 +16,8 @@ from modulo.otel_bridge.export import setup_otel
 @pytest.fixture(autouse=True)
 def _reset_otel() -> None:
     """Reset the global tracer provider after each test to prevent background
-    BatchSpanProcessor threads from writing to closed stdout during teardown."""
+    BatchSpanProcessor threads from writing to closed stdout during teardown.
+    """
     yield
     trace.set_tracer_provider(TracerProvider())
 
