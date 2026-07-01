@@ -16,7 +16,7 @@ class PrimitiveRating(OrgScoped):
         nullable=False,
         index=True,
     )
-    account_id: Mapped[uuid.UUID] = mapped_column(
+    account_id: Mapped[uuid.UUID | None] = mapped_column(
         Uuid(),
         ForeignKey("accounts.id", ondelete="SET NULL"),
         nullable=True,
