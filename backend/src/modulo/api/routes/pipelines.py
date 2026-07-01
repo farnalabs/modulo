@@ -1039,71 +1039,90 @@ async def convert_node_to_agent_endpoint(
     session: AsyncSession = Depends(get_db_session),
     principal: AuthenticatedPrincipal = Depends(get_current_user),
 ) -> PipelineGraphResponse:
-    async with session.begin():
-        await set_rls_org(session, principal.organisation_id)
-        await set_rls_user_context(session, principal.account_id, principal.org_role)
+    try:
+        async with session.begin():
+            await set_rls_org(session, principal.organisation_id)
+            await set_rls_user_context(session, principal.account_id, principal.org_role)
 
-        graph = await get_pipeline_graph(session, pipeline_id)
-        if graph is None:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Pipeline not found")
-        nodes, edges = graph
+            graph = await get_pipeline_graph(session, pipeline_id)
+            if graph is None:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Pipeline not found")
+            nodes, edges = graph
 
-        target = _find_node_in_list(nodes, node_id)
-        if target is None:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Node not found")
-        if target.get("node_type") != "manual":
-            raise HTTPException(
-                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-                detail="Only manual nodes can be converted to agent",
-            )
-
-        agent = (
-            await session.execute(
-                select(Agent).where(
-                    Agent.id == body.agent_id,
-                    Agent.organisation_id == principal.organisation_id,
+            target = _find_node_in_list(nodes, node_id)
+            if target is None:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Node not found")
+            if target.get("node_type") != "manual":
+                raise HTTPException(
+                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                    detail="Only manual nodes can be converted to agent",
                 )
-            )
-        ).scalar_one_or_none()
-        if agent is None:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Agent not found")
 
-        connector = (
-            await session.execute(
-                select(ConnectorInstance).where(
-                    ConnectorInstance.id == body.connector_binding.instance_id,
-                    ConnectorInstance.organisation_id == principal.organisation_id,
+            agent = (
+                await session.execute(
+                    select(Agent).where(
+                        Agent.id == body.agent_id,
+                        Agent.organisation_id == principal.organisation_id,
+                    )
                 )
-            )
-        ).scalar_one_or_none()
-        if connector is None:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Connector not found")
-        if connector.connector_type_id != body.connector_binding.type:
-            raise HTTPException(
-                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-                detail="Connector type mismatch",
-            )
+            ).scalar_one_or_none()
+            if agent is None:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Agent not found")
 
-        model_backend = (
-            await session.execute(
-                select(ModelBackend).where(
-                    ModelBackend.id == body.model_backend_id,
-                    ModelBackend.organisation_id == principal.organisation_id,
+            connector = (
+                await session.execute(
+                    select(ConnectorInstance).where(
+                        ConnectorInstance.id == body.connector_binding.instance_id,
+                        ConnectorInstance.organisation_id == principal.organisation_id,
+                    )
                 )
+            ).scalar_one_or_none()
+            if connector is None:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Connector not found")
+            if connector.connector_type_id != body.connector_binding.type:
+                raise HTTPException(
+                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                    detail="Connector type mismatch",
+                )
+
+            model_backend = (
+                await session.execute(
+                    select(ModelBackend).where(
+                        ModelBackend.id == body.model_backend_id,
+                        ModelBackend.organisation_id == principal.organisation_id,
+                    )
+                )
+            ).scalar_one_or_none()
+            if model_backend is None:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Model backend not found")
+
+            target["node_type"] = "agent"
+            target["agent_id"] = str(body.agent_id)
+            target["connector_binding"] = {
+                "type": body.connector_binding.type,
+                "instance_id": str(body.connector_binding.instance_id),
+            }
+            target.pop("output_schema_id", None)
+
+            await append_audit_event(
+                session,
+                org_id=principal.organisation_id,
+                actor_user_id=principal.account_id,
+                event_type="pipeline.node.convert_to_agent",
+                resource_type="pipeline",
+                resource_id=str(pipeline_id),
+                payload_json={
+                    "node_id": str(node_id),
+                    "agent_id": str(body.agent_id),
+                },
             )
-        ).scalar_one_or_none()
-        if model_backend is None:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Model backend not found")
 
-        target["node_type"] = "agent"
-        target["agent_id"] = str(body.agent_id)
-        target["connector_binding"] = {
-            "type": body.connector_binding.type,
-            "instance_id": str(body.connector_binding.instance_id),
-        }
-        target.pop("output_schema_id", None)
-
-        saved = await _save_graph(session, pipeline_id, principal.organisation_id, nodes, edges)
+            saved = await _save_graph(session, pipeline_id, principal.organisation_id, nodes, edges)
+    except ProgrammingError:
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="Feature is not available. Run database migrations to enable it.",
+        ) from None
 
     if saved is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Pipeline not found")
@@ -1175,12 +1194,12 @@ async def revert_node_to_manual_endpoint(
 
             await append_audit_event(
                 session,
-                organisation_id=principal.organisation_id,
-                principal_id=principal.account_id,
+                org_id=principal.organisation_id,
+                actor_user_id=principal.account_id,
                 event_type="pipeline.node.revert_to_manual",
                 resource_type="pipeline",
                 resource_id=str(pipeline_id),
-                metadata={
+                payload_json={
                     "node_id": str(node_id),
                     "snapshot_id": str(snapshot_id),
                 },
