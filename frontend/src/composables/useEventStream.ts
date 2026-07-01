@@ -18,17 +18,23 @@ function connect(): void {
   eventSource = new EventSource(SSE_URL, { withCredentials: true })
   eventSource.onopen = () => { connected.value = true }
   eventSource.onmessage = (event: MessageEvent) => {
+    let data: EventBusEvent
     try {
-      const data: EventBusEvent = JSON.parse(event.data)
-      const typeHandlers = handlers.get(data.type)
-      if (typeHandlers) {
-        for (const handler of typeHandlers) {
-          handler(data)
+      data = JSON.parse(event.data)
+    } catch (e) {
+      console.warn('[EventBus] Failed to parse event', e instanceof SyntaxError ? e.message : String(e))
+      return
+    }
+    const typeHandlers = handlers.get(data.type)
+    if (typeHandlers) {
+      for (const handler of typeHandlers) {
+        try { handler(data) } catch (e) {
+          console.error('[EventBus] Handler error', String(e))
         }
       }
-      dispatchToStore(data)
-    } catch (e) {
-      console.warn('[EventBus] Failed to parse event', e instanceof SyntaxError ? e.message : String(e), event.data.slice(0, 200))
+    }
+    try { dispatchToStore(data) } catch (e) {
+      console.error('[EventBus] dispatchToStore error', String(e))
     }
   }
   eventSource.onerror = () => {
@@ -57,7 +63,7 @@ function clearAllHandlers(): void {
   handlers.clear()
 }
 
-export function dispatchToStore(event: EventBusEvent): void {
+function dispatchToStore(event: EventBusEvent): void {
   const storeHandlers = getHandlers(event.type)
   for (const handler of storeHandlers) {
     handler(event)
@@ -65,7 +71,7 @@ export function dispatchToStore(event: EventBusEvent): void {
 }
 
 export const eventBus = {
-  get connected() { return connected },
+  get connected() { return connected.value },
   subscribe(resourceType: string, handler: EventHandler): () => void {
     if (!handlers.has(resourceType)) handlers.set(resourceType, new Set())
     handlers.get(resourceType)!.add(handler)
@@ -92,7 +98,7 @@ export function useEventStream(options?: { resourceType?: string; onEvent?: Even
   if (options?.resourceType && options?.onEvent) {
     let unsub: (() => void) | null = null
     onMounted(() => {
-      unsub = eventBus.subscribe(options.resourceType!, options.onEvent!)
+      unsub = eventBus.subscribe(options.resourceType, options.onEvent)
     })
     onUnmounted(() => {
       unsub?.()
