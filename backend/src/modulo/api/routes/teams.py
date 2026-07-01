@@ -3,7 +3,7 @@
 import uuid
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.api.dependencies import get_db_session, require_feature
@@ -23,6 +23,7 @@ from modulo.db.crud.team_membership import (
     get_membership,
     list_team_members,
     remove_team_member,
+    update_member_role,
 )
 from modulo.db.rls import set_rls_org, set_rls_user_context
 
@@ -37,10 +38,28 @@ class CreateTeamRequest(BaseModel):
     name: str = Field(min_length=1, max_length=255)
     description: str | None = Field(None, max_length=2000)
 
+    @field_validator("name", mode="before")
+    @classmethod
+    def _strip_whitespace_name(cls, v: str) -> str:
+        stripped = v.strip() if isinstance(v, str) else v
+        if not stripped:
+            raise ValueError("Team name must not be empty or whitespace-only")
+        return stripped
+
 
 class UpdateTeamRequest(BaseModel):
     name: str | None = Field(None, min_length=1, max_length=255)
     description: str | None = Field(None, max_length=2000)
+
+    @field_validator("name", mode="before")
+    @classmethod
+    def _strip_whitespace_name(cls, v: str | None) -> str | None:
+        if v is None:
+            return v
+        stripped = v.strip() if isinstance(v, str) else v
+        if not stripped:
+            raise ValueError("Team name must not be empty or whitespace-only")
+        return stripped
 
 
 class TeamResponse(BaseModel):
@@ -61,6 +80,10 @@ class TeamListResponse(BaseModel):
 class AddMemberRequest(BaseModel):
     user_id: str = Field(min_length=36, max_length=36)
     role: str = Field(default="viewer", pattern=r"^(viewer|runner|operator)$")
+
+
+class ChangeMemberRoleRequest(BaseModel):
+    role: str = Field(pattern=r"^(viewer|runner|operator)$")
 
 
 class MembershipResponse(BaseModel):
@@ -220,10 +243,54 @@ async def delete_team_endpoint(
     async with session.begin():
         await set_rls_org(session, current_user.organisation_id)
         await set_rls_user_context(session, current_user.account_id, current_user.org_role)
+
+        from sqlalchemy import func, select
+
+        from modulo.db.models.connector_instance import ConnectorInstance
+        from modulo.db.models.model_backend import ModelBackend
+        from modulo.db.models.pipeline import Pipeline
+        from modulo.db.models.stage import Stage
+
+        resource_checks: list[tuple[str, int]] = []
+        for model_cls, label in [
+            (Pipeline, "pipeline"),
+            (Stage, "stage"),
+            (ConnectorInstance, "connector"),
+            (ModelBackend, "model backend"),
+        ]:
+            count = (
+                await session.execute(
+                    select(func.count()).select_from(model_cls).where(model_cls.owner_team_id == team_id)
+                )
+            ).scalar() or 0
+            if count > 0:
+                resource_checks.append((label, count))
+
+        if resource_checks:
+            details = "; ".join(f"{count} {label}(s)" for label, count in resource_checks)
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=f"Cannot delete team: still has resources — {details}",
+            )
+
         deleted = await delete_team(session, team_id)
 
     if not deleted:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Team not found")
+
+    from modulo.core.audit_logger import append_audit_event
+
+    async with session.begin():
+        await set_rls_org(session, current_user.organisation_id)
+        await append_audit_event(
+            session,
+            org_id=current_user.organisation_id,
+            event_type="team_deleted",
+            actor_user_id=current_user.account_id,
+            resource_type="team",
+            resource_id=team_id,
+            payload_json={"team_id": str(team_id)},
+        )
 
 
 @router.get("/{team_id}/members", response_model=MembershipListResponse)
@@ -267,8 +334,6 @@ async def add_member_endpoint(
     current_user: AuthenticatedPrincipal = Depends(get_current_user),
     session: AsyncSession = Depends(get_db_session),
 ) -> MembershipResponse:
-    _require_admin(current_user)
-
     user_id = uuid.UUID(body.user_id)
 
     async with session.begin():
@@ -277,6 +342,25 @@ async def add_member_endpoint(
 
         from modulo.db.crud.account import get_account_by_id
         from modulo.db.crud.org_membership import get_membership_by_account_and_org
+
+        team = await get_team(session, team_id)
+        if team is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Team not found")
+
+        # Authorise: admin (all-powerful) OR team operator of this team
+        is_admin = ORG_ROLE_HIERARCHY.get(current_user.org_role, -1) >= ORG_ROLE_HIERARCHY["admin"]
+        if not is_admin:
+            caller_membership = await get_membership_by_team_and_account(session, team_id, current_user.account_id)
+            if caller_membership is None or caller_membership.role != "operator":
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail="Only admin users or team operators can add members",
+                )
+            if TEAM_ROLE_HIERARCHY.get(body.role, -1) > TEAM_ROLE_HIERARCHY.get(caller_membership.role, -1):
+                raise HTTPException(
+                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                    detail=f"Cannot grant role '{body.role}' above your own team role '{caller_membership.role}'",
+                )
 
         target_account = await get_account_by_id(session, user_id)
         target_membership = await get_membership_by_account_and_org(session, user_id, current_user.organisation_id)
@@ -289,9 +373,6 @@ async def add_member_endpoint(
                 detail=f"Team role '{body.role}' exceeds user's org role '{target_membership.role}'",
             )
 
-        team = await get_team(session, team_id)
-        if team is None:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Team not found")
         membership = await add_team_member(
             session,
             org_id=current_user.organisation_id,
@@ -328,3 +409,49 @@ async def remove_member_endpoint(
         if membership is None or membership.team_id != team_id:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Membership not found")
         await remove_team_member(session, membership_id)
+
+
+@router.patch(
+    "/{team_id}/members/{membership_id}",
+    response_model=MembershipResponse,
+)
+async def change_member_role_endpoint(
+    team_id: uuid.UUID,
+    membership_id: uuid.UUID,
+    body: ChangeMemberRoleRequest,
+    current_user: AuthenticatedPrincipal = Depends(get_current_user),
+    session: AsyncSession = Depends(get_db_session),
+) -> MembershipResponse:
+    async with session.begin():
+        await set_rls_org(session, current_user.organisation_id)
+        await set_rls_user_context(session, current_user.account_id, current_user.org_role)
+
+        team = await get_team(session, team_id)
+        if team is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Team not found")
+
+        is_admin = ORG_ROLE_HIERARCHY.get(current_user.org_role, -1) >= ORG_ROLE_HIERARCHY["admin"]
+        if not is_admin:
+            caller_membership = await get_membership_by_team_and_account(session, team_id, current_user.account_id)
+            if caller_membership is None or caller_membership.role != "operator":
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail="Only admin users or team operators can change member roles",
+                )
+            if TEAM_ROLE_HIERARCHY.get(body.role, -1) > TEAM_ROLE_HIERARCHY.get(caller_membership.role, -1):
+                raise HTTPException(
+                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                    detail=f"Cannot grant role '{body.role}' above your own team role '{caller_membership.role}'",
+                )
+
+        membership = await update_member_role(session, membership_id, body.role)
+        if membership is None or membership.team_id != team_id:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Membership not found")
+
+    return MembershipResponse(
+        id=str(membership.id),
+        team_id=str(membership.team_id),
+        user_id=str(membership.account_id),
+        role=membership.role,
+        created_at=membership.created_at.isoformat(),
+    )

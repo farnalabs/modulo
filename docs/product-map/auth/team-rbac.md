@@ -68,19 +68,19 @@ Org-level and team-level role hierarchy with privilege cap, team membership mana
 - [x] Admin can list all teams in an organisation with pagination
 - [x] Admin can get a single team by ID
 - [x] Admin can delete a team with no owned resources
-- [ ] Team deletion is blocked if any resource has owner_team_id pointing to the team
-- [ ] Team deletion returns a `team_has_resources` error when blocked
+- [x] Team deletion is blocked if any resource has owner_team_id pointing to the team
+- [x] Team deletion returns a `team_has_resources` error when blocked
 - [ ] Admin can bulk-reassign all team-owned resources to org-wide before deletion
-- [ ] Team deletion writes a `team_deleted` audit event
+- [x] Team deletion writes a `team_deleted` audit event
 - [x] Admin can rename a team without affecting its resource ownership
 - [x] Pagination defaults to page 1, page size 20, max 100
 
 ### Team membership management
 - [x] Admin can add any org user to any team with a role
 - [x] Admin can remove any user from any team
-- [ ] Admin can change a user's team role (no PATCH endpoint exists for membership role)
-- [ ] A team operator can add members to their own team only (add_member requires admin)
-- [ ] A team operator can only grant roles up to their own team role (no self-escalation)
+- [x] Admin can change a user's team role (no PATCH endpoint exists for membership role)
+- [x] A team operator can add members to their own team only (add_member requires admin)
+- [x] A team operator can only grant roles up to their own team role (no self-escalation)
 - [x] A user cannot be added to a team if they are not a member of the organisation
 - [x] Adding a user whose org role is below the requested team role is rejected
 - [x] A user can be a member of multiple teams with different roles in each
@@ -159,11 +159,11 @@ Org-level and team-level role hierarchy with privilege cap, team membership mana
 - [x] Removing the last operator from a team is not blocked (no operator self-protection)
 - [x] Creating a team with a duplicate name within the same org returns 409
 - [x] Creating a team with an empty name is rejected
-- [ ] Creating a team with whitespace-only name is rejected (min_length allows whitespace strings)
+- [x] Creating a team with whitespace-only name is rejected (min_length allows whitespace strings)
 - [x] Updating a team to an already-taken name returns 409
 - [x] Fetching a non-existent team returns 404
 - [x] Deleting a non-existent team returns 404
-- [ ] Team with resources cannot be deleted (not implemented in teams.py)
+- [x] Team with resources cannot be deleted (not implemented in teams.py)
 - [ ] Bulk reassign followed by delete is idempotent (not implemented)
 - [ ] A user assigned the same team role via SSO on repeated JIT provision is not re-added (SSO JIT not yet wired)
 - [x] Orphaned team_memberships on user deletion are cleaned up via FK CASCADE
@@ -192,11 +192,10 @@ Org-level and team-level role hierarchy with privilege cap, team membership mana
 
 ## Known Gaps
 - Feature gate `team_rbac` blocks endpoints at the router level, but there is no dedicated `require_feature("team_rbac")` on the team-scoped API key _require_team_rbac helper is a separate check
-- `owner_team_id` blocking on team deletion is only implemented in admin.py, not in teams.py DELETE endpoint
 - Stage board team filtering (`/settings/teams` UI) is v1, not yet implemented
 - V1 team membership requires email-based invitation acceptance — not yet implemented
 - No operator self-protection: removing the last operator from a team is not blocked
-- No PATCH endpoint for changing a membership role
+- `remove_member_endpoint` still requires admin only — team operator removal not yet supported
 - Team cost attribution moved to v1
 - No integration tests for the privilege cap trigger with concurrent inserts
 - No test for DB-live membership check on required_team_id with stale JWT claims
