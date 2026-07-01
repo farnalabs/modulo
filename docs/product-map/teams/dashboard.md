@@ -11,10 +11,15 @@ code:
   - frontend/src/router/index.ts
   - backend/tests/unit/api/test_dashboard.py
   - frontend/src/__tests__/DashboardView.spec.ts
-
+  - backend/tests/bdd/features/ui/eval_dashboard.feature
+unit-tests:
+  - backend/tests/unit/api/test_dashboard.py
+depends-on: []
 status: partial
 ---
-# Teams Dashboard Basic org-level dashboard with run count summary and status breakdown. Root route (`/`) of the application.
+# Teams Dashboard
+
+Basic org-level dashboard with run count summary and status breakdown. Root route (`/`) of the application.
 
 ## Behaviours
 
@@ -98,7 +103,9 @@ status: partial
 - [ ] BDD scenario: error state display
 - [ ] BDD scenario: navigate from dashboard to run detail
 
-## Known Gaps - **BDD feature file (`eval_dashboard.feature`) is a placeholder** — no real scenarios exist.
+## Known Gaps
+
+- **BDD feature file (`eval_dashboard.feature`) is a placeholder** — no real scenarios exist.
 - **Frontend `DashboardSummary` interface is incomplete** in both DashboardView and the store — missing `teams`, `eval_pass_rate`, `trend` despite the API returning them.
 - **DashboardView does not use the Pinia store** — calls API directly with inline fetch logic instead of consuming `useDashboardStore()`.
 - **Frontend unit test coverage is minimal** — only a "renders the heading" smoke test exists (`DashboardView.spec.ts`).
