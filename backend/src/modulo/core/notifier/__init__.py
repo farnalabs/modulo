@@ -37,6 +37,14 @@ from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker
 from modulo.db.models.notification_delivery import NotificationDeliveryLog
 from modulo.db.models.notification_endpoint import NotificationEndpoint
 
+__all__ = [
+    "MAX_DEAD_LETTERS",
+    "MAX_RETRIES",
+    "RETRY_DELAYS",
+    "DispatchResult",
+    "Notifier",
+]
+
 _log = logging.getLogger(__name__)
 
 MAX_RETRIES = 3
@@ -66,11 +74,13 @@ class Notifier:
         self._session_factory = async_sessionmaker(db_engine, expire_on_commit=False)
         self._fernet = Fernet(fernet_key.encode())
         self._http_client: httpx.AsyncClient | None = None
+        self._client_lock = asyncio.Lock()
         self._use_celery = use_celery
 
     async def _get_client(self) -> httpx.AsyncClient:
-        if self._http_client is None or self._http_client.is_closed:
-            self._http_client = httpx.AsyncClient(timeout=30.0)
+        async with self._client_lock:
+            if self._http_client is None or self._http_client.is_closed:
+                self._http_client = httpx.AsyncClient(timeout=30.0)
         return self._http_client
 
     async def dispatch_event(
@@ -102,17 +112,7 @@ class Notifier:
                 org_id, event_type, payload, run_id=run_id, retain_payload=retain_payload, team_id=team_id
             )
 
-        endpoints = await self._get_subscribed_endpoints(org_id, event_type, team_id=team_id)
-        if not endpoints:
-            _log.debug("notifier.no_subscribers", extra={"event_type": event_type, "org_id": str(org_id)})
-            return []
-
-        http_client = await self._get_client()
-        results: list[DispatchResult] = []
-        for ep in endpoints:
-            result = await self._dispatch_to_endpoint(http_client, ep, event_type, payload, run_id, retain_payload)
-            results.append(result)
-        return results
+        return await self._dispatch_inline(org_id, event_type, payload, run_id, retain_payload, team_id)
 
     async def _dispatch_via_celery(
         self,
@@ -151,16 +151,7 @@ class Notifier:
                 "notifier.celery_fallback",
                 extra={"event_type": event_type, "org_id": str(org_id), "error": str(exc)},
             )
-            # Fall back to inline dispatch
-            endpoints = await self._get_subscribed_endpoints(org_id, event_type, team_id=team_id)
-            if not endpoints:
-                return []
-            http_client = await self._get_client()
-            results: list[DispatchResult] = []
-            for ep in endpoints:
-                result = await self._dispatch_to_endpoint(http_client, ep, event_type, payload, run_id, retain_payload)
-                results.append(result)
-            return results
+            return await self._dispatch_inline(org_id, event_type, payload, run_id, retain_payload, team_id)
 
     async def _get_subscribed_endpoints(
         self,
@@ -212,6 +203,26 @@ class Notifier:
             if event_type in events_list:
                 subscribed.append(ep)
         return subscribed
+
+    async def _dispatch_inline(
+        self,
+        org_id: uuid.UUID,
+        event_type: str,
+        payload: dict[str, Any],
+        run_id: uuid.UUID | None,
+        retain_payload: bool,
+        team_id: uuid.UUID | None = None,
+    ) -> list[DispatchResult]:
+        endpoints = await self._get_subscribed_endpoints(org_id, event_type, team_id=team_id)
+        if not endpoints:
+            _log.debug("notifier.no_subscribers", extra={"event_type": event_type, "org_id": str(org_id)})
+            return []
+        http_client = await self._get_client()
+        results: list[DispatchResult] = []
+        for ep in endpoints:
+            result = await self._dispatch_to_endpoint(http_client, ep, event_type, payload, run_id, retain_payload)
+            results.append(result)
+        return results
 
     async def _dispatch_to_endpoint(
         self,
@@ -274,10 +285,8 @@ class Notifier:
         status: str
         if response_code is not None and 200 <= response_code < 300:
             status = "delivered"
-        elif attempt_count >= MAX_RETRIES:
-            status = "dead_lettered"
         else:
-            status = "failed"
+            status = "dead_lettered"
 
         payload_ciphertext: bytes | None = None
         if retain_payload:
@@ -299,7 +308,7 @@ class Notifier:
 
         if status == "dead_lettered":
             await self._increment_dead_letter(endpoint)
-        elif status == "delivered":
+        else:
             await self._reset_dead_letter(endpoint)
 
         return DispatchResult(
