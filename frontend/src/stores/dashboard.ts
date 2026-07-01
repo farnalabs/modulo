@@ -70,7 +70,7 @@ export const useDashboardStore = defineStore('dashboard', () => {
   const summary = ref<DashboardSummary | null>(null)
   const loading = ref(false)
   const error = ref<string | null>(null)
-  const dirtyIds = ref(new Set<string>())
+  const syncingIds = ref(new Set<string>())
   const unsubHandlers: (() => void)[] = []
 
   const totalSpend = computed(() => {
@@ -96,7 +96,7 @@ export const useDashboardStore = defineStore('dashboard', () => {
   }
 
   function handleSyncEvent(event: EventBusEvent): void {
-    if (!dirtyIds.value.has(event.id)) {
+    if (!syncingIds.value.has(event.id)) {
       if (event.type === 'run' || event.type === 'pipeline') {
         fetchSummary()
       }
@@ -109,7 +109,8 @@ export const useDashboardStore = defineStore('dashboard', () => {
   function disposeHandlers(): void {
     for (const unsub of unsubHandlers) unsub()
     unsubHandlers.length = 0
+    syncingIds.value.clear()
   }
 
-  return { summary, loading, error, totalSpend, fetchSummary, dirtyIds, handleSyncEvent, disposeHandlers }
+  return { summary, loading, error, totalSpend, fetchSummary, syncingIds, handleSyncEvent, disposeHandlers }
 })
