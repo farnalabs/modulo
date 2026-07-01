@@ -64,11 +64,11 @@ describe('eventBus', () => {
 
   it('connected ref is reactive', async () => {
     const { eventBus } = await import('../composables/useEventStream')
-    expect(eventBus.connected.value).toBe(false)
+    expect(eventBus.connected).toBe(false)
     const handler = vi.fn()
     eventBus.subscribe('run', handler)
     triggerEvent({ type: 'run', id: 'r-1', action: 'updated', version: 2, org_id: 'org-1' })
-    expect(eventBus.connected.value).toBe(false)
+    expect(eventBus.connected).toBe(false)
   })
 
   it('connected becomes true on open', async () => {
@@ -76,7 +76,7 @@ describe('eventBus', () => {
     const handler = vi.fn()
     eventBus.subscribe('run', handler)
     mockInstances[0].onopen?.()
-    expect(eventBus.connected.value).toBe(true)
+    expect(eventBus.connected).toBe(true)
   })
 
   it('connected becomes false on error', async () => {
@@ -84,9 +84,9 @@ describe('eventBus', () => {
     const handler = vi.fn()
     eventBus.subscribe('run', handler)
     mockInstances[0].onopen?.()
-    expect(eventBus.connected.value).toBe(true)
+    expect(eventBus.connected).toBe(true)
     mockInstances[0].onerror?.()
-    expect(eventBus.connected.value).toBe(false)
+    expect(eventBus.connected).toBe(false)
   })
 })
 
