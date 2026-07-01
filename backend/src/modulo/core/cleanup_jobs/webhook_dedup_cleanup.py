@@ -85,8 +85,6 @@ class WebhookDedupCleanupTask(Task):  # type: ignore[misc]
 
     def run(self) -> dict[str, Any]:
         """Run one iteration of cleanup, batching until fewer than BATCH_SIZE rows remain."""
-        import asyncio
-
         return asyncio.run(_run_cleanup())
 
 
