@@ -65,7 +65,6 @@ Async Jira Cloud REST API v3 connector implementing `ConnectorBase`. Provides re
 - [x] `ConnectorType.JIRA.capabilities` returns `{ISSUE_READ, ISSUE_WRITE, ISSUE_SEARCH}` in `base.py`
 - [x] `JiraConnector.connector_type` returns `ConnectorType.JIRA`
 
-
 ### Health Check — connectivity and credential validation
 
 - [x] Validate credentials by calling `GET /myself` — fail if status != 200
