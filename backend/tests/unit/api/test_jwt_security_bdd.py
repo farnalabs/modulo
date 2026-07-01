@@ -6,6 +6,7 @@ with mocked DB dependencies.
 
 import base64
 import uuid
+from collections.abc import Generator
 from datetime import UTC, datetime
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -61,7 +62,7 @@ def mock_session() -> AsyncMock:
 
 
 @pytest.fixture()
-def client(mock_session: AsyncMock) -> TestClient:
+def client(mock_session: AsyncMock) -> Generator[TestClient, None, None]:
     async def override_session():
         yield mock_session
 

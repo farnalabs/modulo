@@ -5,6 +5,7 @@ configured correctly without needing real OTLP or stdout I/O.
 """
 
 import os
+from collections.abc import Generator
 
 import pytest
 from opentelemetry import trace
@@ -14,7 +15,7 @@ from modulo.otel_bridge.export import setup_otel
 
 
 @pytest.fixture(autouse=True)
-def _reset_otel() -> None:
+def _reset_otel() -> Generator[None, None, None]:
     """Reset the global tracer provider after each test to prevent background
     BatchSpanProcessor threads from writing to closed stdout during teardown.
     """

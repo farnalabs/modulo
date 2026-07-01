@@ -189,7 +189,7 @@ class TestRemyConfigServiceCheckAccess:
         self, service: RemyConfigService, mock_session: AsyncMock, org_id: uuid.UUID,
     ) -> None:
         user_id = uuid.uuid4()
-        stored_value = {
+        stored_value: dict = {
             "access_list": {
                 "user_ids": [],
                 "team_ids": [],

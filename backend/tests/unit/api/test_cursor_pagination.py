@@ -1,6 +1,7 @@
 """Tests for cursor-based pagination utility and endpoint integration."""
 
 import uuid
+from collections.abc import Generator
 from datetime import UTC, datetime, timedelta
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -97,7 +98,7 @@ class TestCursorEncoding:
 
 
 @pytest.fixture()
-def client() -> TestClient:
+def client() -> Generator[TestClient, None, None]:
     mock_session = _make_mock_session()
 
     async def override_session():

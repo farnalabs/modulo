@@ -120,7 +120,7 @@ def get_api_routes() -> list[dict]:
             routes.append(
                 {
                     "path": route.path,
-                    "methods": sorted(route.methods - {"HEAD", "OPTIONS"}),
+                    "methods": sorted((route.methods or set()) - {"HEAD", "OPTIONS"}),
                     "response_model": route.response_model,
                 }
             )
