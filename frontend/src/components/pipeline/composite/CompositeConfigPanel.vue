@@ -6,16 +6,29 @@ import TabsList from '../../ui/tabs/TabsList.vue'
 import TabsTrigger from '../../ui/tabs/TabsTrigger.vue'
 import TabsContent from '../../ui/tabs/TabsContent.vue'
 import ParameterPortForm from './ParameterPortForm.vue'
+import OutputValidationTab from './OutputValidationTab.vue'
 import type { ParameterPort } from '../../../types/pipeline'
+
+interface EvalConfig {
+  id: string
+  name: string
+  type: 'regex' | 'json_schema' | 'llm_judge'
+  config: Record<string, unknown>
+  failure_behaviour: 'retry' | 'block' | 'warn'
+}
 
 const props = defineProps<{
   compositeRef: string | null
   parameterValues: Record<string, unknown>
+  evalDefinitions?: EvalConfig[]
+  maxValidationRetries?: number
 }>()
 
 const emit = defineEmits<{
   (e: 'update:parameterValues', values: Record<string, unknown>): void
   (e: 'apply'): void
+  (e: 'update:evalDefinitions', val: EvalConfig[]): void
+  (e: 'update:maxValidationRetries', val: number): void
 }>()
 
 const compositeStore = useCompositeStore()
@@ -73,6 +86,9 @@ function updatePortValue(portName: string, value: unknown) {
           <TabsTrigger value="mapping">
             Mapping
           </TabsTrigger>
+          <TabsTrigger value="validation">
+            Validation
+          </TabsTrigger>
         </TabsList>
 
         <TabsContent value="parameters" class="mt-4 space-y-4">
@@ -118,6 +134,15 @@ function updatePortValue(portName: string, value: unknown) {
             <p>Schema mapping coming soon</p>
             <p class="mt-1 text-xs">Input and output schemas will be mappable here.</p>
           </div>
+        </TabsContent>
+
+        <TabsContent value="validation" class="mt-4">
+          <OutputValidationTab
+            :eval-definitions="props.evalDefinitions ?? []"
+            :max-validation-retries="props.maxValidationRetries ?? 0"
+            @update:eval-definitions="(val: EvalConfig[]) => $emit('update:evalDefinitions', val)"
+            @update:max-validation-retries="(val: number) => $emit('update:maxValidationRetries', val)"
+          />
         </TabsContent>
       </Tabs>
     </template>
