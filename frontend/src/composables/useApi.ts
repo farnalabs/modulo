@@ -7,8 +7,12 @@ interface ApiOptions {
 }
 
 function authHeader(): Record<string, string> {
-  const token = localStorage.getItem(TOKEN_KEY)
-  return token ? { Authorization: `Bearer ${token}` } : {}
+  try {
+    const token = localStorage.getItem(TOKEN_KEY)
+    return token ? { Authorization: `Bearer ${token}` } : {}
+  } catch {
+    return {}
+  }
 }
 
 async function request<T>(method: string, path: string, body?: unknown, options?: ApiOptions): Promise<T> {
@@ -37,6 +41,5 @@ export function useApi() {
     put: <T>(path: string, body?: unknown, options?: ApiOptions) => request<T>('PUT', path, body, options),
     patch: <T>(path: string, body?: unknown, options?: ApiOptions) => request<T>('PATCH', path, body, options),
     delete: <T>(path: string, options?: ApiOptions) => request<T>('DELETE', path, undefined, options),
-    del: <T>(path: string, options?: ApiOptions) => request<T>('DELETE', path, undefined, options),
   }
 }
