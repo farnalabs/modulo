@@ -102,7 +102,10 @@ class StreamRequest(BaseModel):
     content: str = Field(..., description="The user's message text")
     provider: str = Field(..., description="LLM provider")
     model: str = Field(..., description="Model ID")
-    context_window_tokens: int | None = Field(None, ge=1024, le=1_000_000, description="Override context window (defaults to session value)")
+    context_window_tokens: int | None = Field(
+        None, ge=1024, le=1_000_000,
+        description="Override context window (defaults to session value)",
+    )
     api_key: str = Field(default="", description="User's API key for the LLM provider (auto-resolved if empty)")
     mcp_api_key: str | None = Field(None, description="API key for MCP tool execution")
     system_prompt: str | None = Field(None, description="Optional system prompt override")
@@ -571,7 +574,12 @@ async def stream_chat(
                                 "success": True,
                                 "result": result,
                             })
-                            tc_data = {"tool_call_id": tc["id"], "tool_name": tc["name"], "result": result}
+                            tc_data = {
+                                "tool_call_id": tc["id"],
+                                "tool_name": tc["name"],
+                                "success": True,
+                                "result": result,
+                            }
                             yield f"event: tool_call\ndata: {json.dumps(tc_data)}\n\n"
                         except Exception as exc:
                             tool_results.append({
@@ -580,7 +588,12 @@ async def stream_chat(
                                 "success": False,
                                 "error": str(exc),
                             })
-                            tc_err = {"tool_call_id": tc["id"], "tool_name": tc["name"], "error": str(exc)}
+                            tc_err = {
+                                "tool_call_id": tc["id"],
+                                "tool_name": tc["name"],
+                                "success": False,
+                                "error": str(exc),
+                            }
                             yield f"event: tool_call\ndata: {json.dumps(tc_err)}\n\n"
 
                 # 10. Save assistant message to DB
@@ -614,9 +627,15 @@ async def stream_chat(
 
         except HTTPException:
             raise
-        except ProgrammingError as exc:
+        except ProgrammingError:
             logger.exception("Remy streaming error — missing DB table or schema")
-            yield f"event: error\ndata: {json.dumps({'detail': 'Feature is not available. Run database migrations to enable it.'})}\n\n"
+            yield (
+                "event: error\ndata: "
+                + json.dumps({
+                    "detail": "Feature is not available. Run database migrations to enable it.",
+                })
+                + "\n\n"
+            )
         except Exception as exc:
             logger.exception("Remy streaming error")
             yield f"event: error\ndata: {json.dumps({'detail': str(exc)})}\n\n"

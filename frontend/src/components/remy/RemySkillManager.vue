@@ -125,8 +125,8 @@ async function saveSkill() {
   skillError.value = null
   try {
     if (editingId.value) {
-      const { error: err } = await api.PUT('/api/v1/me/remy/skills/{id}', {
-        params: { path: { id: editingId.value } },
+      const { error: err } = await api.PUT('/api/v1/me/remy/skills/{skill_id}', {
+        params: { path: { skill_id: editingId.value } },
         body: payload,
       })
       if (err) {
@@ -155,8 +155,8 @@ async function saveSkill() {
 async function deleteSkill(id: string) {
   skillError.value = null
   try {
-    const { error: err } = await api.DELETE('/api/v1/me/remy/skills/{id}', {
-      params: { path: { id } },
+    const { error: err } = await api.DELETE('/api/v1/me/remy/skills/{skill_id}', {
+      params: { path: { skill_id: id } },
     })
     if (err) {
       skillError.value = `Failed to delete skill: ${err}`
