@@ -2,8 +2,10 @@
 id: feat-core-trigger-system
 prd: 8.5
 delivery-tasks: []
+bdd: []
 code:
 depends-on: []
+unit-tests: []
 status: gap
 ---
 

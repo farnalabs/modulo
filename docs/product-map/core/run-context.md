@@ -34,34 +34,51 @@ unit-tests:
 depends-on: []
 status: partial
 ---
+
 # Run Context
 
 ## Behaviours
 
 ### Seeding
+
 - [x] run_context seeded from PipelineSnapshot.run_context_defaults at run start
 - [ ] Trigger run_context_overrides merge over pipeline defaults (later wins)
 - [x] Empty defaults produce empty run_context dict
 - [x] Pipeline snapshot captures run_context_defaults at snapshot time (not live pipeline)
-- [ ] HITL-paused resume uses snapshot's run_context_defaults, not current pipeline defaults ### Reading
+- [ ] HITL-paused resume uses snapshot's run_context_defaults, not current pipeline defaults
+
+### Reading
+
 - [x] All agent nodes can read run_context fields
 - [ ] run_context accessible in prompt templates as {{ run_context.key }}
-- [ ] run_context state shown in run detail view per-node ### Context-setter writes
+- [ ] run_context state shown in run detail view per-node
+
+### Context-setter writes
+
 - [x] Context-setter agent (role="context_setter") can write to run_context
 - [x] Written fields appear in downstream nodes' run_context
 - [x] Context-setter can write multiple keys in one node execution
-- [x] Context-setter can update existing keys ### Non-context-setter guard
+- [x] Context-setter can update existing keys
+
+### Non-context-setter guard
+
 - [x] Non-context-setter node writing to run_context raises ContextSetterViolationError
 - [x] Non-context-setter node not writing run_context passes normally
 - [x] Explicit role="agent" also blocked (not just None role)
 - [x] run_context: None in state does not crash guard
 - [x] run_context key absent from state does not crash guard
-- [x] Node with no run_context in returned result passes guard ### Write-log (last-write-wins)
+- [x] Node with no run_context in returned result passes guard
+
+### Write-log (last-write-wins)
+
 - [x] Every context-setter write appends to _run_context_write_log ordered log
 - [x] Write-log entry includes node_name, role, timestamp, written_fields
 - [x] Last write to same key wins in resolved value
 - [ ] Write-log preserved across HITL checkpoints
-- [ ] Write-log visible in run inspection ### Autonomy level integration
+- [ ] Write-log visible in run inspection
+
+### Autonomy level integration
+
 - [x] run_context.autonomy_recommendation overrides pipeline default_autonomy_level
 - [x] Pipeline default_autonomy_level seeded into run_context._pipeline_default_autonomy
 - [x] fully_autonomous causes HITL gate to be skipped
@@ -70,44 +87,72 @@ status: partial
 - [x] Invalid autonomy value in run_context falls back to pipeline default
 - [x] Neither pipeline default nor recommendation set falls back to manual_approval
 - [x] Context-setter can change autonomy level mid-run
-- [x] Autonomy level resolution checked pre-node ### Cancellation
+- [x] Autonomy level resolution checked pre-node
+
+### Cancellation
+
 - [x] run_context.cancelled flag prevents node execution (fast path, no DB roundtrip)
 - [x] DB-backed cancellation check (run.cancellation_requested) prevents node execution (authoritative)
 - [x] DB check skipped when state-level cancelled flag already detected
 - [x] ContextVar isolation prevents cancellation check leaking between concurrent runs
-- [x] DB check hook cleared in finally block (no leak across runs) ### Complexity-reviewer (canonical use case)
+- [x] DB check hook cleared in finally block (no leak across runs)
+
+### Complexity-reviewer (canonical use case)
+
 - [x] Complexity-reviewer agent writes model_tier, estimated_tokens, complexity_reason
 - [x] model_tier is one of "tier-1", "tier-2", "tier-3"
 - [x] estimated_tokens is non-negative integer
-- [x] complexity_reason is <= 500 characters ### Edge cases
+- [x] complexity_reason is <= 500 characters
+
+### Edge cases
+
 - [x] Multiple context-setters in sequence — later writes win
 - [x] Context-setter writes empty dict — no-op, state unchanged
-- [x] Context-setter writes nested dict — stored as-is (no flattening) ### Error states
+- [x] Context-setter writes nested dict — stored as-is (no flattening)
+
+### Error states
+
 - [ ] Non-context-setter violation emits audit event (context_write_by_non_setter) — currently only raises error + log.warning
 - [ ] Invalid run_context_overrides type (non-dict) raises validation error
 - [ ] Node timeout while writing run_context — context write not persisted
 - [x] Non-context-setter violation raises error (PRD specifies silent discard + audit warning — code currently raises) — design tension
 - [ ] Graph validation warns on parallel context-setters writing same key (v1)
 - [ ] Retry with run_context_overrides — retry uses provided overrides
-- [ ] Cancellation-while-waiting for capacity slot transitions to cancelled status ### Security
+- [ ] Cancellation-while-waiting for capacity slot transitions to cancelled status
+
+### Security
+
 - [x] Context-setter role evaluated at LangGraph-node level, not agent config level
 - [ ] Audit event emitted on context_write_by_non_setter violation with node_id and attempted_keys
 - [x] _run_context_write_log is internal-only (not writable by agents)
-- [x] Non-context-setter cannot inject run_context via state manipulation ### Run inspection
+- [x] Non-context-setter cannot inject run_context via state manipulation
+
+### Run inspection
+
 - [ ] Run detail view shows run_context before and after each node
 - [ ] Context writes shown as diffs in inspection UI
-- [ ] Write-log entries displayed in run inspection ### Variant group integration
+- [ ] Write-log entries displayed in run inspection
+
+### Variant group integration
+
 - [ ] Variant group creates N runs with different run_context_overrides
 - [ ] Pre-flight check rejects entire group if quota would be exceeded (no partial firing)
-- [ ] Each variant run counted individually against org/team/trigger limits ### Feedback system integration
+- [ ] Each variant run counted individually against org/team/trigger limits
+
+### Feedback system integration
+
 - [x] feedback_correction promoted from input_payload to top-level run_context
 - [ ] Correction run inherits run_context from original checkpoint
 - [x] feedback_correction removed from input_payload to hide from agents
-- [ ] run_context_overrides merged into feedback_correction during correction run ### Forward/backward compatibility
+- [ ] run_context_overrides merged into feedback_correction during correction run
+
+### Forward/backward compatibility
+
 - [x] Existing pipelines without run_context_defaults run normally (empty dict)
 - [x] Existing agents unaware of run_context are unaffected
 - [x] Previous runs' contexts unchanged by pipeline default changes
 - [ ] All unit and BDD tests pass
+
 ## Known Gaps
 - **Non-context-setter guard strategy mismatch**: PRD 8.18 specifies silent discard + audit_warning event for non-context-setter writes to run_context. Current decorator code raises ContextSetterViolationError instead. The PRD's stated intent is non-breaking behaviour; the code takes a hard-fail approach. Needs resolution: either update PRD to match code (hard error), or update code to match PRD (silent discard). Code path: `backend/src/modulo/core/pipeline_engine/decorator.py:129-142`.
 - **Missing audit event dispatch on violation**: When a non-context-setter violation occurs, only `_log.warning()` is emitted. PRD specifies an `audit_warning` event with node_id and attempted_keys. The decorator lacks DB session access to dispatch to the `audit_events` table. Needs a ContextVar-based callback pattern (similar to the cancellation check) plumbed through the executor.

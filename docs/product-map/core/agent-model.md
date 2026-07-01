@@ -59,12 +59,14 @@ Two categories exist:
 ## Behaviours
 
 ### Database / Model
+
 - [x] Agent model has all fields defined in PRD §8.2
 - [x] `is_executable` column defaults to `True`
 - [x] `library_id` nullable FK to `library_primitives`; null = generic agent
 - [x] Input/output schema FK constraints use `(schema_id, version, org_id)`
 
 ### CRUD
+
 - [x] `create_agent()` inserts a new agent with RLS org scoping
 - [x] `get_agent()` retrieves by ID with RLS
 - [x] `list_agents()` returns paginated results ordered by created_at desc
@@ -74,6 +76,7 @@ Two categories exist:
       history preservation
 
 ### REST API — `/api/v1/agents`
+
 - [x] `GET /api/v1/agents` — list (paginated)
 - [x] `POST /api/v1/agents` — create (201); 422 on validation failure
 - [x] `GET /api/v1/agents/{id}` — get by ID
@@ -85,6 +88,7 @@ Two categories exist:
 - [x] Unauthenticated requests return 401/403
 
 ### Generic (non-library) Agent Criteria — PRD §8.2 Experimental
+
 - [x] **Executable generic agents MUST have a description.** If
       `is_executable=True` and `library_id` is null, a non-empty
       `description` is required on create. The description helps pipeline
@@ -107,6 +111,7 @@ Two categories exist:
       and safety gates, not execution blockers (in alpha).
 
 ### Test Coverage
+
 - [x] Generic agent missing description returns 422 on create
 - [x] Library agent without description succeeds (skips check)
 - [x] Non-executable agent missing description returns 422

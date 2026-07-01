@@ -13,8 +13,10 @@ code:
   - backend/src/modulo/db/crud/pipeline_snapshot.py
   - backend/src/modulo/db/models/agent.py
 depends-on: [feat-evals-eval-engine, feat-variants-variant-groups]
+unit-tests: []
 status: partial
 ---
+
 # Prompt Optimization
 
 LLM-driven prompt improvement from eval failures, with full version history, rollback, diff, and pipeline snapshot pinning.
@@ -22,6 +24,7 @@ LLM-driven prompt improvement from eval failures, with full version history, rol
 ## Behaviours
 
 ### Prompt Versioning
+
 - [ ] Every prompt edit creates a new entry in `prompt_version_history`
 - [ ] Version entries track `version`, `template`, `created_at`, `notes`, `optimized_from`, `eval_result_ids`
 - [ ] Users can roll back to any prior version without creating a new pipeline version
@@ -37,7 +40,10 @@ LLM-driven prompt improvement from eval failures, with full version history, rol
 - [ ] Diffing two versions returns structured line-level result with `added`/`removed`/`unchanged` annotations
 - [ ] Diff with a non-existent version returns 404
 - [ ] Diff on a non-existent agent returns 404
-- [ ] Listing versions on a non-existent agent returns 404 ### Prompt Optimization
+- [ ] Listing versions on a non-existent agent returns 404
+
+### Prompt Optimization
+
 - [ ] `POST /agents/{id}/prompts/{version}/optimize` accepts one or more `eval_result_ids`
 - [ ] Request with an empty `eval_result_ids` array returns 422
 - [ ] Request with non-existent agent returns 404
@@ -56,16 +62,24 @@ LLM-driven prompt improvement from eval failures, with full version history, rol
 - [ ] LLM response wrapped in a markdown code fence (with or without `json` language tag) is parsed correctly
 - [ ] Malformed LLM response (bad JSON) raises a JSON decode error
 - [ ] LLM response missing required keys (`suggested_prompt`, `rationale`) raises a KeyError
-- [ ] LLM call failures (network, timeout) propagate to the caller ### Apply Optimized Prompt
+- [ ] LLM call failures (network, timeout) propagate to the caller
+
+### Apply Optimized Prompt
+
 - [ ] `POST /agents/{id}/prompts/{version}/apply` accepts `suggested_prompt`, `rationale`, `optimize_version`, `eval_result_ids`
 - [ ] Creates a new version entry linking back to the optimized-from version
 - [ ] Returns the updated agent with the new prompt template
 - [ ] Non-existent agent returns 404
 - [ ] Empty `suggested_prompt` returns 422
-- [ ] Apply failure (DB error) returns 404 ### Pipeline Integration
+- [ ] Apply failure (DB error) returns 404
+
+### Pipeline Integration
+
 - [ ] Variant groups compare `prompt_version_hash` between base and variant snapshots
 - [ ] Prompt version pinning is independent of pipeline snapshot versioning — prompts can be rolled back without a new snapshot
-- [ ] Model backend `model_id` is also pinned in the snapshot (`model_backend_pins_json`) — consistent with prompt pinning ## Known Gaps - BDD test coverage exists for basic prompt versioning (CRUD, snapshot pinning) but not for the optimize/apply endpoints or diff
+- [ ] Model backend `model_id` is also pinned in the snapshot (`model_backend_pins_json`) — consistent with prompt pinning
+
+## Known Gaps - BDD test coverage exists for basic prompt versioning (CRUD, snapshot pinning) but not for the optimize/apply endpoints or diff
 - No BDD coverage for variant group prompt hash comparison
 - No BDD coverage for rollback
 - The `prompt_versioning.feature` BDD uses mocked backends and does not exercise real DB state transitions

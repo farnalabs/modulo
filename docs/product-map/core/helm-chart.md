@@ -9,6 +9,9 @@ code:
   - docker-compose.test.yml
   - docker-compose.mariadb.yml
   - backend/Dockerfile
+bdd: []
+depends-on: []
+unit-tests: []
 status: partial
 ---
 
