@@ -10,7 +10,7 @@
         </div>
       </div>
       <router-link
-        to="/admin/users"
+        to="/admin/my-profile"
         class="text-sm text-muted-foreground truncate hover:text-foreground transition-colors flex-1 min-w-0"
       >
         {{ userEmail }}
