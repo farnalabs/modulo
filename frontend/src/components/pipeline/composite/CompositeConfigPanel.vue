@@ -6,15 +6,22 @@ import TabsList from '../../ui/tabs/TabsList.vue'
 import TabsTrigger from '../../ui/tabs/TabsTrigger.vue'
 import TabsContent from '../../ui/tabs/TabsContent.vue'
 import ParameterPortForm from './ParameterPortForm.vue'
+import SchemaMappingPanel from './SchemaMappingPanel.vue'
 import type { ParameterPort } from '../../../types/pipeline'
 
 const props = defineProps<{
   compositeRef: string | null
   parameterValues: Record<string, unknown>
+  inputMapping?: Record<string, string>
+  outputMapping?: Record<string, string>
+  precedingNodeSchemaId?: string | null
+  downstreamNodeSchemaId?: string | null
 }>()
 
 const emit = defineEmits<{
   (e: 'update:parameterValues', values: Record<string, unknown>): void
+  (e: 'update:inputMapping', mapping: Record<string, string>): void
+  (e: 'update:outputMapping', mapping: Record<string, string>): void
 }>()
 
 const compositeStore = useCompositeStore()
@@ -103,20 +110,15 @@ function updatePortValue(portName: string, value: unknown) {
         </TabsContent>
 
         <TabsContent value="mapping" class="mt-4">
-          <div class="rounded-lg border border-dashed border-muted-foreground/30 p-6 text-center text-sm text-muted-foreground">
-            <svg
-              xmlns="http://www.w3.org/2000/svg"
-              class="mx-auto mb-2 h-8 w-8 text-muted-foreground/50"
-              width="24" height="24" viewBox="0 0 24 24"
-              fill="none" stroke="currentColor" stroke-width="2"
-              stroke-linecap="round" stroke-linejoin="round"
-            >
-              <path d="M5 12h14" />
-              <path d="M12 5l7 7-7 7" />
-            </svg>
-            <p>Schema mapping coming soon</p>
-            <p class="mt-1 text-xs">Input and output schemas will be mappable here.</p>
-          </div>
+          <SchemaMappingPanel
+            :composite-ref="props.compositeRef"
+            :input-mapping="props.inputMapping ?? {}"
+            :output-mapping="props.outputMapping ?? {}"
+            :preceding-node-schema-id="props.precedingNodeSchemaId ?? null"
+            :downstream-node-schema-id="props.downstreamNodeSchemaId ?? null"
+            @update:input-mapping="emit('update:inputMapping', $event)"
+            @update:output-mapping="emit('update:outputMapping', $event)"
+          />
         </TabsContent>
       </Tabs>
     </template>
