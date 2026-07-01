@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { mount } from '@vue/test-utils'
+import { createPinia, setActivePinia } from 'pinia'
 import { nextTick } from 'vue'
 
 vi.mock('../lib/api/client', () => ({
@@ -16,6 +17,7 @@ import SettingsHitlReviewView from '../views/SettingsHitlReviewView.vue'
 
 describe('SettingsHitlReviewView', () => {
   beforeEach(() => {
+    setActivePinia(createPinia())
     vi.clearAllMocks()
   })
 
@@ -23,7 +25,9 @@ describe('SettingsHitlReviewView', () => {
     const { api } = await import('../lib/api/client');
     (api.GET as any).mockResolvedValue({ data: { gates: [] }, error: undefined })
 
-    const wrapper = mount(SettingsHitlReviewView)
+    const wrapper = mount(SettingsHitlReviewView, {
+      global: { stubs: { FeatureGate: { template: '<div><slot /></div>' } } },
+    })
     await nextTick()
     await nextTick()
     await nextTick()
@@ -35,7 +39,9 @@ describe('SettingsHitlReviewView', () => {
     const { api } = await import('../lib/api/client');
     (api.GET as any).mockReturnValue(new Promise(() => {}))
 
-    const wrapper = mount(SettingsHitlReviewView)
+    const wrapper = mount(SettingsHitlReviewView, {
+      global: { stubs: { FeatureGate: { template: '<div><slot /></div>' } } },
+    })
     await nextTick()
     expect(wrapper.find('.animate-spin').exists()).toBe(true)
   })
@@ -61,7 +67,9 @@ describe('SettingsHitlReviewView', () => {
       error: undefined,
     })
 
-    const wrapper = mount(SettingsHitlReviewView)
+    const wrapper = mount(SettingsHitlReviewView, {
+      global: { stubs: { FeatureGate: { template: '<div><slot /></div>' } } },
+    })
     await nextTick()
     await nextTick()
     await nextTick()
@@ -90,7 +98,9 @@ describe('SettingsHitlReviewView', () => {
       error: undefined,
     })
 
-    const wrapper = mount(SettingsHitlReviewView)
+    const wrapper = mount(SettingsHitlReviewView, {
+      global: { stubs: { FeatureGate: { template: '<div><slot /></div>' } } },
+    })
     await nextTick()
     await nextTick()
     await nextTick()

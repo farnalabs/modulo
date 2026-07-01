@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { mount } from '@vue/test-utils'
+import { createPinia, setActivePinia } from 'pinia'
 import { nextTick } from 'vue'
 
 const mockMcpConfig = {
@@ -45,7 +46,8 @@ vi.mock('../lib/api/client', () => ({
 
 import SettingsMcpView from '../views/SettingsMcpView.vue'
 
-const dialogStubs = ['Dialog', 'DialogContent', 'DialogDescription', 'DialogFooter', 'DialogHeader', 'DialogTitle']
+const dialogStub = { template: '<div><slot /></div>' }
+const stubs = { Dialog: dialogStub, DialogContent: dialogStub, DialogDescription: dialogStub, DialogFooter: dialogStub, DialogHeader: dialogStub, DialogTitle: dialogStub, FeatureGate: dialogStub }
 
 function mockApiResponses(getMock: any, mcpConfig = mockMcpConfig, apiKeys = mockApiKeys, oauthClients = mockOAuthClients) {
   getMock.mockImplementation((path: string) => {
@@ -64,6 +66,7 @@ function mockApiResponses(getMock: any, mcpConfig = mockMcpConfig, apiKeys = moc
 
 describe('SettingsMcpView', () => {
   beforeEach(() => {
+    setActivePinia(createPinia())
     vi.clearAllMocks()
     Object.defineProperty(navigator, 'clipboard', {
       value: { writeText: vi.fn().mockResolvedValue(undefined) },
@@ -77,7 +80,7 @@ describe('SettingsMcpView', () => {
     mockApiResponses(api.GET)
 
     const wrapper = mount(SettingsMcpView, {
-      global: { stubs: dialogStubs },
+      global: { stubs },
     })
     await nextTick()
     await nextTick()
@@ -91,7 +94,7 @@ describe('SettingsMcpView', () => {
     (api.GET as any).mockReturnValue(new Promise(() => {}))
 
     const wrapper = mount(SettingsMcpView, {
-      global: { stubs: dialogStubs },
+      global: { stubs },
     })
     await nextTick()
     expect(wrapper.find('.animate-spin').exists()).toBe(true)
@@ -102,7 +105,7 @@ describe('SettingsMcpView', () => {
     (api.GET as any).mockImplementation(() => Promise.resolve({ data: null, error: 'Failed to load MCP config: Server error' }))
 
     const wrapper = mount(SettingsMcpView, {
-      global: { stubs: dialogStubs },
+      global: { stubs },
     })
     await nextTick()
     await nextTick()
@@ -115,7 +118,7 @@ describe('SettingsMcpView', () => {
     mockApiResponses(api.GET)
 
     const wrapper = mount(SettingsMcpView, {
-      global: { stubs: dialogStubs },
+      global: { stubs },
     })
     await nextTick()
     await nextTick()
@@ -129,7 +132,7 @@ describe('SettingsMcpView', () => {
     mockApiResponses(api.GET, mockMcpConfigEmpty, mockApiKeysNoActive, mockNoOAuthClients)
 
     const wrapper = mount(SettingsMcpView, {
-      global: { stubs: dialogStubs },
+      global: { stubs },
     })
     await nextTick()
     await nextTick()
@@ -144,7 +147,7 @@ describe('SettingsMcpView', () => {
     mockApiResponses(api.GET)
 
     const wrapper = mount(SettingsMcpView, {
-      global: { stubs: dialogStubs },
+      global: { stubs },
     })
     await nextTick()
     await nextTick()
@@ -163,7 +166,7 @@ describe('SettingsMcpView', () => {
     mockApiResponses(api.GET)
 
     const wrapper = mount(SettingsMcpView, {
-      global: { stubs: dialogStubs },
+      global: { stubs },
     })
     await nextTick()
     await nextTick()
@@ -181,7 +184,7 @@ describe('SettingsMcpView', () => {
     mockApiResponses(api.GET)
 
     const wrapper = mount(SettingsMcpView, {
-      global: { stubs: dialogStubs },
+      global: { stubs },
     })
     await nextTick()
     await nextTick()
@@ -197,7 +200,7 @@ describe('SettingsMcpView', () => {
     mockApiResponses(api.GET)
 
     const wrapper = mount(SettingsMcpView, {
-      global: { stubs: dialogStubs },
+      global: { stubs },
     })
     await nextTick()
     await nextTick()
@@ -214,7 +217,7 @@ describe('SettingsMcpView', () => {
     mockApiResponses(api.GET, mockMcpConfig, mockApiKeysNoActive, mockNoOAuthClients)
 
     const wrapper = mount(SettingsMcpView, {
-      global: { stubs: dialogStubs },
+      global: { stubs },
     })
     await nextTick()
     await nextTick()
@@ -228,7 +231,7 @@ describe('SettingsMcpView', () => {
     mockApiResponses(api.GET)
 
     const wrapper = mount(SettingsMcpView, {
-      global: { stubs: dialogStubs },
+      global: { stubs },
     })
     await nextTick()
     await nextTick()
@@ -244,7 +247,7 @@ describe('SettingsMcpView', () => {
     mockApiResponses(api.GET)
 
     const wrapper = mount(SettingsMcpView, {
-      global: { stubs: dialogStubs },
+      global: { stubs },
     })
     await nextTick()
     await nextTick()

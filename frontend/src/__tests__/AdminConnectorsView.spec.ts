@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { mount } from '@vue/test-utils'
+import { createPinia, setActivePinia } from 'pinia'
 import { nextTick } from 'vue'
 
 vi.mock('../lib/api/client', () => ({
@@ -16,6 +17,7 @@ import AdminConnectorsView from '../views/AdminConnectorsView.vue'
 
 describe('AdminConnectorsView', () => {
   beforeEach(() => {
+    setActivePinia(createPinia())
     vi.clearAllMocks()
   })
 
@@ -25,6 +27,7 @@ describe('AdminConnectorsView', () => {
         stubs: {
           LoadingSpinner: true,
           ErrorAlert: true,
+          FeatureGate: { template: '<div><slot /></div>' },
         },
       },
     })

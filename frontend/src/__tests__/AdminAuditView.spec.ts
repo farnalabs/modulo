@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { mount } from '@vue/test-utils'
+import { createPinia, setActivePinia } from 'pinia'
 import { nextTick } from 'vue'
 
 vi.mock('../lib/api/client', () => ({
@@ -14,11 +15,14 @@ import AdminAuditView from '../views/AdminAuditView.vue'
 
 describe('AdminAuditView', () => {
   beforeEach(() => {
+    setActivePinia(createPinia())
     vi.clearAllMocks()
   })
 
   it('renders without crashing', async () => {
-    const wrapper = mount(AdminAuditView)
+    const wrapper = mount(AdminAuditView, {
+      global: { stubs: { FeatureGate: { template: '<div><slot /></div>' } } },
+    })
     await nextTick()
     expect(wrapper.exists()).toBe(true)
     expect(wrapper.text()).toContain('Audit Log')

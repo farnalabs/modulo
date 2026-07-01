@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { mount } from '@vue/test-utils'
+import { createPinia, setActivePinia } from 'pinia'
 import { nextTick } from 'vue'
 
 vi.mock('../lib/api/client', () => ({
@@ -21,11 +22,14 @@ import SettingsTeamsView from '../views/SettingsTeamsView.vue'
 
 describe('SettingsTeamsView', () => {
   beforeEach(() => {
+    setActivePinia(createPinia())
     vi.clearAllMocks()
   })
 
   it('renders without crashing', async () => {
-    const wrapper = mount(SettingsTeamsView)
+    const wrapper = mount(SettingsTeamsView, {
+      global: { stubs: { FeatureGate: { template: '<div><slot /></div>' } } },
+    })
     await nextTick()
     expect(wrapper.exists()).toBe(true)
     expect(wrapper.text()).toContain('Teams')
