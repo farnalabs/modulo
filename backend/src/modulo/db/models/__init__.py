@@ -27,6 +27,9 @@ from modulo.db.models.pipeline_snapshot import PipelineSnapshot
 from modulo.db.models.primitive_abuse_report import PrimitiveAbuseReport
 from modulo.db.models.primitive_rating import PrimitiveRating
 from modulo.db.models.publisher import Publisher
+from modulo.db.models.remy_message import ChatMessage
+from modulo.db.models.remy_session import ChatSession
+from modulo.db.models.remy_skill import RemySkill
 from modulo.db.models.run import Run
 from modulo.db.models.scheduled_report import ScheduledReport
 from modulo.db.models.schema import Schema, SchemaVersion
@@ -79,6 +82,9 @@ __all__ = [
     "PrimitiveAbuseReport",
     "PrimitiveRating",
     "Publisher",
+    "ChatMessage",
+    "ChatSession",
+    "RemySkill",
     "Run",
     "SavedView",
     "ScheduledReport",
