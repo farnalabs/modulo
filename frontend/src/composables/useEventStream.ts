@@ -4,23 +4,18 @@ import { getHandlers } from '@/stores/syncRegistry'
 
 export type EventHandler = (event: EventBusEvent) => void
 
-const TOKEN_KEY = 'modulo_access_token'
 const SSE_URL = '/api/v1/events'
 
 const connected = ref(false)
 let eventSource: EventSource | null = null
 const handlers = new Map<string, Set<EventHandler>>()
-
-function getToken(): string | null {
-  return localStorage.getItem(TOKEN_KEY)
-}
+let reconnectAttempts = 0
+const MAX_RECONNECT_ATTEMPTS = 10
 
 function connect(): void {
+  reconnectAttempts = 0
   if (eventSource) return
-  const token = getToken()
-  if (!token) return
-  eventSource = new EventSource(`${SSE_URL}?token=${encodeURIComponent(token)}`)
-  eventSource.withCredentials = true
+  eventSource = new EventSource(SSE_URL, { withCredentials: true })
   eventSource.onopen = () => { connected.value = true }
   eventSource.onmessage = (event: MessageEvent) => {
     try {
@@ -38,6 +33,11 @@ function connect(): void {
   }
   eventSource.onerror = () => {
     connected.value = false
+    reconnectAttempts++
+    if (reconnectAttempts > MAX_RECONNECT_ATTEMPTS) {
+      console.error('[EventBus] Max reconnect attempts reached, disconnecting')
+      disconnect()
+    }
   }
 }
 
@@ -46,7 +46,12 @@ function disconnect(): void {
     eventSource.close()
     eventSource = null
     connected.value = false
+    clearAllHandlers()
   }
+}
+
+function clearAllHandlers(): void {
+  handlers.clear()
 }
 
 export function dispatchToStore(event: EventBusEvent): void {

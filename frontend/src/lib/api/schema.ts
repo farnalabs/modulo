@@ -1095,6 +1095,39 @@ export interface paths {
       }
     }
   }
+  '/api/v1/admin/feature-flags': {
+    get: {
+      responses: {
+        200: {
+          content: {
+            'application/json': components['schemas']['FlagsResponse']
+          }
+        }
+      }
+    }
+  }
+  '/api/v1/admin/license': {
+    get: {
+      responses: {
+        200: {
+          content: {
+            'application/json': components['schemas']['LicenseStatusResponse']
+          }
+        }
+      }
+    }
+  }
+  '/api/v1/admin/tiers': {
+    get: {
+      responses: {
+        200: {
+          content: {
+            'application/json': components['schemas']['TiersResponse']
+          }
+        }
+      }
+    }
+  }
 }
 
 export interface components {
@@ -1814,6 +1847,41 @@ export interface components {
       status_code: number | null
       response_body: string | null
       error: string | null
+    }
+    FlagsResponse: {
+      license: {
+        tier: string
+        has_license_key: boolean
+        is_valid: boolean
+      }
+      flags: Array<{
+        name: string
+        description: string
+        tier: string
+        currently_active: boolean
+        depends_on: string[] | null
+      }>
+      would_activate: Array<{
+        name: string
+        description: string
+        tier: string
+        currently_active: boolean
+        depends_on: string[] | null
+      }>
+    }
+    LicenseStatusResponse: {
+      has_license: boolean
+      tier: string
+      features: string[]
+      expires_at: string | null
+      org_id: string | null
+    }
+    TiersResponse: {
+      tiers: Array<{
+        tier_id: string
+        label: string
+        rank: number
+      }>
     }
   }
 }

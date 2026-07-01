@@ -5,44 +5,6 @@ import { formatApiError } from '../lib/api/formatError'
 import { registerHandler } from './syncRegistry'
 import type { EventBusEvent } from '@/types/events'
 
-interface FlagItem {
-  name: string
-  description: string
-  tier: string
-  currently_active: boolean
-  depends_on: string[] | null
-}
-
-interface LicenseInfo {
-  tier: string
-  has_license_key: boolean
-  is_valid: boolean
-}
-
-interface FlagsResponse {
-  license: LicenseInfo
-  flags: FlagItem[]
-  would_activate: FlagItem[]
-}
-
-interface LicenseStatusResponse {
-  has_license: boolean
-  tier: string
-  features: string[]
-  expires_at: string | null
-  org_id: string | null
-}
-
-interface TierInfo {
-  tier_id: string
-  label: string
-  rank: number
-}
-
-interface TiersResponse {
-  tiers: TierInfo[]
-}
-
 export const usePlanStore = defineStore('plan', () => {
   const currentTier = ref('community')
   const features = ref<Record<string, boolean>>({})
@@ -52,7 +14,7 @@ export const usePlanStore = defineStore('plan', () => {
   const orgName = ref<string | null>(null)
   const tierLabels = ref<Record<string, string>>({})
   const tierRanks = ref<Record<string, number>>({})
-  const dirtyIds = ref(new Set<string>())
+  const syncingIds = ref(new Set<string>())
   const unsubHandlers: (() => void)[] = []
 
   const isTeam = computed(() => currentTier.value === 'team')
@@ -75,41 +37,51 @@ export const usePlanStore = defineStore('plan', () => {
     isLoading.value = true
     error.value = null
     try {
-      const { data, error: err } = await (api as any).GET('/api/v1/admin/feature-flags')
-      if (err) {
-        error.value = formatApiError(err)
-      } else if (data) {
-        const resp = data as FlagsResponse
-        currentTier.value = resp.license.tier
-        const map: Record<string, boolean> = {}
-        for (const flag of resp.flags) {
-          map[flag.name] = flag.currently_active
+      // Feature flags
+      try {
+        const { data, error: err } = await api.GET('/api/v1/admin/feature-flags')
+        if (err) {
+          error.value = formatApiError(err)
+        } else if (data) {
+          currentTier.value = data.license.tier
+          const map: Record<string, boolean> = {}
+          for (const flag of data.flags) {
+            map[flag.name] = flag.currently_active
+          }
+          features.value = map
         }
-        features.value = map
+      } catch (e: unknown) {
+        error.value = formatApiError(e)
       }
 
-      const licResp = await (api as any).GET('/api/v1/admin/license')
-      if (!licResp.error && licResp.data) {
-        const lic = licResp.data as LicenseStatusResponse
-        expiresAt.value = lic.expires_at ?? null
-        orgName.value = lic.org_id ?? null
-        if (lic.tier) currentTier.value = lic.tier
+      // License
+      try {
+        const licResp = await api.GET('/api/v1/admin/license')
+        if (!licResp.error && licResp.data) {
+          expiresAt.value = licResp.data.expires_at ?? null
+          orgName.value = licResp.data.org_id ?? null
+          if (licResp.data.tier) currentTier.value = licResp.data.tier
+        }
+      } catch (e: unknown) {
+        // License is optional; don't overwrite main error
       }
 
-      const tiersResp = await (api as any).GET('/api/v1/admin/tiers')
-      if (!tiersResp.error && tiersResp.data) {
-        const tiersData = tiersResp.data as TiersResponse
-        const labels: Record<string, string> = {}
-        const ranks: Record<string, number> = {}
-        for (const t of tiersData.tiers) {
-          labels[t.tier_id] = t.label
-          ranks[t.tier_id] = t.rank
+      // Tiers
+      try {
+        const tiersResp = await api.GET('/api/v1/admin/tiers')
+        if (!tiersResp.error && tiersResp.data) {
+          const labels: Record<string, string> = {}
+          const ranks: Record<string, number> = {}
+          for (const t of tiersResp.data.tiers) {
+            labels[t.tier_id] = t.label
+            ranks[t.tier_id] = t.rank
+          }
+          tierLabels.value = labels
+          tierRanks.value = ranks
         }
-        tierLabels.value = labels
-        tierRanks.value = ranks
+      } catch (e: unknown) {
+        // Tiers is optional; don't overwrite main error
       }
-    } catch (e: unknown) {
-      error.value = formatApiError(e)
     } finally {
       isLoading.value = false
     }
@@ -117,7 +89,7 @@ export const usePlanStore = defineStore('plan', () => {
 
   function handleSyncEvent(event: EventBusEvent): void {
     if (event.type === 'team' || event.type === 'license' || event.type === 'plan') {
-      if (!dirtyIds.value.has(event.id)) fetchPlan()
+      if (!syncingIds.value.has(event.id)) fetchPlan()
     }
   }
 
@@ -128,7 +100,8 @@ export const usePlanStore = defineStore('plan', () => {
   function disposeHandlers(): void {
     for (const unsub of unsubHandlers) unsub()
     unsubHandlers.length = 0
+    syncingIds.value.clear()
   }
 
-  return { currentTier, features, isLoading, error, isTeam, expiresAt, orgName, tierLabels, tierRanks, fetchPlan, featureEnabled, getTierLabel, isAtMinimumTier, dirtyIds, handleSyncEvent, disposeHandlers }
+  return { currentTier, features, isLoading, error, isTeam, expiresAt, orgName, tierLabels, tierRanks, fetchPlan, featureEnabled, getTierLabel, isAtMinimumTier, syncingIds, handleSyncEvent, disposeHandlers }
 })
