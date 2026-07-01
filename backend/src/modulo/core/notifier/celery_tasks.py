@@ -20,17 +20,23 @@ import uuid
 from typing import Any
 
 from celery import Celery, Task  # type: ignore[import-untyped]
-from sqlalchemy.ext.asyncio import create_async_engine
+from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
 
 from modulo.core.notifier import MAX_RETRIES, Notifier
 from modulo.settings import get_settings
 
+__all__ = [
+    "DispatchNotificationTask",
+    "enqueue_dispatch",
+    "get_celery_app",
+]
+
 _log = logging.getLogger(__name__)
 
-_ENGINE: Any = None
+_ENGINE: AsyncEngine | None = None
 
 
-def _get_engine() -> Any:
+def _get_engine() -> AsyncEngine:
     global _ENGINE
     if _ENGINE is None:
         _ENGINE = create_async_engine(get_settings().database_url)
@@ -107,14 +113,17 @@ async def _dispatch_notification(
     settings = get_settings()
     engine = _get_engine()
     notifier = Notifier(engine, settings.fernet_key)
-    results = await notifier.dispatch_event(
-        org_id,
-        event_type,
-        payload,
-        run_id=run_id,
-        retain_payload=retain_payload,
-        team_id=team_id,
-    )
+    try:
+        results = await notifier.dispatch_event(
+            org_id,
+            event_type,
+            payload,
+            run_id=run_id,
+            retain_payload=retain_payload,
+            team_id=team_id,
+        )
+    finally:
+        await notifier.close()
     return [
         {
             "endpoint_id": str(r.endpoint_id),
