@@ -191,6 +191,7 @@ class TestRollback:
     def test_rollback_success(self, client: TestClient) -> None:
         agent_after = MagicMock()
         agent_after.id = _AGENT_ID
+        agent_after.account_id = _USER_ID
         agent_after.organisation_id = _ORG_ID
         agent_after.name = "Prompt Version Agent"
         agent_after.description = None

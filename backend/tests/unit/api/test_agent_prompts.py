@@ -52,6 +52,7 @@ def _make_agent() -> MagicMock:
     a.retry_policy = {}
     a.token_budget = None
     a.library_id = None
+    a.account_id = _USER_ID
     a.created_by = _USER_ID
     a.created_at = _NOW
     a.updated_at = _NOW
