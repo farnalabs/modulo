@@ -58,11 +58,20 @@ export interface DashboardSummary {
   recent_runs: RecentRun[]
 }
 
+function validateDashboardSummary(data: unknown): DashboardSummary | null {
+  if (!data || typeof data !== 'object') return null
+  const d = data as Record<string, unknown>
+  if (typeof d.total_runs !== 'number') return null
+  if (typeof d.active_pipelines !== 'number') return null
+  return d as unknown as DashboardSummary
+}
+
 export const useDashboardStore = defineStore('dashboard', () => {
   const summary = ref<DashboardSummary | null>(null)
   const loading = ref(false)
   const error = ref<string | null>(null)
   const dirtyIds = ref(new Set<string>())
+  const unsubHandlers: (() => void)[] = []
 
   const totalSpend = computed(() => {
     if (!summary.value?.trend) return 0
@@ -77,7 +86,7 @@ export const useDashboardStore = defineStore('dashboard', () => {
       if (err) {
         error.value = String(err)
       } else {
-        summary.value = result as unknown as DashboardSummary
+        summary.value = validateDashboardSummary(result)
       }
     } catch (e: unknown) {
       error.value = e instanceof Error ? e.message : String(e)
@@ -87,13 +96,20 @@ export const useDashboardStore = defineStore('dashboard', () => {
   }
 
   function handleSyncEvent(event: EventBusEvent): void {
-    if ((event.type === 'run' || event.type === 'pipeline') && !dirtyIds.value.has(event.id)) {
-      fetchSummary()
+    if (!dirtyIds.value.has(event.id)) {
+      if (event.type === 'run' || event.type === 'pipeline') {
+        fetchSummary()
+      }
     }
   }
 
-  registerHandler('run', handleSyncEvent)
-  registerHandler('pipeline', handleSyncEvent)
+  unsubHandlers.push(registerHandler('run', handleSyncEvent))
+  unsubHandlers.push(registerHandler('pipeline', handleSyncEvent))
 
-  return { summary, loading, error, totalSpend, fetchSummary, dirtyIds, handleSyncEvent }
+  function disposeHandlers(): void {
+    for (const unsub of unsubHandlers) unsub()
+    unsubHandlers.length = 0
+  }
+
+  return { summary, loading, error, totalSpend, fetchSummary, dirtyIds, handleSyncEvent, disposeHandlers }
 })
