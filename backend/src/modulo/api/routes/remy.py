@@ -608,7 +608,16 @@ async def stream_chat(
 
                 # 9. Execute tool calls via MCP
                 tool_results: list[dict[str, Any]] = []
-                if tool_calls and body.mcp_api_key:
+                if tool_calls:
+                    if not body.mcp_api_key:
+                        yield (
+                            "event: error\ndata: "
+                            + json.dumps({
+                                "detail": "Tool execution requires an MCP API key",
+                            })
+                            + "\n\n"
+                        )
+                        return
                     for tc in tool_calls:
                         try:
                             result = await _call_mcp_tool(
