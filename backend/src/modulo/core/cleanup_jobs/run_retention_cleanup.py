@@ -3,7 +3,7 @@
 import logging
 from datetime import UTC, datetime, timedelta
 
-from sqlalchemy import delete
+from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.db.models.run import Run
@@ -23,22 +23,34 @@ async def cleanup_old_runs(
     """Delete completed/failed runs older than *retention_days*.
 
     Only affects runs in terminal states (complete, failed, eval_failed, cancelled).
+    Uses batched select-then-delete to avoid long-held row locks.
     The caller is responsible for setting up any required RLS context.
 
     Returns the number of deleted runs.
     """
     cutoff = datetime.now(UTC) - timedelta(days=retention_days)
+    total = 0
 
-    result = await db_session.execute(
-        delete(Run)
-        .where(
-            Run.status.in_(_TERMINAL_STATES),
-            Run.created_at < cutoff,
+    while True:
+        result = await db_session.execute(
+            select(Run.id)
+            .where(
+                Run.status.in_(_TERMINAL_STATES),
+                Run.created_at < cutoff,
+            )
+            .limit(BATCH_SIZE)
         )
-    )
-    await db_session.commit()
+        ids = result.scalars().all()
+        if not ids:
+            break
 
-    count = result.rowcount
-    if count > 0:
-        _log.info("Cleaned up %d old runs (retention: %d days)", count, retention_days)
-    return count
+        await db_session.execute(delete(Run).where(Run.id.in_(ids)))
+        await db_session.commit()
+        total += len(ids)
+
+        if len(ids) < BATCH_SIZE:
+            break
+
+    if total > 0:
+        _log.info("Cleaned up %d old runs (retention: %d days)", total, retention_days)
+    return total
