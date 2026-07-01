@@ -32,8 +32,8 @@ except ImportError:
     import typing
 
     if typing.TYPE_CHECKING:
-        from celery import Celery, Task  # noqa: F401
-        from celery.beat import ScheduleEntry, Scheduler  # noqa: F401
+        from celery import Celery, Task
+        from celery.beat import ScheduleEntry, Scheduler
     Celery = Task = ScheduleEntry = Scheduler = object
 
 _log = logging.getLogger(__name__)
