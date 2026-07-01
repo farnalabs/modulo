@@ -6,7 +6,6 @@ detection via EvalEngine.standalone_evaluate(), and correction run mechanics.
 """
 
 import functools
-import logging
 from collections.abc import Callable
 from datetime import datetime
 from typing import Any
@@ -18,10 +17,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from modulo.core.eval_engine import EvalEngine
 from modulo.db.crud.run import create_run, get_run
 from modulo.db.models.feedback_record import FeedbackRecord
+from modulo.db.models.pipeline import Pipeline
 from modulo.db.models.run import Run
 from modulo.db.rls import set_rls_org
-
-_log = logging.getLogger(__name__)
 
 _VALID_STATUS_TRANSITIONS: dict[str, set[str]] = {
     "pending": {"routing", "correcting", "dismissed"},
@@ -54,7 +52,7 @@ class FeedbackManager:
         self,
         run_id: UUID,
         gate_id: str,
-        rejected_by: UUID,
+        account_id: UUID,
         rejection_reason: str,
         rejected_output: dict[str, Any],
         producing_node_id: str,
@@ -65,7 +63,7 @@ class FeedbackManager:
             organisation_id=self._org_id,
             run_id=run_id,
             gate_id=gate_id,
-            rejected_by=rejected_by,
+            account_id=account_id,
             rejection_reason=rejection_reason,
             rejected_output=rejected_output,
             producing_node_id=producing_node_id,
@@ -148,11 +146,18 @@ class FeedbackManager:
             .where(
                 FeedbackRecord.id == record_id,
                 FeedbackRecord.organisation_id == self._org_id,
+                FeedbackRecord.feedback_status == current.feedback_status,
             )
             .values(feedback_status=new_status)
             .returning(FeedbackRecord)
         )
-        return result.scalar_one_or_none()
+        updated = result.scalar_one_or_none()
+        if updated is None:
+            raise ValueError(
+                f"FeedbackRecord {record_id} status changed concurrently. "
+                f"Expected '{current.feedback_status}', retry the transition."
+            )
+        return updated
 
     @_rls
     async def link_correction_run(self, record_id: UUID, correction_run_id: UUID) -> FeedbackRecord | None:
@@ -171,11 +176,18 @@ class FeedbackManager:
             .where(
                 FeedbackRecord.id == record_id,
                 FeedbackRecord.organisation_id == self._org_id,
+                FeedbackRecord.feedback_status == current.feedback_status,
             )
             .values(correction_run_id=correction_run_id, feedback_status="correcting")
             .returning(FeedbackRecord)
         )
-        return result.scalar_one_or_none()
+        updated = result.scalar_one_or_none()
+        if updated is None:
+            raise ValueError(
+                f"FeedbackRecord {record_id} status changed concurrently. "
+                f"Expected '{current.feedback_status}', retry the link."
+            )
+        return updated
 
     @_rls
     async def detect_eval_gap(
@@ -371,15 +383,18 @@ class FeedbackManager:
         rows = (await self._session.execute(q)).scalars().all()
 
         run_ids = list({r.run_id for r in rows if r.run_id})
-        pipeline_map: dict[UUID, str] = {}
+        pipeline_map: dict[str, str] = {}
         if run_ids:
-            run_rows = (await self._session.execute(select(Run.id, Run.pipeline_id).where(Run.id.in_(run_ids)))).all()
-            for run_id, pipeline_id_val in run_rows:
-                from modulo.db.models.pipeline import Pipeline
-
-                pipeline = await self._session.get(Pipeline, pipeline_id_val)
-                if pipeline:
-                    pipeline_map[run_id] = pipeline.name
+            run_rows = (
+                await self._session.execute(
+                    select(Run.id, Pipeline.name)
+                    .select_from(Run)
+                    .join(Pipeline, Run.pipeline_id == Pipeline.id)
+                    .where(Run.id.in_(run_ids))
+                )
+            ).all()
+            for run_id, pipeline_name in run_rows:
+                pipeline_map[str(run_id)] = pipeline_name
 
         return {
             "items": rows,

@@ -31,7 +31,7 @@ class TestFeedbackFlowUnit:
         record = await mgr.create_feedback_record(
             run_id=run_id,
             gate_id="gate-1",
-            rejected_by=test_user,
+            account_id=test_user,
             rejection_reason="Output quality insufficient",
             rejected_output={"result": "poor quality text"},
             producing_node_id="node-b",
@@ -52,7 +52,7 @@ class TestFeedbackFlowUnit:
         created = await mgr.create_feedback_record(
             run_id=run_id,
             gate_id="gate-2",
-            rejected_by=test_user,
+            account_id=test_user,
             rejection_reason="Bad",
             rejected_output={},
             producing_node_id="node-c",
@@ -82,7 +82,7 @@ class TestFeedbackFlowUnit:
             await mgr.create_feedback_record(
                 run_id=run_id,
                 gate_id=f"gate-{i}",
-                rejected_by=test_user,
+                account_id=test_user,
                 rejection_reason=f"Reason {i}",
                 rejected_output={},
                 producing_node_id="node-b",
@@ -113,7 +113,7 @@ class TestFeedbackFlowUnit:
         record = await mgr.create_feedback_record(
             run_id=run_id,
             gate_id="gate-1",
-            rejected_by=test_user,
+            account_id=test_user,
             rejection_reason="Needs correction",
             rejected_output={},
             producing_node_id="node-b",
@@ -145,7 +145,7 @@ class TestFeedbackFlowUnit:
         record = await mgr.create_feedback_record(
             run_id=run_id,
             gate_id="gate-1",
-            rejected_by=test_user,
+            account_id=test_user,
             rejection_reason="Fix it",
             rejected_output={},
             producing_node_id="node-b",
@@ -165,7 +165,7 @@ class TestFeedbackFlowUnit:
         record = await mgr.create_feedback_record(
             run_id=run_id,
             gate_id="gate-review",
-            rejected_by=test_user,
+            account_id=test_user,
             rejection_reason="Manual review required",
             rejected_output={"doc": "needs human edit"},
             producing_node_id="node-d",
@@ -184,7 +184,7 @@ class TestFeedbackFlowUnit:
         record = await mgr.create_feedback_record(
             run_id=run_id,
             gate_id="gate-auto",
-            rejected_by=test_user,
+            account_id=test_user,
             rejection_reason="Auto-fix",
             rejected_output={"code": "buggy"},
             producing_node_id="node-e",
@@ -201,7 +201,7 @@ class TestFeedbackFlowUnit:
         r1 = await mgr.create_feedback_record(
             run_id=run_id,
             gate_id="g1",
-            rejected_by=test_user,
+            account_id=test_user,
             rejection_reason="R1",
             rejected_output={},
             producing_node_id="n1",
@@ -209,7 +209,7 @@ class TestFeedbackFlowUnit:
         await mgr.create_feedback_record(
             run_id=run_id,
             gate_id="g2",
-            rejected_by=test_user,
+            account_id=test_user,
             rejection_reason="R2",
             rejected_output={},
             producing_node_id="n2",
