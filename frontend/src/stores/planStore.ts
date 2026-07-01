@@ -38,13 +38,13 @@ export const usePlanStore = defineStore('plan', () => {
     if (isLoading.value) return
     isLoading.value = true
     error.value = null
+    const apiErrors: string[] = []
     try {
-      let flagsError: string | null = null
       // Feature flags
       try {
         const { data, error: err } = await api.GET('/api/v1/admin/feature-flags')
         if (err) {
-          flagsError = formatApiError(err)
+          apiErrors.push(`Feature flags: ${formatApiError(err)}`)
         } else if (data) {
           currentTier.value = data.license.tier
           const map: Record<string, boolean> = {}
@@ -54,30 +54,36 @@ export const usePlanStore = defineStore('plan', () => {
           features.value = map
         }
       } catch (e: unknown) {
-        flagsError = formatApiError(e)
+        apiErrors.push(`Feature flags: ${formatApiError(e)}`)
       }
 
-      error.value = flagsError
+      error.value = apiErrors.length > 0 ? apiErrors.join('; ') : null
 
       // License
       try {
-        const licResp = await api.GET('/api/v1/admin/license')
-        if (!licResp.error && licResp.data) {
-          expiresAt.value = licResp.data.expires_at ?? null
-          orgName.value = licResp.data.org_id ?? null
-          if (licResp.data.tier) currentTier.value = licResp.data.tier
+        const { data: licenseData, error: licenseError } = await api.GET('/api/v1/admin/license')
+        if (licenseError) {
+          apiErrors.push(`License: ${formatApiError(licenseError)}`)
+        } else if (licenseData) {
+          expiresAt.value = licenseData.expires_at ?? null
+          orgName.value = licenseData.org_id ?? null
+          if (licenseData.tier) currentTier.value = licenseData.tier
         }
       } catch (e: unknown) {
-        console.warn('[PlanStore] License fetch failed', e instanceof Error ? e.message : String(e))
+        apiErrors.push(`License: ${formatApiError(e)}`)
       }
+
+      error.value = apiErrors.length > 0 ? apiErrors.join('; ') : null
 
       // Tiers
       try {
-        const tiersResp = await api.GET('/api/v1/admin/tiers')
-        if (!tiersResp.error && tiersResp.data) {
+        const { data: tiersData, error: tiersError } = await api.GET('/api/v1/admin/tiers')
+        if (tiersError) {
+          apiErrors.push(`Tiers: ${formatApiError(tiersError)}`)
+        } else if (tiersData) {
           const labels: Record<string, string> = {}
           const ranks: Record<string, number> = {}
-          for (const t of tiersResp.data.tiers) {
+          for (const t of tiersData.tiers) {
             labels[t.tier_id] = t.label
             ranks[t.tier_id] = t.rank
           }
@@ -85,8 +91,10 @@ export const usePlanStore = defineStore('plan', () => {
           tierRanks.value = ranks
         }
       } catch (e: unknown) {
-        console.warn('[PlanStore] Tiers fetch failed', e instanceof Error ? e.message : String(e))
+        apiErrors.push(`Tiers: ${formatApiError(e)}`)
       }
+
+      error.value = apiErrors.length > 0 ? apiErrors.join('; ') : null
     } finally {
       isLoading.value = false
     }
