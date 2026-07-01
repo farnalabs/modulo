@@ -99,7 +99,9 @@ export const useDashboardStore = defineStore('dashboard', () => {
     if (!syncingIds.value.has(event.id)) {
       syncingIds.value.add(event.id)
       if (event.type === 'run' || event.type === 'pipeline') {
-        fetchSummary()
+        void fetchSummary().finally(() => {
+          syncingIds.value.delete(event.id)
+        })
       }
     }
   }
@@ -107,11 +109,15 @@ export const useDashboardStore = defineStore('dashboard', () => {
   unsubHandlers.push(registerHandler('run', handleSyncEvent))
   unsubHandlers.push(registerHandler('pipeline', handleSyncEvent))
 
+  if (import.meta.hot) {
+    import.meta.hot.dispose(() => { disposeHandlers() })
+  }
+
   function disposeHandlers(): void {
     for (const unsub of unsubHandlers) unsub()
     unsubHandlers.length = 0
     syncingIds.value.clear()
   }
 
-  return { summary, loading, error, totalSpend, fetchSummary, syncingIds, handleSyncEvent, disposeHandlers }
+  return { summary, loading, error, totalSpend, fetchSummary, disposeHandlers }
 })
