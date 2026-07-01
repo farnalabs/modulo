@@ -218,7 +218,7 @@ def test_refresh_token_has_refresh_purpose() -> None:
     iat_ts: float = payload["iat"]
     exp = datetime.fromtimestamp(exp_ts, tz=UTC)
     iat = datetime.fromtimestamp(iat_ts, tz=UTC)
-    assert 23 <= (exp - iat).total_seconds() / 3600 <= 24
+    assert 167 <= (exp - iat).total_seconds() / 3600 <= 168
 
 
 def test_refresh_access_token_returns_valid_access_token() -> None:
