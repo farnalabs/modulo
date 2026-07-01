@@ -94,7 +94,9 @@ class LibraryPrimitiveResponse(BaseModel):
         if isinstance(data, dict):
             source = data.get("source")
             verified = data.get("verified")
-            if source == "registry" and verified is True:
+            if source == "modulo":
+                data["trust_tier"] = "modulo"
+            elif source == "registry" and verified is True:
                 data["trust_tier"] = "green"
             elif source == "registry":
                 data["trust_tier"] = "amber"

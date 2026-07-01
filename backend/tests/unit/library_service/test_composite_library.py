@@ -4,8 +4,8 @@ import uuid
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from modulo.core.library_service import (
-    _COMMUNITY_PRIMITIVES,
-    _filter_community,
+    _MODULO_PRIMITIVES,
+    _filter_modulo,
     copy_to_adapt,
     get_primitive,
     list_primitives,
@@ -247,11 +247,13 @@ async def test_copy_to_adapt_composite_preserves_content_json():
 # ---------------------------------------------------------------------------
 
 
-def test_community_primitives_do_not_include_composite():
-    composites = [p for p in _COMMUNITY_PRIMITIVES if p.primitive_type == "composite"]
-    assert composites == []
+def test_modulo_primitives_include_composites():
+    composites = [p for p in _MODULO_PRIMITIVES if p.primitive_type == "composite"]
+    assert len(composites) == 4
+    assert {p.slug for p in composites} == {"approver", "booleaner", "d20", "triage"}
 
 
-def test_filter_community_composite_returns_empty():
-    results = _filter_community(primitive_type="composite", search=None)
-    assert results == []
+def test_filter_modulo_composite_returns_composites():
+    results = _filter_modulo(primitive_type="composite", search=None)
+    assert len(results) == 4
+    assert {p.slug for p in results} == {"approver", "booleaner", "d20", "triage"}
