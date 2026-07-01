@@ -181,6 +181,20 @@ export const useRemyStore = defineStore('remy', () => {
     }
   }
 
+  function appendToolCall(tc: { tool_call_id: string; tool_name: string; success: boolean; result?: unknown; error?: string }) {
+    const summary = tc.success
+      ? `Tool: ${tc.tool_name} — completed`
+      : `Tool: ${tc.tool_name} — failed: ${tc.error ?? 'unknown error'}`
+    messages.value.push({
+      id: `tool-${Date.now()}-${tc.tool_call_id}`,
+      session_id: activeSessionId.value ?? '',
+      role: 'tool_result',
+      content: summary,
+      token_count: null,
+      created_at: new Date().toISOString(),
+    })
+  }
+
   return {
     sessions,
     activeSessionId,
@@ -205,6 +219,7 @@ export const useRemyStore = defineStore('remy', () => {
     updateSize,
     setPageContext,
     appendToken,
+    appendToolCall,
     removeLastUserMessage,
     persistPosition,
     persistSize,
