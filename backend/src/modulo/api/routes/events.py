@@ -33,8 +33,8 @@ _queue_users: dict[int, str] = {}
 _active_connections_lock: asyncio.Lock = asyncio.Lock()
 
 
-def _reset_connections() -> None:
-    """Clear all tracked SSE connections. Used in tests to prevent state leakage."""
+def _test_reset_connections() -> None:
+    """Test helper: clears all tracked SSE connections. Not for production use."""
     _active_connections.clear()
     _queue_users.clear()
 

@@ -85,11 +85,20 @@ def _make_listener(action: str) -> Callable[[Any, Any, Any], None]:
             )
             return
 
+        try:
+            resource_id = str(target.id)
+        except AttributeError:
+            _log.warning(
+                "event_listener.no_id",
+                extra={"resource_type": resource_type, "action": action_name},
+            )
+            return
+
         task = loop.create_task(
             get_event_bus().publish(
                 org_id=org_id,
                 resource_type=resource_type,
-                resource_id=str(target.id),
+                resource_id=resource_id,
                 action=action_name,
                 version=0,
             ),
