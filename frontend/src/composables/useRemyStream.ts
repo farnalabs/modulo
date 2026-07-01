@@ -2,6 +2,14 @@ import { ref, onUnmounted } from 'vue'
 import { useRemyStore } from './useRemyStore'
 import { getAccessToken } from '@/lib/api/client'
 
+export interface ToolCallEvent {
+  tool_call_id: string
+  tool_name: string
+  success: boolean
+  result?: unknown
+  error?: string
+}
+
 export function useRemyStream() {
   const store = useRemyStore()
   const connected = ref(false)
@@ -57,8 +65,11 @@ export function useRemyStream() {
       })
 
       if (!response.ok || !response.body) {
-        store.error = response.statusText || 'Stream connection failed'
+        const errorDetail = response.status === 403 ? 'Access denied. Contact your admin.' : (response.statusText || 'Stream connection failed')
+        store.error = errorDetail
         store.removeLastUserMessage()
+        store.isStreaming = false
+        connected.value = false
         return
       }
 
@@ -89,6 +100,8 @@ export function useRemyStream() {
                 store.isStreaming = false
               } else if (currentEvent === 'done') {
                 store.isStreaming = false
+              } else if (currentEvent === 'tool_call') {
+                store.appendToolCall(parsed as ToolCallEvent)
               }
             } catch {
               if (currentEvent === 'token' && data.trim()) {
