@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import json
 import logging
 from typing import Any
 
@@ -58,7 +57,7 @@ class EventBus:
             except (ValueError, KeyError):
                 pass
         if self._redis_broker is not None:
-            asyncio.ensure_future(self._redis_broadcast(org_id, event))
+            _task = asyncio.ensure_future(self._redis_broadcast(org_id, event))  # noqa: RUF006  # fire-and-forget
 
     async def _redis_broadcast(self, org_id: str, event: dict[str, Any]) -> None:
         """Fire-and-forget: publish event to Redis channel (best-effort)."""

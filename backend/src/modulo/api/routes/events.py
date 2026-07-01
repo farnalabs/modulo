@@ -51,7 +51,7 @@ async def sse_event_stream(
                 try:
                     event = await asyncio.wait_for(queue.get(), timeout=30.0)
                     yield f"event: resource_changed\ndata: {json.dumps(event)}\n\n"
-                except asyncio.TimeoutError:
+                except TimeoutError:
                     continue
                 except Exception:
                     _log.warning("sse.event_loop_error", exc_info=True)
