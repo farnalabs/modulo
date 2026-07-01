@@ -126,7 +126,7 @@ class ConnectorBinding(BaseModel):
 class PipelineGraphNode(BaseModel):
     id: uuid.UUID
     node_type: Literal["agent", "manual"] = "agent"
-    agent_id: uuid.UUID | None
+    agent_id: uuid.UUID | None = None
     position: GraphPosition
     connector_binding: ConnectorBinding | None = None
     output_schema_id: uuid.UUID | None = None
