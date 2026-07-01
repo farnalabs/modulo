@@ -7,7 +7,7 @@ export interface SyncableStore {
   remove(id: string): void
 }
 
-export function createSyncAdapter(_resourceType: string, store: SyncableStore) {
+export function createSyncAdapter(store: SyncableStore) {
   return function handleSyncEvent(event: EventBusEvent): void {
     if (store.dirtyIds.has(event.id)) return
     if (event.action === 'deleted') {

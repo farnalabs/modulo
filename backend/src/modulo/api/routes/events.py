@@ -24,13 +24,14 @@ router = APIRouter(tags=["events"])
 
 _ZOMBIE_TIMEOUT = 2.0
 _MAX_CONNECTIONS_PER_ORG = 100
+_MAX_CONNECTIONS_PER_USER = 10
 
 _active_connections: dict[str, set[asyncio.Queue]] = {}
 _active_connections_lock: asyncio.Lock = asyncio.Lock()
 
 
-async def _track_connection(org_id: str, queue: asyncio.Queue) -> None:
-    """Register a connection, raising 429 if the per-org limit is exceeded."""
+async def _track_connection(org_id: str, user_id: str, queue: asyncio.Queue) -> None:
+    """Register a connection, raising 429 if the per-org or per-user limit is exceeded."""
     async with _active_connections_lock:
         active = _active_connections.setdefault(org_id, set())
         if len(active) >= _MAX_CONNECTIONS_PER_ORG:
@@ -39,6 +40,16 @@ async def _track_connection(org_id: str, queue: asyncio.Queue) -> None:
                 detail="Too many SSE connections for this organisation. "
                 f"Limit is {_MAX_CONNECTIONS_PER_ORG} concurrent streams.",
             )
+        user_count = sum(
+            1 for q in active if getattr(q, "_user_id", None) == user_id
+        )
+        if user_count >= _MAX_CONNECTIONS_PER_USER:
+            raise HTTPException(
+                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                detail="Too many SSE connections from this user. "
+                f"Limit is {_MAX_CONNECTIONS_PER_USER} concurrent streams per user.",
+            )
+        queue._user_id = user_id
         active.add(queue)
 
 
@@ -75,7 +86,7 @@ async def sse_event_stream(
 
     event_bus = get_event_bus()
     queue = await event_bus.subscribe(org_id)
-    await _track_connection(org_id, queue)
+    await _track_connection(org_id, str(principal.user_id), queue)
 
     headers = {
         "Cache-Control": "no-cache",
