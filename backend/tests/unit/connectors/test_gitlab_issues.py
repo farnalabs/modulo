@@ -489,6 +489,62 @@ async def test_unsupported_write_resource(connector):
 
 
 @respx.mock
+async def test_query_missing_project_issues(connector):
+    with pytest.raises(ValueError, match="Missing required filter"):
+        await connector.query(ConnectorQuery(resource="issues", filters={}))
+
+
+@respx.mock
+async def test_query_missing_iid_issue(connector):
+    with pytest.raises(ValueError, match="Missing required filter"):
+        await connector.query(ConnectorQuery(resource="issue", filters={"project": "group/project"}))
+
+
+@respx.mock
+async def test_query_missing_project_merge_requests(connector):
+    with pytest.raises(ValueError, match="Missing required filter"):
+        await connector.query(ConnectorQuery(resource="merge_requests", filters={}))
+
+
+@respx.mock
+async def test_query_missing_project_branch(connector):
+    with pytest.raises(ValueError, match="Missing required filter"):
+        await connector.query(ConnectorQuery(resource="branch", filters={}))
+
+
+@respx.mock
+async def test_query_missing_name_branch(connector):
+    with pytest.raises(ValueError, match="Missing required filter"):
+        await connector.query(ConnectorQuery(resource="branch", filters={"project": "group/project"}))
+
+
+@respx.mock
+async def test_query_missing_project_pipelines(connector):
+    with pytest.raises(ValueError, match="Missing required filter"):
+        await connector.query(ConnectorQuery(resource="pipelines", filters={}))
+
+
+@respx.mock
+async def test_query_missing_pipeline_id_jobs(connector):
+    with pytest.raises(ValueError, match="Missing required filter"):
+        await connector.query(ConnectorQuery(resource="jobs", filters={"project": "group/project"}))
+
+
+@respx.mock
+async def test_write_missing_project_issue(connector):
+    with pytest.raises(ValueError, match="Missing required filter"):
+        await connector.write(ConnectorPayload(resource="issue", data={"title": "Bug"}))
+
+
+@respx.mock
+async def test_write_missing_iid_issue_label(connector):
+    with pytest.raises(ValueError, match="Missing required filter"):
+        await connector.write(ConnectorPayload(
+            resource="issue_label", data={"project": "group/project", "labels": ["bug"]},
+        ))
+
+
+@respx.mock
 async def test_query_issues_api_error(connector):
     route = respx.get(f"{_API}/projects/group%2Fproject/issues")
     route.mock(return_value=httpx.Response(403, text="Forbidden"))
