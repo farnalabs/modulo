@@ -1,13 +1,12 @@
 """Schema generation service — uses an LLM to generate JSON Schema from description + examples."""
 
-import asyncio
 import json
 import logging
 from typing import Any
 
 from langchain_core.messages import BaseMessage, HumanMessage, SystemMessage
 
-from modulo.core.schema_registry.inference import _parse_schema_from_response
+from modulo.core.schema_registry._common import invoke_and_parse
 from modulo.model_backends.base import ModelBackendBase
 
 _log = logging.getLogger(__name__)
@@ -73,27 +72,10 @@ class SchemaGenerationService:
             raise ValueError("description must be a non-empty string")
 
         messages = _build_generate_prompt(description, examples, self._system_prompt)
-        try:
-            response = await asyncio.wait_for(
-                self._backend.invoke(messages),
-                timeout=self._timeout,
-            )
-        except TimeoutError:
-            _log.error("Schema generation timed out after %ss", self._timeout)
-            raise SchemaGenerationError(f"LLM call timed out after {self._timeout}s") from None
-        except Exception as exc:
-            _log.exception("LLM call failed during schema generation")
-            raise SchemaGenerationError("LLM call failed") from exc
-
-        if not hasattr(response, "content"):
-            raise SchemaGenerationError("Backend returned unexpected response type")
-
-        content = response.content
-        if not isinstance(content, str):
-            raise SchemaGenerationError(f"Expected string response, got {type(content).__name__}")
-
-        try:
-            return _parse_schema_from_response(content)
-        except (json.JSONDecodeError, ValueError) as exc:
-            _log.exception("Failed to parse generated schema from LLM response")
-            raise SchemaGenerationError("Failed to parse generated schema from LLM response") from exc
+        return await invoke_and_parse(
+            self._backend,
+            messages,
+            self._timeout,
+            SchemaGenerationError,
+            "generation",
+        )

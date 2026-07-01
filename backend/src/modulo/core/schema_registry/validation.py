@@ -27,8 +27,9 @@ def _normalize_type(raw: Any) -> str | None:
         return raw
     if isinstance(raw, list) and len(raw) == 1:
         val = raw[0]
-        assert isinstance(val, str)
-        return val
+        if isinstance(val, str):
+            return val
+        return None
     return None
 
 
@@ -98,11 +99,12 @@ def validate_array_schema(schema: dict[str, Any], path: str = "#") -> SchemaVali
     schema_type = _normalize_type(schema.get("type"))
 
     if schema_type is None:
-        any_of = schema.get("anyOf") or schema.get("oneOf")
-        if any_of:
-            for i, v in enumerate(any_of):
-                nested = validate_array_schema(v, f"{path}/anyOf/{i}")
-                result.errors.extend(nested.errors)
+        for kw in ("anyOf", "oneOf"):
+            variants = schema.get(kw)
+            if isinstance(variants, list):
+                for i, v in enumerate(variants):
+                    nested = validate_array_schema(v, f"{path}/{kw}/{i}")
+                    result.errors.extend(nested.errors)
         return result
 
     if schema_type != "array":

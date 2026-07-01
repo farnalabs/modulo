@@ -4,11 +4,11 @@ import json
 
 import pytest
 
+from modulo.core.schema_registry._common import parse_schema_from_response
 from modulo.core.schema_registry.inference import (
     SchemaInferenceError,
     SchemaInferenceService,
     _build_infer_prompt,
-    _parse_schema_from_response,
 )
 
 
@@ -56,46 +56,46 @@ class TestBuildInferPrompt:
 class TestParseSchemaFromResponse:
     def test_parses_plain_json(self) -> None:
         raw = '{"type": "object", "properties": {"id": {"type": "string"}}}'
-        result = _parse_schema_from_response(raw)
+        result = parse_schema_from_response(raw)
         assert result["type"] == "object"
         assert "id" in result["properties"]
 
     def test_strips_markdown_fences(self) -> None:
         raw = '```json\n{"type": "object", "properties": {}}\n```'
-        result = _parse_schema_from_response(raw)
+        result = parse_schema_from_response(raw)
         assert result["type"] == "object"
 
     def test_adds_missing_type_and_properties(self) -> None:
-        result = _parse_schema_from_response("{}")
+        result = parse_schema_from_response("{}")
         assert result["type"] == "object"
         assert result["properties"] == {}
 
     def test_strips_markdown_without_lang_hint(self) -> None:
         raw = '```\n{"type": "object"}\n```'
-        result = _parse_schema_from_response(raw)
+        result = parse_schema_from_response(raw)
         assert result["type"] == "object"
 
     def test_strips_leading_trailing_whitespace(self) -> None:
         raw = '  \n  {"type": "object"}  \n  '
-        result = _parse_schema_from_response(raw)
+        result = parse_schema_from_response(raw)
         assert result["type"] == "object"
 
     def test_strips_markdown_surrounded_by_whitespace(self) -> None:
         raw = '\n\n```\n{"type": "object"}\n```\n\n'
-        result = _parse_schema_from_response(raw)
+        result = parse_schema_from_response(raw)
         assert result["type"] == "object"
 
     def test_raises_on_invalid_json(self) -> None:
         with pytest.raises(json.JSONDecodeError):
-            _parse_schema_from_response("not json")
+            parse_schema_from_response("not json")
 
     def test_raises_on_non_dict_json(self) -> None:
         with pytest.raises(ValueError, match="not a JSON object"):
-            _parse_schema_from_response('["list"]')
+            parse_schema_from_response('["list"]')
 
     def test_raises_on_empty_string(self) -> None:
         with pytest.raises(json.JSONDecodeError):
-            _parse_schema_from_response("")
+            parse_schema_from_response("")
 
 
 class TestSchemaInferenceService:
