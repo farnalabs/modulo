@@ -1,9 +1,10 @@
 # Modulo — Product Requirements Document
 
-**Version**: 0.25  
+**Version**: 0.26  
 **Date**: 2026-07-01  
 **Status**: Pre-development  
 **Changelog**:  
+- v0.26 — §8.23 Remy In-App AI Assistant: floating draggable/dockable/maximisable chat panel on every page, page awareness via `useRemyContext()`, Multi-window independent sessions with last-activity-winner, tool execution via ViewModel API + MCP server, Markdown skill loading from `remy_skills` table (org-level admin-managed + user-level self-service), context-window-aware conversation reconstruction with automatic pruning and summarization, `chat_sessions` + `chat_messages` + `remy_skills` data model, full CRUD API + SSE streaming endpoint, admin config page at `/admin/remy`, Team-tier feature gate with org-level access list.
 - v0.25 — §8.22 SSE Event Bus (Real-Time Frontend Sync): in-memory EventBus with optional Redis overlay for multi-worker, SSE endpoint at GET /api/v1/events, SQLAlchemy event listeners for automatic publishing, frontend EventSource composable with dirtyIds conflict detection pattern.
 - v0.24 — Tier rename: free→Community, enterprise→Team across all UI text, API responses, backend code, docs, and tests. Community Edition (free, no license key) and Team Edition (self-serve paid, feature-gated, no SLA/support commitment). §6.2 updated to reflect new naming; §6.2.1 Tier System Architecture added describing the future-state flexible tier catalog.
 - v0.23 — §8.21 View Modes (Enterprise): multiple named UI views with admin-defined feature visibility per view, assignment to users/teams/org roles, enforcement, self-lockout prevention guards; `view_modes` enterprise feature flag replaces previously planned `view_mode` + `view_mode_enforcement`
@@ -1808,6 +1809,210 @@ data: {"type":"run","id":"uuid","action":"updated","version":42,"org_id":"uuid"}
 #### Flag / Gating
 
 This feature is **free-tier** (no enterprise gate). Real-time sync is a UX baseline, not a premium feature.
+
+---
+
+### 8.23 Remy — In-App AI Assistant
+
+Remy is a floating AI assistant overlay present on every authenticated page. It is driven by user-provided API keys (Anthropic, OpenAI, or any provider supported by the ModelBackend hub) and can drive every page via the existing ViewModel REST API and MCP tool surface.
+
+Remy is not a separate execution engine — it is a chat UI wrapper around the same MCP server and API that already powers the frontend. What makes it distinct is page awareness (it knows what entities are loaded and what actions are available) and skill loading (Markdown skills are injected into the system prompt, inheriting the same skill format from the agent-cli ecosystem).
+
+#### Panel UX
+
+Remy is a floating overlay panel with these states:
+
+| State | Behaviour |
+|---|---|
+| **Closed** | Remy icon button fixed at bottom-right of viewport. Unread indicator (message count since last focus). |
+| **Open (floating)** | Draggable, resizable window with min/max dimensions. Title bar shows conversation name. |
+| **Maximised** | Full viewport overlay. Chat takes full height; all header/sidebar chrome is visible underneath via `pointer-events: none`. |
+| **Docked** | Side panel at right edge (400px default, resizable). Main content area shrinks to accommodate. Persisted preference. |
+
+Transitions between states are animated and preserve the scroll position of the conversation.
+
+#### Multi-Window and Session Model
+
+Each browser tab/window maintains an independent Remy session via Pinia store scoped to `sessionId` (generated at mount). Sessions are persisted to the backend on every message:
+
+- **Active session per tab**: Each tab has exactly one active `chat_session` loaded. Switching pages within the tab preserves the session — the Pinia store survives route changes.
+- **Last-activity winner**: When a user opens a new tab without an existing session, the API returns the session with the most recent `updated_at`. A user can explicitly start a fresh session from the panel.
+- **Session list**: The panel has a sessions drawer showing all sessions for the user, ordered by `updated_at`, with message count and last message preview.
+- **No cross-tab sync**: Two tabs with the same session open will diverge. This is accepted — the last save wins. A future v2 could add WebSocket-based session sync.
+
+#### Page Awareness
+
+Remy receives structured page context on every navigation. The frontend `useRemyContext()` composable gathers:
+
+- Current route name and params
+- Loaded entity IDs and types (from Pinia stores)
+- Available actions on the current page (from view model metadata)
+- Current search/filter state
+
+This is injected as a system-level context block:
+
+```
+You are on the Pipeline Editor page (/pipelines/{id}/editor).
+Loaded: pipeline "Code Review Pipeline" (id: abc-123), 6 nodes, 8 edges.
+Available: add_node, remove_node, update_agent, run_pipeline, save.
+```
+
+Remy uses this context to answer page-specific questions and execute page-specific actions without the user having to describe where they are.
+
+#### Tool Execution
+
+Remy drives the platform through two channels:
+
+| Channel | When | What it can do |
+|---|---|---|
+| **ViewModel API** (`/api/v1/viewmodel/current`) | Page-aware actions (same as frontend) | Everything the UI can do — CRUD pipelines, agents, schemas, triggers, connectors, run pipelines, review HITL |
+| **MCP Server** (`/mcp`) | Structured tool calls | `list_pipelines`, `trigger_pipeline`, `get_run_status`, `review_hitl`, `browse_library`, `copy_library_primitive` |
+
+The LLM decides which channel to use based on the user's request. The ViewModel API is preferred for page-specific actions (it mirrors exactly what the UI would do); MCP is preferred for cross-page or background operations.
+
+#### Skill System
+
+Remy loads skills from two tiers:
+
+| Tier | Managed by | Scope |
+|---|---|---|
+| **Org-level** | Admin via `/admin/remy` | Visible to all authorised Remy users in the org |
+| **User-level** | User via panel settings | Visible only to that user |
+
+Skills are Markdown files with frontmatter (agentskills.io format). They are stored in the `remy_skills` table and injected into the Remy system prompt on session start. The skill loader:
+
+1. Queries all org-level and user-level skills
+2. Parses frontmatter for `name`, `description`, `triggers`
+3. Concatenates them into the system prompt as a "Available skills" block
+4. The LLM uses skill instructions to decide how to handle user requests
+
+This means skills written for Claude Code or Codex (e.g. `deploy`, `qa`, `delivery-status`) can be loaded directly into Remy with minimal adaptation — the skill body describes the behaviour, and Remy's tool channel substitutes for the CLI tools the skill originally referenced.
+
+#### Context Window Management
+
+Remy manages the LLM context window automatically:
+
+1. **Token counting**: Each message is token-counted on save (via `tiktoken` or the provider's tokeniser)
+2. **Pruning**: When the reconstructed conversation exceeds the model's context window minus a safety margin (20%), Remy prunes the oldest turns first, keeping the system prompt, page context, and most recent messages
+3. **Summarization**: If pruning would remove meaningful history (more than half the messages), Remy writes a one-turn summarization of the pruned conversation into the prompt:
+
+```
+[Earlier conversation summary: User asked to create a pipeline for PR review.
+Remy created "PR Review Pipeline" with 4 nodes. User ran it and checked results.]
+```
+
+The summarization is itself a message token-counted and included in the budget.
+
+#### Data Model
+
+Two new tables:
+
+**`chat_sessions`**
+| Column | Type | Notes |
+|---|---|---|
+| `id` | UUID | PK |
+| `organisation_id` | UUID | FK → organisations |
+| `user_id` | UUID | FK → users |
+| `name` | text | Auto-generated from first user message or user-set |
+| `provider` | text | Model provider (e.g. `anthropic`, `openai`) |
+| `model` | text | Model name (e.g. `claude-sonnet-4-20250514`) |
+| `context_window_tokens` | int | Token limit for the model |
+| `system_prompt_hash` | text | SHA-256 of resolved system prompt (skills + guidance + page context format) — used to detect prompt changes that should start a new context |
+| `created_at` | timestamptz | |
+| `updated_at` | timestamptz | |
+
+**`chat_messages`**
+| Column | Type | Notes |
+|---|---|---|
+| `id` | UUID | PK |
+| `session_id` | UUID | FK → chat_sessions |
+| `role` | text | `user` | `assistant` | `tool_use` | `tool_result` | `summary` |
+| `content` | text | Message body |
+| `tool_calls_json` | JSONB | Structured tool call arguments (assistant messages) |
+| `tool_results_json` | JSONB | Tool call results (tool_result messages) |
+| `token_count` | int | Estimated tokens |
+| `parent_id` | UUID | Nullable FK → chat_messages (enables branching / re-roll) |
+| `created_at` | timestamptz | |
+
+**`remy_skills`**
+| Column | Type | Notes |
+|---|---|---|
+| `id` | UUID | PK |
+| `organisation_id` | UUID | FK → organisations (nullable for user-level) |
+| `user_id` | UUID | FK → users (nullable for org-level) |
+| `name` | text | Skill name from frontmatter |
+| `description` | text | Skill description |
+| `triggers` | text[] | Trigger keywords |
+| `body` | text | Full Markdown skill content |
+| `active` | boolean | Soft disable without deletion |
+| `created_at` | timestamptz | |
+| `updated_at` | timestamptz | |
+
+Only one of `organisation_id` or `user_id` is set — CHECK constraint enforces this.
+
+#### API Endpoints
+
+| Method | Path | Purpose |
+|---|---|---|
+| `GET` | `/api/v1/remy/sessions` | List user's sessions (latest first) |
+| `POST` | `/api/v1/remy/sessions` | Create new session |
+| `GET` | `/api/v1/remy/sessions/{id}` | Get session with messages |
+| `DELETE` | `/api/v1/remy/sessions/{id}` | Delete session + messages |
+| `PATCH` | `/api/v1/remy/sessions/{id}` | Rename session |
+| `POST` | `/api/v1/remy/sessions/{id}/messages` | Append message (user or tool) |
+| `POST` | `/api/v1/remy/sessions/{id}/stream` | SSE stream of LLM response |
+
+The stream endpoint is the core of Remy — it receives the user's new message, reconstructs the context window, calls the LLM, executes tool calls via ViewModel/MCP, and streams the assistant response + tool results back as SSE events.
+
+**Admin endpoints** (gated behind `remy_admin` feature):
+
+| Method | Path | Purpose |
+|---|---|---|
+| `GET` | `/api/v1/admin/remy/config` | Get org-level Remy config |
+| `PUT` | `/api/v1/admin/remy/config` | Update system prompt, additional guidance, access list |
+| `GET` | `/api/v1/admin/remy/skills` | List org-level skills |
+| `POST` | `/api/v1/admin/remy/skills` | Create org-level skill |
+| `PUT` | `/api/v1/admin/remy/skills/{id}` | Update skill |
+| `DELETE` | `/api/v1/admin/remy/skills/{id}` | Delete skill |
+
+**User endpoints** (self-service):
+
+| Method | Path | Purpose |
+|---|---|---|
+| `GET` | `/api/v1/me/remy/skills` | List user's skills |
+| `POST` | `/api/v1/me/remy/skills` | Create user-level skill |
+| `PUT` | `/api/v1/me/remy/skills/{id}` | Update skill |
+| `DELETE` | `/api/v1/me/remy/skills/{id}` | Delete skill |
+
+#### Feature Gating
+
+Remy is gated at two levels:
+
+1. **Feature flag**: `remy` feature flag — admin must enable it for the organisation (or globally) via the existing PlanContext system
+2. **Access list**: Admin configures which users, teams, or org roles can use Remy. Users not on the access list see no Remy button — it is fully hidden, not disabled.
+3. **API key prerequisite**: Remy is invisible if the user has not configured at least one LLM API key (stored via the existing ModelBackend mechanism or a dedicated `remy_keys` table). A settings prompt appears on first load guiding the user to add a key.
+
+#### Frontend Architecture
+
+- **`RemyPanel.vue`** — root component mounted in `AppLayout.vue`, always rendered (gated by visibility logic). Contains the trigger button + panel shell.
+- **`RemyChat.vue`** — chat message list + input area, stream handling, markdown rendering
+- **`RemySessionDrawer.vue`** — sessions list sidebar within the panel
+- **`RemySkillManager.vue`** — user skill editor within panel settings
+- **`useRemyContext()`** — composable that gathers page context on route change
+- **`useRemyStream()`** — composable that manages SSE connection for streaming responses
+
+The panel state (open/closed, position, size, docked/maximised/floating) is persisted to `localStorage`. The active session and message list live in a Pinia store (`useRemyStore`) scoped to `sessionId`.
+
+#### Delivery Dependencies
+
+- No new infrastructure dependencies (PostgreSQL, existing auth, existing SSE)
+- The ViewModel API must expose all page actions as callable commands — any gap is a Remy gap
+- The MCP server must have tool coverage for cross-page operations
+- Models do not require LangGraph — Remy is a stateless LLM call pattern, not a pipeline run
+
+#### Flag / Gating
+
+Remy is a **Team-tier** feature (enterprise-gated via `remy` feature flag). The base access control (which users/teams see Remy) is org-level admin configuration, not a separate license gate. The feature flag controls whether Remy exists in the org at all; the access list controls who sees it.
 
 ---
 
