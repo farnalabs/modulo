@@ -79,9 +79,6 @@ Discovered from 1 completed delivery tasks. Also specified in PRD 8.5 (Trigger S
 ## Known Gaps - BDD feature file `backend/tests/bdd/features/pipelines/scheduling.feature` has 5 cron scenarios but zero polling scenarios — no BDD coverage exists for polling trigger behaviour
 - PRD 8.5 designates `polling` as v1 (not alpha); the delivery plan may need to scope this differently
 - `max_concurrent_runs` uses pipeline-level active-run counting; PRD 8.5 suggests trigger-level counting (per-trigger, not per-pipeline)
-- No integration test validates end-to-end: DB scheduler -> PollingFireTask -> connector query -> condition eval -> run creation
 - `_build_polling_connector()` is a standalone copy of `connector_hub._build_connector()` -- drifts if connector hub gains new types or tracing wrappers; drift has widened (41+ types registered in hub vs 6 in polling); a drift parity test was added but the missing types are not yet implemented
 - `snapshot_id` falls back to `uuid.uuid4()` if unset or invalid in config -- this will create runs against the latest pipeline snapshot, which may not be intended; should probably block or use a predictable sentinel
 - Polling trigger has no `retain_payload` equivalent (webhook does for replay) -- intentional but undocumented
-- Missing unit tests for `connector_init_failed`, `query_failed`, and `already_fired_this_cycle` paths — now added
-- `_fetch_due_triggers` now logs a TriggerEvent for triggers with missing `connector_instance_id` — added in cross-cutting QA pass
