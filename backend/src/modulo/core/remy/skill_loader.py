@@ -28,30 +28,22 @@ class SkillLoader:
         self._session = session
 
     async def get_org_skills(self, org_id: uuid.UUID) -> list[SkillEntry]:
-        try:
-            result = await self._session.execute(
-                select(RemySkill).where(
-                    RemySkill.organisation_id == org_id,
-                    RemySkill.active.is_(True),
-                )
+        result = await self._session.execute(
+            select(RemySkill).where(
+                RemySkill.organisation_id == org_id,
+                RemySkill.active.is_(True),
             )
-            return [self._to_entry(s) for s in result.scalars().all()]
-        except Exception:
-            logger.exception("Failed to load org skills for org %s", org_id)
-            return []
+        )
+        return [self._to_entry(s) for s in result.scalars().all()]
 
     async def get_user_skills(self, user_id: uuid.UUID) -> list[SkillEntry]:
-        try:
-            result = await self._session.execute(
-                select(RemySkill).where(
-                    RemySkill.user_id == user_id,
-                    RemySkill.active.is_(True),
-                )
+        result = await self._session.execute(
+            select(RemySkill).where(
+                RemySkill.user_id == user_id,
+                RemySkill.active.is_(True),
             )
-            return [self._to_entry(s) for s in result.scalars().all()]
-        except Exception:
-            logger.exception("Failed to load user skills for user %s", user_id)
-            return []
+        )
+        return [self._to_entry(s) for s in result.scalars().all()]
 
     async def build_system_prompt(
         self,
