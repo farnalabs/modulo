@@ -7,6 +7,8 @@ from modulo.db.models.composite_template import CompositeTemplate
 from modulo.db.models.connector_instance import ConnectorInstance
 from modulo.db.models.daily_run_count import OrgDailyRunCount
 from modulo.db.models.environment_profile import EnvironmentProfile
+from modulo.db.models.error_event import ErrorEvent
+from modulo.db.models.error_group import ErrorGroup
 from modulo.db.models.eval_definition import EvalDefinition
 from modulo.db.models.eval_result import EvalResult
 from modulo.db.models.feedback_record import FeedbackRecord
@@ -39,9 +41,9 @@ from modulo.db.models.spend_anomaly import SpendAnomaly
 from modulo.db.models.sso_provider import SsoProvider
 from modulo.db.models.stage import Stage
 from modulo.db.models.system_config import SystemConfig
-from modulo.db.models.tier_catalog import FeatureFlagCatalog, TierCatalog
 from modulo.db.models.team import Team
 from modulo.db.models.team_membership import TeamMembership
+from modulo.db.models.tier_catalog import FeatureFlagCatalog, TierCatalog
 from modulo.db.models.token_family import TokenFamily
 from modulo.db.models.trigger import Trigger
 from modulo.db.models.trigger_event import TriggerEvent
@@ -56,11 +58,16 @@ __all__ = [
     "AuditChainHead",
     "AuditEvent",
     "Base",
+    "ChatMessage",
+    "ChatSession",
     "CompositeTemplate",
     "ConnectorInstance",
     "EnvironmentProfile",
+    "ErrorEvent",
+    "ErrorGroup",
     "EvalDefinition",
     "EvalResult",
+    "FeatureFlagCatalog",
     "FeedbackRecord",
     "HitlClaim",
     "LibraryPrimitive",
@@ -84,8 +91,6 @@ __all__ = [
     "PrimitiveAbuseReport",
     "PrimitiveRating",
     "Publisher",
-    "ChatMessage",
-    "ChatSession",
     "RemySkill",
     "Run",
     "SavedView",
@@ -100,7 +105,6 @@ __all__ = [
     "Team",
     "TeamMembership",
     "TierCatalog",
-    "FeatureFlagCatalog",
     "TimestampMixin",
     "TokenFamily",
     "Trigger",
