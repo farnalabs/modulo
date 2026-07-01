@@ -68,3 +68,8 @@ Feature: Slack Connector
     Given a Slack connector with invalid bot token
     When I perform a health check
     Then the health result indicates failure
+
+  Scenario: Health check with non-JSON response returns a failure
+    Given a Slack connector with valid bot token
+    When the API returns non-JSON response
+    Then the health result indicates failure
