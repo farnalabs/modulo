@@ -1,7 +1,7 @@
 import uuid
 from datetime import datetime
 
-from sqlalchemy import DateTime, ForeignKey, Integer, String, Text, Uuid, func
+from sqlalchemy import CheckConstraint, DateTime, ForeignKey, Integer, String, Text, Uuid, func
 from sqlalchemy.dialects.postgresql import JSON
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -10,6 +10,12 @@ from modulo.db.models.base import Base
 
 class ChatMessage(Base):
     __tablename__ = "chat_messages"
+    __table_args__ = (
+        CheckConstraint(
+            "role IN ('user', 'assistant', 'tool_use', 'tool_result', 'summary')",
+            name="ck_chat_messages_role",
+        ),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(Uuid(), primary_key=True, default=uuid.uuid4)
     organisation_id: Mapped[uuid.UUID] = mapped_column(
