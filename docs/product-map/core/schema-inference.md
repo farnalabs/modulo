@@ -33,7 +33,7 @@ status: partial
 - [x] Propagate LLM invocation errors as `SchemaInferenceError("LLM call failed")`
 - [x] Reject non-string `response.content` from backend → `SchemaInferenceError`
 - [x] Reject invalid JSON from LLM → `SchemaInferenceError("Failed to parse")`
-- [ ] Accept configurable `max_sample_records` (constructor arg) — constructor stores it but prompt builder ignores it, still hard-coded at 50
+- [x] Accept configurable `max_sample_records` (constructor arg) — constructor stores it and `_build_infer_prompt` now respects it
 - [x] Accept empty samples list gracefully — LLM sees "0 records", service allows it
 - [x] Raise `ValueError` when samples contains non-dict items
 - [x] Accept nested object structures in samples
@@ -71,13 +71,17 @@ status: partial
 - [x] Apply migration: add missing fields (set to null), remove deleted, apply renames
 - [x] Migration is idempotent
 - [x] Migration does not mutate original data
-- [x] `transform_field` applies a callable to a single field ### Known Gaps — PRD 8.16 requirements not yet implemented - [ ] **Sampled record default (200)**: PRD says default 200 records, code caps at 50 in prompt builder, API default limit is 10, max is 100
+- [x] `transform_field` applies a callable to a single field ### Known Gaps — PRD 8.16 requirements not yet implemented
+- [ ] **Sampled record default (200)**: PRD says default 200 records, code caps at 50 in prompt builder, API default limit is 10, max is 100 — no sample count displayed in UI
 - [ ] **Rare-field exclusion**: PRD says fields appearing in <10% of samples should be flagged and excluded from draft — not implemented anywhere
 - [ ] **`abstract_name` inference**: PRD says inferred `abstract_name` suggestion per resource type — not implemented; only static string "Inferred from {name}"
 - [ ] **SandboxedEnvironment for LLM prompt**: PRD requires `SandboxedEnvironment` with structural separators for prompt safety — not used
 - [ ] **Sampled data not stored**: PRD says sampled data must not be persisted after inference — not verified/audited post-inference
 - [ ] **Resource-type scope**: PRD says inference works on issue-tracker, git-host, and document-store connectors — no connector-type validation in endpoint
 - [ ] **LLM prompt injection hardening**: PRD requires structural separators and no prompt interpolation of raw field values — current prompt interpolates samples directly via f-string
-- [ ] **BDD feature file is placeholder**: `backend/tests/bdd/features/connectors/schema_inference.feature` has no real scenarios
-- [ ] **No E2E integration test**: BDD is placeholder; no end-to-end test for the full sample→infer→review flow
-- [ ] **`depends-on` was pointing to a delivery task ID** instead of a feature ID — corrected to `[]` 
+- [ ] **No E2E integration test**: No end-to-end test for the full sample→infer→review flow; BDD scenarios have step definitions but run against mocked backends
+- [ ] **No connector-type validation**: Endpoint does not validate that the connector instance belongs to a supported type (issue-tracker, git-host, document-store)
+- [ ] **No frontend unit tests**: Zero spec files for SchemaInferenceView or OnboardingWizard schema steps
+
+### QA History
+- 2026-07-01: Cross-cutting QA — fixed `_build_infer_prompt` to respect configurable `max_sample_records`, added `ProgrammingError` catch to infer endpoint (501 on missing DB table), added BDD step definitions for all 5 scenarios (test_schema_inference.py), added unit test for configurable max_sample_records. 23/23 tests pass.
