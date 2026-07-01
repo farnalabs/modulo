@@ -2,6 +2,7 @@
   <nav aria-label="Main navigation" class="flex-1 space-y-6">
     <template v-for="group in filteredGroups" :key="group.id">
       <SidebarGroup
+        :id="group.id"
         :label="group.label"
         :collapsed="isGroupCollapsed(group.id, group.defaultCollapsed)"
         @toggle="toggleGroup(group.id, group.defaultCollapsed)"
