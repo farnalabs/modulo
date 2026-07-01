@@ -88,7 +88,11 @@
           <div
             class="flex cursor-pointer items-center justify-between p-4"
             :class="{ 'border-b': expandedTeamId === team.id }"
+            role="button"
+            tabindex="0"
             @click="toggleExpand(team.id)"
+            @keydown.enter="toggleExpand(team.id)"
+            @keydown.space.prevent="toggleExpand(team.id)"
           >
             <div class="flex items-center gap-3">
               <svg

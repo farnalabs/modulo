@@ -211,9 +211,12 @@
               :key="event.id"
               class="cursor-pointer transition-colors hover:bg-muted/30"
               role="button"
+              tabindex="0"
               :data-testid="'admin-audit-event-row-' + event.id"
               :aria-label="'Expand event ' + event.id"
               @click="toggleExpand(event.id)"
+              @keydown.enter="toggleExpand(event.id)"
+              @keydown.space.prevent="toggleExpand(event.id)"
             >
               <td class="whitespace-nowrap px-4 py-3 text-sm">
                 {{ formatTimestamp(event.created_at) }}

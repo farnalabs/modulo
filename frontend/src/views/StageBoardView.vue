@@ -100,7 +100,11 @@
             <div
               class="stage-column-header mb-3 cursor-pointer rounded-lg border bg-card p-3 transition-shadow hover:shadow-md"
               :data-testid="'stage-board-column-' + stage.id"
+              role="button"
+              tabindex="0"
               @click="selectedStageId = stage.id"
+              @keydown.enter="selectedStageId = stage.id"
+              @keydown.space.prevent="selectedStageId = stage.id"
             >
               <div class="flex items-center justify-between">
                 <div class="flex items-center gap-2">
@@ -123,7 +127,11 @@
                 :key="pipeline.id"
                 :data-testid="'stage-board-card-' + pipeline.id"
                 class="card card-hover cursor-pointer px-3 py-2.5"
+                role="button"
+                tabindex="0"
                 @click="selectedPipeline = pipeline"
+                @keydown.enter="selectedPipeline = pipeline"
+                @keydown.space.prevent="selectedPipeline = pipeline"
               >
                 <div class="flex items-center justify-between">
                   <span class="text-sm font-medium truncate flex-1">{{ pipeline.name }}</span>

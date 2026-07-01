@@ -121,8 +121,12 @@
             <tr
               v-for="entry in items"
               :key="entry.id"
+              role="button"
+              tabindex="0"
               class="transition-colors hover:bg-muted/30 cursor-pointer"
               @click="toggleRow(entry.id)"
+              @keydown.enter="toggleRow(entry.id)"
+              @keydown.space.prevent="toggleRow(entry.id)"
             >
               <td class="px-4 py-3 text-sm text-muted-foreground">
                 <svg

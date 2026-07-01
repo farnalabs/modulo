@@ -82,6 +82,8 @@
             <button
               class="relative inline-flex h-5 w-9 items-center rounded-full transition-colors focus:outline-none"
               :class="prim.auto_update ? 'bg-primary' : 'bg-muted'"
+              role="switch"
+              :aria-checked="prim.auto_update"
               @click="toggleAutoUpdate(prim)"
               :data-testid="`auto-update-toggle-${prim.id}`"
             >
