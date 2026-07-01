@@ -20,6 +20,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from modulo.core.graph_validator._types import ValidationResult
 from modulo.core.graph_validator.category_validator import validate_node_categories
 from modulo.db.models.agent import Agent
+from modulo.db.models.composite_template import CompositeTemplate
 from modulo.db.models.connector_instance import ConnectorInstance
 from modulo.db.models.environment_profile import EnvironmentProfile
 from modulo.db.models.model_backend import ModelBackend
@@ -87,6 +88,7 @@ class GraphValidator:
         )
 
         await self._check_node_categories(graph_json, session, result)
+        await self._check_composite_nodes(graph_json, session, result)
 
         return result
 
@@ -142,6 +144,9 @@ class GraphValidator:
 
         # Node category check.
         await self._check_node_categories(snapshot.graph_json, session, result)
+
+        # Composite node validation.
+        await self._check_composite_nodes(snapshot.graph_json, session, result)
 
         return self._strip_warnings(result)
 
@@ -681,3 +686,85 @@ class GraphValidator:
         """
         cat_result = await validate_node_categories(graph_json, session)
         result.issues.extend(cat_result.issues)
+
+    # ------------------------------------------------------------------
+    # Composite nodes
+    # ------------------------------------------------------------------
+
+    async def _check_composite_nodes(
+        self,
+        graph_json: dict[str, Any],
+        session: AsyncSession,
+        result: ValidationResult,
+    ) -> None:
+        """Validate composite node references.
+
+        For each composite node in the graph:
+        1. Verify the referenced ``CompositeTemplate`` exists.
+        2. Check that required parameter ports have values (if template
+           declares ``parameter_ports_json`` with ``required: true``).
+        3. Check that the composite version exists — a version constraint
+           may be stored on the binding; for now we verify the template
+           record itself exists (version validation is deferred to
+           execution time).
+        """
+        nodes: list[dict[str, Any]] = graph_json.get("nodes", [])
+        composite_nodes = [n for n in nodes if n.get("node_type") == "composite" or n.get("composite_ref") is not None]
+
+        if not composite_nodes:
+            return
+
+        composite_refs: set[uuid.UUID] = set()
+        for node in composite_nodes:
+            raw = node.get("composite_ref")
+            if raw is not None:
+                try:
+                    composite_refs.add(uuid.UUID(str(raw)))
+                except (ValueError, TypeError):
+                    node_id = str(node.get("id", "?"))
+                    result.error(
+                        "COMPOSITE_INVALID_REF",
+                        f"Node '{node_id}': composite_ref is not a valid UUID",
+                        node_id=node_id,
+                    )
+
+        if not composite_refs:
+            return
+
+        rows = (
+            (await session.execute(select(CompositeTemplate).where(CompositeTemplate.id.in_(composite_refs))))
+            .scalars()
+            .all()
+        )
+        found: dict[uuid.UUID, CompositeTemplate] = {r.id: r for r in rows}
+
+        for node in composite_nodes:
+            node_id = str(node.get("id", "?"))
+            raw = node.get("composite_ref")
+            if raw is None:
+                continue
+
+            try:
+                ref = uuid.UUID(str(raw))
+            except (ValueError, TypeError):
+                continue
+
+            template = found.get(ref)
+            if template is None:
+                result.error(
+                    "COMPOSITE_TEMPLATE_NOT_FOUND",
+                    f"Node '{node_id}': CompositeTemplate '{ref}' not found",
+                    node_id=node_id,
+                )
+                continue
+
+            parameter_ports: list[dict[str, Any]] = template.parameter_ports_json or []
+            parameter_values: dict[str, Any] = node.get("composite_parameter_values") or {}
+
+            for port in parameter_ports:
+                if port.get("required") and port.get("name") not in parameter_values:
+                    result.error(
+                        "COMPOSITE_MISSING_PARAMETER",
+                        f"Node '{node_id}': required parameter '{port.get('name')}' has no value",
+                        node_id=node_id,
+                    )
