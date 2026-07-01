@@ -7,60 +7,60 @@ declare module 'vue-router' {
   }
 }
 
-import DashboardView from '../views/DashboardView.vue'
-import LoginView from '../views/LoginView.vue'
-import LibraryView from '../views/LibraryView.vue'
-import LibraryPipelineWizard from '../views/LibraryPipelineWizard.vue'
-import SettingsObservabilityView from '../views/SettingsObservabilityView.vue'
-import SettingsRateLimitsView from '../views/SettingsRateLimitsView.vue'
-import SettingsRuntimeConfigView from '../views/SettingsRuntimeConfigView.vue'
-import SettingsSsoView from '../views/SettingsSsoView.vue'
-import SettingsTeamsView from '../views/SettingsTeamsView.vue'
-import SchemaInferenceView from '../views/SchemaInferenceView.vue'
-import SchemaListView from '../views/SchemaListView.vue'
-import SchemaEditorView from '../views/SchemaEditorView.vue'
-import OnboardingWizard from '../views/OnboardingWizard.vue'
-import FeedbackInboxView from '../views/FeedbackInboxView.vue'
-import EvalEditorView from '../views/EvalEditorView.vue'
-import EvalProposalsQueueView from '../views/EvalProposalsQueueView.vue'
-import VariantCompareView from '../views/VariantCompareView.vue'
-import ABTestModelsView from '../views/ABTestModelsView.vue'
-import RunDetailView from '../views/RunDetailView.vue'
-import AgentOutputDiffView from '../views/AgentOutputDiffView.vue'
-import AdminAuditView from '../views/AdminAuditView.vue'
-import AdminFeatureFlagsView from '../views/AdminFeatureFlagsView.vue'
-import AdminPluginsView from '../views/AdminPluginsView.vue'
-import ApiChangelogView from '../views/ApiChangelogView.vue'
-import TeamComparisonView from '../views/TeamComparisonView.vue'
-import StageBoardView from '../views/StageBoardView.vue'
-import PipelineEditorView from '../views/PipelineEditorView.vue'
-import CompositeEditorView from '../views/pipeline/CompositeEditorView.vue'
-import CopyPipelineWizard from '../views/CopyPipelineWizard.vue'
-import PipelineTemplateGallery from '../views/PipelineTemplateGallery.vue'
-import AdminUsersView from '../views/AdminUsersView.vue'
-import AdminSpendLimitsView from '../views/AdminSpendLimitsView.vue'
-import AdminCostBreakdownView from '../views/AdminCostBreakdownView.vue'
-import AdminCostControlsView from '../views/AdminCostControlsView.vue'
-import AdminConnectorsView from '../views/AdminConnectorsView.vue'
-import AdminNodeCategoriesView from '../views/AdminNodeCategoriesView.vue'
-import AdminViewsView from '../views/AdminViewsView.vue'
-import AdminModelBackendsView from '../views/AdminModelBackendsView.vue'
-import AdminOrgSettingsView from '../views/AdminOrgSettingsView.vue'
-import AdminRunRetentionView from '../views/AdminRunRetentionView.vue'
-import MyProfileView from '../views/MyProfileView.vue'
-import SettingsLicenseView from '../views/SettingsLicenseView.vue'
-import SettingsMcpView from '../views/SettingsMcpView.vue'
-import SettingsTriggersView from '../views/SettingsTriggersView.vue'
-import SettingsHitlReviewView from '../views/SettingsHitlReviewView.vue'
-import AdminNotificationDeliveryLogView from '../views/AdminNotificationDeliveryLogView.vue'
-import AdminEnvironmentProfilesView from '../views/AdminEnvironmentProfilesView.vue'
-import AdminSystemOrgsView from '../views/AdminSystemOrgsView.vue'
-import AdminSystemConfigView from '../views/AdminSystemConfigView.vue'
-import AdminRemyView from '../views/AdminRemyView.vue'
-import AdminErrorsView from '../views/AdminErrorsView.vue'
-import AdminErrorDetailView from '../views/AdminErrorDetailView.vue'
-import UserRemySkillsView from '../views/UserRemySkillsView.vue'
-import SettingsErrorForwardersView from '../views/SettingsErrorForwardersView.vue'
+const DashboardView = () => import('../views/DashboardView.vue')
+const LoginView = () => import('../views/LoginView.vue')
+const LibraryView = () => import('../views/LibraryView.vue')
+const LibraryPipelineWizard = () => import('../views/LibraryPipelineWizard.vue')
+const SettingsObservabilityView = () => import('../views/SettingsObservabilityView.vue')
+const SettingsRateLimitsView = () => import('../views/SettingsRateLimitsView.vue')
+const SettingsRuntimeConfigView = () => import('../views/SettingsRuntimeConfigView.vue')
+const SettingsSsoView = () => import('../views/SettingsSsoView.vue')
+const SettingsTeamsView = () => import('../views/SettingsTeamsView.vue')
+const SchemaInferenceView = () => import('../views/SchemaInferenceView.vue')
+const SchemaListView = () => import('../views/SchemaListView.vue')
+const SchemaEditorView = () => import('../views/SchemaEditorView.vue')
+const OnboardingWizard = () => import('../views/OnboardingWizard.vue')
+const FeedbackInboxView = () => import('../views/FeedbackInboxView.vue')
+const EvalEditorView = () => import('../views/EvalEditorView.vue')
+const EvalProposalsQueueView = () => import('../views/EvalProposalsQueueView.vue')
+const VariantCompareView = () => import('../views/VariantCompareView.vue')
+const ABTestModelsView = () => import('../views/ABTestModelsView.vue')
+const RunDetailView = () => import('../views/RunDetailView.vue')
+const AgentOutputDiffView = () => import('../views/AgentOutputDiffView.vue')
+const AdminAuditView = () => import('../views/AdminAuditView.vue')
+const AdminFeatureFlagsView = () => import('../views/AdminFeatureFlagsView.vue')
+const AdminPluginsView = () => import('../views/AdminPluginsView.vue')
+const ApiChangelogView = () => import('../views/ApiChangelogView.vue')
+const TeamComparisonView = () => import('../views/TeamComparisonView.vue')
+const StageBoardView = () => import('../views/StageBoardView.vue')
+const PipelineEditorView = () => import('../views/PipelineEditorView.vue')
+const CompositeEditorView = () => import('../views/pipeline/CompositeEditorView.vue')
+const CopyPipelineWizard = () => import('../views/CopyPipelineWizard.vue')
+const PipelineTemplateGallery = () => import('../views/PipelineTemplateGallery.vue')
+const AdminUsersView = () => import('../views/AdminUsersView.vue')
+const AdminSpendLimitsView = () => import('../views/AdminSpendLimitsView.vue')
+const AdminCostBreakdownView = () => import('../views/AdminCostBreakdownView.vue')
+const AdminCostControlsView = () => import('../views/AdminCostControlsView.vue')
+const AdminConnectorsView = () => import('../views/AdminConnectorsView.vue')
+const AdminNodeCategoriesView = () => import('../views/AdminNodeCategoriesView.vue')
+const AdminViewsView = () => import('../views/AdminViewsView.vue')
+const AdminModelBackendsView = () => import('../views/AdminModelBackendsView.vue')
+const AdminOrgSettingsView = () => import('../views/AdminOrgSettingsView.vue')
+const AdminRunRetentionView = () => import('../views/AdminRunRetentionView.vue')
+const MyProfileView = () => import('../views/MyProfileView.vue')
+const SettingsLicenseView = () => import('../views/SettingsLicenseView.vue')
+const SettingsMcpView = () => import('../views/SettingsMcpView.vue')
+const SettingsTriggersView = () => import('../views/SettingsTriggersView.vue')
+const SettingsHitlReviewView = () => import('../views/SettingsHitlReviewView.vue')
+const AdminNotificationDeliveryLogView = () => import('../views/AdminNotificationDeliveryLogView.vue')
+const AdminEnvironmentProfilesView = () => import('../views/AdminEnvironmentProfilesView.vue')
+const AdminSystemOrgsView = () => import('../views/AdminSystemOrgsView.vue')
+const AdminSystemConfigView = () => import('../views/AdminSystemConfigView.vue')
+const AdminRemyView = () => import('../views/AdminRemyView.vue')
+const AdminErrorsView = () => import('../views/AdminErrorsView.vue')
+const AdminErrorDetailView = () => import('../views/AdminErrorDetailView.vue')
+const UserRemySkillsView = () => import('../views/UserRemySkillsView.vue')
+const SettingsErrorForwardersView = () => import('../views/SettingsErrorForwardersView.vue')
 
 const router = createRouter({
   history: createWebHistory(),
@@ -346,7 +346,19 @@ const router = createRouter({
       name: 'composite-editor',
       component: CompositeEditorView,
     },
+    {
+      path: '/:pathMatch(.*)*',
+      name: 'not-found',
+      redirect: '/',
+    },
   ],
+  scrollBehavior() {
+    return { top: 0 }
+  },
+})
+
+router.onError((err) => {
+  console.error('[router] unhandled error:', err)
 })
 
 router.beforeEach((to) => {
@@ -360,7 +372,7 @@ router.beforeEach((to) => {
     const token = getAccessToken()
     if (!token) return { name: 'login' }
     try {
-      const payload = JSON.parse(atob(token.split('.')[1]))
+      const payload = JSON.parse(atob(token.split('.')[1].replace(/-/g, '+').replace(/_/g, '/')))
       if (payload.is_system_admin !== true) {
         return { name: 'dashboard' }
       }
