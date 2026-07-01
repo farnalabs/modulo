@@ -98,4 +98,8 @@ class TestAWSSecretsManagerBackend:
 
         # Should not raise despite the underlying AWS exception
         await backend.delete_secret("missing-key")
-        backend._client.delete_secret.assert_called_once_with(SecretId="missing-key")
+        backend._client.delete_secret.assert_called_once_with(
+            SecretId="missing-key",
+            RecoveryWindowInDays=7,
+            ForceDeleteWithoutRecovery=False,
+        )
