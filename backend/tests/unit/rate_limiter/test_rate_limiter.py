@@ -10,12 +10,12 @@ from modulo.core.rate_limiter import RateLimiterRegistry, RedisSlidingWindowRate
 
 class TestTokenBucket:
     async def test_consume_allows_when_tokens_available(self):
-        bucket = TokenBucket(rate=10.0, burst=5)
+        bucket = TokenBucket(max_requests=5, window_s=1)
         for _ in range(5):
             assert await bucket.consume() is True
 
     async def test_consume_blocks_when_empty(self):
-        bucket = TokenBucket(rate=0.1, burst=2)
+        bucket = TokenBucket(max_requests=2, window_s=20)
         assert await bucket.consume() is True
         assert await bucket.consume() is True
         assert await bucket.consume() is False
@@ -23,16 +23,16 @@ class TestTokenBucket:
     async def test_refills_over_time(self):
         # Values: [init=0.0, consume1=0.0, consume2=0.0, consume3(False)=0.0, consume4(True)=0.2]
         # __init__ consumes the first monotonic() call before the bucket is used.
-        times = iter([0.0, 0.0, 0.0, 0.0, 0.2])
+        times = iter([0.0, 0.0, 0.0, 0.0, 0.5])
         with patch.object(time, "monotonic", side_effect=times):
-            bucket = TokenBucket(rate=10.0, burst=2)
+            bucket = TokenBucket(max_requests=2, window_s=1)
             await bucket.consume()
             await bucket.consume()
             assert await bucket.consume() is False
             assert await bucket.consume() is True
 
     async def test_burst_limits_max_tokens(self):
-        bucket = TokenBucket(rate=1.0, burst=3)
+        bucket = TokenBucket(max_requests=3, window_s=3)
         for _ in range(3):
             assert await bucket.consume() is True
         assert await bucket.consume() is False
