@@ -10,6 +10,7 @@ Checks:
 7. Node category: ``node_category_id`` references exist and are compatible with node type
 """
 
+import re
 import uuid
 from typing import Any
 
@@ -769,3 +770,107 @@ class GraphValidator:
                         f"Node '{node_id}': required parameter '{port.get('name')}' has no value",
                         node_id=node_id,
                     )
+
+            output_validation: dict[str, Any] = node.get("output_validation", {})
+            if output_validation:
+                self._check_output_validation(node_id, output_validation, result)
+
+    def _check_output_validation(
+        self,
+        node_id: str,
+        output_validation: dict[str, Any],
+        result: ValidationResult,
+    ) -> None:
+        """Validate output validation config on a composite node.
+
+        Checks:
+        1. max_validation_retries must be 0-5.
+        2. Each eval definition must have a valid type.
+        3. Regex patterns must compile.
+        4. JSON Schema configs must have 'schema' or valid 'schema_ref'.
+        5. failure_behaviour must be valid.
+        """
+        max_retries = output_validation.get("max_validation_retries", 0)
+        if not isinstance(max_retries, int) or max_retries < 0 or max_retries > 5:
+            result.error(
+                "COMPOSITE_VALIDATION_RETRIES_RANGE",
+                f"Node '{node_id}': max_validation_retries must be an integer between 0 and 5 (got {max_retries!r})",
+                node_id=node_id,
+            )
+
+        valid_types = {"regex", "json_schema", "llm_judge"}
+        valid_behaviours = {"retry", "block", "warn"}
+
+        eval_definitions: list[dict[str, Any]] = output_validation.get("eval_definitions", [])
+        for i, eval_def in enumerate(eval_definitions):
+            eval_id = eval_def.get("id", f"#{i}")
+            eval_name = eval_def.get("name", eval_id)
+
+            eval_type = eval_def.get("type")
+            if eval_type not in valid_types:
+                result.error(
+                    "COMPOSITE_VALIDATION_INVALID_TYPE",
+                    f"Node '{node_id}', eval '{eval_name}': type must be one of {valid_types} (got {eval_type!r})",
+                    node_id=node_id,
+                )
+
+            behaviour = eval_def.get("failure_behaviour", "retry")
+            if behaviour not in valid_behaviours:
+                result.error(
+                    "COMPOSITE_VALIDATION_INVALID_BEHAVIOUR",
+                    f"Node '{node_id}', eval '{eval_name}': failure_behaviour must be"
+                    f" one of {valid_behaviours} (got {behaviour!r})",
+                    node_id=node_id,
+                )
+
+            config: dict[str, Any] = eval_def.get("config", {})
+
+            if eval_type == "regex":
+                self._check_regex_eval(node_id, eval_name, config, result)
+
+            elif eval_type == "json_schema":
+                self._check_json_schema_eval(node_id, eval_name, config, result)
+
+    def _check_regex_eval(
+        self,
+        node_id: str,
+        eval_name: str,
+        config: dict[str, Any],
+        result: ValidationResult,
+    ) -> None:
+        if not config.get("field"):
+            result.error(
+                "COMPOSITE_VALIDATION_REGEX_NO_FIELD",
+                f"Node '{node_id}', eval '{eval_name}': regex eval missing 'field' in config",
+                node_id=node_id,
+            )
+        pattern = config.get("pattern", "")
+        if not pattern:
+            result.error(
+                "COMPOSITE_VALIDATION_REGEX_NO_PATTERN",
+                f"Node '{node_id}', eval '{eval_name}': regex eval missing 'pattern' in config",
+                node_id=node_id,
+            )
+        elif isinstance(pattern, str):
+            try:
+                re.compile(pattern)
+            except re.error as exc:
+                result.error(
+                    "COMPOSITE_VALIDATION_REGEX_INVALID",
+                    f"Node '{node_id}', eval '{eval_name}': regex pattern '{pattern}' failed to compile: {exc}",
+                    node_id=node_id,
+                )
+
+    def _check_json_schema_eval(
+        self,
+        node_id: str,
+        eval_name: str,
+        config: dict[str, Any],
+        result: ValidationResult,
+    ) -> None:
+        if not config.get("schema") and not config.get("schema_ref"):
+            result.error(
+                "COMPOSITE_VALIDATION_SCHEMA_MISSING",
+                f"Node '{node_id}', eval '{eval_name}': json_schema eval requires 'schema' or 'schema_ref' in config",
+                node_id=node_id,
+            )
