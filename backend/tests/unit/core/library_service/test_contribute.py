@@ -87,7 +87,7 @@ class TestContributeFixture:
         assert call_kwargs["slug"] == "my-fixture"
         assert call_kwargs["visibility"] == "org"
         assert call_kwargs["author"] == created_by.hex
-        assert call_kwargs["created_by"] == created_by
+        assert call_kwargs["account_id"] == created_by
         assert call_kwargs["content_json"]["fixture_map"] == {"input": "output"}
         mock_update.assert_awaited_once_with(session, prim.id, {"contribution_status": CONTRIBUTION_DRAFT})
 

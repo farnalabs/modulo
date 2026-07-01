@@ -81,8 +81,9 @@ async def test_list_primitives_filters_composite_type():
     mock_list.assert_awaited_once()
     call_kwargs = mock_list.call_args.kwargs
     assert call_kwargs["primitive_type"] == "composite"
-    assert len(result.items) == 1
-    assert result.items[0].primitive_type == "composite"
+    # 1 org composite + 7 community composites
+    assert len(result.items) == 8
+    assert all(p.primitive_type == "composite" for p in result.items)
 
 
 async def test_list_primitives_composite_passes_filter_downstream():
@@ -104,7 +105,8 @@ async def test_list_primitives_composite_passes_filter_downstream():
     mock_list.assert_awaited_once()
     call_kwargs = mock_list.call_args.kwargs
     assert call_kwargs["primitive_type"] == "composite"
-    assert len(result.items) == 1
+    # 1 org composite + 7 community composites; org item is first
+    assert len(result.items) == 8
     assert result.items[0].slug == "my-composite"
 
 
@@ -249,11 +251,17 @@ async def test_copy_to_adapt_composite_preserves_content_json():
 
 def test_modulo_primitives_include_composites():
     composites = [p for p in _MODULO_PRIMITIVES if p.primitive_type == "composite"]
-    assert len(composites) == 4
-    assert {p.slug for p in composites} == {"approver", "booleaner", "d20", "triage"}
+    assert len(composites) == 7
+    assert {p.slug for p in composites} == {
+        "approver", "booleaner", "devils-advocate", "triage", "llm-council",
+        "structured-output-enforcer", "complexity-estimator",
+    }
 
 
 def test_filter_modulo_composite_returns_composites():
     results = _filter_modulo(primitive_type="composite", search=None)
-    assert len(results) == 4
-    assert {p.slug for p in results} == {"approver", "booleaner", "d20", "triage"}
+    assert len(results) == 7
+    assert {p.slug for p in results} == {
+        "approver", "booleaner", "devils-advocate", "triage", "llm-council",
+        "structured-output-enforcer", "complexity-estimator",
+    }

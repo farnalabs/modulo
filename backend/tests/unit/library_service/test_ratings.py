@@ -78,7 +78,7 @@ class TestSelfRatingGuard:
         user_id = uuid.uuid4()
         prim_id = uuid.uuid4()
         prim = MagicMock(spec=LibraryPrimitive)
-        prim.created_by = user_id
+        prim.account_id = user_id
 
         # Execute result that returns the LibraryPrimitive via scalar_one_or_none
         result = MagicMock()
@@ -91,7 +91,7 @@ class TestSelfRatingGuard:
                 org_id=uuid.uuid4(),
                 primitive_id=prim_id,
                 thumbs_up=True,
-                user_id=user_id,
+                account_id=user_id,
             )
         assert exc.value.status_code == 403
         assert "own primitive" in exc.value.detail
@@ -117,7 +117,7 @@ class TestSelfRatingGuard:
             org_id=uuid.uuid4(),
             primitive_id=prim.id,
             thumbs_up=True,
-            user_id=user_id,
+            account_id=user_id,
         )
         assert isinstance(result, PrimitiveRating)
 
@@ -142,7 +142,7 @@ class TestCooldownGuard:
                 org_id=uuid.uuid4(),
                 primitive_id=uuid.uuid4(),
                 thumbs_up=True,
-                user_id=user_id,
+                account_id=user_id,
             )
         assert exc.value.status_code == 429
         assert "wait" in exc.value.detail.lower()
@@ -170,7 +170,7 @@ class TestCopyToAdaptGuard:
                 org_id=uuid.uuid4(),
                 primitive_id=uuid.uuid4(),
                 thumbs_up=True,
-                user_id=user_id,
+                account_id=user_id,
             )
         assert exc.value.status_code == 403
         assert "copy" in exc.value.detail.lower()
@@ -195,7 +195,7 @@ class TestCopyToAdaptGuard:
             org_id=uuid.uuid4(),
             primitive_id=prim.id,
             thumbs_up=True,
-            user_id=user_id,
+            account_id=user_id,
         )
         assert isinstance(result, PrimitiveRating)
 
@@ -317,7 +317,7 @@ class TestSubmitAbuseReport:
             org_id=uuid.uuid4(),
             primitive_id=uuid.uuid4(),
             rating_id=uuid.uuid4(),
-            reporter_user_id=uuid.uuid4(),
+            reporter_account_id=uuid.uuid4(),
             reason="This rating is inappropriate",
         )
         assert isinstance(report, PrimitiveAbuseReport)
@@ -348,7 +348,7 @@ class TestReviewAbuseReport:
         report_id = uuid.uuid4()
         report = MagicMock(spec=PrimitiveAbuseReport)
         report.status = "pending"
-        report.reviewed_by = None
+        report.reviewer_account_id = None
         report.reviewed_at = None
 
         result = MagicMock()
@@ -356,7 +356,7 @@ class TestReviewAbuseReport:
         _given_execute(mock_session, result)
 
         result = await review_abuse_report(
-            mock_session, report_id, new_status="dismissed", reviewed_by=uuid.uuid4()
+            mock_session, report_id, new_status="dismissed", reviewer_account_id=uuid.uuid4()
         )
         assert result is not None
         assert result.status == "dismissed"
