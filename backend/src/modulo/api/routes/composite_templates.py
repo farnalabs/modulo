@@ -285,6 +285,31 @@ async def save_composite_editor_endpoint(
 # ---------------------------------------------------------------------------
 
 
+# ---------------------------------------------------------------------------
+# Detect: scan sub-pipeline prompts for {{parameter.*}} placeholders
+# ---------------------------------------------------------------------------
+
+
+class DetectParamsRequest(BaseModel):
+    node_ids: list[str] = Field(default_factory=list)
+
+
+class DetectParamsResponse(BaseModel):
+    ports: list[ParameterPort] = Field(default_factory=list)
+
+
+@router.post("/detect-params", response_model=DetectParamsResponse)
+async def detect_params_endpoint(
+    body: DetectParamsRequest,
+) -> DetectParamsResponse:
+    """Scan sub-pipeline agent prompts for ``{{parameter.*}}`` placeholders.
+
+    TODO: Implement actual prompt scanning. Currently returns an empty list.
+    The frontend handles empty results gracefully via its best-effort contract.
+    """
+    return DetectParamsResponse(ports=[])
+
+
 class PublishRequest(BaseModel):
     version: str | None = Field(default=None, description="Override version string, defaults to '1.0.0'")
 
