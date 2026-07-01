@@ -19,5 +19,5 @@ class FeatureFlagCatalog(Base):
     name = Column(Text, primary_key=True)
     description = Column(Text)
     tier_id = Column(Text, ForeignKey("tier_catalog.tier_id"), nullable=False)
-    depends_on = Column(ARRAY(Text))
+    depends_on: list[str] | None = Column(ARRAY(Text))  # type: ignore[assignment]
     is_active = Column(Boolean, server_default="true")
