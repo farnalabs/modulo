@@ -11,12 +11,25 @@ let eventSource: EventSource | null = null
 const handlers = new Map<string, Set<EventHandler>>()
 let reconnectAttempts = 0
 const MAX_RECONNECT_ATTEMPTS = 10
+let reconnectTimer: ReturnType<typeof setTimeout> | null = null
 
 function connect(): void {
-  reconnectAttempts = 0
   if (eventSource) return
+  if (reconnectTimer) {
+    clearTimeout(reconnectTimer)
+    reconnectTimer = null
+  }
+  reconnectAttempts = 0
+  doConnect()
+}
+
+function doConnect(): void {
+  if (eventSource) eventSource.close()
   eventSource = new EventSource(SSE_URL, { withCredentials: true })
-  eventSource.onopen = () => { connected.value = true }
+  eventSource.onopen = () => {
+    connected.value = true
+    reconnectAttempts = 0
+  }
   eventSource.onmessage = (event: MessageEvent) => {
     let data: EventBusEvent
     try {
@@ -40,23 +53,37 @@ function connect(): void {
   eventSource.onerror = () => {
     connected.value = false
     reconnectAttempts++
-    if (reconnectAttempts > MAX_RECONNECT_ATTEMPTS) {
-      console.error('[EventBus] Max reconnect attempts reached, closing connection')
-      if (eventSource) {
-        eventSource.close()
-        eventSource = null
-      }
+    if (eventSource) {
+      eventSource.close()
+      eventSource = null
     }
+    if (reconnectAttempts > MAX_RECONNECT_ATTEMPTS) {
+      console.error('[EventBus] Max reconnect attempts reached')
+      return
+    }
+    const delay = Math.min(1000 * Math.pow(2, reconnectAttempts - 1), 30000)
+    reconnectTimer = setTimeout(() => {
+      reconnectTimer = null
+      doConnect()
+    }, delay)
   }
 }
 
-function disconnect(): void {
+function cleanup(): void {
+  if (reconnectTimer) {
+    clearTimeout(reconnectTimer)
+    reconnectTimer = null
+  }
   if (eventSource) {
     eventSource.close()
     eventSource = null
-    connected.value = false
-    clearAllHandlers()
   }
+  connected.value = false
+}
+
+function disconnect(): void {
+  cleanup()
+  clearAllHandlers()
 }
 
 function clearAllHandlers(): void {
@@ -86,6 +113,11 @@ export const eventBus = {
     }
     if (totalHandlerCount() <= 0) disconnect()
   },
+  reconnect(): void {
+    cleanup()
+    reconnectAttempts = 0
+    doConnect()
+  },
 }
 
 function totalHandlerCount(): number {
@@ -96,13 +128,22 @@ function totalHandlerCount(): number {
 
 export function useEventStream(options?: { resourceType?: string; onEvent?: EventHandler }) {
   if (options?.resourceType && options?.onEvent) {
+    const resourceType: string = options.resourceType
+    const onEvent: EventHandler = options.onEvent
     let unsub: (() => void) | null = null
     onMounted(() => {
-      unsub = eventBus.subscribe(options.resourceType, options.onEvent)
+      unsub = eventBus.subscribe(resourceType, onEvent)
     })
     onUnmounted(() => {
       unsub?.()
     })
   }
   return { connected }
+}
+
+if (import.meta.hot) {
+  import.meta.hot.dispose(() => {
+    cleanup()
+    clearAllHandlers()
+  })
 }
