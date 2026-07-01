@@ -59,16 +59,40 @@ export interface DashboardSummary {
 }
 
 function validateDashboardSummary(data: unknown): DashboardSummary | null {
-  if (!data || typeof data !== 'object') return null
+  if (!data || typeof data !== 'object') {
+    console.warn('[Dashboard] validateDashboardSummary failed: data is not an object', typeof data)
+    return null
+  }
   const d = data as Record<string, unknown>
-  if (typeof d.total_runs !== 'number') return null
-  if (typeof d.active_pipelines !== 'number') return null
-  if (!d.run_counts_by_status || typeof d.run_counts_by_status !== 'object') return null
+  if (typeof d.total_runs !== 'number') {
+    console.warn('[Dashboard] validateDashboardSummary failed: total_runs is not a number', d.total_runs)
+    return null
+  }
+  if (typeof d.active_pipelines !== 'number') {
+    console.warn('[Dashboard] validateDashboardSummary failed: active_pipelines is not a number', d.active_pipelines)
+    return null
+  }
+  if (!d.run_counts_by_status || typeof d.run_counts_by_status !== 'object') {
+    console.warn('[Dashboard] validateDashboardSummary failed: run_counts_by_status is missing or not an object')
+    return null
+  }
   const rcs = d.run_counts_by_status as Record<string, unknown>
-  if (typeof rcs.running !== 'number' || typeof rcs.awaiting_human !== 'number' || typeof rcs.failed !== 'number' || typeof rcs.idle !== 'number') return null
-  if (!Array.isArray(d.teams)) return null  
-  if (!Array.isArray(d.trend)) return null
-  if (!Array.isArray(d.recent_runs)) return null
+  if (typeof rcs.running !== 'number' || typeof rcs.awaiting_human !== 'number' || typeof rcs.failed !== 'number' || typeof rcs.idle !== 'number') {
+    console.warn('[Dashboard] validateDashboardSummary failed: run_counts_by_status fields are not all numbers')
+    return null
+  }
+  if (!Array.isArray(d.teams)) {
+    console.warn('[Dashboard] validateDashboardSummary failed: teams is not an array')
+    return null  
+  }
+  if (!Array.isArray(d.trend)) {
+    console.warn('[Dashboard] validateDashboardSummary failed: trend is not an array')
+    return null
+  }
+  if (!Array.isArray(d.recent_runs)) {
+    console.warn('[Dashboard] validateDashboardSummary failed: recent_runs is not an array')
+    return null
+  }
   return d as unknown as DashboardSummary
 }
 
