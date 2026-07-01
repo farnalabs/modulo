@@ -162,6 +162,8 @@ class ModelBackendHub:
 
         Returns a RotatedResult so the caller can detect when a fallback was used.
         """
+        if backend_id not in self._backends:
+            raise BackendNotFoundError(backend_id)
         if self._healthy.get(backend_id, False) and backend_id in self._backends:
             return RotatedResult(
                 backend=self._backends[backend_id],
@@ -188,8 +190,6 @@ class ModelBackendHub:
                     used_fallback_id=oid,
                 )
         raise BackendUnavailableError(backend_id)
-
-    CONNECTOR_TIMEOUT: float = 60.0
 
     async def health_check(self, backend_id: uuid.UUID) -> HealthResult:
         """Check backend health; delegates to the backend's own health check."""
@@ -221,6 +221,15 @@ def _build_backend(
             aws_secret_access_key=creds["aws_secret_access_key"],
             model_id=model_id,
             region=creds.get("region", "us-east-1"),
+            **default_params,
+        )
+    if provider == "vertexai":
+        if "project" not in creds:
+            raise ValueError(f"Missing 'project' in credentials for provider 'vertexai'. Got keys: {sorted(creds)}")
+        return VertexAIBackend(
+            project=creds["project"],
+            model_id=model_id,
+            location=creds.get("location", "us-central-1"),
             **default_params,
         )
     if "api_key" not in creds:
@@ -320,14 +329,9 @@ def _build_backend(
                 base_url=base_url,
                 **default_params,
             )
-        case "vertexai":
-            return VertexAIBackend(
-                project=creds["project"],
-                model_id=model_id,
-                location=creds.get("location", "us-central-1"),
-                **default_params,
-            )
         case "watsonx":
+            if "project_id" not in creds:
+                raise ValueError(f"Missing 'project_id' in credentials for provider 'watsonx'. Got keys: {sorted(creds)}")
             return WatsonXBackend(
                 api_key=creds["api_key"],
                 model_id=model_id,
