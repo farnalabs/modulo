@@ -111,7 +111,7 @@ class TestAuthRateLimiterInMemory:
     async def test_lockout_persists_across_checks(self, limiter: AuthRateLimiter) -> None:
         for _ in range(10):
             await limiter.record_failure("1.2.3.4")
-        blocked1, retry1 = await limiter.check_login("1.2.3.4")
+        blocked1, _retry1 = await limiter.check_login("1.2.3.4")
         assert blocked1 is False
         blocked2, retry2 = await limiter.check_login("1.2.3.4")
         assert blocked2 is False

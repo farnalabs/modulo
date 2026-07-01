@@ -10,8 +10,6 @@ Create Date: 2026-06-28
 
 from collections.abc import Sequence
 
-from alembic import op
-
 revision: str = "0038_agent_missing_columns"
 down_revision: str | Sequence[str] | None = "0036_conditional_edges"
 branch_labels: str | Sequence[str] | None = None

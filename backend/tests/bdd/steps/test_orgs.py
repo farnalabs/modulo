@@ -93,7 +93,6 @@ def user_is_active(username: str, ctx):
 
 @when(parsers.parse('I add user "{username}" to team "{team_name}" with role "{role}"'))
 def add_user_to_team(request, username: str, team_name: str, role: str, client, ctx):
-    from fastapi import HTTPException
 
     team_id = ctx.get("team_id", str(uuid.uuid4()))
     target_user_id = ctx.get("target_user_id", str(uuid.uuid4()))
@@ -149,7 +148,7 @@ def remove_user_from_team(request, username: str, team_name: str, client, ctx):
     with patch(
         "modulo.api.routes.teams.remove_team_member",
         new_callable=AsyncMock,
-    ) as mock_remove:
+    ):
         with patch(
             "modulo.api.routes.teams.get_membership",
             new_callable=AsyncMock,

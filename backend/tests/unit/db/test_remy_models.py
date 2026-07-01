@@ -70,7 +70,7 @@ class TestChatMessage:
 
     def test_parent_id_ondelete_set_null(self) -> None:
         table = Base.metadata.tables["chat_messages"]
-        parent_fk = [fk for fk in table.foreign_keys if fk.parent.name == "parent_id"][0]
+        parent_fk = next(fk for fk in table.foreign_keys if fk.parent.name == "parent_id")
         assert parent_fk.ondelete == "SET NULL"
 
     def test_session_id_fk_to_chat_sessions(self) -> None:
@@ -81,7 +81,7 @@ class TestChatMessage:
 
     def test_session_id_ondelete_cascade(self) -> None:
         table = Base.metadata.tables["chat_messages"]
-        session_fk = [fk for fk in table.foreign_keys if fk.parent.name == "session_id"][0]
+        session_fk = next(fk for fk in table.foreign_keys if fk.parent.name == "session_id")
         assert session_fk.ondelete == "CASCADE"
 
     def test_organisation_id_not_null(self) -> None:

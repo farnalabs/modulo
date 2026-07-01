@@ -18,7 +18,6 @@ from modulo.connectors.base import (
     HealthResult,
 )
 from modulo.core.connector_hub import (
-    ConnectorDecryptError,
     ConnectorHub,
     ConnectorNotFoundError,
 )

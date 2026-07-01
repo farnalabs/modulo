@@ -24,10 +24,10 @@ from modulo.db.models.audit_event import AuditEvent
 from modulo.db.models.connector_instance import ConnectorInstance
 from modulo.db.models.library_primitive import LibraryPrimitive
 from modulo.db.models.model_backend import ModelBackend
+from modulo.db.models.org_membership import OrgMembership
 from modulo.db.models.organisation import Organisation
 from modulo.db.models.pipeline import Pipeline
 from modulo.db.models.run import Run
-from modulo.db.models.org_membership import OrgMembership
 
 DELETION_TOKEN_BYTES = 48
 CONFIRMATION_WINDOW_HOURS = 24

@@ -6,7 +6,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from modulo.api.main import app
-from modulo.api.routes.health import CheckResult, ReadinessResponse
+from modulo.api.routes.health import CheckResult
 from modulo.settings import Settings, get_settings
 
 

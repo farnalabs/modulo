@@ -5,7 +5,7 @@ All functions require RLS org context to be set by the caller.
 """
 
 import uuid
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 
 from sqlalchemy import func, or_, select
@@ -93,7 +93,7 @@ async def deprecate_schema(session: AsyncSession, schema_id: uuid.UUID) -> Schem
     if schema is None:
         return None
     schema.deprecated = True
-    schema.deprecated_at = datetime.now(timezone.utc)
+    schema.deprecated_at = datetime.now(UTC)
     await session.flush()
     return schema
 

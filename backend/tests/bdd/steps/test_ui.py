@@ -386,14 +386,14 @@ def _i_am_org_admin() -> None:
 
 @given("there are 3 members in the organisation")
 def _three_members(page: Page) -> None:
-    members = page.locator('[data-testid="member-row"]')
+    page.locator('[data-testid="member-row"]')
     # This will be true when the frontend renders the member list
     # For now we just check the page loaded
 
 
 @given("the organisation has 2 API keys")
 def _two_api_keys(page: Page) -> None:
-    api_keys = page.locator('[data-testid="api-key-row"]')
+    page.locator('[data-testid="api-key-row"]')
     # Check that the page has an API key section
 
 
@@ -586,8 +586,8 @@ def _eval_runs_pass_fail(page: Page) -> None:
     items = page.locator('[data-testid="eval-result-item"]')
     if items.count() > 0:
         statuses = [el.text_content() for el in items.all() if el.is_visible()]
-        has_pass = any("pass" in (s or "").lower() for s in statuses)
-        has_fail = any("fail" in (s or "").lower() for s in statuses)
+        any("pass" in (s or "").lower() for s in statuses)
+        any("fail" in (s or "").lower() for s in statuses)
         # Not asserting — the frontend may not have seeded data
 
 

@@ -7,10 +7,10 @@ from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, status
 
+from modulo.api.middleware.sensitive_mask import is_sensitive_env_key, mask_sensitive_value
 from modulo.auth.dependencies import get_current_user
 from modulo.auth.jwt import AuthenticatedPrincipal
 from modulo.core.runtime_config.store import get_runtime_config_store
-from modulo.api.middleware.sensitive_mask import is_sensitive_env_key, mask_sensitive_value
 
 router = APIRouter(prefix="/api/v1/admin/runtime-config", tags=["admin-runtime-config"])
 

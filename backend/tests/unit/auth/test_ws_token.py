@@ -44,14 +44,14 @@ class TestCreateWsToken:
         assert json.loads(args[2]) == _PRINCIPAL
 
     async def test_default_ttl_is_60(self, mock_redis: AsyncMock) -> None:
-        token = await create_ws_token(mock_redis, _PRINCIPAL)
+        await create_ws_token(mock_redis, _PRINCIPAL)
 
         mock_redis.setex.assert_awaited_once()
         args, _kwargs = mock_redis.setex.await_args
         assert args[1] == 60
 
     async def test_custom_ttl(self, mock_redis: AsyncMock) -> None:
-        token = await create_ws_token(mock_redis, _PRINCIPAL, ttl=120)
+        await create_ws_token(mock_redis, _PRINCIPAL, ttl=120)
 
         mock_redis.setex.assert_awaited_once()
         args, _kwargs = mock_redis.setex.await_args

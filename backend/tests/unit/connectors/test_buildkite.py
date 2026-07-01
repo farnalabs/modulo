@@ -5,7 +5,6 @@ import pytest
 import respx
 
 from modulo.connectors.base import (
-    CIRunLog,
     CIRunStatus,
     ConnectorPayload,
     ConnectorQuery,

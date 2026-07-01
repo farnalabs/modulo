@@ -1,7 +1,6 @@
 """BDD step definitions: Team creation."""
 
 import uuid
-from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -9,7 +8,6 @@ from fastapi.testclient import TestClient
 from pytest_bdd import given, parsers, scenarios, then, when
 
 from modulo.api.main import app
-from modulo.auth.jwt import AuthenticatedPrincipal
 from modulo.settings import get_settings
 from tests.bdd.conftest import make_settings
 

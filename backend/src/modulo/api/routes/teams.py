@@ -24,7 +24,6 @@ from modulo.db.crud.team_membership import (
     list_team_members,
     remove_team_member,
 )
-
 from modulo.db.rls import set_rls_org, set_rls_user_context
 
 router = APIRouter(

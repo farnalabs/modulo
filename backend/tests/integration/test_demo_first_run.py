@@ -274,7 +274,6 @@ async def test_seed_demo_data_skipped_when_disabled(db_engine: AsyncEngine, db_u
     )
 
     # Use a unique email for this test to avoid cross-test contamination
-    from modulo.auth.passwords import hash_password
 
     # First, clean the demo user from previous test
     async with db_engine.connect() as conn:

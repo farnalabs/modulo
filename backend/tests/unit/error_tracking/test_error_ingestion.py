@@ -11,7 +11,7 @@ import pytest
 from pydantic import ValidationError
 
 from modulo.api.middleware.rate_limiter import RateLimitMiddleware
-from modulo.api.models.error import ErrorEventInput, ErrorIngestRequest, ErrorGroupResult, ErrorIngestResponse
+from modulo.api.models.error import ErrorEventInput, ErrorGroupResult, ErrorIngestRequest, ErrorIngestResponse
 from modulo.core.error_tracking import ErrorIngestionService, SessionKeyStore
 
 _ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
@@ -137,7 +137,7 @@ class TestIngest:
 
         with (
             patch("modulo.core.error_tracking.create_error_event", AsyncMock(return_value=event_mock)) as create_mock,
-            patch("modulo.core.error_tracking.get_error_group_by_fingerprint", AsyncMock(return_value=None)) as get_mock,
+            patch("modulo.core.error_tracking.get_error_group_by_fingerprint", AsyncMock(return_value=None)),
             patch("modulo.core.error_tracking.upsert_error_group") as upsert_mock,
         ):
             upsert_group = MagicMock()
@@ -239,7 +239,7 @@ class TestSessionKeyStore:
         store = SessionKeyStore(redis_client=None)
         a1, a2 = str(uuid.uuid4()), str(uuid.uuid4())
         k1 = await store.generate_key(a1)
-        k2 = await store.generate_key(a2)
+        await store.generate_key(a2)
 
         body = b"hello"
         sig1 = hmac.new(k1.encode(), body, hashlib.sha256).hexdigest()
