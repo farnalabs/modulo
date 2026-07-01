@@ -107,7 +107,10 @@ def _group_to_scim(group: Team, members: list[dict[str, str]], base_url: str) ->
 
 
 def _get_base_url(settings: Settings) -> str:
-    return settings.modulo_public_url.rstrip("/")
+    url = settings.modulo_public_url
+    if not url:
+        return "http://localhost:8000"
+    return url.rstrip("/")
 
 
 # ── Request / Response models ────────────────────────────────────────
@@ -335,6 +338,11 @@ async def patch_user(
             raise _scim_error(status.HTTP_404_NOT_FOUND, f"User {user_id} not found")
 
         for op in body.Operations:
+            if op.op not in ("replace", "remove", "add"):
+                raise _scim_error(
+                    status.HTTP_400_BAD_REQUEST,
+                    f"Unsupported PATCH operation '{op.op}'. Supported: replace, remove, add",
+                )
             if op.op == "replace":
                 if isinstance(op.value, dict):
                     if "userName" in op.value:
@@ -580,6 +588,11 @@ async def patch_group(
             raise _scim_error(status.HTTP_404_NOT_FOUND, f"Group {group_id} not found")
 
         for op in body.Operations:
+            if op.op not in ("replace", "remove", "add"):
+                raise _scim_error(
+                    status.HTTP_400_BAD_REQUEST,
+                    f"Unsupported PATCH operation '{op.op}'. Supported: replace, remove, add",
+                )
             if op.op == "replace":
                 if isinstance(op.value, dict):
                     if "displayName" in op.value:
