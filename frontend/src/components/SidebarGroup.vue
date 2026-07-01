@@ -16,7 +16,6 @@
 
 <script setup lang="ts">
 defineProps<{
-  id: string
   label: string
   collapsed: boolean
 }>()
