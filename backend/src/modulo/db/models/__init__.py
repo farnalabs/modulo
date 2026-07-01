@@ -8,6 +8,7 @@ from modulo.db.models.connector_instance import ConnectorInstance
 from modulo.db.models.daily_run_count import OrgDailyRunCount
 from modulo.db.models.environment_profile import EnvironmentProfile
 from modulo.db.models.error_event import ErrorEvent
+from modulo.db.models.error_forwarder_config import ErrorForwarderConfig
 from modulo.db.models.error_group import ErrorGroup
 from modulo.db.models.error_notification_rule import ErrorNotificationRule
 from modulo.db.models.eval_definition import EvalDefinition
@@ -65,6 +66,7 @@ __all__ = [
     "ConnectorInstance",
     "EnvironmentProfile",
     "ErrorEvent",
+    "ErrorForwarderConfig",
     "ErrorGroup",
     "ErrorNotificationRule",
     "EvalDefinition",
