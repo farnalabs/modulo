@@ -174,3 +174,89 @@ async def delete_composite_template_endpoint(
         deleted = await delete_composite_template(session, template_id)
     if not deleted:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Composite template not found")
+
+
+# ---------------------------------------------------------------------------
+# Editor: open composite sub-pipeline graph for editing
+# ---------------------------------------------------------------------------
+
+
+class EditorGraphResponse(BaseModel):
+    """Mirrors the pipeline graph shape but within a composite scope."""
+
+    nodes: list[dict[str, Any]] = Field(default_factory=list)
+    edges: list[dict[str, Any]] = Field(default_factory=list)
+
+
+class EditorGraphUpdate(BaseModel):
+    nodes: list[dict[str, Any]] = Field(default_factory=list)
+    edges: list[dict[str, Any]] = Field(default_factory=list)
+
+
+@router.get("/{template_id}/editor", response_model=EditorGraphResponse)
+async def get_composite_editor_endpoint(
+    template_id: uuid.UUID,
+    session: AsyncSession = Depends(get_db_session),
+    principal: AuthenticatedPrincipal = Depends(get_current_user),
+) -> EditorGraphResponse:
+    async with session.begin():
+        await set_rls_org(session, principal.organisation_id)
+        template = await get_composite_template(session, template_id)
+    if template is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Composite template not found")
+    graph = template.sub_pipeline_graph_json
+    return EditorGraphResponse(
+        nodes=graph.get("nodes", []),
+        edges=graph.get("edges", []),
+    )
+
+
+@router.put("/{template_id}/editor", response_model=EditorGraphResponse)
+async def save_composite_editor_endpoint(
+    template_id: uuid.UUID,
+    body: EditorGraphUpdate,
+    session: AsyncSession = Depends(get_db_session),
+    principal: AuthenticatedPrincipal = Depends(get_current_user),
+) -> EditorGraphResponse:
+    async with session.begin():
+        await set_rls_org(session, principal.organisation_id)
+        template = await update_composite_template(session, template_id, {
+            "sub_pipeline_graph_json": {"nodes": body.nodes, "edges": body.edges},
+        })
+    if template is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Composite template not found")
+    return EditorGraphResponse(
+        nodes=template.sub_pipeline_graph_json.get("nodes", []),
+        edges=template.sub_pipeline_graph_json.get("edges", []),
+    )
+
+
+# ---------------------------------------------------------------------------
+# Publish: mark composite as published with a version
+# ---------------------------------------------------------------------------
+
+
+class PublishRequest(BaseModel):
+    version: str | None = Field(default=None, description="Override version string, defaults to '1.0.0'")
+
+
+class PublishResponse(BaseModel):
+    id: uuid.UUID
+    version: str
+    published: bool
+
+
+@router.post("/{template_id}/publish", response_model=PublishResponse)
+async def publish_composite_endpoint(
+    template_id: uuid.UUID,
+    body: PublishRequest,
+    session: AsyncSession = Depends(get_db_session),
+    principal: AuthenticatedPrincipal = Depends(get_current_user),
+) -> PublishResponse:
+    version = body.version or "1.0.0"
+    async with session.begin():
+        await set_rls_org(session, principal.organisation_id)
+        template = await update_composite_template(session, template_id, {"version": version})
+    if template is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Composite template not found")
+    return PublishResponse(id=template.id, version=template.version, published=True)
