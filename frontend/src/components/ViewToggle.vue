@@ -1,7 +1,7 @@
 <template>
   <FeatureGate feature-name="saved_views" data-testid="view-toggle-gate">
     <div class="flex items-center gap-2" data-testid="view-toggle">
-      <Select v-model="selectedViewId" @update:model-value="onViewSelect">
+      <Select v-model="selectedViewId" @update:model-value="onViewSelect($event as string)">
         <SelectTrigger class="w-[200px]" data-testid="view-toggle-trigger">
           <SelectValue placeholder="Select a saved view..." />
         </SelectTrigger>
@@ -17,7 +17,11 @@
               {{ view.name }}
             </SelectItem>
           </SelectGroup>
-          <div v-if="views.length === 0" class="px-2 py-4 text-center text-sm text-muted-foreground" data-testid="view-toggle-empty">
+          <div
+            v-if="views.length === 0"
+            class="px-2 py-4 text-center text-sm text-muted-foreground"
+            data-testid="view-toggle-empty"
+          >
             No saved views
           </div>
         </SelectContent>
@@ -48,18 +52,18 @@
         class="text-xs"
         data-testid="view-toggle-badge"
       >
-        {{ isEnabled ? 'Active' : 'Inactive' }}
+        {{ isEnabled ? "Active" : "Inactive" }}
       </Badge>
     </div>
   </FeatureGate>
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted } from 'vue'
-import { api } from '@/lib/api/client'
-import { usePlanStore } from '@/stores/planStore'
-import FeatureGate from './FeatureGate.vue'
-import Badge from './ui/badge/Badge.vue'
+import { ref, onMounted } from "vue";
+import { api } from "@/lib/api/client";
+import { usePlanStore } from "@/stores/planStore";
+import FeatureGate from "./FeatureGate.vue";
+import Badge from "./ui/badge/Badge.vue";
 import {
   Select,
   SelectContent,
@@ -68,54 +72,59 @@ import {
   SelectLabel,
   SelectTrigger,
   SelectValue,
-} from './ui/select'
+} from "./ui/select";
 
 interface SavedView {
-  id: string
-  name: string
+  id: string;
+  name: string;
 }
 
 const emit = defineEmits<{
-  (e: 'view-changed', payload: { viewId: string | null; enabled: boolean }): void
-}>()
+  (
+    e: "view-changed",
+    payload: { viewId: string | null; enabled: boolean },
+  ): void;
+}>();
 
-const planStore = usePlanStore()
-const views = ref<SavedView[]>([])
-const selectedViewId = ref<string | null>(null)
-const isEnabled = ref(false)
+const planStore = usePlanStore();
+const views = ref<SavedView[]>([]);
+const selectedViewId = ref<string | null>(null);
+const isEnabled = ref(false);
 
 async function fetchViews() {
   try {
-    const { data, error } = await (api as any).GET('/api/v1/views')
+    const { data, error } = await (api as any).GET("/api/v1/views");
     if (error) {
-      console.error('Failed to fetch views:', error)
-      return
+      return;
     }
     if (data && Array.isArray(data.views)) {
-      views.value = data.views
+      views.value = data.views;
     }
-  } catch (e) {
-    console.error('Failed to fetch views:', e)
+  } catch (_e) {
+    // Silently handle
   }
 }
 
 function onViewSelect(id: string) {
-  selectedViewId.value = id
-  emit('view-changed', { viewId: id, enabled: isEnabled.value })
+  selectedViewId.value = id;
+  emit("view-changed", { viewId: id, enabled: isEnabled.value });
 }
 
 function toggleEnabled() {
-  isEnabled.value = !isEnabled.value
+  isEnabled.value = !isEnabled.value;
   if (selectedViewId.value) {
-    emit('view-changed', { viewId: selectedViewId.value, enabled: isEnabled.value })
+    emit("view-changed", {
+      viewId: selectedViewId.value,
+      enabled: isEnabled.value,
+    });
   }
 }
 
-defineExpose({ selectedViewId, views, isEnabled, fetchViews })
+defineExpose({ selectedViewId, views, isEnabled, fetchViews });
 
 onMounted(() => {
-  if (planStore.featureEnabled('saved_views')) {
-    fetchViews()
+  if (planStore.featureEnabled("saved_views")) {
+    fetchViews();
   }
-})
+});
 </script>

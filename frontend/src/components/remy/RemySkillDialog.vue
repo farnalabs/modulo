@@ -2,7 +2,7 @@
   <Dialog :open="dialogOpen" @update:open="closeForm">
     <DialogContent class="sm:max-w-lg">
       <DialogHeader>
-        <DialogTitle>{{ editingId ? 'Edit Skill' : 'Add Skill' }}</DialogTitle>
+        <DialogTitle>{{ editingId ? "Edit Skill" : "Add Skill" }}</DialogTitle>
         <DialogDescription>
           {{ editingId ? editDescription : createDescription }}
         </DialogDescription>
@@ -10,7 +10,9 @@
 
       <form @submit.prevent="save" class="space-y-4">
         <div>
-          <label class="mb-1 block text-sm font-medium">Name <span class="text-destructive">*</span></label>
+          <label class="mb-1 block text-sm font-medium"
+            >Name <span class="text-destructive">*</span></label
+          >
           <input
             v-model="form.name"
             type="text"
@@ -39,7 +41,9 @@
             placeholder="trigger1, trigger2"
             data-testid="remy-skills-form-triggers"
           />
-          <p class="mt-1 text-xs text-muted-foreground">Comma-separated trigger keywords</p>
+          <p class="mt-1 text-xs text-muted-foreground">
+            Comma-separated trigger keywords
+          </p>
         </div>
         <div>
           <label class="mb-1 block text-sm font-medium">Body (Markdown)</label>
@@ -62,7 +66,9 @@
             Active
           </label>
         </div>
-        <div v-if="saveError" class="text-sm text-destructive">{{ saveError }}</div>
+        <div v-if="saveError" class="text-sm text-destructive">
+          {{ saveError }}
+        </div>
         <DialogFooter>
           <button
             type="button"
@@ -78,7 +84,7 @@
             class="rounded-lg bg-primary px-4 py-2 text-sm font-semibold text-primary-foreground hover:brightness-110 disabled:opacity-50 transition-all"
             data-testid="remy-skills-form-submit"
           >
-            {{ saving ? 'Saving...' : (editingId ? 'Update' : 'Create') }}
+            {{ saving ? "Saving..." : editingId ? "Update" : "Create" }}
           </button>
         </DialogFooter>
       </form>
@@ -90,7 +96,8 @@
       <DialogHeader>
         <DialogTitle>Delete Skill</DialogTitle>
         <DialogDescription>
-          Are you sure you want to delete "{{ deletingName }}"? This action cannot be undone.
+          Are you sure you want to delete "{{ deletingName }}"? This action
+          cannot be undone.
         </DialogDescription>
       </DialogHeader>
       <DialogFooter>
@@ -109,7 +116,7 @@
           data-testid="remy-skills-delete-confirm"
           @click="confirmDelete"
         >
-          {{ deleting ? 'Deleting...' : 'Delete' }}
+          {{ deleting ? "Deleting..." : "Delete" }}
         </button>
       </DialogFooter>
     </DialogContent>
@@ -117,151 +124,163 @@
 </template>
 
 <script setup lang="ts">
-import { ref, reactive } from 'vue'
-import { api } from '@/lib/api/client'
+import { ref, reactive } from "vue";
+import { api } from "@/lib/api/client";
 import {
-  Dialog, DialogContent, DialogDescription, DialogFooter,
-  DialogHeader, DialogTitle,
-} from '@/components/ui/dialog'
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 
 export interface SkillFormItem {
-  id: string
-  name: string
-  description?: string
-  triggers?: string[]
-  body?: string
-  active: boolean
+  id: string;
+  name: string;
+  description?: string;
+  triggers?: string[];
+  body?: string;
+  active: boolean;
 }
 
-const props = withDefaults(defineProps<{
-  createDescription?: string
-  editDescription?: string
-  createEndpoint?: string
-  updateEndpoint?: string
-  deleteEndpoint?: string
-  listEndpoint?: string
-}>(), {
-  createDescription: 'Create a new skill.',
-  editDescription: 'Update the skill configuration.',
-  createEndpoint: '/api/v1/admin/remy/skills',
-  updateEndpoint: '/api/v1/admin/remy/skills/{skill_id}',
-  deleteEndpoint: '/api/v1/admin/remy/skills/{skill_id}',
-})
+const props = withDefaults(
+  defineProps<{
+    createDescription?: string;
+    editDescription?: string;
+    createEndpoint?: string;
+    updateEndpoint?: string;
+    deleteEndpoint?: string;
+    listEndpoint?: string;
+  }>(),
+  {
+    createDescription: "Create a new skill.",
+    editDescription: "Update the skill configuration.",
+    createEndpoint: "/api/v1/admin/remy/skills",
+    updateEndpoint: "/api/v1/admin/remy/skills/{skill_id}",
+    deleteEndpoint: "/api/v1/admin/remy/skills/{skill_id}",
+  },
+);
 
 const emit = defineEmits<{
-  saved: []
-}>()
+  saved: [];
+}>();
 
-const dialogOpen = ref(false)
-const deleteOpen = ref(false)
-const editingId = ref<string | null>(null)
-const deletingId = ref<string | null>(null)
-const deletingName = ref('')
-const saving = ref(false)
-const deleting = ref(false)
-const saveError = ref<string | null>(null)
+const dialogOpen = ref(false);
+const deleteOpen = ref(false);
+const editingId = ref<string | null>(null);
+const deletingId = ref<string | null>(null);
+const deletingName = ref("");
+const saving = ref(false);
+const deleting = ref(false);
+const saveError = ref<string | null>(null);
 
 const form = reactive({
-  name: '',
-  description: '',
-  triggersInput: '',
-  body: '',
+  name: "",
+  description: "",
+  triggersInput: "",
+  body: "",
   active: true,
-})
+});
 
 function openCreate() {
-  editingId.value = null
-  form.name = ''
-  form.description = ''
-  form.triggersInput = ''
-  form.body = ''
-  form.active = true
-  saveError.value = null
-  dialogOpen.value = true
+  editingId.value = null;
+  form.name = "";
+  form.description = "";
+  form.triggersInput = "";
+  form.body = "";
+  form.active = true;
+  saveError.value = null;
+  dialogOpen.value = true;
 }
 
 function openEdit(skill: SkillFormItem) {
-  editingId.value = skill.id
-  form.name = skill.name
-  form.description = skill.description || ''
-  form.triggersInput = (skill.triggers || []).join(', ')
-  form.body = skill.body || ''
-  form.active = skill.active
-  saveError.value = null
-  dialogOpen.value = true
+  editingId.value = skill.id;
+  form.name = skill.name;
+  form.description = skill.description || "";
+  form.triggersInput = (skill.triggers || []).join(", ");
+  form.body = skill.body || "";
+  form.active = skill.active;
+  saveError.value = null;
+  dialogOpen.value = true;
 }
 
 function closeForm() {
-  dialogOpen.value = false
-  editingId.value = null
-  saveError.value = null
+  dialogOpen.value = false;
+  editingId.value = null;
+  saveError.value = null;
 }
 
 function openDelete(skill: SkillFormItem) {
-  deletingId.value = skill.id
-  deletingName.value = skill.name
-  deleteOpen.value = true
+  deletingId.value = skill.id;
+  deletingName.value = skill.name;
+  deleteOpen.value = true;
 }
 
 async function save() {
-  if (!form.name.trim()) return
-  saving.value = true
-  saveError.value = null
+  if (!form.name.trim()) return;
+  saving.value = true;
+  saveError.value = null;
   try {
-    const triggers = form.triggersInput.split(/[\s,]+/).map(s => s.trim()).filter(Boolean)
+    const triggers = form.triggersInput
+      .split(/[\s,]+/)
+      .map((s) => s.trim())
+      .filter(Boolean);
     const payload = {
       name: form.name.trim(),
       description: form.description.trim() || null,
       triggers,
       body: form.body,
       active: form.active,
-    }
+    };
 
     if (editingId.value) {
       const { error: err } = await (api as any).PUT(props.updateEndpoint, {
         params: { path: { skill_id: editingId.value } },
         body: payload,
-      })
+      });
       if (err) {
-        saveError.value = `Failed to update skill: ${err}`
-        return
+        saveError.value = `Failed to update skill: ${err}`;
+        return;
       }
     } else {
-      const { error: err } = await (api as any).POST(props.createEndpoint, { body: payload })
+      const { error: err } = await (api as any).POST(props.createEndpoint, {
+        body: payload,
+      });
       if (err) {
-        saveError.value = `Failed to create skill: ${err}`
-        return
+        saveError.value = `Failed to create skill: ${err}`;
+        return;
       }
     }
-    closeForm()
-    emit('saved')
+    closeForm();
+    emit("saved");
   } catch (e: unknown) {
-    saveError.value = `Failed to save skill: ${e instanceof Error ? e.message : String(e)}`
+    saveError.value = `Failed to save skill: ${e instanceof Error ? e.message : String(e)}`;
   } finally {
-    saving.value = false
+    saving.value = false;
   }
 }
 
 async function confirmDelete() {
-  if (!deletingId.value) return
-  deleting.value = true
+  if (!deletingId.value) return;
+  deleting.value = true;
   try {
     const { error: err } = await (api as any).DELETE(props.deleteEndpoint, {
       params: { path: { skill_id: deletingId.value } },
-    })
+    });
     if (err) {
-      saveError.value = `Failed to delete skill: ${err}`
-      return
+      saveError.value = `Failed to delete skill: ${err}`;
+      return;
     }
-    deleteOpen.value = false
-    deletingId.value = null
-    emit('saved')
+    deleteOpen.value = false;
+    deletingId.value = null;
+    emit("saved");
   } catch (e: unknown) {
-    saveError.value = `Failed to delete skill: ${e instanceof Error ? e.message : String(e)}`
+    saveError.value = `Failed to delete skill: ${e instanceof Error ? e.message : String(e)}`;
   } finally {
-    deleting.value = false
+    deleting.value = false;
   }
 }
 
-defineExpose({ openCreate, openEdit, openDelete })
+defineExpose({ openCreate, openEdit, openDelete });
 </script>
