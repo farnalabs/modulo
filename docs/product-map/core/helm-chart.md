@@ -23,7 +23,7 @@ Packages Modulo for self-hosted deployment via Docker Compose (dev/alpha/poc) an
 - [x] `docker compose up` starts Postgres 16, Redis 7, backend (uvicorn), and frontend (Vite dev server)
 - [x] Backend connects to Postgres via `DATABASE_URL` and Redis via `REDIS_URL`
 - [x] Backend auto-migrates schema via Alembic + AsyncPostgresSaver on startup
-- [ ] Frontend proxies `/api` to backend at port 8000; WebSocket passthrough works for real-time updates — **Helm nginx config missing WebSocket headers (`Upgrade`, `Connection`); Vite dev proxy handles it but nginx does not**
+- [x] Frontend proxies `/api` to backend at port 8000; WebSocket passthrough works for real-time updates — **Fixed: nginx config in `_helpers.tpl` now includes WebSocket proxy headers; Vite dev proxy also handles it**
 - [ ] SQLite mode available for zero-dependency local dev (no Postgres/Redis required)
 - [x] MariaDB override via `docker compose -f docker-compose.yml -f docker-compose.mariadb.yml up`
 - [x] `docker compose -f docker-compose.test.yml up db-test` provides isolated Postgres for pytest
@@ -34,7 +34,7 @@ Packages Modulo for self-hosted deployment via Docker Compose (dev/alpha/poc) an
 ### Docker build — container images
 
 - [x] Backend image builds from `python:3.12-slim` via uv-based install
-- [ ] Frontend image builds as nginx serving the Vue 3 SPA — **current frontend Dockerfile uses Vite dev server, not production nginx** (create `Dockerfile.prod`)
+- [x] Frontend image builds as nginx serving the Vue 3 SPA — **Fixed: `Dockerfile.prod` created as multi-stage build (Node build → nginx serve)**
 - [ ] Images publishable to `ghcr.io/anomalyco/modulo` (or custom registry)
 
 ### Helm chart — production Kubernetes deployment
@@ -47,11 +47,11 @@ Packages Modulo for self-hosted deployment via Docker Compose (dev/alpha/poc) an
 - [x] Security context: non-root user (UID 1000 backend / 101 frontend), read-only root filesystem, all capabilities dropped
 - [x] Secrets (SECRET_KEY, FERNET_KEY, DATABASE_URL, REDIS_URL) stored as k8s `Secret` — never in pod spec env
 - [x] Secrets auto-generated via `randAlphaNum` when not explicitly provided
-- [ ] Existing secrets preserved on upgrade (not regenerated) — **BUG: secrets.yaml uses `pre-install,pre-upgrade` hook, causing regeneration on every upgrade**
+- [x] Existing secrets preserved on upgrade (not regenerated) — **Fixed: secrets.yaml hook changed from `pre-install,pre-upgrade` to `pre-install` only**
 - [x] Ingress with TLS termination and optional `MODULO_PUBLIC_URL` host routing
-- [ ] HorizontalPodAutoscaler for backend and frontend with CPU/memory thresholds — **HPA template only covers backend (deployment-backend), missing frontend HPA**
-- [ ] PodDisruptionBudget for HA setups — **values.yaml has `podDisruptionBudget` blocks but no template (pdb.yaml) renders them**
-- [ ] NetworkPolicy restricting ingress/egress per component — **no networkpolicy.yaml template exists**
+- [x] HorizontalPodAutoscaler for backend and frontend with CPU/memory thresholds — **Fixed: hpa.yaml now creates separate HPAs for both backend and frontend**
+- [x] PodDisruptionBudget for HA setups — **Fixed: pdb.yaml template created that renders backend and frontend PDBs from values**
+- [x] NetworkPolicy restricting ingress/egress per component — **Fixed: networkpolicy.yaml template created, gated by `networkPolicy.enabled`**
 - [x] Helm chart version follows semver with AppVersion tag
 - [x] `helm test` runs `/healthz` connectivity checks
 
@@ -59,7 +59,7 @@ Packages Modulo for self-hosted deployment via Docker Compose (dev/alpha/poc) an
 
 - [x] Docker Compose observability profile disabled by default (no resource overhead)
 - [ ] SQLite mode skips Redis entirely — rate limiter falls back to in-memory — **backend code not verified from infra files**
-- [ ] Frontend dev proxy works with both HTTP and WebSocket — **Helm nginx config needs WebSocket headers; Vite dev proxy handles it**
+- [x] Frontend dev proxy works with both HTTP and WebSocket — **Fixed: nginx config in `_helpers.tpl` now includes WebSocket proxy headers**
 - [x] Helm chart can deploy to namespaces other than `modulo`
 - [x] Existing Postgres/Redis can be used instead of sub-charts (external DB mode)
 
@@ -70,10 +70,4 @@ Packages Modulo for self-hosted deployment via Docker Compose (dev/alpha/poc) an
 - No documented upgrade path between chart versions
 - No automated backup/restore hooks in Helm chart
 - No multi-replica backend deployment tested (advisory locks, rate limiter, scheduler)
-- No NetworkPolicy template — Kubernetes network isolation unenforced
-- No PodDisruptionBudget template — HA setups lack graceful disruption budgets
-- Helm chart secrets.yaml regenerates secrets on upgrade (pre-upgrade hook bug)
-- Frontend HPA only covers backend; frontend lacks autoscaling
-- No production nginx-based frontend Dockerfile (`Dockerfile.prod`)
 - No CI/CD workflow for building/publishing Docker images to ghcr.io
-- Nginx config lacks WebSocket proxy headers (`Upgrade`, `Connection`)
