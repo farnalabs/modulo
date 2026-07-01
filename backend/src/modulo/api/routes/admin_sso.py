@@ -140,21 +140,26 @@ async def create_provider_endpoint(
     session: AsyncSession = Depends(get_db_session),
 ) -> SsoProviderResponse:
     _require_admin(current_user)
-    provider = await create_provider(
-        session,
-        provider_type=body.provider_type,
-        name=body.name,
-        client_id=body.client_id,
-        client_secret=body.client_secret,
-        discovery_url=body.discovery_url,
-        metadata_url=body.metadata_url,
-        metadata_xml=body.metadata_xml,
-        entity_id=body.entity_id,
-        scopes=body.scopes,
-        enabled=body.enabled,
-        auto_provision=body.auto_provision,
-        default_role=body.default_role,
-    )
+    try:
+        provider = await create_provider(
+            session,
+            provider_type=body.provider_type,
+            name=body.name,
+            client_id=body.client_id,
+            client_secret=body.client_secret,
+            discovery_url=body.discovery_url,
+            metadata_url=body.metadata_url,
+            metadata_xml=body.metadata_xml,
+            entity_id=body.entity_id,
+            scopes=body.scopes,
+            enabled=body.enabled,
+            auto_provision=body.auto_provision,
+            default_role=body.default_role,
+            org_id=current_user.organisation_id,
+            actor_user_id=current_user.account_id,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
     return SsoProviderResponse.from_orm(provider)  # type: ignore[pydantic-orm]
 
 
@@ -171,7 +176,7 @@ async def update_provider_endpoint(
     if not updates:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No fields to update")
 
-    provider = await update_provider(session, provider_id, **updates)
+    provider = await update_provider(session, provider_id, actor_user_id=current_user.account_id, **updates)
     if provider is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -188,7 +193,7 @@ async def delete_provider_endpoint(
     session: AsyncSession = Depends(get_db_session),
 ) -> None:
     _require_admin(current_user)
-    deleted = await delete_provider(session, provider_id)
+    deleted = await delete_provider(session, provider_id, actor_user_id=current_user.account_id)
     if not deleted:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -355,7 +360,7 @@ async def toggle_provider_endpoint(
     session: AsyncSession = Depends(get_db_session),
 ) -> SsoProviderResponse:
     _require_admin(current_user)
-    provider = await toggle_provider(session, provider_id)
+    provider = await toggle_provider(session, provider_id, actor_user_id=current_user.account_id)
     if provider is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
