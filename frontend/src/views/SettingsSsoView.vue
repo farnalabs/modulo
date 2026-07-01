@@ -183,7 +183,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, reactive, onMounted } from 'vue'
+import { ref, reactive, onMounted, onBeforeUnmount } from 'vue'
 import { api } from '../lib/api/client'
 import type { components } from '../lib/api/client'
 import SsoProviderForm from '../components/SsoProviderForm.vue'
@@ -247,6 +247,7 @@ const deleteError = ref<string | null>(null)
 const testingId = ref<string | null>(null)
 const testResultProviderId = ref<string | null>(null)
 const testResult = ref<SsoProviderTestResult | null>(null)
+let ssoTestTimeout: ReturnType<typeof setTimeout> | null = null
 
 function onFormUpdate(updated: SsoFormState) {
   Object.assign(formData, updated)
@@ -464,7 +465,8 @@ async function testConnection(providerId: string) {
       testResult.value = { success: false, message: formatError(err), provider_info: null }
     } else if (data) {
       testResult.value = data
-      setTimeout(() => { testResultProviderId.value = null; testResult.value = null }, 12000)
+      if (ssoTestTimeout) clearTimeout(ssoTestTimeout)
+      ssoTestTimeout = setTimeout(() => { testResultProviderId.value = null; testResult.value = null }, 12000)
     }
   } catch (e: unknown) {
     testResult.value = { success: false, message: formatError(e), provider_info: null }
@@ -473,5 +475,8 @@ async function testConnection(providerId: string) {
   }
 }
 
+onBeforeUnmount(() => {
+  if (ssoTestTimeout) clearTimeout(ssoTestTimeout)
+})
 onMounted(loadProviders)
 </script>

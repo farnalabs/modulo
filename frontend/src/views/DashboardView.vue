@@ -19,7 +19,7 @@
     </div>
 
     <!-- Full-page error -->
-    <ErrorAlert v-else-if="error && !summary" :message="error" :onRetry="fetchData" />
+    <ErrorAlert v-else-if="error && !summary" :message="error" :on-retry="fetchData" />
 
     <template v-else-if="summary">
 
@@ -144,8 +144,12 @@
           </thead>
           <tbody>
             <tr v-for="team in summary.teams" :key="team.id"
+                role="button"
+                tabindex="0"
                 class="border-b last:border-0 cursor-pointer hover:bg-muted/50"
-                @click="toggleTeam(team.id)">
+                @click="toggleTeam(team.id)"
+                @keydown.enter="toggleTeam(team.id)"
+                @keydown.space.prevent="toggleTeam(team.id)">
               <td class="py-2.5 font-medium">{{ team.name }}</td>
               <td class="py-2.5 text-right">{{ team.total_runs }}</td>
               <td class="py-2.5 text-right text-success">{{ team.run_counts_by_status.running }}</td>

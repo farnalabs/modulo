@@ -89,14 +89,16 @@
               <td class="py-3 pr-4 tabular-nums">{{ node.outputTokens ?? '—' }}</td>
               <td class="py-3 pr-4 tabular-nums">{{ node.cost != null ? '$' + node.cost.toFixed(6) : '—' }}</td>
               <td class="py-3 pr-4">
-                <code
+                <button
                   v-if="node.traceId"
                   data-testid="run-detail-node-trace-id"
                   aria-label="Copy node trace ID"
                   class="cursor-pointer rounded bg-muted px-1.5 py-0.5 font-mono text-xs"
                   :title="node.traceId"
                   @click="copyText(node.traceId!)"
-                >{{ node.traceId.slice(0, 8) }}…</code>
+                  @keydown.enter="copyText(node.traceId!)"
+                  @keydown.space.prevent="copyText(node.traceId!)"
+                >{{ node.traceId.slice(0, 8) }}…</button>
                 <span v-else class="text-muted-foreground">—</span>
               </td>
               <td class="py-3">

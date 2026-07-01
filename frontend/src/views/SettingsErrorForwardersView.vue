@@ -261,7 +261,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, reactive, onMounted } from 'vue'
+import { ref, reactive, onMounted, onBeforeUnmount } from 'vue'
 import { formatApiError } from '../lib/api/formatError'
 import { usePlanStore } from '../stores/planStore'
 import { api } from '../lib/api/client'
@@ -304,6 +304,7 @@ const saving = ref<Record<string, boolean>>({})
 const testResults = ref<Record<string, TestResult | null>>({})
 const formSuccess = ref<Record<string, string | null>>({})
 const formErrors = ref<Record<string, string | null>>({})
+const errorFwdTimeouts = ref<Record<string, ReturnType<typeof setTimeout>>>({})
 
 const configs = reactive<ForwarderConfigs>({
   sentry: {},
@@ -367,7 +368,8 @@ async function saveConfig(fwd: ForwarderItem) {
       formErrors.value[ftype] = `Save failed: ${formatApiError(err)}`
     } else {
       formSuccess.value[ftype] = 'Configuration saved.'
-      setTimeout(() => { formSuccess.value[ftype] = null }, 3000)
+      if (errorFwdTimeouts.value[ftype]) clearTimeout(errorFwdTimeouts.value[ftype])
+      errorFwdTimeouts.value[ftype] = setTimeout(() => { formSuccess.value[ftype] = null }, 3000)
     }
   } catch (e: unknown) {
     formErrors.value[ftype] = `Save failed: ${e instanceof Error ? e.message : String(e)}`
@@ -390,7 +392,8 @@ async function testConnection(fwd: ForwarderItem) {
       testResults.value[ftype] = { ok: false, message: String(err) }
     } else if (data) {
       testResults.value[ftype] = data
-      setTimeout(() => { testResults.value[ftype] = null }, 10000)
+      if (errorFwdTimeouts.value[ftype]) clearTimeout(errorFwdTimeouts.value[ftype])
+      errorFwdTimeouts.value[ftype] = setTimeout(() => { testResults.value[ftype] = null }, 10000)
     }
   } catch (e: unknown) {
     testResults.value[ftype] = { ok: false, message: e instanceof Error ? e.message : String(e) }
@@ -398,6 +401,12 @@ async function testConnection(fwd: ForwarderItem) {
     testing.value[ftype] = false
   }
 }
+
+onBeforeUnmount(() => {
+  for (const tid of Object.values(errorFwdTimeouts.value)) {
+    if (tid) clearTimeout(tid)
+  }
+})
 
 onMounted(() => {
   planStore.fetchPlan()

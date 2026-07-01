@@ -51,8 +51,12 @@
               v-for="team in data.teams"
               :key="team.id"
               :data-testid="`team-comparison-team-row-${team.id}`"
+              role="button"
+              tabindex="0"
               class="cursor-pointer transition-colors hover:bg-muted/30"
               @click="toggleExpand(team.id)"
+              @keydown.enter="toggleExpand(team.id)"
+              @keydown.space.prevent="toggleExpand(team.id)"
             >
               <td class="px-4 py-3 text-sm font-medium">{{ team.name }}</td>
               <td class="px-4 py-3 text-sm text-muted-foreground">{{ team.memberCount }}</td>

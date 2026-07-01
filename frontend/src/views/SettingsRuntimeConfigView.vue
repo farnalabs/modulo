@@ -167,7 +167,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, reactive, onMounted } from 'vue'
+import { ref, reactive, onMounted, onBeforeUnmount } from 'vue'
 import { api } from '../lib/api/client'
 import { formatApiError } from '../lib/api/formatError'
 import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
@@ -193,6 +193,7 @@ const error = ref<string | null>(null)
 const saving = ref(false)
 const formError = ref<string | null>(null)
 const formSuccess = ref<string | null>(null)
+let runtimeConfigTimeout: ReturnType<typeof setTimeout> | null = null
 const items = ref<ConfigEntry[]>([])
 const hasDrift = ref(false)
 const editedValues = reactive<Record<string, string>>({})
@@ -294,7 +295,8 @@ async function applyOverride(key: string) {
     } else if (data) {
       applyResponse(data as unknown as ConfigResponse)
       formSuccess.value = `Override applied for ${key}.`
-      setTimeout(() => { formSuccess.value = null }, 3000)
+      if (runtimeConfigTimeout) clearTimeout(runtimeConfigTimeout)
+      runtimeConfigTimeout = setTimeout(() => { formSuccess.value = null }, 3000)
     }
   } catch (e: unknown) {
     formError.value = `Failed to apply override: ${e instanceof Error ? e.message : String(e)}`
@@ -316,7 +318,8 @@ async function clearOverride(key: string) {
     } else if (data) {
       applyResponse(data as unknown as ConfigResponse)
       formSuccess.value = `Override cleared for ${key}.`
-      setTimeout(() => { formSuccess.value = null }, 3000)
+      if (runtimeConfigTimeout) clearTimeout(runtimeConfigTimeout)
+      runtimeConfigTimeout = setTimeout(() => { formSuccess.value = null }, 3000)
     }
   } catch (e: unknown) {
     formError.value = `Failed to clear override: ${e instanceof Error ? e.message : String(e)}`
@@ -325,5 +328,8 @@ async function clearOverride(key: string) {
   }
 }
 
+onBeforeUnmount(() => {
+  if (runtimeConfigTimeout) clearTimeout(runtimeConfigTimeout)
+})
 onMounted(loadConfig)
 </script>

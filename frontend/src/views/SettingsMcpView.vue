@@ -314,6 +314,7 @@ const revokingKey = ref(false)
 const revokeKeyError = ref<string | null>(null)
 
 const copiedField = ref<string | null>(null)
+let mcpCopyTimeout: ReturnType<typeof setTimeout> | null = null
 
 function formatDate(iso: string): string {
   try {
@@ -453,7 +454,8 @@ async function copyToClipboard(text: string, field: string) {
   try {
     await navigator.clipboard.writeText(text)
     copiedField.value = field
-    setTimeout(() => {
+    if (mcpCopyTimeout) clearTimeout(mcpCopyTimeout)
+    mcpCopyTimeout = setTimeout(() => {
       if (copiedField.value === field) {
         copiedField.value = null
       }
@@ -464,5 +466,8 @@ async function copyToClipboard(text: string, field: string) {
 }
 
 onMounted(() => { planStore.fetchPlan(); loadAll() })
-onUnmounted(clearKeyMaskTimer)
+onUnmounted(() => {
+  clearKeyMaskTimer()
+  if (mcpCopyTimeout) clearTimeout(mcpCopyTimeout)
+})
 </script>

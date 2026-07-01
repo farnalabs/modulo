@@ -51,7 +51,7 @@
             <CardDescription>Monthly spend, run count, and average cost per run by team</CardDescription>
           </CardHeader>
           <CardContent>
-            <div v-if="teams.length === 0" class="py-4 text-center text-sm text-muted-foreground">
+            <div v-if="items.length === 0" class="py-4 text-center text-sm text-muted-foreground">
               No team cost data available.
             </div>
             <div v-else class="overflow-x-auto">
@@ -65,7 +65,7 @@
                   </tr>
                 </thead>
                 <tbody>
-                  <tr v-for="team in teams" :key="team.entity_id" class="border-b last:border-b-0" :data-testid="'cost-team-row-' + team.entity_id">
+                  <tr v-for="team in items" :key="team.entity_id" class="border-b last:border-b-0" :data-testid="'cost-team-row-' + team.entity_id">
                     <td class="py-3 pr-4 font-medium">{{ team.entity_name }}</td>
                     <td class="py-3 pr-4">${{ team.total_spend_usd.toFixed(2) }}</td>
                     <td class="py-3 pr-4">{{ team.total_runs }}</td>
@@ -165,7 +165,6 @@ const anomalies = ref<AnomalyResponse[]>([])
 const totalSpend = computed(() => items.value.reduce((sum, i) => sum + i.total_spend_usd, 0))
 const totalRuns = computed(() => items.value.reduce((sum, i) => sum + i.total_runs, 0))
 const avgCostPerRun = computed(() => totalRuns.value > 0 ? totalSpend.value / totalRuns.value : 0)
-const teams = computed(() => items.value)
 
 const activeAnomalies = computed(() => anomalies.value.filter((a) => !a.dismissed))
 const dismissedAnomalies = computed(() => anomalies.value.filter((a) => a.dismissed))
