@@ -73,7 +73,14 @@ class TestDeploymentInfo:
     def test_build_metadata_fields_are_strings(self, client: TestClient) -> None:
         resp = client.get("/api/v1/deployment")
         body = resp.json()
-        for field in ("git_sha", "git_branch", "git_commit_timestamp", "git_commit_message", "build_timestamp", "ci_job_url"):
+        for field in (
+            "git_sha",
+            "git_branch",
+            "git_commit_timestamp",
+            "git_commit_message",
+            "build_timestamp",
+            "ci_job_url",
+        ):
             assert isinstance(body[field], str), f"{field} should be a string"
 
     def test_build_metadata_falls_back_to_empty(self, client: TestClient) -> None:

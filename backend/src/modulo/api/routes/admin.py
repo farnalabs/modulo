@@ -10,8 +10,6 @@ from pydantic import BaseModel, Field
 from sqlalchemy import case, delete, func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
-logger = logging.getLogger(__name__)
-
 from modulo.api.dependencies import get_db_session, require_feature
 from modulo.auth.api_key import revoke_api_key
 from modulo.auth.dependencies import get_current_user
@@ -50,6 +48,8 @@ from modulo.db.models.pipeline import Pipeline
 from modulo.db.models.run import Run
 from modulo.db.models.team import Team
 from modulo.db.rls import set_rls_org, set_rls_user_context
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/v1/admin", tags=["admin"])
 
@@ -1028,15 +1028,21 @@ async def admin_billing_overview(
 
             org_id = current_user.organisation_id
             user_count = (
-                await session.execute(select(func.count()).select_from(OrgMembership).where(OrgMembership.organisation_id == org_id))
+                await session.execute(
+                    select(func.count()).select_from(OrgMembership).where(OrgMembership.organisation_id == org_id)
+                )
             ).scalar() or 0
 
             team_count = (
-                await session.execute(select(func.count()).select_from(Team).where(Team.organisation_id == org_id))
+                await session.execute(
+                    select(func.count()).select_from(Team).where(Team.organisation_id == org_id)
+                )
             ).scalar() or 0
 
             pipeline_count = (
-                await session.execute(select(func.count()).select_from(Pipeline).where(Pipeline.organisation_id == org_id))
+                await session.execute(
+                    select(func.count()).select_from(Pipeline).where(Pipeline.organisation_id == org_id)
+                )
             ).scalar() or 0
 
             month_start = datetime.now(UTC).replace(day=1, hour=0, minute=0, second=0, microsecond=0)
@@ -1053,7 +1059,7 @@ async def admin_billing_overview(
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Billing overview is temporarily unavailable.",
-        )
+        ) from None
 
     plan_id = org.plan_id or "community"
     if plan_id and plan_id.startswith("team"):
@@ -2025,7 +2031,13 @@ async def admin_update_retention(
 ) -> RetentionConfigResponse:
     if current_user.org_role != "admin":
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Only admin users can update retention")
-    logger.info("run_retention.updated", extra={"org_id": str(current_user.organisation_id), "retention_days": body.retention_days})
+    logger.info(
+        "run_retention.updated",
+        extra={
+            "org_id": str(current_user.organisation_id),
+            "retention_days": body.retention_days,
+        },
+    )
     return RetentionConfigResponse(retention_days=body.retention_days)
 
 

@@ -157,7 +157,7 @@ async def list_profiles(
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
-        )
+        ) from None
     return ProfileListResponse(
         items=[_to_response(p) for p in result.items],
         total=result.total,
@@ -192,7 +192,7 @@ async def create_profile(
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
-        )
+        ) from None
     return _to_response(profile)
 
 
@@ -210,7 +210,7 @@ async def get_profile(
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
-        )
+        ) from None
     return _to_response(profile)
 
 
@@ -232,7 +232,7 @@ async def update_profile(
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
-        )
+        ) from None
     if profile is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -255,7 +255,7 @@ async def delete_profile(
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
-        )
+        ) from None
     if not deleted:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -367,7 +367,7 @@ async def test_profile(
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
-        )
+        ) from None
     return StreamingResponse(
         _sandbox_test_stream(profile),
         media_type="text/event-stream",

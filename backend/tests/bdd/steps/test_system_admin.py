@@ -147,7 +147,9 @@ def _attempt_create_org_duplicate(slug: str, request, client):
     _set_auth_override(True)
 
     existing_org = _make_mock_org(slug=slug)
-    with patch("modulo.api.routes.admin_orgs.get_organisation_by_slug", new_callable=AsyncMock, return_value=existing_org):
+    with patch(
+        "modulo.api.routes.admin_orgs.get_organisation_by_slug", new_callable=AsyncMock, return_value=existing_org
+    ):
         resp = client.post("/api/v1/admin/orgs", json={"name": "Temp Org", "slug": slug})
     request.node._resp = resp
 

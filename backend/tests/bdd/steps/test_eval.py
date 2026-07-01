@@ -1,6 +1,8 @@
 """Step definitions for Eval Run and related eval features."""
 
+import json
 import uuid
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -373,13 +375,6 @@ def step_valid_data_passes_json_schema(ctx):
     assert result.passed, f"JSON Schema scorer failed: {result.detail}"
 
 
-@then("an error is raised for unknown eval type")
-def step_unknown_eval_type_error(ctx):
-    assert ctx.get("eval_error") is not None, (
-        "Expected an error for unknown eval type, but none was raised"
-    )
-
-
 # ============================================================================
 # eval/eval_suite_crud.feature  —  5 scenarios
 # ============================================================================
@@ -387,10 +382,6 @@ try:
     scenarios("../features/eval/eval_suite_crud.feature")
 except (FileNotFoundError, OSError):
     pass
-
-
-import json
-from types import SimpleNamespace
 
 
 def _eval_resp(status_code, **kwargs):

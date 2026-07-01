@@ -3,9 +3,9 @@
 import asyncio
 import sys
 import uuid
-from pathlib import Path
 
 import pytest
+from anyio import Path
 
 from modulo.core.runtime_provider import WorkspaceSpec
 from modulo.core.runtime_provider.local import LocalRuntimeProvider, create_local_provider_from_env
@@ -32,7 +32,7 @@ class TestLocalRuntimeProvider:
     async def test_create_and_destroy_workspace(self, provider: LocalRuntimeProvider, spec: WorkspaceSpec) -> None:
         ref = await provider.create_workspace(spec)
         assert ref in provider._workspaces
-        assert Path(provider._workspaces[ref]).is_dir()
+        assert await Path(provider._workspaces[ref]).is_dir()
 
         await provider.destroy_workspace(ref)
         assert ref not in provider._workspaces

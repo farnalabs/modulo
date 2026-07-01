@@ -212,7 +212,10 @@ async def viewmodel_current(
 
         if view_as_team is not None:
             if current_user.organisation_id is None:
-                raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Cannot use view_as_team without an organisation")
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Cannot use view_as_team without an organisation",
+                )
             team_result = await session.execute(
                 select(Team).where(
                     Team.id == view_as_team,
@@ -294,7 +297,11 @@ async def viewmodel_current(
         feature_flags=feature_flags,
         plan=PlanInfo(
             tier=_resolve_tier(settings),
-            daily_spend_limit=float(org.daily_spend_limit) if org is not None and org.daily_spend_limit is not None else None,
+            daily_spend_limit=(
+                float(org.daily_spend_limit)
+                if org is not None and org.daily_spend_limit is not None
+                else None
+            ),
         ),
         pipelines=[PipelineSummary.model_validate(p) for p in (pipelines_page.items if pipelines_page else [])],
         pipelines_total=pipelines_page.total if pipelines_page else 0,
