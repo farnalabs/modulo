@@ -138,26 +138,20 @@ export const useRemyStore = defineStore('remy', () => {
       created_at: new Date().toISOString(),
     }
     messages.value.push(userMsg)
+    isStreaming.value = true
 
     try {
       const { data, error: err } = await api.POST('/api/v1/remy/sessions/{id}/messages', {
         params: { path: { id: activeSessionId.value } },
-        body: { content: text, page_context: pageContext.value },
+        body: { role: 'user', content: text },
       })
       if (err) throw new Error(String(err))
       const saved = data as ChatMessage
       userMsg.id = saved.id
       userMsg.token_count = saved.token_count
-
-      const { data: replyData, error: replyErr } = await api.POST(
-        '/api/v1/remy/sessions/{id}/chat',
-        { params: { path: { id: activeSessionId.value } }, body: { content: text } },
-      )
-      if (replyErr) throw new Error(String(replyErr))
-      const reply = replyData as ChatMessage
-      messages.value.push(reply)
     } catch (e: unknown) {
       error.value = e instanceof Error ? e.message : String(e)
+      isStreaming.value = false
     }
   }
 

@@ -145,7 +145,10 @@ def _message_to_langchain(m: ChatMessage) -> BaseMessage:
                 kwargs["tool_calls"] = m.tool_calls_json.get("tool_calls", [])
             return AIMessage(**kwargs)
         case "tool_result":
-            return ToolMessage(content=m.content or "", tool_call_id="")
+            tool_call_id = ""
+            if m.tool_results_json:
+                tool_call_id = m.tool_results_json.get("tool_call_id", "")
+            return ToolMessage(content=m.content or "", tool_call_id=tool_call_id)
         case _:
             return HumanMessage(content=m.content or "")
 

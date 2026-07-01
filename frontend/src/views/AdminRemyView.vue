@@ -478,8 +478,10 @@ async function saveAccessList() {
   try {
     const userIds = accessList.userIds.split(/[\n,]+/).map(s => s.trim()).filter(Boolean)
     const teamIds = accessList.teamIds.split(/[\n,]+/).map(s => s.trim()).filter(Boolean)
-    const { error: err } = await (api as any).PUT('/api/v1/admin/remy/access', {
-      body: { user_ids: userIds, team_ids: teamIds, roles: accessList.selectedRoles },
+    const { error: err } = await (api as any).PUT('/api/v1/admin/remy/config', {
+      body: {
+        access_list: { user_ids: userIds, team_ids: teamIds, org_roles: accessList.selectedRoles },
+      },
     })
     if (err) {
       accessError.value = `Failed to save access list: ${err}`
@@ -518,11 +520,11 @@ async function saveModelConfig() {
   modelError.value = null
   try {
     const allowedModels = modelConfig.allowedModels.split(/[\s,]+/).map(s => s.trim()).filter(Boolean)
-    const { error: err } = await (api as any).PUT('/api/v1/admin/remy/model-config', {
+    const { error: err } = await (api as any).PUT('/api/v1/admin/remy/config', {
       body: {
         default_provider: modelConfig.defaultProvider,
         default_model: modelConfig.defaultModel,
-        context_window: modelConfig.contextWindow,
+        default_context_window: modelConfig.contextWindow,
         allowed_providers: modelConfig.allowedProviders,
         allowed_models: allowedModels,
       },
@@ -546,8 +548,8 @@ async function saveSystemPrompt() {
   promptSaving.value = true
   promptError.value = null
   try {
-    const { error: err } = await (api as any).PUT('/api/v1/admin/remy/system-prompt', {
-      body: { prompt: systemPrompt.value },
+    const { error: err } = await (api as any).PUT('/api/v1/admin/remy/config', {
+      body: { system_prompt: systemPrompt.value },
     })
     if (err) {
       promptError.value = `Failed to save system prompt: ${err}`
@@ -568,8 +570,8 @@ async function saveGuidance() {
   guidanceSaving.value = true
   guidanceError.value = null
   try {
-    const { error: err } = await (api as any).PUT('/api/v1/admin/remy/guidance', {
-      body: { guidance: guidance.value },
+    const { error: err } = await (api as any).PUT('/api/v1/admin/remy/config', {
+      body: { additional_guidance: guidance.value },
     })
     if (err) {
       guidanceError.value = `Failed to save guidance: ${err}`
@@ -719,51 +721,31 @@ async function loadSkills() {
   }
 }
 
-async function loadAccess() {
+async function loadConfig() {
   try {
-    const { data, error: err } = await (api as any).GET('/api/v1/admin/remy/access')
+    const { data, error: err } = await (api as any).GET('/api/v1/admin/remy/config')
     if (!err && data) {
-      accessList.userIds = ((data as { user_ids?: string[] }).user_ids || []).join('\n')
-      accessList.teamIds = ((data as { team_ids?: string[] }).team_ids || []).join('\n')
-      accessList.selectedRoles = (data as { roles?: string[] }).roles || []
-    }
-  } catch {
-    // Non-critical
-  }
-}
-
-async function loadModelConfig() {
-  try {
-    const { data, error: err } = await (api as any).GET('/api/v1/admin/remy/model-config')
-    if (!err && data) {
-      const cfg = data as { default_provider?: string; default_model?: string; context_window?: number; allowed_providers?: string[]; allowed_models?: string[] }
+      const cfg = data as {
+        access_list?: { user_ids?: string[]; team_ids?: string[]; org_roles?: string[] }
+        default_provider?: string
+        default_model?: string
+        default_context_window?: number
+        allowed_providers?: string[]
+        allowed_models?: string[]
+        system_prompt?: string
+        additional_guidance?: string
+      }
+      const acl = cfg.access_list || {}
+      accessList.userIds = (acl.user_ids || []).join('\n')
+      accessList.teamIds = (acl.team_ids || []).join('\n')
+      accessList.selectedRoles = acl.org_roles || []
       modelConfig.defaultProvider = cfg.default_provider || 'anthropic'
       modelConfig.defaultModel = cfg.default_model || ''
-      modelConfig.contextWindow = cfg.context_window || 200000
+      modelConfig.contextWindow = cfg.default_context_window || 200000
       modelConfig.allowedProviders = cfg.allowed_providers || ['anthropic']
       modelConfig.allowedModels = (cfg.allowed_models || []).join(', ')
-    }
-  } catch {
-    // Non-critical
-  }
-}
-
-async function loadSystemPrompt() {
-  try {
-    const { data, error: err } = await (api as any).GET('/api/v1/admin/remy/system-prompt')
-    if (!err && data) {
-      systemPrompt.value = (data as { prompt?: string }).prompt || ''
-    }
-  } catch {
-    // Non-critical
-  }
-}
-
-async function loadGuidance() {
-  try {
-    const { data, error: err } = await (api as any).GET('/api/v1/admin/remy/guidance')
-    if (!err && data) {
-      guidance.value = (data as { guidance?: string }).guidance || ''
+      systemPrompt.value = cfg.system_prompt || ''
+      guidance.value = cfg.additional_guidance || ''
     }
   } catch {
     // Non-critical
@@ -775,10 +757,7 @@ async function loadAll() {
   loadError.value = null
   try {
     await Promise.all([
-      loadAccess(),
-      loadModelConfig(),
-      loadSystemPrompt(),
-      loadGuidance(),
+      loadConfig(),
       loadSkills(),
     ])
   } finally {
