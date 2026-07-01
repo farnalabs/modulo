@@ -17,7 +17,7 @@ status: partial
 
 # Linear Connector
 
-Async Linear GraphQL API connector implementing `ConnectorBase`. BDD coverage: 5 scenarios with step definitions in `backend/tests/bdd/features/connectors/linear_connector.feature` and `backend/tests/bdd/steps/test_connectors.py`. Provides read/write access to Linear issues for agent pipelines. Authenticated via Linear API key. Belongs to the `issue-tracker` connector type family alongside `JiraConnector`.
+Async Linear GraphQL API connector implementing `ConnectorBase`. BDD coverage: 8 scenarios (5 happy-path + 3 error-path) with step definitions in `backend/tests/bdd/features/connectors/linear_connector.feature` and `backend/tests/bdd/steps/test_connectors.py`. Provides read/write access to Linear issues for agent pipelines. Authenticated via Linear API key. Belongs to the `issue-tracker` connector type family alongside `JiraConnector`.
 
 ## Behaviours
 
@@ -94,9 +94,8 @@ Async Linear GraphQL API connector implementing `ConnectorBase`. BDD coverage: 5
 - [ ] **No cycle/sprint awareness**: cannot read or set issue cycle assignment
 - [ ] **No pagination**: `query("search")` results are limited by default with no cursor-based continuation
 - [ ] **No rate-limit handling**: no GraphQL query cost measurement, no 429 handling
-- [ ] **No error-path BDD scenarios**: all 5 scenarios are happy-path only; error conditions (unsupported resource, API errors, HTTP failures) have no BDD coverage
-- [ ] **Missing `limit` passthrough**: `ConnectorQuery.limit` is ignored by search; always uses GraphQL default
+
 
 ## QA History
-- 2026-07-01: Cross-cutting QA: fixed frontmatter (added unit-tests), removed outdated known gaps #7 (BDD placeholder → 5 real scenarios) and #8 (unit tests exist), added 6 BDD error-path scenarios, added 4 unit tests, fixed search to respect `q.limit`, consolidated gaps from 9→9
+- 2026-07-01: Cross-cutting QA: fixed frontmatter (added unit-tests), removed outdated known gaps #7 (BDD placeholder → 5 real scenarios) and #8 (unit tests exist), added 3 BDD error-path scenarios + step definitions, added 4 unit tests (missing id, update failure, GraphQL error), fixed search to respect `q.limit` via `first:$limit`, consolidated gaps from 9→7
 
