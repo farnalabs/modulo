@@ -1,5 +1,6 @@
 """Unit tests for health endpoints — liveness, readiness, and dependency checks."""
 
+from collections.abc import Generator
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -21,7 +22,7 @@ def _make_settings() -> Settings:
 
 
 @pytest.fixture()
-def client() -> TestClient:
+def client() -> Generator[TestClient, None, None]:
     app.dependency_overrides[get_settings] = _make_settings
     yield TestClient(app)
     app.dependency_overrides.clear()

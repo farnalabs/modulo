@@ -4,6 +4,7 @@ Tests the ViewModel-level scope checks independently of the middleware,
 and verifies integration through the MCP tool handlers.
 """
 
+from collections.abc import Generator
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -143,7 +144,7 @@ class TestToolHandlerScopeErrorFormat:
     pytestmark = pytest.mark.asyncio
 
     @pytest.fixture(autouse=True)
-    def _patch_auth(self) -> None:
+    def _patch_auth(self) -> Generator[None, None, None]:
         """Mock ``validate_current_auth`` to return True so scope checks are reached."""
         with patch("modulo.api.mcp_server.validate_current_auth", return_value=True):
             yield

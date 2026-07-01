@@ -3,7 +3,8 @@
 import base64
 import json
 import uuid
-from collections.abc import Generator
+from collections.abc import AsyncGenerator, Generator
+from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -114,7 +115,7 @@ def _make_saml_response(email: str, display_name: str, groups: list[str] | None 
 
 
 def _make_id_token(email: str, name: str, groups: list[str] | None = None, sub: str = "abc123") -> str:
-    claims = {"email": email, "name": name, "sub": sub}
+    claims: dict[str, Any] = {"email": email, "name": name, "sub": sub}
     if groups:
         claims["groups"] = groups
     payload = base64.urlsafe_b64encode(
@@ -146,7 +147,7 @@ def _clear_cache() -> Generator[None, None, None]:
 def client() -> Generator[TestClient, None, None]:
     mock_session = AsyncMock(spec=AsyncSession)
 
-    async def _override_session() -> AsyncMock:
+    async def _override_session() -> AsyncGenerator[AsyncMock, None]:
         yield mock_session
 
     _app.dependency_overrides[get_settings] = lambda: _oidc_settings()
@@ -178,7 +179,7 @@ def client() -> Generator[TestClient, None, None]:
 def saml_client() -> Generator[TestClient, None, None]:
     mock_session = AsyncMock(spec=AsyncSession)
 
-    async def _override_session() -> AsyncMock:
+    async def _override_session() -> AsyncGenerator[AsyncMock, None]:
         yield mock_session
 
     _app.dependency_overrides[get_settings] = lambda: _saml_settings()

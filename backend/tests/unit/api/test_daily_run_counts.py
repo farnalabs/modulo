@@ -1,7 +1,7 @@
 """Unit tests for GET /api/v1/dashboard/daily-run-counts."""
 
 import uuid
-from collections.abc import AsyncGenerator, Generator
+from collections.abc import AsyncGenerator, Generator, Sequence
 from datetime import UTC, datetime, timedelta
 from unittest.mock import AsyncMock, MagicMock
 
@@ -35,7 +35,7 @@ class _MockRow:
 
 
 class _MockResult:
-    def __init__(self, rows: list[object] | None = None) -> None:
+    def __init__(self, rows: Sequence[object] | None = None) -> None:
         self._rows = rows if rows is not None else []
 
     def scalar_one(self) -> object:
@@ -51,7 +51,7 @@ class _MockResult:
         return iter(self._rows)
 
 
-def _make_mock_session(rows: list[object] | None = None) -> AsyncMock:
+def _make_mock_session(rows: Sequence[object] | None = None) -> AsyncMock:
     session = AsyncMock()
     begin_cm = AsyncMock()
     begin_cm.__aenter__ = AsyncMock(return_value=None)
