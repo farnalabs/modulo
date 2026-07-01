@@ -147,7 +147,7 @@ connector object for a single pipeline run. Every connector operation is wrapped
 - [x] Write resource `"issue"` — creates issue via `POST /issue`
 - [x] Write resource `"issue_update"` — updates issue fields via `PUT /issue/{key}`
 - [x] `health_check()` verifies connectivity via `GET /myself` — returns display name on success
-- [ ] BDD scenarios missing — `jira_connector.feature` is a placeholder
+- [x] 5 BDD scenarios exist — query issue, search issues, create issue, update issue, missing issue_key error
 
 ### Linear Connector
 
