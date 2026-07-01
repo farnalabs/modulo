@@ -53,6 +53,7 @@ export const usePlanStore = defineStore('plan', () => {
   const tierLabels = ref<Record<string, string>>({})
   const tierRanks = ref<Record<string, number>>({})
   const dirtyIds = ref(new Set<string>())
+  const unsubHandlers: (() => void)[] = []
 
   const isTeam = computed(() => currentTier.value === 'team')
 
@@ -120,9 +121,14 @@ export const usePlanStore = defineStore('plan', () => {
     }
   }
 
-  registerHandler('team', handleSyncEvent)
-  registerHandler('license', handleSyncEvent)
-  registerHandler('plan', handleSyncEvent)
+  unsubHandlers.push(registerHandler('team', handleSyncEvent))
+  unsubHandlers.push(registerHandler('license', handleSyncEvent))
+  unsubHandlers.push(registerHandler('plan', handleSyncEvent))
 
-  return { currentTier, features, isLoading, error, isTeam, expiresAt, orgName, tierLabels, tierRanks, fetchPlan, featureEnabled, getTierLabel, isAtMinimumTier, dirtyIds, handleSyncEvent }
+  function disposeHandlers(): void {
+    for (const unsub of unsubHandlers) unsub()
+    unsubHandlers.length = 0
+  }
+
+  return { currentTier, features, isLoading, error, isTeam, expiresAt, orgName, tierLabels, tierRanks, fetchPlan, featureEnabled, getTierLabel, isAtMinimumTier, dirtyIds, handleSyncEvent, disposeHandlers }
 })

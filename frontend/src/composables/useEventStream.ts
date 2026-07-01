@@ -9,7 +9,6 @@ const SSE_URL = '/api/v1/events'
 
 const connected = ref(false)
 let eventSource: EventSource | null = null
-let subscriberCount = 0
 const handlers = new Map<string, Set<EventHandler>>()
 
 function getToken(): string | null {
@@ -21,6 +20,7 @@ function connect(): void {
   const token = getToken()
   if (!token) return
   eventSource = new EventSource(`${SSE_URL}?token=${encodeURIComponent(token)}`)
+  eventSource.withCredentials = true
   eventSource.onopen = () => { connected.value = true }
   eventSource.onmessage = (event: MessageEvent) => {
     try {
@@ -32,13 +32,12 @@ function connect(): void {
         }
       }
       dispatchToStore(data)
-    } catch {
-      console.warn('[EventBus] Failed to parse event')
+    } catch (e) {
+      console.warn('[EventBus] Failed to parse event', e instanceof SyntaxError ? e.message : String(e), event.data.slice(0, 200))
     }
   }
   eventSource.onerror = () => {
     connected.value = false
-    console.warn('[EventBus] Connection error')
   }
 }
 
@@ -62,7 +61,6 @@ export const eventBus = {
   subscribe(resourceType: string, handler: EventHandler): () => void {
     if (!handlers.has(resourceType)) handlers.set(resourceType, new Set())
     handlers.get(resourceType)!.add(handler)
-    subscriberCount++
     if (!eventSource) connect()
     return () => { eventBus.unsubscribe(resourceType, handler) }
   },
@@ -72,9 +70,14 @@ export const eventBus = {
       typeHandlers.delete(handler)
       if (typeHandlers.size === 0) handlers.delete(resourceType)
     }
-    subscriberCount = Math.max(0, subscriberCount - 1)
-    if (subscriberCount <= 0) disconnect()
+    if (totalHandlerCount() <= 0) disconnect()
   },
+}
+
+function totalHandlerCount(): number {
+  let count = 0
+  for (const typeHandlers of handlers.values()) count += typeHandlers.size
+  return count
 }
 
 export function useEventStream(options?: { resourceType?: string; onEvent?: EventHandler }) {
