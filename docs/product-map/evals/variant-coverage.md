@@ -12,9 +12,11 @@ code:
   - backend/src/modulo/api/routes/evals.py
   - backend/src/modulo/api/routes/admin.py
   - backend/src/modulo/core/feedback_manager/__init__.py
+unit-tests: []
 depends-on: [feat-evals-eval-engine, feat-variants-variant-groups]
 status: partial
 ---
+
 # Run Variants — Coverage Gap Signal
 
 Discovered from 1 completed delivery tasks.
@@ -31,20 +33,26 @@ Discovered from 1 completed delivery tasks.
 - [ ] `selection_strategy`: `weighted` — weighted random pick when running a single variant
 - [ ] Weighted selection short-circuits when only one variant or total weight is zero
 - [ ] `degraded_evals` flag on group skips eval execution for all variant runs in the group
-- [ ] Group is complete when all variants reach terminal state (success, failed, abandoned) ### Running Variants
+- [ ] Group is complete when all variants reach terminal state (success, failed, abandoned)
+
+### Running Variants
 - [ ] Fire one run per variant — same input payload, same pipeline snapshot
 - [ ] `run_variant_weighted` merges `run_context_overrides` into the run payload
 - [ ] Runs are counted individually against org/team/trigger run limits
 - [ ] Pre-flight quota check: breach by any variant rejects the entire group (`variant_group_quota_exceeded`)
 - [ ] Prompt version comparison via `run_context_overrides` containing `prompt_version`
 - [ ] Agents read `run_context.prompt_version` to select prompt template
-- [ ] Abandon a variant run — marked `abandoned`, excluded from aggregate scores ### Comparison View
+- [ ] Abandon a variant run — marked `abandoned`, excluded from aggregate scores
+
+### Comparison View
 - [ ] Eval scores per node, per variant shown side-by-side
 - [ ] Token cost per run shown in comparison
 - [ ] HITL outcomes shown per variant (if any gates were reached)
 - [ ] Per-node output diff side-by-side (artifact comparison)
 - [ ] HITL variant blocked: partial results for completed variants + "pending HITL" indicator
-- [ ] Pre-eval degraded mode: no evals configured → cost + output diffs only + config banner ### Eval Coverage Signal
+- [ ] Pre-eval degraded mode: no evals configured → cost + output diffs only + config banner
+
+### Eval Coverage Signal
 - [ ] Warning surfaces when variants produce different outputs but identical eval scores
 - [ ] Warning copy: "Variants diverged but evals did not differentiate — your eval suite may have a coverage gap."
 - [ ] `GET /api/v1/variant-groups/{group_id}/coverage-gaps` — returns missing eval def IDs per variant
@@ -56,11 +64,15 @@ Discovered from 1 completed delivery tasks.
 - [x] Feedback system: `detect_eval_gap()` flags when human rejection is not caught by existing evals
 - [ ] `POST /api/v1/feedback/{record_id}/detect-gap` endpoint triggers eval gap check on a feedback record
 - [ ] FeedbackRecords with `eval_gap = True` feed into eval proposal generation
-- [ ] `GET /api/v1/variant-groups/{group_id}/prompt-diffs` — compares prompt hash diffs between variants ### Prompt Version Comparison
+- [ ] `GET /api/v1/variant-groups/{group_id}/prompt-diffs` — compares prompt hash diffs between variants
+
+### Prompt Version Comparison
 - [ ] Variant groups support model backend differences and prompt version differences
 - [ ] Prompt diffs endpoint compares `prompt_pins_json` hashes between variant snapshots
 - [ ] Prompt diffs returns agent-level diff entries per variant pair
-- [ ] Agents declare multiple prompt template versions and select by `run_context.prompt_version` ## Known Gaps
+- [ ] Agents declare multiple prompt template versions and select by `run_context.prompt_version`
+
+## Known Gaps
 - BDD feature file `run_variants.feature` is a placeholder — no scenarios implemented
 - No integration tests exist for variant group endpoints
 - No unit tests for `get_coverage_gaps` CRUD function
