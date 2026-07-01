@@ -45,9 +45,10 @@ async def test_connect_creates_two_connections():
         await broker.connect()
 
         assert mock_from_url.call_count == 2
+        expected_kwargs = {"decode_responses": True, "socket_connect_timeout": 2.0, "socket_timeout": 5.0}
         for call_args in mock_from_url.call_args_list:
             assert call_args[0][0] == "redis://test:6379/0"
-            assert call_args[1] == {"decode_responses": True}
+            assert call_args[1] == expected_kwargs
 
         assert broker._pub is mock_client
         assert broker._sub is mock_client
@@ -88,7 +89,7 @@ async def test_publish_auto_connects_when_not_connected():
 
         await broker.publish("test", {"msg": "hello"})
 
-        assert mock_from_url.call_count == 2
+        assert mock_from_url.call_count == 1
         mock_client.publish.assert_awaited_once()
 
 
@@ -120,7 +121,7 @@ async def test_subscribe_auto_connects_when_not_connected():
         # _sub is None by default — subscribe() will call connect()
         await broker.subscribe("x")
 
-        assert mock_from_url.call_count == 2
+        assert mock_from_url.call_count == 1
         assert broker._sub is mock_client
 
 
