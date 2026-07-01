@@ -19,8 +19,8 @@ class EvalDefinitionConfig(BaseModel):
 class OutputValidation(BaseModel):
     """Configuration for composite output validation."""
 
-    eval_definitions: list[EvalDefinitionConfig] = Field(default_factory=list)
-    max_validation_retries: int = 0
+    eval_definitions: list[EvalDefinitionConfig] = Field(default_factory=list, max_length=20)
+    max_validation_retries: int = Field(default=0, ge=0)
 
 
 class ValidationResult(BaseModel):
@@ -51,6 +51,6 @@ class CompositeBinding(BaseModel):
     composite_template_id: uuid.UUID
     composite_version: str
     parameter_values: dict[str, Any] = Field(default_factory=dict)
-    input_mapping: dict | None = None
-    output_mapping: dict | None = None
+    input_mapping: dict[str, Any] | None = None
+    output_mapping: dict[str, Any] | None = None
     output_validation: OutputValidation = Field(default_factory=OutputValidation)
