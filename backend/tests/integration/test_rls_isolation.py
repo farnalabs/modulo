@@ -88,11 +88,10 @@ async def test_set_rls_org_sets_correct_guc(db_engine: AsyncEngine) -> None:
     """set_rls_org must write app.organisation_id, not any other GUC."""
     org_id = uuid.uuid4()
     factory = async_sessionmaker(db_engine, expire_on_commit=False)
-    async with factory() as session:
-        async with session.begin():
-            await set_rls_org(session, org_id)
-            val = (await session.execute(text("SELECT current_setting('app.organisation_id', true)"))).scalar()
-            assert val == str(org_id)
+    async with factory() as session, session.begin():
+        await set_rls_org(session, org_id)
+        val = (await session.execute(text("SELECT current_setting('app.organisation_id', true)"))).scalar()
+        assert val == str(org_id)
 
 
 # ---------------------------------------------------------------------------
@@ -116,8 +115,8 @@ async def test_rls_policies_exist_on_all_org_scoped_tables(
                     text(
                         "SELECT table_name FROM information_schema.columns "
                         "WHERE column_name = 'organisation_id' "
-                        "AND table_schema = 'public'"
-                    )
+                        "AND table_schema = 'public'",
+                    ),
                 )
             ).fetchall()
         }
@@ -160,25 +159,24 @@ async def test_rls_filters_rows_for_non_superuser(db_engine: AsyncEngine) -> Non
 
     try:
         # Seed: insert orgs and one audit_event per org (as superuser, bypasses RLS)
-        async with db_engine.connect() as conn:
-            async with conn.begin():
-                for oid, name in [(org_a, "RLS-Org-A"), (org_b, "RLS-Org-B")]:
-                    await conn.execute(
-                        text(
-                            "INSERT INTO organisations (id, name, slug, settings_json) "
-                            "VALUES (:id, :name, :slug, '{}'::json)"
-                        ),
-                        {"id": str(oid), "name": name, "slug": f"{name}-{oid}"},
-                    )
-                for eid, oid in [(event_a, org_a), (event_b, org_b)]:
-                    await conn.execute(
-                        text(
-                            "INSERT INTO audit_events "
-                            "(id, organisation_id, event_type, payload_json) "
-                            "VALUES (:id, :oid, 'test.rls', '{}'::json)"
-                        ),
-                        {"id": str(eid), "oid": str(oid)},
-                    )
+        async with db_engine.connect() as conn, conn.begin():
+            for oid, name in [(org_a, "RLS-Org-A"), (org_b, "RLS-Org-B")]:
+                await conn.execute(
+                    text(
+                        "INSERT INTO organisations (id, name, slug, settings_json) "
+                        "VALUES (:id, :name, :slug, '{}'::json)",
+                    ),
+                    {"id": str(oid), "name": name, "slug": f"{name}-{oid}"},
+                )
+            for eid, oid in [(event_a, org_a), (event_b, org_b)]:
+                await conn.execute(
+                    text(
+                        "INSERT INTO audit_events "
+                        "(id, organisation_id, event_type, payload_json) "
+                        "VALUES (:id, :oid, 'test.rls', '{}'::json)",
+                    ),
+                    {"id": str(eid), "oid": str(oid)},
+                )
 
         # Enforcement: as non-superuser with org_a context, only event_a visible
         async with db_engine.connect() as conn:
@@ -244,13 +242,12 @@ async def test_set_rls_user_context_sets_gucs(db_engine: AsyncEngine) -> None:
     user_id = uuid.uuid4()
     org_role = "operator"
     factory = async_sessionmaker(db_engine, expire_on_commit=False)
-    async with factory() as session:
-        async with session.begin():
-            await set_rls_user_context(session, user_id, org_role)
-            uid_val = (await session.execute(text("SELECT current_setting('app.user_id', true)"))).scalar()
-            role_val = (await session.execute(text("SELECT current_setting('app.org_role', true)"))).scalar()
-            assert uid_val == str(user_id)
-            assert role_val == org_role
+    async with factory() as session, session.begin():
+        await set_rls_user_context(session, user_id, org_role)
+        uid_val = (await session.execute(text("SELECT current_setting('app.user_id', true)"))).scalar()
+        role_val = (await session.execute(text("SELECT current_setting('app.org_role', true)"))).scalar()
+        assert uid_val == str(user_id)
+        assert role_val == org_role
 
 
 async def test_set_rls_user_context_resets_after_commit(db_engine: AsyncEngine) -> None:
