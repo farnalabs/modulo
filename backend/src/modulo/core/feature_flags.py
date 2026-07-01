@@ -53,6 +53,21 @@ _KNOWN_FLAGS: list[FeatureFlag] = [
         description="Persistent saved views for run and pipeline lists",
         tier="community",
     ),
+    FeatureFlag(
+        name="polling_trigger",
+        description="Trigger pipelines by polling external endpoints",
+        tier="community",
+    ),
+    FeatureFlag(
+        name="agent_signal_trigger",
+        description="Trigger pipelines via agent-to-agent signals",
+        tier="community",
+    ),
+    FeatureFlag(
+        name="helm_deployment",
+        description="Helm chart for production Kubernetes deployment",
+        tier="community",
+    ),
     # ── Team tier ──────────────────────────────────────────────────────
     FeatureFlag(
         name="remy",
@@ -94,17 +109,6 @@ _KNOWN_FLAGS: list[FeatureFlag] = [
     ),
     # ── v1 tier ────────────────────────────────────────────────────────
     FeatureFlag(
-        name="polling_trigger",
-        description="Trigger pipelines by polling external endpoints",
-        tier="v1",
-    ),
-    FeatureFlag(
-        name="agent_signal_trigger",
-        description="Trigger pipelines via agent-to-agent signals",
-        tier="v1",
-    ),
-    # ── v1 extended ────────────────────────────────────────────────────
-    FeatureFlag(
         name="schema_union_types",
         description="Union types and polymorphic schemas",
         tier="v1",
@@ -112,11 +116,6 @@ _KNOWN_FLAGS: list[FeatureFlag] = [
     FeatureFlag(
         name="migration_cli",
         description="CLI tool for migrating pipelines across instances",
-        tier="v1",
-    ),
-    FeatureFlag(
-        name="helm_deployment",
-        description="Helm chart for production Kubernetes deployment",
         tier="v1",
     ),
     # ── v2 tier ────────────────────────────────────────────────────────
@@ -144,11 +143,6 @@ _KNOWN_FLAGS: list[FeatureFlag] = [
         name="pipeline_diff_rollback",
         description="Diff-based pipeline version comparison and rollback",
         tier="v2",
-    ),
-    FeatureFlag(
-        name="model-backend-management",
-        description="Manage LLM backend connections and credentials",
-        tier="team",
     ),
     FeatureFlag(
         name="environment-profiles",
