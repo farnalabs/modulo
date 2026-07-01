@@ -27,6 +27,12 @@ export function createSyncAdapter(store: SyncableStore) {
 export function useDirtyTracker() {
   const dirtyIds = ref(new Set<string>())
 
+  if (import.meta.hot) {
+    import.meta.hot.dispose(() => {
+      dirtyIds.value.clear()
+    })
+  }
+
   function markDirty(id: string): void {
     dirtyIds.value.add(id)
     triggerRef(dirtyIds)

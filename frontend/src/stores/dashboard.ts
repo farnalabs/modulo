@@ -85,13 +85,47 @@ function validateDashboardSummary(data: unknown): DashboardSummary | null {
     console.warn('[Dashboard] validateDashboardSummary failed: teams is not an array')
     return null  
   }
+  for (const team of d.teams) {
+    if (!team || typeof team !== 'object' || typeof team.id !== 'string' || typeof team.name !== 'string') {
+      console.warn('[Dashboard] validateDashboardSummary failed: malformed team entry', team)
+      return null
+    }
+    const t = team as Record<string, unknown>
+    if (!t.run_counts_by_status || typeof t.run_counts_by_status !== 'object') {
+      console.warn('[Dashboard] validateDashboardSummary failed: team missing run_counts_by_status')
+      return null
+    }
+  }
   if (!Array.isArray(d.trend)) {
     console.warn('[Dashboard] validateDashboardSummary failed: trend is not an array')
     return null
   }
+  for (const day of d.trend) {
+    if (!day || typeof day !== 'object' || typeof day.date !== 'string') {
+      console.warn('[Dashboard] validateDashboardSummary failed: malformed trend entry', day)
+      return null
+    }
+  }
   if (!Array.isArray(d.recent_runs)) {
     console.warn('[Dashboard] validateDashboardSummary failed: recent_runs is not an array')
     return null
+  }
+  for (const run of d.recent_runs) {
+    if (!run || typeof run !== 'object' || typeof run.id !== 'string') {
+      console.warn('[Dashboard] validateDashboardSummary failed: malformed recent_run entry', run)
+      return null
+    }
+  }
+  if (d.eval_pass_rate !== null && d.eval_pass_rate !== undefined) {
+    if (!d.eval_pass_rate || typeof d.eval_pass_rate !== 'object') {
+      console.warn('[Dashboard] validateDashboardSummary failed: eval_pass_rate is not null/object')
+      return null
+    }
+    const ep = d.eval_pass_rate as Record<string, unknown>
+    if (typeof ep.overall_pass_rate !== 'number' || typeof ep.total_evals !== 'number' || typeof ep.passed_evals !== 'number') {
+      console.warn('[Dashboard] validateDashboardSummary failed: eval_pass_rate fields not all numbers')
+      return null
+    }
   }
   return d as unknown as DashboardSummary
 }
