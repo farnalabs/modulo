@@ -30,6 +30,7 @@ export function useRemyStream() {
 
     const token = getAccessToken()
     const pageCtx = store.pageContext
+    let reader: ReadableStreamDefaultReader<Uint8Array> | null = null
 
     try {
       const response = await fetch(`/api/v1/remy/sessions/${sessionId}/stream`, {
@@ -44,19 +45,24 @@ export function useRemyStream() {
           model: session.model,
           context_window_tokens: session.context_window_tokens,
           api_key: '',
-          page_context: pageCtx.route ? `${pageCtx.route}${pageCtx.params.id ? ` / ${pageCtx.params.id}` : ''}` : undefined,
+          page_context: (() => {
+            if (!pageCtx.route) return undefined
+            let ctx = `Page: ${pageCtx.route}`
+            if (pageCtx.params.id) ctx += ` / ${pageCtx.params.id}`
+            if (pageCtx.entities.length) ctx += `\nEntities: ${pageCtx.entities.join(', ')}`
+            return ctx
+          })(),
         }),
         signal: abortController.signal,
       })
 
       if (!response.ok || !response.body) {
-        store.isStreaming = false
-        connected.value = false
         store.error = response.statusText || 'Stream connection failed'
+        store.removeLastUserMessage()
         return
       }
 
-      const reader = response.body.getReader()
+      reader = response.body.getReader()
       const decoder = new TextDecoder()
       let buffer = ''
       let currentEvent = ''
@@ -95,7 +101,9 @@ export function useRemyStream() {
     } catch (e: unknown) {
       if (e instanceof Error && e.name === 'AbortError') return
       store.error = e instanceof Error ? e.message : 'Stream disconnected'
+      store.removeLastUserMessage()
     } finally {
+      reader?.cancel().catch(() => {})
       store.isStreaming = false
       connected.value = false
     }

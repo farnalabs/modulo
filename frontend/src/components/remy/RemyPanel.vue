@@ -49,7 +49,7 @@
             <button class="remy-tab" :class="{ active: activeTab === 'sessions' }" @click="activeTab = 'sessions'">Sessions</button>
           </div>
           <RemyChat v-show="activeTab === 'chat'" ref="chatRef" />
-          <RemySkillManager v-show="activeTab === 'skills'" />
+          <RemySkillManager v-if="activeTab === 'skills'" />
           <div v-show="activeTab === 'sessions'" class="flex-1 overflow-auto p-2">
             <RemySessionDrawer @select-session="activeTab = 'chat'" />
           </div>

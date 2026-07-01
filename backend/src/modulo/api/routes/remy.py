@@ -459,7 +459,24 @@ async def stream_chat(
                 if system_prompt:
                     langchain_messages.insert(0, SystemMessage(content=system_prompt))
 
-                # 5. Resolve API key (from request or DB backend)
+                # 5. Enforce context window — prune oldest messages if over budget
+                context_window = chat_session.context_window_tokens or 200000
+                budget = int(context_window * 0.8)
+                total_tokens = sum(
+                    max(1, len(m.content or "") // 4) for m in langchain_messages
+                )
+                pruned_count = 0
+                while total_tokens > budget and len(langchain_messages) > 2:
+                    removed = langchain_messages.pop(1)
+                    total_tokens -= max(1, len(removed.content or "") // 4)
+                    pruned_count += 1
+                if pruned_count:
+                    logger.info(
+                        "Pruned %d messages from session %s to fit context window",
+                        pruned_count, session_id,
+                    )
+
+                # 6. Resolve API key (from request or DB backend)
                 api_key = body.api_key
                 if not api_key:
                     resolved = await _resolve_api_key(
@@ -477,7 +494,7 @@ async def stream_chat(
 
                 backend = _build_backend(body.provider, body.model, api_key)
 
-                # 6. Stream tokens from the LLM
+                # 7. Stream tokens from the LLM
                 full_content = ""
                 tool_call_buffers: dict[int, dict[str, Any]] = {}
 
@@ -504,7 +521,7 @@ async def stream_chat(
                 if await request.is_disconnected():
                     return
 
-                # 7. Reconstruct tool calls from accumulated chunks
+                # 8. Reconstruct tool calls from accumulated chunks
                 tool_calls = []
                 for idx in sorted(tool_call_buffers.keys()):
                     buf = tool_call_buffers[idx]
@@ -519,7 +536,7 @@ async def stream_chat(
                         "args": parsed_args,
                     })
 
-                # 8. Execute tool calls via MCP
+                # 9. Execute tool calls via MCP
                 tool_results: list[dict[str, Any]] = []
                 if tool_calls and body.mcp_api_key:
                     for tc in tool_calls:
@@ -548,7 +565,7 @@ async def stream_chat(
                             tc_err = {"tool_call_id": tc["id"], "tool_name": tc["name"], "error": str(exc)}
                             yield f"event: tool_call\ndata: {json.dumps(tc_err)}\n\n"
 
-                # 9. Save assistant message to DB
+                # 10. Save assistant message to DB
                 async with db_session.begin():
                     await set_rls_org(db_session, principal.organisation_id)
                     assistant_msg = ChatMessage(
@@ -574,7 +591,7 @@ async def stream_chat(
                         )
                         db_session.add(tool_msg)
 
-            # 10. Send done event
+            # 11. Send done event
             yield f"event: done\ndata: {json.dumps({'message_id': msg_id})}\n\n"
 
         except HTTPException:

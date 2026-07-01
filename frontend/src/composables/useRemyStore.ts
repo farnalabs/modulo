@@ -158,6 +158,13 @@ export const useRemyStore = defineStore('remy', () => {
     pageContext.value = ctx
   }
 
+  function removeLastUserMessage() {
+    const lastIdx = messages.value.length - 1
+    if (lastIdx >= 0 && messages.value[lastIdx].role === 'user') {
+      messages.value.splice(lastIdx, 1)
+    }
+  }
+
   function appendToken(text: string) {
     const lastMsg = messages.value[messages.value.length - 1]
     if (lastMsg && lastMsg.role === 'assistant') {
@@ -198,6 +205,7 @@ export const useRemyStore = defineStore('remy', () => {
     updateSize,
     setPageContext,
     appendToken,
+    removeLastUserMessage,
     persistPosition,
     persistSize,
   }
