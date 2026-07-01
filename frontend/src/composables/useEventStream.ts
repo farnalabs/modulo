@@ -35,8 +35,11 @@ function connect(): void {
     connected.value = false
     reconnectAttempts++
     if (reconnectAttempts > MAX_RECONNECT_ATTEMPTS) {
-      console.error('[EventBus] Max reconnect attempts reached, disconnecting')
-      disconnect()
+      console.error('[EventBus] Max reconnect attempts reached, closing connection')
+      if (eventSource) {
+        eventSource.close()
+        eventSource = null
+      }
     }
   }
 }
