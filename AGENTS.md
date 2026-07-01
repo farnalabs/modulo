@@ -502,3 +502,9 @@ Wait-Process -Name "uv" -ErrorAction SilentlyContinue  # doesn't block; just con
 - SCIM CRUD functions (`scim_create_group`, `scim_create_user`) call Team/Account CRUD directly, bypassing REST API validation. Any validation gap in the underlying CRUD (e.g. duplicate name enforcement) is inherited by SCIM. Document this cross-module concern in the product map entry's Known Gaps.
 - When auditing behaviours in the product map, do NOT assume an unchecked `[ ]` means "not implemented" — it often means "not verified." Read the test files and run `grep` for each behaviour before deciding status.
 - The `prd:` frontmatter field must contain only the bare section number (e.g. `8.17`), never wrapped in quotes or prefixed with `§`. The `§` prefix or quotes cause `graph-validate.ps1` to fail section matching because `TrimStart('§')` cannot strip quotes, leaving a `"8.17"` string that doesn't match the PRD index.
+
+### Backend / Async & Concurrency
+
+- `asyncio.create_task()` called from sync code (SQLAlchemy listeners, signal handlers) → guard with `try: asyncio.get_running_loop(); except RuntimeError: log_warning(...) else: create_task(...)`. Without this guard, calling sync code without a running event loop crashes with `RuntimeError: no running event loop`.
+- Monkey-patching stdlib types (`asyncio.Queue._user_id = ...`) → use a separate tracking structure (`dict[int, str]` keyed by `id(queue)`). Stdlib types are not guaranteed to have dunder-namespace stability and future CPython versions may add internal `_`-prefixed attributes that collide.
+- Lazy-init side effects in dual-channel classes (pub/sub, read/write) → each method should only create its own channel. `publish()` must not create subscription connections and `subscribe()` must not create publishing connections. Use the shared `connect()` method for full initialization.
