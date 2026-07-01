@@ -73,16 +73,23 @@ Async GitHub REST API connector implementing `ConnectorBase`. Provides read/writ
 - [ ] Batch file operations — not implemented
 - [ ] Path traversal protection — relies on GitHub API server-side; no local validation
 
-### Issue Operations — not yet implemented
+### Issue Operations — create, read, update, and comment
 
-- [ ] Create issue — BDD scenario exists in `github.feature` but no `query("issues")` or `write("issue")` implementation
-- [ ] List issues — not implemented
+- [x] List issues via `query("issues")` with `repo` and optional `state`, `labels`, `since`, `per_page` filters
+- [x] Get single issue by number via `query("issue")` with `repo` and `issue_number` filters
+- [x] List issue comments via `query("issue_comments")` with `repo` and `issue_number` filters
+- [x] List issue events via `query("issue_events")` with `repo` and `issue_number` filters
+- [x] List assignees via `query("assignees")` with `repo` filter
+- [x] List issue timeline via `query("timeline")` with `repo` and `issue_number` filters
+- [x] Create issue via `write("issue")` with `repo`, `title`, optional `body`, `labels`, `assignees`
+- [x] Update issue fields via `write("issue_update")` with `repo`, `issue_number` and any updatable field
+- [x] Add issue comment via `write("issue_comment")` with `repo`, `issue_number`, `body`
+- [x] Add labels to issue via `write("issue_label")` with `repo`, `issue_number`, `labels`
+- [x] React to issue via `write("issue_reaction")` with `repo`, `issue_number`, `reaction` content
+- [x] Create label via `write("label")` with `repo`, `name`, `color`, optional `description`
+- [x] Create milestone via `write("milestone")` with `repo`, `title`, optional `description`, `due_on`
 - [ ] Search issues — not implemented
-- [ ] Close issue — not implemented
-- [ ] Add issue comment — not implemented
-- [ ] Add issue labels — not implemented
-- [ ] Assign issue — not implemented
-- [ ] `Capability.ISSUE_READ` / `ISSUE_WRITE` / `ISSUE_SEARCH` are defined in `base.py` but not assigned to `ConnectorType.GITHUB` capabilities
+- [ ] Assign issue — not implemented (`assignees` filter is query-only)
 
 ### Health Check — connectivity and credential validation
 
@@ -99,13 +106,12 @@ Async GitHub REST API connector implementing `ConnectorBase`. Provides read/writ
 - [x] `ConnectorType.GITHUB.capabilities` returns `{READ, WRITE, GIT_PUSH, CREATE_PR}` in `base.py`
 - [x] `GitHubConnector.connector_type` returns `ConnectorType.GITHUB`
 - [ ] `CREATE_PR` capability declared but `write("pr")` not implemented — capability mismatch
-- [ ] `ISSUE_READ`/`ISSUE_WRITE`/`ISSUE_SEARCH` not assigned — no issue operations possible
+- [x] `ISSUE_READ` and `ISSUE_WRITE` assigned to `ConnectorType.GITHUB` in `base.py`
 
 ## Known Gaps
 
 - [ ] **No OAuth flow**: PAT-only auth; no OAuth 2.0 authorization code flow for user-context operations
 - [ ] **PR creation unimplemented**: `CREATE_PR` capability declared, but `write("pr")` resource handler missing
-- [ ] **Issue operations entirely absent**: no issue CRUD despite BDD scenario and base capability enums existing
 - [ ] **PR commenting not wired**: BDD scenario exists but no `write("pr_comment")` in connector code
 - [ ] **Scope verification incomplete**: health check verifies `repo` and `read:org` classic PAT scopes; fine-grained PAT `pull_requests:write` not checked
 - [ ] **PRD vs code scope mismatch**: PRD §7.11 specifies fine-grained PAT scopes (`contents:read`, `contents:write`, `pull_requests:write`) but code uses classic PAT scopes (`repo`, `read:org`) — different scope systems
@@ -116,3 +122,4 @@ Async GitHub REST API connector implementing `ConnectorBase`. Provides read/writ
 - [ ] **Token expiry not distinguished from other errors**: expired PAT, insufficient scopes, and network errors all return `HTTP {code}: {body}` with no structured error type
 - [ ] **Fine-grained PAT not supported**: code requires classic PAT `repo` scope; fine-grained PAT with `contents:read`, `contents:write`, `pull_requests:write` would fail `REQUIRED_SCOPES` check
 - [ ] **`read:org` scope requirement unclear**: product map doesn't explain why `read:org` is required — may be unnecessary for most agent workflows
+- [ ] **No unit tests for issue operations**: `write("issue")`, `query("issues")`, `write("issue_comment")`, `write("issue_label")`, `write("issue_update")` have no test coverage
