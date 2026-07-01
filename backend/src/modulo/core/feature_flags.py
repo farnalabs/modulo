@@ -57,6 +57,11 @@ _KNOWN_FLAGS: list[FeatureFlag] = [
     ),
     # ── Team tier ──────────────────────────────────────────────────────
     FeatureFlag(
+        name="remy",
+        description="Remy in-app AI assistant",
+        tier="team",
+    ),
+    FeatureFlag(
         name="sso",
         description="Single sign-on via OIDC / SAML 2.0 providers",
         tier="team",
