@@ -6,6 +6,7 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.db.models.model_backend import ModelBackend
+from modulo.db.rls import set_rls_org
 
 
 async def user_has_api_key(
@@ -13,6 +14,7 @@ async def user_has_api_key(
     org_id: uuid.UUID,
     session: AsyncSession,
 ) -> bool:
+    await set_rls_org(session, org_id)
     result = await session.execute(
         select(func.count(ModelBackend.id)).where(
             ModelBackend.organisation_id == org_id,

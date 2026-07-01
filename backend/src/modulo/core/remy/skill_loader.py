@@ -8,6 +8,7 @@ from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from modulo.core.remy.config_service import RemyConfigService
 from modulo.db.models.remy_skill import RemySkill
 
 logger = logging.getLogger(__name__)
@@ -58,8 +59,6 @@ class SkillLoader:
         user_id: uuid.UUID,
         page_context: str | None = None,
     ) -> str:
-        from modulo.core.remy.config_service import RemyConfigService
-
         config_service = RemyConfigService(self._session)
         config = await config_service.get_config(org_id)
 

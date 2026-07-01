@@ -112,7 +112,7 @@ async def list_user_skills(
     session: AsyncSession = Depends(get_db_session),
 ) -> list[SkillResponse]:
     async with session.begin():
-        skills = await get_user_skills(session, current_user.account_id)
+        skills = await get_user_skills(session, current_user.account_id, current_user.organisation_id)
     return [_skill_to_response(s) for s in skills]
 
 
