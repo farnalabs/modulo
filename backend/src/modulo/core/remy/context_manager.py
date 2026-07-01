@@ -88,37 +88,6 @@ class ContextManager:
         lines.append("Summary:")
         return "\n".join(lines)
 
-    @staticmethod
-    def prune_messages(
-        messages: list[dict[str, Any]],
-        budget: int,
-    ) -> PruneResult:
-        """Remove oldest messages until remaining fit within ``budget`` tokens.
-
-        The first message (system prompt) and last message (newest user
-        message) are always preserved.
-        """
-        if not messages:
-            return PruneResult(kept_messages=[], pruned_count=0)
-
-        kept = list(messages)
-        pruned_count = 0
-
-        while len(kept) > 2:
-            tokens = sum(
-                ContextManager.count_tokens(m.get("content", "") or "")
-                for m in kept
-            )
-            if tokens <= budget:
-                break
-            kept.pop(1)
-            pruned_count += 1
-
-        return PruneResult(
-            kept_messages=kept,
-            pruned_count=pruned_count,
-        )
-
     async def generate_summary(
         self,
         pruned_messages: list[ChatMessage],

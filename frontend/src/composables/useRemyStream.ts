@@ -72,22 +72,18 @@ export function useRemyStream() {
             currentEvent = line.slice(7).trim()
           } else if (line.startsWith('data: ')) {
             const data = line.slice(6)
-            if (data === '[DONE]') {
-              store.isStreaming = false
-              continue
-            }
             try {
               const parsed = JSON.parse(data)
               if (currentEvent === 'token' && parsed.token) {
                 store.appendToken(parsed.token)
-              } else if (currentEvent === 'error' || (parsed.detail)) {
+              } else if (currentEvent === 'error') {
                 store.error = parsed.detail ?? parsed.message ?? 'Stream error'
                 store.isStreaming = false
-              } else if (currentEvent === 'done' && parsed.message_id) {
+              } else if (currentEvent === 'done') {
                 store.isStreaming = false
               }
             } catch {
-              if (data.trim()) {
+              if (currentEvent === 'token' && data.trim()) {
                 store.appendToken(data)
               }
             }
