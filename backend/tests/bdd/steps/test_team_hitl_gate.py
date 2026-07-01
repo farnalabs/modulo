@@ -1,4 +1,4 @@
-﻿"""BDD step definitions: Team-scoped HITL gates."""
+"""BDD step definitions: Team-scoped HITL gates."""
 
 import uuid
 from typing import Any
@@ -14,7 +14,7 @@ from modulo.settings import get_settings
 from tests.bdd.conftest import make_settings
 
 try:
-    scenarios("../../features/teams/team_hitl_gate.feature")
+    scenarios("../features/teams/team_hitl_gate.feature")
 except (FileNotFoundError, OSError):
     pass
 

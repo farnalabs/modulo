@@ -9,7 +9,7 @@ import pytest
 from pytest_bdd import given, parsers, scenarios, then, when
 
 try:
-    scenarios("../../features/costs/cost_controls.feature")
+    scenarios("../features/costs/cost_controls.feature")
 except (FileNotFoundError, OSError):
     pass
 

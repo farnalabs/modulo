@@ -13,15 +13,15 @@ from modulo.db.rls import set_rls_org, set_rls_user_context
 # Register feature files
 # ---------------------------------------------------------------------------
 try:
-    scenarios("../../features/security/credential_store.feature")
+    scenarios("../features/security/credential_store.feature")
 except (FileNotFoundError, OSError):
     pass
 try:
-    scenarios("../../features/security/input_sanitization.feature")
+    scenarios("../features/security/input_sanitization.feature")
 except (FileNotFoundError, OSError):
     pass
 try:
-    scenarios("../../features/security/rls_enforcement.feature")
+    scenarios("../features/security/rls_enforcement.feature")
 except (FileNotFoundError, OSError):
     pass
 

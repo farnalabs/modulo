@@ -7,11 +7,11 @@ from unittest.mock import MagicMock, patch
 
 from pytest_bdd import given, parsers, scenarios, then, when
 
-scenarios("../../features/triggers/manual.feature")
-scenarios("../../features/triggers/webhook_hmac.feature")
-scenarios("../../features/triggers/webhook_payload_mapping.feature")
-scenarios("../../features/triggers/flood_protection.feature")
-scenarios("../../features/triggers/trigger_event_log.feature")
+scenarios("../features/triggers/manual.feature")
+scenarios("../features/triggers/webhook_hmac.feature")
+scenarios("../features/triggers/webhook_payload_mapping.feature")
+scenarios("../features/triggers/flood_protection.feature")
+scenarios("../features/triggers/trigger_event_log.feature")
 
 from tests.bdd.conftest import make_mock_pipeline  # noqa: E402
 

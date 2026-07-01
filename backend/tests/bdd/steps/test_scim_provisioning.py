@@ -22,7 +22,7 @@ from modulo.settings import Settings, get_settings
 # Register feature files
 # ---------------------------------------------------------------------------
 try:
-    scenarios("../../features/scim/scim_provisioning.feature")
+    scenarios("../features/scim/scim_provisioning.feature")
 except (FileNotFoundError, OSError):
     pass
 

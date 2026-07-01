@@ -22,7 +22,7 @@ from modulo.db.repositories.postgres import PostgresRepository
 # Register feature file
 # ---------------------------------------------------------------------------
 try:
-    scenarios("../../features/organisation/multi_backend.feature")
+    scenarios("../features/organisation/multi_backend.feature")
 except (FileNotFoundError, OSError):
     pass
 

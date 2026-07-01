@@ -12,7 +12,7 @@ from modulo.core.pipeline_engine.graph_cache import (
 )
 
 try:
-    scenarios("../../features/pipelines/conditional_transitions.feature")
+    scenarios("../features/pipelines/conditional_transitions.feature")
 except (FileNotFoundError, OSError):
     pass
 

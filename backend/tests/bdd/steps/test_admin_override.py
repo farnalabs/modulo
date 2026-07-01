@@ -1,4 +1,4 @@
-﻿"""BDD step definitions: Admin override of team restrictions."""
+"""BDD step definitions: Admin override of team restrictions."""
 
 import uuid
 from typing import Any
@@ -14,7 +14,7 @@ from modulo.settings import get_settings
 from tests.bdd.conftest import make_settings
 
 try:
-    scenarios("../../features/teams/admin_override.feature")
+    scenarios("../features/teams/admin_override.feature")
 except (FileNotFoundError, OSError):
     pass
 

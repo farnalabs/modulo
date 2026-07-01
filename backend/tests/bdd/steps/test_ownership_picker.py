@@ -12,7 +12,7 @@ from pytest_bdd import given, parsers, scenarios, then, when
 # Register feature file
 # ---------------------------------------------------------------------------
 try:
-    scenarios("../../features/teams/ownership_picker.feature")
+    scenarios("../features/teams/ownership_picker.feature")
 except (FileNotFoundError, OSError):
     pass
 

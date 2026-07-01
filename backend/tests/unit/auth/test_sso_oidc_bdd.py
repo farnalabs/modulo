@@ -13,7 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.api.dependencies import _get_engine, get_db_session, get_plan_context
 from modulo.api.routes.sso import router as sso_router
-from modulo.core.feature_flags import CommunityTier, LicenseData, LicenseKeyTier
+from modulo.core.feature_flags import DbPlanContext, FeatureFlagRegistry
 from modulo.settings import Settings, get_settings
 
 _VALID_32 = "a" * 32
@@ -83,16 +83,7 @@ def client() -> Generator[TestClient, None, None]:
     _app.dependency_overrides[get_settings] = lambda: _oidc_settings()
     _app.dependency_overrides[get_db_session] = _override_session
     _app.dependency_overrides[_get_engine] = lambda: MagicMock()
-    _app.dependency_overrides[get_plan_context] = lambda: LicenseKeyTier(
-        LicenseData(
-            tier="team",
-            features=["sso"],
-            expires_at="",
-            org_id="",
-            raw_payload={},
-            raw_key="test-license-key",
-        )
-    )
+    _app.dependency_overrides[get_plan_context] = lambda: DbPlanContext(FeatureFlagRegistry(current_tier="team"))
     try:
         yield TestClient(_app)
     finally:
@@ -149,7 +140,7 @@ class TestCallbackNewUser:
             user_mock.id = uuid.uuid4()
             user_mock.organisation_id = _ORG_ID
             user_mock.org_role = "runner"
-            mock_jit.return_value = user_mock
+            mock_jit.return_value = (user_mock, _ORG_ID, "runner")
 
             mock_tok.return_value = {
                 "access_token": "at-test",
@@ -202,7 +193,7 @@ class TestCallbackExistingUser:
             existing.org_role = "admin"
             existing.sso_subject = "google:existing"
             existing.auth_provider = "oidc"
-            mock_jit.return_value = existing
+            mock_jit.return_value = (existing, _ORG_ID, "admin")
 
             mock_tok.return_value = {
                 "access_token": "at-existing",
@@ -224,10 +215,10 @@ class TestCallbackExistingUser:
         assert call is not None
         assert call[0][2] == "alice@example.com"
 
-        user = mock_jit.return_value
-        assert user.email == "alice@example.com"
-        assert user.sso_subject == "google:existing"
-        assert user.auth_provider == "oidc"
+        account = mock_jit.return_value[0]
+        assert account.email == "alice@example.com"
+        assert account.sso_subject == "google:existing"
+        assert account.auth_provider == "oidc"
 
 
 # ---------------------------------------------------------------------------
@@ -275,27 +266,27 @@ class TestCallbackStateValidation:
 class TestEnterpriseGate:
     def test_oidc_login_blocked_without_license(self, client: TestClient) -> None:
         _app.dependency_overrides[get_settings] = lambda: _oidc_settings(license_key="")
-        _app.dependency_overrides[get_plan_context] = lambda: CommunityTier()
+        _app.dependency_overrides[get_plan_context] = lambda: DbPlanContext(FeatureFlagRegistry(current_tier="community"))
         get_settings.cache_clear()
 
         resp = client.get("/api/v1/auth/oidc/google/login", follow_redirects=False)
         assert resp.status_code == 402
-        detail = resp.json().get("detail", "")
-        assert "sso" in detail.lower()
+        body = resp.json()
+        assert "sso" in body.get("detail", {}).get("detail", "").lower()
 
     def test_oidc_callback_blocked_without_license(self, client: TestClient) -> None:
         _app.dependency_overrides[get_settings] = lambda: _oidc_settings(license_key="")
-        _app.dependency_overrides[get_plan_context] = lambda: CommunityTier()
+        _app.dependency_overrides[get_plan_context] = lambda: DbPlanContext(FeatureFlagRegistry(current_tier="community"))
         get_settings.cache_clear()
 
         resp = client.get("/api/v1/auth/oidc/google/callback?code=c&state=s", follow_redirects=False)
         assert resp.status_code == 402
-        detail = resp.json().get("detail", "")
-        assert "sso" in detail.lower()
+        body = resp.json()
+        assert "sso" in body.get("detail", {}).get("detail", "").lower()
 
     def test_sso_providers_blocked_without_license(self, client: TestClient) -> None:
         _app.dependency_overrides[get_settings] = lambda: _oidc_settings(license_key="")
-        _app.dependency_overrides[get_plan_context] = lambda: CommunityTier()
+        _app.dependency_overrides[get_plan_context] = lambda: DbPlanContext(FeatureFlagRegistry(current_tier="community"))
         get_settings.cache_clear()
 
         resp = client.get("/api/v1/auth/sso/providers")

@@ -1,4 +1,4 @@
-﻿"""BDD step definitions: Team pipeline visibility."""
+"""BDD step definitions: Team pipeline visibility."""
 
 import uuid
 from typing import Any
@@ -14,7 +14,7 @@ from modulo.settings import get_settings
 from tests.bdd.conftest import make_settings, make_mock_pipeline
 
 try:
-    scenarios("../../features/teams/team_pipeline_visibility.feature")
+    scenarios("../features/teams/team_pipeline_visibility.feature")
 except (FileNotFoundError, OSError):
     pass
 

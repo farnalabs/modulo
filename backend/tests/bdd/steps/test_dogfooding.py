@@ -10,7 +10,7 @@ from pytest_bdd import given, parsers, scenarios, then, when
 
 from modulo.core.library.workflows.definitions import DOGFOODING_PIPELINE
 
-scenarios("../../features/workflows/dogfooding.feature")
+scenarios("../features/workflows/dogfooding.feature")
 
 KNOWN_AGENTS: set[str] = {
     "changelog-aggregator",

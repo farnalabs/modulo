@@ -7,7 +7,7 @@ from modulo.connectors.base import ConnectorPayload, ConnectorQuery
 from modulo.connectors.snyk import SnykConnector
 
 try:
-    scenarios("../../features/connectors/snyk.feature")
+    scenarios("../features/connectors/snyk.feature")
 except Exception:
     pass
 

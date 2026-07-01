@@ -1,4 +1,4 @@
-﻿"""BDD step definitions: Cross-team isolation."""
+"""BDD step definitions: Cross-team isolation."""
 
 import uuid
 from typing import Any
@@ -14,7 +14,7 @@ from modulo.settings import get_settings
 from tests.bdd.conftest import make_settings
 
 try:
-    scenarios("../../features/teams/cross_team_isolation.feature")
+    scenarios("../features/teams/cross_team_isolation.feature")
 except (FileNotFoundError, OSError):
     pass
 
