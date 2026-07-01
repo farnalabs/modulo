@@ -741,22 +741,23 @@ RELEASE_CANDIDATE: dict[str, Any] = {
 SIMPLEST_WORKFLOW: dict[str, Any] = {
     "name": "Simplest Workflow",
     "description": (
-        "The absolute simplest Modulo pipeline — a single agent that reads a "
-        "freeform specification (markdown), implements the required changes in "
-        "a target code path, runs a test command to validate, and optionally "
-        "git-commits the result. No connectors, no cloud services, no setup "
-        "beyond a model backend. Perfect for day-1 evaluation, dogfooding, "
-        "and the lowest possible barrier to entry.\n\n"
+        "The absolute simplest Modulo pipeline. One agent, one step. "
+        "You need two things:\n"
+        "  1. A model backend (your AI provider API key)\n"
+        "  2. A markdown spec describing what to build\n\n"
+        "That's it. The agent reads the spec, implements the changes in your "
+        "codebase, validates them (deduces the right test command from your "
+        "project files — no config needed), and optionally git-commits. "
+        "No connectors, no schemas, no cloud services, no HITL gates, no edges.\n\n"
         "HOW TO USE:\n"
-        "1. Create a pipeline from this template\n"
-        "2. Set the run context defaults:\n"
-        "   - spec_path: path to your markdown spec file\n"
-        "   - code_path: path to your codebase\n"
-        "   - test_command: e.g. 'pytest', 'npm test'\n"
-        "   - auto_commit: true/false\n"
-        "3. Trigger a run with the spec text as input\n"
-        "4. The agent reads, implements, tests, and commits.\n\n"
-        "No schemas, no connectors, no HITL gates, no edges."
+        "1. Create a model backend at Settings > Model Backends (API key only)\n"
+        "2. Create a pipeline from this template\n"
+        "3. Set run context defaults (all optional except spec text):\n"
+        "   - spec_path: path to your markdown spec\n"
+        "   - code_path: path to your codebase (defaults to .)\n"
+        "   - auto_commit: true to git commit if in a repo (default: false)\n"
+        "4. Trigger a run with your markdown spec as input\n"
+        "5. The agent reads, implements, validates, and commits."
     ),
     "version": "1.0.0",
     "author": "Modulo",
