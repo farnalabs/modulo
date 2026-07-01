@@ -69,6 +69,7 @@ from modulo.api.routes.onboarding import router as onboarding_router
 from modulo.api.routes.pipelines import router as pipelines_router
 from modulo.api.routes.plugins import router as plugins_router
 from modulo.api.routes.registry import router as registry_router
+from modulo.api.routes.remy import router as remy_router
 from modulo.api.routes.run_ws import router as run_ws_router
 from modulo.api.routes.runs import router as runs_router
 from modulo.api.routes.schemas import router as schemas_router
@@ -597,6 +598,7 @@ app.include_router(templates_router)
 app.include_router(onboarding_router)
 app.include_router(environments_router)
 app.include_router(events_router)
+app.include_router(remy_router)
 
 # Remote MCP server — mounted as a Starlette sub-app at /mcp.
 # Auth is enforced by McpAuthMiddleware inside the sub-app.
