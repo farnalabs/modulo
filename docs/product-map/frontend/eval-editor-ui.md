@@ -7,13 +7,24 @@ bdd:
 code:
   - frontend/src/views/EvalEditorView.vue
   - frontend/src/router/index.ts
+unit-tests:
+  - frontend/src/__tests__/EvalEditorView.spec.ts
+  - tests/unit/api/test_evals_endpoint.py
+  - tests/unit/api/test_evals_compare.py
+  - tests/unit/api/test_evals_dashboard.py
+  - tests/unit/core/test_eval_engine.py
+  - tests/unit/core/test_eval_judge_injection.py
+  - tests/unit/core/test_eval_regressions.py
+  - tests/unit/core/test_eval_suite.py
 depends-on: [feat-evals-eval-definitions]
 status: partial
 ---
 
 # Frontend Eval Editor UI
 
-CRUD UI for eval definitions — create, edit, delete evals scoped to a pipeline and optionally a node. Supports all four eval types from 8.17: llm_judge, regex, json_schema, custom_function.
+CRUD UI for eval definitions — create, edit, delete evals scoped to a pipeline and
+optionally a node. Supports all four eval types from 8.17: llm_judge, regex,
+json_schema, custom_function.
 
 ## Behaviours
 
@@ -86,7 +97,8 @@ CRUD UI for eval definitions — create, edit, delete evals scoped to a pipeline
 
 ## Known Gaps
 
-- No BDD feature file for eval editor UI specifically — only eval_run.feature exists under backend/tests/bdd/features/eval/
+- No BDD feature file for eval editor UI specifically — only eval_run.feature
+  exists under backend/tests/bdd/features/eval/
 - No pagination in evals list (API response carries pagination fields but UI shows all)
 - No search or filter within evals list
 - Suite assignment UI missing (suite_id field exists on EvalDefinition but no UI to assign)

@@ -9,13 +9,18 @@ bdd:
 code:
   - frontend/src/components/OwnershipPicker.vue
   - frontend/src/views/LibraryPipelineWizard.vue
+unit-tests:
+  - tests/unit/api/test_ownership_picker_bdd.py
+  - tests/bdd/steps/test_ownership_picker.py
 depends-on: [feat-teams-team-ownership]
 status: partial
 ---
 
 # Ownership Picker
 
-Popover-based team ownership selector for pipelines, bundles, and library primitives. Supports org-wide and team-scoped ownership with teams fetched from the admin API.
+Popover-based team ownership selector for pipelines, bundles, and library
+primitives. Supports org-wide and team-scoped ownership with teams fetched
+from the admin API.
 
 ## Behaviours
 
@@ -99,4 +104,5 @@ Popover-based team ownership selector for pipelines, bundles, and library primit
 - Picker relies on `GET /api/v1/admin/teams` — non-admin users see an error rather than a read-only view
 - No search/filter for teams with many entries
 - Popover items lack a `disabled` state for teams the user cannot select
-- `depends-on` references `feat-teams-team-ownership` (product map feature ID); the value was previously the delivery task `task-nv1-team-ownership`
+- `depends-on` references `feat-teams-team-ownership` (product map feature ID);
+  the value was previously the delivery task `task-nv1-team-ownership`
