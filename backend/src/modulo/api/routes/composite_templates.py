@@ -301,6 +301,7 @@ class DetectParamsResponse(BaseModel):
 @router.post("/detect-params", response_model=DetectParamsResponse)
 async def detect_params_endpoint(
     body: DetectParamsRequest,
+    principal: AuthenticatedPrincipal = Depends(get_current_user),
 ) -> DetectParamsResponse:
     """Scan sub-pipeline agent prompts for ``{{parameter.*}}`` placeholders.
 
@@ -311,7 +312,12 @@ async def detect_params_endpoint(
 
 
 class PublishRequest(BaseModel):
-    version: str | None = Field(default=None, description="Override version string, defaults to '1.0.0'")
+    version: str | None = Field(
+        default=None,
+        min_length=1,
+        pattern=r"^\d+\.\d+\.\d+$",
+        description="Override version string, defaults to '1.0.0'",
+    )
 
 
 class PublishResponse(BaseModel):
