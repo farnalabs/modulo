@@ -21,3 +21,9 @@ export function getHandlers(resourceType: string): Set<(event: EventBusEvent) =>
 export function clearAllRegistrations(): void {
   registry.clear()
 }
+
+if (import.meta.hot) {
+  import.meta.hot.dispose(() => {
+    clearAllRegistrations()
+  })
+}
