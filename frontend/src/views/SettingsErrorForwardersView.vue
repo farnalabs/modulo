@@ -264,6 +264,7 @@
 import { ref, reactive, onMounted } from 'vue'
 import { formatApiError } from '../lib/api/formatError'
 import { usePlanStore } from '../stores/planStore'
+import { api } from '../lib/api/client'
 import FeatureGate from '../components/FeatureGate.vue'
 import LockIcon from '../components/LockIcon.vue'
 import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
@@ -314,7 +315,6 @@ const configs = reactive<ForwarderConfigs>({
 })
 
 async function loadForwarders() {
-  const { api } = await import('../lib/api/client')
   loading.value = true
   loadError.value = null
   try {
@@ -350,7 +350,6 @@ function buildConfigJson(forwarderType: string): Record<string, string> {
 }
 
 async function saveConfig(fwd: ForwarderItem) {
-  const { api } = await import('../lib/api/client')
   const ftype = fwd.forwarder_type
   saving.value[ftype] = true
   formErrors.value[ftype] = null
@@ -378,7 +377,6 @@ async function saveConfig(fwd: ForwarderItem) {
 }
 
 async function testConnection(fwd: ForwarderItem) {
-  const { api } = await import('../lib/api/client')
   const ftype = fwd.forwarder_type
   testing.value[ftype] = true
   testResults.value[ftype] = null

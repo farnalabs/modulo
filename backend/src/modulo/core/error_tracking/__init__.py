@@ -10,6 +10,8 @@ import secrets
 import time
 from typing import Any
 
+from sqlalchemy import select
+
 from modulo.core.error_tracking.alerting import AlertEngine
 from modulo.core.error_tracking.forwarders import get_forwarder
 from modulo.core.error_tracking.metrics import init_metrics, record_error_ingest
@@ -18,6 +20,7 @@ from modulo.db.crud.error_tracking import (
     get_error_group_by_fingerprint,
     upsert_error_group,
 )
+from modulo.db.models.error_forwarder_config import ErrorForwarderConfig
 
 _log = logging.getLogger(__name__)
 
@@ -49,7 +52,6 @@ class ErrorIngestionService:
 
     def __init__(self, redis_client: Any | None = None) -> None:
         self._redis = redis_client
-        _metrics_initialised = False
 
     @staticmethod
     def fingerprint(message: str, stacktrace: str | None = None, source: str = "") -> str:
@@ -126,7 +128,7 @@ class ErrorIngestionService:
         except Exception:
             _log.exception("error_tracking.alert_evaluation_failed")
 
-        await _dispatch_forwarders(org_id, group, event, event_data)
+        await _dispatch_forwarders(org_id, group, event, event_data, session)
 
         return {"group_id": str(group.id), "is_new": existing is None}
 
@@ -223,14 +225,27 @@ async def _dispatch_forwarders(
     error_group: Any,
     error_event: Any,
     event_data: dict[str, Any],
+    session: Any | None = None,
 ) -> None:
     """Call all configured forwarders for the org.
 
-    Forwarder configs are looked up by org_id (or fall back to
+    Forwarder configs are looked up by org_id from the DB (or fall back to
     a global default).  Each forwarder runs independently; a single
     forwarder failure does not affect others.
     """
-    configs = _DEFAULT_FORWARDER_CONFIGS
+    per_org_configs: dict[str, dict[str, Any]] = {}
+    if session is not None:
+        result = await session.execute(
+            select(ErrorForwarderConfig).where(
+                ErrorForwarderConfig.organisation_id == org_id,
+                ErrorForwarderConfig.enabled.is_(True),
+            )
+        )
+        for row in result.scalars().all():
+            if row.config_json:
+                per_org_configs[row.forwarder_type] = row.config_json
+
+    configs = per_org_configs or _DEFAULT_FORWARDER_CONFIGS
     if not configs:
         return
 
