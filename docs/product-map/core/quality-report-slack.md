@@ -4,11 +4,14 @@ prd: 8.6, 8.11
 delivery-tasks: [task-nv7-quality-report-slack]
 bdd:
   - backend/tests/bdd/features/connectors/slack_connector.feature
+  - backend/tests/bdd/features/reports/quality_report.feature
 code:
   - backend/src/modulo/core/reports/quality_report.py
   - backend/src/modulo/core/reports/__init__.py
+  - backend/src/modulo/api/routes/pipelines.py
 depends-on: [feat-core-notifications, feat-evals-eval-engine]
-unit-tests: []
+unit-tests:
+  - backend/tests/unit/reports/test_quality_report.py
 status: partial
 ---
 
@@ -44,16 +47,47 @@ Weekly quality report generated from run volume, eval pass rate, and cost data, 
 - [x] `generate_quality_report` requires an active transaction with RLS org context
 - [x] Webhook delivery uses 30-second timeout per POST
 - [x] Error text truncated to 200 characters in delivery results
+- [x] `POST /{pipeline_id}/quality-report` endpoint triggers report generation and delivery
+- [x] Pipeline endpoint passes recipient URLs as dict to `deliver_quality_report`
+- [x] Returns 501 Not Implemented when DB tables missing (ProgrammingError caught)
+- [x] Unit tests exist for `_pct_delta`, `_trend_symbol`, `_fmt_delta`, formatting functions, `format_slack_message`, `deliver_quality_report`, and `generate_quality_report`
+- [x] BDD feature files exist for quality report delivery (happy path, no webhook, pipeline not found)
 
-## Missing / Issues - ~~No API endpoint calls `generate_quality_report` or `deliver_quality_report`~~ — RESOLVED: `POST /{pipeline_id}/quality-report` now triggers report generation and delivery via NotificationEndpoint webhook config (`pipelines.py:569`). Scheduled task still absent.
-- No unit tests exist for `quality_report.py`
-- No BDD feature files exist for notification webhooks (steps exist at `test_alpha_notifications.py` but `.feature` files are missing)
-- Slack connector BDD feature is a placeholder only
+## Missing / Issues
+
+### Resolved
+- ~~No unit tests exist for `quality_report.py`~~ — RESOLVED: `backend/tests/unit/reports/test_quality_report.py` covers all functions (2026-07-01)
+- ~~No BDD feature files exist for notification webhooks~~ — RESOLVED: `backend/tests/bdd/features/reports/quality_report.feature` with step definitions (2026-07-01)
+- ~~Slack connector BDD feature is a placeholder only~~ — RESOLVED: 12 real scenarios exist in `backend/tests/bdd/features/connectors/slack_connector.feature` (2026-07-01)
+- ~~Type mismatch: pipeline endpoint passes `recipient_urls: list[str]` directly to `deliver_quality_report` which expects `dict[str, Any]`~~ — RESOLVED: now wraps in `{"webhook_urls": recipient_urls}` (2026-07-01)
+- ~~No ProgrammingError catch on pipeline endpoint~~ — RESOLVED: `trigger_quality_report` now catches `ProgrammingError` and returns 501 Not Implemented (2026-07-01)
+
+### Remaining
 - No unit tests for `format_slack_message` output structure or Slack Block Kit schema compliance
 - PRD 8.11 says "V1: native Slack" but Slack delivery is already implemented — PRD may be outdated on this point
 - PRD 8.11 describes HMAC-SHA256 signing and retry logic for notification webhooks but `deliver_quality_report` does not implement signing, retries, or dead-letter queue
 - Scheduled report CRUD exists (ScheduledReport model, CRUD, REST routes in costs.py) but is not connected to quality report generation — only cost reports
 - No org-level webhook URL configuration UI or API for quality report recipients
-- `deliver_quality_report` accepts `recipient_urls` directly — no persistent endpoint config is consulted ## Known Gaps - API endpoint exists (`POST /{pipeline_id}/quality-report`) but still needs scheduled delivery, comprehensive tests, and dedicated webhook config UI
+- `deliver_quality_report` accepts `recipient_urls` directly — no persistent endpoint config is consulted
+- API endpoint exists (`POST /{pipeline_id}/quality-report`) but still needs scheduled delivery, comprehensive tests, and dedicated webhook config UI
 - No notification bell alert for failed quality report deliveries
-- No team-scoped quality reports — always org-wide 
+- No team-scoped quality reports — always org-wide
+
+## Known Gaps
+
+- Scheduled delivery (cron-triggered quality reports) not yet implemented
+- No HMAC-SHA256 signing of webhook payloads
+- No retry logic or dead-letter queue for failed deliveries
+- No org-level webhook URL configuration UI
+- No team-scoped quality reports
+
+## QA History
+
+### 2026-07-01 — Cross-cutting architecture QA
+
+**Findings fixed:**
+- CRITICAL: Type mismatch — `trigger_quality_report` passed `list[str]` to `deliver_quality_report` which expects `dict[str, Any]`. Fixed by wrapping in `{"webhook_urls": recipient_urls}`.
+- MAJOR: Missing `ProgrammingError` catch in `trigger_quality_report`. Added standard 501 Not Implemented handler.
+- MAJOR: No unit tests for `quality_report.py`. Created `backend/tests/unit/reports/test_quality_report.py` with 30+ tests covering all functions.
+- MAJOR: No BDD feature files for quality report delivery. Created `backend/tests/bdd/features/reports/quality_report.feature` with 3 scenarios and step definitions.
+- MAJOR: Product map listed stale placeholders. Updated with resolved/remaining sections and QA history.
