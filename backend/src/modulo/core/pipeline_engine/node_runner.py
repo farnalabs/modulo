@@ -76,7 +76,7 @@ def _is_truthy(value: Any) -> bool:
 
 def _evaluate_eval_condition(score: float, threshold: float, operator: str) -> bool:
     """Evaluate an eval-reference condition using the given operator.
-    
+
     Returns True when the condition is satisfied (meaning the gate should fire/interrupt).
     Returns False when the condition is not satisfied (gate should be skipped).
     """
