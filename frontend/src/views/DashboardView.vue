@@ -19,81 +19,53 @@
     </div>
 
     <!-- Full-page error -->
-    <ErrorAlert v-else-if="error && !summary" :message="error" :on-retry="fetchData" />
+    <ErrorAlert v-else-if="error && !summary" :message="error" :on-retry="dashboardStore.fetchSummary" />
 
     <template v-else-if="summary">
 
-      <!-- Row 1: Summary stat cards -->
-      <div class="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-        <div data-testid="dashboard-stats-card" class="card card-hover p-4">
-          <div class="flex items-center gap-3">
-            <div class="flex h-9 w-9 items-center justify-center rounded-lg bg-primary/10 text-primary">
-              <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="20" x2="12" y2="10"/><line x1="18" y1="20" x2="18" y2="4"/><line x1="6" y1="20" x2="6" y2="16"/></svg>
-            </div>
-            <div class="min-w-0">
-              <p class="text-sm font-medium text-muted-foreground">Total Runs</p>
-              <p class="text-2xl font-bold stat-card-number">{{ summary.total_runs }}</p>
-            </div>
+      <!-- Config warnings -->
+      <div v-if="summary.config_warnings && summary.config_warnings.length > 0" class="space-y-2">
+        <div
+          v-for="w in summary.config_warnings"
+          :key="w.type"
+          class="flex items-center justify-between gap-3 rounded-lg border border-warning/30 bg-warning/5 p-4 text-sm text-warning"
+        >
+          <div class="flex items-center gap-2">
+            <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="shrink-0"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+            <span>{{ w.message }}</span>
           </div>
-        </div>
-        <div data-testid="dashboard-stats-card" class="card card-hover p-4">
-          <div class="flex items-center gap-3">
-            <div class="flex h-9 w-9 items-center justify-center rounded-lg bg-primary/10 text-primary">
-              <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg>
-            </div>
-            <div class="min-w-0">
-              <p class="text-sm font-medium text-muted-foreground">Active Pipelines</p>
-              <p class="text-2xl font-bold stat-card-number">{{ summary.active_pipelines }}</p>
-            </div>
-          </div>
-        </div>
-        <div data-testid="dashboard-stats-card" class="card card-hover p-4">
-          <div class="flex items-center gap-3">
-            <div class="flex h-9 w-9 items-center justify-center rounded-lg bg-success/10 text-success">
-              <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="23 6 13.5 15.5 8.5 10.5 1 18"/><polyline points="17 6 23 6 23 12"/></svg>
-            </div>
-            <div class="min-w-0">
-              <p class="text-sm font-medium text-muted-foreground">Running</p>
-              <p class="text-2xl font-bold text-success">{{ summary.run_counts_by_status?.running ?? 0 }}</p>
-            </div>
-          </div>
-        </div>
-        <div data-testid="dashboard-stats-card" class="card card-hover p-4">
-          <div class="flex items-center gap-3">
-            <div class="flex h-9 w-9 items-center justify-center rounded-lg bg-warning/10 text-warning">
-              <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
-            </div>
-            <div class="min-w-0">
-              <p class="text-sm font-medium text-muted-foreground">Awaiting Human</p>
-              <p class="text-2xl font-bold text-warning">{{ summary.run_counts_by_status?.awaiting_human ?? 0 }}</p>
-            </div>
-          </div>
+          <a
+            :href="w.action_url"
+            class="shrink-0 rounded-md bg-warning/15 px-3 py-1.5 text-xs font-semibold text-warning hover:bg-warning/25 transition-colors"
+          >
+            {{ w.action_label }}
+          </a>
         </div>
       </div>
 
+      <!-- Row 1: Summary stat cards -->
+      <div class="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+        <StatCard label="Total Runs" :value="summary.total_runs" color="primary">
+          <template #icon><line x1="12" y1="20" x2="12" y2="10"/><line x1="18" y1="20" x2="18" y2="4"/><line x1="6" y1="20" x2="6" y2="16"/></template>
+        </StatCard>
+        <StatCard label="Active Pipelines" :value="summary.active_pipelines" color="primary">
+          <template #icon><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></template>
+        </StatCard>
+        <StatCard label="Running" :value="summary.run_counts_by_status?.running ?? 0" color="success">
+          <template #icon><polyline points="23 6 13.5 15.5 8.5 10.5 1 18"/><polyline points="17 6 23 6 23 12"/></template>
+        </StatCard>
+        <StatCard label="Awaiting Human" :value="summary.run_counts_by_status?.awaiting_human ?? 0" color="warning">
+          <template #icon><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></template>
+        </StatCard>
+      </div>
+
       <div class="grid gap-4 sm:grid-cols-2">
-        <div data-testid="dashboard-stats-card" class="card card-hover p-4">
-          <div class="flex items-center gap-3">
-            <div class="flex h-9 w-9 items-center justify-center rounded-lg bg-destructive/10 text-destructive">
-              <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="15" y1="9" x2="9" y2="15"/><line x1="9" y1="9" x2="15" y2="15"/></svg>
-            </div>
-            <div class="min-w-0">
-              <p class="text-sm font-medium text-muted-foreground">Failed</p>
-              <p class="text-2xl font-bold text-destructive">{{ summary.run_counts_by_status?.failed ?? 0 }}</p>
-            </div>
-          </div>
-        </div>
-        <div data-testid="dashboard-stats-card" class="card card-hover p-4">
-          <div class="flex items-center gap-3">
-            <div class="flex h-9 w-9 items-center justify-center rounded-lg bg-muted text-muted-foreground">
-              <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
-            </div>
-            <div class="min-w-0">
-              <p class="text-sm font-medium text-muted-foreground">Idle</p>
-              <p class="text-2xl font-bold">{{ summary.run_counts_by_status?.idle ?? 0 }}</p>
-            </div>
-          </div>
-        </div>
+        <StatCard label="Failed" :value="summary.run_counts_by_status?.failed ?? 0" color="destructive">
+          <template #icon><circle cx="12" cy="12" r="10"/><line x1="15" y1="9" x2="9" y2="15"/><line x1="9" y1="9" x2="15" y2="15"/></template>
+        </StatCard>
+        <StatCard label="Idle" :value="summary.run_counts_by_status?.idle ?? 0" color="muted">
+          <template #icon><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></template>
+        </StatCard>
       </div>
 
       <!-- Eval pass rate + Token spend -->
@@ -263,6 +235,7 @@ import { usePlanStore } from '../stores/planStore'
 import { useDashboardStore } from '../stores/dashboard'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
 import Sparkline from '../components/shared/Sparkline.vue'
+import StatCard from '../components/StatCard.vue'
 
 const planStore = usePlanStore()
 const dashboardStore = useDashboardStore()
@@ -270,6 +243,7 @@ const dashboardStore = useDashboardStore()
 const loading = computed(() => dashboardStore.loading)
 const error = computed(() => dashboardStore.error)
 const summary = computed(() => dashboardStore.summary)
+const totalSpend = computed(() => dashboardStore.totalSpend)
 
 const isTeam = computed(() => planStore.isTeam)
 
@@ -320,11 +294,6 @@ const evalTrendLabel = computed(() => {
   return 'Stable'
 })
 
-const totalSpend = computed(() => {
-  if (!summary.value?.trend) return 0
-  return summary.value.trend.reduce((sum, d) => sum + d.token_spend_usd, 0)
-})
-
 const spendSparklineData = computed(() => {
   if (!summary.value?.trend) return []
   return summary.value.trend.map(d => d.token_spend_usd)
@@ -352,7 +321,6 @@ const trendData = computed(() => {
     }))
   }
   const items: Array<{ date: string; run_count: number; eval_pass_rate: number | null; token_spend_usd: number }> = []
-  const countMap = new Map(tr.run_counts.map(r => [r.date, r.run_count]))
   const evalMap = new Map(tr.eval_pass_rates.map(r => [r.date, r.pass_rate]))
   const spendMap = new Map(tr.token_spend.map(r => [r.date, r.total_spend_usd]))
   // Build a combined series covering all dates
@@ -400,15 +368,11 @@ function formatTimestamp(iso: string): string {
   }
 }
 
-function fetchData() {
-  return dashboardStore.fetchSummary()
-}
-
 onMounted(async () => {
+  const promises: Promise<unknown>[] = [dashboardStore.fetchSummary()];
   if (!planStore.currentTier || planStore.currentTier === 'community') {
-    // Don't await — let plan fetch and dashboard fetch run in parallel
-    planStore.fetchPlan()
+    promises.push(planStore.fetchPlan());
   }
-  await fetchData()
+  await Promise.all(promises);
 })
 </script>

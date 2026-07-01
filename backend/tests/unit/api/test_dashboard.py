@@ -48,6 +48,14 @@ class _MockResult:
     def scalar_one_or_none(self) -> object:
         return self._scalar_one
 
+    def one(self) -> "_MockRow":
+        """Return the first row, or a default row if none exist."""
+        if hasattr(self._rows, "__iter__"):
+            rows_list = list(self._rows)
+            if rows_list:
+                return rows_list[0]
+        return _MockRow(total=100, passed=75)
+
     def scalars(self) -> "_MockResult":
         return self
 
@@ -164,8 +172,16 @@ class TestDashboardSummary:
             "eval_pass_rate",
             "trend",
             "recent_runs",
+            "config_warnings",
         }
         assert set(body.keys()) == expected
+
+    def test_config_warnings_is_list(self, client: TestClient) -> None:
+        response = client.get("/api/v1/dashboard/summary")
+        assert response.status_code == 200
+        body = response.json()
+        assert "config_warnings" in body
+        assert isinstance(body["config_warnings"], list)
 
     def test_requires_auth(self, unauth_client: TestClient) -> None:
         response = unauth_client.get("/api/v1/dashboard/summary")
@@ -259,7 +275,8 @@ class TestDashboardTrends:
             assert "approved_count" in entry
             assert "rejected_count" in entry
             assert "rejection_rate" in entry
-            assert "avg_time_to_approve_ms" in entry or entry["avg_time_to_approve_ms"] is None
+            assert "avg_time_to_approve_ms" in entry
+            assert entry["avg_time_to_approve_ms"] is None or isinstance(entry["avg_time_to_approve_ms"], (int, float))
 
     def test_rejection_trend_structure(self, client: TestClient) -> None:
         response = client.get("/api/v1/dashboard/trends?days=7")

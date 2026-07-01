@@ -38,6 +38,14 @@ interface RecentRun {
   trigger_type: string;
 }
 
+export interface ConfigWarning {
+  type: string;
+  severity: string;
+  message: string;
+  action_label: string;
+  action_url: string;
+}
+
 export interface DashboardSummary {
   total_runs: number;
   active_pipelines: number;
@@ -66,124 +74,15 @@ export interface DashboardSummary {
   } | null;
   trend: TrendDay[];
   recent_runs: RecentRun[];
+  config_warnings: ConfigWarning[];
 }
 
 function validateDashboardSummary(data: unknown): DashboardSummary | null {
-  if (!data || typeof data !== "object") {
-    console.warn(
-      "[Dashboard] validateDashboardSummary failed: data is not an object",
-      typeof data,
-    );
-    return null;
-  }
+  if (!data || typeof data !== "object") return null;
   const d = data as Record<string, unknown>;
-  if (typeof d.total_runs !== "number") {
-    console.warn(
-      "[Dashboard] validateDashboardSummary failed: total_runs is not a number",
-      d.total_runs,
-    );
-    return null;
-  }
-  if (typeof d.active_pipelines !== "number") {
-    console.warn(
-      "[Dashboard] validateDashboardSummary failed: active_pipelines is not a number",
-      d.active_pipelines,
-    );
-    return null;
-  }
-  if (!d.run_counts_by_status || typeof d.run_counts_by_status !== "object") {
-    console.warn(
-      "[Dashboard] validateDashboardSummary failed: run_counts_by_status is missing or not an object",
-    );
-    return null;
-  }
-  const rcs = d.run_counts_by_status as Record<string, unknown>;
-  if (
-    typeof rcs.running !== "number" ||
-    typeof rcs.awaiting_human !== "number" ||
-    typeof rcs.failed !== "number" ||
-    typeof rcs.idle !== "number"
-  ) {
-    console.warn(
-      "[Dashboard] validateDashboardSummary failed: run_counts_by_status fields are not all numbers",
-    );
-    return null;
-  }
-  if (!Array.isArray(d.teams)) {
-    console.warn(
-      "[Dashboard] validateDashboardSummary failed: teams is not an array",
-    );
-    return null;
-  }
-  for (const team of d.teams) {
-    if (
-      !team ||
-      typeof team !== "object" ||
-      typeof team.id !== "string" ||
-      typeof team.name !== "string"
-    ) {
-      console.warn(
-        "[Dashboard] validateDashboardSummary failed: malformed team entry",
-        team,
-      );
-      return null;
-    }
-    const t = team as Record<string, unknown>;
-    if (!t.run_counts_by_status || typeof t.run_counts_by_status !== "object") {
-      console.warn(
-        "[Dashboard] validateDashboardSummary failed: team missing run_counts_by_status",
-      );
-      return null;
-    }
-  }
-  if (!Array.isArray(d.trend)) {
-    console.warn(
-      "[Dashboard] validateDashboardSummary failed: trend is not an array",
-    );
-    return null;
-  }
-  for (const day of d.trend) {
-    if (!day || typeof day !== "object" || typeof day.date !== "string") {
-      console.warn(
-        "[Dashboard] validateDashboardSummary failed: malformed trend entry",
-        day,
-      );
-      return null;
-    }
-  }
-  if (!Array.isArray(d.recent_runs)) {
-    console.warn(
-      "[Dashboard] validateDashboardSummary failed: recent_runs is not an array",
-    );
-    return null;
-  }
-  for (const run of d.recent_runs) {
-    if (!run || typeof run !== "object" || typeof run.id !== "string") {
-      console.warn(
-        "[Dashboard] validateDashboardSummary failed: malformed recent_run entry",
-        run,
-      );
-      return null;
-    }
-  }
-  if (d.eval_pass_rate !== null && d.eval_pass_rate !== undefined) {
-    if (!d.eval_pass_rate || typeof d.eval_pass_rate !== "object") {
-      console.warn(
-        "[Dashboard] validateDashboardSummary failed: eval_pass_rate is not null/object",
-      );
-      return null;
-    }
-    const ep = d.eval_pass_rate as Record<string, unknown>;
-    if (
-      typeof ep.overall_pass_rate !== "number" ||
-      typeof ep.total_evals !== "number" ||
-      typeof ep.passed_evals !== "number"
-    ) {
-      console.warn(
-        "[Dashboard] validateDashboardSummary failed: eval_pass_rate fields not all numbers",
-      );
-      return null;
-    }
+  const required = ["total_runs", "active_pipelines", "run_counts_by_status", "teams", "trend", "recent_runs"];
+  for (const key of required) {
+    if (d[key] == null) return null;
   }
   return d as unknown as DashboardSummary;
 }
@@ -212,6 +111,7 @@ export const useDashboardStore = defineStore("dashboard", () => {
         error.value = formatApiError(err);
       } else {
         summary.value = validateDashboardSummary(result);
+        if (!summary.value) error.value = "Received invalid dashboard data from server.";
       }
     } catch (e: unknown) {
       error.value = e instanceof Error ? e.message : String(e);
@@ -220,7 +120,8 @@ export const useDashboardStore = defineStore("dashboard", () => {
     }
   }
 
-  const trends = ref<{
+  interface TrendsResponse {
+    days: number;
     run_counts: Array<{ date: string; run_count: number }>;
     eval_pass_rates: Array<{
       date: string;
@@ -229,7 +130,33 @@ export const useDashboardStore = defineStore("dashboard", () => {
       pass_rate: number | null;
     }>;
     token_spend: Array<{ date: string; total_spend_usd: number }>;
-  } | null>(null);
+    hitl_volume: Array<{
+      date: string;
+      total_decisions: number;
+      approved_count: number;
+      rejected_count: number;
+      rejection_rate: number;
+      avg_time_to_approve_ms: number | null;
+    }>;
+    rejection_trend: Array<{
+      date: string;
+      rolling_rejection_rate: number;
+      raw_rejection_rate: number;
+    }>;
+    correlation: Array<{
+      date: string;
+      rejection_rate: number;
+      eval_pass_rate: number | null;
+    }>;
+    feedback_volume: Array<{
+      date: string;
+      feedback_count: number;
+      resolved_count: number;
+      correcting_count: number;
+    }>;
+  }
+
+  const trends = ref<TrendsResponse | null>(null);
 
   const trendsLoading = ref(false);
 
@@ -237,20 +164,18 @@ export const useDashboardStore = defineStore("dashboard", () => {
     if (trendsLoading.value) return;
     trendsLoading.value = true;
     try {
-      const { data: result, error: err } = await api.GET(
+      const { data: result, error: err } = await (api as any).GET(
         "/api/v1/dashboard/trends",
-        {
-          params: { query: { days } },
-        },
+        { params: { query: { days } } },
       );
       if (err) {
-        console.warn("[Dashboard] fetchTrends failed:", err);
         error.value = formatApiError(err);
-      } else if (result) {
-        trends.value = result;
+      } else if (result && typeof result === "object" && "run_counts" in result) {
+        trends.value = result as TrendsResponse;
+      } else {
+        error.value = "Received invalid trends data from server.";
       }
     } catch (e: unknown) {
-      console.warn("[Dashboard] fetchTrends error:", e);
       error.value = e instanceof Error ? e.message : String(e);
     } finally {
       trendsLoading.value = false;
@@ -258,13 +183,12 @@ export const useDashboardStore = defineStore("dashboard", () => {
   }
 
   function handleSyncEvent(event: EventBusEvent): void {
+    if (event.type !== "run" && event.type !== "pipeline") return;
     if (!syncingIds.value.has(event.id)) {
       syncingIds.value.add(event.id);
-      if (event.type === "run" || event.type === "pipeline") {
-        void fetchSummary().finally(() => {
-          syncingIds.value.delete(event.id);
-        });
-      }
+      void fetchSummary().finally(() => {
+        syncingIds.value.delete(event.id);
+      });
     }
   }
 
