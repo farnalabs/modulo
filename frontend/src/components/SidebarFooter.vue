@@ -34,6 +34,8 @@
     <div class="flex items-center gap-2">
       <button
         type="button"
+        :aria-pressed="viewMode === 'advanced'"
+        :aria-label="viewMode === 'simple' ? 'Show all navigation groups' : 'Show fewer navigation groups'"
         @click="$emit('setViewMode', viewMode === 'simple' ? 'advanced' : 'simple')"
         class="text-xs text-muted-foreground hover:text-foreground transition-colors flex items-center gap-1.5"
       >
