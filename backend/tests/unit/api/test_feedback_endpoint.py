@@ -39,7 +39,7 @@ def _make_mock_record(**overrides: object) -> MagicMock:
     r.organisation_id = _ORG_ID
     r.run_id = overrides.get("run_id", _RUN_ID)
     r.gate_id = overrides.get("gate_id", "gate-1")
-    r.rejected_by = overrides.get("rejected_by", _USER_ID)
+    r.account_id = overrides.get("account_id", _USER_ID)
     r.rejection_reason = overrides.get("rejection_reason", "Wrong output")
     r.rejected_output = overrides.get("rejected_output", {"result": "bad"})
     r.producing_node_id = overrides.get("producing_node_id", "node-b")
