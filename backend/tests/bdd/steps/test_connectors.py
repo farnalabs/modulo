@@ -1460,7 +1460,11 @@ def step_gitlab_write_issue(project, title, ctx):
         ctx["query_error"] = str(exc)
 
 
-@when(parsers.parse('I write GitLab issue_update for issue "{iid}" with project "{project}" and state_event "{state_event}"'))
+@when(
+    parsers.parse(
+        'I write GitLab issue_update for issue "{iid}" with project "{project}" and state_event "{state_event}"'
+    )
+)
 def step_gitlab_update_issue(iid, project, state_event, ctx):
     from modulo.connectors.base import ConnectorPayload
     payload = ConnectorPayload(
@@ -2376,7 +2380,12 @@ def step_trello_accepts_create(ctx):
 
     async def mock_write(payload):
         if payload.resource == "card":
-            return {"id": "c_new", "name": payload.data.get("name", ""), "idList": payload.data.get("idList", ""), "url": "https://trello.com/c/c_new"}
+            return {
+                "id": "c_new",
+                "name": payload.data.get("name", ""),
+                "idList": payload.data.get("idList", ""),
+                "url": "https://trello.com/c/c_new",
+            }
         raise ValueError(f"Unsupported Trello write: {payload.resource!r}")
 
     connector.write = mock_write
@@ -2874,7 +2883,13 @@ def step_shortcut_single_story(ctx):
         from modulo.connectors.base import ConnectorResult
         if q.resource == "story":
             return ConnectorResult(
-                records=[{"id": int(q.filters.get("story_id", "0")), "name": "Single Story", "description": "A test story"}]
+                records=[
+                    {
+                        "id": int(q.filters.get("story_id", "0")),
+                        "name": "Single Story",
+                        "description": "A test story",
+                    }
+                ]
             )
         raise ValueError(f"Unsupported Shortcut resource: {q.resource!r}")
 
@@ -3040,7 +3055,11 @@ def step_shortcut_accepts_comments(ctx):
 
     async def mock_write(payload):
         if payload.resource == "story_comment":
-            return {"id": "c1", "text": payload.data.get("text", ""), "story_id": int(payload.data.get("story_id", "0"))}
+            return {
+                "id": "c1",
+                "text": payload.data.get("text", ""),
+                "story_id": int(payload.data.get("story_id", "0")),
+            }
         raise ValueError(f"Unsupported Shortcut write: {payload.resource!r}")
 
     connector.write = mock_write
@@ -3429,7 +3448,13 @@ def step_notion_connector(ctx):
                 if not page_id:
                     raise ValueError("Notion page query requires 'page_id' filter")
                 return ConnectorResult(
-                    records=[{"id": page_id, "object": "page", "properties": {"title": {"title": [{"plain_text": "Hello"}]}}}]
+                    records=[
+                        {
+                            "id": page_id,
+                            "object": "page",
+                            "properties": {"title": {"title": [{"plain_text": "Hello"}]}},
+                        }
+                    ]
                 )
             case "users":
                 return ConnectorResult(
@@ -4357,7 +4382,11 @@ def step_datadog_connector_valid(ctx):
             case "event":
                 return {"id": "evt1", "title": payload.data.get("title", ""), "text": payload.data.get("text", "")}
             case "monitor":
-                return {"id": 42, "name": payload.data.get("name", "Datadog Monitor"), "type": payload.data.get("type", "")}
+                return {
+                    "id": 42,
+                    "name": payload.data.get("name", "Datadog Monitor"),
+                    "type": payload.data.get("type", ""),
+                }
             case "monitor_status":
                 return {"id": payload.data.get("monitor_id"), "status": payload.data.get("status", "Muted")}
             case _:

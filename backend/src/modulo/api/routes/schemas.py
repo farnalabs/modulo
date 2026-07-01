@@ -13,8 +13,6 @@ from pydantic import BaseModel, Field
 from sqlalchemy.exc import ProgrammingError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-logger = logging.getLogger(__name__)
-
 from modulo.api.dependencies import get_db_session
 from modulo.auth.dependencies import get_current_user
 from modulo.auth.jwt import AuthenticatedPrincipal
@@ -45,6 +43,8 @@ from modulo.db.crud.schema import (
 )
 from modulo.db.rls import set_rls_org
 from modulo.settings import Settings, get_settings
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/v1/schemas", tags=["schemas"])
 
@@ -143,7 +143,7 @@ async def list_schemas_endpoint(
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Schema management is not available. Run database migrations to enable it.",
-        )
+        ) from None
     return SchemaListResponse(
         items=[SchemaResponse.model_validate(s) for s in result.items],
         total=result.total,
@@ -363,7 +363,7 @@ async def infer_schema_endpoint(
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Schema inference is not available. Run database migrations to enable it.",
-        )
+        ) from None
 
     secrets_backend = create_secrets_backend(fernet_key=settings.fernet_key)
 

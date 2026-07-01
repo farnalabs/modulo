@@ -271,7 +271,7 @@ async def ws_token(
             )
             return WsTokenResponse(
                 ws_token=token,
-                token_type="ws-opaque",
+                token_type="ws-opaque",  # noqa: S106
                 expires_in_seconds=settings.modulo_ws_token_ttl_seconds,
             )
         except Exception as exc:
@@ -286,7 +286,7 @@ async def ws_token(
     )
     return WsTokenResponse(
         ws_token=token,
-        token_type="ws-jwt",
+        token_type="ws-jwt",  # noqa: S106
         expires_in_seconds=settings.modulo_ws_token_ttl_seconds,
     )
 

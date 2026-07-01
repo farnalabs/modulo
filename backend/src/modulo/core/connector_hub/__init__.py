@@ -29,7 +29,6 @@ from modulo.connectors.base import (
     ConnectorACL,
     ConnectorBase,
     ConnectorPayload,
-    ConnectorPermissionError,
     ConnectorQuery,
     ConnectorResult,
     ConnectorType,
@@ -75,9 +74,9 @@ from modulo.core.plugin_registry import get_plugin_registry
 from modulo.core.secrets_backend import SecretsBackend
 from modulo.db.models.connector_instance import ConnectorInstance
 
-logger = logging.getLogger(__name__)
-
 from .locking import ConnectorLockError as ConnectorLockError
+
+logger = logging.getLogger(__name__)
 
 
 class ConnectorNotFoundError(KeyError):

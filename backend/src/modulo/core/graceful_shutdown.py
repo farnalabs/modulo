@@ -36,6 +36,7 @@ class ShutdownManager:
     _shutting_down: bool = False
     _active_requests: int = 0
     _resources: list[tuple[str, Callable[[], Awaitable[None]]]] = field(default_factory=list)
+    _idle_event: asyncio.Event = field(default_factory=asyncio.Event)
 
     @property
     def is_shutting_down(self) -> bool:
@@ -50,6 +51,7 @@ class ShutdownManager:
 
     def request_finished(self) -> None:
         self._active_requests -= 1
+        self._idle_event.set()
 
     async def shutdown(self) -> None:
         """Execute the full shutdown sequence with timeout."""
@@ -87,9 +89,10 @@ class ShutdownManager:
             )
 
     async def _wait_for_idle(self) -> None:
-        """Poll until active requests drain. Called within a timeout by drain()."""
+        """Wait until active requests drain. Called within a timeout by drain()."""
         while self._active_requests > 0:
-            await asyncio.sleep(0.1)
+            self._idle_event.clear()
+            await self._idle_event.wait()
 
 
 class ShutdownMiddleware:

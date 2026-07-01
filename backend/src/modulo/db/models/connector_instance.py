@@ -20,7 +20,9 @@ class ConnectorInstance(OrgScoped):
 
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     connector_type_id: Mapped[str] = mapped_column(String(255), nullable=False, index=True)
-    account_id: Mapped[uuid.UUID] = mapped_column(Uuid(), ForeignKey("accounts.id", ondelete="RESTRICT"), nullable=False)
+    account_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid(), ForeignKey("accounts.id", ondelete="RESTRICT"), nullable=False
+    )
     owner_team_id: Mapped[uuid.UUID | None] = mapped_column(Uuid(), ForeignKey("teams.id", ondelete="RESTRICT"))
     visibility: Mapped[str] = mapped_column(String(10), nullable=False, server_default="org")
     credentials_ciphertext: Mapped[bytes] = mapped_column(LargeBinary, nullable=False)

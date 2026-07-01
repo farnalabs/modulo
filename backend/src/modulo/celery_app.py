@@ -40,6 +40,6 @@ celery_app.conf.update(
 )
 
 # Wire task failure handler
-from modulo.core.error_tracking.celery_hooks import celery_task_failure_handler
+from modulo.core.error_tracking.celery_hooks import celery_task_failure_handler  # noqa: E402
 
 task_failure.connect(celery_task_failure_handler)

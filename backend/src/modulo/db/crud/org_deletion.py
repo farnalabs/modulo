@@ -47,7 +47,8 @@ async def _collect_org_export(session: AsyncSession, org: Organisation) -> dict[
     """Bundle all org-owned data into a JSON-serialisable dict."""
     org_id = org.id
 
-    memberships = (await session.execute(select(OrgMembership).where(OrgMembership.organisation_id == org_id))).scalars().all()
+    stmt = select(OrgMembership).where(OrgMembership.organisation_id == org_id)
+    memberships = (await session.execute(stmt)).scalars().all()
     pipelines = (await session.execute(select(Pipeline).where(Pipeline.organisation_id == org_id))).scalars().all()
     runs = (await session.execute(select(Run).where(Run.organisation_id == org_id).limit(5000))).scalars().all()
     audit = (

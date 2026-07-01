@@ -14,8 +14,6 @@ from sqlalchemy import select
 from sqlalchemy.exc import ProgrammingError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-logger = logging.getLogger(__name__)
-
 from modulo.api.dependencies import get_db_session
 from modulo.auth.dependencies import get_current_user
 from modulo.auth.jwt import AuthenticatedPrincipal
@@ -23,6 +21,8 @@ from modulo.db.models.notification_delivery import NotificationDeliveryLog
 from modulo.db.models.notification_endpoint import NotificationEndpoint
 from modulo.db.rls import set_rls_org
 from modulo.settings import Settings, get_settings
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/v1/admin/notifications", tags=["admin-notifications"])
 
@@ -161,7 +161,7 @@ async def list_all_deliveries(
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Notification delivery logging is not available. Run database migrations to enable it.",
-        )
+        ) from None
 
 
 async def _list_deliveries(

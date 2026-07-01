@@ -166,18 +166,18 @@ async def set_team_spend_limit(
 class CostControlsResponse(BaseModel):
     teams: list[dict[str, object]]
     budget: float | None = None
-    alertThresholds: list[float] = []
-    circuitBreakerEnabled: bool = False
+    alert_thresholds: list[float] = []
+    circuit_breaker_enabled: bool = False
     currency: str = "USD"
-    billingPeriod: str = "monthly"
+    billing_period: str = "monthly"
 
 
 class UpdateCostControlsRequest(BaseModel):
     budget: float | None = None
-    alertThresholds: list[float] | None = None
-    circuitBreakerEnabled: bool | None = None
+    alert_thresholds: list[float] | None = None
+    circuit_breaker_enabled: bool | None = None
     currency: str | None = None
-    billingPeriod: str | None = None
+    billing_period: str | None = None
 
 
 @router.get("/controls", response_model=CostControlsResponse)

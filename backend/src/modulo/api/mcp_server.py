@@ -353,7 +353,12 @@ async def create_pipeline(
         return _tool_error("Failed to create pipeline")
 
 
-@mcp.tool(description="Set or replace the graph (nodes + edges) of an existing pipeline. Pass nodes as a list of dicts with id, node_type, agent_id, position (x, y), and edges as a list of dicts with id, source_node_id, target_node_id, edge_type. Returns the updated graph.")
+@mcp.tool(
+    description="Set or replace the graph (nodes + edges) of an existing pipeline. "
+    "Pass nodes as a list of dicts with id, node_type, agent_id, position (x, y), "
+    "and edges as a list of dicts with id, source_node_id, target_node_id, edge_type. "
+    "Returns the updated graph."
+)
 async def update_pipeline_graph(
     pipeline_id: str,
     nodes: list[dict[str, Any]],

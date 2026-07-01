@@ -53,6 +53,8 @@ class Pipeline(OrgScoped):
         server_default=text("'[]'"),
     )
     default_feedback_handler: Mapped[str | None] = mapped_column(String(50))
-    account_id: Mapped[uuid.UUID] = mapped_column(Uuid(), ForeignKey("accounts.id", ondelete="RESTRICT"), nullable=False)
+    account_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid(), ForeignKey("accounts.id", ondelete="RESTRICT"), nullable=False
+    )
     organisation: Mapped[Organisation] = relationship()
     creator: Mapped[Account] = relationship()

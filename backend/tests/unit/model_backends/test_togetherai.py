@@ -37,9 +37,9 @@ def test_togetherai_base_url_constant():
 
 
 def test_chat_openai_uses_togetherai_base_url():
-    with patch("modulo.model_backends.togetherai.ChatOpenAI") as MockChatOpenAI:
+    with patch("modulo.model_backends.togetherai.ChatOpenAI") as mock_chat_openai:
         TogetherAIBackend(api_key="test-key", model_id="mistralai/Mixtral-8x7B-Instruct-v0.1")
-        MockChatOpenAI.assert_called_once_with(
+        mock_chat_openai.assert_called_once_with(
             model="mistralai/Mixtral-8x7B-Instruct-v0.1",
             api_key="test-key",
             base_url=TOGETHERAI_BASE_URL,

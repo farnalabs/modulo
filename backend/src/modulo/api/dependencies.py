@@ -40,7 +40,11 @@ def require_feature(feature_name: str):
         if not ctx.feature_enabled(feature_name):
             raise HTTPException(
                 status_code=status.HTTP_402_PAYMENT_REQUIRED,
-                detail={"detail": f"{feature_name} is not available on your plan", "code": "feature_required", "feature": feature_name},
+                detail={
+                    "detail": f"{feature_name} is not available on your plan",
+                    "code": "feature_required",
+                    "feature": feature_name,
+                },
             )
 
     return Depends(_check)

@@ -8,6 +8,7 @@ Create Date: 2026-06-28
 from collections.abc import Sequence
 
 from alembic import op
+from sqlalchemy import text
 
 revision: str = "0039_sync_remaining_columns"
 down_revision: str | Sequence[str] | None = "0038_agent_missing_columns"
@@ -24,11 +25,11 @@ def _add_col(table: str, col: str, col_type: str, default: str | None = None) ->
 
 def _add_fk_if_not_exists(table: str, constraint: str, col: str, ref_table: str, ref_col: str, on_delete: str) -> None:
     op.execute(
-        f"DO $$ BEGIN "
-        f"IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = '{constraint}') THEN "
-        f"ALTER TABLE {table} ADD CONSTRAINT {constraint} "
-        f"FOREIGN KEY ({col}) REFERENCES {ref_table}({ref_col}) ON DELETE {on_delete}; "
-        f"END IF; END $$;"
+        text(f"DO $$ BEGIN "  # noqa: S608
+             f"IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = '{constraint}') THEN "
+             f"ALTER TABLE {table} ADD CONSTRAINT {constraint} "
+             f"FOREIGN KEY ({col}) REFERENCES {ref_table}({ref_col}) ON DELETE {on_delete}; "
+             f"END IF; END $$;")
     )
 
 
