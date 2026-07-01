@@ -1,9 +1,11 @@
 export interface ChatSession {
   id: string
+  user_id: string
   name: string | null
   provider: string
   model: string
   context_window_tokens: number
+  system_prompt_hash: string | null
   message_count: number
   created_at: string
   updated_at: string
@@ -14,7 +16,10 @@ export interface ChatMessage {
   session_id: string
   role: string
   content: string | null
+  tool_calls_json: Record<string, unknown> | null
+  tool_results_json: Record<string, unknown> | null
   token_count: number | null
+  parent_id: string | null
   created_at: string
 }
 
