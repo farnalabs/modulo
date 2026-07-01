@@ -9,6 +9,7 @@ Validation performed:
 - ``aud`` matches the client_id
 - ``exp`` is not expired
 - JWT signature matches the key from the JWKS
+- ``alg`` is restricted to an allowlist (``none`` is rejected)
 """
 
 import base64
@@ -26,6 +27,13 @@ _log = logging.getLogger(__name__)
 
 _JWKS_CACHE_TTL = 3600  # 1 hour
 _jwks_cache: dict[str, tuple[float, list[dict[str, Any]]]] = {}
+
+_ACCEPTABLE_JWT_ALGORITHMS = frozenset({
+    "RS256", "RS384", "RS512",
+    "ES256", "ES384", "ES512",
+    "PS256", "PS384", "PS512",
+    "EdDSA",
+})
 
 
 class OidcVerifyError(Exception):
@@ -64,10 +72,13 @@ def _cache_set(jwks_uri: str, keys: list[dict[str, Any]]) -> None:
 
 async def _fetch_jwks_uri(discovery_url: str) -> str:
     """Fetch the ``jwks_uri`` from the provider's OpenID discovery document."""
-    async with httpx.AsyncClient() as client:
-        resp = await client.get(discovery_url, timeout=10)
-        resp.raise_for_status()
-        disc: dict[str, Any] = resp.json()
+    try:
+        async with httpx.AsyncClient() as client:
+            resp = await client.get(discovery_url, timeout=10)
+            resp.raise_for_status()
+            disc: dict[str, Any] = resp.json()
+    except (httpx.HTTPStatusError, httpx.RequestError, json.JSONDecodeError) as exc:
+        raise OidcVerifyError(f"Failed to fetch discovery document: {exc}") from exc
     jwks_uri = disc.get("jwks_uri")
     if not jwks_uri:
         raise OidcVerifyError("No jwks_uri in discovery document")
@@ -80,10 +91,13 @@ async def _fetch_jwks(jwks_uri: str) -> list[dict[str, Any]]:
     if cached is not None:
         return cached
 
-    async with httpx.AsyncClient() as client:
-        resp = await client.get(jwks_uri, timeout=10)
-        resp.raise_for_status()
-        data: dict[str, Any] = resp.json()
+    try:
+        async with httpx.AsyncClient() as client:
+            resp = await client.get(jwks_uri, timeout=10)
+            resp.raise_for_status()
+            data: dict[str, Any] = resp.json()
+    except (httpx.HTTPStatusError, httpx.RequestError, json.JSONDecodeError) as exc:
+        raise OidcVerifyError(f"Failed to fetch JWKS: {exc}") from exc
 
     raw_keys = data.get("keys", data if isinstance(data, list) else [])
     if not isinstance(raw_keys, list) or not raw_keys:
@@ -166,6 +180,8 @@ async def verify_id_token(
     header = _decode_jwt_header(id_token)
     kid = header.get("kid")
     alg = header.get("alg", "RS256")
+    if alg not in _ACCEPTABLE_JWT_ALGORITHMS:
+        raise OidcVerifyError(f"Unsupported JWT algorithm '{alg}' — rejected")
 
     jwks = await _fetch_jwks(jwks_uri)
 
