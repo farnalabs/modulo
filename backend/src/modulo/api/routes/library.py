@@ -53,6 +53,8 @@ from modulo.db.models.pipeline_edge import PipelineEdge
 from modulo.db.models.team import Team
 from modulo.db.rls import set_rls_org, set_rls_user_context
 
+_MAX_UPLOAD_SIZE: int = 50 * 1024 * 1024  # 50 MB
+
 router = APIRouter(prefix="/api/v1/libraries", tags=["libraries"])
 
 
@@ -91,20 +93,17 @@ class LibraryPrimitiveResponse(BaseModel):
 
     model_config = {"from_attributes": True}
 
-    @model_validator(mode="before")
+    @model_validator(mode="after")
     @classmethod
     def _compute_trust_tier(cls, data: Any) -> Any:
-        source = getattr(data, "source", None) if not isinstance(data, dict) else data.get("source")
-        verified = getattr(data, "verified", None) if not isinstance(data, dict) else data.get("verified")
-        if isinstance(data, dict):
-            if source == "modulo":
-                data["trust_tier"] = "modulo"
-            elif source == "registry" and verified is True:
-                data["trust_tier"] = "green"
-            elif source == "registry":
-                data["trust_tier"] = "amber"
-            else:
-                data["trust_tier"] = None
+        if data.source == "modulo":
+            data.trust_tier = "modulo"
+        elif data.source == "registry" and data.verified is True:
+            data.trust_tier = "green"
+        elif data.source == "registry":
+            data.trust_tier = "amber"
+        else:
+            data.trust_tier = None
         return data
 
 
@@ -144,10 +143,17 @@ class LibraryPrimitiveUpdate(BaseModel):
     visibility: str | None = Field(default=None, pattern=r"^(org|team)$")
     auto_update: bool | None = None
 
+    @model_validator(mode="after")
+    @classmethod
+    def _require_team_id_for_team_visibility(cls, values: Any) -> Any:
+        if values.visibility == "team" and values.owner_team_id is None:
+            raise ValueError("owner_team_id is required when visibility is 'team'")
+        return values
+
 
 class RatingSubmit(BaseModel):
     thumbs_up: bool
-    comment: str | None = None
+    comment: str | None = Field(default=None, max_length=2000)
 
 
 class RatingResponse(BaseModel):
@@ -186,11 +192,6 @@ class AbuseReportResponse(BaseModel):
     created_at: datetime
 
     model_config = {"from_attributes": True}
-
-
-class AbuseReportListResponse(BaseModel):
-    items: list[AbuseReportResponse]
-    total: int
 
 
 class ImportBundleResponse(BaseModel):
@@ -508,7 +509,7 @@ async def export_pipeline_endpoint(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
         )
-    safe_name = pipeline.name.replace(" ", "_").replace("/", "_")
+    safe_name = "".join(c if c.isalnum() or c in "-_." else "_" for c in pipeline.name)
     return Response(
         content=bundle_bytes,
         media_type="application/zip",
@@ -656,6 +657,11 @@ async def upload_zip_and_analyse_endpoint(
             detail="Only .zip or .modulo.zip files are accepted",
         )
     zip_bytes = await file.read()
+    if len(zip_bytes) > _MAX_UPLOAD_SIZE:
+        raise HTTPException(
+            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+            detail=f"Upload size exceeds maximum of {_MAX_UPLOAD_SIZE // (1024 * 1024)} MB",
+        )
     try:
         bundle = extract_bundle_json_from_zip(zip_bytes)
     except (LookupError, json.JSONDecodeError) as e:
