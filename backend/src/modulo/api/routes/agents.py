@@ -11,6 +11,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from langchain_core.messages import BaseMessage
 from pydantic import BaseModel, Field
 from sqlalchemy import select
+from sqlalchemy.exc import ProgrammingError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.api.dependencies import get_db_session
@@ -336,9 +337,15 @@ async def optimize_prompt(
             detail="At least one eval_result_id is required",
         )
 
-    async with session.begin():
-        await set_rls_org(session, principal.organisation_id)
-        agent = await get_agent(session, agent_id)
+    try:
+        async with session.begin():
+            await set_rls_org(session, principal.organisation_id)
+            agent = await get_agent(session, agent_id)
+    except ProgrammingError:
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="Feature is not available. Run database migrations to enable it.",
+        ) from None
 
     if agent is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Agent not found")
@@ -411,17 +418,23 @@ async def apply_optimized_prompt(
     session: AsyncSession = Depends(get_db_session),
     principal: AuthenticatedPrincipal = Depends(get_current_user),
 ) -> AgentResponse:
-    async with session.begin():
-        await set_rls_org(session, principal.organisation_id)
-        agent = await add_prompt_version(
-            session,
-            agent_id,
-            new_template=body.suggested_prompt,
-            notes=body.rationale,
-            version_label=version,
-            optimized_from=body.optimize_version,
-            eval_result_ids=body.eval_result_ids,
-        )
+    try:
+        async with session.begin():
+            await set_rls_org(session, principal.organisation_id)
+            agent = await add_prompt_version(
+                session,
+                agent_id,
+                new_template=body.suggested_prompt,
+                notes=body.rationale,
+                version_label=version,
+                optimized_from=body.optimize_version,
+                eval_result_ids=body.eval_result_ids,
+            )
+    except ProgrammingError:
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="Feature is not available. Run database migrations to enable it.",
+        ) from None
     if agent is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Agent not found")
     return AgentResponse.model_validate(agent)
@@ -433,9 +446,15 @@ async def list_prompt_versions(
     session: AsyncSession = Depends(get_db_session),
     principal: AuthenticatedPrincipal = Depends(get_current_user),
 ) -> list[PromptVersionListEntry]:
-    async with session.begin():
-        await set_rls_org(session, principal.organisation_id)
-        agent = await get_agent(session, agent_id)
+    try:
+        async with session.begin():
+            await set_rls_org(session, principal.organisation_id)
+            agent = await get_agent(session, agent_id)
+    except ProgrammingError:
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="Feature is not available. Run database migrations to enable it.",
+        ) from None
     if agent is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Agent not found")
 
@@ -460,9 +479,15 @@ async def get_prompt_version_endpoint(
     session: AsyncSession = Depends(get_db_session),
     principal: AuthenticatedPrincipal = Depends(get_current_user),
 ) -> PromptVersionDetail:
-    async with session.begin():
-        await set_rls_org(session, principal.organisation_id)
-        entry = await get_prompt_version(session, agent_id, version)
+    try:
+        async with session.begin():
+            await set_rls_org(session, principal.organisation_id)
+            entry = await get_prompt_version(session, agent_id, version)
+    except ProgrammingError:
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="Feature is not available. Run database migrations to enable it.",
+        ) from None
     if entry is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Version not found")
     return PromptVersionDetail(
@@ -482,9 +507,15 @@ async def rollback_prompt(
     session: AsyncSession = Depends(get_db_session),
     principal: AuthenticatedPrincipal = Depends(get_current_user),
 ) -> PromptRollbackResponse:
-    async with session.begin():
-        await set_rls_org(session, principal.organisation_id)
-        agent = await rollback_prompt_version(session, agent_id, version)
+    try:
+        async with session.begin():
+            await set_rls_org(session, principal.organisation_id)
+            agent = await rollback_prompt_version(session, agent_id, version)
+    except ProgrammingError:
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="Feature is not available. Run database migrations to enable it.",
+        ) from None
     if agent is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -503,9 +534,15 @@ async def diff_prompt_versions(
     session: AsyncSession = Depends(get_db_session),
     principal: AuthenticatedPrincipal = Depends(get_current_user),
 ) -> PromptDiffResponse:
-    async with session.begin():
-        await set_rls_org(session, principal.organisation_id)
-        agent = await get_agent(session, agent_id)
+    try:
+        async with session.begin():
+            await set_rls_org(session, principal.organisation_id)
+            agent = await get_agent(session, agent_id)
+    except ProgrammingError:
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="Feature is not available. Run database migrations to enable it.",
+        ) from None
     if agent is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Agent not found")
 
