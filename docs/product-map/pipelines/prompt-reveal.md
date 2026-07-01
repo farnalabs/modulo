@@ -17,7 +17,12 @@ status: partial
 
 # Prompt Reveal API
 
-Server-authenticated reveal of the rendered prompt sent to an LLM for a specific run node. Prompts are masked by default (`[Prompt hidden — click to reveal]`) and revealed per-node on click. Sensitive credential-like values (api_key, secret, token, password) are always masked in the response. The `prompt_always_visible` agent flag disables frontend masking for pipelines whose prompts contain no sensitive data.
+Server-authenticated reveal of the rendered prompt sent to an LLM for a specific
+run node. Prompts are masked by default (`[Prompt hidden — click to reveal]`)
+and revealed per-node on click. Sensitive credential-like values (api_key, secret,
+token, password) are always masked in the response. The `prompt_always_visible`
+agent flag disables frontend masking for pipelines whose prompts contain no
+sensitive data.
 
 ## Behaviours
 
@@ -72,7 +77,8 @@ Server-authenticated reveal of the rendered prompt sent to an LLM for a specific
 - [ ] Agent API CRUD supports prompt_always_visible field
 
 ## Known Gaps
-- No 30-second TTL on the revealed prompt DOM value (PRD §8.9 — Redis-backed token mechanism not implemented for prompt reveal)
+- No 30-second TTL on the revealed prompt DOM value
+  (PRD §8.9 — Redis-backed token mechanism not implemented for prompt reveal)
 - No Agent editor UI toggle for prompt_always_visible
 - Agent CRUD API may not expose prompt_always_visible field for create/update
 - Frontend does not auto-reveal when prompt_always_visible is true (requires API call first)

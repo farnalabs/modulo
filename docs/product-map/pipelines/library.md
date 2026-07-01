@@ -15,7 +15,9 @@ status: partial
 
 # Pipeline Library
 
-Community and organisation-scoped library of reusable primitives (schemas, agents, workflows, pipeline templates, integrations, test fixtures) with copy-to-adapt, versioning, ratings, and contribution workflow.
+Community and organisation-scoped library of reusable primitives (schemas, agents,
+workflows, pipeline templates, integrations, test fixtures) with copy-to-adapt,
+versioning, ratings, and contribution workflow.
 
 ## Behaviours
 
@@ -111,7 +113,8 @@ Community and organisation-scoped library of reusable primitives (schemas, agent
 
 - [ ] ConnectorType implementations discovered via importlib entry_points at startup
 - [ ] In-memory ConnectorTypeRegistry, no DB table for types
-- [ ] Uninstalled connector package: DB instances still exist, pre-run health check fails with connector_type_unavailable
+- [ ] Uninstalled connector package: DB instances still exist, pre-run health check
+  fails with connector_type_unavailable
 - [ ] Admin UI surfaces connector_type_unavailable instances with warning badge
 - [ ] Runtime pip install explicitly disallowed — resolved only at server startup
 - [ ] Completed runs unaffected by connector package removal (immutable snapshots)
@@ -122,7 +125,8 @@ Community and organisation-scoped library of reusable primitives (schemas, agent
 - [ ] Community primitives are read-only via MCP (403 guard)
 - [ ] Team-private library entries visible only to team members and admins
 - [ ] Community registry entries are visibility=org (no per-org team scope)
-- [ ] API key role restricted: admin keys prohibited from operator/runner operations; library:read and library:write scopes enforced
+- [ ] API key role restricted: admin keys prohibited from operator/runner operations;
+  library:read and library:write scopes enforced
 - [ ] Rating abuse reports require admin review
 
 ### Concurrency
@@ -150,7 +154,8 @@ Community and organisation-scoped library of reusable primitives (schemas, agent
 - [ ] Existing primitives created before version_group_id feature get seeded on first version submission
 - [ ] fork_copies list uses subquery to find all versions in group, not just the current row
 - [ ] update_available_version_id field is nullable — existing copies have null until first publish
-- [ ] Library primitive table schema is backward-compatible with existing data (all new fields nullable or have defaults)
+- [ ] Library primitive table schema is backward-compatible with existing data
+  (all new fields nullable or have defaults)
 
 ## Known Gaps
 

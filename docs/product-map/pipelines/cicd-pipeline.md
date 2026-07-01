@@ -26,7 +26,9 @@ status: partial
 
 # CI/CD Pipeline
 
-Executes a pipeline run end-to-end: seed state from snapshot, compile StateGraph, enforce concurrency limits, stream events, handle HITL interrupts, eval thresholds, and checkpoint resume.
+Executes a pipeline run end-to-end: seed state from snapshot, compile StateGraph,
+enforce concurrency limits, stream events, handle HITL interrupts, eval thresholds,
+and checkpoint resume.
 
 ## Behaviours
 
