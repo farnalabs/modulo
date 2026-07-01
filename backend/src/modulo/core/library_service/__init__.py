@@ -20,17 +20,17 @@ from modulo.db.crud.library_primitive import (
 from modulo.db.models.library_primitive import LibraryPrimitive
 from modulo.db.rls import set_rls_org
 
-# Fixed sentinel used as organisation_id for community (built-in) primitives.
-COMMUNITY_ORG_ID: uuid.UUID = uuid.UUID("00000000-0000-0000-0000-000000000001")
+# Fixed sentinel used as organisation_id for modulo (built-in) primitives.
+MODULO_ORG_ID: uuid.UUID = uuid.UUID("00000000-0000-0000-0000-000000000001")
 
 _EPOCH = datetime(2024, 1, 1, tzinfo=UTC)
 
 
 class CommunityPrimitiveReadOnlyError(Exception):
-    """Raised when a community primitive is adapted via MCP — browser UI only."""
+    """Raised when a modulo/community primitive is adapted via MCP — browser UI only."""
 
 
-def _make_community(
+def _make_modulo(
     pid: str,
     primitive_type: str,
     name: str,
@@ -41,8 +41,8 @@ def _make_community(
 ) -> LibraryPrimitive:
     p = LibraryPrimitive(
         id=uuid.UUID(pid),
-        organisation_id=COMMUNITY_ORG_ID,
-        source="local",
+        organisation_id=MODULO_ORG_ID,
+        source="modulo",
         primitive_type=primitive_type,
         name=name,
         slug=slug,
@@ -92,8 +92,8 @@ class ContributionInvalidTransitionError(ValueError):
 # Built-in community primitives (in-memory, no DB row required)
 # ---------------------------------------------------------------------------
 
-_COMMUNITY_PRIMITIVES: list[LibraryPrimitive] = [
-    _make_community(
+_MODULO_PRIMITIVES: list[LibraryPrimitive] = [
+    _make_modulo(
         pid="00000000-0000-0000-0000-000000000010",
         primitive_type="schema",
         name="PRD Input Schema",
@@ -110,7 +110,7 @@ _COMMUNITY_PRIMITIVES: list[LibraryPrimitive] = [
         },
         tags=["schema", "product", "prd"],
     ),
-    _make_community(
+    _make_modulo(
         pid="00000000-0000-0000-0000-000000000011",
         primitive_type="schema",
         name="Requirements Output Schema",
@@ -131,7 +131,7 @@ _COMMUNITY_PRIMITIVES: list[LibraryPrimitive] = [
         },
         tags=["schema", "requirements", "prd"],
     ),
-    _make_community(
+    _make_modulo(
         pid="00000000-0000-0000-0000-000000000020",
         primitive_type="agent",
         name="PRD Ingestion Agent",
@@ -147,7 +147,7 @@ _COMMUNITY_PRIMITIVES: list[LibraryPrimitive] = [
         },
         tags=["agent", "prd", "ingestion"],
     ),
-    _make_community(
+    _make_modulo(
         pid="00000000-0000-0000-0000-000000000021",
         primitive_type="agent",
         name="Requirements Writer Agent",
@@ -164,7 +164,7 @@ _COMMUNITY_PRIMITIVES: list[LibraryPrimitive] = [
         },
         tags=["agent", "requirements", "prd"],
     ),
-    _make_community(
+    _make_modulo(
         pid="00000000-0000-0000-0000-000000000030",
         primitive_type="workflow",
         name="PRD to Requirements",
@@ -180,7 +180,7 @@ _COMMUNITY_PRIMITIVES: list[LibraryPrimitive] = [
         },
         tags=["workflow", "prd", "requirements"],
     ),
-    _make_community(
+    _make_modulo(
         pid="00000000-0000-0000-0000-000000000040",
         primitive_type="test_fixture",
         name="Example Test Fixture",
@@ -203,7 +203,7 @@ _COMMUNITY_PRIMITIVES: list[LibraryPrimitive] = [
     # -----------------------------------------------------------------------
     # Modulo dogfood pipeline primitives (schemas, agents, workflow)
     # -----------------------------------------------------------------------
-    _make_community(
+    _make_modulo(
         pid="00000000-0000-0000-0000-000000000050",
         primitive_type="schema",
         name="GitHub Issue Input Schema",
@@ -220,7 +220,7 @@ _COMMUNITY_PRIMITIVES: list[LibraryPrimitive] = [
         },
         tags=["schema", "github", "issue", "dogfood"],
     ),
-    _make_community(
+    _make_modulo(
         pid="00000000-0000-0000-0000-000000000051",
         primitive_type="schema",
         name="Structured Requirements Schema",
@@ -237,7 +237,7 @@ _COMMUNITY_PRIMITIVES: list[LibraryPrimitive] = [
         },
         tags=["schema", "requirements", "spec", "dogfood"],
     ),
-    _make_community(
+    _make_modulo(
         pid="00000000-0000-0000-0000-000000000052",
         primitive_type="schema",
         name="Code Diff Output Schema",
@@ -261,7 +261,7 @@ _COMMUNITY_PRIMITIVES: list[LibraryPrimitive] = [
         },
         tags=["schema", "code", "diff", "dogfood"],
     ),
-    _make_community(
+    _make_modulo(
         pid="00000000-0000-0000-0000-000000000053",
         primitive_type="schema",
         name="Test Result Output Schema",
@@ -277,7 +277,7 @@ _COMMUNITY_PRIMITIVES: list[LibraryPrimitive] = [
         },
         tags=["schema", "test", "result", "dogfood"],
     ),
-    _make_community(
+    _make_modulo(
         pid="00000000-0000-0000-0000-000000000054",
         primitive_type="schema",
         name="PR Output Schema",
@@ -292,7 +292,7 @@ _COMMUNITY_PRIMITIVES: list[LibraryPrimitive] = [
         },
         tags=["schema", "pr", "github", "dogfood"],
     ),
-    _make_community(
+    _make_modulo(
         pid="00000000-0000-0000-0000-000000000060",
         primitive_type="agent",
         name="Issue Reader Agent",
@@ -314,7 +314,7 @@ _COMMUNITY_PRIMITIVES: list[LibraryPrimitive] = [
         },
         tags=["agent", "github", "issue-reader", "dogfood"],
     ),
-    _make_community(
+    _make_modulo(
         pid="00000000-0000-0000-0000-000000000061",
         primitive_type="agent",
         name="Code Generator Agent",
@@ -336,7 +336,7 @@ _COMMUNITY_PRIMITIVES: list[LibraryPrimitive] = [
         },
         tags=["agent", "code-generation", "llm", "dogfood"],
     ),
-    _make_community(
+    _make_modulo(
         pid="00000000-0000-0000-0000-000000000062",
         primitive_type="agent",
         name="Code Applier Agent",
@@ -358,7 +358,7 @@ _COMMUNITY_PRIMITIVES: list[LibraryPrimitive] = [
         },
         tags=["agent", "code-applier", "shell", "dogfood"],
     ),
-    _make_community(
+    _make_modulo(
         pid="00000000-0000-0000-0000-000000000063",
         primitive_type="agent",
         name="Test Runner Agent",
@@ -380,7 +380,7 @@ _COMMUNITY_PRIMITIVES: list[LibraryPrimitive] = [
         },
         tags=["agent", "test-runner", "shell", "dogfood"],
     ),
-    _make_community(
+    _make_modulo(
         pid="00000000-0000-0000-0000-000000000064",
         primitive_type="agent",
         name="PR Creator Agent",
@@ -402,7 +402,7 @@ _COMMUNITY_PRIMITIVES: list[LibraryPrimitive] = [
         },
         tags=["agent", "pr-creator", "github", "dogfood"],
     ),
-    _make_community(
+    _make_modulo(
         pid="00000000-0000-0000-0000-000000000070",
         primitive_type="workflow",
         name="Modulo Dogfood Pipeline",
@@ -437,6 +437,195 @@ _COMMUNITY_PRIMITIVES: list[LibraryPrimitive] = [
         },
         tags=["workflow", "dogfood", "modulo", "pipeline"],
     ),
+    # -----------------------------------------------------------------------
+    # Modulo example composite primitives
+    # -----------------------------------------------------------------------
+    _make_modulo(
+        pid="00000000-0000-0000-0000-000000000090",
+        primitive_type="composite",
+        name="Approver",
+        slug="approver",
+        description="Binary approval gate. Output starts with APPROVED or REJECTED. Self-corrects on failure.",
+        content_json={
+            "parameter_ports": [
+                {"name": "system_prompt", "label": "System Prompt", "type": "string", "required": True,
+                 "description": "Instructions for what to approve/reject",
+                 "default_value": (
+                     "You are an approver. Respond with APPROVED or REJECTED"
+                     " as the first word, followed by your reasoning."
+                 ),
+                 "target_injection": {
+                     "mode": "prompt_replace",
+                     "node_id": "decision-agent",
+                     "injection_point": "prompt_template",
+                 }},
+            ],
+            "sub_pipeline_graph_json": {
+                "nodes": [{"id": "decision-agent", "node_type": "agent", "label": "Decision Agent"}],
+                "edges": [],
+            },
+            "input_schema_id": None,
+            "output_schema": {
+                "type": "object",
+                "properties": {
+                    "result": {"type": "string"},
+                    "reasoning": {"type": "string"},
+                },
+                "required": ["result"],
+            },
+            "output_validation": {
+                "eval_definitions": [{
+                    "name": "first_word_approved_rejected",
+                    "type": "regex",
+                    "config": {"pattern": "^(APPROVED|REJECTED)\\b", "field": "result"},
+                    "failure_behaviour": "retry",
+                }],
+                "max_validation_retries": 2,
+            },
+        },
+        tags=["composite", "approval", "gate", "validation"],
+    ),
+    _make_modulo(
+        pid="00000000-0000-0000-0000-000000000091",
+        primitive_type="composite",
+        name="Booleaner",
+        slug="booleaner",
+        description="Forces TRUE or FALSE decision. First word is forced. Useful for conditional routing.",
+        content_json={
+            "parameter_ports": [
+                {"name": "system_prompt", "label": "System Prompt", "type": "string", "required": True,
+                 "description": "Instructions for what to evaluate as true or false",
+                 "default_value": (
+                     "You are a boolean evaluator. Respond with TRUE"
+                     " or FALSE as the first word, followed by your reasoning."
+                 ),
+                 "target_injection": {
+                     "mode": "prompt_replace",
+                     "node_id": "decision-agent",
+                     "injection_point": "prompt_template",
+                 }},
+            ],
+            "sub_pipeline_graph_json": {
+                "nodes": [{"id": "decision-agent", "node_type": "agent", "label": "Decision Agent"}],
+                "edges": [],
+            },
+            "input_schema_id": None,
+            "output_schema": {
+                "type": "object",
+                "properties": {
+                    "result": {"type": "string"},
+                    "reasoning": {"type": "string"},
+                },
+                "required": ["result"],
+            },
+            "output_validation": {
+                "eval_definitions": [{
+                    "name": "first_word_true_false",
+                    "type": "regex",
+                    "config": {"pattern": "^(TRUE|FALSE)\\b", "field": "result"},
+                    "failure_behaviour": "retry",
+                }],
+                "max_validation_retries": 2,
+            },
+        },
+        tags=["composite", "boolean", "decision", "validation"],
+    ),
+    _make_modulo(
+        pid="00000000-0000-0000-0000-000000000092",
+        primitive_type="composite",
+        name="d20",
+        slug="d20",
+        description="Rolls a d20 (1-20). Output is always an integer 1-20. Self-corrects on hallucination.",
+        content_json={
+            "parameter_ports": [
+                {"name": "system_prompt", "label": "System Prompt", "type": "string", "required": True,
+                 "description": "Instructions for the dice roll context",
+                 "default_value": (
+                     "You roll a 20-sided die. Respond with just"
+                     " a number between 1 and 20."
+                 ),
+                 "target_injection": {
+                     "mode": "prompt_replace",
+                     "node_id": "roll-agent",
+                     "injection_point": "prompt_template",
+                 }},
+            ],
+            "sub_pipeline_graph_json": {
+                "nodes": [{"id": "roll-agent", "node_type": "agent", "label": "Dice Roll Agent"}],
+                "edges": [],
+            },
+            "input_schema_id": None,
+            "output_schema": {
+                "type": "object",
+                "properties": {
+                    "roll": {"type": "integer", "minimum": 1, "maximum": 20},
+                },
+                "required": ["roll"],
+            },
+            "output_validation": {
+                "eval_definitions": [{
+                    "name": "roll_in_range",
+                    "type": "json_schema",
+                    "config": {
+                        "schema": {
+                            "type": "object",
+                            "properties": {"roll": {"type": "integer", "minimum": 1, "maximum": 20}},
+                            "required": ["roll"],
+                        },
+                    },
+                    "failure_behaviour": "retry",
+                }],
+                "max_validation_retries": 3,
+            },
+        },
+        tags=["composite", "dice", "random", "game"],
+    ),
+    _make_modulo(
+        pid="00000000-0000-0000-0000-000000000093",
+        primitive_type="composite",
+        name="Triage",
+        slug="triage",
+        description="Classifies into BUG, FEATURE, INFRA, DOCS. First word is forced to one of the four.",
+        content_json={
+            "parameter_ports": [
+                {"name": "system_prompt", "label": "System Prompt", "type": "string", "required": True,
+                 "description": "Instructions for the triage classification",
+                 "default_value": (
+                     "You are a triage classifier. Respond with one of"
+                     " BUG, FEATURE, INFRA, or DOCS as the first word,"
+                     " followed by your reasoning."
+                 ),
+                 "target_injection": {
+                     "mode": "prompt_replace",
+                     "node_id": "classifier-agent",
+                     "injection_point": "prompt_template",
+                 }},
+            ],
+            "sub_pipeline_graph_json": {
+                "nodes": [{"id": "classifier-agent", "node_type": "agent", "label": "Classifier Agent"}],
+                "edges": []
+            },
+            "input_schema_id": None,
+            "output_schema": {
+                "type": "object",
+                "properties": {
+                    "result": {"type": "string"},
+                    "reasoning": {"type": "string"},
+                },
+                "required": ["result"],
+            },
+            "output_validation": {
+                "eval_definitions": [{
+                    "name": "first_word_category",
+                    "type": "regex",
+                    "config": {"pattern": "^(BUG|FEATURE|INFRA|DOCS)\\b", "field": "result"},
+                    "failure_behaviour": "retry",
+                }],
+                "max_validation_retries": 2,
+            },
+        },
+        tags=["composite", "triage", "classification", "bug", "feature"],
+    ),
 ]
 
 # ---------------------------------------------------------------------------
@@ -444,12 +633,12 @@ _COMMUNITY_PRIMITIVES: list[LibraryPrimitive] = [
 # ---------------------------------------------------------------------------
 
 
-def _filter_community(
+def _filter_modulo(
     *,
     primitive_type: str | None,
     search: str | None,
 ) -> list[LibraryPrimitive]:
-    results = _COMMUNITY_PRIMITIVES
+    results = _MODULO_PRIMITIVES
     if primitive_type is not None:
         results = [p for p in results if p.primitive_type == primitive_type]
     if search:
@@ -486,14 +675,14 @@ async def list_primitives(
         cursor=cursor,
     )
 
-    community: list[LibraryPrimitive] = (
-        _filter_community(primitive_type=primitive_type, search=search) if include_community else []
+    modulo: list[LibraryPrimitive] = (
+        _filter_modulo(primitive_type=primitive_type, search=search) if include_community else []
     )
 
-    all_items: list[LibraryPrimitive] = list(org_page.items) + community
+    all_items: list[LibraryPrimitive] = list(org_page.items) + modulo
     return PageResult(
         items=all_items,
-        total=org_page.total + len(community),
+        total=org_page.total + len(modulo),
         page=page,
         page_size=page_size,
         next_cursor=org_page.next_cursor,
@@ -508,14 +697,14 @@ async def get_primitive(
 ) -> LibraryPrimitive | None:
     """Return a primitive visible to org_id, or None.
 
-    Checks the org-scoped DB first, then falls back to in-memory community primitives.
+    Checks the org-scoped DB first, then falls back to in-memory modulo primitives.
     """
     async with session.begin():
         await set_rls_org(session, org_id)
         item = await get_library_primitive(session, primitive_id)
     if item is not None:
         return item
-    return _COMMUNITY_BY_ID.get(primitive_id)
+    return _MODULO_BY_ID.get(primitive_id)
 
 
 async def get_primitive_by_slug(
@@ -526,7 +715,7 @@ async def get_primitive_by_slug(
 ) -> LibraryPrimitive | None:
     """Return a primitive visible to org_id by type and slug, or None.
 
-    Checks the org-scoped DB first, then falls back to in-memory community primitives.
+    Checks the org-scoped DB first, then falls back to in-memory modulo primitives.
     """
     async with session.begin():
         await set_rls_org(session, org_id)
@@ -538,7 +727,7 @@ async def get_primitive_by_slug(
         item = result.scalar_one_or_none()
     if item is not None:
         return item
-    return _COMMUNITY_BY_SLUG.get((primitive_type, slug))
+    return _MODULO_BY_SLUG.get((primitive_type, slug))
 
 
 async def copy_to_adapt(
@@ -565,7 +754,7 @@ async def copy_to_adapt(
         )
 
     # Increment download count on registry/community primitives.
-    if source.source in ("registry", "community") and source.download_count is not None:
+    if source.source in ("registry", "modulo") and source.download_count is not None:
         async with session.begin():
             await set_rls_org(session, org_id)
             await update_library_primitive(
@@ -941,9 +1130,9 @@ _INCIDENT_TEMPLATE_EDGES = [
     },
 ]
 
-_COMMUNITY_PRIMITIVES.extend(
+_MODULO_PRIMITIVES.extend(
     [
-        _make_community(
+        _make_modulo(
             pid="00000000-0000-0000-0000-000000000080",
             primitive_type="pipeline_template",
             name="PR Review Pipeline",
@@ -962,7 +1151,7 @@ _COMMUNITY_PRIMITIVES.extend(
             },
             tags=["pipeline_template", "code-review", "pr", "github"],
         ),
-        _make_community(
+        _make_modulo(
             pid="00000000-0000-0000-0000-000000000081",
             primitive_type="pipeline_template",
             name="Release Checklist Pipeline",
@@ -981,7 +1170,7 @@ _COMMUNITY_PRIMITIVES.extend(
             },
             tags=["pipeline_template", "release", "changelog", "github"],
         ),
-        _make_community(
+        _make_modulo(
             pid="00000000-0000-0000-0000-000000000082",
             primitive_type="pipeline_template",
             name="Incident Response Pipeline",
@@ -1004,9 +1193,9 @@ _COMMUNITY_PRIMITIVES.extend(
 )
 
 # Indexes for O(1) community lookup
-_COMMUNITY_BY_ID: dict[uuid.UUID, LibraryPrimitive] = {p.id: p for p in _COMMUNITY_PRIMITIVES}
-_COMMUNITY_BY_SLUG: dict[tuple[str, str], LibraryPrimitive] = {
-    (p.primitive_type, p.slug): p for p in _COMMUNITY_PRIMITIVES
+_MODULO_BY_ID: dict[uuid.UUID, LibraryPrimitive] = {p.id: p for p in _MODULO_PRIMITIVES}
+_MODULO_BY_SLUG: dict[tuple[str, str], LibraryPrimitive] = {
+    (p.primitive_type, p.slug): p for p in _MODULO_PRIMITIVES
 }
 
 # Fixture contribution flow
@@ -1147,7 +1336,7 @@ async def publish_contribution(
             {
                 "contribution_status": CONTRIBUTION_PUBLISHED,
                 "visibility": "community",
-                "organisation_id": COMMUNITY_ORG_ID,
+                "organisation_id": MODULO_ORG_ID,
             },
         )
     if updated is None:
