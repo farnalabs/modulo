@@ -1,5 +1,6 @@
 """Unit tests for autonomy_level resolution and helpers."""
 
+import logging
 from typing import Any
 
 import pytest
@@ -122,6 +123,35 @@ class TestEffectiveAutonomyLevel:
     ) -> None:
         result = effective_autonomy_level(pipeline_default, run_context)
         assert result == expected
+
+    def test_invalid_recommendation_logs_warning(self, caplog: pytest.LogCaptureFixture) -> None:
+        with caplog.at_level(logging.WARNING):
+            result = effective_autonomy_level(
+                pipeline_default="notify_on_complete",
+                run_context={"autonomy_recommendation": "bogus"},
+            )
+        assert result == AutonomyLevel.NOTIFY_ON_COMPLETE
+        assert len(caplog.records) == 1
+        assert "bogus" in caplog.records[0].message
+
+    def test_invalid_pipeline_default_logs_warning(self, caplog: pytest.LogCaptureFixture) -> None:
+        with caplog.at_level(logging.WARNING):
+            result = effective_autonomy_level(
+                pipeline_default="invalid_level",
+                run_context=None,
+            )
+        assert result == AutonomyLevel.MANUAL_APPROVAL
+        assert len(caplog.records) == 1
+        assert "invalid_level" in caplog.records[0].message
+
+    def test_both_invalid_only_logs_recommendation(self, caplog: pytest.LogCaptureFixture) -> None:
+        with caplog.at_level(logging.WARNING):
+            result = effective_autonomy_level(
+                pipeline_default="bad_default",
+                run_context={"autonomy_recommendation": "bad_rec"},
+            )
+        assert result == AutonomyLevel.MANUAL_APPROVAL
+        assert len(caplog.records) == 2
 
 
 class TestShouldSkipHitlGate:
