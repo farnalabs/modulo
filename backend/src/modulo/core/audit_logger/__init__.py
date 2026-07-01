@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import uuid
 from datetime import UTC, datetime
 from typing import Any
@@ -16,6 +17,8 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.db.models.audit_event import AuditChainHead, AuditEvent
+
+_log = logging.getLogger(__name__)
 
 __all__ = [
     "append_audit_event",
@@ -27,30 +30,42 @@ __all__ = [
 ]
 
 
+def _uuid_or_none(val: object) -> str | None:
+    """Convert a UUID (or str) to its string form, or return None."""
+    if val is None:
+        return None
+    return str(val)
+
+
 def _compute_event_hash(
     event_type: str,
-    actor_user_id: str | None,
+    actor_user_id: object,
     resource_type: str | None,
-    resource_id: str | None,
+    resource_id: object,
     payload_json: dict[str, Any],
     request_id: str | None,
     previous_hash: str | None,
-    event_id: str,
-    organisation_id: str,
+    event_id: object,
+    organisation_id: object,
     created_at: str,
 ) -> str:
-    """Compute the SHA-256 hash of canonical event JSON."""
+    """Compute the SHA-256 hash of canonical event JSON.
+
+    UUID parameters (actor_user_id, resource_id, event_id, organisation_id)
+    are converted to strings internally so callers may pass UUID objects
+    or strings interchangeably.
+    """
     canonical = json.dumps(
         {
             "event_type": event_type,
-            "actor_user_id": actor_user_id,
+            "actor_user_id": _uuid_or_none(actor_user_id),
             "resource_type": resource_type,
-            "resource_id": resource_id,
+            "resource_id": _uuid_or_none(resource_id),
             "payload_json": payload_json,
             "request_id": request_id,
             "previous_hash": previous_hash,
-            "event_id": event_id,
-            "organisation_id": organisation_id,
+            "event_id": _uuid_or_none(event_id),
+            "organisation_id": _uuid_or_none(organisation_id),
             "created_at": created_at,
         },
         separators=(",", ":"),
@@ -76,14 +91,18 @@ async def append_audit_event(
     payload_json: dict[str, Any] | None = None,
     request_id: str | None = None,
 ) -> AuditEvent:
-    """Append a new event to the audit chain, computing the previous hash."""
-    head = await get_chain_head(session, org_id)
+    """Append a new event to the audit chain, computing the previous hash.
+
+    Uses SELECT ... FOR UPDATE on the chain head to prevent forks from
+    concurrent appends within the same organisation.
+    """
+    head = await _get_chain_head_locked(session, org_id)
     prev_hash = head.last_event_hash if head else None
 
     event = AuditEvent(
         organisation_id=org_id,
         event_type=event_type,
-        actor_user_id=actor_user_id,
+        account_id=actor_user_id,
         resource_type=resource_type,
         resource_id=resource_id,
         payload_json=payload_json or {},
@@ -97,14 +116,14 @@ async def append_audit_event(
 
     event_hash = _compute_event_hash(
         event_type=event_type,
-        actor_user_id=str(actor_user_id) if actor_user_id else None,
+        actor_user_id=actor_user_id,
         resource_type=resource_type,
-        resource_id=str(resource_id) if resource_id else None,
+        resource_id=resource_id,
         payload_json=payload_json or {},
         request_id=request_id,
         previous_hash=prev_hash,
-        event_id=str(event.id),
-        organisation_id=str(org_id),
+        event_id=event.id,
+        organisation_id=org_id,
         created_at=event.created_at.isoformat(),
     )
 
@@ -124,6 +143,19 @@ async def append_audit_event(
 
     await session.flush()
     return event
+
+
+async def _get_chain_head_locked(session: AsyncSession, org_id: uuid.UUID) -> AuditChainHead | None:
+    """Return the current chain head for an org, with a row-level lock.
+
+    Prevents concurrent appends from reading the same head and creating a fork.
+    """
+    result = await session.execute(
+        select(AuditChainHead)
+        .where(AuditChainHead.organisation_id == org_id)
+        .with_for_update()
+    )
+    return result.scalar_one_or_none()
 
 
 async def verify_chain(
@@ -157,14 +189,14 @@ async def verify_chain(
     for idx, event in enumerate(events):
         canonical_hash = _compute_event_hash(
             event_type=event.event_type,
-            actor_user_id=str(event.account_id) if event.account_id else None,
+            actor_user_id=event.account_id,
             resource_type=event.resource_type,
-            resource_id=str(event.resource_id) if event.resource_id else None,
+            resource_id=event.resource_id,
             payload_json=event.payload_json,
             request_id=event.request_id,
             previous_hash=expected_prev,
-            event_id=str(event.id),
-            organisation_id=str(event.organisation_id),
+            event_id=event.id,
+            organisation_id=event.organisation_id,
             created_at=event.created_at.isoformat() if event.created_at else "",
         )
         if event.previous_hash != expected_prev:
@@ -253,6 +285,10 @@ async def list_audit_events(
 ) -> dict[str, Any]:
     """List audit events with cursor-based pagination and filtering.
 
+    Cursor is a JSON object ``{"c":"<created_at_iso>","i":"<event_id>"}``
+    that encodes both sort columns so pagination is correct across
+    ``created_at DESC, id DESC``.
+
     Returns dict with items, next_cursor, prev_cursor, total.
     """
     query = select(AuditEvent).where(AuditEvent.organisation_id == org_id)
@@ -273,12 +309,17 @@ async def list_audit_events(
     total_result = await session.execute(count_query)
     total = total_result.scalar() or 0
 
-    # Cursor: decode UUID, fetch events after that id
+    # Composite cursor: decode created_at + id from JSON
     if cursor:
         try:
-            cursor_uuid = uuid.UUID(cursor)
-            query = query.where(AuditEvent.id < cursor_uuid)
-        except ValueError:
+            cursor_data = json.loads(cursor)
+            cursor_ts = datetime.fromisoformat(cursor_data["c"])
+            cursor_id = uuid.UUID(cursor_data["i"])
+            query = query.where(
+                (AuditEvent.created_at < cursor_ts)
+                | ((AuditEvent.created_at == cursor_ts) & (AuditEvent.id < cursor_id))
+            )
+        except (ValueError, KeyError, TypeError):
             pass
 
     query = query.order_by(AuditEvent.created_at.desc(), AuditEvent.id.desc()).limit(limit + 1)
@@ -306,8 +347,17 @@ async def list_audit_events(
             }
         )
 
-    next_cursor = str(events[-1].id) if events and has_more else None
-    prev_cursor = str(events[0].id) if events else None
+    last_event = events[-1] if events else None
+    next_cursor = (
+        json.dumps({"c": last_event.created_at.isoformat(), "i": str(last_event.id)}, separators=(",", ":"))
+        if last_event and has_more
+        else None
+    )
+    prev_cursor = (
+        json.dumps({"c": events[0].created_at.isoformat(), "i": str(events[0].id)}, separators=(",", ":"))
+        if events
+        else None
+    )
 
     return {
         "items": items,
@@ -329,6 +379,7 @@ async def get_audit_events_batch(
         try:
             ids.append(uuid.UUID(eid))
         except ValueError:
+            _log.warning("get_audit_events_batch: received invalid UUID %r — skipping", eid)
             continue
 
     if not ids:

@@ -141,7 +141,7 @@ class TestVerifyChain:
                 "id",
                 "organisation_id",
                 "event_type",
-                "actor_user_id",
+                "account_id",
                 "resource_type",
                 "resource_id",
                 "payload_json",
@@ -153,7 +153,7 @@ class TestVerifyChain:
         e1.id = event_id1
         e1.organisation_id = org_id
         e1.event_type = "e1"
-        e1.actor_user_id = None
+        e1.account_id = None
         e1.resource_type = None
         e1.resource_id = None
         e1.payload_json = {}
@@ -166,7 +166,7 @@ class TestVerifyChain:
                 "id",
                 "organisation_id",
                 "event_type",
-                "actor_user_id",
+                "account_id",
                 "resource_type",
                 "resource_id",
                 "payload_json",
@@ -178,7 +178,7 @@ class TestVerifyChain:
         e2.id = event_id2
         e2.organisation_id = org_id
         e2.event_type = "e2"
-        e2.actor_user_id = None
+        e2.account_id = None
         e2.resource_type = None
         e2.resource_id = None
         e2.payload_json = {}
@@ -226,7 +226,7 @@ class TestVerifyChain:
                 "id",
                 "organisation_id",
                 "event_type",
-                "actor_user_id",
+                "account_id",
                 "resource_type",
                 "resource_id",
                 "payload_json",
@@ -238,7 +238,7 @@ class TestVerifyChain:
         e1.id = event_id1
         e1.organisation_id = org_id
         e1.event_type = "e1"
-        e1.actor_user_id = None
+        e1.account_id = None
         e1.resource_type = None
         e1.resource_id = None
         e1.payload_json = {}
@@ -251,7 +251,7 @@ class TestVerifyChain:
                 "id",
                 "organisation_id",
                 "event_type",
-                "actor_user_id",
+                "account_id",
                 "resource_type",
                 "resource_id",
                 "payload_json",
@@ -263,7 +263,7 @@ class TestVerifyChain:
         e2.id = event_id2
         e2.organisation_id = org_id
         e2.event_type = "e2"
-        e2.actor_user_id = None
+        e2.account_id = None
         e2.resource_type = None
         e2.resource_id = None
         e2.payload_json = {}
