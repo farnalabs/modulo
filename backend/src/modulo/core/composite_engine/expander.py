@@ -65,9 +65,7 @@ def run_output_validation(
                     if "i" in flags_str:
                         flags |= re.IGNORECASE
                     if not re.search(pattern, value, flags):
-                        failures.append(
-                            f"Eval '{eval_def.name}': regex /{pattern}/ did not match field '{field}'"
-                        )
+                        failures.append(f"Eval '{eval_def.name}': regex /{pattern}/ did not match field '{field}'")
                 except re.error as exc:
                     failures.append(f"Eval '{eval_def.name}': regex error: {exc}")
 
@@ -81,15 +79,11 @@ def run_output_validation(
                 try:
                     jsonschema.validate(data, schema)
                 except jsonschema.ValidationError as exc:
-                    failures.append(
-                        f"Eval '{eval_def.name}': JSON Schema validation failed: {exc.message}"
-                    )
+                    failures.append(f"Eval '{eval_def.name}': JSON Schema validation failed: {exc.message}")
 
             case "llm_judge":
                 if llm_judge_callable is None:
-                    failures.append(
-                        f"Eval '{eval_def.name}': llm_judge requires a callable but none provided"
-                    )
+                    failures.append(f"Eval '{eval_def.name}': llm_judge requires a callable but none provided")
                     continue
                 try:
                     raw = llm_judge_callable(mapped_output, config)
@@ -146,6 +140,10 @@ def execute_composite_with_retry(
     retry_count = 0
 
     while True:
+        # NOTE: expand_composite_node result is intentionally discarded here.
+        # This is called for its side effects (e.g. parameter injection, validation
+        # that the template has nodes). Tests mock this function to simulate
+        # sub-pipeline re-execution on retry.
         expand_composite_node(node_def, composite_template, parameter_values)
 
         output_mapping = node_def.get("composite_output_mapping")
@@ -163,9 +161,7 @@ def execute_composite_with_retry(
         retry_eligible_failures: list[str] = []
         blocking_failures: list[str] = []
         for eval_def in output_validation.eval_definitions:
-            eval_failures = [
-                f for f in result.failures if f.startswith(f"Eval '{eval_def.name}':")
-            ]
+            eval_failures = [f for f in result.failures if f.startswith(f"Eval '{eval_def.name}':")]
             if eval_failures:
                 if eval_def.failure_behaviour == "block":
                     blocking_failures.extend(eval_failures)
