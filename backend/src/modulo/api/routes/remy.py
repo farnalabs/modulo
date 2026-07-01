@@ -501,9 +501,8 @@ async def stream_chat(
                         org_id=principal.organisation_id,
                         user_id=principal.account_id,
                         page_context=body.page_context,
+                        system_prompt_override=body.system_prompt,
                     )
-                if body.system_prompt:
-                    system_prompt = body.system_prompt
 
                 # 2. Save the user message to DB
                 async with db_session.begin():
@@ -632,17 +631,19 @@ async def stream_chat(
                             }
                             yield f"event: tool_call\ndata: {json.dumps(tc_data)}\n\n"
                         except Exception as exc:
+                            logger.exception("MCP tool call failed: %r", tc["name"])
+                            err_msg = f"{type(exc).__name__}: {exc}"[:200]
                             tool_results.append({
                                 "tool_call_id": tc["id"],
                                 "tool_name": tc["name"],
                                 "success": False,
-                                "error": str(exc),
+                                "error": err_msg,
                             })
                             tc_err = {
                                 "tool_call_id": tc["id"],
                                 "tool_name": tc["name"],
                                 "success": False,
-                                "error": str(exc),
+                                "error": err_msg,
                             }
                             yield f"event: tool_call\ndata: {json.dumps(tc_err)}\n\n"
 

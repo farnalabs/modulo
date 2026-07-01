@@ -88,7 +88,7 @@
               >
                 <option value="anthropic">Anthropic</option>
                 <option value="openai">OpenAI</option>
-                <option value="google-gemini">Google Gemini</option>
+                <option value="gemini">Google Gemini</option>
                 <option value="deepseek">DeepSeek</option>
                 <option value="groq">Groq</option>
               </select>
@@ -370,7 +370,7 @@ async function saveAccessList() {
 }
 
 // Model config
-const allProviders = ['anthropic', 'openai', 'google-gemini', 'deepseek', 'groq']
+const allProviders = ['anthropic', 'openai', 'gemini', 'deepseek', 'groq']
 
 const modelConfig = reactive({
   defaultProvider: 'anthropic',

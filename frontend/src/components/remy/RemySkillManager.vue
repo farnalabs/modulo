@@ -139,8 +139,6 @@ async function saveSkill() {
         skillError.value = `Failed to create skill: ${err}`
         return
       }
-      const created = data as UserSkill
-      skills.value.push(created)
     }
     showForm.value = false
     editingId.value = null

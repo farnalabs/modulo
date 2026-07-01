@@ -48,7 +48,7 @@ class RemyConfigResponse(BaseModel):
     default_provider: str = "anthropic"
     default_model: str = "claude-sonnet-4-20250514"
     default_context_window: int = 200000
-    allowed_providers: list[str] = ["anthropic", "openai", "google-gemini", "deepseek", "groq"]
+    allowed_providers: list[str] = ["anthropic", "openai", "gemini", "deepseek", "groq"]
     allowed_models: list[str] = []
 
 
@@ -119,7 +119,7 @@ async def get_remy_config(
             default_model=value.get("default_model", "claude-sonnet-4-20250514"),
             default_context_window=value.get("default_context_window", 200000),
             allowed_providers=value.get(
-                "allowed_providers", ["anthropic", "openai", "google-gemini", "deepseek", "groq"]
+                "allowed_providers", ["anthropic", "openai", "gemini", "deepseek", "groq"]
             ),
             allowed_models=value.get("allowed_models", []),
         )
@@ -176,7 +176,7 @@ async def update_remy_config(
             default_model=current.get("default_model", "claude-sonnet-4-20250514"),
             default_context_window=current.get("default_context_window", 200000),
             allowed_providers=current.get(
-                "allowed_providers", ["anthropic", "openai", "google-gemini", "deepseek", "groq"]
+                "allowed_providers", ["anthropic", "openai", "gemini", "deepseek", "groq"]
             ),
             allowed_models=current.get("allowed_models", []),
         )
