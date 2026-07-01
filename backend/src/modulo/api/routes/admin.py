@@ -40,12 +40,15 @@ from modulo.db.crud.team_membership import list_team_memberships_for_account, re
 from modulo.db.crud.token_family import blacklist_family, list_families_for_account
 from modulo.db.models.account import Account
 from modulo.db.models.api_key import OrgApiKey
+from modulo.db.models.connector_instance import ConnectorInstance
 from modulo.db.models.eval_definition import EvalDefinition
 from modulo.db.models.eval_result import EvalResult
+from modulo.db.models.model_backend import ModelBackend
 from modulo.db.models.org_membership import OrgMembership
 from modulo.db.models.organisation import Organisation
 from modulo.db.models.pipeline import Pipeline
 from modulo.db.models.run import Run
+from modulo.db.models.stage import Stage
 from modulo.db.models.team import Team
 from modulo.db.rls import set_rls_org, set_rls_user_context
 
@@ -975,20 +978,46 @@ async def admin_delete_team(
     async with session.begin():
         await set_rls_org(session, current_user.organisation_id)
 
-        # Check for pipelines referencing this team
-        pipeline_count = (
-            await session.execute(select(func.count()).select_from(Pipeline).where(Pipeline.owner_team_id == team_id))
-        ).scalar() or 0
-        if pipeline_count > 0:
+        resource_checks: list[tuple[str, int]] = []
+        for model_cls, label in [
+            (Pipeline, "pipeline"),
+            (Stage, "stage"),
+            (ConnectorInstance, "connector"),
+            (ModelBackend, "model backend"),
+        ]:
+            count = (
+                await session.execute(
+                    select(func.count()).select_from(model_cls).where(model_cls.owner_team_id == team_id)
+                )
+            ).scalar() or 0
+            if count > 0:
+                resource_checks.append((label, count))
+
+        if resource_checks:
+            details = "; ".join(f"{count} {label}(s)" for label, count in resource_checks)
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
-                detail=(f"Cannot delete team: {pipeline_count} pipeline(s) still reference this team"),
+                detail=f"Cannot delete team: still has resources — {details}",
             )
 
         deleted = await delete_team(session, team_id)
 
     if not deleted:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Team not found")
+
+    from modulo.core.audit_logger import append_audit_event
+
+    async with session.begin():
+        await set_rls_org(session, current_user.organisation_id)
+        await append_audit_event(
+            session,
+            org_id=current_user.organisation_id,
+            event_type="team_deleted",
+            actor_user_id=current_user.account_id,
+            resource_type="team",
+            resource_id=team_id,
+            payload_json={"team_id": str(team_id)},
+        )
 
 
 # ── Billing Overview ─────────────────────────────────────────
