@@ -1,3 +1,5 @@
+"""QwenBackend — wraps ChatOpenAI pointed at Alibaba Cloud's DashScope API."""
+
 from collections.abc import AsyncIterator
 from typing import Any
 
