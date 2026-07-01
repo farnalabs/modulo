@@ -27,13 +27,13 @@ export function useViews(viewType: string) {
     loading.value = true
     error.value = null
     try {
-      const { data, error: apiError } = await api.GET('/api/v1/views', {
+      const { data, error: apiError } = await (api as any).GET('/api/v1/views', {
         params: { query: { view_type: viewType } },
       })
-      if (apiError) throw new Error(apiError.message)
+      if (apiError) throw new Error(String(apiError))
       views.value = (data as any)?.items ?? []
-    } catch (e: any) {
-      error.value = e.message
+    } catch (e: unknown) {
+      error.value = e instanceof Error ? e.message : String(e)
     } finally {
       loading.value = false
     }

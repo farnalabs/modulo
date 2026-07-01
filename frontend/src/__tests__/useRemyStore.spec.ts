@@ -61,17 +61,20 @@ describe('useRemyStore', () => {
     const store = useRemyStore()
     store.messages.push({
       id: '1', session_id: 's1', role: 'user',
-      content: 'hi', token_count: null, created_at: new Date().toISOString(),
+      content: 'hi', tool_calls_json: null, tool_results_json: null,
+      token_count: null, parent_id: null, created_at: new Date().toISOString(),
     })
     store.messages.push({
       id: '2', session_id: 's1', role: 'assistant',
-      content: 'hello', token_count: null, created_at: new Date().toISOString(),
+      content: 'hello', tool_calls_json: null, tool_results_json: null,
+      token_count: null, parent_id: null, created_at: new Date().toISOString(),
     })
     store.removeLastUserMessage()
     expect(store.messages.length).toBe(2) // last is assistant, not removed
     store.messages.push({
       id: '3', session_id: 's1', role: 'user',
-      content: 'bye', token_count: null, created_at: new Date().toISOString(),
+      content: 'bye', tool_calls_json: null, tool_results_json: null,
+      token_count: null, parent_id: null, created_at: new Date().toISOString(),
     })
     store.removeLastUserMessage()
     expect(store.messages.length).toBe(2) // last user removed
