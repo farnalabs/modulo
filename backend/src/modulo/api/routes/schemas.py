@@ -341,6 +341,8 @@ async def infer_schema_endpoint(
     The returned *definition_json* is a draft for the user to review and
     save via the standard POST /api/v1/schemas endpoint.
     """
+    from modulo.core.audit_logger import append_audit_event
+
     try:
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
@@ -350,6 +352,18 @@ async def infer_schema_endpoint(
                 raise HTTPException(
                     status_code=status.HTTP_404_NOT_FOUND,
                     detail="Connector instance not found",
+                )
+
+            # Connector-types currently supported for schema inference
+            _SUPPORTED_INFERENCE_TYPES = frozenset({
+                "github", "gitlab", "jira", "linear", "slack",
+                "notion", "confluence",
+            })
+            if ci.connector_type_id not in _SUPPORTED_INFERENCE_TYPES:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=f"Connector type '{ci.connector_type_id}' does not support schema inference. "
+                           f"Supported types: {', '.join(sorted(_SUPPORTED_INFERENCE_TYPES))}",
                 )
 
             mbs = await list_model_backends(session, page_size=1)
@@ -400,6 +414,22 @@ async def infer_schema_endpoint(
     suggestion_description = (
         f"Auto-inferred schema from {ci.name} ({body.sample_query.resource}, {len(records)} samples)"
     )
+
+    async with session.begin():
+        await append_audit_event(
+            session,
+            org_id=principal.organisation_id,
+            event_type="schema_inference_completed",
+            actor_user_id=principal.account_id,
+            resource_type="connector_instance",
+            resource_id=body.connector_instance_id,
+            payload_json={
+                "connector_name": ci.name,
+                "resource": body.sample_query.resource,
+                "sample_count": len(records),
+                "model_backend_id": str(first_backend_id),
+            },
+        )
 
     return SchemaInferResponse(
         definition_json=definition_json,
