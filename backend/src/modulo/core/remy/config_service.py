@@ -61,16 +61,26 @@ class RemyConfigService:
         config = await self.get_config(org_id)
         access = config.access_list
 
-        if user_id in [uuid.UUID(uid) if isinstance(uid, str) else uid for uid in access.get("user_ids", [])]:
+        try:
+            allowed_user_ids = [
+                uuid.UUID(uid) if isinstance(uid, str) else uid
+                for uid in access.get("user_ids", [])
+            ]
+        except ValueError:
+            allowed_user_ids = []
+        if user_id in allowed_user_ids:
             return True
 
         if user_role in access.get("org_roles", []):
             return True
 
-        allowed_team_ids = [
-            uuid.UUID(tid) if isinstance(tid, str) else tid
-            for tid in access.get("team_ids", [])
-        ]
+        try:
+            allowed_team_ids = [
+                uuid.UUID(tid) if isinstance(tid, str) else tid
+                for tid in access.get("team_ids", [])
+            ]
+        except ValueError:
+            allowed_team_ids = []
         if any(tid in allowed_team_ids for tid in team_ids):
             return True
 
