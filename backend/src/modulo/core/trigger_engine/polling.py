@@ -46,8 +46,6 @@ _engine = None
 def _get_engine() -> Any:
     global _engine
     if _engine is None:
-        from modulo.settings import get_settings
-
         _engine = create_async_engine(get_settings().database_url)
     return _engine
 
@@ -529,6 +527,16 @@ class DatabasePollingScheduler(Scheduler):  # type: ignore[misc]
                         connector_instance_id = None
                     if connector_instance_id is None:
                         _log.warning("Polling trigger %s has no connector_instance_id", row.id)
+                        event = TriggerEvent(
+                            organisation_id=row.organisation_id,
+                            trigger_id=row.id,
+                            trigger_type="polling",
+                            raw_payload_hash=hashlib.sha256(b"").hexdigest(),
+                            validation_result="poll_error",
+                            error_detail="Polling trigger missing connector_instance_id in config_json",
+                        )
+                        session.add(event)
+                        await session.flush()
                         continue
 
                     triggers.append(
