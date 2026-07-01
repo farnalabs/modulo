@@ -72,7 +72,7 @@ function setViewMode(mode: 'simple' | 'advanced') {
 export function useSidebar() {
   init()
   return {
-    viewMode,
+    viewMode: readonly(viewMode),
     groupPrefs: readonly(groupPrefs),
     toggleGroup,
     isGroupCollapsed,

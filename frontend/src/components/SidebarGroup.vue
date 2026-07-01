@@ -3,7 +3,7 @@
     <button
       type="button"
       :aria-expanded="!collapsed"
-      :aria-controls="`sidebar-group-${label.replace(/\s+/g, '-').toLowerCase()}`"
+      :aria-controls="`sidebar-group-${id}`"
       @click="$emit('toggle')"
       class="sidebar-group-header"
     >
@@ -15,7 +15,7 @@
     <Transition name="fade">
       <div
         v-if="!collapsed"
-        :id="`sidebar-group-${label.replace(/\s+/g, '-').toLowerCase()}`"
+        :id="`sidebar-group-${id}`"
         class="sidebar-group-items"
         role="region"
         :aria-label="label"
@@ -28,6 +28,7 @@
 
 <script setup lang="ts">
 defineProps<{
+  id: string
   label: string
   collapsed: boolean
 }>()
@@ -88,11 +89,14 @@ defineEmits<{
 
 .fade-enter-active,
 .fade-leave-active {
-  transition: opacity 0.15s ease;
+  transition: opacity 0.15s ease, max-height 0.2s ease;
+  max-height: 600px;
+  overflow: hidden;
 }
 
 .fade-enter-from,
 .fade-leave-to {
   opacity: 0;
+  max-height: 0;
 }
 </style>
