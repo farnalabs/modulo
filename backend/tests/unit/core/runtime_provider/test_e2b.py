@@ -25,8 +25,7 @@ def workspace_spec() -> WorkspaceSpec:
 @pytest.fixture
 def mock_sandbox() -> MagicMock:
     sbx = MagicMock()
-    sbx.id = "sbx-e2b-test-001"
-    sbx.process = MagicMock()
+    sbx.sandbox_id = "sbx-e2b-test-001"
     sbx.commands = MagicMock()
     return sbx
 
@@ -516,13 +515,11 @@ async def test_multiple_workspaces_independent(
     provider = E2BRuntimeProvider(api_key="sk-test")
 
     sbx1 = MagicMock()
-    sbx1.id = "sbx-e2b-001"
-    sbx1.process = MagicMock()
+    sbx1.sandbox_id = "sbx-e2b-001"
     sbx1.commands = MagicMock()
 
     sbx2 = MagicMock()
-    sbx2.id = "sbx-e2b-002"
-    sbx2.process = MagicMock()
+    sbx2.sandbox_id = "sbx-e2b-002"
     sbx2.commands = MagicMock()
 
     mock_sandbox_cls.create = AsyncMock(side_effect=[sbx1, sbx2])
