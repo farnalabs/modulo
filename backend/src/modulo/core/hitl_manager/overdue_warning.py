@@ -8,6 +8,7 @@ a longer escalation threshold.
 import logging
 import uuid
 from datetime import UTC, datetime, timedelta
+from typing import Any
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -24,7 +25,7 @@ async def get_overdue_claims(
     db_session: AsyncSession,
     org_id: uuid.UUID,
     warning_hours: int = DEFAULT_WARNING_HOURS,
-) -> list[dict]:
+) -> list[dict[str, Any]]:
     """Find undecided HITL claims that exceed the warning age threshold.
 
     Returns a list of dicts with claim id, pipeline_run_id, node_id,

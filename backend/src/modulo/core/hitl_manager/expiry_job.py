@@ -133,7 +133,7 @@ class ClaimExpiryJob:
                         update(HitlClaim)
                         .where(HitlClaim.id.in_(claim_ids))
                         .values(
-                            claimed_by=None,
+                            account_id=None,
                             claimed_at=None,
                             claim_token=None,
                             expires_at=None,
