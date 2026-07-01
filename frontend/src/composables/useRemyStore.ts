@@ -128,9 +128,8 @@ export const useRemyStore = defineStore('remy', () => {
 
   async function sendMessage(text: string) {
     if (!activeSessionId.value) return
-    const tempId = `temp-${Date.now()}`
     const userMsg: ChatMessage = {
-      id: tempId,
+      id: `msg-${Date.now()}`,
       session_id: activeSessionId.value,
       role: 'user',
       content: text,
@@ -139,20 +138,6 @@ export const useRemyStore = defineStore('remy', () => {
     }
     messages.value.push(userMsg)
     isStreaming.value = true
-
-    try {
-      const { data, error: err } = await api.POST('/api/v1/remy/sessions/{id}/messages', {
-        params: { path: { id: activeSessionId.value } },
-        body: { role: 'user', content: text },
-      })
-      if (err) throw new Error(String(err))
-      const saved = data as ChatMessage
-      userMsg.id = saved.id
-      userMsg.token_count = saved.token_count
-    } catch (e: unknown) {
-      error.value = e instanceof Error ? e.message : String(e)
-      isStreaming.value = false
-    }
   }
 
   function setPanelState(state: 'closed' | 'floating' | 'docked' | 'maximised') {

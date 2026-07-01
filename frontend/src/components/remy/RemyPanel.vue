@@ -71,14 +71,17 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted, onUnmounted } from 'vue'
+import { ref, computed, watch, onMounted, onUnmounted } from 'vue'
 import { useRemyStore } from '@/composables/useRemyStore'
+import { useRemyContext } from '@/composables/useRemyContext'
 import Button from '@/components/ui/button/Button.vue'
 import RemyChat from './RemyChat.vue'
 import RemySessionDrawer from './RemySessionDrawer.vue'
 import RemySkillManager from './RemySkillManager.vue'
 
 const store = useRemyStore()
+const { pageContext } = useRemyContext()
+watch(pageContext, (ctx) => { store.setPageContext(ctx) }, { immediate: true })
 const chatRef = ref<InstanceType<typeof RemyChat> | null>(null)
 const showSidebar = ref(false)
 const activeTab = ref<'chat' | 'skills' | 'sessions'>('chat')
