@@ -5,7 +5,6 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-import sqlalchemy
 from sqlalchemy import event
 
 from modulo.core.events.event_bus import get_event_bus
@@ -47,7 +46,7 @@ _ACTION_MAP: dict[str, str] = {
 def _make_listener(action: str):
     """Factory: return an event-listener function for the given SQLAlchemy action."""
 
-    def listener(mapper: Any, connection: Any, target: Any) -> None:  # noqa: ANN401
+    def listener(mapper: Any, connection: Any, target: Any) -> None:
         resource_type = _RESOURCE_TYPES.get(type(target))
         if resource_type is None:
             return
