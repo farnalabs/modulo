@@ -4,6 +4,7 @@ Tests the structural separators, delimiter stripping, and content
 length limits applied in ``_build_safe_judge_input``.
 """
 
+from collections.abc import Callable
 from uuid import uuid4
 
 from modulo.core.eval_engine import (
@@ -29,7 +30,7 @@ def _make_eval_def(config: dict | None = None) -> EvalDefinition:
     )
 
 
-def _capturing_callable(captured: list) -> callable:
+def _capturing_callable(captured: list) -> Callable:
     """Return a callable that stores (output, eval_def) in *captured*."""
 
     def callable(output: dict, eval_def: EvalDefinition) -> dict:

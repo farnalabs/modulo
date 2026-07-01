@@ -40,7 +40,7 @@ class TestValidateUnionSchema:
         assert "non-empty array" in result.errors[0].message
 
     def test_one_of_empty_array(self) -> None:
-        schema = {"oneOf": []}
+        schema: dict[str, list] = {"oneOf": []}
         result = validate_union_schema(schema)
         assert not result.valid
         assert "not be empty" in result.errors[0].message

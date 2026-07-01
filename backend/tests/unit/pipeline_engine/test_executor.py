@@ -488,7 +488,7 @@ async def test_execute_passes_hash_to_cache():
 # ---------------------------------------------------------------------------
 
 
-def _make_pipeline(max_concurrent_runs: int = 5) -> MagicMock:
+def _make_pipeline_with_capacity(max_concurrent_runs: int = 5) -> MagicMock:
     p = MagicMock()
     p.max_concurrent_runs = max_concurrent_runs
     p.lock_wait_timeout_seconds = 1
