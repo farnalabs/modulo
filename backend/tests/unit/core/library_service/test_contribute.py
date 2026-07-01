@@ -6,11 +6,11 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from modulo.core.library_service import (
-    _COMMUNITY_PRIMITIVES,
-    COMMUNITY_ORG_ID,
+    _MODULO_PRIMITIVES,
     CONTRIBUTION_DRAFT,
     CONTRIBUTION_PUBLISHED,
     CONTRIBUTION_REVIEW_QUEUE,
+    MODULO_ORG_ID,
     ContributionInvalidTransitionError,
     ContributionNotFoundError,
     contribute_fixture,
@@ -409,7 +409,7 @@ class TestPublish:
             {
                 "contribution_status": CONTRIBUTION_PUBLISHED,
                 "visibility": "community",
-                "organisation_id": COMMUNITY_ORG_ID,
+                "organisation_id": MODULO_ORG_ID,
             },
         )
 
@@ -563,7 +563,7 @@ class TestCommunityFixturePrimitive:
     """Built-in community primitives include one test_fixture."""
 
     def test_example_test_fixture_exists_in_community(self):
-        fixtures = [p for p in _COMMUNITY_PRIMITIVES if p.primitive_type == "test_fixture"]
+        fixtures = [p for p in _MODULO_PRIMITIVES if p.primitive_type == "test_fixture"]
         assert len(fixtures) == 1
         fixture = fixtures[0]
         assert fixture.name == "Example Test Fixture"
@@ -571,7 +571,7 @@ class TestCommunityFixturePrimitive:
         assert fixture.contribution_status == "published"
 
     def test_example_fixture_has_fixture_map(self):
-        fixtures = [p for p in _COMMUNITY_PRIMITIVES if p.primitive_type == "test_fixture"]
+        fixtures = [p for p in _MODULO_PRIMITIVES if p.primitive_type == "test_fixture"]
         content = fixtures[0].content_json
         assert "fixture_map" in content
         assert len(content["fixture_map"]) == 2
