@@ -64,9 +64,9 @@ StateGraph-based pipeline executor. Compiles pipeline config into a LangGraph gr
 - [x] RunawayRunError transitions to failed with error_code="runaway"
 - [x] RunCancelledError transitions to cancelled ### Edge Cases
 - [ ] Empty pipeline (no nodes) → what happens? (should be validation error on save, not at run-time)
-- [ ] Node returns None output → handled gracefully or crashes?
+- [x] Node returns None output → handled gracefully or crashes?
 - [ ] Post-HITL model backend unreachable → retry vs fail vs HITL re-engage?
-- [ ] Two simultaneous runs of same pipeline → isolated state, no cross-contamination
+- [x] Two simultaneous runs of same pipeline → isolated state, no cross-contamination
 - [ ] Checkpoint restore with schema migration applied → old snapshots still load (version compatibility)
 - [ ] WebSocket reconnect mid-run → event replay catches client up
 - [ ] `cancelled` state mechanics: in-flight node finishes? or is interrupted mid-execution?
@@ -81,3 +81,8 @@ StateGraph-based pipeline executor. Compiles pipeline config into a LangGraph gr
 - Node retry policy (max_retries, retry_on, backoff) is specified in the pipeline config schema but is not implemented in the pipeline engine — no retry logic exists at the node execution or graph level
 - DB connection lost mid-run: no explicit handling, in-memory graph state is lost if checkpointer is unreachable
 - Checkpoint restore with schema migration: no version-compatibility check for old snapshots after schema changes
+- **Node timeout uses Python built-in error code**: `TimeoutError` (Python built-in) is used as the error_code instead of a domain-specific `node_timeout` — confusing in API responses and logs
+- **Missing BDD for conditional gate**: The JMESPath-based conditional gate feature (in `graph_cache.py` + `node_runner.py`) has no BDD scenario
+- **Missing BDD for eval-before-interrupt**: The eval-before-interrupt feature in `node_runner.py` has no BDD scenario
+- **Missing BDD for node timeout**: The `@cancellable_node` timeout wrapper has no BDD scenario
+- **Empty pipeline (no nodes) produces raw 500**: `graph_cache.py` raises `ValueError` which becomes HTTP 500 instead of a structured validation error

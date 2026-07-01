@@ -819,6 +819,14 @@ class PipelineExecutor:
                 },
             )
             return "failed", "runaway", error_detail, node_token_usage or None
+        except TimeoutError as exc:
+            error_detail = str(exc)
+            broker.publish("run_failed", {"error": "node_timeout", "detail": error_detail})
+            _log.warning(
+                "node.timeout",
+                extra={"run_id": str(run_id), "detail": error_detail},
+            )
+            return "failed", "node_timeout", error_detail, node_token_usage or None
         except Exception as exc:
             broker.publish("run_failed", {"error": type(exc).__name__})
             return "failed", type(exc).__name__, None, None
