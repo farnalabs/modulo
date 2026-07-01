@@ -20,15 +20,18 @@ status: partial
 
 # Shareable Workflow Bundles (Import/Export)
 
-Bundle-based pipeline portability — export a pipeline as a `.modulo.zip` bundle, import it into another organisation with schema/connector/model backend binding.
+Bundle-based pipeline portability — export a pipeline as a `.modulo.zip` bundle,
+import it into another organisation with schema/connector/model backend binding.
 
 ## Behaviours
 
 ### Export
 
-- [ ] Export pipeline as `.modulo.zip` via POST `/api/v1/libraries/export/{pipeline_id}` — response is `application/zip` with `Content-Disposition` ending in `.modulo.zip`
+- [ ] Export pipeline as `.modulo.zip` via POST `/api/v1/libraries/export/{pipeline_id}`
+  — response is `application/zip` with `Content-Disposition` ending in `.modulo.zip`
 - [ ] Non-existent pipeline returns 404
-- [ ] Exported ZIP contains `bundle.json` at archive root with `format_version`, `pipeline`, `agents`, `schemas`, `edges`
+- [ ] Exported ZIP contains `bundle.json` at archive root with
+  `format_version`, `pipeline`, `agents`, `schemas`, `edges`
 - [ ] Export strips `owner_team_id` from pipeline section
 - [ ] Export strips credentials and ciphertexts from agent definitions
 - [ ] Export preserves pipeline name and graph nodes
@@ -41,7 +44,9 @@ Bundle-based pipeline portability — export a pipeline as a `.modulo.zip` bundl
 
 - [ ] Upload `.modulo.zip` to `/api/v1/libraries/import/upload-zip` extracts bundle JSON server-side
 - [ ] Analyse raw bundle JSON via `/api/v1/libraries/import/analyse`
-- [ ] Analysis response contains `resolved_schemas`, `resolved_connectors`, `resolved_model_backends`, `warnings`, `name_conflicts`, `available_teams`, `bundle_json`
+- [ ] Analysis response contains `resolved_schemas`, `resolved_connectors`,
+  `resolved_model_backends`, `warnings`, `name_conflicts`, `available_teams`,
+  `bundle_json`
 - [ ] Non-ZIP file upload rejected with 400
 - [ ] Missing `bundle.json` in ZIP raises error
 - [ ] Invalid JSON in `bundle.json` raises parse error
@@ -50,19 +55,22 @@ Bundle-based pipeline portability — export a pipeline as a `.modulo.zip` bundl
 
 - [ ] Schema resolved by `abstract_name` to existing local schema (identical field structure → reuse, no import)
 - [ ] Schema resolved by `definition_json` equality (structural match)
-- [ ] Schema with same `abstract_name` but different field structure → imported as new schema with disambiguation suffix (e.g. `document-input-imported-1`) + warning
+- [ ] Schema with same `abstract_name` but different field structure → imported as
+  new schema with disambiguation suffix (e.g. `document-input-imported-1`) + warning
 - [ ] Unresolved schema (not present locally) → new Schema and SchemaVersion created
 - [ ] No auto-merge or silent version bump on schema conflicts — user consolidates manually
 
 ### Import — Binding
 
 - [ ] Connector type resolved to local active instance by type match
-- [ ] Unmatched connector type generates warning; creates placeholder (`status: unconfigured`) — pipeline saved but not runnable
+- [ ] Unmatched connector type generates warning; creates placeholder
+  (`status: unconfigured`) — pipeline saved but not runnable
 - [ ] Schema resolved by `abstract_name` match to local schema
 - [ ] Schema resolved by structure match (`definition_json` equality)
 - [ ] Model backend resolved by name
 - [ ] Model backend resolved by `provider`+`model_id` fallback when name does not match
-- [ ] Capability check: hard block (`connector_capability_mismatch`) if bound connector instance lacks required operation
+- [ ] Capability check: hard block (`connector_capability_mismatch`) if bound
+  connector instance lacks required operation
 - [ ] Model backend `model_id` differs from bundle's declared `preferred_model_id` — informational warning only
 
 ### Import — Name Conflict Resolution
@@ -70,7 +78,8 @@ Bundle-based pipeline portability — export a pipeline as a `.modulo.zip` bundl
 - [ ] Pipeline name collision: imported with "(imported)" suffix, no silent overwrite
 - [ ] Agent name collision: imported with "(imported)" suffix
 - [ ] Two agents in same bundle sharing identical name — rejected pre-import with validation error listing duplicates
-- [ ] `suggest_import_name` appends suffix on collision, increments counter (`(imported) 2`, `(imported) 3`) on repeated collisions
+- [ ] `suggest_import_name` appends suffix on collision, increments counter
+  (`(imported) 2`, `(imported) 3`) on repeated collisions
 - [ ] Name conflict resolution is case-sensitive — same string with different case is a distinct name
 
 ### Import — Materialization
@@ -109,9 +118,11 @@ Bundle-based pipeline portability — export a pipeline as a `.modulo.zip` bundl
 ### Edge Cases
 
 - [ ] Minimal bundle (zero agents, schemas, edges) creates just Pipeline + LibraryPrimitive
-- [ ] Import with all references already resolved (schemas, connectors, model backends all match locally) — no warnings
+- [ ] Import with all references already resolved (schemas, connectors, model backends
+  all match locally) — no warnings
 - [ ] Import with no matching local references — all schemas created fresh, connector placeholders created
-- [ ] Abstract schema namespacing: unnamespaced in local use (collision is user's responsibility); `author/name` in v2 registry
+- [ ] Abstract schema namespacing: unnamespaced in local use (collision is user's
+  responsibility); `author/name` in v2 registry
 - [ ] `owner_team_id` stripped on export (org-internal reference, meaningless outside source org)
 - [ ] `visibility` defaults to `org` on import regardless of source value
 
