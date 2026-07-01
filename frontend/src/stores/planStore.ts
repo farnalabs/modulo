@@ -28,8 +28,9 @@ export const usePlanStore = defineStore('plan', () => {
   }
 
   function isAtMinimumTier(minTier: string): boolean {
-    const currentRank = tierRanks.value[currentTier.value] ?? -1
-    const minRank = tierRanks.value[minTier] ?? -1
+    const currentRank = tierRanks.value[currentTier.value]
+    const minRank = tierRanks.value[minTier]
+    if (currentRank === undefined || minRank === undefined) return false
     return currentRank >= minRank
   }
 
@@ -37,11 +38,12 @@ export const usePlanStore = defineStore('plan', () => {
     isLoading.value = true
     error.value = null
     try {
+      let flagsError: string | null = null
       // Feature flags
       try {
         const { data, error: err } = await api.GET('/api/v1/admin/feature-flags')
         if (err) {
-          error.value = formatApiError(err)
+          flagsError = formatApiError(err)
         } else if (data) {
           currentTier.value = data.license.tier
           const map: Record<string, boolean> = {}
@@ -51,8 +53,10 @@ export const usePlanStore = defineStore('plan', () => {
           features.value = map
         }
       } catch (e: unknown) {
-        error.value = formatApiError(e)
+        flagsError = formatApiError(e)
       }
+
+      error.value = flagsError
 
       // License
       try {
@@ -89,7 +93,10 @@ export const usePlanStore = defineStore('plan', () => {
 
   function handleSyncEvent(event: EventBusEvent): void {
     if (event.type === 'team' || event.type === 'license' || event.type === 'plan') {
-      if (!syncingIds.value.has(event.id)) fetchPlan()
+      if (!syncingIds.value.has(event.id)) {
+        syncingIds.value.add(event.id)
+        fetchPlan()
+      }
     }
   }
 

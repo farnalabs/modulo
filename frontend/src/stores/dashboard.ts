@@ -97,6 +97,7 @@ export const useDashboardStore = defineStore('dashboard', () => {
 
   function handleSyncEvent(event: EventBusEvent): void {
     if (!syncingIds.value.has(event.id)) {
+      syncingIds.value.add(event.id)
       if (event.type === 'run' || event.type === 'pipeline') {
         fetchSummary()
       }
