@@ -12,6 +12,7 @@ from typing import Any
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
+from sqlalchemy.exc import ProgrammingError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.api.dependencies import get_db_session
@@ -148,9 +149,15 @@ async def list_profiles(
     session: AsyncSession = Depends(get_db_session),
     principal: AuthenticatedPrincipal = Depends(get_current_user),
 ) -> ProfileListResponse:
-    async with session.begin():
-        await set_rls_org(session, principal.organisation_id)
-        result = await list_environment_profiles(session, page=page, page_size=page_size)
+    try:
+        async with session.begin():
+            await set_rls_org(session, principal.organisation_id)
+            result = await list_environment_profiles(session, page=page, page_size=page_size)
+    except ProgrammingError:
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="Feature is not available. Run database migrations to enable it.",
+        )
     return ProfileListResponse(
         items=[_to_response(p) for p in result.items],
         total=result.total,
@@ -165,20 +172,26 @@ async def create_profile(
     session: AsyncSession = Depends(get_db_session),
     principal: AuthenticatedPrincipal = Depends(get_current_user),
 ) -> ProfileResponse:
-    async with session.begin():
-        await set_rls_org(session, principal.organisation_id)
-        profile = await create_environment_profile(
-            session,
-            org_id=principal.organisation_id,
-            name=body.name,
-            image_ref=body.image_ref,
-            account_id=principal.account_id,
-            description=body.description,
-            capabilities=body.capabilities,
-            egress_policy=body.egress_policy,
-            timeout_seconds=body.timeout_seconds,
-            resource_limits=body.resource_limits,
-            persistence_policy=body.persistence_policy,
+    try:
+        async with session.begin():
+            await set_rls_org(session, principal.organisation_id)
+            profile = await create_environment_profile(
+                session,
+                org_id=principal.organisation_id,
+                name=body.name,
+                image_ref=body.image_ref,
+                account_id=principal.account_id,
+                description=body.description,
+                capabilities=body.capabilities,
+                egress_policy=body.egress_policy,
+                timeout_seconds=body.timeout_seconds,
+                resource_limits=body.resource_limits,
+                persistence_policy=body.persistence_policy,
+            )
+    except ProgrammingError:
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="Feature is not available. Run database migrations to enable it.",
         )
     return _to_response(profile)
 
@@ -189,9 +202,15 @@ async def get_profile(
     session: AsyncSession = Depends(get_db_session),
     principal: AuthenticatedPrincipal = Depends(get_current_user),
 ) -> ProfileResponse:
-    async with session.begin():
-        await set_rls_org(session, principal.organisation_id)
-        profile = await _get_profile_or_404(session, profile_id)
+    try:
+        async with session.begin():
+            await set_rls_org(session, principal.organisation_id)
+            profile = await _get_profile_or_404(session, profile_id)
+    except ProgrammingError:
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="Feature is not available. Run database migrations to enable it.",
+        )
     return _to_response(profile)
 
 
@@ -205,9 +224,15 @@ async def update_profile(
     updates = {k: v for k, v in body.model_dump().items() if v is not None}
     if "resource_limits" in updates:
         updates["resource_limits_json"] = updates.pop("resource_limits")
-    async with session.begin():
-        await set_rls_org(session, principal.organisation_id)
-        profile = await update_environment_profile(session, profile_id, updates)
+    try:
+        async with session.begin():
+            await set_rls_org(session, principal.organisation_id)
+            profile = await update_environment_profile(session, profile_id, updates)
+    except ProgrammingError:
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="Feature is not available. Run database migrations to enable it.",
+        )
     if profile is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -222,9 +247,15 @@ async def delete_profile(
     session: AsyncSession = Depends(get_db_session),
     principal: AuthenticatedPrincipal = Depends(get_current_user),
 ) -> None:
-    async with session.begin():
-        await set_rls_org(session, principal.organisation_id)
-        deleted = await delete_environment_profile(session, profile_id)
+    try:
+        async with session.begin():
+            await set_rls_org(session, principal.organisation_id)
+            deleted = await delete_environment_profile(session, profile_id)
+    except ProgrammingError:
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="Feature is not available. Run database migrations to enable it.",
+        )
     if not deleted:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -328,9 +359,15 @@ async def test_profile(
     principal: AuthenticatedPrincipal = Depends(get_current_user),
 ) -> StreamingResponse:
     """Provision a sandbox from the profile, run echo, destroy it — stream events."""
-    async with session.begin():
-        await set_rls_org(session, principal.organisation_id)
-        profile = await _get_profile_or_404(session, profile_id)
+    try:
+        async with session.begin():
+            await set_rls_org(session, principal.organisation_id)
+            profile = await _get_profile_or_404(session, profile_id)
+    except ProgrammingError:
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="Feature is not available. Run database migrations to enable it.",
+        )
     return StreamingResponse(
         _sandbox_test_stream(profile),
         media_type="text/event-stream",

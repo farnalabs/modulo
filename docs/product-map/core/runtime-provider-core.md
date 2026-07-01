@@ -16,6 +16,8 @@ unit-tests:
   - backend/tests/unit/core/runtime_provider/test_abc.py
   - backend/tests/unit/core/runtime_provider/test_hub.py
   - backend/tests/unit/core/runtime_provider/test_e2b.py
+  - backend/tests/unit/core/runtime_provider/test_local.py
+  - backend/tests/unit/runtime_provider/test_docker_provider.py
   - backend/tests/unit/graph_validator/test_environment_capabilities.py
   - backend/tests/unit/api/test_environments.py
 depends-on: [feat-core-pipeline-execution]
@@ -38,8 +40,7 @@ Provided by existing tests: test_abc.py
 - [x] Complete concrete provider create/destroy/exec/status roundtrip works end-to-end
 - [x] WorkspaceSpec dataclass has all fields with correct defaults (run_id=None, image_ref="", capabilities=[], timeout_seconds=3600, resource_limits={}, egress_policy=None, persistence_policy={}, labels={})
 - [x] ExecResult dataclass has exit_code, stdout, stderr, duration_ms (nullable)
-- [x] RuntimeProviderFactory Protocol is defined
-- [ ] RuntimeProviderFactory Protocol is used by any consumer
+- [x] RuntimeProviderFactory Protocol is defined (not yet used by any consumer — available as extension point)
 
 ### RuntimeProviderHub (`core/runtime_provider/hub.py`)
 
@@ -74,6 +75,47 @@ Provided by existing tests: test_e2b.py
 - [x] destroy_workspace raises RuntimeError when sandbox not found
 - [x] get_workspace_status returns alive/dead status
 - [x] get_workspace_status raises RuntimeError when sandbox not found
+
+### DockerRuntimeProvider (`core/runtime_provider/docker.py`)
+
+Provided by existing tests: test_docker_provider.py
+
+- [x] supports(): docker hint → true
+- [x] supports(): image_ref with "docker" substring → true
+- [x] supports(): other hint (e2b) → false
+- [x] create_workspace: creates container with correct config (image, Cmd sleep infinity, AutoRemove, Memory)
+- [x] create_workspace: passes labels as Env variables
+- [x] create_workspace: defaults image to python:3.13-slim when image_ref is empty
+- [x] exec_command: runs command via container.exec and returns ExecResult with stdout/stderr/exit_code
+- [x] exec_command: raises ValueError for unknown provider_ref
+- [x] destroy_workspace: stops and deletes container
+- [x] destroy_workspace: unknown ref is no-op (returns None)
+- [x] get_workspace_status: returns "running" from container.show()
+- [x] get_workspace_status: returns "terminated" for unknown ref
+- [x] get_workspace_status: falls back to "terminated" on error (e.g. connection lost)
+- [x] close: closes underlying Docker client connection
+- [x] close: idempotent (can be called multiple times)
+
+### LocalRuntimeProvider (`core/runtime_provider/local.py`)
+
+Provided by existing tests: test_local.py
+
+- [x] supports(): local hint → true
+- [x] supports(): e2b hint → false
+- [x] supports(): no hint → true (default fallback)
+- [x] create_workspace: creates temp directory
+- [x] create_workspace: optionally clones repo from spec.labels repo_url
+- [x] exec_command: runs subprocess and returns stdout/stderr/exit_code
+- [x] exec_command: raises ValueError for unknown workspace
+- [x] exec_command with timeout: returns exit_code=-1 and "timed out" in stderr
+- [x] destroy_workspace: removes temp directory
+- [x] destroy_workspace: unknown workspace is no-op
+- [x] get_workspace_status: returns "running" for active workspace
+- [x] get_workspace_status: returns "terminated" for destroyed workspace
+- [x] concurrency semaphore: blocks when at max_concurrency
+- [x] create_local_provider_from_env: defaults to 2 when env unset
+- [x] create_local_provider_from_env: reads MODULO_MAX_LOCAL_CONCURRENCY
+- [x] create_local_provider_from_env: invalid value defaults to 2
 
 ### Graph Validator — environment capabilities
 
@@ -120,5 +162,6 @@ Provided by existing tests: test_environment_capabilities.py
 - E2B sandbox timeouts are not auto-renewed for long-running agent executions
 - No resource limit enforcement on E2B sandboxes (memory, CPU)
 - No egress policy enforcement on E2B sandboxes
-- No alternative runtime provider implementations (only E2B)
+- Only three runtime providers shipped: Local (dev/demo), Docker, and E2B. No K8s, no remote SSH, no custom sandbox runner.
 - Workspace lease release on run completion is not automatic
+- DockerRuntimeProvider.exec_command does not enforce the caller-provided timeout (the underlying Docker exec API has no native timeout support)
