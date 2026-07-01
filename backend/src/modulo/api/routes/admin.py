@@ -1,6 +1,7 @@
 """Admin-only routes for organisation, user, team, and billing management."""
 
 import logging
+import secrets
 import uuid
 from datetime import UTC, datetime, timedelta
 
@@ -815,6 +816,40 @@ async def admin_reactivate_user(
         created_at=account.created_at.isoformat(),
         last_login=account.last_login.isoformat() if account.last_login else None,
     )
+
+
+class AdminResetPasswordResponse(BaseModel):
+    temporary_password: str
+
+
+@router.post("/users/{user_id}/reset-password", response_model=AdminResetPasswordResponse)
+async def admin_reset_password(
+    user_id: uuid.UUID,
+    current_user: AuthenticatedPrincipal = Depends(get_current_user),
+    session: AsyncSession = Depends(get_db_session),
+) -> AdminResetPasswordResponse:
+    if current_user.org_role != "admin":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only admin users can reset passwords",
+        )
+
+    async with session.begin():
+        await set_rls_org(session, current_user.organisation_id)
+        account = await get_account_by_id(session, user_id)
+        if account is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
+
+        temporary_password = secrets.token_urlsafe(18)[:24]
+        account.password_hash = hash_password(temporary_password)
+
+        families = await list_families_for_account(session, user_id)
+        for family in families:
+            await blacklist_family(session, family.family_id)
+
+        await session.flush()
+
+    return AdminResetPasswordResponse(temporary_password=temporary_password)
 
 
 # ── Team Management ──────────────────────────────────────────
