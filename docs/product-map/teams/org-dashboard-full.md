@@ -13,6 +13,8 @@ code:
   - backend/tests/unit/api/test_dashboard.py
   - frontend/src/__tests__/DashboardView.spec.ts
   - frontend/src/views/TeamComparisonView.vue
+unit-tests:
+  - backend/tests/unit/api/test_dashboard.py
 depends-on:
   - feat-teams-dashboard
   - feat-teams-team-crud
@@ -20,7 +22,9 @@ depends-on:
   - feat-core-cost-breakdown
 status: partial
 ---
-# Org Dashboard (Full) Org-level dashboard with run overview, team breakdown, eval quality metrics, trend data, HITL analytics, and feedback volume. Built on top of the basic dashboard with per-team drill-down. Discovered from 1 completed delivery tasks.
+# Org Dashboard (Full)
+
+Org-level dashboard with run overview, team breakdown, eval quality metrics, trend data, HITL analytics, and feedback volume. Built on top of the basic dashboard with per-team drill-down. Discovered from 1 completed delivery tasks.
 
 ## Behaviours
 
@@ -126,7 +130,9 @@ status: partial
 - [ ] Custom widget layout
 - [ ] Grafana-native dashboard as complement
 
-## Known Gaps - **No BDD feature exists** for the main org dashboard UI. Only `eval_dashboard.feature` exists, and it is a placeholder.
+## Known Gaps
+
+- **No BDD feature exists** for the main org dashboard UI. Only `eval_dashboard.feature` exists, and it is a placeholder.
 - **Frontend DashboardView is incomplete**: only shows basic stat cards (Total Runs, Active Pipelines, Running, Awaiting Human, Failed, Idle). Does not render team breakdown, eval pass rate, trend chart, or HITL/feedback metrics.
 - **DashboardView `DashboardSummary` interface is incomplete** — missing `teams`, `eval_pass_rate`, `trend` fields from the API response.
 - **Pinia store (`dashboard.ts`) has incomplete `DashboardSummary` interface** — same missing fields.
