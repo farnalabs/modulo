@@ -722,7 +722,7 @@ async def test_input_payload_missing_field_is_error():
         [
             _schema_version_row(
                 uuid.UUID(schema_id),
-                {"type": "object", "properties": {"name": {"type": "string"}}},
+                {"type": "object", "properties": {"name": {"type": "string"}}, "required": ["name"]},
             )
         ]
     )

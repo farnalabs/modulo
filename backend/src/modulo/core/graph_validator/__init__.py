@@ -14,6 +14,7 @@ import uuid
 from typing import Any
 
 import jmespath
+import jmespath.exceptions
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -235,7 +236,7 @@ class GraphValidator:
         def _max_depth(node: str, visited: frozenset[str]) -> int:
             children = [c for c in adj.get(node, []) if c not in visited]
             if not children:
-                return 1  # leaf counts as 1
+                return 0
             return 1 + max(_max_depth(c, visited | {node}) for c in children)
 
         depth = _max_depth(entry_id, frozenset())
@@ -284,7 +285,7 @@ class GraphValidator:
             return
         try:
             jmespath.compile(expr.strip())
-        except Exception as exc:
+        except jmespath.exceptions.JMESPathError as exc:
             result.error(
                 "CONDITION_INVALID_EXPRESSION",
                 f"Edge from '{src}': invalid JMESPath expression: {exc}",
