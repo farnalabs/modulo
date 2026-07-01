@@ -216,7 +216,7 @@
             <button
               class="rounded-lg bg-primary px-4 py-2 text-sm font-semibold text-primary-foreground border border-primary/30 hover:brightness-110 transition-all"
               data-testid="remy-skills-add"
-              @click="openSkillDialog()"
+              @click="skillDialogRef?.openCreate()"
             >
               Add Skill
             </button>
@@ -275,7 +275,7 @@
                         class="rounded p-1 text-muted-foreground hover:bg-accent"
                         :aria-label="'Edit skill'"
                         title="Edit skill"
-                        @click="openSkillDialog(skill)"
+                        @click="skillDialogRef?.openEdit(skill)"
                       >
                         <svg class="h-4 w-4" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                           <path d="M17 3a2.85 2.85 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z" />
@@ -285,7 +285,7 @@
                         class="rounded p-1 text-destructive hover:bg-destructive/10"
                         :aria-label="'Delete skill'"
                         title="Delete skill"
-                        @click="confirmDeleteSkill(skill)"
+                        @click="skillDialogRef?.openDelete(skill)"
                       >
                         <svg class="h-4 w-4" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                           <path d="M3 6h18" /><path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6" /><path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2" />
@@ -298,126 +298,15 @@
             </table>
           </div>
         </div>
+
+        <RemySkillDialog
+          ref="skillDialogRef"
+          create-description="Create a new organisation-level skill for Remy."
+          edit-description="Update the skill configuration."
+          @saved="loadSkills"
+        />
       </template>
     </div>
-
-    <!-- Skill Dialog -->
-    <Dialog :open="skillDialogOpen" @update:open="skillDialogOpen = false">
-      <DialogContent class="sm:max-w-lg">
-        <DialogHeader>
-          <DialogTitle>{{ editingSkillId ? 'Edit Skill' : 'Add Skill' }}</DialogTitle>
-          <DialogDescription>
-            {{ editingSkillId ? 'Update the skill configuration.' : 'Create a new organisation-level skill for Remy.' }}
-          </DialogDescription>
-        </DialogHeader>
-
-        <form @submit.prevent="saveSkill" class="space-y-4">
-          <div>
-            <label class="mb-1 block text-sm font-medium">Name <span class="text-destructive">*</span></label>
-            <input
-              v-model="skillForm.name"
-              type="text"
-              class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm"
-              placeholder="Skill name"
-              required
-              data-testid="remy-skills-form-name"
-            />
-          </div>
-          <div>
-            <label class="mb-1 block text-sm font-medium">Description</label>
-            <textarea
-              v-model="skillForm.description"
-              rows="2"
-              class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm"
-              placeholder="What this skill does"
-              data-testid="remy-skills-form-description"
-            />
-          </div>
-          <div>
-            <label class="mb-1 block text-sm font-medium">Triggers</label>
-            <input
-              v-model="skillForm.triggersInput"
-              type="text"
-              class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm"
-              placeholder="trigger1, trigger2"
-              data-testid="remy-skills-form-triggers"
-            />
-            <p class="mt-1 text-xs text-muted-foreground">Comma-separated trigger keywords</p>
-          </div>
-          <div>
-            <label class="mb-1 block text-sm font-medium">Body (Markdown)</label>
-            <textarea
-              v-model="skillForm.body"
-              rows="6"
-              class="w-full rounded-lg border border-input bg-background px-3 py-2 font-mono text-sm"
-              placeholder="# Skill instructions&#10;Write markdown here..."
-              data-testid="remy-skills-form-body"
-            />
-          </div>
-          <div class="flex items-center gap-2">
-            <label class="flex items-center gap-2 text-sm cursor-pointer">
-              <input
-                v-model="skillForm.active"
-                type="checkbox"
-                class="rounded border-input"
-                data-testid="remy-skills-form-active"
-              />
-              Active
-            </label>
-          </div>
-          <div v-if="skillFormError" class="text-sm text-destructive">{{ skillFormError }}</div>
-          <DialogFooter>
-            <button
-              type="button"
-              class="rounded-lg border border-input bg-background px-4 py-2 text-sm font-medium hover:bg-accent"
-              data-testid="remy-skills-form-cancel"
-              @click="closeSkillDialog"
-            >
-              Cancel
-            </button>
-            <button
-              :disabled="skillSaving || !skillForm.name.trim()"
-              type="submit"
-              class="rounded-lg bg-primary px-4 py-2 text-sm font-semibold text-primary-foreground hover:brightness-110 disabled:opacity-50 transition-all"
-              data-testid="remy-skills-form-submit"
-            >
-              {{ skillSaving ? 'Saving...' : (editingSkillId ? 'Update' : 'Create') }}
-            </button>
-          </DialogFooter>
-        </form>
-      </DialogContent>
-    </Dialog>
-
-    <!-- Delete skill confirmation -->
-    <Dialog :open="deleteSkillDialogOpen" @update:open="deleteSkillDialogOpen = false">
-      <DialogContent class="sm:max-w-sm">
-        <DialogHeader>
-          <DialogTitle>Delete Skill</DialogTitle>
-          <DialogDescription>
-            Are you sure you want to delete "{{ deleteSkillName }}"? This action cannot be undone.
-          </DialogDescription>
-        </DialogHeader>
-        <DialogFooter>
-          <button
-            type="button"
-            class="rounded-lg border border-input bg-background px-4 py-2 text-sm font-medium hover:bg-accent"
-            data-testid="remy-skills-delete-cancel"
-            @click="deleteSkillDialogOpen = false"
-          >
-            Cancel
-          </button>
-          <button
-            :disabled="skillDeleting"
-            type="button"
-            class="rounded-lg bg-destructive px-4 py-2 text-sm font-semibold text-destructive-foreground hover:brightness-110 disabled:opacity-50 transition-all"
-            data-testid="remy-skills-delete-confirm"
-            @click="deleteSkill"
-          >
-            {{ skillDeleting ? 'Deleting...' : 'Delete' }}
-          </button>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
   </FeatureGate>
 </template>
 
@@ -429,14 +318,8 @@ import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
 import FeatureGate from '../components/FeatureGate.vue'
 import LockIcon from '../components/LockIcon.vue'
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from '../components/ui/dialog'
+import RemySkillDialog from '../components/remy/RemySkillDialog.vue'
+import type { SkillFormItem } from '../components/remy/RemySkillDialog.vue'
 
 const planStore = usePlanStore()
 
@@ -585,114 +468,7 @@ async function saveGuidance() {
 
 // Skills
 const skills = ref<SkillItem[]>([])
-const skillDialogOpen = ref(false)
-const editingSkillId = ref<string | null>(null)
-const skillForm = reactive({
-  name: '',
-  description: '',
-  triggersInput: '',
-  body: '',
-  active: true,
-})
-const skillSaving = ref(false)
-const skillFormError = ref<string | null>(null)
-const deleteSkillDialogOpen = ref(false)
-const deleteSkillId = ref<string | null>(null)
-const deleteSkillName = ref('')
-const skillDeleting = ref(false)
-
-function openSkillDialog(skill?: SkillItem) {
-  skillDialogOpen.value = true
-  skillFormError.value = null
-  if (skill) {
-    editingSkillId.value = skill.id
-    skillForm.name = skill.name
-    skillForm.description = skill.description || ''
-    skillForm.triggersInput = (skill.triggers || []).join(', ')
-    skillForm.body = skill.body || ''
-    skillForm.active = skill.active
-  } else {
-    editingSkillId.value = null
-    skillForm.name = ''
-    skillForm.description = ''
-    skillForm.triggersInput = ''
-    skillForm.body = ''
-    skillForm.active = true
-  }
-}
-
-function closeSkillDialog() {
-  skillDialogOpen.value = false
-  editingSkillId.value = null
-}
-
-async function saveSkill() {
-  if (!skillForm.name.trim()) return
-  skillSaving.value = true
-  skillFormError.value = null
-  try {
-    const triggers = skillForm.triggersInput.split(/[\s,]+/).map(s => s.trim()).filter(Boolean)
-    const body = {
-      name: skillForm.name.trim(),
-      description: skillForm.description.trim() || null,
-      triggers,
-      body: skillForm.body,
-      active: skillForm.active,
-    }
-
-    if (editingSkillId.value) {
-      const { error: err } = await (api as any).PUT('/api/v1/admin/remy/skills/{skill_id}', {
-        params: { path: { skill_id: editingSkillId.value } },
-        body,
-      })
-      if (err) {
-        skillFormError.value = `Failed to update skill: ${err}`
-        return
-      }
-    } else {
-      const { data, error: err } = await (api as any).POST('/api/v1/admin/remy/skills', { body })
-      if (err) {
-        skillFormError.value = `Failed to create skill: ${err}`
-        return
-      }
-      if (data) skills.value.push(data as SkillItem)
-    }
-
-    closeSkillDialog()
-    await loadSkills()
-  } catch (e: unknown) {
-    skillFormError.value = `Failed to save skill: ${e instanceof Error ? e.message : String(e)}`
-  } finally {
-    skillSaving.value = false
-  }
-}
-
-function confirmDeleteSkill(skill: SkillItem) {
-  deleteSkillId.value = skill.id
-  deleteSkillName.value = skill.name
-  deleteSkillDialogOpen.value = true
-}
-
-async function deleteSkill() {
-  if (!deleteSkillId.value) return
-  skillDeleting.value = true
-  try {
-    const { error: err } = await (api as any).DELETE('/api/v1/admin/remy/skills/{skill_id}', {
-      params: { path: { skill_id: deleteSkillId.value } },
-    })
-    if (err) {
-      skillFormError.value = `Failed to delete skill: ${err}`
-      return
-    }
-    skills.value = skills.value.filter(s => s.id !== deleteSkillId.value)
-    deleteSkillDialogOpen.value = false
-    deleteSkillId.value = null
-  } catch (e: unknown) {
-    skillFormError.value = `Failed to delete skill: ${e instanceof Error ? e.message : String(e)}`
-  } finally {
-    skillDeleting.value = false
-  }
-}
+const skillDialogRef = ref<InstanceType<typeof RemySkillDialog> | null>(null)
 
 async function toggleSkillActive(skill: SkillItem) {
   const newActive = !skill.active

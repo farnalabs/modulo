@@ -22,6 +22,7 @@ import uuid
 from collections.abc import AsyncGenerator
 from typing import Any
 
+from cryptography.fernet import Fernet
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from httpx import AsyncClient
 from langchain_core.messages import AIMessage, AIMessageChunk, BaseMessage, HumanMessage, SystemMessage, ToolMessage
@@ -33,6 +34,7 @@ from starlette.responses import StreamingResponse
 from modulo.api.dependencies import get_db_session
 from modulo.auth.dependencies import get_current_user
 from modulo.auth.jwt import AuthenticatedPrincipal
+from modulo.db.models.model_backend import ModelBackend
 from modulo.db.models.remy_message import ChatMessage
 from modulo.db.models.remy_session import ChatSession
 from modulo.db.rls import set_rls_org
@@ -98,7 +100,7 @@ class StreamRequest(BaseModel):
     provider: str = Field(..., description="LLM provider")
     model: str = Field(..., description="Model ID")
     context_window_tokens: int = Field(..., ge=1024, le=1_000_000)
-    api_key: str = Field(..., description="User's API key for the LLM provider")
+    api_key: str = Field(default="", description="User's API key for the LLM provider (auto-resolved if empty)")
     mcp_api_key: str | None = Field(None, description="API key for MCP tool execution")
     system_prompt: str | None = Field(None, description="Optional system prompt override")
 
@@ -161,6 +163,30 @@ def _build_backend(provider: str, model: str, api_key: str, **kwargs: Any) -> An
             detail=f"Unsupported provider: {provider!r}. Supported: {', '.join(sorted(_SIMPLE_BACKENDS))}",
         )
     return cls(api_key=api_key, model_id=model, **kwargs)
+
+
+async def _resolve_api_key(
+    provider: str,
+    org_id: uuid.UUID,
+    session: AsyncSession,
+    fernet_key: str,
+) -> str | None:
+    result = await session.execute(
+        select(ModelBackend).where(
+            ModelBackend.organisation_id == org_id,
+            ModelBackend.provider == provider,
+            ModelBackend.status == "active",
+        )
+    )
+    backend = result.scalar_one_or_none()
+    if backend is None:
+        return None
+    try:
+        fernet = Fernet(fernet_key.encode())
+        return fernet.decrypt(backend.credentials_ciphertext).decode()
+    except Exception:
+        logger.exception("Failed to decrypt credentials for provider %r", provider)
+        return None
 
 
 async def _call_mcp_tool(
@@ -418,8 +444,23 @@ async def stream_chat(
             if body.system_prompt:
                 langchain_messages.insert(0, SystemMessage(content=body.system_prompt))
 
-            # 4. Create the LLM backend
-            backend = _build_backend(body.provider, body.model, body.api_key)
+            # 4. Resolve API key (from request or DB backend)
+            api_key = body.api_key
+            if not api_key:
+                resolved = await _resolve_api_key(
+                    body.provider,
+                    principal.organisation_id,
+                    read_session,
+                    settings.fernet_key,
+                )
+                if resolved is None:
+                    msg = f"No active {body.provider} API key configured. "
+                    msg += "Add one in Settings > Model Backends or provide an api_key."
+                    yield f"event: error\ndata: {json.dumps({'detail': msg})}\n\n"
+                    return
+                api_key = resolved
+
+            backend = _build_backend(body.provider, body.model, api_key)
 
             # 5. Stream tokens from the LLM
             full_content = ""

@@ -103,7 +103,7 @@ async def get_remy_config(
     _require_admin(principal)
     async with session.begin():
         result = await session.execute(
-            select(SystemConfig).where(SystemConfig.key == "remy_config")
+            select(SystemConfig).where(SystemConfig.key == f"remy_config:{principal.organisation_id}")
         )
         entry = result.scalar_one_or_none()
     if entry is None:
@@ -130,11 +130,11 @@ async def update_remy_config(
     _require_admin(principal)
     async with session.begin():
         result = await session.execute(
-            select(SystemConfig).where(SystemConfig.key == "remy_config")
+            select(SystemConfig).where(SystemConfig.key == f"remy_config:{principal.organisation_id}")
         )
         entry = result.scalar_one_or_none()
         if entry is None:
-            entry = SystemConfig(key="remy_config", value={})
+            entry = SystemConfig(key=f"remy_config:{principal.organisation_id}", value={})
             session.add(entry)
 
         current: dict[str, Any] = entry.value if isinstance(entry.value, dict) else {}
@@ -165,7 +165,9 @@ async def update_remy_config(
         default_provider=current.get("default_provider", "anthropic"),
         default_model=current.get("default_model", "claude-sonnet-4-20250514"),
         default_context_window=current.get("default_context_window", 200000),
-        allowed_providers=current.get("allowed_providers", ["anthropic", "openai", "google-gemini", "deepseek", "groq"]),
+        allowed_providers=current.get(
+            "allowed_providers", ["anthropic", "openai", "google-gemini", "deepseek", "groq"]
+        ),
         allowed_models=current.get("allowed_models", []),
     )
 
