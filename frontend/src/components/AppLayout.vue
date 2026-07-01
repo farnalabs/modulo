@@ -322,7 +322,7 @@ import { ref, onMounted } from 'vue'
 import { getAccessToken, clearAccessToken } from '../lib/api/client'
 import { usePlanStore } from '../stores/planStore'
 import LogoMark from './LogoMark.vue'
-import RemyPanel from './RemyPanel.vue'
+import RemyPanel from './remy/RemyPanel.vue'
 
 const planStore = usePlanStore()
 

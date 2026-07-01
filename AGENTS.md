@@ -503,6 +503,26 @@ Wait-Process -Name "uv" -ErrorAction SilentlyContinue  # doesn't block; just con
 - When auditing behaviours in the product map, do NOT assume an unchecked `[ ]` means "not implemented" — it often means "not verified." Read the test files and run `grep` for each behaviour before deciding status.
 - The `prd:` frontmatter field must contain only the bare section number (e.g. `8.17`), never wrapped in quotes or prefixed with `§`. The `§` prefix or quotes cause `graph-validate.ps1` to fail section matching because `TrimStart('§')` cannot strip quotes, leaving a `"8.17"` string that doesn't match the PRD index.
 
+### Backend / API Schema Migrations
+
+- When a DB column is renamed in a migration (e.g. `created_by` → `account_id`), every Pydantic response schema that references the old name must use `Field(validation_alias="account_id")` and add `"populate_by_name": True` to `model_config`. Without this, `model_validate(pipeline)` fails because the ORM model's attribute is `account_id` but the response schema expects `created_by`.
+- After a column rename migration, grep ALL response schemas in `backend/src/modulo/api/routes/` for the old column name — it's common to miss several files.
+
+### Backend / Models
+
+- When a new column is added to a table via deployment schema patch (e.g. `ALTER TABLE pipelines ADD COLUMN IF NOT EXISTS default_autonomy_level`), the SQLAlchemy ORM model MUST have the corresponding `mapped_column`. Without it, any CRUD function that passes the field to the model constructor raises `TypeError: 'default_autonomy_level' is an invalid keyword argument for Pipeline`.
+- Keep `__table_args__` check constraints and ORM mapped columns in sync: if a check constraint references a column, the ORM must map it.
+- For optional Pydantic fields in graph/JSON schemas (`PipelineGraphNode.agent_id`, etc.), always add `= None` default — otherwise dicts that omit the key entirely fail `model_validate` with `Field required`.
+
+### Ops / Deploy
+
+- `flyctl deploy` direct invocation without `--build-arg` flags leaves all git metadata fields (`git_sha`, `git_branch`, `git_commit_message`, `git_commit_timestamp`, `build_timestamp`) empty in the `/api/v1/deployment` endpoint. Always use `deploy.ps1` (which reads and passes build args automatically) instead of calling `flyctl deploy` directly.
+- The `/deployments` page on modulo.run reads this endpoint. If git metadata is missing, the page shows blank fields — not a backend model change.
+
+### Frontend / Resilient Rendering
+
+- When displaying API data that may be temporarily empty (e.g. between redeploys), use `{{ value || '—' }}` fallback instead of `v-if="value"` conditional rendering. Empty strings are falsy in JS — `v-if` hides the entire field, making it look like the model changed. Always show the field label with a fallback value.
+
 ### Backend / Async & Concurrency
 
 - `asyncio.create_task()` called from sync code (SQLAlchemy listeners, signal handlers) → guard with `try: asyncio.get_running_loop(); except RuntimeError: log_warning(...) else: create_task(...)`. Without this guard, calling sync code without a running event loop crashes with `RuntimeError: no running event loop`.
