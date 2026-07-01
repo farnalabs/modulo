@@ -120,6 +120,7 @@ status: covered | partial | gap    # auto-updated by graph-validate
 ### Observability
 - [feat-observability-otel-config-ui](observability/otel-config-ui.md) => PRD 6.6
 - [feat-observability-data-residency](observability/data-residency.md) => PRD 10.5, 6.6, 6.2
+- [feat-observability-error-tracking](observability/error-tracking.md) => PRD 8.25
 
 ### Pipelines
 - [feat-pipelines-pipeline-versioning](pipelines/pipeline-versioning.md) => PRD 8.13
@@ -228,6 +229,7 @@ status: covered | partial | gap    # auto-updated by graph-validate
 ### Observability
 - [feat-observability-otel-config-ui](observability/otel-config-ui.md) => PRD delivery-tasks: [task-nv9-otel-config-ui]
 - [feat-observability-data-residency](observability/data-residency.md) => PRD delivery-tasks: [task-nv0-data-residency]
+- [feat-observability-error-tracking](observability/error-tracking.md) => PRD delivery-tasks: [task-nv28-error-models, task-nv28-error-ingestion-api, task-nv28-error-backend-hooks, task-nv28-error-frontend-sdk, task-nv28-error-dashboard-ui, task-nv28-error-notification-engine, task-nv28-error-bdd-tests]
 
 ### Pipelines
 - [feat-pipelines-pipeline-versioning](pipelines/pipeline-versioning.md) => PRD delivery-tasks: [task-nv0-snapshot-expansion]
