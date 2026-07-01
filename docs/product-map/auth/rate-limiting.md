@@ -8,7 +8,13 @@ code:
   - backend/src/modulo/api/middleware/rate_limiter.py
   - backend/src/modulo/core/rate_limiter.py
   - backend/src/modulo/api/routes/admin_rate_limits.py
-
+unit-tests:
+  - backend/tests/unit/rate_limiter/test_rate_limiter.py
+  - backend/tests/unit/api/test_rate_limiting_bdd.py
+  - backend/tests/unit/api/test_rate_limiter_middleware.py
+  - backend/tests/unit/api/test_rate_limiter_keys.py
+  - backend/tests/bdd/steps/test_rate_limiting.py
+depends-on: [feat-auth-jwt-auth]
 status: partial
 ---
 # API Rate Limiting
