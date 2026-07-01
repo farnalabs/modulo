@@ -34,14 +34,18 @@ status: partial
 
 # HITL Gates
 
-HITL (Human-In-The-Loop) gates pause pipeline execution at an edge and wait for a human to review the upstream node's output before deciding whether to approve, reject, or modify it. A gate is a property of an edge (not a node) and compiles to an intermediate LangGraph gate node at runtime.
+HITL (Human-In-The-Loop) gates pause pipeline execution at an edge and wait for
+a human to review the upstream node's output before deciding whether to approve,
+reject, or modify it. A gate is a property of an edge (not a node) and compiles
+to an intermediate LangGraph gate node at runtime.
 
 ## Behaviours
 
 ### Gate Lifecycle
 
 - [x] Edge with `hitl_gate_config` compiles to an intermediate gate node between source and target
-- [x] Gate node first call raises `NodeInterrupt` with gate payload (gate_id, autonomy_level, human_only, overdue_threshold)
+- [x] Gate node first call raises `NodeInterrupt` with gate payload
+  (gate_id, autonomy_level, human_only, overdue_threshold)
 - [x] Run transitions to `awaiting_human` when interrupt is caught by executor
 - [x] Human claims the gate (atomic claim via `UPDATE ... WHERE claimed_by IS NULL RETURNING`)
 - [x] Human approves the gate with optional notes — run resumes with status `approved`
@@ -150,6 +154,7 @@ HITL (Human-In-The-Loop) gates pause pipeline execution at an edge and wait for 
 
 - [ ] Eval-reference condition format (§8.17) not yet implemented — code uses JMESPath only
 - [ ] Eval results from eval-before-interrupt not logged/persisted
-- [ ] PRD specifies `condition` field as `{eval_id, threshold, operator}` but code implements JMESPath `condition` and `eval_condition` as separate fields
+- [ ] PRD specifies `condition` field as `{eval_id, threshold, operator}` but code
+  implements JMESPath `condition` and `eval_condition` as separate fields
 - [ ] No end-to-end integration test for full eval-before-interrupt → suite check → eval_failed chain
 - [ ] Frontend pipeline editor lacks edge properties panel entirely
