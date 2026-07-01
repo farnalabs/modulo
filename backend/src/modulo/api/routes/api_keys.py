@@ -31,6 +31,7 @@ class ApiKeyUpdate(BaseModel):
     name: str | None = Field(None, min_length=1)
     role: str | None = Field(None, min_length=1)
     team_id: str | None = None
+    expires_at: str | None = None
 
 
 class ApiKeyCreatedResponse(BaseModel):
@@ -144,6 +145,9 @@ async def update_api_key_endpoint(
         await _require_team_rbac(settings, session)
         _require_admin(principal)
         team_id = uuid.UUID(body.team_id)
+    expires_at: datetime | None = None
+    if body.expires_at:
+        expires_at = datetime.fromisoformat(body.expires_at)
     async with session.begin():
         await set_rls_org(session, principal.organisation_id)
         await set_rls_user_context(session, principal.account_id, principal.org_role)
@@ -154,6 +158,7 @@ async def update_api_key_endpoint(
             name=body.name,
             role=body.role,
             team_id=team_id,
+            expires_at=expires_at,
         )
     if key is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="API key not found")
