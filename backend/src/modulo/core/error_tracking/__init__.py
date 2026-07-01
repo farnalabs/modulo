@@ -11,6 +11,7 @@ import time
 from typing import Any
 
 from modulo.core.error_tracking.alerting import AlertEngine
+from modulo.core.error_tracking.forwarders import get_forwarder
 from modulo.core.error_tracking.metrics import init_metrics, record_error_ingest
 from modulo.db.crud.error_tracking import (
     create_error_event,
@@ -125,6 +126,8 @@ class ErrorIngestionService:
         except Exception:
             _log.exception("error_tracking.alert_evaluation_failed")
 
+        await _dispatch_forwarders(org_id, group, event, event_data)
+
         return {"group_id": str(group.id), "is_new": existing is None}
 
     async def ingest_batch(
@@ -192,3 +195,60 @@ class SessionKeyStore:
             return False
         expected = hmac.new(key.encode(), body, hashlib.sha256).hexdigest()
         return hmac.compare_digest(expected, signature)
+
+
+# ---------------------------------------------------------------------------
+# Forwarder dispatch — called after alert evaluation
+# ---------------------------------------------------------------------------
+
+_DEFAULT_FORWARDER_CONFIGS: dict[str, dict[str, Any]] = {}
+
+
+def configure_forwarders(configs: dict[str, dict[str, Any]]) -> None:
+    """Set org-level forwarder configs at startup.
+
+    Expected shape::
+
+        {
+            "sentry": {"dsn": "...", "org_slug": "...", "project_slug": "..."},
+            "datadog": {"api_key": "...", "site": "datadoghq.com"},
+        }
+    """
+    global _DEFAULT_FORWARDER_CONFIGS
+    _DEFAULT_FORWARDER_CONFIGS = configs
+
+
+async def _dispatch_forwarders(
+    org_id: Any,
+    error_group: Any,
+    error_event: Any,
+    event_data: dict[str, Any],
+) -> None:
+    """Call all configured forwarders for the org.
+
+    Forwarder configs are looked up by org_id (or fall back to
+    a global default).  Each forwarder runs independently; a single
+    forwarder failure does not affect others.
+    """
+    configs = _DEFAULT_FORWARDER_CONFIGS
+    if not configs:
+        return
+
+    for type_name, fwd_config in configs.items():
+        forwarder = get_forwarder(type_name)
+        if forwarder is None:
+            _log.warning("dispatch_forwarders.unknown_type", extra={"type": type_name})
+            continue
+
+        try:
+            await forwarder.forward(
+                org_id=org_id,
+                error_group=error_group,
+                error_event=error_event,
+                config=fwd_config,
+            )
+        except Exception:
+            _log.exception(
+                "dispatch_forwarders.failed",
+                extra={"type": type_name, "org_id": str(org_id)},
+            )
