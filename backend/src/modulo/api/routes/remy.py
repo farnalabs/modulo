@@ -28,6 +28,7 @@ from httpx import AsyncClient
 from langchain_core.messages import AIMessage, AIMessageChunk, BaseMessage, HumanMessage, SystemMessage, ToolMessage
 from pydantic import BaseModel, Field
 from sqlalchemy import func, select
+from sqlalchemy.exc import ProgrammingError
 from sqlalchemy.ext.asyncio import AsyncSession
 from starlette.responses import StreamingResponse
 
@@ -41,6 +42,7 @@ from modulo.db.models.remy_session import ChatSession
 from modulo.db.rls import set_rls_org
 from modulo.model_backends.ai21 import Ai21Backend
 from modulo.model_backends.anthropic import AnthropicBackend
+from modulo.model_backends.base import ModelBackendBase
 from modulo.model_backends.deepseek import DeepSeekBackend
 from modulo.model_backends.fireworks import FireworksBackend
 from modulo.model_backends.gemini import GeminiBackend
@@ -58,7 +60,7 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/v1/remy", tags=["remy"])
 
 # ── Provider → backend class mapping ──────────────────────────────────────
-_SIMPLE_BACKENDS: dict[str, type] = {
+_SIMPLE_BACKENDS: dict[str, type[ModelBackendBase]] = {
     "ai21": Ai21Backend,
     "anthropic": AnthropicBackend,
     "deepseek": DeepSeekBackend,
@@ -100,7 +102,7 @@ class StreamRequest(BaseModel):
     content: str = Field(..., description="The user's message text")
     provider: str = Field(..., description="LLM provider")
     model: str = Field(..., description="Model ID")
-    context_window_tokens: int = Field(..., ge=1024, le=1_000_000)
+    context_window_tokens: int | None = Field(None, ge=1024, le=1_000_000, description="Override context window (defaults to session value)")
     api_key: str = Field(default="", description="User's API key for the LLM provider (auto-resolved if empty)")
     mcp_api_key: str | None = Field(None, description="API key for MCP tool execution")
     system_prompt: str | None = Field(None, description="Optional system prompt override")
@@ -148,6 +150,11 @@ def _message_to_langchain(m: ChatMessage) -> BaseMessage:
             if m.tool_calls_json:
                 kwargs["tool_calls"] = m.tool_calls_json.get("tool_calls", [])
             return AIMessage(**kwargs)
+        case "tool_use":
+            return AIMessage(
+                content=m.content or "",
+                tool_calls=m.tool_calls_json.get("tool_calls", []) if m.tool_calls_json else [],
+            )
         case "tool_result":
             tool_call_id = ""
             if m.tool_results_json:
@@ -160,7 +167,7 @@ def _message_to_langchain(m: ChatMessage) -> BaseMessage:
             return HumanMessage(content=m.content or "")
 
 
-def _build_backend(provider: str, model: str, api_key: str, **kwargs: Any) -> Any:
+def _build_backend(provider: str, model: str, api_key: str, **kwargs: Any) -> ModelBackendBase:
     cls = _SIMPLE_BACKENDS.get(provider)
     if cls is None:
         raise HTTPException(
@@ -246,12 +253,19 @@ async def list_sessions(
         result = await session.execute(q)
         sessions = result.scalars().all()
 
-        items = []
-        for s in sessions:
-            count_q = select(func.count(ChatMessage.id)).where(ChatMessage.session_id == s.id)
+        if sessions:
+            session_ids = [s.id for s in sessions]
+            count_q = (
+                select(ChatMessage.session_id, func.count(ChatMessage.id).label("cnt"))
+                .where(ChatMessage.session_id.in_(session_ids))
+                .group_by(ChatMessage.session_id)
+            )
             count_result = await session.execute(count_q)
-            msg_count = count_result.scalar() or 0
-            items.append(_serialise_session(s, msg_count))
+            count_map = {row.session_id: row.cnt for row in count_result}
+        else:
+            count_map = {}
+
+        items = [_serialise_session(s, count_map.get(s.id, 0)) for s in sessions]
 
     return {"items": items, "total": total, "page": page, "page_size": page_size}
 
@@ -460,7 +474,11 @@ async def stream_chat(
                     langchain_messages.insert(0, SystemMessage(content=system_prompt))
 
                 # 5. Enforce context window — prune oldest messages if over budget
-                context_window = chat_session.context_window_tokens or 200000
+                context_window = (
+                    body.context_window_tokens
+                    if body.context_window_tokens is not None
+                    else (chat_session.context_window_tokens or 200000)
+                )
                 budget = int(context_window * 0.8)
                 total_tokens = sum(
                     max(1, len(m.content or "") // 4) for m in langchain_messages
@@ -596,6 +614,9 @@ async def stream_chat(
 
         except HTTPException:
             raise
+        except ProgrammingError as exc:
+            logger.exception("Remy streaming error — missing DB table or schema")
+            yield f"event: error\ndata: {json.dumps({'detail': 'Feature is not available. Run database migrations to enable it.'})}\n\n"
         except Exception as exc:
             logger.exception("Remy streaming error")
             yield f"event: error\ndata: {json.dumps({'detail': str(exc)})}\n\n"
