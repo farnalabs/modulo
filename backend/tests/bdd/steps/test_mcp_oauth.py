@@ -167,7 +167,6 @@ def used_auth_code_exists(code: str, client_id: str, request):
     )
 )
 def register_oauth_client(name: str, uris: str, scopes: str, client, request):
-    from modulo.auth.dependencies import get_current_user
 
     uri_list = json.loads(uris)
     scope_list = json.loads(scopes)

@@ -6,8 +6,6 @@ import uuid
 from dataclasses import dataclass
 from typing import Any, Protocol
 
-from modulo.core.license import LicenseData
-
 
 @dataclass
 class FeatureFlag:

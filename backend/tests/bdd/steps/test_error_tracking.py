@@ -1,7 +1,7 @@
 """BDD step definitions for error tracking — ingestion, dashboard, notifications."""
 
 import uuid
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -34,8 +34,8 @@ def _make_group(**kw):
     g.status = kw.get("status", "new")
     g.level_peak = kw.get("level_peak", "error")
     g.count = kw.get("count", 1)
-    g.first_seen = kw.get("first_seen", datetime.now(timezone.utc))
-    g.last_seen = kw.get("last_seen", datetime.now(timezone.utc))
+    g.first_seen = kw.get("first_seen", datetime.now(UTC))
+    g.last_seen = kw.get("last_seen", datetime.now(UTC))
     g.sample_event_id = kw.get("sample_event_id", uuid.uuid4())
     g.assigned_to = kw.get("assigned_to", None)
     return g
@@ -52,7 +52,7 @@ def _make_event(**kw):
     e.environment = kw.get("environment", None)
     e.version = kw.get("version", None)
     e.breadcrumbs = kw.get("breadcrumbs", None)
-    e.created_at = kw.get("created_at", datetime.now(timezone.utc))
+    e.created_at = kw.get("created_at", datetime.now(UTC))
     return e
 
 
@@ -450,7 +450,7 @@ def only_one_alert(ctx):
 @when(parsers.parse("I POST /api/v1/errors/notification-rules with valid config"))
 def create_notification_rule(request, ctx):
     rule_id = str(uuid.uuid4())
-    now = datetime.now(timezone.utc).isoformat()
+    now = datetime.now(UTC).isoformat()
     body = {
         "id": rule_id,
         "name": "critical error alert",

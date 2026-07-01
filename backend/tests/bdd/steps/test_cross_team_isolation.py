@@ -1,17 +1,10 @@
 """BDD step definitions: Cross-team isolation."""
 
 import uuid
-from typing import Any
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import MagicMock
 
 import pytest
-from fastapi.testclient import TestClient
 from pytest_bdd import given, parsers, scenarios, then, when
-
-from modulo.api.main import app
-from modulo.auth.jwt import AuthenticatedPrincipal
-from modulo.settings import get_settings
-from tests.bdd.conftest import make_settings
 
 try:
     scenarios("../features/teams/cross_team_isolation.feature")

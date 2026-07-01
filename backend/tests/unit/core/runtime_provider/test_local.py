@@ -84,7 +84,7 @@ class TestLocalRuntimeProvider:
 
         await started_event.wait()
 
-        start = asyncio.get_running_loop().time()
+        asyncio.get_running_loop().time()
         second_task = asyncio.create_task(
             tight_provider.exec_command(ref, [sys.executable, "-c", "print('second')"])
         )

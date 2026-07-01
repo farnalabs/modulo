@@ -22,13 +22,13 @@ from modulo.model_backends.vllm import VllmBackend
 from modulo.model_backends.watsonx import WatsonXBackend
 
 __all__ = [
-    "HealthResult",
     "Ai21Backend",
     "AnthropicBackend",
     "AzureOpenAIBackend",
     "DeepSeekBackend",
     "FireworksBackend",
     "GroqBackend",
+    "HealthResult",
     "JanBackend",
     "LLamaCppBackend",
     "LmStudioBackend",

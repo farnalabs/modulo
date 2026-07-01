@@ -3,10 +3,10 @@
 import asyncio
 import uuid
 from typing import Any
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock
 
 import pytest
-from pytest_bdd import given, parsers, scenarios, then, when
+from pytest_bdd import given, scenarios, then, when
 
 from modulo.connectors.base import ConnectorType
 from modulo.determination.scanner import ScanSample
@@ -93,7 +93,6 @@ def step_jira_connector_samples(ctx):
 def step_scanned_samples_planning_dev(ctx):
     """Build mock ScanSample objects representing planning + dev findings."""
     from modulo.determination.inference import Finding
-    from modulo.determination.draft import generate_draft
 
     samples = [
         ScanSample(

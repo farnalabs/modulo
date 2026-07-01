@@ -3,7 +3,7 @@
 from sqlalchemy import CheckConstraint
 
 from modulo.db.enums import ModelBackendProvider
-from modulo.db.models.model_backend import ModelBackend, _PROVIDER_VALUES
+from modulo.db.models.model_backend import _PROVIDER_VALUES, ModelBackend
 
 EXPECTED_PROVIDERS = frozenset({
     "ai21",

@@ -118,7 +118,6 @@ class TestGetEffectiveSetting:
         org = MagicMock()
         org.settings_json = {"theme": "dark", "max_items": 50}
 
-        from modulo.db.crud.organisation import get_organisation
 
         get_organisation_result = AsyncMock(return_value=org)
         with pytest.MonkeyPatch().context() as m:
@@ -134,7 +133,6 @@ class TestGetEffectiveSetting:
         config_entity = MagicMock()
         config_entity.value = "system_wide"
 
-        from modulo.db.crud.system_config import get_config
 
         get_org = AsyncMock(return_value=org)
         get_cfg = AsyncMock(return_value=config_entity)

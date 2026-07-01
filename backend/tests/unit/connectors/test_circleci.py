@@ -4,9 +4,8 @@ import httpx
 import pytest
 import respx
 
-from modulo.connectors.base import CIRunLog, CIRunStatus, ConnectorPayload, ConnectorQuery
-from modulo.connectors.circleci import CircleCIConnector
-from modulo.connectors.circleci import _CircleCITestDouble
+from modulo.connectors.base import CIRunStatus, ConnectorPayload, ConnectorQuery
+from modulo.connectors.circleci import CircleCIConnector, _CircleCITestDouble
 
 
 @pytest.fixture()

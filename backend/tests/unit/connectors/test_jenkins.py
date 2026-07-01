@@ -4,7 +4,7 @@ import httpx
 import pytest
 import respx
 
-from modulo.connectors.base import CIRunLog, CIRunStatus, ConnectorPayload, ConnectorQuery
+from modulo.connectors.base import CIRunStatus, ConnectorPayload, ConnectorQuery
 from modulo.connectors.jenkins import JenkinsConnector, _JenkinsTestDouble
 
 _JENKINS_BASE = "http://jenkins.example.com"

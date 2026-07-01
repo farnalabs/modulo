@@ -3,14 +3,14 @@
 from __future__ import annotations
 
 import uuid
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from pydantic import ValidationError
 
 from modulo.api.models.error_notification_rule import ErrorNotificationRuleCreate, ErrorNotificationRuleUpdate
-from modulo.core.error_tracking.alerting import AlertEngine, TriggeredAlert
 from modulo.core.error_tracking.alert_dispatcher import _format_slack_payload
+from modulo.core.error_tracking.alerting import AlertEngine, TriggeredAlert
 from modulo.db.models.error_notification_rule import ErrorNotificationRule
 
 _ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")

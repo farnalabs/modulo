@@ -1,17 +1,10 @@
 """BDD step definitions: Team-scoped HITL gates."""
 
 import uuid
-from typing import Any
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import MagicMock
 
 import pytest
-from fastapi.testclient import TestClient
 from pytest_bdd import given, parsers, scenarios, then, when
-
-from modulo.api.main import app
-from modulo.auth.jwt import AuthenticatedPrincipal
-from modulo.settings import get_settings
-from tests.bdd.conftest import make_settings
 
 try:
     scenarios("../features/teams/team_hitl_gate.feature")
@@ -120,7 +113,7 @@ def user_claims_gate(username: str, gate_id: str, run_name: str, request, ctx) -
     parsers.parse('user "{username}" approves gate "{gate_id}" on run "{run_name}"')
 )
 def user_approves_gate(username: str, gate_id: str, run_name: str, request, ctx) -> None:
-    gate = ctx["gates"].get(gate_id)
+    ctx["gates"].get(gate_id)
     resp = MagicMock()
     resp.status_code = 200
     resp.json = lambda: {"status": "approved", "run_status": "running"}

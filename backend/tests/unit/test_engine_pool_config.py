@@ -23,7 +23,7 @@ class TestEnginePoolConfig:
             from modulo.settings import Settings
 
             settings = Settings()
-            engine = deps.get_or_create_engine(settings)
+            deps.get_or_create_engine(settings)
 
         _call_kwargs = mock_create.call_args.kwargs
         assert _call_kwargs["pool_pre_ping"] is True
@@ -44,7 +44,7 @@ class TestEnginePoolConfig:
             from modulo.settings import Settings
 
             settings = Settings()
-            engine = deps.get_or_create_engine(settings)
+            deps.get_or_create_engine(settings)
 
         _call_kwargs = mock_create.call_args.kwargs
         assert _call_kwargs["pool_pre_ping"] is True

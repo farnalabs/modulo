@@ -5,8 +5,8 @@ from unittest.mock import AsyncMock, patch
 import pytest
 from langchain_core.messages import AIMessage, HumanMessage
 
-from modulo.model_backends.groq import GROQ_BASE_URL, GroqBackend
 from modulo.model_backends.base import ModelBackendBase
+from modulo.model_backends.groq import GROQ_BASE_URL, GroqBackend
 
 
 @pytest.fixture()

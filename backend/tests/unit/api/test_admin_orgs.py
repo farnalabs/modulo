@@ -1,18 +1,17 @@
 """Tests for the admin org management API."""
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from unittest.mock import AsyncMock
 from uuid import UUID, uuid4
 
 import pytest
-from httpx import AsyncClient, ASGITransport
+from httpx import ASGITransport, AsyncClient
 
-from modulo.api.main import app
 from modulo.api.dependencies import get_db_session
+from modulo.api.main import app
 from modulo.auth.dependencies import get_current_user
 from modulo.auth.jwt import AuthenticatedPrincipal
 from modulo.db.models.organisation import Organisation
-
 
 ORG_ID = uuid4()
 USER_ID = uuid4()
@@ -40,7 +39,7 @@ SYSTEM_ADMIN_PRINCIPAL = AuthenticatedPrincipal(
 @pytest.fixture
 def mock_session():
     """Create a mock DB session for testing."""
-    from unittest.mock import AsyncMock, MagicMock
+    from unittest.mock import AsyncMock
 
     session = AsyncMock()
     session.begin.return_value.__aenter__.return_value = session
@@ -103,7 +102,7 @@ async def test_create_org_success(client_system_admin, mock_session):
             name=name,
             slug=slug,
             status="active",
-            created_at=datetime.now(timezone.utc),
+            created_at=datetime.now(UTC),
         )
         return org
 
@@ -162,7 +161,7 @@ async def test_create_org_slug_collision(client_system_admin):
 
     existing = Organisation(
         id=uuid4(), name="Existing", slug="taken", status="active",
-        created_at=datetime.now(timezone.utc),
+        created_at=datetime.now(UTC),
     )
     original = admin_orgs.get_organisation_by_slug
     admin_orgs.get_organisation_by_slug = AsyncMock(return_value=existing)
@@ -184,7 +183,7 @@ async def test_create_org_duplicate_slug_orig(client_system_admin):
 
     existing_org = Organisation(
         id=uuid4(), name="Existing", slug="dup-slug", status="active",
-        created_at=datetime.now(timezone.utc),
+        created_at=datetime.now(UTC),
     )
     original = admin_orgs.get_organisation_by_slug
     admin_orgs.get_organisation_by_slug = AsyncMock(return_value=existing_org)
@@ -212,7 +211,7 @@ async def test_create_org_user_success(client_system_admin):
 
     target_org = Organisation(
         id=target_org_id, name="Target Org", slug="target", status="active",
-        created_at=datetime.now(timezone.utc),
+        created_at=datetime.now(UTC),
     )
 
     original_get_org = admin_orgs.get_organisation
@@ -230,7 +229,7 @@ async def test_create_org_user_success(client_system_admin):
             display_name=display_name,
             password_hash=password_hash,
             auth_provider=auth_provider,
-            created_at=datetime.now(timezone.utc),
+            created_at=datetime.now(UTC),
         )
         return account
 

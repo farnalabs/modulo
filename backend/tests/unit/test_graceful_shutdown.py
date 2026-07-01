@@ -1,7 +1,7 @@
 """Tests for the graceful shutdown manager and middleware."""
 
 import asyncio
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock
 
 import pytest
 

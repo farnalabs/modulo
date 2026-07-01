@@ -283,7 +283,7 @@ def step_scorer_regex_with_type(eval_type, pattern, type_val, ctx):
 
 @when("the eval engine scores using each scorer")
 def step_eval_engine_scores(ctx):
-    from modulo.core.eval_engine import EvalEngine, EvalDefinition
+    from modulo.core.eval_engine import EvalDefinition, EvalEngine
 
     engine = EvalEngine()
     output = ctx.get("eval_output", {})
@@ -324,7 +324,7 @@ def step_unknown_eval_type_error(ctx):
 @then(parsers.parse('the output "{output}" passes the regex scorer'))
 def step_output_passes_regex(output, ctx):
     ctx["eval_output"] = {"text": output}
-    from modulo.core.eval_engine import EvalEngine, EvalDefinition
+    from modulo.core.eval_engine import EvalDefinition, EvalEngine
 
     engine = EvalEngine()
     eval_def = EvalDefinition(
@@ -341,7 +341,7 @@ def step_output_passes_regex(output, ctx):
 @then(parsers.parse('the output "{output}" fails the regex scorer'))
 def step_output_fails_regex(output, ctx):
     ctx["eval_output"] = {"text": output}
-    from modulo.core.eval_engine import EvalEngine, EvalDefinition
+    from modulo.core.eval_engine import EvalDefinition, EvalEngine
 
     engine = EvalEngine()
     eval_def = EvalDefinition(
@@ -358,7 +358,7 @@ def step_output_fails_regex(output, ctx):
 @then("valid data passes the json_schema scorer")
 def step_valid_data_passes_json_schema(ctx):
     ctx["eval_output"] = {"valid": True}
-    from modulo.core.eval_engine import EvalEngine, EvalDefinition
+    from modulo.core.eval_engine import EvalDefinition, EvalEngine
 
     engine = EvalEngine()
     config = ctx.get("eval_config", {})
@@ -389,8 +389,8 @@ except (FileNotFoundError, OSError):
     pass
 
 
-from types import SimpleNamespace
 import json
+from types import SimpleNamespace
 
 
 def _eval_resp(status_code, **kwargs):
@@ -422,6 +422,7 @@ def step_create_eval_def(name, eval_type, request, ctx):
         return
 
     from unittest.mock import AsyncMock, MagicMock
+
     from modulo.db.models.eval_definition import EvalDefinition
 
     mock_session = AsyncMock()
@@ -527,8 +528,9 @@ def step_feedback_eval_suite_passes(ctx):
 @when("a human provides feedback on the output")
 def step_feedback_human_provides(ctx, request):
     """Simulate creating a feedback record via FeedbackManager."""
-    from modulo.core.feedback_manager import FeedbackManager
     from unittest.mock import AsyncMock
+
+    from modulo.core.feedback_manager import FeedbackManager
 
     mock_session = AsyncMock()
     mock_session.add = MagicMock()
@@ -560,8 +562,9 @@ def step_feedback_human_provides(ctx, request):
 
 @when(parsers.parse('the status is changed to "{new_status}"'))
 def step_feedback_change_status(new_status, ctx, request):
-    from modulo.core.feedback_manager import FeedbackManager
     from unittest.mock import AsyncMock
+
+    from modulo.core.feedback_manager import FeedbackManager
 
     mock_session = AsyncMock()
     mock_session.get = AsyncMock()
@@ -609,8 +612,9 @@ def step_feedback_change_status(new_status, ctx, request):
 
 @when("the system detects an eval gap")
 def step_feedback_detect_eval_gap(ctx, request):
-    from modulo.core.feedback_manager import FeedbackManager
     from unittest.mock import AsyncMock, MagicMock
+
+    from modulo.core.feedback_manager import FeedbackManager
 
     mock_session = AsyncMock()
     mock_session.get = AsyncMock()
@@ -627,7 +631,7 @@ def step_feedback_detect_eval_gap(ctx, request):
 
     import asyncio
 
-    from modulo.core.eval_engine import EvalDefinition, EvalEngine
+    from modulo.core.eval_engine import EvalDefinition
 
     # Provide an eval suite that passes on the output text "This is incorrect"
     # → no eval catches the rejection → this IS an eval gap
@@ -651,8 +655,9 @@ def step_feedback_detect_eval_gap(ctx, request):
 
 @when("a correction run is spawned")
 def step_feedback_spawn_correction(ctx, request):
-    from modulo.core.feedback_manager import FeedbackManager
     from unittest.mock import AsyncMock, MagicMock, patch
+
+    from modulo.core.feedback_manager import FeedbackManager
 
     mock_session = AsyncMock()
     fake_run_id = uuid.uuid4()

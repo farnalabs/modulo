@@ -191,7 +191,6 @@ async def get_cost_controls(
         teams_result = await list_teams(session, org_id=current_user.organisation_id, page=1, page_size=1000)
         org = await get_organisation(session, current_user.organisation_id)
 
-    from modulo.db.models.team import Team
 
     return CostControlsResponse(
         teams=[

@@ -6,17 +6,13 @@ import logging
 import os
 import uuid
 from typing import Any
-from unittest.mock import ANY, AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
-import pytest
 from fastapi import FastAPI
-from fastapi.responses import JSONResponse
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
 from starlette.responses import Response
 from starlette.testclient import TestClient
-
-
 
 _ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
 

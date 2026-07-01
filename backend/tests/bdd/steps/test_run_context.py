@@ -593,7 +593,6 @@ def context_setter_changes_autonomy(new_level: str, ctx: dict[str, Any]) -> None
 @then("the gate is skipped")
 def gate_is_skipped(ctx: dict[str, Any]) -> None:
     from modulo.core.run_context.autonomy import (
-        AutonomyLevel,
         should_skip_hitl_gate,
     )
 
@@ -627,7 +626,6 @@ def gate_uses_pipeline_default(level: str, ctx: dict[str, Any]) -> None:
 @then("the gate interrupts for human review")
 def gate_interrupts(ctx: dict[str, Any]) -> None:
     from modulo.core.run_context.autonomy import (
-        AutonomyLevel,
         should_skip_hitl_gate,
     )
 
@@ -674,10 +672,10 @@ def gate_uses_level(level: str, ctx: dict[str, Any]) -> None:
 def context_setter_writes_nothing(
     node_name: str, ctx: dict[str, Any]
 ) -> None:
+    import asyncio
+
     from modulo.core.pipeline_engine import cancellable_node
     from modulo.core.pipeline_engine.decorator import _RUN_CONTEXT_WRITE_LOG_KEY
-
-    import asyncio
 
     async def _noop_setter(state: dict[str, Any]) -> dict[str, Any]:
         return {}

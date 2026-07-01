@@ -88,9 +88,9 @@ class TestMigration0049Upgrade:
                     with patch.object(migration, "op", mock_op, create=True):
                         migration.upgrade()
 
-        chat_sessions_call = [
+        chat_sessions_call = next(
             c for c in mock_op.create_table.call_args_list if c[0][0] == "chat_sessions"
-        ][0]
+        )
         columns = chat_sessions_call[0][1:]
         col_names = [c.name for c in columns]
         assert "id" in col_names

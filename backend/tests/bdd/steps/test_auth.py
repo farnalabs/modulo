@@ -259,8 +259,8 @@ def step_api_key_exists(name: str, request: Any, ctx: dict[str, Any]) -> None:
 
 def _make_key_response(status_code, **kwargs):
     """Build a SimpleNamespace that looks like a requests.Response for conftest steps."""
-    from types import SimpleNamespace
     import json
+    from types import SimpleNamespace
 
     return SimpleNamespace(
         status_code=status_code,
@@ -292,6 +292,7 @@ def step_create_api_key(
         return
 
     from unittest.mock import AsyncMock, MagicMock
+
     from modulo.auth.api_key import create_api_key as create_key_fn
 
     mock_session = AsyncMock()
@@ -328,9 +329,9 @@ def step_revoke_api_key(
 ) -> None:
     """Revoke an API key via business logic."""
     from unittest.mock import AsyncMock, MagicMock
+
     from modulo.auth.api_key import revoke_api_key
     from modulo.db.models.api_key import OrgApiKey
-    from sqlalchemy import select
 
     key_id = ctx.get("api_key_id", uuid.uuid4())
     mock_session = AsyncMock()
@@ -366,6 +367,7 @@ def step_list_api_keys(
 ) -> None:
     """List API keys via business logic."""
     from unittest.mock import AsyncMock, MagicMock
+
     from modulo.auth.api_key import list_api_keys
 
     mock_session = AsyncMock()
@@ -436,8 +438,9 @@ def step_wrong_api_key_request(
     request: Any, ctx: dict[str, Any]
 ) -> None:
     """Validate an invalid API key — expect ApiKeyInvalidError."""
-    from modulo.auth.api_key import validate_api_key
     from unittest.mock import AsyncMock, MagicMock
+
+    from modulo.auth.api_key import validate_api_key
 
     mock_session = AsyncMock()
     mock_result = MagicMock()

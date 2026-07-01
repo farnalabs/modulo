@@ -7,7 +7,6 @@ import pytest
 from httpx import ASGITransport, AsyncClient
 
 from modulo.api.dependencies import get_db_session
-from modulo.api.routes import admin_system_config as sc_route
 from modulo.auth.dependencies import get_current_user
 from modulo.auth.jwt import AuthenticatedPrincipal
 

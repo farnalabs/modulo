@@ -6,7 +6,6 @@ import uuid
 from datetime import UTC, datetime
 from unittest.mock import AsyncMock, MagicMock, patch
 
-import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
@@ -67,8 +66,8 @@ def _make_app():
         session.begin.return_value = cm
         return session
 
-    from modulo.auth.dependencies import get_current_user
     from modulo.api.dependencies import get_db_session
+    from modulo.auth.dependencies import get_current_user
     app.dependency_overrides[get_current_user] = _override_user
     app.dependency_overrides[get_db_session] = _override_db
     return app

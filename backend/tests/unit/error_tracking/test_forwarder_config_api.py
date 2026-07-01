@@ -41,8 +41,8 @@ def _make_app():
 
         return session
 
-    from modulo.auth.dependencies import get_current_user
     from modulo.api.dependencies import get_db_session
+    from modulo.auth.dependencies import get_current_user
     app.dependency_overrides[get_current_user] = _override_user
     app.dependency_overrides[get_db_session] = _override_db
     return app
@@ -116,8 +116,8 @@ class TestConfigureForwarder:
             session.flush = AsyncMock()
             return session
 
-        from modulo.auth.dependencies import get_current_user
         from modulo.api.dependencies import get_db_session
+        from modulo.auth.dependencies import get_current_user
         app.dependency_overrides[get_current_user] = _override_viewer
         app.dependency_overrides[get_db_session] = _override_db
 

@@ -396,7 +396,6 @@ def community_primitive_exists(request: pytest.FixtureRequest) -> None:
 
 @when(parsers.parse('I POST /api/composite-templates with name "{name}" and a sub-pipeline containing agent "{agent_name}"'))
 def crud_post_composite(client, name: str, agent_name: str, request: pytest.FixtureRequest, patches: list[Any]) -> None:
-    from tests.bdd.conftest import make_mock_pipeline
 
     actual_url = _map_url("/api/composite-templates")
     _patch_set_rls(patches, "modulo.api.routes.composite_templates.set_rls_org")
@@ -543,7 +542,6 @@ def crud_delete_composite(client, template_id: str, request: pytest.FixtureReque
 @when(parsers.parse('the user from org "{org}" requests GET /api/composite-templates/{template_id}'))
 def other_org_get_composite(org: str, template_id: str, request: pytest.FixtureRequest, patches: list[Any]) -> None:
     # Use alt_org_client for cross-org isolation test
-    from tests.bdd.conftest import ALT_ORG_ID
 
     actual_url = _map_url(f"/api/composite-templates/{template_id}")
     _patch_set_rls(patches, "modulo.api.routes.composite_templates.set_rls_org")
@@ -587,7 +585,7 @@ def when_graph_validator_checks(request: pytest.FixtureRequest) -> None:
     # Simulate the model_validator from PipelineGraphNode
     errors = []
     try:
-        node = PipelineGraphNode(
+        PipelineGraphNode(
             id=uuid.uuid4() if "id" not in composite_node else composite_node["id"],
             node_type=composite_node.get("node_type", "agent"),
             position={"x": 0, "y": 0},
@@ -606,7 +604,6 @@ def when_graph_validator_checks(request: pytest.FixtureRequest) -> None:
     if composite_node.get("composite_ref") and not errors:
         tid = composite_node["composite_ref"]
         if len(tid) == 36 or len(tid) == 32:
-            from modulo.db.crud.composite_template import get_composite_template
             # Patch-level: simulate 404
             if tid == "00000000-0000-0000-0000-000000099999":
                 errors.append("Composite template not found")
@@ -696,7 +693,6 @@ def when_snapshot_created(request: pytest.FixtureRequest) -> None:
 def when_save_composite_as_library(
     client, primitive_type: str, request: pytest.FixtureRequest, patches: list[Any],
 ) -> None:
-    from tests.bdd.conftest import make_mock_pipeline
 
     _patch_set_rls(patches, "modulo.api.routes.library.set_rls_org")
     _patch_set_rls(patches, "modulo.api.routes.library.set_rls_user_context")

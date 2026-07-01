@@ -11,7 +11,6 @@ SCHEMAS: list[dict[str, object]] = [
         "definition": {
             "title": "Meeting Notes",
             "description": "Schema for structured meeting documentation",
-            "description": "Schema for structured meeting documentation",
             "type": "object",
             "properties": {
                 "title": {"type": "string", "description": "Meeting title"},

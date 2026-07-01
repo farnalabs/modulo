@@ -1,7 +1,6 @@
 """BDD step definitions: Team pipeline visibility."""
 
 import uuid
-from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -9,9 +8,8 @@ from fastapi.testclient import TestClient
 from pytest_bdd import given, parsers, scenarios, then, when
 
 from modulo.api.main import app
-from modulo.auth.jwt import AuthenticatedPrincipal
 from modulo.settings import get_settings
-from tests.bdd.conftest import make_settings, make_mock_pipeline
+from tests.bdd.conftest import make_settings
 
 try:
     scenarios("../features/teams/team_pipeline_visibility.feature")
@@ -69,7 +67,7 @@ def user_exists(username: str, ctx) -> None:
     parsers.parse('user "{username}" is a member of team "{team_name}"')
 )
 def user_is_member(username: str, team_name: str, ctx) -> None:
-    user_id = ctx["users"].get(username, {}).get("id", str(uuid.uuid4()))
+    ctx["users"].get(username, {}).get("id", str(uuid.uuid4()))
     team_id = ctx["teams"].get(team_name, {}).get("id", str(uuid.uuid4()))
     ctx["memberships"][username] = {"team_id": team_id, "role": "operator"}
 
@@ -115,7 +113,7 @@ def user_requests_pipeline_list(username: str, request, ctx) -> None:
     client = TestClient(app)
     app.dependency_overrides[get_settings] = make_settings
 
-    user = ctx["users"].get(username, {"id": str(uuid.uuid4())})
+    ctx["users"].get(username, {"id": str(uuid.uuid4())})
     is_member = username in ctx.get("memberships", {})
 
     pipelines = []
