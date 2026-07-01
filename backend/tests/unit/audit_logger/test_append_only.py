@@ -114,7 +114,7 @@ class TestAppendOnlyGuardWithMockSession:
         org_id = uuid.uuid4()
 
         with patch(
-            "modulo.core.audit_logger.get_chain_head",
+            "modulo.core.audit_logger._get_chain_head_locked",
             return_value=None,
         ):
             event = await append_audit_event(
@@ -143,7 +143,7 @@ class TestAppendOnlyGuardWithMockSession:
         org_id = uuid.uuid4()
 
         with patch(
-            "modulo.core.audit_logger.get_chain_head",
+            "modulo.core.audit_logger._get_chain_head_locked",
             return_value=None,
         ):
             # This should complete without RuntimeError
