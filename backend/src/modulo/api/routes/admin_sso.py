@@ -4,7 +4,7 @@ import uuid
 from typing import Any
 
 import httpx
-from defusedxml import ElementTree as ET  # noqa: N817
+from defusedxml import ElementTree as ET
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
