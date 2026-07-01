@@ -102,6 +102,8 @@ Community and organisation-scoped library of reusable primitives (schemas, agent
 - [ ] PR Review Pipeline template is seeded at startup
 - [ ] Release Checklist Pipeline template is seeded at startup
 - [ ] Incident Response Pipeline template is seeded at startup
+- [ ] Spec Implementer agent is seeded at startup
+- [ ] Simplest Workflow workflow is seeded at startup
 - [ ] Community primitives are O(1) lookup by ID via _COMMUNITY_BY_ID dict
 - [ ] Community primitives have COMMUNITY_ORG_ID sentinel (00000000-0000-0000-0000-000000000001)
 

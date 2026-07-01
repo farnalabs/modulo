@@ -734,3 +734,45 @@ RELEASE_CANDIDATE: dict[str, Any] = {
         "smoke_test_endpoints": ["/healthz", "/healthz/ready"],
     },
 }
+
+# ---------------------------------------------------------------------------
+# 14. simplest-workflow
+# ---------------------------------------------------------------------------
+SIMPLEST_WORKFLOW: dict[str, Any] = {
+    "name": "Simplest Workflow",
+    "description": (
+        "The absolute simplest Modulo pipeline — a single agent that reads a "
+        "freeform specification (markdown), implements the required changes in "
+        "a target code path, runs a test command to validate, and optionally "
+        "git-commits the result. No connectors, no cloud services, no setup "
+        "beyond a model backend. Perfect for day-1 evaluation, dogfooding, "
+        "and the lowest possible barrier to entry.\n\n"
+        "HOW TO USE:\n"
+        "1. Create a pipeline from this template\n"
+        "2. Set the run context defaults:\n"
+        "   - spec_path: path to your markdown spec file\n"
+        "   - code_path: path to your codebase\n"
+        "   - test_command: e.g. 'pytest', 'npm test'\n"
+        "   - auto_commit: true/false\n"
+        "3. Trigger a run with the spec text as input\n"
+        "4. The agent reads, implements, tests, and commits.\n\n"
+        "No schemas, no connectors, no HITL gates, no edges."
+    ),
+    "version": "1.0.0",
+    "author": "Modulo",
+    "tags": ["simplest", "day-1", "getting-started", "dogfood", "canonical"],
+    "pipeline_steps": [
+        {
+            "id": "spec-implementer",
+            "agent": "spec-implementer",
+            "description": "Read the spec, implement code changes, run tests, optionally commit",
+        },
+    ],
+    "default_config": {
+        "spec_path": "",
+        "code_path": ".",
+        "test_command": "",
+        "auto_commit": False,
+        "max_iterations": 3,
+    },
+}

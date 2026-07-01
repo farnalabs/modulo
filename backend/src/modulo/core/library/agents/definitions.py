@@ -1413,3 +1413,83 @@ TICKET_ESTIMATOR: dict[str, Any] = {
     "version": "1.0.0",
     "author": "Modulo",
 }
+
+# ---------------------------------------------------------------------------
+# 22. spec-implementer
+# ---------------------------------------------------------------------------
+SPEC_IMPLEMENTER: dict[str, Any] = {
+    "name": "Spec Implementer",
+    "description": (
+        "Reads a specification from the input, implements the required changes "
+        "in the target code path, runs the configured test command to validate, "
+        "and optionally commits the result if the folder is a git repo. "
+        "This is the core agent for the Simplest Workflow — no connectors, "
+        "no schemas, no edges required."
+    ),
+    "node_type": "agent",
+    "role": "implementer",
+    "prompt_template": (
+        "You are an AI software engineer implementing a specification.\n\n"
+        "SPECIFICATION:\n{input}\n\n"
+        "Read the specification above, understand the codebase at the code path, "
+        "implement the required changes, run the test command to validate the changes, "
+        "and fix any test failures. "
+        "If auto-commit is enabled and the project is a git repository, stage all "
+        "changes and commit them with a descriptive message.\n\n"
+        "Report what files were changed, the test results (pass/fail counts, "
+        "any error messages), and whether a commit was made."
+    ),
+    "input_schema": {
+        "type": "object",
+        "required": ["spec_text"],
+        "properties": {
+            "spec_text": {
+                "type": "string",
+                "description": "Markdown specification text describing what to implement",
+            },
+            "code_path": {
+                "type": "string",
+                "description": "Path to the codebase directory (from pipeline run context)",
+            },
+            "test_command": {
+                "type": "string",
+                "description": "Shell command to run for test validation",
+            },
+            "auto_commit": {
+                "type": "boolean",
+                "description": "Whether to auto-commit changes if in a git repo",
+            },
+        },
+    },
+    "output_schema": {
+        "type": "object",
+        "required": ["files_changed", "test_summary"],
+        "properties": {
+            "files_changed": {
+                "type": "array",
+                "items": {"type": "string"},
+                "description": "List of file paths that were created or modified",
+            },
+            "test_summary": {
+                "type": "object",
+                "properties": {
+                    "passed": {"type": "boolean"},
+                    "output": {"type": "string"},
+                    "command": {"type": "string"},
+                },
+                "description": "Summary of test execution results",
+            },
+            "commit_made": {
+                "type": "boolean",
+                "description": "Whether a git commit was made",
+            },
+            "commit_message": {
+                "type": "string",
+                "description": "The commit message if a commit was made",
+            },
+        },
+    },
+    "tags": ["implementer", "canonical", "library", "spec", "simplest-workflow"],
+    "version": "1.0.0",
+    "author": "Modulo",
+}

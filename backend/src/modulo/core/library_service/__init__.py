@@ -461,6 +461,62 @@ _MODULO_PRIMITIVES: list[LibraryPrimitive] = [
         tags=["workflow", "dogfood", "modulo", "pipeline"],
     ),
     # -----------------------------------------------------------------------
+    # Simplest Workflow primitives (agent + workflow)
+    # -----------------------------------------------------------------------
+    _make_modulo(
+        pid="00000000-0000-0000-0000-000000000065",
+        primitive_type="agent",
+        name="Spec Implementer",
+        slug="spec-implementer",
+        description=(
+            "Reads a freeform specification (markdown), implements the required "
+            "changes in a target code path, runs a test command to validate, "
+            "and optionally git-commits the result."
+        ),
+        content_json={
+            "input_schema": None,
+            "output_schema": None,
+            "prompt_template": (
+                "You are an AI software engineer implementing a specification.\n\n"
+                "SPECIFICATION:\n{{ input }}\n\n"
+                "Read the specification above, understand the codebase at the code path, "
+                "implement the required changes, run the test command to validate the changes, "
+                "and fix any test failures. "
+                "If auto-commit is enabled and the project is a git repository, stage all "
+                "changes and commit them with a descriptive message.\n\n"
+                "Report what files were changed, the test results (pass/fail counts, "
+                "any error messages), and whether a commit was made."
+            ),
+            "connector_type_refs": [],
+            "required_environment_capabilities": [],
+            "model_backend_id": None,
+            "retry_policy": {},
+            "token_budget": None,
+        },
+        tags=["agent", "spec-implementer", "simplest-workflow", "day-1"],
+    ),
+    _make_modulo(
+        pid="00000000-0000-0000-0000-000000000071",
+        primitive_type="workflow",
+        name="Simplest Workflow",
+        slug="simplest-workflow",
+        description=(
+            "The absolute simplest Modulo pipeline — a single agent that reads a "
+            "freeform specification (markdown), implements the required changes in "
+            "a target code path, runs a test command to validate, and optionally "
+            "git-commits the result. No connectors, no cloud services, no setup "
+            "beyond a model backend. Perfect for day-1 evaluation."
+        ),
+        content_json={
+            "nodes": [
+                {"id": "spec-implementer", "agent": "spec-implementer"},
+            ],
+            "edges": [],
+            "entry": "spec-implementer",
+        },
+        tags=["workflow", "simplest-workflow", "day-1", "getting-started"],
+    ),
+    # -----------------------------------------------------------------------
     # Modulo example composite primitives
     # -----------------------------------------------------------------------
     _make_modulo(

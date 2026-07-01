@@ -62,7 +62,7 @@ Every primitive type ships with two concrete implementations — proof that the 
 - **Trigger types (2)**: `manual` and `webhook`
 - **Library schemas (2)**: `markdown-document` and `structured-requirements`
 - **Library agents (2)**: `document-loader` and `requirements-extractor`
-- **Library workflows (2)**: `prd-to-requirements` and `requirements-to-file`
+- **Library workflows (3)**: `simplest-workflow`, `prd-to-requirements`, and `requirements-to-file`
 - **Model backends (2)**: Anthropic Claude and OpenAI GPT — both registered via ModelBackend registry
 - Schema editor where users define and version their own output schema
 - Simplified HITL gate (pause → claim → approve or reject)
@@ -2384,7 +2384,7 @@ V1 Feature Tests (separate suite, not in alpha CI — these features do not exis
 | Model backend | Anthropic Claude | OpenAI GPT-4o |
 | Library schema | `markdown-document` | `structured-requirements` |
 | Library agent | `document-loader` | `requirements-extractor` |
-| Library workflow | `prd-to-requirements` | `requirements-to-file` |
+| Library workflow | `simplest-workflow` | `prd-to-requirements` | `requirements-to-file` |
 
 ### Alpha Feature Checklist
 
