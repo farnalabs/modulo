@@ -83,6 +83,11 @@ class Settings(BaseSettings):
 
     modulo_otel_service_name: str = Field("modulo")
 
+    # SSE event stream limits
+    modulo_sse_max_connections_per_org: int = Field(100)
+    modulo_sse_max_connections_per_user: int = Field(10)
+    modulo_sse_zombie_timeout_seconds: float = Field(2.0)
+
     # CSRF protection
     modulo_csrf_enabled: bool = Field(True)
     modulo_csrf_exempt_paths: str = Field("/api/v1/health,/api/v1/triggers,/api/v1/auth")
