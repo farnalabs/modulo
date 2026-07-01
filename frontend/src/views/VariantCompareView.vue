@@ -231,7 +231,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted, watch } from 'vue'
+import { ref, computed, onMounted, onBeforeUnmount, watch } from 'vue'
 import { api } from '../lib/api/client'
 import type { components } from '../lib/api/client'
 import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
@@ -263,6 +263,7 @@ const selectedGroupId = ref<string | null>(null)
 const selectedGroup = ref<VariantGroup | null>(null)
 const loading = ref(true)
 const error = ref<string | null>(null)
+const isUnmounted = ref(false)
 
 const runEntries = ref<Map<string, RunEntry>>(new Map())
 const runningVariants = ref<Set<string>>(new Set())
@@ -405,6 +406,10 @@ watch(diffVariantsAvailable, (available) => {
   }
 })
 
+onBeforeUnmount(() => {
+  isUnmounted.value = true
+})
+
 async function fetchGroups() {
   loading.value = true
   error.value = null
@@ -422,9 +427,7 @@ async function fetchGroups() {
   } catch (e: unknown) {
     error.value = `Failed to load variant groups: ${e instanceof Error ? e.message : String(e)}`
   } finally {
-    if (!error.value) {
-      loading.value = false
-    }
+    loading.value = false
   }
 }
 
@@ -489,7 +492,7 @@ async function runVariants() {
 async function pollRunStatus(runId: string, variantName: string) {
   let status = 'pending'
 
-  while (!terminalStatuses.has(status)) {
+  while (!isUnmounted.value && !terminalStatuses.has(status)) {
     await delay(2000)
 
     try {

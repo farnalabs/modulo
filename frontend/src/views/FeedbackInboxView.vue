@@ -95,7 +95,11 @@
             data-testid="feedback-inbox-toggle-expand"
             class="flex cursor-pointer items-center gap-4 p-4"
             :class="{ 'border-b': expandedId === record.id }"
+            role="button"
+            tabindex="0"
             @click="toggleExpand(record.id)"
+            @keydown.enter="toggleExpand(record.id)"
+            @keydown.space.prevent="toggleExpand(record.id)"
           >
             <svg
               class="h-4 w-4 flex-shrink-0 text-muted-foreground transition-transform"
@@ -216,7 +220,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted } from 'vue'
+import { ref, onMounted, onBeforeUnmount } from 'vue'
 import { api } from '../lib/api/client'
 import type { components } from '../lib/api/client'
 import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
@@ -245,6 +249,7 @@ const annotations = ref<Record<string, string>>({})
 const savingAnnotation = ref<Record<string, boolean>>({})
 const annotationMessage = ref<Record<string, { type: string; text: string } | null>>({})
 const triggering = ref<Record<string, boolean>>({})
+const feedbackTimeouts = ref<Record<string, ReturnType<typeof setTimeout>>>({})
 
 function statusBadgeClass(status: string): string {
   const classMap: Record<string, string> = {
@@ -350,7 +355,8 @@ async function saveAnnotation(recordId: string) {
     } else if (data) {
       detailMap.value[recordId] = data
       annotationMessage.value[recordId] = { type: 'success', text: 'Annotation saved.' }
-      setTimeout(() => { annotationMessage.value[recordId] = null }, 3000)
+      if (feedbackTimeouts.value[recordId]) clearTimeout(feedbackTimeouts.value[recordId])
+      feedbackTimeouts.value[recordId] = setTimeout(() => { annotationMessage.value[recordId] = null }, 3000)
     }
   } catch (e: unknown) {
     annotationMessage.value[recordId] = { type: 'error', text: `Save failed: ${e instanceof Error ? e.message : String(e)}` }
@@ -374,7 +380,8 @@ async function resolveRecord(recordId: string) {
       annotationMessage.value[recordId] = { type: 'success', text: 'Marked as resolved.' }
       const rec = records.value.find(r => r.id === recordId)
       if (rec) rec.status = 'resolved'
-      setTimeout(() => { annotationMessage.value[recordId] = null }, 3000)
+      if (feedbackTimeouts.value[recordId]) clearTimeout(feedbackTimeouts.value[recordId])
+      feedbackTimeouts.value[recordId] = setTimeout(() => { annotationMessage.value[recordId] = null }, 3000)
     }
   } catch (e: unknown) {
     annotationMessage.value[recordId] = { type: 'error', text: `Resolve failed: ${e instanceof Error ? e.message : String(e)}` }
@@ -398,7 +405,8 @@ async function triggerCorrection(recordId: string) {
       annotationMessage.value[recordId] = { type: 'success', text: 'Correction run triggered.' }
       const rec = records.value.find(r => r.id === recordId)
       if (rec) rec.status = 'correcting'
-      setTimeout(() => { annotationMessage.value[recordId] = null }, 3000)
+      if (feedbackTimeouts.value[recordId]) clearTimeout(feedbackTimeouts.value[recordId])
+      feedbackTimeouts.value[recordId] = setTimeout(() => { annotationMessage.value[recordId] = null }, 3000)
     }
   } catch (e: unknown) {
     annotationMessage.value[recordId] = { type: 'error', text: `Trigger failed: ${e instanceof Error ? e.message : String(e)}` }
@@ -406,6 +414,12 @@ async function triggerCorrection(recordId: string) {
     triggering.value[recordId] = false
   }
 }
+
+onBeforeUnmount(() => {
+  for (const tid of Object.values(feedbackTimeouts.value)) {
+    if (tid) clearTimeout(tid)
+  }
+})
 
 onMounted(async () => {
   await Promise.all([loadFeedback(), loadPipelines()])

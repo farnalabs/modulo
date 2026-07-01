@@ -82,6 +82,8 @@
             <button
               class="relative inline-flex h-5 w-9 items-center rounded-full transition-colors focus:outline-none"
               :class="prim.auto_update ? 'bg-primary' : 'bg-muted'"
+              role="switch"
+              :aria-checked="prim.auto_update"
               @click="toggleAutoUpdate(prim)"
               :data-testid="`auto-update-toggle-${prim.id}`"
             >
@@ -138,7 +140,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted } from 'vue'
+import { ref, onMounted, onBeforeUnmount } from 'vue'
 import { useRouter } from 'vue-router'
 import { useApi } from '../composables/useApi'
 
@@ -259,5 +261,8 @@ async function toggleAutoUpdate(prim: LibraryPrimitive) {
   }
 }
 
+onBeforeUnmount(() => {
+  if (searchTimer) clearTimeout(searchTimer)
+})
 onMounted(loadPrimitives)
 </script>

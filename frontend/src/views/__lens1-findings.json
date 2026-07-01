@@ -1,0 +1,44 @@
+[
+  {
+    "severity": "minor",
+    "file": "frontend/src/views/SettingsObservabilityView.vue",
+    "line": 58,
+    "finding": "Using `:key=\"index\"` on `v-for=\"(header, index) in otlpHeaders\"` where items are dynamically added (`addHeader`) and removed (`removeHeader`) from the middle of the list. Index-as-key causes Vue to patch wrong DOM nodes on removal, mixing up input values during the transition.",
+    "fix": "Add a unique `id` field to each `HeaderRow` (e.g. incrementing counter or `crypto.randomUUID()`) and use `:key=\"header.id\"` instead of the array index."
+  },
+  {
+    "severity": "minor",
+    "file": "frontend/src/views/AdminEnvironmentProfilesView.vue",
+    "line": 122,
+    "finding": "Using `:key=\"idx\"` on `v-for=\"(env, idx) in formData.env_vars\"` with dynamic add/remove via `addEnvVar`/`removeEnvVar`. Same index-as-key issue on a mutable array.",
+    "fix": "Add a unique `_key` to each env var entry (incrementing counter) and use `:key=\"env._key\"`."
+  },
+  {
+    "severity": "minor",
+    "file": "frontend/src/views/SettingsHitlReviewView.vue",
+    "lines": [340, 341],
+    "finding": "`refreshTimer` and `countdownTimer` are declared as raw `let` variables at module scope instead of `ref()`, inconsistent with the component's otherwise fully reactive data model.",
+    "fix": "Declare as `const refreshTimer = ref<ReturnType<typeof setInterval> | null>(null)` and access via `.value`."
+  },
+  {
+    "severity": "minor",
+    "file": "frontend/src/views/SettingsMcpView.vue",
+    "line": 309,
+    "finding": "`keyMaskTimer` is declared as `let keyMaskTimer: ReturnType<typeof setInterval> | null = null` at module scope instead of using `ref()`. Inconsistent with surrounding reactive patterns.",
+    "fix": "Declare as `const keyMaskTimer = ref<ReturnType<typeof setInterval> | null>(null)`."
+  },
+  {
+    "severity": "minor",
+    "file": "frontend/src/views/PipelineTemplateGallery.vue",
+    "line": 300,
+    "finding": "`debounceTimer` is a module-level `let` variable with no cleanup on component unmount. If the component unmounts while a debounce timeout is pending, the callback executes against potentially stale component state.",
+    "fix": "Add `onUnmounted(() => { if (debounceTimer) clearTimeout(debounceTimer); })` to cancel pending debounce."
+  },
+  {
+    "severity": "minor",
+    "file": "frontend/src/views/SchemaEditorView.vue",
+    "line": 89,
+    "finding": "Using `:key=\"err\"` on `v-for=\"err in validationErrors\"` where duplicate error strings would cause duplicate-key warnings and incorrect DOM reuse.",
+    "fix": "Use `v-for=\"(err, idx) in validationErrors\" :key=\"idx\"` since this is a transient display-only list."
+  }
+]

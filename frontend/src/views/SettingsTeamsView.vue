@@ -88,7 +88,11 @@
           <div
             class="flex cursor-pointer items-center justify-between p-4"
             :class="{ 'border-b': expandedTeamId === team.id }"
+            role="button"
+            tabindex="0"
             @click="toggleExpand(team.id)"
+            @keydown.enter="toggleExpand(team.id)"
+            @keydown.space.prevent="toggleExpand(team.id)"
           >
             <div class="flex items-center gap-3">
               <svg
@@ -312,7 +316,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted } from 'vue'
+import { ref, onMounted, onBeforeUnmount } from 'vue'
 import { api } from '../lib/api/client'
 import type { components } from '../lib/api/client'
 import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
@@ -345,6 +349,7 @@ const createDescription = ref('')
 const creatingTeam = ref(false)
 const createError = ref<string | null>(null)
 const createSuccess = ref<string | null>(null)
+let teamsCreateTimeout: ReturnType<typeof setTimeout> | null = null
 
 const renameTeamId = ref<string | null>(null)
 const renameName = ref('')
@@ -468,7 +473,8 @@ async function createTeam() {
       createName.value = ''
       createDescription.value = ''
       await loadTeams()
-      setTimeout(() => { createSuccess.value = null; showCreateForm.value = false }, 1500)
+      if (teamsCreateTimeout) clearTimeout(teamsCreateTimeout)
+      teamsCreateTimeout = setTimeout(() => { createSuccess.value = null; showCreateForm.value = false }, 1500)
     }
   } catch (e: unknown) {
     createError.value = e instanceof Error ? e.message : String(e)
@@ -605,6 +611,10 @@ async function removeMember(teamId: string, member: MembershipResponse) {
     memberActionError.value[teamId] = `Remove failed: ${e instanceof Error ? e.message : String(e)}`
   }
 }
+
+onBeforeUnmount(() => {
+  if (teamsCreateTimeout) clearTimeout(teamsCreateTimeout)
+})
 
 onMounted(async () => {
   planStore.fetchPlan()

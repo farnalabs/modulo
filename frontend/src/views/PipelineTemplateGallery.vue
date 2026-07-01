@@ -218,7 +218,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref } from 'vue'
+import { ref, onBeforeUnmount } from 'vue'
 import { useRouter } from 'vue-router'
 import { useApi } from '../composables/useApi'
 import OwnershipPicker from '../components/OwnershipPicker.vue'
@@ -372,4 +372,8 @@ async function useTemplate() {
     creating.value = false
   }
 }
+
+onBeforeUnmount(() => {
+  if (debounceTimer) clearTimeout(debounceTimer)
+})
 </script>

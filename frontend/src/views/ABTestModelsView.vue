@@ -279,7 +279,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted, watch } from 'vue'
+import { ref, computed, onMounted, onBeforeUnmount, watch } from 'vue'
 import { api } from '../lib/api/client'
 import type { components } from '../lib/api/client'
 import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
@@ -321,6 +321,7 @@ const groupDescription = ref('')
 const variants = ref<VariantForm[]>([])
 const loading = ref(true)
 const error = ref<string | null>(null)
+const isUnmounted = ref(false)
 const running = ref(false)
 const savedGroupId = ref<string | null>(null)
 const promotingName = ref<string | null>(null)
@@ -553,7 +554,7 @@ async function runTest(groupId: string) {
 async function pollRunStatus(runId: string, variantName: string) {
   let status = 'pending'
 
-  while (!terminalStatuses.has(status)) {
+  while (!isUnmounted.value && !terminalStatuses.has(status)) {
     await delay(2000)
 
     try {
@@ -675,6 +676,10 @@ async function promoteWinner(variantName: string) {
     promotingName.value = null
   }
 }
+
+onBeforeUnmount(() => {
+  isUnmounted.value = true
+})
 
 onMounted(async () => {
   await Promise.all([
