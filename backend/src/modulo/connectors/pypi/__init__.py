@@ -1,6 +1,6 @@
 """PyPIConnector — async PyPI JSON/XML-RPC API connector for package metadata."""
 
-from typing import Any
+from typing import Any, cast
 
 import httpx
 
@@ -94,17 +94,18 @@ class PyPIConnector(ConnectorBase):
         text = q.filters.get("text")
         if not text:
             raise ValueError("PyPI search query requires 'text' in filters")
-        import xmlrpc.client
+        import defusedxml.xmlrpc
         spec = {"name": text, "summary": text}
         operator = q.filters.get("operator", "and")
-        xml_body = xmlrpc.client.dumps((spec, operator), "search")
+        defusedxml.xmlrpc.monkey_patch()
+        xml_body = defusedxml.xmlrpc.dumps((spec, operator), "search")
         async with httpx.AsyncClient(
             base_url=_API_BASE,
             timeout=30,
         ) as c:
             resp = await c.post("/", content=xml_body, headers={"Content-Type": "text/xml"})
             resp.raise_for_status()
-            results = xmlrpc.client.loads(resp.text)[0][0]
+            results: list[dict[str, Any]] = cast("list[dict[str, Any]]", defusedxml.xmlrpc.loads(resp.text)[0][0])
         records = []
         for r in results:
             records.append({

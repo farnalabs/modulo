@@ -59,7 +59,7 @@ class GiteaConnector(ConnectorBase):
             timeout=30,
         )
 
-    async def _get_missing_scopes(self) -> set[str]:
+    async def _get_missing_scopes(self) -> frozenset[str]:
         """Check the token's scopes against required scopes.
 
         Gitea's /api/v1/user endpoint doesn't return scope info in headers,
@@ -74,7 +74,7 @@ class GiteaConnector(ConnectorBase):
         if r.status_code == 403:
             return REQUIRED_SCOPES - {"read:repository"}
 
-        return set()
+        return frozenset()
 
     async def health_check(self) -> HealthResult:
         """Check API access by fetching the authenticated user."""
