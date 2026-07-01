@@ -12,6 +12,10 @@ code:
   - backend/src/modulo/api/routes/feedback.py
   - backend/src/modulo/core/feedback_manager/__init__.py
   - backend/src/modulo/db/models/feedback_record.py
+unit-tests:
+  - tests/unit/api/test_feedback_endpoint.py
+  - tests/unit/core/feedback_manager/test_feedback_manager.py
+  - tests/integration/feedback_manager/test_feedback_flow.py
 depends-on: [feat-evals-feedback-records]
 status: partial
 ---
@@ -103,8 +107,15 @@ status: partial
 
 ## Known Gaps
 
-- **Correction run checkpoint seeding**: Correction run creates a fresh run rather than seeding from original LangGraph checkpoint at target_node_id (per PRD 8.20: "pre-seeded with checkpoint state")
-- **No AI correction agent library primitive**: PRD 8.20 describes an agent that produces diagnosis + correction proposal + proposed eval case, but no code exists for it
-- **No `reject_routing_conflict` validation**: Gate-level validation for setting both `feedback_handler` and `reject_target` on the same gate not yet implemented
-- **No eval proposals UI**: Eval proposals queue with draft eval editor (PRD 8.20 ¶1495) not yet built
-- **BDD features placeholder only**: Both `feedback_system.feature` and `feedback_handler.feature` contain only placeholder scenarios
+- **Correction run checkpoint seeding**: Correction run creates a fresh run rather
+  than seeding from original LangGraph checkpoint at target_node_id
+  (per PRD 8.20: "pre-seeded with checkpoint state")
+- **No AI correction agent library primitive**: PRD 8.20 describes an agent that
+  produces diagnosis + correction proposal + proposed eval case, but no code
+  exists for it
+- **No `reject_routing_conflict` validation**: Gate-level validation for setting
+  both `feedback_handler` and `reject_target` on the same gate not yet implemented
+- **No eval proposals UI**: Eval proposals queue with draft eval editor
+  (PRD 8.20 ¶1495) not yet built
+- **BDD features placeholder only**: Both `feedback_system.feature` and
+  `feedback_handler.feature` contain only placeholder scenarios
