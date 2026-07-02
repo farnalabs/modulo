@@ -140,9 +140,10 @@ def get_event_bus() -> EventBus:
     """Return the module-level EventBus singleton (lazy init)."""
     if _event_bus is None:
         _set_event_bus(EventBus())
-    if _event_bus is None:
+    bus = _event_bus
+    if bus is None:
         raise RuntimeError("EventBus singleton accessed before initialization")
-    return _event_bus
+    return bus
 
 
 def configure_event_bus(redis_broker: RedisEventBroker | None = None) -> None:
