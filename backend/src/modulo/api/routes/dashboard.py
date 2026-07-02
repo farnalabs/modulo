@@ -623,30 +623,36 @@ async def daily_run_counts(
     principal: AuthenticatedPrincipal = Depends(get_current_user),
 ) -> dict[str, Any]:
     """Return daily run counts for the last N days, grouped by status."""
-    async with session.begin():
-        await set_rls_org(session, principal.organisation_id)
+    try:
+        async with session.begin():
+            await set_rls_org(session, principal.organisation_id)
 
-        cutoff = datetime.now(UTC) - timedelta(days=days)
+            cutoff = datetime.now(UTC) - timedelta(days=days)
 
-        result = await session.execute(
-            select(
-                cast(Run.created_at, Date).label("day"),
-                Run.status,
-                func.count().label("cnt"),
+            result = await session.execute(
+                select(
+                    cast(Run.created_at, Date).label("day"),
+                    Run.status,
+                    func.count().label("cnt"),
+                )
+                .where(
+                    Run.organisation_id == principal.organisation_id,
+                    Run.created_at >= cutoff,
+                )
+                .group_by(cast(Run.created_at, Date), Run.status)
+                .order_by(cast(Run.created_at, Date))
             )
-            .where(
-                Run.organisation_id == principal.organisation_id,
-                Run.created_at >= cutoff,
-            )
-            .group_by(cast(Run.created_at, Date), Run.status)
-            .order_by(cast(Run.created_at, Date))
+
+        daily: dict[str, dict[str, int]] = {}
+        for dr_row in result:
+            day = dr_row.day.isoformat()
+            if day not in daily:
+                daily[day] = {}
+            daily[day][dr_row.status] = dr_row.cnt
+
+        return {"daily_counts": daily, "days": days}
+    except SQLAlchemyError:
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="Feature is not available. Run database migrations to enable it.",
         )
-
-    daily: dict[str, dict[str, int]] = {}
-    for dr_row in result:
-        day = dr_row.day.isoformat()
-        if day not in daily:
-            daily[day] = {}
-        daily[day][dr_row.status] = dr_row.cnt
-
-    return {"daily_counts": daily, "days": days}
