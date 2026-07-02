@@ -115,6 +115,7 @@
     </aside>
 
     <main class="flex-1 overflow-auto bg-background pt-14 md:pt-0">
+      <Breadcrumb class="px-6 pt-4" />
       <router-view v-slot="{ Component, route }">
         <transition name="page" mode="out-in">
           <component :is="Component" :key="route.fullPath" />
@@ -130,6 +131,7 @@
 import { ref, computed, onMounted, watch, nextTick } from "vue";
 import { getAccessToken, clearAccessToken } from "../lib/api/client";
 import { usePlanStore } from "../stores/planStore";
+import Breadcrumb from "./Breadcrumb.vue";
 import LogoMark from "./LogoMark.vue";
 import RemyPanel from "./remy/RemyPanel.vue";
 import SidebarFooter from "./SidebarFooter.vue";
