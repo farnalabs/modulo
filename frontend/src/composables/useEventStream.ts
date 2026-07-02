@@ -1,20 +1,21 @@
 import { ref, onMounted, onUnmounted } from 'vue'
 import type { EventBusEvent } from '@/types/events'
 import { getHandlers } from '@/stores/syncRegistry'
+import { getAccessToken } from '@/lib/api/client'
 
 export type EventHandler = (event: EventBusEvent) => void
 
 const SSE_URL = '/api/v1/events'
 
 const connected = ref(false)
-let eventSource: EventSource | null = null
+let abortController: AbortController | null = null
 const handlers = new Map<string, Set<EventHandler>>()
 let reconnectAttempts = 0
 const MAX_RECONNECT_ATTEMPTS = 10
 let reconnectTimer: ReturnType<typeof setTimeout> | null = null
 
 function connect(): void {
-  if (eventSource) return
+  if (abortController) return
   if (reconnectTimer) {
     clearTimeout(reconnectTimer)
     reconnectTimer = null
@@ -23,50 +24,92 @@ function connect(): void {
   doConnect()
 }
 
-function doConnect(): void {
-  if (eventSource) eventSource.close()
-  eventSource = new EventSource(SSE_URL, { withCredentials: true })
-  eventSource.onopen = () => {
-    connected.value = true
-    reconnectAttempts = 0
+function scheduleReconnect(): void {
+  connected.value = false
+  reconnectAttempts++
+  if (reconnectAttempts > MAX_RECONNECT_ATTEMPTS) {
+    console.error('[EventBus] Max reconnect attempts reached')
+    return
   }
-  eventSource.onmessage = (event: MessageEvent) => {
-    let data: EventBusEvent
-    try {
-      data = JSON.parse(event.data)
-    } catch (e) {
-      console.warn('[EventBus] Failed to parse event', e instanceof Error ? e.message : String(e))
+  const delay = Math.min(1000 * Math.pow(2, reconnectAttempts - 1), 30000)
+  reconnectTimer = setTimeout(() => {
+    reconnectTimer = null
+    doConnect()
+  }, delay)
+}
+
+async function doConnect(): Promise<void> {
+  cleanup()
+  abortController = new AbortController()
+  const token = getAccessToken()
+  let reader: ReadableStreamDefaultReader<Uint8Array> | null = null
+
+  try {
+    const response = await fetch(SSE_URL, {
+      headers: {
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      },
+      signal: abortController.signal,
+    })
+
+    if (!response.ok || !response.body) {
+      scheduleReconnect()
       return
     }
-    const typeHandlers = handlers.get(data.type)
-    if (typeHandlers) {
-      for (const handler of typeHandlers) {
-        try { handler(data) } catch (e) {
-          console.error('[EventBus] Handler error', String(e))
+
+    connected.value = true
+    reconnectAttempts = 0
+
+    reader = response.body.getReader()
+    const decoder = new TextDecoder()
+    let buffer = ''
+    let currentEvent = ''
+
+    while (true) {
+      const { done, value } = await reader.read()
+      if (done) break
+
+      buffer += decoder.decode(value, { stream: true })
+      const lines = buffer.split('\n')
+      buffer = lines.pop() ?? ''
+
+      for (const line of lines) {
+        if (line.startsWith('event: ')) {
+          currentEvent = line.slice(7).trim()
+        } else if (line.startsWith('data: ')) {
+          const dataLine = line.slice(6)
+          try {
+            const data = JSON.parse(dataLine)
+            if (currentEvent === 'resource_changed') {
+              const typeHandlers = handlers.get(data.type)
+              if (typeHandlers) {
+                for (const handler of typeHandlers) {
+                  try { handler(data) } catch (e) {
+                    console.error('[EventBus] Handler error', String(e))
+                  }
+                }
+              }
+              try { dispatchToStore(data) } catch (e) {
+                console.error('[EventBus] dispatchToStore error', String(e))
+              }
+            }
+          } catch {
+            // Ignore parse errors on SSE data lines
+          }
+          currentEvent = ''
         }
       }
     }
-    try { dispatchToStore(data) } catch (e) {
-      console.error('[EventBus] dispatchToStore error', String(e))
-    }
-  }
-  eventSource.onerror = () => {
+  } catch (e: unknown) {
+    if (e instanceof Error && e.name === 'AbortError') return
+    scheduleReconnect()
+    return
+  } finally {
+    reader?.cancel().catch(() => {})
     connected.value = false
-    reconnectAttempts++
-    if (eventSource) {
-      eventSource.close()
-      eventSource = null
-    }
-    if (reconnectAttempts > MAX_RECONNECT_ATTEMPTS) {
-      console.error('[EventBus] Max reconnect attempts reached')
-      return
-    }
-    const delay = Math.min(1000 * Math.pow(2, reconnectAttempts - 1), 30000)
-    reconnectTimer = setTimeout(() => {
-      reconnectTimer = null
-      doConnect()
-    }, delay)
   }
+
+  scheduleReconnect()
 }
 
 function cleanup(): void {
@@ -74,9 +117,9 @@ function cleanup(): void {
     clearTimeout(reconnectTimer)
     reconnectTimer = null
   }
-  if (eventSource) {
-    eventSource.close()
-    eventSource = null
+  if (abortController) {
+    abortController.abort()
+    abortController = null
   }
   connected.value = false
 }
@@ -102,7 +145,7 @@ export const eventBus = {
   subscribe(resourceType: string, handler: EventHandler): () => void {
     if (!handlers.has(resourceType)) handlers.set(resourceType, new Set())
     handlers.get(resourceType)!.add(handler)
-    if (!eventSource) connect()
+    if (!abortController) connect()
     return () => { eventBus.unsubscribe(resourceType, handler) }
   },
   unsubscribe(resourceType: string, handler: EventHandler): void {
