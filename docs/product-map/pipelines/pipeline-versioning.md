@@ -38,8 +38,8 @@ status: partial
 ### Run Isolation
 
 - [x] Pipeline is locked (`SELECT ... FOR UPDATE`) during snapshot creation to prevent concurrent graph replacement
-- [ ] Active runs execute against their snapshot — live pipeline changes do not affect in-progress runs
-- [ ] Runs started before a snapshot is replaced continue using the snapshot they were created with
+- [x] Active runs execute against their snapshot — live pipeline changes do not affect in-progress runs
+- [x] Runs started before a snapshot is replaced continue using the snapshot they were created with
 - [ ] UI displays a warning when a user edits a pipeline while a run is `awaiting_human`
 
 ### Snapshot Querying
@@ -48,7 +48,7 @@ status: partial
 - [x] Listing supports pagination (page, page_size) and returns total count
 - [x] Individual snapshot can be retrieved by ID with full graph detail
 - [x] Snapshots created_at timestamp is recorded and displayable
-- [ ] Snapshots display their version number prominently in the admin UI
+- [x] Snapshots display their version number prominently in the admin UI (partial — shown in revert-to-manual dialog only, no dedicated admin page)
 
 ### Tagging and Notes
 
@@ -91,11 +91,21 @@ status: partial
 - [x] Snapshot creation fails if a referenced agent, connector, schema, or model backend is missing
 - [x] Concurrent snapshot creation for the same pipeline is serialised via row lock
 - [x] Missing or null environment_profile_id is handled (field is nullable)
+- [ ] Snapshot list returns 501 if pipeline_snapshots table does not exist
+- [ ] Snapshot detail returns 501 if pipeline_snapshots table does not exist
+- [ ] Snapshot tag returns 501 if pipeline_snapshots table does not exist
+- [ ] Snapshot delete returns 501 if pipeline_snapshots table does not exist
+- [ ] Snapshot rollback returns 501 if pipeline_snapshots table does not exist
+- [ ] Snapshot diff returns 501 if pipeline_snapshots table does not exist
+
+## QA History
+
+- 2026-07-02: Cross-cutting QA (index 57): Marked 3 run isolation behaviours [ ]→[x] (architecturally guaranteed — snapshot created at run-start via FOR UPDATE, run engine uses snapshot.graph_json, live edits do not affect in-flight runs). Added 6 error-path behaviour checkboxes (501 Not Implemented for missing DB table). Added ProgrammingError catches to 6 snapshot API routes. Added BDD scenario for empty-graph snapshot creation. Updated Known Gaps (improved descriptions for isolation lifecycle, concurrency testing gap, and version display limitation). Status: partial (5 known gaps remain, 2 UI behaviours untracked).
 
 ## Known Gaps
 
-- No integration tests for the full snapshot -> run -> live-edit -> isolation lifecycle
-- No concurrency tests for simultaneous snapshot creation and pipeline edit
+- No integration tests for the full snapshot → run → live-edit → isolation lifecycle (no test starts a run, edits the pipeline, then verifies the in-flight run still uses original snapshot)
+- No concurrency tests for simultaneous snapshot creation and pipeline edit (no test proves that concurrent graph edits are serialised by FOR UPDATE lock during snapshot creation)
 - Missing UI behaviour specs for snapshot version display in pipeline history view
 - Missing deletion protection lifecycle: what happens to snapshots when a referenced schema version is deprecated?
-- No coverage for snapshot creation boundary: what happens if graph has 0 nodes?
+- No dedicated admin UI page for browsing snapshot history — version numbers only shown in revert-to-manual dialog

@@ -91,3 +91,9 @@ Feature: Pipeline CRUD
     Given I am authenticated in org "acme"
     When I GET /api/pipelines/non-existent/snapshots
     Then the response status is 404
+
+  Scenario: Create snapshot from empty pipeline
+    Given org "acme" has pipeline "empty-pipeline" with no agents or connectors
+    When I start a run for pipeline "empty-pipeline"
+    Then a snapshot is created with version 1
+    And the snapshot has an empty graph with no nodes and no edges
