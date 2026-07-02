@@ -79,6 +79,8 @@ async def fix():
                     account.password_hash = pw
                     if not account.active:
                         account.active = True
+                    if not account.is_system_admin:
+                        account.is_system_admin = True
                     print(f'{email} updated with known password')
                 else:
                     display_name = email.split('@')[0]
@@ -88,6 +90,7 @@ async def fix():
                         display_name=display_name,
                         password_hash=pw,
                         auth_provider='local',
+                        is_system_admin=True,
                     )
                     s.add(account)
                     await s.flush()
