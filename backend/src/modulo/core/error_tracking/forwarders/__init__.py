@@ -45,14 +45,14 @@ def get_forwarder(type_name: str) -> BaseForwarder | None:
     return cls()
 
 
-__all__ = sorted([
+__all__ = [
     "BaseForwarder",
     "DatadogErrorForwarder",
     "ForwarderRegistry",
-    "get_forwarder",
     "LokiErrorForwarder",
     "OpsGenieErrorForwarder",
     "PagerDutyErrorForwarder",
     "RollbarErrorForwarder",
     "SentryErrorForwarder",
-])
+    "get_forwarder",
+]

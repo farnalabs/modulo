@@ -53,7 +53,7 @@ class AlertEngine:
         self._cooldowns: dict[_CooldownKey, float] = {}
         if redis_client is None:
             _log.warning(
-                "AlertEngine: No Redis client — cooldown state is in-memory only (not shared across processes)"
+                "AlertEngine: No Redis client — cooldown state is in-memory only (not shared across processes)",
             )
 
     async def evaluate(
@@ -76,7 +76,7 @@ class AlertEngine:
         result = await session.execute(
             select(ErrorNotificationRule).where(
                 ErrorNotificationRule.organisation_id == org_id,
-            )
+            ),
         )
         raw_rules: list[ErrorNotificationRule] = list(result.scalars().all())
         rules = [r for r in raw_rules if r.enabled]
@@ -112,7 +112,7 @@ class AlertEngine:
                     level=level,
                     count=count,
                     environment=environment,
-                )
+                ),
             )
 
         return triggered

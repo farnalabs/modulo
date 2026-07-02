@@ -54,7 +54,7 @@ async def _dispatch_in_app(
     org_id: uuid.UUID,
     alert: TriggeredAlert,
     sample_message: str,
-    admin_url: str,
+    _admin_url: str,
     session: AsyncSession,
 ) -> None:
     """Create an in-app notification via the notification_delivery_log table."""
@@ -76,7 +76,7 @@ async def _dispatch_in_app(
 
 
 async def _dispatch_email(
-    org_id: uuid.UUID,
+    _org_id: uuid.UUID,
     alert: TriggeredAlert,
     sample_message: str,
     admin_url: str,
