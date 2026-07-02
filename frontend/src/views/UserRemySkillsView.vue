@@ -1,14 +1,4 @@
 <template>
-  <FeatureGate feature-name="remy" required-tier="team">
-    <template #locked="{ tooltip }">
-      <div data-theme="agent" class="mx-auto max-w-6xl space-y-6 p-6">
-        <div class="mb-4 flex items-center gap-2 rounded-lg border border-warning/30 bg-warning/5 p-4 text-sm text-warning">
-          <LockIcon :locked="true" :tooltip="tooltip" />
-          <span>Remy is not available on your current plan.</span>
-        </div>
-      </div>
-    </template>
-
   <div data-theme="agent" class="mx-auto max-w-4xl space-y-6 p-6">
     <header class="flex items-center justify-between">
       <div>
@@ -54,7 +44,7 @@
               class="transition-colors hover:bg-muted/30"
             >
               <td class="px-4 py-3 font-medium">{{ skill.name }}</td>
-              <td class="px-4 py-3 text-muted-foreground max-w-xs truncate">{{ skill.description || '—' }}</td>
+              <td class="px-4 py-3 text-muted-foreground max-w-xs truncate" :title="skill.description ?? undefined">{{ skill.description || '—' }}</td>
               <td class="px-4 py-3">
                 <div class="flex flex-wrap gap-1">
                   <span
@@ -121,7 +111,6 @@
       @saved="loadSkills"
     />
   </div>
-  </FeatureGate>
 </template>
 
 <script setup lang="ts">
@@ -129,8 +118,6 @@ import { ref, onMounted } from 'vue'
 import { api } from '../lib/api/client'
 import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
-import FeatureGate from '../components/FeatureGate.vue'
-import LockIcon from '../components/LockIcon.vue'
 import RemySkillDialog from '../components/remy/RemySkillDialog.vue'
 import type { SkillItem } from '../types/remy'
 

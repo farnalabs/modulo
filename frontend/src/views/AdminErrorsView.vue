@@ -122,7 +122,7 @@
                   {{ group.level_peak }}
                 </span>
               </td>
-              <td class="max-w-xs truncate px-4 py-3 text-sm font-medium">
+              <td class="max-w-xs truncate px-4 py-3 text-sm font-medium" :title="group.sample_message || '(no message)'">
                 {{ group.sample_message || '(no message)' }}
               </td>
               <td class="px-4 py-3 text-sm">{{ group.count }}</td>

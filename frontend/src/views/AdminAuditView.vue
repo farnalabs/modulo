@@ -238,7 +238,7 @@
                 </span>
                 <span v-else class="text-muted-foreground/50">&mdash;</span>
               </td>
-              <td class="max-w-xs truncate px-4 py-3 text-sm text-muted-foreground">
+              <td class="max-w-xs truncate px-4 py-3 text-sm text-muted-foreground" :title="summarize(event)">
                 {{ summarize(event) }}
               </td>
               <td class="px-4 py-3 text-xs text-muted-foreground">
@@ -265,11 +265,11 @@
                   <div v-if="expandedEvent?.previous_hash" class="grid grid-cols-1 gap-2 sm:grid-cols-2">
                     <div>
                       <h4 class="mb-1 text-xs font-semibold uppercase text-muted-foreground">Previous Hash</h4>
-                      <code class="block truncate rounded bg-background px-2 py-1 text-xs font-mono">{{ expandedEvent.previous_hash }}</code>
+                      <code class="block truncate rounded bg-background px-2 py-1 text-xs font-mono" :title="expandedEvent.previous_hash">{{ expandedEvent.previous_hash }}</code>
                     </div>
                     <div>
                       <h4 class="mb-1 text-xs font-semibold uppercase text-muted-foreground">Event ID</h4>
-                      <code class="block truncate rounded bg-background px-2 py-1 text-xs font-mono">{{ expandedEvent.id }}</code>
+                      <code class="block truncate rounded bg-background px-2 py-1 text-xs font-mono" :title="expandedEvent.id">{{ expandedEvent.id }}</code>
                     </div>
                   </div>
                   <div v-if="expandedEvent?.request_id">
