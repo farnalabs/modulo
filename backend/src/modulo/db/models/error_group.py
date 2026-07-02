@@ -4,9 +4,10 @@ import uuid
 from datetime import datetime
 
 from sqlalchemy import CheckConstraint, DateTime, ForeignKey, Integer, String, UniqueConstraint, Uuid, func
-from sqlalchemy.orm import Mapped, mapped_column
+from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from modulo.db.models.base import OrgScoped
+from modulo.db.models.error_event import ErrorEvent
 
 
 class ErrorGroup(OrgScoped):
@@ -30,5 +31,8 @@ class ErrorGroup(OrgScoped):
     level_peak: Mapped[str] = mapped_column(String(20), nullable=False, server_default="error")
     sample_event_id: Mapped[uuid.UUID | None] = mapped_column(
         Uuid(), ForeignKey("error_events.id", ondelete="SET NULL")
+    )
+    sample_event: Mapped[ErrorEvent | None] = relationship(
+        "ErrorEvent", foreign_keys=[sample_event_id], lazy="joined"
     )
     assigned_to: Mapped[uuid.UUID | None] = mapped_column(Uuid(), ForeignKey("accounts.id", ondelete="SET NULL"))
