@@ -18,9 +18,8 @@ async def find_stale_orgs(
     base_url: str,
     admin_email: str,
     admin_password: str,
-    max_age_hours: float = 2,
 ) -> list[dict]:
-    """Find orgs whose slug starts with e2e- and are older than max_age_hours."""
+    """Find orgs whose slug starts with e2e-."""
     token = await get_admin_token(base_url, admin_email, admin_password)
     headers = {"Authorization": f"Bearer {token}"}
 
@@ -70,7 +69,7 @@ async def cleanup(
             if not org_id:
                 continue
             try:
-                resp = await client.post(f"/api/v1/admin/org/{org_id}/deletion-request")
+                resp = await client.delete(f"/api/v1/admin/orgs/{org_id}")
                 print(f"  Deleted {org.get('slug')}: {resp.status_code}")
             except Exception as e:
                 print(f"  Failed to delete {org.get('slug')}: {e}", file=sys.stderr)

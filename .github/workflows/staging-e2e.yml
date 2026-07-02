@@ -1,0 +1,80 @@
+name: Staging E2E
+
+on:
+  workflow_run:
+    workflows: [Staging Auto-Deploy]
+    types: [completed]
+  schedule:
+    - cron: '0 6 * * *'
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  PYTHONPATH: src
+
+defaults:
+  run:
+    working-directory: backend
+
+jobs:
+  cleanup-stale:
+    runs-on: [self-hosted, windows, docker]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v7
+        with:
+          python-version: "3.12"
+      - name: Clean stale E2E orgs
+        shell: powershell
+        run: |
+          uv run python -m tests.staging_e2e.cleanup
+
+  e2e:
+    needs: cleanup-stale
+    runs-on: [self-hosted, windows, docker]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v7
+        with:
+          python-version: "3.12"
+
+      - name: Wait for staging health
+        shell: powershell
+        timeout-minutes: 5
+        run: |
+          Write-Host "Waiting for staging.modulo.run ..."
+          for ($i=0; $i -lt 60; $i++) {
+            try {
+              $r = curl.exe -s -f "https://staging.modulo.run/healthz" 2>$null
+              if ($LASTEXITCODE -eq 0) { Write-Host "Staging ready after ${i}s"; exit 0 }
+            } catch {}
+            Start-Sleep -Seconds 5
+          }
+          Write-Host "Staging not ready after 300s"
+          exit 1
+
+      - name: Run staging E2E tests
+        shell: powershell
+        timeout-minutes: 30
+        run: |
+          uv run pytest tests/staging_e2e/ -v --timeout=120 `
+            --junit-xml=test-results/staging-e2e.xml `
+            -o "log_cli=true" -o "log_cli_level=INFO"
+        env:
+          STAGING_BASE_URL: https://staging.modulo.run
+
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: staging-e2e-results
+          path: backend/test-results/staging-e2e.xml
+
+      - name: Final cleanup
+        if: always()
+        shell: powershell
+        run: |
+          uv run python -m tests.staging_e2e.cleanup
