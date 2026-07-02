@@ -44,7 +44,7 @@ class ModelBackendBase(ABC):
         try:
             await asyncio.wait_for(
                 self.invoke([HumanMessage(content="ping")], max_tokens=1),
-                timeout=30.0,
+                timeout=10.0,
             )
             return HealthResult(ok=True)
         except TimeoutError:
