@@ -21,6 +21,7 @@ from sqlalchemy import select
 from tqdm import tqdm  # type: ignore[import-untyped]
 
 from modulo.db.models import (
+    Account,
     Agent,
     ConnectorInstance,
     LibraryPrimitive,
@@ -32,7 +33,6 @@ from modulo.db.models import (
     SchemaVersion,
     Stage,
     Team,
-    User,
 )
 from modulo.db.session import AsyncSessionLocal
 
@@ -42,7 +42,7 @@ PAGE_SIZE = 500
 ConflictStrategy = Literal["skip", "overwrite", "rename"]
 
 ENTITY_ORDER: list[tuple[str, type]] = [
-    ("users", User),
+    ("users", Account),
     ("teams", Team),
     ("stages", Stage),
     ("schemas", Schema),
