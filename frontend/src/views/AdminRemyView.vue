@@ -51,7 +51,7 @@
         <div class="mt-3 text-xs text-muted-foreground">
           <Tooltip :delay-duration="300">
             <TooltipTrigger as-child>
-              <a href="/admin/model-backends" class="underline hover:text-foreground">{{ $t('views.AdminRemyView.manage_model_backends') }}</a>
+              <router-link :to="{ name: 'admin-model-backends' }" class="underline hover:text-foreground">{{ $t('views.AdminRemyView.manage_model_backends') }}</router-link>
             </TooltipTrigger>
             <TooltipContent side="top">
               <p>{{ $t('views.AdminRemyView.add_edit_or_remove_api_keys_for_llm_providers') }}</p>
@@ -414,6 +414,7 @@
 <script setup lang="ts">
 import { ref, reactive, onMounted } from 'vue'
 import { api } from '../lib/api/client'
+import { formatApiError } from '../lib/api/formatError'
 import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
 import RemySkillDialog from '../components/remy/RemySkillDialog.vue'
@@ -481,10 +482,10 @@ async function saveAccessList() {
       },
     })
     if (err) {
-      accessError.value = `Failed to save access list: ${err}`
+      accessError.value = `Failed to save access list: ${formatApiError(err)}`
     }
   } catch (e: unknown) {
-    accessError.value = `Failed to save access list: ${e instanceof Error ? e.message : String(e)}`
+    accessError.value = `Failed to save access list: ${formatApiError(e)}`
   } finally {
     accessSaving.value = false
   }
@@ -522,10 +523,10 @@ async function saveModelConfig() {
       },
     })
     if (err) {
-      modelError.value = `Failed to save model config: ${err}`
+      modelError.value = `Failed to save model config: ${formatApiError(err)}`
     }
   } catch (e: unknown) {
-    modelError.value = `Failed to save model config: ${e instanceof Error ? e.message : String(e)}`
+    modelError.value = `Failed to save model config: ${formatApiError(e)}`
   } finally {
     modelSaving.value = false
   }
@@ -544,10 +545,10 @@ async function saveSystemPrompt() {
       body: { system_prompt: systemPrompt.value },
     })
     if (err) {
-      promptError.value = `Failed to save system prompt: ${err}`
+      promptError.value = `Failed to save system prompt: ${formatApiError(err)}`
     }
   } catch (e: unknown) {
-    promptError.value = `Failed to save system prompt: ${e instanceof Error ? e.message : String(e)}`
+    promptError.value = `Failed to save system prompt: ${formatApiError(e)}`
   } finally {
     promptSaving.value = false
   }
@@ -566,10 +567,10 @@ async function saveGuidance() {
       body: { additional_guidance: guidance.value },
     })
     if (err) {
-      guidanceError.value = `Failed to save guidance: ${err}`
+      guidanceError.value = `Failed to save guidance: ${formatApiError(err)}`
     }
   } catch (e: unknown) {
-    guidanceError.value = `Failed to save guidance: ${e instanceof Error ? e.message : String(e)}`
+    guidanceError.value = `Failed to save guidance: ${formatApiError(e)}`
   } finally {
     guidanceSaving.value = false
   }
@@ -587,7 +588,7 @@ async function loadUsers() {
       users.value.sort((a, b) => a.display_name.localeCompare(b.display_name))
     }
   } catch (e: unknown) {
-    const msg = e instanceof Error ? e.message : String(e)
+    const msg = formatApiError(e)
     console.warn('Failed to load users:', msg)
   }
 }
@@ -608,7 +609,7 @@ async function loadTeams() {
       teams.value.sort((a, b) => a.name.localeCompare(b.name))
     }
   } catch (e: unknown) {
-    const msg = e instanceof Error ? e.message : String(e)
+    const msg = formatApiError(e)
     console.warn('Failed to load teams:', msg)
   }
 }
@@ -628,12 +629,12 @@ async function toggleSkillActive(skill: SkillItem) {
       body: { active: !skill.active },
     })
     if (err) {
-      skillError.value = `Failed to toggle skill: ${err}`
+      skillError.value = `Failed to toggle skill: ${formatApiError(err)}`
       return
     }
     await loadSkills()
   } catch (e: unknown) {
-    skillError.value = `Failed to toggle skill: ${e instanceof Error ? e.message : String(e)}`
+    skillError.value = `Failed to toggle skill: ${formatApiError(e)}`
   } finally {
     skillToggling.value[skill.id] = false
   }
@@ -643,13 +644,13 @@ async function loadSkills() {
   try {
     const { data, error: err } = await (api as any).GET('/api/v1/admin/remy/skills')
     if (err) {
-      skillError.value = `Failed to load skills: ${err}`
+      skillError.value = `Failed to load skills: ${formatApiError(err)}`
     } else if (data) {
       const items = (data as { items?: SkillItem[] }).items
       skills.value = Array.isArray(items) ? items : []
     }
   } catch (e: unknown) {
-    skillError.value = `Failed to load skills: ${e instanceof Error ? e.message : String(e)}`
+    skillError.value = `Failed to load skills: ${formatApiError(e)}`
   }
 }
 
@@ -680,7 +681,7 @@ async function loadConfig() {
       guidance.value = cfg.additional_guidance || ''
     }
   } catch (e: unknown) {
-    const msg = e instanceof Error ? e.message : String(e)
+    const msg = formatApiError(e)
     loadError.value = `Failed to load Remy config: ${msg}`
   }
 }
@@ -702,7 +703,7 @@ async function loadProviders() {
       configured: configuredProviders.has(p.id),
     }))
   } catch (e: unknown) {
-    const msg = e instanceof Error ? e.message : String(e)
+    const msg = formatApiError(e)
     console.warn('Failed to load provider status:', msg)
   } finally {
     providersLoading.value = false
