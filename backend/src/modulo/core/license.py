@@ -26,14 +26,29 @@ from modulo.core.registry.crypto import verify_signature
 # Ed25519 public key (hex-encoded, 64 hex chars).
 # In production this would be set via environment or mounted secret.
 # This is the dev/test key — replace for production deployments.
-_LICENSE_PUBLIC_KEY_HEX: str = "9c832d6b2a767344b70d7be7484096b9acd71e9bdd21b3f76dc3b06b17e9035f"
+_LICENSE_PUBLIC_KEY_HEX: str = "e94cd572b813f157ee450767ae54d8375adaa1580b279435c45a3fa5a5549dd5"
 
 # In-memory store for the current validated license.
 _current_license: LicenseData | None = None
 
 
+def _validate_public_key_hex(hex_key: str) -> None:
+    if len(hex_key) != 64:
+        msg = f"License public key must be 64 hex chars, got {len(hex_key)}"
+        raise ValueError(msg)
+    try:
+        bytes.fromhex(hex_key)
+    except ValueError as exc:
+        raise ValueError(f"License public key is not valid hex: {exc}") from exc
+
+
+# Validate key format at module load time.
+_validate_public_key_hex(_LICENSE_PUBLIC_KEY_HEX)
+
+
 def set_public_key(hex_key: str) -> None:
     global _LICENSE_PUBLIC_KEY_HEX
+    _validate_public_key_hex(hex_key)
     _LICENSE_PUBLIC_KEY_HEX = hex_key
 
 
