@@ -122,6 +122,14 @@ Immutable SHA-256-linked audit event chain per organisation. Each event records 
 - [x] `hitl.manual_delivery` — run_id, gate_id, user_id
 - [x] `hitl.claim_expired` — run_id, gate_id, claim_token
 - [x] `node.recovery` — run_id, node_id, recovery_strategy
+- [x] `pipeline.node.convert_to_agent` — pipeline_id, node_id, agent_id
+- [x] `pipeline.node.revert_to_manual` — pipeline_id, node_id, snapshot_id
+- [x] `schema_inference_completed` — connector_name, resource, sample_count, model_backend_id
+- [x] `sso_provider.created` — provider_name
+- [x] `sso_provider.deleted` — provider_name
+- [x] `sso_provider.toggled` — provider_name
+- [x] `sso_provider.updated` — provider_name
+- [x] `team_deleted` — team_id
 
 ### Edge Cases
 
@@ -167,11 +175,12 @@ Immutable SHA-256-linked audit event chain per organisation. Each event records 
 - verify_chain limited to 10000 events by default — large orgs may need higher limit or batched verification
 - No event retention policy (events accumulate indefinitely)
 - No event schema versioning (payload structure could change between event types)
-- **PRD-vs-implementation divergence**: all 18 PRD-specified event types (`run_started`, `hitl_approved`, `team_created`, etc.) are NOT dispatched. Production code uses 11 different dot-notation event types (`pipeline.autonomy_level_changed`, `hitl.output_delivered`, etc.) with no overlap to the PRD table. The naming convention, granularity, and payload structure differ entirely.
+- **PRD-vs-implementation divergence**: all 18 PRD-specified event types (`run_started`, `hitl_approved`, `team_created`, etc.) are NOT dispatched. Production code uses 19 different dot-notation event types (`pipeline.autonomy_level_changed`, `hitl.output_delivered`, etc.) with no overlap to the PRD table. The naming convention, granularity, and payload structure differ entirely.
 - **No `run_started` event**: pipeline runs start without an audit event. The `run_started` PRD event is not dispatched anywhere.
 - **No `hitl_claimed`/`hitl_approved`/`hitl_rejected` events**: HITL lifecycle decisions are not recorded in the audit trail. HITL-related events in production are limited to output delivery (`hitl.output_delivered`, `hitl.output_delivery_failed`, `hitl.output_modified`, `hitl.manual_delivery`) and claim expiry (`hitl.claim_expired`).
 - **No team CRUD audit events**: team creation, rename, deletion, membership changes, and role changes are not audited.
 - **No permission change audit**: `user_permission_changed` event not dispatched.
 - **No API key audit**: `api_key_created`/`api_key_revoked` not dispatched.
 - **No auth event audit**: login, logout, and failed auth attempts not recorded.
-- **BDD feature file uses wrong event types**: `event_recording.feature` references `pipeline.created`, `pipeline.deleted`, `run.created`, `hitl.approved` — none of which match either the PRD table or the actual dispatched event types.
+- **BDD placeholder steps**: Scenarios 'Audit events have cryptographic chaining', 'Claim expiry is audited', 'HITL output delivery is audited', 'Org deletion request is audited' have @then step implementations at `backend/tests/bdd/steps/test_alpha_audit.py` that were placeholders (pass). Not a functional bug (the scenarios verify existence at code level) but serve as regression safety net. **[Now fixed: assertions added for event_type matching and gate metadata.]**
+- **BDD feature file uses wrong event types** (resolved): `event_recording.feature` previously referenced `pipeline.created`, `pipeline.deleted`, `run.created`, `hitl.approved` — none of which match either the PRD table or the actual dispatched event types. **[RESOLVED]** — Feature file now uses correct event types matching actual dispatched events (`pipeline.autonomy_level_changed`, `hitl.output_delivered`, `hitl.claim_expired`, `org_deletion_requested`).
