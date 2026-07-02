@@ -9,6 +9,13 @@
       </div>
     </template>
 
+    <PageTabs :tabs="[
+      { label: 'Evals', to: '/evals/editor' },
+      { label: 'Proposals', to: '/evals/proposals' },
+      { label: 'Variants', to: '/variants/compare' },
+      { label: 'AB Test', to: '/variants/ab-test' },
+    ]" />
+
     <div class="mx-auto max-w-6xl space-y-8 p-6">
     <LoadingSpinner v-if="loading" />
     <ErrorAlert v-else-if="error" :message="error" />
@@ -239,6 +246,7 @@ import ErrorAlert from '../components/shared/ErrorAlert.vue'
 import { usePlanStore } from '../stores/planStore'
 import FeatureGate from '../components/FeatureGate.vue'
 import LockIcon from '../components/LockIcon.vue'
+import PageTabs from "../components/PageTabs.vue"
 
 const planStore = usePlanStore()
 
