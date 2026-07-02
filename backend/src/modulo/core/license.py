@@ -32,8 +32,23 @@ _LICENSE_PUBLIC_KEY_HEX: str = "e94cd572b813f157ee450767ae54d8375adaa1580b279435
 _current_license: LicenseData | None = None
 
 
+def _validate_public_key_hex(hex_key: str) -> None:
+    if len(hex_key) != 64:
+        msg = f"License public key must be 64 hex chars, got {len(hex_key)}"
+        raise ValueError(msg)
+    try:
+        bytes.fromhex(hex_key)
+    except ValueError as exc:
+        raise ValueError(f"License public key is not valid hex: {exc}") from exc
+
+
+# Validate key format at module load time.
+_validate_public_key_hex(_LICENSE_PUBLIC_KEY_HEX)
+
+
 def set_public_key(hex_key: str) -> None:
     global _LICENSE_PUBLIC_KEY_HEX
+    _validate_public_key_hex(hex_key)
     _LICENSE_PUBLIC_KEY_HEX = hex_key
 
 

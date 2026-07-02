@@ -27,3 +27,5 @@
 - Integer fields that must be non-negative (retry counts, pages, sizes) → always add `Field(ge=0)`. Without it, negative values pass Pydantic validation and cause logic errors (e.g. `retry_count (0) >= -1` → immediate exhaustion).
 
 - PUT endpoints that accept only a subset of a JSON blob (e.g. `{nodes, edges}` from a graph editor) → merge with the existing blob, don't replace entirely. `db_obj.field | update_dict` preserves unmanaged metadata keys (viewport, zoom, comments) that would otherwise be silently deleted on every save.
+
+- Unit tests for standalone modules (`modulo.core.*`, `modulo.auth.*`, etc.) should import the module under test directly instead of going through `modulo.api.main`. Importing `modulo.api.main` at module level triggers MCP server startup and database connection pooling, causing the test suite to hang indefinitely. Prefer `from modulo.core.license import parse_and_verify` over `from modulo.api.main import app` in pure unit tests.
