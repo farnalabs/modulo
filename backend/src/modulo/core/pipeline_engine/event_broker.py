@@ -16,6 +16,7 @@ from stale subscriptions.
 """
 
 import asyncio
+import time
 import uuid
 import weakref
 from collections import deque
@@ -60,6 +61,7 @@ class RunEventBroker:
         self._buffer: deque[RunEvent] = deque(maxlen=_RING_BUFFER_SIZE)
         self._subscribers: weakref.WeakSet[asyncio.Queue[RunEvent | None]] = weakref.WeakSet()
         self._closed = False
+        self._created_at = time.monotonic()
         self._redis_broker = redis_broker
 
     @property
@@ -150,6 +152,16 @@ class BrokerRegistry:
         broker = self._brokers.pop(run_id, None)
         if broker is not None:
             broker.close()
+
+    def cleanup_stale(self, max_age_seconds: int = 3600) -> None:
+        """Remove brokers that have been closed or are older than max_age_seconds."""
+        now = time.monotonic()
+        stale = [
+            run_id for run_id, broker in list(self._brokers.items())
+            if not broker._closed and now - broker._created_at > max_age_seconds
+        ]
+        for run_id in stale:
+            self.close(run_id)
 
     @property
     def active_run_count(self) -> int:
