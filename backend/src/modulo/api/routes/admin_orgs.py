@@ -102,7 +102,8 @@ async def admin_list_orgs(
     if not current_user.is_system_admin:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="System admin role required")
 
-    orgs = await list_organisations(session)
+    async with session.begin():
+        orgs = await list_organisations(session)
     return [
         ListOrgItem(
             id=str(o.id),
@@ -222,13 +223,14 @@ async def admin_delete_org(
     if not current_user.is_system_admin:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="System admin role required")
 
-    org = await get_organisation(session, org_id)
-    if org is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Organisation not found")
+    async with session.begin():
+        org = await get_organisation(session, org_id)
+        if org is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Organisation not found")
 
-    deleted = await delete_organisation(session, org_id)
-    if not deleted:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Organisation not found")
+        deleted = await delete_organisation(session, org_id)
+        if not deleted:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Organisation not found")
 
 
 # ── Org License Management ──────────────────────────────────────────────
