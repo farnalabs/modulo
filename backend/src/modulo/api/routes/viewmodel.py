@@ -91,6 +91,8 @@ class PendingHitlGate(BaseModel):
     gate_id: str
     claimed_by: uuid.UUID | None
     expires_at: datetime | None
+    required_team_id: uuid.UUID | None = None
+    required_team_name: str | None = None
 
     model_config = {"from_attributes": True}
 
