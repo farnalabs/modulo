@@ -5,16 +5,21 @@ on:
     inputs:
       reason:
         description: 'Reason for production deploy'
-        required: false
-        default: 'Manual production deploy'
+        required: true
+
+permissions:
+  contents: read
+  id-token: write
+  deployments: write
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 jobs:
   deploy:
     name: Deploy ${{ matrix.env.name }}
+    environment: ${{ matrix.env.name }}
     runs-on: [self-hosted, windows, docker]
     strategy:
       matrix:
@@ -29,18 +34,28 @@ jobs:
             host: demo.modulo.run
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Log deploy reason
+        shell: powershell
+        run: Write-Host "Production deploy reason: ${{ inputs.reason }}"
 
       - name: Capture git metadata
         shell: powershell
         run: |
           "GIT_SHA=$(git rev-parse HEAD)" | Out-File $env:GITHUB_ENV -Encoding utf8 -Append
           "GIT_BRANCH=$(git rev-parse --abbrev-ref HEAD)" | Out-File $env:GITHUB_ENV -Encoding utf8 -Append
-          "GIT_COMMIT_TIMESTAMP=$(git log -1 --format=%cI)" | Out-File $env:GITHUB_ENV -Encoding utf8 -Append
-          "GIT_COMMIT_MESSAGE=$(git log -1 --format=%s)" | Out-File $env:GITHUB_ENV -Encoding utf8 -Append
-          "BUILD_TIMESTAMP=$(Get-Date -Format 'yyyy-MM-ddTHH:mm:ssZ')" | Out-File $env:GITHUB_ENV -Encoding utf8 -Append
+          $timestamp = git log -1 --format=%cI
+          Add-Content -Path $env:GITHUB_ENV -Value "GIT_COMMIT_TIMESTAMP=$timestamp" -Encoding utf8
+          $msg = git log -1 --format=%s
+          $msg = $msg -replace "`r`n"," " -replace "`n"," "
+          Add-Content -Path $env:GITHUB_ENV -Value "GIT_COMMIT_MESSAGE=$msg" -Encoding utf8
+          $buildTimestamp = (Get-Date -Format 'yyyy-MM-ddTHH:mm:ssZ')
+          Add-Content -Path $env:GITHUB_ENV -Value "BUILD_TIMESTAMP=$buildTimestamp" -Encoding utf8
 
-      - name: Deploy to ${{ matrix.env.name }}.modulo.run
-        working-directory: Development/Product
+      - id: deploy
+        name: Deploy to ${{ matrix.env.name }}.modulo.run
         shell: powershell
         run: |
           fly deploy --app ${{ matrix.env.fly-app }} --config ${{ matrix.env.fly-config }} --strategy immediate `
@@ -55,26 +70,35 @@ jobs:
         run: |
           $url = "https://${{ matrix.env.host }}/healthz"
           Write-Host "Waiting for $url ..."
-          for ($i=0; $i -lt 30; $i++) {
+          for ($i=0; $i -lt 60; $i++) {
             try {
-              $r = curl.exe -s -f $url 2>$null
+              $r = curl.exe -s --connect-timeout 5 --max-time 10 $url 2>&1
               if ($LASTEXITCODE -eq 0) { Write-Host "Healthy after ${i}s"; exit 0 }
-            } catch {}
+            } catch {
+              Write-Host "[$i/60] $url - health check failed: $_"
+            }
             Start-Sleep -Seconds 2
           }
-          Write-Host "Health check failed after 60s"
+          Write-Host "Health check failed after 120s"
           exit 1
 
       - name: Smoke test frontend
         shell: powershell
         run: |
-          $resp = curl.exe -s -m 10 "https://${{ matrix.env.host }}/" 2>$null
-          if ($resp -match '<title>Modulo') {
-            Write-Host "${{ matrix.env.host }} — OK"
-          } else {
-            Write-Host "${{ matrix.env.host }} — FAILED (title not found)"
-            exit 1
+          for ($attempt=1; $attempt -le 2; $attempt++) {
+            $resp = curl.exe -s -m 30 "https://${{ matrix.env.host }}/" 2>$null
+            if ($resp -match '<title>Modulo') { Write-Host "${{ matrix.env.host }} - OK"; exit 0 }
+            if ($attempt -eq 1) { Write-Host "Smoke test attempt 1 failed - retrying..."; Start-Sleep -Seconds 15 }
           }
+          Write-Host "${{ matrix.env.host }} - FAILED (title not found)"
+          exit 1
+
+      - name: Rollback on verification failure
+        if: failure() && steps.deploy.outcome == 'success'
+        shell: powershell
+        run: |
+          Write-Host "Deploy succeeded but verification failed - rolling back ${{ matrix.env.fly-app }}"
+          fly rollback --app ${{ matrix.env.fly-app }}
 
   consistency:
     name: Cross-environment check
@@ -82,43 +106,29 @@ jobs:
     runs-on: [self-hosted, windows, docker]
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
 
       - name: Verify deployed SHAs
         shell: powershell
         run: |
           $expectedSha = git rev-parse HEAD
+          $expectedSha7 = $expectedSha.Substring(0, 7)
           $allOk = $true
           foreach ($url in @("https://app.modulo.run", "https://demo.modulo.run")) {
             $info = curl.exe -s -m 10 "$url/api/v1/deployment" 2>$null
             if ($info) {
               $deployInfo = $info | ConvertFrom-Json
-              $deployedSha = if ($deployInfo.git_sha) { $deployInfo.git_sha.Substring(0, 7) } else { "?" }
-              $expectedSha7 = $expectedSha.Substring(0, 7)
+              $deployedSha = if ($deployInfo.git_sha -and $deployInfo.git_sha.Length -ge 7) { $deployInfo.git_sha.Substring(0, 7) } else { "?" }
               if ($deployedSha -ne $expectedSha7) {
-                Write-Host "$url — SHA MISMATCH: $deployedSha != $expectedSha7"
+                Write-Host "$url - SHA MISMATCH: $deployedSha != $expectedSha7"
                 $allOk = $false
               } else {
-                Write-Host "$url — SHA match: $deployedSha"
+                Write-Host "$url - SHA match: $deployedSha"
               }
             } else {
-              Write-Host "$url — no deployment info available"
+              Write-Host "$url - no deployment info available"
               $allOk = $false
             }
           }
           if (-not $allOk) { exit 1 }
-
-  # Future release stages — add as needs: [consistency]
-  # publish-pypi:
-  #   needs: consistency
-  #   runs-on: ubuntu-latest
-  #   steps:
-  #     - uses: actions/checkout@v4
-  #     - name: Publish to PyPI
-  #       run: ...
-
-  # publish-dockerhub:
-  #   needs: consistency
-  #   runs-on: ubuntu-latest
-  #   steps:
-  #     - name: Publish to Docker Hub
-  #       run: ...
