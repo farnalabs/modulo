@@ -311,7 +311,7 @@ async function detectPlaceholders() {
           <input
             v-model="form.default"
             class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm"
-            ::placeholder="$t('components.pipeline.composite.PortDefinitionPanel.formtype_number_07_default_value')"
+            :placeholder="$t('components.pipeline.composite.PortDefinitionPanel.formtype_number_07_default_value')"
             :type="form.type === 'number' ? 'number' : 'text'"
           />
         </div>
