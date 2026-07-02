@@ -126,6 +126,15 @@ def _recreate_fks() -> None:
         )
 
 
+def _users_table_exists() -> bool:
+    """Check if the old ``users`` table exists (fresh DB vs migration scenario)."""
+    conn = op.get_bind()
+    result = conn.execute(
+        sa.text("SELECT EXISTS (SELECT FROM information_schema.tables WHERE table_schema = 'public' AND table_name = 'users')")
+    ).scalar()
+    return bool(result)
+
+
 def upgrade() -> None:
     # 1. Create accounts table
     op.create_table(
@@ -169,6 +178,12 @@ def upgrade() -> None:
     )
     op.create_index(op.f("ix_org_memberships_account_id"), "org_memberships", ["account_id"], unique=False)
     op.create_index(op.f("ix_org_memberships_organisation_id"), "org_memberships", ["organisation_id"], unique=False)
+
+    # Steps 3-9 only apply when migrating from the old `users` table schema.
+    # On a fresh database the `users` table doesn't exist — just create the
+    # new tables and let the seed functions populate them.
+    if not _users_table_exists():
+        return
 
     # 3. Migrate data from users -> accounts
     # Use DISTINCT ON email in case the same email exists in multiple orgs.

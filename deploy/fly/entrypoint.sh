@@ -28,8 +28,8 @@ async def fix():
             await s.execute(text('CREATE TABLE IF NOT EXISTS alembic_version (version_num VARCHAR(255) NOT NULL PRIMARY KEY)'))
             await s.execute(text(\"DELETE FROM alembic_version WHERE version_num = '0037_agent_columns'\"))
 asyncio.run(fix())
-" 2>&1 || echo "WARNING: Alembic prep step failed — continuing anyway"
-.venv/bin/alembic upgrade heads || echo "WARNING: Migration failed — continuing anyway"
+" 2>&1
+.venv/bin/alembic upgrade heads
 
 echo "=== Applying schema patches (columns missing from base migrations) ==="
 .venv/bin/python3 -c "
@@ -47,7 +47,7 @@ async def fix():
             await s.execute(text(\"ALTER TABLE agents ADD COLUMN IF NOT EXISTS library_id UUID\"))
             print('Schema patches applied')
 asyncio.run(fix())
-" 2>&1 || echo "WARNING: Schema patch step failed — continuing anyway"
+" 2>&1
 
 echo "=== Admin user seeding handled by backend lifespan startup (_seed_modulo_users) ==="
 
