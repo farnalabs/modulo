@@ -176,7 +176,7 @@
                   <button
                     class="rounded p-1 text-muted-foreground hover:bg-accent"
                     data-testid="admin-views-duplicate"
-                    ::aria-label="$t('views.AdminViewsView.duplicate_view')"
+                    :aria-label="$t('views.AdminViewsView.duplicate_view')"
                     title="Duplicate"
                     @click="duplicateView(v)"
                   >
@@ -187,7 +187,7 @@
                   <button
                     class="rounded p-1 text-muted-foreground hover:bg-accent"
                     data-testid="admin-views-edit"
-                    ::aria-label="$t('views.AdminViewsView.edit_view')"
+                    :aria-label="$t('views.AdminViewsView.edit_view')"
                     :title="$t('views.AdminViewsView.edit_view_1')"
                     @click="openEditForm(v)"
                   >
@@ -198,7 +198,7 @@
                   <button
                     class="rounded p-1 text-destructive hover:bg-destructive/10"
                     data-testid="admin-views-delete"
-                    ::aria-label="$t('views.AdminViewsView.delete_view')"
+                    :aria-label="$t('views.AdminViewsView.delete_view')"
                     :title="$t('views.AdminViewsView.delete_view_1')"
                     @click="confirmDelete(v)"
                   >
