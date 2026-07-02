@@ -9,6 +9,7 @@ from collections.abc import Sequence
 
 import sqlalchemy as sa
 from alembic import op
+from sqlalchemy.dialects import postgresql
 
 revision: str = "0055_error_forwarder_configs"
 down_revision: str | Sequence[str] | None = "0054_error_notification_rules"
@@ -27,7 +28,7 @@ def upgrade() -> None:
         ),
         sa.Column("forwarder_type", sa.String(50), nullable=False),
         sa.Column("enabled", sa.Boolean(), nullable=False, server_default=sa.text("false")),
-        sa.Column("config_json", sa.JSONB(), nullable=True),
+        sa.Column("config_json", postgresql.JSONB(), nullable=True),
         sa.Column("last_test_at", sa.DateTime(timezone=True), nullable=True),
         sa.Column("last_test_ok", sa.Boolean(), nullable=True),
         sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.func.current_timestamp(), nullable=False),

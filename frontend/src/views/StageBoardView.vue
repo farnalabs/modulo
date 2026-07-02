@@ -150,8 +150,9 @@
                   <button
                     v-if="stage.position > 0"
                     data-testid="stage-board-move-left"
-                    class="rounded p-1 text-muted-foreground hover:bg-accent hover:text-foreground"
+                    class="rounded p-1 text-muted-foreground hover:bg-accent hover:text-foreground disabled:opacity-30"
                     title="Move to previous stage"
+                    :disabled="movingPipelines[pipeline.id]"
                     @click.stop="movePipeline(pipeline, -1)"
                   >
                     <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="15 18 9 12 15 6"/></svg>
@@ -159,8 +160,9 @@
                   <button
                     v-if="stage.position < maxStagePosition"
                     data-testid="stage-board-move-right"
-                    class="rounded p-1 text-muted-foreground hover:bg-accent hover:text-foreground"
+                    class="rounded p-1 text-muted-foreground hover:bg-accent hover:text-foreground disabled:opacity-30"
                     title="Move to next stage"
+                    :disabled="movingPipelines[pipeline.id]"
                     @click.stop="movePipeline(pipeline, 1)"
                   >
                     <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="9 18 15 12 9 6"/></svg>
@@ -491,6 +493,8 @@ async function loadTeams() {
   }
 }
 
+const movingPipelines = ref<Record<string, boolean>>({})
+
 async function movePipeline(pipeline: any, direction: number) {
   const currentStage = stages.value.find(s => s.id === pipeline.stage_id)
   if (!currentStage) return
@@ -499,11 +503,15 @@ async function movePipeline(pipeline: any, direction: number) {
   const targetIdx = currentIdx + direction
   if (targetIdx < 0 || targetIdx >= sortedStages.length) return
   const targetStage = sortedStages[targetIdx]
+  const prevStageId = pipeline.stage_id
+  movingPipelines.value[pipeline.id] = true
   try {
     await patch(`/api/v1/pipelines/${pipeline.id}`, { stage_id: targetStage.id })
     pipeline.stage_id = targetStage.id
   } catch {
-    // Move failed silently
+    pipeline.stage_id = prevStageId
+  } finally {
+    movingPipelines.value[pipeline.id] = false
   }
 }
 

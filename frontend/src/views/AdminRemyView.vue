@@ -258,15 +258,16 @@
                   </td>
                   <td class="px-4 py-3">
                     <button
-                      class="inline-flex items-center gap-1.5 rounded-full px-2.5 py-0.5 text-xs font-medium transition-colors"
+                      class="inline-flex items-center gap-1.5 rounded-full px-2.5 py-0.5 text-xs font-medium transition-colors disabled:opacity-50"
                       :class="skill.active ? 'bg-success/10 text-success' : 'bg-muted text-muted-foreground'"
+                      :disabled="skillToggling[skill.id]"
                       @click="toggleSkillActive(skill)"
                     >
                       <span
                         class="h-1.5 w-1.5 rounded-full"
                         :class="skill.active ? 'bg-success' : 'bg-muted-foreground'"
                       />
-                      {{ skill.active ? 'Active' : 'Inactive' }}
+                      {{ skillToggling[skill.id] ? '...' : (skill.active ? 'Active' : 'Inactive') }}
                     </button>
                   </td>
                   <td class="px-4 py-3 text-right">
@@ -470,22 +471,25 @@ async function saveGuidance() {
 const skills = ref<SkillItem[]>([])
 const skillError = ref<string | null>(null)
 const skillDialogRef = ref<InstanceType<typeof RemySkillDialog> | null>(null)
+const skillToggling = ref<Record<string, boolean>>({})
 
 async function toggleSkillActive(skill: SkillItem) {
-  const newActive = !skill.active
+  skillToggling.value[skill.id] = true
   skillError.value = null
   try {
     const { error: err } = await (api as any).PUT('/api/v1/admin/remy/skills/{skill_id}', {
       params: { path: { skill_id: skill.id } },
-      body: { active: newActive },
+      body: { active: !skill.active },
     })
     if (err) {
       skillError.value = `Failed to toggle skill: ${err}`
       return
     }
-    skill.active = newActive
+    await loadSkills()
   } catch (e: unknown) {
     skillError.value = `Failed to toggle skill: ${e instanceof Error ? e.message : String(e)}`
+  } finally {
+    skillToggling.value[skill.id] = false
   }
 }
 

@@ -64,8 +64,9 @@
               </td>
               <td class="px-4 py-3">
                 <button
-                  class="inline-flex items-center gap-1.5 rounded-full px-2.5 py-0.5 text-xs font-medium transition-colors"
+                  class="inline-flex items-center gap-1.5 rounded-full px-2.5 py-0.5 text-xs font-medium transition-colors disabled:opacity-50"
                   :class="t.active ? 'bg-success/10 text-success hover:bg-success/20' : 'bg-muted text-muted-foreground hover:bg-muted/80'"
+                  :disabled="triggerToggling[t.id]"
                   data-testid="settings-triggers-toggle"
                   @click="toggleActive(t)"
                 >
@@ -73,7 +74,7 @@
                     class="h-1.5 w-1.5 rounded-full"
                     :class="t.active ? 'bg-success' : 'bg-muted-foreground'"
                   />
-                  {{ t.active ? 'Active' : 'Inactive' }}
+                  {{ triggerToggling[t.id] ? '...' : (t.active ? 'Active' : 'Inactive') }}
                 </button>
               </td>
               <td class="px-4 py-3 text-muted-foreground">
@@ -634,7 +635,10 @@ async function deleteTrigger() {
   }
 }
 
+const triggerToggling = ref<Record<string, boolean>>({})
+
 async function toggleActive(trigger: TriggerItem) {
+  triggerToggling.value[trigger.id] = true
   try {
     const { error: err } = await api.POST('/api/v1/triggers/{trigger_id}/toggle', {
       params: { path: { trigger_id: trigger.id } },
@@ -646,6 +650,8 @@ async function toggleActive(trigger: TriggerItem) {
     await loadTriggers()
   } catch (e: unknown) {
     error.value = `Error toggling trigger: ${e instanceof Error ? e.message : String(e)}`
+  } finally {
+    triggerToggling.value[trigger.id] = false
   }
 }
 

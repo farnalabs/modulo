@@ -114,12 +114,14 @@ def problem_from_http_exception(
     lookup = {
         400: ProblemType.BAD_REQUEST,
         401: ProblemType.UNAUTHORIZED,
+        402: ProblemType.FEATURE_REQUIRED,
         403: ProblemType.FORBIDDEN,
         404: ProblemType.NOT_FOUND,
         405: ProblemType.BAD_REQUEST,
         409: ProblemType.CONFLICT,
         422: ProblemType.VALIDATION_ERROR,
         429: ProblemType.RATE_LIMITED,
+        501: ProblemType.MIGRATION_REQUIRED,
     }
     problem_type = lookup.get(status, ProblemType.INTERNAL_ERROR)
     return ProblemDetail.from_type(

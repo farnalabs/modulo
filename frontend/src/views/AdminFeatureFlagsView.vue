@@ -128,7 +128,7 @@
                         @click.stop="toggleFlag(flag)"
                         @keydown.enter="toggleFlag(flag)"
                         @keydown.space.prevent="toggleFlag(flag)"
-                        :class="flag.currently_active ? 'bg-primary' : 'bg-input'"
+                        :class="flagToggling[flag.name] ? 'bg-muted-foreground/50' : (flag.currently_active ? 'bg-primary' : 'bg-input')"
                       >
                         <span
                           class="inline-block h-4 w-4 rounded-full bg-background shadow-sm transition-transform"
@@ -333,7 +333,10 @@ async function loadFlags() {
   }
 }
 
+const flagToggling = ref<Record<string, boolean>>({})
+
 async function toggleFlag(flag: FlagItem) {
+  flagToggling.value[flag.name] = true
   const enabled = !flag.currently_active
   const { error: err } = await (api as any).PUT('/api/v1/admin/feature-flags/{flag_name}', {
     params: { path: { flag_name: flag.name } },
@@ -341,9 +344,11 @@ async function toggleFlag(flag: FlagItem) {
   })
   if (err) {
     error.value = `Failed to toggle flag: ${err}`
+    flagToggling.value[flag.name] = false
     return
   }
   await loadFlags()
+  flagToggling.value[flag.name] = false
 }
 
 onMounted(() => {

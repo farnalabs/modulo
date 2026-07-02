@@ -238,7 +238,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted, onBeforeUnmount } from 'vue'
+import { ref, computed, onMounted } from 'vue'
 import { api } from '../lib/api/client'
 import { usePlanStore } from '../stores/planStore'
 import FeatureGate from '../components/FeatureGate.vue'
@@ -421,6 +421,9 @@ async function saveTeamBudget(team: TeamBudgetRow) {
     })
     if (err) {
       team.saveError = `Failed to save: ${err}`
+    } else {
+      budgetSaveSuccess.value = true
+      setTimeout(() => { budgetSaveSuccess.value = false }, 3000)
     }
   } catch (e: unknown) {
     team.saveError = `Failed to save: ${e instanceof Error ? e.message : String(e)}`
@@ -449,7 +452,8 @@ async function saveBudget() {
   }
 }
 
-function toggleThreshold(threshold: number) {
+async function toggleThreshold(threshold: number) {
+  const prev = [...settings.value.alertThresholds]
   const idx = settings.value.alertThresholds.indexOf(threshold)
   if (idx >= 0) {
     settings.value.alertThresholds.splice(idx, 1)
@@ -458,44 +462,51 @@ function toggleThreshold(threshold: number) {
     settings.value.alertThresholds.sort((a, b) => a - b)
   }
   thresholdSaveError.value = null
-  saveSettingsField({ alertThresholds: settings.value.alertThresholds })
+  try {
+    await (api as any).PUT('/api/v1/admin/costs/controls', { body: { alertThresholds: settings.value.alertThresholds } })
+  } catch {
+    settings.value.alertThresholds = prev
+    thresholdSaveError.value = 'Failed to save thresholds'
+  }
 }
 
-function toggleCircuitBreaker() {
-  settings.value.circuitBreakerEnabled = !settings.value.circuitBreakerEnabled
+async function toggleCircuitBreaker() {
+  const prev = settings.value.circuitBreakerEnabled
+  settings.value.circuitBreakerEnabled = !prev
   circuitBreakerSaveError.value = null
-  saveSettingsField({ circuitBreakerEnabled: settings.value.circuitBreakerEnabled })
+  try {
+    await (api as any).PUT('/api/v1/admin/costs/controls', { body: { circuitBreakerEnabled: settings.value.circuitBreakerEnabled } })
+  } catch {
+    settings.value.circuitBreakerEnabled = prev
+    circuitBreakerSaveError.value = 'Failed to save circuit breaker'
+  }
 }
 
-function onCurrencyChange(e: Event) {
+async function onCurrencyChange(e: Event) {
   const target = e.target as HTMLSelectElement
+  const prev = settings.value.currency
   settings.value.currency = target.value as 'USD' | 'EUR' | 'GBP'
   currencySaveError.value = null
-  saveSettingsField({ currency: settings.value.currency })
+  try {
+    await (api as any).PUT('/api/v1/admin/costs/controls', { body: { currency: settings.value.currency } })
+  } catch {
+    settings.value.currency = prev
+    currencySaveError.value = 'Failed to save currency'
+  }
 }
 
-function onBillingPeriodChange(e: Event) {
+async function onBillingPeriodChange(e: Event) {
   const target = e.target as HTMLSelectElement
+  const prev = settings.value.billingPeriod
   settings.value.billingPeriod = target.value as 'monthly' | 'quarterly' | 'annual'
   periodSaveError.value = null
-  saveSettingsField({ billingPeriod: settings.value.billingPeriod })
+  try {
+    await (api as any).PUT('/api/v1/admin/costs/controls', { body: { billingPeriod: settings.value.billingPeriod } })
+  } catch {
+    settings.value.billingPeriod = prev
+    periodSaveError.value = 'Failed to save billing period'
+  }
 }
-
-let saveSettingsTimeout: ReturnType<typeof setTimeout> | null = null
-async function saveSettingsField(field: Partial<ControlsSettings>) {
-  if (saveSettingsTimeout) clearTimeout(saveSettingsTimeout)
-  saveSettingsTimeout = setTimeout(async () => {
-    try {
-      await (api as any).PUT('/api/v1/admin/costs/controls', { body: field })
-    } catch {
-      // Background save — errors shown inline
-    }
-  }, 500)
-}
-
-onBeforeUnmount(() => {
-  if (saveSettingsTimeout) clearTimeout(saveSettingsTimeout)
-})
 
 onMounted(() => {
   planStore.fetchPlan()

@@ -9,7 +9,7 @@ from .tenant_setup import TenantContext
 
 @pytest.mark.asyncio
 async def test_login_succeeds(tenant: TenantContext) -> None:
-    async with httpx.AsyncClient(base_url=tenant.base_url, verify=False) as client:
+    async with httpx.AsyncClient(base_url=tenant.base_url, verify=False, timeout=60.0) as client:
         resp = await client.post(
             "/api/v1/auth/login",
             json={"email": tenant.user_email, "password": tenant.user_password},
@@ -21,7 +21,7 @@ async def test_login_succeeds(tenant: TenantContext) -> None:
 
 @pytest.mark.asyncio
 async def test_login_wrong_password_fails(tenant: TenantContext) -> None:
-    async with httpx.AsyncClient(base_url=tenant.base_url, verify=False) as client:
+    async with httpx.AsyncClient(base_url=tenant.base_url, verify=False, timeout=60.0) as client:
         resp = await client.post(
             "/api/v1/auth/login",
             json={"email": tenant.user_email, "password": "wrong-password-123"},
@@ -31,7 +31,7 @@ async def test_login_wrong_password_fails(tenant: TenantContext) -> None:
 
 @pytest.mark.asyncio
 async def test_login_wrong_email_fails(tenant: TenantContext) -> None:
-    async with httpx.AsyncClient(base_url=tenant.base_url, verify=False) as client:
+    async with httpx.AsyncClient(base_url=tenant.base_url, verify=False, timeout=60.0) as client:
         resp = await client.post(
             "/api/v1/auth/login",
             json={"email": "nonexistent@e2e.modulo", "password": "some-password"},
@@ -41,7 +41,6 @@ async def test_login_wrong_email_fails(tenant: TenantContext) -> None:
 
 @pytest.mark.asyncio
 async def test_authenticated_endpoint_with_valid_token(tenant_client: httpx.AsyncClient) -> None:
-    """Using the tenant_client fixture (already authenticated), call an endpoint."""
     resp = await tenant_client.get("/api/v1/me")
     assert resp.status_code == 200
     me = resp.json()
@@ -50,6 +49,6 @@ async def test_authenticated_endpoint_with_valid_token(tenant_client: httpx.Asyn
 
 @pytest.mark.asyncio
 async def test_authenticated_endpoint_without_token(tenant: TenantContext) -> None:
-    async with httpx.AsyncClient(base_url=tenant.base_url, verify=False) as client:
+    async with httpx.AsyncClient(base_url=tenant.base_url, verify=False, timeout=60.0) as client:
         resp = await client.get("/api/v1/me")
     assert resp.status_code == 401

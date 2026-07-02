@@ -121,7 +121,10 @@ function moveDown(index: number) {
   emit("update:ports", updated);
 }
 
+const detectLoading = ref(false)
+
 async function detectPlaceholders() {
+  detectLoading.value = true
   try {
     const result = await post<{ ports: ParameterPort[] }>(
       "/api/v1/composite-templates/detect-params",
@@ -133,7 +136,9 @@ async function detectPlaceholders() {
       emit("update:ports", [...props.ports, ...newPorts]);
     }
   } catch {
-    // Silently fail - detection is best-effort
+    // Best-effort detection - user can retry
+  } finally {
+    detectLoading.value = false
   }
 }
 </script>
@@ -144,11 +149,12 @@ async function detectPlaceholders() {
       <h3 class="text-sm font-semibold">Parameter Ports</h3>
       <div class="flex gap-1">
         <button
-          class="rounded-md border border-input px-2 py-1 text-xs hover:bg-accent"
+          class="rounded-md border border-input px-2 py-1 text-xs hover:bg-accent disabled:opacity-50"
           title="Scan prompts for {{parameter.*}} placeholders"
+          :disabled="detectLoading"
           @click="detectPlaceholders"
         >
-          Detect
+          {{ detectLoading ? '...' : 'Detect' }}
         </button>
         <button
           class="rounded-md bg-indigo-600 px-2 py-1 text-xs font-medium text-white hover:bg-indigo-500"

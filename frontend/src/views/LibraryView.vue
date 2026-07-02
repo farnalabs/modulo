@@ -80,10 +80,11 @@
           <div v-if="prim.forked_from" class="flex items-center gap-2 mb-3">
             <span class="text-xs text-muted-foreground">Auto-update</span>
             <button
-              class="relative inline-flex h-5 w-9 items-center rounded-full transition-colors focus:outline-none"
+              class="relative inline-flex h-5 w-9 items-center rounded-full transition-colors focus:outline-none disabled:opacity-50"
               :class="prim.auto_update ? 'bg-primary' : 'bg-muted'"
               role="switch"
               :aria-checked="prim.auto_update"
+              :disabled="toggleLoading[prim.id]"
               @click="toggleAutoUpdate(prim)"
               :data-testid="`auto-update-toggle-${prim.id}`"
             >
@@ -250,14 +251,20 @@ function viewPrimitive(prim: LibraryPrimitive) {
   router.push({ name: 'library-pipeline-wizard', params: { id: prim.id } })
 }
 
+const toggleLoading = ref<Record<string, boolean>>({})
+
 async function toggleAutoUpdate(prim: LibraryPrimitive) {
   const newValue = !prim.auto_update
+  toggleLoading.value[prim.id] = true
   try {
-    await patch<LibraryPrimitive>(`/api/v1/libraries/${prim.id}`, { auto_update: newValue })
-    prim.auto_update = newValue
+    const data = await patch<LibraryPrimitive>(`/api/v1/libraries/${prim.id}`, { auto_update: newValue })
+    const idx = primitives.value.findIndex(x => x.id === prim.id)
+    if (idx !== -1) primitives.value[idx] = data
   } catch (e) {
     const msg = e instanceof Error ? e.message : 'Failed to toggle auto-update'
     error.value = msg
+  } finally {
+    toggleLoading.value[prim.id] = false
   }
 }
 
