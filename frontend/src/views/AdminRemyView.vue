@@ -339,7 +339,14 @@
                 class="hover:bg-muted/30 transition-colors"
               >
                 <td class="px-4 py-3 font-medium">{{ skill.name }}</td>
-                <td class="px-4 py-3 text-muted-foreground max-w-xs truncate" :title="skill.description ?? undefined">{{ skill.description || '—' }}</td>
+                <Tooltip :delay-duration="300">
+                  <TooltipTrigger as-child>
+                    <td class="px-4 py-3 text-muted-foreground max-w-xs truncate">{{ skill.description || '—' }}</td>
+                  </TooltipTrigger>
+                  <TooltipContent side="top" class="max-w-xs">
+                    <p>{{ skill.description || '—' }}</p>
+                  </TooltipContent>
+                </Tooltip>
                 <td class="px-4 py-3">
                   <div class="flex flex-wrap gap-1">
                     <span

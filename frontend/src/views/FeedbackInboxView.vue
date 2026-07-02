@@ -118,13 +118,25 @@
             </span>
 
             <div class="min-w-0 flex-1">
-              <p class="truncate text-sm font-medium" :title="record.pipeline_name">{{ record.pipeline_name }}</p>
+              <Tooltip :delay-duration="300">
+                <TooltipTrigger as-child>
+                  <p class="truncate text-sm font-medium">{{ record.pipeline_name }}</p>
+                </TooltipTrigger>
+                <TooltipContent side="top">
+                  <p>{{ record.pipeline_name }}</p>
+                </TooltipContent>
+              </Tooltip>
             </div>
 
             <div class="min-w-0 flex-1">
-              <p class="truncate text-sm text-muted-foreground" :title="record.rejection_reason || record.summary || '-'">
-                {{ record.rejection_reason || record.summary || '-' }}
-              </p>
+              <Tooltip :delay-duration="300">
+                <TooltipTrigger as-child>
+                  <p class="truncate text-sm text-muted-foreground">{{ record.rejection_reason || record.summary || '-' }}</p>
+                </TooltipTrigger>
+                <TooltipContent side="top" class="max-w-xs">
+                  <p>{{ record.rejection_reason || record.summary || '-' }}</p>
+                </TooltipContent>
+              </Tooltip>
             </div>
 
             <span class="flex-shrink-0 text-xs text-muted-foreground">
@@ -225,6 +237,11 @@ import { api } from '../lib/api/client'
 import type { components } from '../lib/api/client'
 import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
+import {
+  Tooltip,
+  TooltipTrigger,
+  TooltipContent,
+} from '../components/ui/tooltip'
 
 type FeedbackRecordItem = components['schemas']['FeedbackRecordItem']
 type FeedbackRecordDetail = components['schemas']['FeedbackRecordDetail']

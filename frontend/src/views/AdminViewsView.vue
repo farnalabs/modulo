@@ -161,7 +161,14 @@
               <td class="px-4 py-3">
                 <span class="inline-flex rounded-full bg-primary/10 px-2.5 py-0.5 text-xs font-medium text-primary capitalize">{{ v.view_type }}</span>
               </td>
-              <td class="px-4 py-3 text-muted-foreground max-w-[200px] truncate font-mono text-xs" :title="filtersSummary(v.filters)">{{ filtersSummary(v.filters) }}</td>
+              <Tooltip :delay-duration="300">
+                <TooltipTrigger as-child>
+                  <td class="px-4 py-3 text-muted-foreground max-w-[200px] truncate font-mono text-xs">{{ filtersSummary(v.filters) }}</td>
+                </TooltipTrigger>
+                <TooltipContent side="top" class="max-w-xs">
+                  <p>{{ filtersSummary(v.filters) }}</p>
+                </TooltipContent>
+              </Tooltip>
               <td class="px-4 py-3 text-muted-foreground">{{ v.created_by || '—' }}</td>
               <td class="px-4 py-3 text-muted-foreground">{{ formatDate(v.created_at) }}</td>
               <td class="px-4 py-3 text-right">
@@ -237,6 +244,11 @@ import { ref, onMounted } from 'vue'
 import { getAccessToken } from '../lib/api/client'
 import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
+import {
+  Tooltip,
+  TooltipTrigger,
+  TooltipContent,
+} from '../components/ui/tooltip'
 
 interface SavedView {
   id: string

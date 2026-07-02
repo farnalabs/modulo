@@ -122,7 +122,14 @@
                     >
                       <div class="flex items-center justify-between">
                         <div class="min-w-0 flex-1">
-                          <p class="text-sm font-medium truncate" :title="pe.pipelineName">{{ pe.pipelineName }}</p>
+                          <Tooltip :delay-duration="300">
+                            <TooltipTrigger as-child>
+                              <p class="text-sm font-medium truncate">{{ pe.pipelineName }}</p>
+                            </TooltipTrigger>
+                            <TooltipContent side="top">
+                              <p>{{ pe.pipelineName }}</p>
+                            </TooltipContent>
+                          </Tooltip>
                           <p class="text-xs text-muted-foreground">
                             {{ pe.totalEvals }} eval{{ pe.totalEvals === 1 ? '' : 's' }}
                             · {{ pe.passedEvals }} passed
@@ -163,6 +170,11 @@ import { api } from '../lib/api/client'
 import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
 import { formatError } from '../lib/utils'
+import {
+  Tooltip,
+  TooltipTrigger,
+  TooltipContent,
+} from '../components/ui/tooltip'
 
 interface TeamRunStatus {
   running: number

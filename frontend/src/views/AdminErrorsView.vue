@@ -122,9 +122,14 @@
                   {{ group.level_peak }}
                 </span>
               </td>
-              <td class="max-w-xs truncate px-4 py-3 text-sm font-medium" :title="group.sample_message || '(no message)'">
-                {{ group.sample_message || '(no message)' }}
-              </td>
+              <Tooltip :delay-duration="300">
+                <TooltipTrigger as-child>
+                  <td class="max-w-xs truncate px-4 py-3 text-sm font-medium">{{ group.sample_message || '(no message)' }}</td>
+                </TooltipTrigger>
+                <TooltipContent side="top" class="max-w-xs">
+                  <p>{{ group.sample_message || '(no message)' }}</p>
+                </TooltipContent>
+              </Tooltip>
               <td class="px-4 py-3 text-sm">{{ group.count }}</td>
               <td class="whitespace-nowrap px-4 py-3 text-sm text-muted-foreground">
                 {{ formatDate(group.first_seen) }}
@@ -180,6 +185,11 @@ import { fetchErrorGroups, type ErrorGroupSummary, type FetchErrorGroupsParams }
 import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
 import PageTabs from "../components/PageTabs.vue"
+import {
+  Tooltip,
+  TooltipTrigger,
+  TooltipContent,
+} from "../components/ui/tooltip"
 
 const router = useRouter()
 
