@@ -1,4 +1,5 @@
 ﻿<template>
+  <TooltipProvider :delay-duration="300">
   <div class="flex items-start min-h-screen">
     <!-- Sidebar -->
     <aside class="hidden md:flex w-64 border-r bg-background p-4 flex-col min-h-screen">
@@ -36,7 +37,7 @@
         ref="mobileButtonRef"
         @click="mobileOpen = !mobileOpen"
         class="rounded-md p-2 text-muted-foreground hover:text-foreground hover:bg-muted transition-colors"
-        ::aria-label="$t('components.AppLayout.mobileopen_close_navigation_open_navigation')"
+        :aria-label="$t('components.AppLayout.mobileopen_close_navigation_open_navigation')"
         :aria-expanded="mobileOpen"
         aria-controls="mobile-sidebar"
       >
@@ -126,6 +127,7 @@
 
     <RemyPanel />
   </div>
+  </TooltipProvider>
 </template>
 
 <script setup lang="ts">
@@ -139,6 +141,7 @@ import RemyPanel from "./remy/RemyPanel.vue";
 import SidebarFooter from "./SidebarFooter.vue";
 import SidebarNav from "./SidebarNav.vue";
 import ViewModeToggle from "./ViewModeToggle.vue";
+import { TooltipProvider } from "./ui/tooltip";
 import { useSidebar } from "../composables/useSidebar";
 
 const { viewMode, setViewMode } = useSidebar();

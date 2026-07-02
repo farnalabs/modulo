@@ -377,8 +377,8 @@
                   <div class="flex items-center justify-end gap-1">
                     <button
                       class="rounded p-1 text-muted-foreground hover:bg-accent"
-                      ::aria-label="$t('views.AdminRemyView.edit_skill')"
-                      :title="$t('views.AdminRemyView.edit_skill_1')"
+                      :aria-label="$t('views.AdminRemyView.edit_skill')"
+                      :title="$t('views.AdminRemyView.edit_skill')"
                       @click="skillDialogRef?.openEdit(skill)"
                     >
                       <svg class="h-4 w-4" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -387,7 +387,7 @@
                     </button>
                     <button
                       class="rounded p-1 text-destructive hover:bg-destructive/10"
-                      ::aria-label="$t('views.AdminRemyView.delete_skill')"
+                      :aria-label="$t('views.AdminRemyView.delete_skill')"
                       :title="$t('components.remy.RemySkillDialog.delete_skill')"
                       @click="skillDialogRef?.openDelete(skill)"
                     >

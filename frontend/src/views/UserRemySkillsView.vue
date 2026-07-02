@@ -69,21 +69,22 @@
                 <button
                   class="inline-flex items-center gap-1.5 rounded-full px-2.5 py-0.5 text-xs font-medium transition-colors"
                   :class="skill.active ? 'bg-success/10 text-success' : 'bg-muted text-muted-foreground'"
+                  :disabled="!!skillToggling[skill.id]"
                   @click="toggleSkillActive(skill)"
                 >
                   <span
                     class="h-1.5 w-1.5 rounded-full"
                     :class="skill.active ? 'bg-success' : 'bg-muted-foreground'"
                   />
-                  {{ skill.active ? 'Active' : 'Inactive' }}
+                  {{ skillToggling[skill.id] ? '...' : (skill.active ? 'Active' : 'Inactive') }}
                 </button>
               </td>
               <td class="px-4 py-3 text-right">
                 <div class="flex items-center justify-end gap-1">
                   <button
                     class="rounded p-1 text-muted-foreground hover:bg-accent"
-                    ::aria-label="$t('views.AdminRemyView.edit_skill')"
-                    :title="$t('views.AdminRemyView.edit_skill_1')"
+                    :aria-label="$t('views.AdminRemyView.edit_skill')"
+                    :title="$t('views.AdminRemyView.edit_skill')"
                     @click="skillDialogRef?.openEdit(skill)"
                   >
                     <svg class="h-4 w-4" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -92,7 +93,7 @@
                   </button>
                   <button
                     class="rounded p-1 text-destructive hover:bg-destructive/10"
-                    ::aria-label="$t('views.AdminRemyView.delete_skill')"
+                    :aria-label="$t('views.AdminRemyView.delete_skill')"
                     :title="$t('components.remy.RemySkillDialog.delete_skill')"
                     @click="skillDialogRef?.openDelete(skill)"
                   >
@@ -140,6 +141,7 @@ const skills = ref<SkillItem[]>([])
 const loading = ref(true)
 const loadError = ref<string | null>(null)
 const skillToggleError = ref<string | null>(null)
+const skillToggling = ref<Record<string, boolean>>({})
 
 const skillDialogRef = ref<InstanceType<typeof RemySkillDialog> | null>(null)
 
@@ -161,10 +163,12 @@ async function loadSkills() {
 }
 
 async function toggleSkillActive(skill: SkillItem) {
+  if (skillToggling.value[skill.id]) return
   const newActive = !skill.active
   skillToggleError.value = null
+  skillToggling.value = { ...skillToggling.value, [skill.id]: true }
   try {
-    const { error: err } = await (api as any).PUT('/api/v1/me/remy/skills/{skill_id}', {
+    const { data, error: err } = await (api as any).PUT('/api/v1/me/remy/skills/{skill_id}', {
       params: { path: { skill_id: skill.id } },
       body: { active: newActive },
     })
@@ -172,9 +176,15 @@ async function toggleSkillActive(skill: SkillItem) {
       skillToggleError.value = `Failed to toggle skill: ${err}`
       return
     }
-    skill.active = newActive
+    if (data) {
+      const idx = skills.value.findIndex((s) => s.id === skill.id)
+      if (idx !== -1) skills.value[idx] = data as SkillItem
+    }
   } catch (e: unknown) {
     skillToggleError.value = `Failed to toggle skill: ${e instanceof Error ? e.message : String(e)}`
+  } finally {
+    const { [skill.id]: _, ...rest } = skillToggling.value
+    skillToggling.value = rest
   }
 }
 
