@@ -7,7 +7,7 @@ from unittest.mock import MagicMock, patch
 
 from pytest_bdd import given, parsers, scenarios, then, when
 
-scenarios("../../features/library/schemas.feature")
+scenarios("../features/library/schemas.feature")
 
 _MOCK_SCHEMA_ID = uuid.uuid4()
 _ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
@@ -22,7 +22,7 @@ def _make_mock_schema(name: str = "meeting-notes", description: str | None = Non
     s.name = name
     s.description = description
     s.abstract_name = None
-    s.created_by = _USER_ID
+    s.account_id = _USER_ID
     s.created_at = _NOW
     s.updated_at = _NOW
     s.deprecated = False
@@ -39,7 +39,7 @@ def _make_mock_schema_version(version: str = "1.0") -> MagicMock:
     sv.version_number = 1
     sv.definition_json = {"type": "object", "title": "Test", "properties": {}}
     sv.published = True
-    sv.created_by = _USER_ID
+    sv.account_id = _USER_ID
     sv.created_at = _NOW
     sv.updated_at = _NOW
     return sv
@@ -81,8 +81,8 @@ def _schema_has_version(version: str) -> None:
 
 
 @when("the user sends POST /api/v1/schemas with body")
-def _post_create_schema(client, request, body):
-    data = json.loads(body)
+def _post_create_schema(client, request, docstring):
+    data = json.loads(docstring)
     mock_schema = _make_mock_schema(name=data["name"], description=data.get("description"))
     with (
         patch("modulo.api.routes.schemas.create_schema", return_value=mock_schema),
@@ -93,8 +93,8 @@ def _post_create_schema(client, request, body):
 
 
 @when("the user sends POST /api/v1/schemas/{schema_id}/versions with body")
-def _post_create_schema_version(client, request, body):
-    data = json.loads(body)
+def _post_create_schema_version(client, request, docstring):
+    data = json.loads(docstring)
     mock_schema = _make_mock_schema()
     mock_sv = _make_mock_schema_version(version=data["version"])
     with (
@@ -151,8 +151,8 @@ def _get_schema_not_found(client, request):
 
 
 @when("the user sends PATCH /api/v1/schemas/{schema_id} with body")
-def _patch_update_schema(client, request, body):
-    data = json.loads(body)
+def _patch_update_schema(client, request, docstring):
+    data = json.loads(docstring)
     mock_schema = _make_mock_schema(description=data.get("description"))
     with (
         patch("modulo.api.routes.schemas.update_schema", return_value=mock_schema),
@@ -211,15 +211,15 @@ def _get_schema_version(client, request):
 
 
 @when("the user sends POST /api/v1/schemas/validate with body")
-def _post_validate(client, request, body):
-    data = json.loads(body)
+def _post_validate(client, request, docstring):
+    data = json.loads(docstring)
     resp = client.post("/api/v1/schemas/validate", json=data)
     request.node._resp = resp
 
 
 @when("the user sends POST /api/v1/schemas/import with body")
-def _post_import(client, request, body):
-    data = json.loads(body)
+def _post_import(client, request, docstring):
+    data = json.loads(docstring)
     resp = client.post("/api/v1/schemas/import", json=data)
     request.node._resp = resp
 
