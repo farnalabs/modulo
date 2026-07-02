@@ -4,7 +4,9 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field
+from sqlalchemy.ext.asyncio import AsyncSession
 
+from modulo.api.dependencies import get_db_session
 from modulo.auth.dependencies import get_current_user
 from modulo.auth.jwt import AuthenticatedPrincipal
 from modulo.core.license import (
@@ -13,6 +15,8 @@ from modulo.core.license import (
     parse_and_verify,
     store_license,
 )
+from modulo.db.crud.organisation import get_organisation
+from modulo.settings import Settings, get_settings
 
 router = APIRouter(prefix="/api/v1/admin/license", tags=["admin-license"])
 
@@ -45,21 +49,67 @@ def _require_admin(principal: AuthenticatedPrincipal) -> None:
         )
 
 
+def _resolve_effective_license(settings: Settings, org: "Organisation | None" = None) -> LicenseStatusResponse:
+    """Resolve the effective license, checking org-level, then system-level (env var), then in-memory."""
+    from modulo.db.models.organisation import Organisation
+
+    # 1. Org-level license key
+    if org is not None:
+        org_key = org.settings_json.get("license_key") if org.settings_json else None
+        if org_key:
+            validation = parse_and_verify(org_key)
+            if validation.valid and validation.license_data is not None:
+                d = validation.license_data
+                return LicenseStatusResponse(
+                    has_license=True,
+                    tier=d.tier,
+                    features=d.features,
+                    expires_at=d.expires_at or None,
+                    org_id=d.org_id or None,
+                )
+
+    # 2. In-memory store (from POST /admin/license)
+    lic = get_license()
+    if lic is not None:
+        return LicenseStatusResponse(
+            has_license=True,
+            tier=lic.tier,
+            features=lic.features,
+            expires_at=lic.expires_at or None,
+            org_id=lic.org_id or None,
+        )
+
+    # 3. System-level env var
+    raw_key = getattr(settings, "modulo_license_key", "") or ""
+    if raw_key:
+        validation = parse_and_verify(raw_key)
+        if validation.valid and validation.license_data is not None:
+            d = validation.license_data
+            return LicenseStatusResponse(
+                has_license=True,
+                tier=d.tier,
+                features=d.features,
+                expires_at=d.expires_at or None,
+                org_id=d.org_id or None,
+            )
+
+    return LicenseStatusResponse(has_license=False)
+
+
 @router.get("", response_model=LicenseStatusResponse)
 async def get_license_status(
+    settings: Settings = Depends(get_settings),
     current_user: AuthenticatedPrincipal = Depends(get_current_user),
+    session: AsyncSession = Depends(get_db_session),
 ) -> LicenseStatusResponse:
     _require_admin(current_user)
-    lic = get_license()
-    if lic is None:
-        return LicenseStatusResponse(has_license=False)
-    return LicenseStatusResponse(
-        has_license=True,
-        tier=lic.tier,
-        features=lic.features,
-        expires_at=lic.expires_at or None,
-        org_id=lic.org_id or None,
-    )
+
+    org = None
+    if current_user.organisation_id is not None:
+        async with session.begin():
+            org = await get_organisation(session, current_user.organisation_id)
+
+    return _resolve_effective_license(settings, org=org)
 
 
 @router.post("", response_model=LicenseUploadResponse, status_code=status.HTTP_200_OK)

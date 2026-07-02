@@ -24,7 +24,8 @@ router = APIRouter(prefix="/api/v1/admin/feature-flags", tags=["admin-feature-fl
 async def _build_registry(settings: Settings, session: AsyncSession) -> FeatureFlagRegistry:
     has_key = bool(settings.modulo_license_key)
     tier = "team" if has_key else "community"
-    return await FeatureFlagRegistry.from_db(session, current_tier=tier, has_license_key=has_key)
+    async with session.begin():
+        return await FeatureFlagRegistry.from_db(session, current_tier=tier, has_license_key=has_key)
 
 
 @router.get("")
