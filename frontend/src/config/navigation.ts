@@ -30,7 +30,7 @@ export const navGroups: NavGroup[] = [
     simpleMode: true,
     defaultCollapsed: false,
     items: [
-      { to: '/pipelines', icon: 'GitBranch', label: 'Pipelines' },
+      { to: '/library', icon: 'GitBranch', label: 'Pipelines & Library' },
       { to: '/pipelines/copy', icon: 'Copy', label: 'Copy Pipeline' },
       { to: '/templates', icon: 'LayoutTemplate', label: 'Pipeline Templates' },
       { to: '/stages', icon: 'Columns', label: 'Stages' },
@@ -45,6 +45,7 @@ export const navGroups: NavGroup[] = [
       { to: '/evals/editor', icon: 'CheckSquare', label: 'Evals' },
       { to: '/evals/proposals', icon: 'Clipboard', label: 'Eval Proposals' },
       { to: '/variants/compare', icon: 'GitFork', label: 'Variants' },
+      { to: '/variants/ab-test', icon: 'FlaskConical', label: 'AB Test Models' },
     ],
   },
   {
