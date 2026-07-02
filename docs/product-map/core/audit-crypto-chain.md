@@ -57,8 +57,8 @@ SHA-256 cryptographic chaining of audit events per organisation, providing tampe
 
 ### BDD Scenarios
 
-- [ ] Given 3 audit events exist: When I verify the audit chain, then each event has a previous_hash linking to the prior event and the chain is valid
-- [ ] Given a sequence of 100 audit events: When I verify the hash chain, then each event's hash is derived from the previous event's hash and tampering with any event breaks the chain for all subsequent events
+- [x] Given 3 audit events exist: When I verify the audit chain, then each event has a previous_hash linking to the prior event and the chain is valid
+- [x] Given a sequence of 100 audit events: When I verify the hash chain, then each event's hash is derived from the previous event's hash and tampering with any event breaks the chain for all subsequent events
 
 ### Edge Cases
 
@@ -78,6 +78,9 @@ SHA-256 cryptographic chaining of audit events per organisation, providing tampe
 - [x] SHA-256 linking makes single-event tampering detectable — altering any field changes its hash, breaking the link to the next event
 - [x] Chain head stored separately — tampering would also need to update AuditChainHead to avoid detection
 - [x] Verification is read-only — no mutation performed during integrity check
+
+## QA History
+- **2026-07-02**: Cross-cutting QA (index 49). Fixed BDD scenario path (scenarios() was resolving to nonexistent bdd/features/audit/, now uses ../../features/ corrected path) for test_alpha_audit.py, test_audit.py, and test_personas.py step files. Fixed check_previous_hash step to handle both _appended_events and verify API response (was passing vacuously for "Audit events have cryptographic chaining" scenario). Added 4 missing step definitions for `@goal-marcus-crypto-chain` scenario (sequence of 100 events, chain verification, tampering detection). Updated unit-tests frontmatter from empty [] to 3 actual test file references. Marked both BDD scenario behaviours [ ]→[x].
 
 ## Known Gaps
 - verify_chain limited to 10,000 events by default — large orgs may need batched or incremental verification
