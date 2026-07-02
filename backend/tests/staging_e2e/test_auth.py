@@ -12,7 +12,7 @@ async def test_login_succeeds(tenant: TenantContext) -> None:
     async with httpx.AsyncClient(base_url=tenant.base_url, verify=False) as client:
         resp = await client.post(
             "/api/v1/auth/login",
-            json={"username": tenant.user_email, "password": tenant.user_password},
+            json={"email": tenant.user_email, "password": tenant.user_password},
         )
     assert resp.status_code == 200
     data = resp.json()
@@ -24,7 +24,7 @@ async def test_login_wrong_password_fails(tenant: TenantContext) -> None:
     async with httpx.AsyncClient(base_url=tenant.base_url, verify=False) as client:
         resp = await client.post(
             "/api/v1/auth/login",
-            json={"username": tenant.user_email, "password": "wrong-password-123"},
+            json={"email": tenant.user_email, "password": "wrong-password-123"},
         )
     assert resp.status_code == 401
 
@@ -34,7 +34,7 @@ async def test_login_wrong_email_fails(tenant: TenantContext) -> None:
     async with httpx.AsyncClient(base_url=tenant.base_url, verify=False) as client:
         resp = await client.post(
             "/api/v1/auth/login",
-            json={"username": "nonexistent@e2e.modulo", "password": "some-password"},
+            json={"email": "nonexistent@e2e.modulo", "password": "some-password"},
         )
     assert resp.status_code == 401
 

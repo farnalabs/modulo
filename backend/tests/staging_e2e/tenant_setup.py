@@ -71,7 +71,7 @@ async def get_admin_token(
     async with httpx.AsyncClient(base_url=base_url, verify=False) as client:
         resp = await client.post(
             "/api/v1/auth/login",
-            json={"username": email, "password": password},
+            json={"email": email, "password": password},
         )
         if resp.status_code != 200:
             raise RuntimeError(f"Admin auth failed ({resp.status_code}): {resp.text}")

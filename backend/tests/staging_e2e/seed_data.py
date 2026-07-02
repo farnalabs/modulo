@@ -14,7 +14,7 @@ async def seed_existing_org(
     async with httpx.AsyncClient(base_url=base_url, verify=False) as client:
         resp = await client.post(
             "/api/v1/auth/login",
-            json={"username": user_email, "password": user_password},
+            json={"email": user_email, "password": user_password},
         )
         if resp.status_code != 200:
             raise RuntimeError(f"Seed auth failed ({resp.status_code}): {resp.text}")

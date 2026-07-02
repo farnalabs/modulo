@@ -36,7 +36,7 @@ async def test_cross_tenant_pipeline_invisibility(
         async with httpx.AsyncClient(base_url=other.base_url, verify=False) as other_client:
             auth_resp = await other_client.post(
                 "/api/v1/auth/login",
-                json={"username": other.user_email, "password": other.user_password},
+                json={"email": other.user_email, "password": other.user_password},
             )
             if auth_resp.status_code != 200:
                 continue
@@ -72,7 +72,7 @@ async def test_cross_tenant_404_on_direct_access(
         async with httpx.AsyncClient(base_url=other.base_url, verify=False) as other_client:
             auth_resp = await other_client.post(
                 "/api/v1/auth/login",
-                json={"username": other.user_email, "password": other.user_password},
+                json={"email": other.user_email, "password": other.user_password},
             )
             if auth_resp.status_code != 200:
                 continue
