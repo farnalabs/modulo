@@ -200,6 +200,11 @@ def _bdd_auth_viewer_in_org(org: str, request) -> None:
     request.node._viewer_auth = True
 
 
+@given("the organisation exists")
+def _bdd_org_exists() -> None:
+    """No-op — DB fixtures handle org creation."""
+
+
 @then(parsers.parse("the response status is {status:d}"))
 def _bdd_check_response_status(status: int, request) -> None:
     """Check response status code."""
