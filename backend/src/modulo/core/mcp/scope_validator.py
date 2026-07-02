@@ -7,7 +7,17 @@ Dual-layer enforcement:
    business logic layer, preventing bypass if the middleware has a bug.
 """
 
+from logging import getLogger
+
 from modulo.auth.team_rbac import ORG_ROLE_HIERARCHY, org_role_level
+
+_log = getLogger(__name__)
+
+__all__ = [
+    "TOOL_SCOPE_REQUIREMENTS",
+    "MCPAuthorizationError",
+    "check_tool_scope",
+]
 
 
 class MCPAuthorizationError(Exception):
@@ -17,15 +27,16 @@ class MCPAuthorizationError(Exception):
     to the MCP client — never let it propagate to the HTTP layer.
     """
 
-    def __init__(self, message: str) -> None:
-        self.message = message
-        super().__init__(message)
-
 
 TOOL_SCOPE_REQUIREMENTS: dict[str, str] = {
     "trigger_pipeline": "runner",
     "cancel_run": "runner",
+    # Tool-level default for review_hitl (no action = operator)
     "review_hitl": "operator",
+    # Action-scoped sub-requirements
+    "review_hitl:claim": "runner",
+    "review_hitl:approve": "operator",
+    "review_hitl:reject": "operator",
     "copy_library_primitive": "runner",
     "list_pending_hitl": "runner",
     "get_run_output": "runner",
@@ -35,11 +46,16 @@ TOOL_SCOPE_REQUIREMENTS: dict[str, str] = {
 }
 
 
-REVIEW_HITL_ACTION_REQUIREMENTS: dict[str, str] = {
-    "claim": "runner",
-    "approve": "operator",
-    "reject": "operator",
-}
+def _require_role_exists(role: str) -> None:
+    """Validate that *role* is a known key in the role hierarchy.
+
+    Raises ``MCPAuthorizationError`` if the role is not defined — this is
+    a configuration error that must be surfaced, not silently tolerated.
+    """
+    if role not in ORG_ROLE_HIERARCHY:
+        raise MCPAuthorizationError(
+            f"Misconfigured scope requirement: role '{role}' is not in the role hierarchy",
+        )
 
 
 def check_tool_scope(
@@ -47,31 +63,43 @@ def check_tool_scope(
     tool_name: str,
     action: str | None = None,
 ) -> None:
-    """Validate that `current_role` meets the tool's minimum role requirement.
+    """Validate that ``current_role`` meets the tool's minimum role requirement.
 
     Args:
         current_role: The role derived by the middleware (``_ctx_role``).
         tool_name: The MCP tool being invoked.
-        action: Optional sub-action (e.g. ``"approve"`` for *review_hitl*).
+        action: Optional sub-action (e.g. ``"approve"`` for ``review_hitl``).
 
     Raises:
         MCPAuthorizationError: If the principal's role is below the minimum.
     """
     if current_role is None:
-        raise MCPAuthorizationError("No authentication context — role not set")
+        raise MCPAuthorizationError("No authentication context: role not set")
 
-    required = TOOL_SCOPE_REQUIREMENTS.get(tool_name)
-    if required is None:
-        return  # Tool has no scope gate — accessible to all authenticated roles
+    name = tool_name.strip().lower()
+    if not name:
+        raise MCPAuthorizationError("Tool name is empty or whitespace-only")
 
-    # Fine-grained action-level scoping for review_hitl
-    if tool_name == "review_hitl" and action is not None:
-        action_req = REVIEW_HITL_ACTION_REQUIREMENTS.get(action)
-        if action_req is not None:
-            required = action_req
+    if action is not None:
+        act = action.strip().lower()
+        if not act:
+            raise MCPAuthorizationError("Action is empty or whitespace-only")
+        key = f"{name}:{act}"
+        required = TOOL_SCOPE_REQUIREMENTS.get(key)
+        if required is None:
+            # Action not found in scope requirements — caller bug
+            raise MCPAuthorizationError(
+                f"Unknown action '{action}' for tool '{tool_name}'",
+            )
+    else:
+        required = TOOL_SCOPE_REQUIREMENTS.get(name)
+        if required is None:
+            return  # No scope gate — accessible to all authenticated roles
+
+    _require_role_exists(required)
 
     current_level = org_role_level(current_role)
-    required_level = ORG_ROLE_HIERARCHY.get(required, -1)
+    required_level = ORG_ROLE_HIERARCHY[required]
 
     if current_level < 0:
         raise MCPAuthorizationError(f"Unknown role: '{current_role}'")

@@ -10,7 +10,6 @@ from unittest.mock import AsyncMock, patch
 import pytest
 
 from modulo.core.mcp.scope_validator import (
-    REVIEW_HITL_ACTION_REQUIREMENTS,
     TOOL_SCOPE_REQUIREMENTS,
     MCPAuthorizationError,
     check_tool_scope,
@@ -103,7 +102,6 @@ class TestMCPAuthorizationError:
 
     def test_message_attribute(self) -> None:
         exc = MCPAuthorizationError("test message")
-        assert exc.message == "test message"
         assert str(exc) == "test message"
 
     def test_is_exception(self) -> None:
@@ -118,10 +116,15 @@ class TestConstants:
             "trigger_pipeline",
             "cancel_run",
             "review_hitl",
+            "review_hitl:claim",
+            "review_hitl:approve",
+            "review_hitl:reject",
             "copy_library_primitive",
             "list_pending_hitl",
             "get_run_output",
             "get_trigger_events",
+            "create_pipeline",
+            "update_pipeline_graph",
         }
         assert set(TOOL_SCOPE_REQUIREMENTS) == expected_tools
 
@@ -129,14 +132,6 @@ class TestConstants:
         valid_roles = {"viewer", "runner", "operator", "admin"}
         for tool, role in TOOL_SCOPE_REQUIREMENTS.items():
             assert role in valid_roles, f"{tool} has invalid role '{role}'"
-
-    def test_review_hitl_action_requirements_keys(self) -> None:
-        assert set(REVIEW_HITL_ACTION_REQUIREMENTS) == {"claim", "approve", "reject"}
-
-    def test_review_hitl_action_use_valid_roles(self) -> None:
-        for action, role in REVIEW_HITL_ACTION_REQUIREMENTS.items():
-            assert role in {"runner", "operator"}, f"{action} has invalid role '{role}'"
-
 
 class TestToolHandlerScopeErrorFormat:
     """Tool handlers return ``insufficient_scope`` error when scope check fails."""
@@ -157,7 +152,7 @@ class TestToolHandlerScopeErrorFormat:
         result = await _tp(pipeline_id="00000000-0000-0000-0000-000000000001")
         assert result == {
             "error": "insufficient_scope",
-            "detail": "No authentication context — role not set",
+            "detail": "No authentication context: role not set",
         }
 
     async def test_cancel_run_insufficient_scope(self) -> None:
@@ -168,7 +163,7 @@ class TestToolHandlerScopeErrorFormat:
         result = await _cr(run_id="00000000-0000-0000-0000-000000000001")
         assert result == {
             "error": "insufficient_scope",
-            "detail": "No authentication context — role not set",
+            "detail": "No authentication context: role not set",
         }
 
     async def test_list_pending_hitl_insufficient_scope(self) -> None:
@@ -179,7 +174,7 @@ class TestToolHandlerScopeErrorFormat:
         result = await _lph()
         assert result == {
             "error": "insufficient_scope",
-            "detail": "No authentication context — role not set",
+            "detail": "No authentication context: role not set",
         }
 
     async def test_copy_library_primitive_insufficient_scope(self) -> None:
@@ -190,7 +185,7 @@ class TestToolHandlerScopeErrorFormat:
         result = await _clp(primitive_id="00000000-0000-0000-0000-000000000001")
         assert result == {
             "error": "insufficient_scope",
-            "detail": "No authentication context — role not set",
+            "detail": "No authentication context: role not set",
         }
 
     async def test_review_hitl_insufficient_scope(self) -> None:
@@ -205,7 +200,7 @@ class TestToolHandlerScopeErrorFormat:
         )
         assert result == {
             "error": "insufficient_scope",
-            "detail": "No authentication context — role not set",
+            "detail": "No authentication context: role not set",
         }
 
     async def test_review_hitl_approve_requires_operator(self) -> None:
