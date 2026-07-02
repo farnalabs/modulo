@@ -1,4 +1,4 @@
-<template>
+﻿<template>
   <div class="relative mx-auto flex min-h-screen max-w-md items-center justify-center p-6">
     <div
       class="pointer-events-none fixed inset-0 -z-10"
@@ -11,7 +11,7 @@
       <div class="text-center">
         <div class="mb-4 flex justify-center">
           <div class="flex h-14 w-14 items-center justify-center rounded-xl bg-primary/10 border border-primary/20">
-            <svg width="32" height="32" viewBox="0 0 100 100" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Modulo logo">
+            <svg width="32" height="32" viewBox="0 0 100 100" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" :aria-label="$t('components.LogoMark.modulo_logo')">
               <g stroke="#00FFD1" stroke-width="7" fill="none" stroke-linejoin="round" stroke-linecap="round">
                 <line x1="30" y1="84.64" x2="70" y2="15.36" />
                 <polygon points="36,28 31,36.66 21,36.66 16,28 21,19.34 31,19.34" />
@@ -21,7 +21,7 @@
           </div>
         </div>
         <h1 class="text-3xl font-bold tracking-tight">Modulo</h1>
-        <p class="mt-1 text-muted-foreground">Governed orchestration for your agentic SDLC</p>
+        <p class="mt-1 text-muted-foreground">{{ $t('views.LoginView.governed_orchestration_for_your_agentic_sdlc') }}</p>
       </div>
 
       <div v-if="error" class="rounded-lg border border-destructive/50 bg-destructive/10 p-4 text-sm text-destructive">
@@ -30,7 +30,7 @@
 
       <form @submit.prevent="login" class="rounded-xl border bg-card p-6 space-y-4 shadow-sm">
         <div class="space-y-2">
-          <label class="text-sm font-medium">Email</label>
+          <label class="text-sm font-medium">{{ $t('common.email') }}</label>
           <input
             v-model="email"
             type="text"
@@ -41,12 +41,12 @@
           />
         </div>
         <div class="space-y-2">
-          <label class="text-sm font-medium">Password</label>
+          <label class="text-sm font-medium">{{ $t('common.password') }}</label>
           <input
             v-model="password"
             type="password"
             class="input-teal w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
-            placeholder="Enter your password"
+            :placeholder="$t('views.LoginView.enter_your_password')"
             required
             data-testid="login-password"
           />
@@ -57,7 +57,7 @@
           class="btn-glow w-full rounded-md bg-primary px-4 py-2.5 text-sm font-semibold text-primary-foreground border border-primary/30 hover:border-primary/60 hover:brightness-110 disabled:opacity-50 transition-all duration-150"
           data-testid="login-submit"
         >
-          {{ loading ? 'Signing in...' : 'Sign in' }}
+          {{ loading ? $t('common.signing_in') : $t('common.sign_in') }}
         </button>
       </form>
     </div>

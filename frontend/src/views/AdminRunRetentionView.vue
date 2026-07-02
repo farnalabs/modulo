@@ -1,15 +1,15 @@
-<template>
+﻿<template>
   <div data-theme="agent" class="mx-auto max-w-6xl space-y-6 p-6">
     <header>
-      <h1 class="text-3xl font-bold tracking-tight">Run Retention</h1>
-      <p class="mt-1 text-muted-foreground">Configure run retention policies and manual purge</p>
+      <h1 class="text-3xl font-bold tracking-tight">{{ $t('views.AdminRunRetentionView.run_retention') }}</h1>
+      <p class="mt-1 text-muted-foreground">{{ $t('views.AdminRunRetentionView.configure_run_retention_policies_and_manual_purge') }}</p>
     </header>
 
     <FeatureGate feature-name="admin_run_retention" required-tier="team">
       <template #locked="{ tooltip }">
         <div class="mb-4 flex items-center gap-2 rounded-lg border border-warning/30 bg-warning/5 p-4 text-sm text-warning">
           <LockIcon :locked="true" :tooltip="tooltip" />
-          <span>Run retention management is not available on your current plan.</span>
+          <span>{{ $t('views.AdminRunRetentionView.run_retention_management_is_not_available_on_your_current_pl') }}</span>
         </div>
       </template>
 

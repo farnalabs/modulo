@@ -1,4 +1,4 @@
-<template>
+﻿<template>
   <PageTabs :tabs="[
     { label: 'Overview', to: '/admin/costs' },
     { label: 'Spend Limits', to: '/admin/costs/limits' },
@@ -6,15 +6,15 @@
   ]" />
   <div data-theme="agent" class="mx-auto max-w-6xl space-y-6 p-6">
     <header>
-      <h1 class="text-3xl font-bold tracking-tight">Spend Limits</h1>
-      <p class="mt-1 text-muted-foreground">Configure daily spend limits at the org and team level</p>
+      <h1 class="text-3xl font-bold tracking-tight">{{ $t('views.AdminCostBreakdownView.spend_limits') }}</h1>
+      <p class="mt-1 text-muted-foreground">{{ $t('views.AdminSpendLimitsView.configure_daily_spend_limits_at_the_org_and_team_level') }}</p>
     </header>
 
     <FeatureGate feature-name="admin_spend_limits" required-tier="team">
       <template #locked="{ tooltip }">
         <div class="mb-4 flex items-center gap-2 rounded-lg border border-warning/30 bg-warning/5 p-4 text-sm text-warning">
           <LockIcon :locked="true" :tooltip="tooltip" />
-          <span>Spend limits are not available on your current plan.</span>
+          <span>{{ $t('views.AdminSpendLimitsView.spend_limits_are_not_available_on_your_current_plan') }}</span>
         </div>
       </template>
 

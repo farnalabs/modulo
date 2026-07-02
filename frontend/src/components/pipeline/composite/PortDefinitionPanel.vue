@@ -1,4 +1,4 @@
-<script setup lang="ts">
+﻿<script setup lang="ts">
 import { ref } from "vue";
 import { useApi } from "../../../composables/useApi";
 import type { ParameterPort, ParameterPortType } from "../../../types/pipeline";
@@ -146,7 +146,7 @@ async function detectPlaceholders() {
 <template>
   <div class="space-y-4">
     <div class="flex items-center justify-between">
-      <h3 class="text-sm font-semibold">Parameter Ports</h3>
+      <h3 class="text-sm font-semibold">{{ $t('components.pipeline.composite.PortDefinitionPanel.parameter_ports') }}</h3>
       <div class="flex gap-1">
         <button
           class="rounded-md border border-input px-2 py-1 text-xs hover:bg-accent disabled:opacity-50"
@@ -205,14 +205,14 @@ async function detectPlaceholders() {
         <div class="ml-2 flex flex-col gap-1">
           <button
             class="rounded p-1 text-xs text-muted-foreground hover:bg-accent"
-            title="Move up"
+            :title="$t('components.pipeline.composite.PortDefinitionPanel.move_up')"
             @click="moveUp(index)"
           >
             &#x25B2;
           </button>
           <button
             class="rounded p-1 text-xs text-muted-foreground hover:bg-accent"
-            title="Move down"
+            :title="$t('components.pipeline.composite.PortDefinitionPanel.move_down')"
             @click="moveDown(index)"
           >
             &#x25BC;
@@ -243,7 +243,7 @@ async function detectPlaceholders() {
       <div class="space-y-3">
         <div>
           <label class="mb-1 block text-xs font-medium text-muted-foreground"
-            >Name *</label
+            >{{ $t('components.pipeline.composite.PortDefinitionPanel.name') }}</label
           >
           <input
             v-model="form.name"
@@ -253,12 +253,12 @@ async function detectPlaceholders() {
         </div>
         <div>
           <label class="mb-1 block text-xs font-medium text-muted-foreground"
-            >Label *</label
+            >{{ $t('components.pipeline.composite.PortDefinitionPanel.label') }}</label
           >
           <input
             v-model="form.label"
             class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm"
-            placeholder="Model Temperature"
+            :placeholder="$t('components.pipeline.composite.PortDefinitionPanel.model_temperature')"
           />
         </div>
         <div>
@@ -269,7 +269,7 @@ async function detectPlaceholders() {
             v-model="form.description"
             class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm"
             rows="2"
-            placeholder="Controls the randomness of the model output"
+            :placeholder="$t('components.pipeline.composite.PortDefinitionPanel.controls_the_randomness_of_the_model_output')"
           />
         </div>
         <div>
@@ -284,8 +284,8 @@ async function detectPlaceholders() {
             <option value="number">Number</option>
             <option value="boolean">Boolean</option>
             <option value="select">Select</option>
-            <option value="model_backend_ref">Model Backend Ref</option>
-            <option value="schema_ref">Schema Ref</option>
+            <option value="model_backend_ref">{{ $t('components.pipeline.composite.PortDefinitionPanel.model_backend_ref') }}</option>
+            <option value="schema_ref">{{ $t('components.pipeline.composite.PortDefinitionPanel.schema_ref') }}</option>
           </select>
         </div>
         <div class="flex items-center gap-2">
@@ -306,12 +306,12 @@ async function detectPlaceholders() {
         </div>
         <div v-if="form.type !== 'boolean'">
           <label class="mb-1 block text-xs font-medium text-muted-foreground"
-            >Default Value</label
+            >{{ $t('components.pipeline.composite.PortDefinitionPanel.default_value') }}</label
           >
           <input
             v-model="form.default"
             class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm"
-            :placeholder="form.type === 'number' ? '0.7' : 'default value'"
+            ::placeholder="$t('components.pipeline.composite.PortDefinitionPanel.formtype_number_07_default_value')"
             :type="form.type === 'number' ? 'number' : 'text'"
           />
         </div>

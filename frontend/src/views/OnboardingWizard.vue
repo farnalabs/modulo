@@ -1,8 +1,8 @@
-<template>
+﻿<template>
   <div class="mx-auto max-w-4xl space-y-8 p-6">
     <header>
-      <h1 class="text-3xl font-bold tracking-tight">SDLC Onboarding</h1>
-      <p class="mt-1 text-muted-foreground">Guided setup wizard &mdash; connect tools, infer schemas, browse the library, and wire your first pipeline</p>
+      <h1 class="text-3xl font-bold tracking-tight">{{ $t('views.OnboardingWizard.sdlc_onboarding') }}</h1>
+      <p class="mt-1 text-muted-foreground">{{ $t('views.OnboardingWizard.guided_setup_wizard_mdash_connect_tools_infer_schemas_browse') }}</p>
     </header>
 
     <div class="flex items-center justify-center gap-0">

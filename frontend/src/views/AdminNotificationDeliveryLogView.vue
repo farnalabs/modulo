@@ -1,8 +1,8 @@
-<template>
+﻿<template>
   <div class="mx-auto max-w-7xl space-y-6 p-6">
     <header>
-      <h1 data-testid="admin-notification-log-title" class="text-3xl font-bold tracking-tight">Notification Delivery Log</h1>
-      <p class="mt-1 text-muted-foreground">Admin view of all webhook notification deliveries</p>
+      <h1 data-testid="admin-notification-log-title" class="text-3xl font-bold tracking-tight">{{ $t('views.AdminNotificationDeliveryLogView.notification_delivery_log') }}</h1>
+      <p class="mt-1 text-muted-foreground">{{ $t('views.AdminNotificationDeliveryLogView.admin_view_of_all_webhook_notification_deliveries') }}</p>
     </header>
 
     <div class="rounded-lg border bg-card p-4 shadow-sm">
@@ -14,25 +14,25 @@
             data-testid="admin-notification-log-status"
             class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring"
           >
-            <option value="">All statuses</option>
+            <option value="">{{ $t('views.AdminErrorsView.all_statuses') }}</option>
             <option value="delivered">Delivered</option>
             <option value="failed">Failed</option>
-            <option value="dead_lettered">Dead Lettered</option>
+            <option value="dead_lettered">{{ $t('views.AdminNotificationDeliveryLogView.dead_lettered') }}</option>
             <option value="pending">Pending</option>
           </select>
         </div>
         <div>
-          <label class="mb-1 block text-xs font-medium text-muted-foreground">Event Type</label>
+          <label class="mb-1 block text-xs font-medium text-muted-foreground">{{ $t('views.AdminAuditView.event_type') }}</label>
           <select
             v-model="filterEventType"
             data-testid="admin-notification-log-event-type"
             class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring"
           >
-            <option value="">All types</option>
-            <option value="hitl_awaiting">HITL Awaiting</option>
-            <option value="run_failed">Run Failed</option>
-            <option value="claim_expired">Claim Expired</option>
-            <option value="hitl_overdue">HITL Overdue</option>
+            <option value="">{{ $t('views.AdminNotificationDeliveryLogView.all_types') }}</option>
+            <option value="hitl_awaiting">{{ $t('views.AdminNotificationDeliveryLogView.hitl_awaiting') }}</option>
+            <option value="run_failed">{{ $t('views.AdminNotificationDeliveryLogView.run_failed') }}</option>
+            <option value="claim_expired">{{ $t('views.AdminNotificationDeliveryLogView.claim_expired') }}</option>
+            <option value="hitl_overdue">{{ $t('views.AdminNotificationDeliveryLogView.hitl_overdue') }}</option>
           </select>
         </div>
         <div>
@@ -96,7 +96,7 @@
     <ErrorAlert v-else-if="error" :message="error" :on-retry="loadDeliveries" />
 
     <div v-else-if="items.length === 0" data-testid="admin-notification-log-empty" class="rounded-lg border bg-card p-8 text-center">
-      <p class="text-lg font-medium">No delivery logs found</p>
+      <p class="text-lg font-medium">{{ $t('views.AdminNotificationDeliveryLogView.no_delivery_logs_found') }}</p>
       <p class="mt-1 text-sm text-muted-foreground">
         Try adjusting your filters or wait for notifications to be sent.
       </p>
@@ -109,7 +109,7 @@
             <tr class="border-b bg-muted/50 text-left text-xs font-medium uppercase text-muted-foreground">
               <th class="w-8 px-4 py-3"></th>
               <th class="px-4 py-3">Timestamp</th>
-              <th class="px-4 py-3">Event Type</th>
+              <th class="px-4 py-3">{{ $t('views.AdminAuditView.event_type') }}</th>
               <th class="px-4 py-3">Destination</th>
               <th class="px-4 py-3">Status</th>
               <th class="px-4 py-3">Attempts</th>
@@ -181,15 +181,15 @@
               <td colspan="8" class="bg-muted/20 px-4 py-3">
                 <div class="space-y-2 text-sm">
                   <div v-if="entry.response_body" class="rounded border bg-card p-3">
-                    <span class="text-xs font-medium text-muted-foreground">Response Body</span>
+                    <span class="text-xs font-medium text-muted-foreground">{{ $t('views.AdminNotificationDeliveryLogView.response_body') }}</span>
                     <pre class="mt-1 max-h-40 overflow-auto whitespace-pre-wrap break-all font-mono text-xs">{{ entry.response_body }}</pre>
                   </div>
                   <div v-if="entry.last_error" class="rounded border border-red-200 bg-red-50 p-3 dark:border-red-800 dark:bg-red-950/30">
-                    <span class="text-xs font-medium text-red-600 dark:text-red-400">Error Details</span>
+                    <span class="text-xs font-medium text-red-600 dark:text-red-400">{{ $t('views.AdminNotificationDeliveryLogView.error_details') }}</span>
                     <pre class="mt-1 max-h-40 overflow-auto whitespace-pre-wrap break-all font-mono text-xs text-red-700 dark:text-red-300">{{ entry.last_error }}</pre>
                   </div>
                   <div v-if="entry.response_code" class="text-muted-foreground">
-                    <span class="text-xs font-medium">HTTP Response Code:</span>
+                    <span class="text-xs font-medium">{{ $t('views.AdminNotificationDeliveryLogView.http_response_code') }}</span>
                     <code class="ml-1 font-mono text-xs">{{ entry.response_code }}</code>
                   </div>
                   <div v-if="!entry.response_body && !entry.last_error && !entry.response_code" class="text-xs text-muted-foreground italic">

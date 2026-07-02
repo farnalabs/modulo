@@ -1,8 +1,8 @@
-<template>
+﻿<template>
   <div class="mx-auto max-w-6xl space-y-6 p-6">
     <header>
-      <h1 class="text-3xl font-bold tracking-tight">Notification Delivery Log</h1>
-      <p class="mt-1 text-muted-foreground">Delivery history for all webhook notifications</p>
+      <h1 class="text-3xl font-bold tracking-tight">{{ $t('views.AdminNotificationDeliveryLogView.notification_delivery_log') }}</h1>
+      <p class="mt-1 text-muted-foreground">{{ $t('views.SettingsNotificationLogView.delivery_history_for_all_webhook_notifications') }}</p>
     </header>
 
     <div class="rounded-lg border bg-card p-4 shadow-sm">
@@ -14,10 +14,10 @@
             data-testid="settings-notification-log-status"
             class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring"
           >
-            <option value="">All statuses</option>
+            <option value="">{{ $t('views.AdminErrorsView.all_statuses') }}</option>
             <option value="delivered">Delivered</option>
             <option value="failed">Failed</option>
-            <option value="dead_lettered">Dead Lettered</option>
+            <option value="dead_lettered">{{ $t('views.AdminNotificationDeliveryLogView.dead_lettered') }}</option>
           </select>
         </div>
         <div>
@@ -65,7 +65,7 @@
     <ErrorAlert v-else-if="error" :message="error" :on-retry="loadDeliveries" />
 
     <div v-else-if="items.length === 0" class="rounded-lg border bg-card p-8 text-center">
-      <p class="text-lg font-medium">No delivery logs found</p>
+      <p class="text-lg font-medium">{{ $t('views.AdminNotificationDeliveryLogView.no_delivery_logs_found') }}</p>
       <p class="mt-1 text-sm text-muted-foreground">
         Try adjusting your filters or wait for notifications to be sent.
       </p>
@@ -76,12 +76,12 @@
         <table class="w-full">
           <thead>
             <tr class="border-b bg-muted/50 text-left text-xs font-medium uppercase text-muted-foreground">
-              <th class="px-4 py-3">Event Type</th>
+              <th class="px-4 py-3">{{ $t('views.AdminAuditView.event_type') }}</th>
               <th class="px-4 py-3">Destination</th>
               <th class="px-4 py-3">Status</th>
               <th class="px-4 py-3">Attempts</th>
-              <th class="px-4 py-3">Last Attempt</th>
-              <th class="px-4 py-3">Error Detail</th>
+              <th class="px-4 py-3">{{ $t('views.SettingsNotificationLogView.last_attempt') }}</th>
+              <th class="px-4 py-3">{{ $t('views.SettingsNotificationLogView.error_detail') }}</th>
             </tr>
           </thead>
           <tbody class="divide-y">

@@ -1,9 +1,9 @@
-<template>
+﻿<template>
   <div class="mx-auto max-w-5xl space-y-8 p-6">
     <header class="flex items-center justify-between">
       <div>
-        <h1 class="text-3xl font-bold tracking-tight">Saved Views</h1>
-        <p class="mt-1 text-muted-foreground">Manage saved views for organizing and filtering data</p>
+        <h1 class="text-3xl font-bold tracking-tight">{{ $t('components.ViewToggle.saved_views') }}</h1>
+        <p class="mt-1 text-muted-foreground">{{ $t('views.AdminViewsView.manage_saved_views_for_organizing_and_filtering_data') }}</p>
       </div>
       <button
         class="rounded-lg bg-primary px-4 py-2 text-sm font-semibold text-primary-foreground border border-primary/30 hover:border-primary/60 hover:brightness-110 transition-all duration-150"
@@ -27,13 +27,13 @@
             <input
               v-model="form.name"
               class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary/50"
-              placeholder="My View"
+              :placeholder="$t('views.AdminViewsView.my_view')"
               data-testid="admin-views-name-input"
               required
             />
           </div>
           <div>
-            <label class="mb-1 block text-sm font-medium">View Type</label>
+            <label class="mb-1 block text-sm font-medium">{{ $t('views.AdminViewsView.view_type') }}</label>
             <select
               v-model="form.view_type"
               class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary/50"
@@ -46,7 +46,7 @@
             </select>
           </div>
           <div>
-            <label class="mb-1 block text-sm font-medium">Filters (JSON)</label>
+            <label class="mb-1 block text-sm font-medium">{{ $t('views.AdminViewsView.filters_json') }}</label>
             <textarea
               v-model="form.filters"
               class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-primary/50"
@@ -60,13 +60,13 @@
             <input
               v-model="form.columns"
               class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary/50"
-              placeholder="name, status, created_at"
+              :placeholder="$t('views.AdminViewsView.name_status_createdat')"
               data-testid="admin-views-columns-input"
             />
           </div>
           <div class="grid grid-cols-2 gap-4">
             <div>
-              <label class="mb-1 block text-sm font-medium">Sort By</label>
+              <label class="mb-1 block text-sm font-medium">{{ $t('views.AdminViewsView.sort_by') }}</label>
               <input
                 v-model="form.sort_by"
                 class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary/50"
@@ -75,7 +75,7 @@
               />
             </div>
             <div>
-              <label class="mb-1 block text-sm font-medium">Sort Order</label>
+              <label class="mb-1 block text-sm font-medium">{{ $t('components.NodeCategoryEditor.sort_order') }}</label>
               <select
                 v-model="form.sort_order"
                 class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary/50"
@@ -121,7 +121,7 @@
           <line x1="3" y1="9" x2="21" y2="9" />
           <line x1="9" y1="21" x2="9" y2="9" />
         </svg>
-        <p class="mt-4 text-lg font-medium">No saved views yet</p>
+        <p class="mt-4 text-lg font-medium">{{ $t('views.AdminViewsView.no_saved_views_yet') }}</p>
         <p class="mt-1 text-sm text-muted-foreground max-w-md mx-auto">
           Create a view to save filter configurations and layout preferences so you can quickly switch between different data perspectives.
         </p>
@@ -146,8 +146,8 @@
               <th class="px-4 py-3 font-medium">Name</th>
               <th class="px-4 py-3 font-medium">Type</th>
               <th class="px-4 py-3 font-medium">Filters</th>
-              <th class="px-4 py-3 font-medium">Created By</th>
-              <th class="px-4 py-3 font-medium">Created At</th>
+              <th class="px-4 py-3 font-medium">{{ $t('views.AdminViewsView.created_by') }}</th>
+              <th class="px-4 py-3 font-medium">{{ $t('views.AdminViewsView.created_at') }}</th>
               <th class="px-4 py-3 font-medium text-right">Actions</th>
             </tr>
           </thead>
@@ -176,7 +176,7 @@
                   <button
                     class="rounded p-1 text-muted-foreground hover:bg-accent"
                     data-testid="admin-views-duplicate"
-                    :aria-label="'Duplicate view'"
+                    ::aria-label="$t('views.AdminViewsView.duplicate_view')"
                     title="Duplicate"
                     @click="duplicateView(v)"
                   >
@@ -187,8 +187,8 @@
                   <button
                     class="rounded p-1 text-muted-foreground hover:bg-accent"
                     data-testid="admin-views-edit"
-                    :aria-label="'Edit view'"
-                    title="Edit view"
+                    ::aria-label="$t('views.AdminViewsView.edit_view')"
+                    :title="$t('views.AdminViewsView.edit_view_1')"
                     @click="openEditForm(v)"
                   >
                     <svg class="h-4 w-4" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -198,8 +198,8 @@
                   <button
                     class="rounded p-1 text-destructive hover:bg-destructive/10"
                     data-testid="admin-views-delete"
-                    :aria-label="'Delete view'"
-                    title="Delete view"
+                    ::aria-label="$t('views.AdminViewsView.delete_view')"
+                    :title="$t('views.AdminViewsView.delete_view_1')"
                     @click="confirmDelete(v)"
                   >
                     <svg class="h-4 w-4" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -215,7 +215,7 @@
 
       <div v-if="deleteConfirmId" class="rounded-lg border border-destructive/50 bg-destructive/10 p-4">
         <p class="text-sm font-medium text-destructive">Delete "{{ deleteConfirmName }}"?</p>
-        <p class="mt-1 text-sm text-destructive/80">This action cannot be undone.</p>
+        <p class="mt-1 text-sm text-destructive/80">{{ $t('views.AdminModelBackendsView.this_action_cannot_be_undone') }}</p>
         <div class="mt-3 flex items-center gap-2">
           <button
             :disabled="deleting"

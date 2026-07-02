@@ -1,4 +1,4 @@
-<template>
+﻿<template>
   <div class="space-y-4">
     <div>
       <label class="mb-1 block text-sm font-medium">Name</label>
@@ -6,7 +6,7 @@
         v-model="form.name"
         type="text"
         class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-        placeholder="e.g. LLM Call, Connector Read"
+        :placeholder="$t('components.NodeCategoryEditor.eg_llm_call_connector_read')"
       />
     </div>
 
@@ -16,7 +16,7 @@
         v-model="form.description"
         rows="3"
         class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-        placeholder="Optional description of this category"
+        :placeholder="$t('components.NodeCategoryEditor.optional_description_of_this_category')"
       />
     </div>
 
@@ -49,7 +49,7 @@
         <option value="database">Database</option>
         <option value="globe">Globe</option>
         <option value="mail">Mail</option>
-        <option value="message-circle">Message Circle</option>
+        <option value="message-circle">{{ $t('components.NodeCategoryEditor.message_circle') }}</option>
         <option value="refresh-cw">Refresh</option>
         <option value="search">Search</option>
         <option value="settings">Settings</option>
@@ -61,7 +61,7 @@
     </div>
 
     <div>
-      <label class="mb-1 block text-sm font-medium">Sort Order</label>
+      <label class="mb-1 block text-sm font-medium">{{ $t('components.NodeCategoryEditor.sort_order') }}</label>
       <input
         v-model.number="form.sort_order"
         type="number"

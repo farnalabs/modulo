@@ -65,8 +65,12 @@ async def update_last_login(session: AsyncSession, account_id: uuid.UUID) -> Non
 async def update_account_preferences(
     session: AsyncSession, account_id: uuid.UUID, preferences: dict[str, object]
 ) -> dict[str, object]:
-    await session.execute(update(Account).where(Account.id == account_id).values(preferences=preferences))
-    return preferences
+    account = await get_account_by_id(session, account_id)
+    if account is None:
+        return preferences
+    merged = {**account.preferences, **preferences}
+    await session.execute(update(Account).where(Account.id == account_id).values(preferences=merged))
+    return merged
 
 
 async def list_accounts(

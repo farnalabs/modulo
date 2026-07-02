@@ -30,7 +30,7 @@
         type="button"
         class="rounded px-2 py-1 text-[11px] font-medium text-muted-foreground hover:bg-muted hover:text-foreground transition-colors"
         @click="$emit('review-later', notification.id)"
-        title="Hide from dashboard, keep in notifications page"
+        :title="$t('components.NotificationCard.hide_from_dashboard_keep_in_notifications_page')"
       >
         Review Later
       </button>
@@ -38,7 +38,7 @@
         type="button"
         class="rounded px-2 py-1 text-[11px] font-medium text-muted-foreground hover:bg-muted hover:text-destructive transition-colors"
         @click="showDismiss = true"
-        title="Dismiss this notification"
+        :title="$t('components.NotificationCard.dismiss_this_notification')"
       >
         Dismiss
       </button>

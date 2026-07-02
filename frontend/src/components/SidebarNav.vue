@@ -1,5 +1,5 @@
-<template>
-  <nav aria-label="Main navigation" class="flex-1 space-y-6">
+﻿<template>
+  <nav :aria-label="$t('components.SidebarNav.main_navigation')" class="flex-1 space-y-6">
     <template v-for="group in filteredGroups" :key="group.id">
       <SidebarGroup
         :id="group.id"

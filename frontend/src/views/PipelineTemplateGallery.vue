@@ -1,14 +1,14 @@
-<template>
+﻿<template>
   <div class="min-h-screen bg-background">
     <header class="bg-card border-b border-border px-6 py-4">
       <div class="max-w-6xl mx-auto flex items-center justify-between gap-3">
-        <h1 class="text-xl font-semibold text-foreground">Pipeline Templates</h1>
+        <h1 class="text-xl font-semibold text-foreground">{{ $t('views.LibraryView.pipeline_templates') }}</h1>
         <div class="relative">
           <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground pointer-events-none"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
           <input
             v-model="search"
             type="text"
-            placeholder="Search templates..."
+            :placeholder="$t('views.PipelineTemplateGallery.search_templates')"
             class="pl-9 pr-3 py-1.5 border border-input bg-background rounded-lg text-sm w-64"
             @input="debouncedSearch"
             data-testid="template-gallery-search"
@@ -140,7 +140,7 @@
         <div class="bg-card rounded-xl border border-border shadow-xl w-full max-w-lg mx-4 max-h-[90vh] overflow-y-auto">
           <div class="p-6">
             <div class="flex items-center justify-between mb-6">
-              <h2 class="text-lg font-semibold text-foreground">Use Template</h2>
+              <h2 class="text-lg font-semibold text-foreground">{{ $t('views.PipelineTemplateGallery.use_template') }}</h2>
               <button
                 class="text-muted-foreground hover:text-foreground transition-colors"
                 @click="showDialog = false"
@@ -157,31 +157,31 @@
 
             <div class="space-y-4">
               <div>
-                <label class="block text-sm font-medium text-foreground mb-1">Pipeline Name</label>
+                <label class="block text-sm font-medium text-foreground mb-1">{{ $t('views.LibraryPipelineWizard.pipeline_name') }}</label>
                 <input
                   v-model="pipelineName"
                   type="text"
                   class="w-full px-3 py-2 border border-input bg-background rounded-lg text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                  :placeholder="`${selectedTemplate?.name ?? 'Pipeline'}`"
+                  ::placeholder="$t('views.PipelineTemplateGallery.selectedtemplatename_pipeline')"
                   data-testid="template-gallery-dialog-name"
                 />
               </div>
 
               <div>
-                <label class="block text-sm font-medium text-foreground mb-1">Target Ownership</label>
+                <label class="block text-sm font-medium text-foreground mb-1">{{ $t('views.PipelineTemplateGallery.target_ownership') }}</label>
                 <OwnershipPicker v-model="ownership" label="Owner" />
               </div>
 
               <div>
-                <label class="block text-sm font-medium text-foreground mb-1">Initial Trigger</label>
+                <label class="block text-sm font-medium text-foreground mb-1">{{ $t('views.PipelineTemplateGallery.initial_trigger') }}</label>
                 <select
                   v-model="triggerType"
                   class="w-full px-3 py-2 border border-input bg-background rounded-lg text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                   data-testid="template-gallery-dialog-trigger"
                 >
-                  <option value="manual">Manual (run on demand)</option>
+                  <option value="manual">{{ $t('views.PipelineTemplateGallery.manual_run_on_demand') }}</option>
                   <option value="webhook">Webhook</option>
-                  <option value="cron">Cron / Scheduled</option>
+                  <option value="cron">{{ $t('views.PipelineTemplateGallery.cron_scheduled') }}</option>
                 </select>
               </div>
             </div>

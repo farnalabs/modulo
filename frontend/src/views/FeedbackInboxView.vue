@@ -1,8 +1,8 @@
-<template>
+﻿<template>
   <div class="mx-auto max-w-6xl space-y-8 p-6">
     <header>
-      <h1 data-testid="feedback-inbox-title" class="text-3xl font-bold tracking-tight">Feedback Inbox</h1>
-      <p class="mt-1 text-muted-foreground">Review and resolve pending feedback from pipeline evaluations</p>
+      <h1 data-testid="feedback-inbox-title" class="text-3xl font-bold tracking-tight">{{ $t('views.FeedbackInboxView.feedback_inbox') }}</h1>
+      <p class="mt-1 text-muted-foreground">{{ $t('views.FeedbackInboxView.review_and_resolve_pending_feedback_from_pipeline_evaluation') }}</p>
     </header>
 
     <div class="flex flex-wrap items-center gap-4">
@@ -31,7 +31,7 @@
           class="rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
           @change="loadFeedback"
         >
-          <option value="">All Pipelines</option>
+          <option value="">{{ $t('views.FeedbackInboxView.all_pipelines') }}</option>
           <option
             v-for="p in pipelines"
             :key="p.id"
@@ -81,8 +81,8 @@
         >
           <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
         </svg>
-        <p class="text-lg font-medium">No feedback yet</p>
-        <p class="mt-1 text-sm text-muted-foreground">All feedback records have been resolved or no evaluations have run yet.</p>
+        <p class="text-lg font-medium">{{ $t('views.FeedbackInboxView.no_feedback_yet') }}</p>
+        <p class="mt-1 text-sm text-muted-foreground">{{ $t('views.FeedbackInboxView.all_feedback_records_have_been_resolved_or_no_evaluations_ha') }}</p>
       </div>
 
       <div v-else class="space-y-2">

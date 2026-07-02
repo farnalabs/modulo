@@ -240,11 +240,10 @@ foreach ($file in $vueFiles) {
 Write-Host "Raw extractions: $($allTexts.Count)" -ForegroundColor Cyan
 
 # ── Deduplicate ──
-$unique = @{}
+$unique = [Ordered]@{}
 foreach ($item in $allTexts) {
   $t = $item.text
-  if (-not $unique.ContainsKey($t)) { $unique[$t] = @() }
-  [void]$unique[$t].Add($item)
+  if (-not $unique.Contains($t)) { $unique[$t] = $item }
 }
 
 Write-Host "Unique strings: $($unique.Count)" -ForegroundColor Cyan
@@ -320,8 +319,7 @@ if ($outCommon.Count -gt 0) {
 $byFile = @{}
 foreach ($kv in $unique.GetEnumerator()) {
   if ($seenInCommon.ContainsKey($kv.Key)) { continue }
-  $locations = $kv.Value
-  $firstFile = $locations[0].file
+  $firstFile = $kv.Value.file
   
   # Determine category
   if ($firstFile -match '^views/(.+?)(/|$)') {

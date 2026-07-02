@@ -1,4 +1,4 @@
-<template>
+﻿<template>
   <div class="remy-chat flex flex-col flex-1 overflow-hidden">
     <div
       ref="scrollRef"
@@ -103,7 +103,7 @@
         <input
           v-model="inputText"
           class="remy-input flex-1"
-          placeholder="Ask Remy..."
+          :placeholder="$t('components.remy.RemyChat.ask_remy')"
           @keydown.enter.prevent="handleSend"
           :disabled="store.isStreaming"
         />

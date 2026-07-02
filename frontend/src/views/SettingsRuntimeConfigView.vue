@@ -1,7 +1,7 @@
-<template>
+﻿<template>
   <div class="mx-auto max-w-6xl space-y-6 p-6">
     <header>
-      <h1 class="text-3xl font-bold tracking-tight">Runtime Configuration</h1>
+      <h1 class="text-3xl font-bold tracking-tight">{{ $t('views.SettingsRuntimeConfigView.runtime_configuration') }}</h1>
       <p class="mt-1 text-muted-foreground">
         View and override configuration without restarting the server.
       </p>
@@ -10,7 +10,7 @@
     <div class="flex items-center gap-3">
       <div v-if="hasDrift" class="flex items-center gap-2 rounded-lg border border-warning/50 bg-warning/10 px-4 py-2 text-sm text-warning">
         <span>⚠</span>
-        <span>Some values differ from environment — restart to sync.</span>
+        <span>{{ $t('views.SettingsRuntimeConfigView.some_values_differ_from_environment_restart_to_sync') }}</span>
       </div>
       <button
         type="button"
@@ -32,8 +32,8 @@
         <thead>
           <tr class="border-b text-left text-sm font-medium text-muted-foreground">
             <th class="px-4 py-3">Key</th>
-            <th class="px-4 py-3">Current Value</th>
-            <th class="px-4 py-3">Expected (env)</th>
+            <th class="px-4 py-3">{{ $t('views.SettingsRuntimeConfigView.current_value') }}</th>
+            <th class="px-4 py-3">{{ $t('views.SettingsRuntimeConfigView.expected_env') }}</th>
             <th class="px-4 py-3">Default</th>
             <th class="px-4 py-3">Provenance</th>
             <th class="px-4 py-3">Actions</th>
@@ -48,7 +48,7 @@
             >
               <td class="px-4 py-3">
                 <div class="flex items-center gap-2">
-                  <span v-if="entryHasDrift(entry)" class="text-warning" title="Value differs from environment">⚠</span>
+                  <span v-if="entryHasDrift(entry)" class="text-warning" :title="$t('views.SettingsRuntimeConfigView.value_differs_from_environment')">⚠</span>
                 <code class="text-sm font-mono">{{ entry.key }}</code>
                   <span
                     v-if="entry.hot_reloadable"
@@ -59,7 +59,7 @@
                   <span
                     v-else
                     class="badge badge-status-muted"
-                    title="Requires server restart"
+                    :title="$t('views.SettingsRuntimeConfigView.requires_server_restart')"
                   >
                     static
                   </span>

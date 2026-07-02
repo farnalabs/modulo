@@ -1,4 +1,4 @@
-<script setup lang="ts">
+﻿<script setup lang="ts">
 defineProps<{
   size?: number;
   transparent?: boolean;
@@ -13,7 +13,7 @@ defineProps<{
     fill="none"
     xmlns="http://www.w3.org/2000/svg"
     role="img"
-    aria-label="Modulo logo"
+    :aria-label="$t('components.LogoMark.modulo_logo')"
   >
     <rect
       v-if="!transparent"

@@ -1,4 +1,4 @@
-<template>
+﻿<template>
   <BackLink to="/" label="Back to Dashboard" />
   <div class="mx-auto max-w-6xl space-y-8 p-6">
     <LoadingSpinner v-if="loading" />
@@ -8,7 +8,7 @@
       <header class="flex flex-wrap items-center justify-between gap-4">
         <div>
           <div class="flex items-center gap-3">
-            <h1 class="text-3xl font-bold tracking-tight">Run Detail</h1>
+            <h1 class="text-3xl font-bold tracking-tight">{{ $t('views.RunDetailView.run_detail') }}</h1>
             <span :class="statusBadgeClass" class="capitalize">{{ run.status }}</span>
           </div>
           <p class="mt-1 text-sm text-muted-foreground">
@@ -34,18 +34,18 @@
 
       <!-- Timestamps -->
       <div v-if="runTimestamps" class="flex flex-wrap gap-x-6 gap-y-1 text-xs text-muted-foreground">
-        <div><span class="font-medium text-foreground">Created:</span> {{ runTimestamps.created }}</div>
-        <div><span class="font-medium text-foreground">Started:</span> {{ runTimestamps.started }}</div>
-        <div><span class="font-medium text-foreground">Completed:</span> {{ runTimestamps.completed }}</div>
+        <div><span class="font-medium text-foreground">{{ $t('views.RunDetailView.created') }}</span> {{ runTimestamps.created }}</div>
+        <div><span class="font-medium text-foreground">{{ $t('views.RunDetailView.started') }}</span> {{ runTimestamps.started }}</div>
+        <div><span class="font-medium text-foreground">{{ $t('views.RunDetailView.completed') }}</span> {{ runTimestamps.completed }}</div>
       </div>
 
       <!-- Trace ID -->
       <div v-if="run.trace_id" class="flex items-center gap-2">
-        <span class="text-xs text-muted-foreground">OTel Trace ID:</span>
+        <span class="text-xs text-muted-foreground">{{ $t('views.RunDetailView.otel_trace_id') }}</span>
         <code class="rounded bg-muted px-1.5 py-0.5 font-mono text-xs">{{ run.trace_id }}</code>
         <button
           data-testid="run-detail-copy-trace-id"
-          aria-label="Copy trace ID"
+          :aria-label="$t('views.RunDetailView.copy_trace_id')"
           class="inline-flex items-center gap-1 rounded-md px-2 py-1 text-xs font-medium text-primary hover:bg-primary/10"
           @click="copyTraceId"
         >
@@ -55,7 +55,7 @@
 
       <!-- Per-Node Execution Trace -->
       <section class="space-y-4 rounded-lg border bg-card p-6">
-        <h2 class="text-lg font-semibold tracking-tight">Execution Trace</h2>
+        <h2 class="text-lg font-semibold tracking-tight">{{ $t('views.RunDetailView.execution_trace') }}</h2>
 
         <div v-if="nodeEntries.length === 0" class="py-4 text-center text-sm text-muted-foreground">
           No node data available for this run.
@@ -67,10 +67,10 @@
               <th class="pb-2 pr-4 font-medium">Node</th>
               <th class="pb-2 pr-4 font-medium">Status</th>
               <th class="pb-2 pr-4 font-medium">Duration</th>
-              <th class="pb-2 pr-4 font-medium">Input Tokens</th>
-              <th class="pb-2 pr-4 font-medium">Output Tokens</th>
+              <th class="pb-2 pr-4 font-medium">{{ $t('views.RunDetailView.input_tokens') }}</th>
+              <th class="pb-2 pr-4 font-medium">{{ $t('views.RunDetailView.output_tokens') }}</th>
               <th class="pb-2 pr-4 font-medium">Cost</th>
-              <th class="pb-2 pr-4 font-medium">Trace ID</th>
+              <th class="pb-2 pr-4 font-medium">{{ $t('views.RunDetailView.trace_id') }}</th>
               <th class="pb-2 pr-4 font-medium">IO</th>
               <th class="pb-2 font-medium">Prompt</th>
             </tr>
@@ -93,7 +93,7 @@
                 <button
                   v-if="node.traceId"
                   data-testid="run-detail-node-trace-id"
-                  aria-label="Copy node trace ID"
+                  :aria-label="$t('views.RunDetailView.copy_node_trace_id')"
                   class="cursor-pointer rounded bg-muted px-1.5 py-0.5 font-mono text-xs"
                   :title="node.traceId"
                   @click="copyText(node.traceId!)"
@@ -158,7 +158,7 @@
       <!-- Total Run Cost -->
       <section v-if="run.total_cost_usd != null" class="rounded-lg border bg-card p-6">
         <div class="flex items-center justify-between">
-          <h2 class="text-lg font-semibold tracking-tight">Total Run Cost</h2>
+          <h2 class="text-lg font-semibold tracking-tight">{{ $t('views.RunDetailView.total_run_cost') }}</h2>
           <span class="text-2xl font-bold tabular-nums">${{ formattedCost }}</span>
         </div>
         <p v-if="totalTokens != null" class="mt-1 text-xs text-muted-foreground">

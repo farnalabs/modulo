@@ -1,4 +1,4 @@
-<script setup lang="ts">
+﻿<script setup lang="ts">
 import { computed } from "vue";
 import type { ParameterPort } from "../../../types/pipeline";
 
@@ -58,7 +58,7 @@ function onBooleanChange(event: Event) {
       <textarea
         :value="localValue as string"
         class="min-h-[80px] w-full rounded-lg border border-input bg-background px-3 py-2 text-sm placeholder:text-muted-foreground focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50"
-        :placeholder="(port.default as string) ?? ''"
+        ::placeholder="$t('components.pipeline.composite.ParameterPortForm.portdefault_as_string')"
         @change="onStringChange"
       />
     </template>

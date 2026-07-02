@@ -1,4 +1,4 @@
-<template>
+﻿<template>
   <BackLink to="/admin/errors" label="Back to Error Dashboard" />
   <div class="mx-auto max-w-6xl space-y-6 p-6">
     <header class="flex items-center justify-between">
@@ -10,7 +10,7 @@
           &larr; Back
         </button>
         <div>
-          <h1 class="text-2xl font-bold tracking-tight">Error Group Detail</h1>
+          <h1 class="text-2xl font-bold tracking-tight">{{ $t('views.AdminErrorDetailView.error_group_detail') }}</h1>
           <p v-if="group" class="mt-0.5 text-sm text-muted-foreground font-mono">
             {{ group.fingerprint.slice(0, 16) }}...
           </p>
@@ -42,11 +42,11 @@
 
       <div class="grid grid-cols-1 gap-4 lg:grid-cols-2">
         <div class="card p-4">
-          <span class="text-xs font-medium text-muted-foreground">First Seen</span>
+          <span class="text-xs font-medium text-muted-foreground">{{ $t('views.AdminErrorDetailView.first_seen') }}</span>
           <p class="mt-0.5 text-sm">{{ formatDate(group.first_seen) }}</p>
         </div>
         <div class="card p-4">
-          <span class="text-xs font-medium text-muted-foreground">Last Seen</span>
+          <span class="text-xs font-medium text-muted-foreground">{{ $t('views.AdminErrorDetailView.last_seen') }}</span>
           <p class="mt-0.5 text-sm">{{ formatDate(group.last_seen) }}</p>
         </div>
       </div>
@@ -76,7 +76,7 @@
             Archive
           </button>
           <div class="ml-auto flex items-center gap-2">
-            <span class="text-xs text-muted-foreground">Assign to:</span>
+            <span class="text-xs text-muted-foreground">{{ $t('views.AdminErrorDetailView.assign_to') }}</span>
             <select
               v-model="assigneeId"
               class="rounded-lg border border-input bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring"
@@ -151,7 +151,7 @@
             <p class="mt-0.5">{{ sampleEvent.version || '—' }}</p>
           </div>
           <div>
-            <span class="text-xs font-medium text-muted-foreground">Event ID</span>
+            <span class="text-xs font-medium text-muted-foreground">{{ $t('views.AdminErrorDetailView.event_id') }}</span>
             <p class="mt-0.5 font-mono text-xs">{{ sampleEvent.id.slice(0, 12) }}...</p>
           </div>
         </div>

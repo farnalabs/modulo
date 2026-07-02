@@ -1,8 +1,8 @@
-<template>
+﻿<template>
   <div data-theme="agent" class="mx-auto max-w-4xl space-y-8 p-6">
     <header>
-      <h1 data-testid="rate-limits-title" class="text-3xl font-bold tracking-tight">Rate Limits</h1>
-      <p class="mt-1 text-muted-foreground">View per-route rate limiting rules and current usage</p>
+      <h1 data-testid="rate-limits-title" class="text-3xl font-bold tracking-tight">{{ $t('views.SettingsRateLimitsView.rate_limits') }}</h1>
+      <p class="mt-1 text-muted-foreground">{{ $t('views.SettingsRateLimitsView.view_perroute_rate_limiting_rules_and_current_usage') }}</p>
     </header>
 
     <LoadingSpinner v-if="loading" />
@@ -30,9 +30,9 @@
         <table v-if="rules.length > 0" data-testid="rate-limits-table" class="w-full text-sm">
           <thead>
             <tr class="border-b text-left text-muted-foreground">
-              <th class="pb-2 font-medium">Path Prefix</th>
-              <th class="pb-2 font-medium">Max Requests</th>
-              <th class="pb-2 font-medium">Window (s)</th>
+              <th class="pb-2 font-medium">{{ $t('views.SettingsRateLimitsView.path_prefix') }}</th>
+              <th class="pb-2 font-medium">{{ $t('views.SettingsRateLimitsView.max_requests') }}</th>
+              <th class="pb-2 font-medium">{{ $t('views.SettingsRateLimitsView.window_s') }}</th>
             </tr>
           </thead>
           <tbody>
@@ -43,7 +43,7 @@
             </tr>
           </tbody>
         </table>
-        <div v-else class="text-sm text-muted-foreground">No rate limit rules configured.</div>
+        <div v-else class="text-sm text-muted-foreground">{{ $t('views.SettingsRateLimitsView.no_rate_limit_rules_configured') }}</div>
       </div>
     </div>
   </div>
