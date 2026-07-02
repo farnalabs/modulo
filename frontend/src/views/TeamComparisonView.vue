@@ -1,8 +1,8 @@
-<template>
+﻿<template>
   <div class="mx-auto max-w-6xl space-y-6 p-6">
     <header>
-      <h1 class="text-3xl font-bold tracking-tight">Team Comparison</h1>
-      <p class="mt-1 text-muted-foreground">Side-by-side eval pass rates and pipeline metrics across teams</p>
+      <h1 class="text-3xl font-bold tracking-tight">{{ $t('views.TeamComparisonView.team_comparison') }}</h1>
+      <p class="mt-1 text-muted-foreground">{{ $t('views.TeamComparisonView.sidebyside_eval_pass_rates_and_pipeline_metrics_across_teams') }}</p>
     </header>
 
     <LoadingSpinner v-if="loading" />
@@ -13,15 +13,15 @@
       <!-- Org-wide summary cards -->
       <div class="grid gap-4 sm:grid-cols-4">
         <div class="rounded-lg border bg-card p-4 text-card-foreground shadow-sm">
-          <p class="text-sm font-medium text-muted-foreground">Total Runs</p>
+          <p class="text-sm font-medium text-muted-foreground">{{ $t('views.TeamComparisonView.total_runs') }}</p>
           <p class="mt-1 text-3xl font-bold">{{ data.summary.total_runs }}</p>
         </div>
         <div class="rounded-lg border bg-card p-4 text-card-foreground shadow-sm">
-          <p class="text-sm font-medium text-muted-foreground">Active Pipelines</p>
+          <p class="text-sm font-medium text-muted-foreground">{{ $t('views.TeamComparisonView.active_pipelines') }}</p>
           <p class="mt-1 text-3xl font-bold">{{ data.summary.active_pipelines }}</p>
         </div>
         <div class="rounded-lg border bg-card p-4 text-card-foreground shadow-sm">
-          <p class="text-sm font-medium text-muted-foreground">Eval Pass Rate</p>
+          <p class="text-sm font-medium text-muted-foreground">{{ $t('views.ABTestModelsView.eval_pass_rate') }}</p>
           <p class="mt-1 text-3xl font-bold" :class="passRateClass(data.orgEvalPassRate)">
             {{ data.orgEvalPassRate != null ? `${data.orgEvalPassRate}%` : '—' }}
           </p>
@@ -39,10 +39,10 @@
             <tr class="border-b bg-muted/50 text-left text-xs font-medium uppercase text-muted-foreground">
               <th class="px-4 py-3">Team</th>
               <th class="px-4 py-3">Members</th>
-              <th class="px-4 py-3">Total Runs</th>
-              <th class="px-4 py-3">Active Pipelines</th>
-              <th class="px-4 py-3">Eval Pass Rate</th>
-              <th class="px-4 py-3">Run Status</th>
+              <th class="px-4 py-3">{{ $t('views.TeamComparisonView.total_runs') }}</th>
+              <th class="px-4 py-3">{{ $t('views.TeamComparisonView.active_pipelines') }}</th>
+              <th class="px-4 py-3">{{ $t('views.ABTestModelsView.eval_pass_rate') }}</th>
+              <th class="px-4 py-3">{{ $t('views.TeamComparisonView.run_status') }}</th>
               <th class="w-8 px-4 py-3" />
             </tr>
           </thead>

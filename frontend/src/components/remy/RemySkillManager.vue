@@ -1,4 +1,4 @@
-<template>
+﻿<template>
   <div class="remy-skills flex flex-col flex-1 overflow-hidden">
     <div class="flex items-center justify-between p-3 border-b">
       <h3
@@ -11,7 +11,7 @@
         variant="ghost"
         size="icon"
         @click="openCreateForm"
-        title="New skill"
+        :title="$t('components.remy.RemySkillManager.new_skill')"
       >
         <svg
           xmlns="http://www.w3.org/2000/svg"
@@ -32,7 +32,7 @@
       <input
         v-model="form.name"
         class="remy-skill-input"
-        placeholder="Skill name"
+        :placeholder="$t('components.remy.RemySkillDialog.skill_name')"
       />
       <input
         v-model="form.description"
@@ -42,12 +42,12 @@
       <input
         v-model="form.triggersText"
         class="remy-skill-input"
-        placeholder="Triggers (comma-separated)"
+        :placeholder="$t('components.remy.RemySkillManager.triggers_commaseparated')"
       />
       <textarea
         v-model="form.body"
         class="remy-skill-textarea"
-        placeholder="Skill body (Markdown)"
+        :placeholder="$t('components.remy.RemySkillManager.skill_body_markdown')"
         rows="4"
       />
       <div class="flex gap-2 justify-end">
@@ -67,7 +67,7 @@
         v-if="skills.length === 0 && !showForm"
         class="flex items-center justify-center py-12"
       >
-        <p class="text-sm text-muted-foreground">No skills yet</p>
+        <p class="text-sm text-muted-foreground">{{ $t('components.remy.RemySkillManager.no_skills_yet') }}</p>
       </div>
       <div v-for="skill in skills" :key="skill.id" class="remy-skill-item p-3">
         <div class="flex items-start justify-between gap-2">

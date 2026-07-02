@@ -1,7 +1,7 @@
 ﻿<template>
   <div class="inline-flex items-center rounded-lg border bg-background p-4 shadow-sm min-w-[300px] max-w-[400px]">
     <div class="flex-1">
-      <p class="text-sm font-medium">Dismiss this notification?</p>
+      <p class="text-sm font-medium">{{ $t('components.DismissDialog.dismiss_this_notification') }}</p>
       <p class="mt-1 text-xs text-muted-foreground">
         Choose whether to dismiss for yourself or for everyone who can see this notification.
       </p>

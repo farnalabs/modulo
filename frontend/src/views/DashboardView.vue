@@ -1,9 +1,9 @@
-<template>
+﻿<template>
   <div class="mx-auto max-w-6xl space-y-8 p-6">
     <DashboardNotificationsPanel class="mb-4" />
     <header>
       <h1 data-testid="dashboard-title" class="text-3xl font-bold tracking-tight">Dashboard</h1>
-      <p class="mt-1 text-muted-foreground">Overview of your organisation's pipelines and runs</p>
+      <p class="mt-1 text-muted-foreground">{{ $t('views.DashboardView.overview_of_your_organisations_pipelines_and_runs') }}</p>
     </header>
 
     <!-- Loading skeleton grid -->

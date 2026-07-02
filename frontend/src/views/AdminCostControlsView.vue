@@ -1,4 +1,4 @@
-<template>
+﻿<template>
   <PageTabs :tabs="[
     { label: 'Overview', to: '/admin/costs' },
     { label: 'Spend Limits', to: '/admin/costs/limits' },
@@ -6,15 +6,15 @@
   ]" />
   <div data-theme="agent" class="mx-auto max-w-6xl space-y-6 p-6">
     <header>
-      <h1 class="text-3xl font-bold tracking-tight">Cost Controls</h1>
-      <p class="mt-1 text-muted-foreground">Budget overview, team budgets, alert thresholds, and billing settings</p>
+      <h1 class="text-3xl font-bold tracking-tight">{{ $t('views.AdminCostBreakdownView.cost_controls') }}</h1>
+      <p class="mt-1 text-muted-foreground">{{ $t('views.AdminCostControlsView.budget_overview_team_budgets_alert_thresholds_and_billing_se') }}</p>
     </header>
 
     <FeatureGate feature-name="admin_cost_controls" required-tier="team">
       <template #locked="{ tooltip }">
         <div class="mb-4 flex items-center gap-2 rounded-lg border border-warning/30 bg-warning/5 p-4 text-sm text-warning">
           <LockIcon :locked="true" :tooltip="tooltip" />
-          <span>Cost controls are not available on your current plan.</span>
+          <span>{{ $t('views.AdminCostControlsView.cost_controls_are_not_available_on_your_current_plan') }}</span>
         </div>
       </template>
 

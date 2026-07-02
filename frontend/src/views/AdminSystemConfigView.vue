@@ -1,9 +1,9 @@
-<template>
+﻿<template>
   <div class="mx-auto max-w-6xl space-y-6 p-6">
     <header class="flex items-center justify-between">
       <div>
-        <h1 class="text-3xl font-bold tracking-tight">System Admin — Config</h1>
-        <p class="mt-1 text-muted-foreground">Deployment-wide system configuration (system admin only)</p>
+        <h1 class="text-3xl font-bold tracking-tight">{{ $t('views.AdminSystemConfigView.system_admin_config') }}</h1>
+        <p class="mt-1 text-muted-foreground">{{ $t('views.AdminSystemConfigView.deploymentwide_system_configuration_system_admin_only') }}</p>
       </div>
       <button
         type="button"

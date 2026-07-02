@@ -1,4 +1,4 @@
-<script setup lang="ts">
+﻿<script setup lang="ts">
 import { ref, computed, onMounted } from "vue";
 import { PopoverRoot, PopoverTrigger, PopoverContent } from "radix-vue";
 import type { Component } from "vue";
@@ -86,7 +86,7 @@ onMounted(loadTeams);
         class="flex w-full items-center justify-between rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background placeholder:text-muted-foreground hover:bg-accent/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1 disabled:cursor-not-allowed disabled:opacity-50 [&>svg]:shrink-0 transition-colors"
       >
         <span v-if="selectedLabel">{{ selectedLabel }}</span>
-        <span v-else class="text-muted-foreground">Select ownership...</span>
+        <span v-else class="text-muted-foreground">{{ $t('components.OwnershipPicker.select_ownership') }}</span>
         <ChevronDown
           class="h-4 w-4 text-muted-foreground transition-transform duration-200"
           :class="open && 'rotate-180'"
@@ -107,8 +107,8 @@ onMounted(loadTeams);
           @click="selectOrg"
         >
           <Earth class="mr-2 h-4 w-4 text-muted-foreground shrink-0" />
-          <span class="flex-1">Org-wide</span>
-          <span class="text-xs text-muted-foreground">Everyone in the org</span>
+          <span class="flex-1">{{ $t('components.OwnershipPicker.orgwide') }}</span>
+          <span class="text-xs text-muted-foreground">{{ $t('components.OwnershipPicker.everyone_in_the_org') }}</span>
         </button>
         <div
           v-if="teams.length > 0"

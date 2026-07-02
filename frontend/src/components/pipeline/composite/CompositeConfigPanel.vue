@@ -1,4 +1,4 @@
-<script setup lang="ts">
+﻿<script setup lang="ts">
 import { ref, computed } from "vue";
 import { useCompositeStore } from "../../../stores/compositeStore";
 import Tabs from "../../ui/tabs/Tabs.vue";
@@ -66,7 +66,7 @@ function updatePortValue(portName: string, value: unknown) {
       v-if="!composite"
       class="py-8 text-center text-sm text-muted-foreground"
     >
-      <p>No composite selected.</p>
+      <p>{{ $t('components.pipeline.composite.CompositeConfigPanel.no_composite_selected') }}</p>
       <p class="mt-1 text-xs">
         Select a composite node to configure its parameters.
       </p>
@@ -147,7 +147,7 @@ function updatePortValue(portName: string, value: unknown) {
               <path d="M5 12h14" />
               <path d="M12 5l7 7-7 7" />
             </svg>
-            <p>Schema mapping coming soon</p>
+            <p>{{ $t('components.pipeline.composite.CompositeConfigPanel.schema_mapping_coming_soon') }}</p>
             <p class="mt-1 text-xs">
               Input and output schemas will be mappable here.
             </p>

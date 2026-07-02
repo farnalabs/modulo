@@ -1,4 +1,4 @@
-<template>
+﻿<template>
   <BackLink to="/library" label="Back to Library" />
   <div class="min-h-screen bg-background">
     <header class="bg-card border-b border-border px-6 py-4">
@@ -10,7 +10,7 @@
         >
           &larr; Back to Library
         </button>
-        <h1 class="text-xl font-semibold text-foreground">Create Pipeline from Template</h1>
+        <h1 class="text-xl font-semibold text-foreground">{{ $t('views.LibraryPipelineWizard.create_pipeline_from_template') }}</h1>
       </div>
     </header>
 
@@ -37,22 +37,22 @@
           </div>
 
           <div class="bg-muted rounded-lg p-4 text-sm text-foreground">
-            <p><strong>Author:</strong> {{ primitive?.author }}</p>
-            <p><strong>Version:</strong> {{ primitive?.version }}</p>
+            <p><strong>{{ $t('views.LibraryPipelineWizard.author') }}</strong> {{ primitive?.author }}</p>
+            <p><strong>{{ $t('views.LibraryPipelineWizard.version') }}</strong> {{ primitive?.version }}</p>
           </div>
         </div>
 
         <div class="card p-6 mb-6">
-          <h3 class="text-base font-medium text-foreground mb-4">Pipeline Configuration</h3>
+          <h3 class="text-base font-medium text-foreground mb-4">{{ $t('views.LibraryPipelineWizard.pipeline_configuration') }}</h3>
 
           <div class="space-y-4">
             <div>
-              <label class="block text-sm font-medium text-foreground mb-1">Pipeline Name</label>
+              <label class="block text-sm font-medium text-foreground mb-1">{{ $t('views.LibraryPipelineWizard.pipeline_name') }}</label>
               <input
                 v-model="pipelineName"
                 type="text"
                 class="w-full px-3 py-2 border border-input bg-background rounded-lg text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                :placeholder="`${primitive?.name ?? 'Pipeline'} (from template)`"
+                ::placeholder="$t('views.LibraryPipelineWizard.primitivename_pipeline_from_template')"
                 data-testid="library-wizard-pipeline-name"
               />
             </div>
@@ -63,7 +63,7 @@
                 v-model="pipelineDescription"
                 rows="3"
                 class="w-full px-3 py-2 border border-input bg-background rounded-lg text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                :placeholder="primitive?.description ?? 'Pipeline created from library template'"
+                ::placeholder="$t('views.LibraryPipelineWizard.primitivedescription_pipeline_created_from_library_template')"
                 data-testid="library-wizard-description"
               />
             </div>
@@ -72,7 +72,7 @@
 
         <div class="card p-6 mb-6">
           <h3 class="text-base font-medium text-foreground mb-4">Ownership</h3>
-          <p class="text-sm text-muted-foreground mb-4">Choose who this pipeline belongs to. Org-wide pipelines are visible to everyone in the organisation; team pipelines are visible only to team members.</p>
+          <p class="text-sm text-muted-foreground mb-4">{{ $t('views.LibraryPipelineWizard.choose_who_this_pipeline_belongs_to_orgwide_pipelines_are_vi') }}</p>
           <OwnershipPicker v-model="ownership" label="Owner" />
         </div>
 
@@ -126,10 +126,10 @@
           v-if="result"
           class="mt-6 rounded-lg border border-success/50 bg-success/10 p-4 text-success"
         >
-          <p class="font-medium">Pipeline created!</p>
+          <p class="font-medium">{{ $t('views.LibraryPipelineWizard.pipeline_created') }}</p>
           <p class="text-sm mt-1">
             {{ result.name }} is ready. 
-             <a :href="`/pipelines/${result.id}`" class="underline font-medium" data-testid="library-wizard-view-pipeline">View pipeline</a>
+             <a :href="`/pipelines/${result.id}`" class="underline font-medium" data-testid="library-wizard-view-pipeline">{{ $t('views.LibraryPipelineWizard.view_pipeline') }}</a>
           </p>
         </div>
 

@@ -39,10 +39,12 @@ async def current_user_profile(
 
 class SettingsResponse(BaseModel):
     theme: str | None = None
+    locale: str | None = None
 
 
 class SettingsUpdate(BaseModel):
     theme: str | None = None
+    locale: str | None = None
 
 
 @router.get("/me/settings", response_model=SettingsResponse)
@@ -65,6 +67,8 @@ async def update_user_settings(
     prefs = {}
     if body.theme is not None:
         prefs["theme"] = body.theme
+    if body.locale is not None:
+        prefs["locale"] = body.locale
     return await update_account_preferences(session, current_user.account_id, prefs)
 
 

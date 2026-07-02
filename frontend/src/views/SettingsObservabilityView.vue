@@ -1,15 +1,15 @@
-<template>
+﻿<template>
   <div class="mx-auto max-w-4xl space-y-8 p-6">
     <header>
       <h1 class="text-3xl font-bold tracking-tight">Observability</h1>
-      <p class="mt-1 text-muted-foreground">Configure OpenTelemetry export and LangSmith integration</p>
+      <p class="mt-1 text-muted-foreground">{{ $t('views.SettingsObservabilityView.configure_opentelemetry_export_and_langsmith_integration') }}</p>
     </header>
 
     <FeatureGate feature-name="observability" required-tier="team">
       <template #locked="{ tooltip }">
         <div class="mb-4 flex items-center gap-2 rounded-lg border border-warning/30 bg-warning/5 p-4 text-sm text-warning">
           <LockIcon :locked="true" :tooltip="tooltip" />
-          <span>Observability settings are not available on your current plan.</span>
+          <span>{{ $t('views.SettingsObservabilityView.observability_settings_are_not_available_on_your_current_pla') }}</span>
         </div>
       </template>
 

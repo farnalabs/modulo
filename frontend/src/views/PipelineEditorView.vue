@@ -1,4 +1,4 @@
-<template>
+﻿<template>
   <BackLink to="/library" label="Back to Library" />
   <div class="flex h-[calc(100vh-3.5rem)]">
     <div v-if="loading" class="flex flex-1 items-center justify-center">
@@ -11,7 +11,7 @@
       <div class="relative flex-1">
         <!-- Toolbar -->
         <div class="absolute left-4 top-4 z-10 flex items-center gap-2 rounded-lg border bg-card px-3 py-2 shadow-sm">
-          <h2 class="text-sm font-semibold">Pipeline Editor</h2>
+          <h2 class="text-sm font-semibold">{{ $t('views.PipelineEditorView.pipeline_editor') }}</h2>
           <span class="mx-2 h-4 w-px bg-border" />
           <div class="relative" @click.stop>
             <button

@@ -78,7 +78,7 @@
           >
             <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z" />
           </svg>
-          <span>{{ isLight ? "Light" : "Dark" }}</span>
+          <span>{{ isLight ? $t('common.light') : $t('common.dark') }}</span>
         </span>
         <input
           type="checkbox"
@@ -92,7 +92,7 @@
         @click="$emit('logout')"
         class="text-xs text-muted-foreground hover:text-foreground transition-colors"
       >
-        Sign out
+        {{ $t('common.sign_out') }}
       </button>
     </div>
   </div>

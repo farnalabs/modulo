@@ -1,8 +1,8 @@
-<template>
+﻿<template>
   <div class="p-6 max-w-2xl mx-auto space-y-6">
     <div>
-      <h1 class="text-2xl font-bold tracking-tight">My Profile</h1>
-      <p class="text-muted-foreground mt-1">Manage your account settings and password.</p>
+      <h1 class="text-2xl font-bold tracking-tight">{{ $t('views.MyProfileView.my_profile') }}</h1>
+      <p class="text-muted-foreground mt-1">{{ $t('views.MyProfileView.manage_your_account_settings_and_password') }}</p>
     </div>
 
     <div class="card p-6 space-y-6">
@@ -23,10 +23,10 @@
     </div>
 
     <div class="card p-6">
-      <h2 class="text-lg font-semibold mb-4">Change Password</h2>
+      <h2 class="text-lg font-semibold mb-4">{{ $t('views.MyProfileView.change_password') }}</h2>
       <form @submit.prevent="changePassword" class="space-y-4">
         <div>
-          <label class="block text-sm font-medium mb-1">Current Password</label>
+          <label class="block text-sm font-medium mb-1">{{ $t('views.MyProfileView.current_password') }}</label>
           <input
             v-model="currentPassword"
             type="password"
@@ -36,7 +36,7 @@
           />
         </div>
         <div>
-          <label class="block text-sm font-medium mb-1">New Password</label>
+          <label class="block text-sm font-medium mb-1">{{ $t('views.MyProfileView.new_password') }}</label>
           <input
             v-model="newPassword"
             type="password"
@@ -47,7 +47,7 @@
           />
         </div>
         <div>
-          <label class="block text-sm font-medium mb-1">Confirm New Password</label>
+          <label class="block text-sm font-medium mb-1">{{ $t('views.MyProfileView.confirm_new_password') }}</label>
           <input
             v-model="confirmPassword"
             type="password"
@@ -65,7 +65,7 @@
           class="px-4 py-2 bg-primary text-primary-foreground text-sm font-medium rounded-lg border border-primary/30 hover:brightness-110 transition-all disabled:opacity-50"
           data-testid="my-profile-update-password"
         >
-          {{ passSaving ? 'Saving...' : 'Update Password' }}
+          {{ passSaving ? $t('common.saving') : $t('views.MyProfileView.update_password') }}
         </button>
       </form>
     </div>
@@ -74,7 +74,10 @@
 
 <script setup lang="ts">
 import { ref, computed, onMounted } from 'vue'
+import { useI18n } from 'vue-i18n'
 import { useApi } from '../composables/useApi'
+
+const { t } = useI18n()
 
 interface Profile {
   id: string
@@ -113,11 +116,11 @@ async function changePassword() {
   passError.value = ''
   passSuccess.value = ''
   if (newPassword.value !== confirmPassword.value) {
-    passError.value = 'Passwords do not match'
+    passError.value = t('views.MyProfileView.passwords_do_not_match')
     return
   }
   if (newPassword.value.length < 8) {
-    passError.value = 'Password must be at least 8 characters'
+    passError.value = t('views.MyProfileView.password_must_be_at_least_8_characters')
     return
   }
   passSaving.value = true
@@ -126,12 +129,12 @@ async function changePassword() {
       current_password: currentPassword.value,
       new_password: newPassword.value,
     })
-    passSuccess.value = 'Password changed successfully'
+    passSuccess.value = t('views.MyProfileView.password_changed_successfully')
     currentPassword.value = ''
     newPassword.value = ''
     confirmPassword.value = ''
   } catch (e: any) {
-    passError.value = e instanceof Error ? e.message : 'Failed to change password'
+    passError.value = e instanceof Error ? e.message : t('views.MyProfileView.failed_to_change_password')
   } finally {
     passSaving.value = false
   }

@@ -1,4 +1,4 @@
-<script setup lang="ts">
+﻿<script setup lang="ts">
 import { ref, computed } from "vue";
 import { useRouter } from "vue-router";
 import { useApi } from "../../../composables/useApi";
@@ -147,11 +147,11 @@ function goToLibrary() {
           Give your composite template a name and description.
         </p>
         <div>
-          <label class="mb-1 block text-sm font-medium">Name *</label>
+          <label class="mb-1 block text-sm font-medium">{{ $t('components.pipeline.composite.PortDefinitionPanel.name') }}</label>
           <input
             v-model="name"
             class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm"
-            placeholder="Code Review Assistant"
+            :placeholder="$t('components.pipeline.composite.PublishCompositeFlow.code_review_assistant')"
           />
         </div>
         <div>
@@ -160,7 +160,7 @@ function goToLibrary() {
             v-model="description"
             class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm"
             rows="3"
-            placeholder="A reusable composite that performs code review across multiple agents"
+            :placeholder="$t('components.pipeline.composite.PublishCompositeFlow.a_reusable_composite_that_performs_code_review_across_multip')"
           />
         </div>
       </div>
@@ -215,7 +215,7 @@ function goToLibrary() {
           recommended.
         </p>
         <div>
-          <label class="mb-1 block text-sm font-medium">Version *</label>
+          <label class="mb-1 block text-sm font-medium">{{ $t('components.pipeline.composite.PublishCompositeFlow.version') }}</label>
           <input
             v-model="version"
             class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm font-mono"

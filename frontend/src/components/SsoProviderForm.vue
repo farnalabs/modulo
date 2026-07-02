@@ -1,7 +1,7 @@
-<template>
+﻿<template>
   <div class="space-y-4">
     <div>
-      <label class="mb-1 block text-sm font-medium">Provider Type</label>
+      <label class="mb-1 block text-sm font-medium">{{ $t('components.SsoProviderForm.provider_type') }}</label>
       <div class="flex gap-2">
         <button
           class="flex-1 rounded-lg border px-4 py-2 text-sm font-medium transition-colors"
@@ -52,7 +52,7 @@
         :value="data.name"
         type="text"
         class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-        placeholder="e.g. Google Workspace"
+        :placeholder="$t('components.SsoProviderForm.eg_google_workspace')"
         @input="
           emitUpdate({
             ...data,
@@ -64,12 +64,12 @@
 
     <template v-if="data.provider_type === 'oidc'">
       <div>
-        <label class="mb-1 block text-sm font-medium">Client ID</label>
+        <label class="mb-1 block text-sm font-medium">{{ $t('components.SsoProviderForm.client_id') }}</label>
         <input
           :value="data.client_id"
           type="text"
           class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-          placeholder="e.g. 1234567890-abc123.apps.googleusercontent.com"
+          :placeholder="$t('components.SsoProviderForm.eg_1234567890abc123appsgoogleusercontentcom')"
           @input="
             emitUpdate({
               ...data,
@@ -79,12 +79,12 @@
         />
       </div>
       <div>
-        <label class="mb-1 block text-sm font-medium">Client Secret</label>
+        <label class="mb-1 block text-sm font-medium">{{ $t('components.SsoProviderForm.client_secret') }}</label>
         <input
           :value="data.client_secret"
           type="password"
           class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-          placeholder="Leave blank to keep existing"
+          :placeholder="$t('components.SsoProviderForm.leave_blank_to_keep_existing')"
           @input="
             emitUpdate({
               ...data,
@@ -94,7 +94,7 @@
         />
       </div>
       <div>
-        <label class="mb-1 block text-sm font-medium">Discovery URL</label>
+        <label class="mb-1 block text-sm font-medium">{{ $t('components.SsoProviderForm.discovery_url') }}</label>
         <input
           :value="data.discovery_url"
           type="url"
@@ -114,7 +114,7 @@
           :value="data.scopes"
           type="text"
           class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-          placeholder="openid, profile, email"
+          :placeholder="$t('components.SsoProviderForm.openid_profile_email')"
           @input="
             emitUpdate({
               ...data,

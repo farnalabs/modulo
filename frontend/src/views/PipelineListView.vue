@@ -1,4 +1,4 @@
-<template>
+﻿<template>
   <div class="min-h-screen bg-background">
     <header class="bg-card border-b border-border px-6 py-4">
       <div class="max-w-6xl mx-auto flex items-center justify-between gap-3">
@@ -8,7 +8,7 @@
           <input
             v-model="search"
             type="text"
-            placeholder="Search pipelines..."
+            :placeholder="$t('views.PipelineListView.search_pipelines')"
             class="pl-9 pr-3 py-1.5 border border-input bg-background rounded-lg text-sm w-64"
             @input="page = 1"
             data-testid="pipeline-list-search"
@@ -31,13 +31,13 @@
       <ErrorAlert v-else-if="error" :message="error" :on-retry="loadPipelines" class="mb-6" />
 
       <div v-else-if="filteredPipelines.length === 0 && search" class="text-center py-16">
-        <p class="text-lg font-medium text-foreground">No pipelines match your search</p>
-        <p class="text-sm text-muted-foreground mt-1">Try a different search term.</p>
+        <p class="text-lg font-medium text-foreground">{{ $t('views.PipelineListView.no_pipelines_match_your_search') }}</p>
+        <p class="text-sm text-muted-foreground mt-1">{{ $t('views.PipelineListView.try_a_different_search_term') }}</p>
       </div>
 
       <div v-else-if="allPipelines.length === 0 && !search" class="text-center py-16">
         <svg xmlns="http://www.w3.org/2000/svg" width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1" class="mx-auto mb-4 text-muted-foreground/40"><polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/></svg>
-        <p class="text-lg font-medium text-foreground">No pipelines yet</p>
+        <p class="text-lg font-medium text-foreground">{{ $t('views.PipelineListView.no_pipelines_yet') }}</p>
         <p class="text-sm text-muted-foreground mt-1 mb-6">
           Browse the Library to find a template to adapt, or copy an existing pipeline.
         </p>

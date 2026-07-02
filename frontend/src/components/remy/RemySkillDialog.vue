@@ -1,4 +1,4 @@
-<template>
+﻿<template>
   <Dialog :open="dialogOpen" @update:open="closeForm">
     <DialogContent class="sm:max-w-lg">
       <DialogHeader>
@@ -17,7 +17,7 @@
             v-model="form.name"
             type="text"
             class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm"
-            placeholder="Skill name"
+            :placeholder="$t('components.remy.RemySkillDialog.skill_name')"
             required
             data-testid="remy-skills-form-name"
           />
@@ -28,7 +28,7 @@
             v-model="form.description"
             rows="2"
             class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm"
-            placeholder="What this skill does"
+            :placeholder="$t('components.remy.RemySkillDialog.what_this_skill_does')"
             data-testid="remy-skills-form-description"
           />
         </div>
@@ -38,7 +38,7 @@
             v-model="form.triggersInput"
             type="text"
             class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm"
-            placeholder="trigger1, trigger2"
+            :placeholder="$t('components.remy.RemySkillDialog.trigger1_trigger2')"
             data-testid="remy-skills-form-triggers"
           />
           <p class="mt-1 text-xs text-muted-foreground">
@@ -46,12 +46,12 @@
           </p>
         </div>
         <div>
-          <label class="mb-1 block text-sm font-medium">Body (Markdown)</label>
+          <label class="mb-1 block text-sm font-medium">{{ $t('components.remy.RemySkillDialog.body_markdown') }}</label>
           <textarea
             v-model="form.body"
             rows="6"
             class="w-full rounded-lg border border-input bg-background px-3 py-2 font-mono text-sm"
-            placeholder="# Skill instructions&#10;Write markdown here..."
+            :placeholder="$t('components.remy.RemySkillDialog.skill_instructions10write_markdown_here')"
             data-testid="remy-skills-form-body"
           />
         </div>
@@ -94,7 +94,7 @@
   <Dialog :open="deleteOpen" @update:open="deleteOpen = false">
     <DialogContent class="sm:max-w-sm">
       <DialogHeader>
-        <DialogTitle>Delete Skill</DialogTitle>
+        <DialogTitle>{{ $t('components.remy.RemySkillDialog.delete_skill') }}</DialogTitle>
         <DialogDescription>
           Are you sure you want to delete "{{ deletingName }}"? This action
           cannot be undone.

@@ -1,15 +1,15 @@
-<template>
+﻿<template>
   <div data-theme="agent" class="mx-auto max-w-4xl space-y-8 p-6">
     <header>
-      <h1 class="text-3xl font-bold tracking-tight">Error Forwarders</h1>
-      <p class="mt-1 text-muted-foreground">Configure external error tracking and alerting integrations</p>
+      <h1 class="text-3xl font-bold tracking-tight">{{ $t('views.SettingsErrorForwardersView.error_forwarders') }}</h1>
+      <p class="mt-1 text-muted-foreground">{{ $t('views.SettingsErrorForwardersView.configure_external_error_tracking_and_alerting_integrations') }}</p>
     </header>
 
     <FeatureGate feature-name="error_forwarders" required-tier="team">
       <template #locked="{ tooltip }">
         <div class="mb-4 flex items-center gap-2 rounded-lg border border-warning/30 bg-warning/5 p-4 text-sm text-warning">
           <LockIcon :locked="true" :tooltip="tooltip" />
-          <span>Error forwarders are not available on your current plan.</span>
+          <span>{{ $t('views.SettingsErrorForwardersView.error_forwarders_are_not_available_on_your_current_plan') }}</span>
         </div>
       </template>
 

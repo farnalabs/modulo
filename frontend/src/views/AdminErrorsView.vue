@@ -1,11 +1,11 @@
-<template>
+﻿<template>
   <PageTabs :tabs="[
     { label: 'Dashboard', to: '/admin/errors' },
   ]" />
   <div class="mx-auto max-w-6xl space-y-6 p-6">
     <header>
-      <h1 class="text-3xl font-bold tracking-tight">Error Dashboard</h1>
-      <p class="mt-1 text-muted-foreground">Monitor and manage errors across your organisation</p>
+      <h1 class="text-3xl font-bold tracking-tight">{{ $t('views.AdminErrorsView.error_dashboard') }}</h1>
+      <p class="mt-1 text-muted-foreground">{{ $t('views.AdminErrorsView.monitor_and_manage_errors_across_your_organisation') }}</p>
     </header>
 
     <div class="card p-4">
@@ -16,7 +16,7 @@
             v-model="filterLevel"
             class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring"
           >
-            <option value="">All levels</option>
+            <option value="">{{ $t('views.AdminErrorsView.all_levels') }}</option>
             <option value="error">Error</option>
             <option value="warning">Warning</option>
             <option value="critical">Critical</option>
@@ -28,7 +28,7 @@
             v-model="filterStatus"
             class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring"
           >
-            <option value="">All statuses</option>
+            <option value="">{{ $t('views.AdminErrorsView.all_statuses') }}</option>
             <option value="new">New</option>
             <option value="acknowledged">Acknowledged</option>
             <option value="resolved">Resolved</option>
@@ -41,7 +41,7 @@
             v-model="filterSource"
             class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring"
           >
-            <option value="">All sources</option>
+            <option value="">{{ $t('views.AdminErrorsView.all_sources') }}</option>
             <option value="backend">Backend</option>
             <option value="frontend">Frontend</option>
             <option value="celery">Celery</option>
@@ -52,7 +52,7 @@
           <input
             v-model="filterEnvironment"
             type="text"
-            placeholder="e.g. production"
+            :placeholder="$t('views.AdminErrorsView.eg_production')"
             class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring"
           />
         </div>
@@ -62,7 +62,7 @@
           <input
             v-model="filterSearch"
             type="text"
-            placeholder="Search error messages..."
+            :placeholder="$t('views.AdminErrorsView.search_error_messages')"
             class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring"
           />
         </div>
@@ -86,7 +86,7 @@
     <ErrorAlert v-else-if="error" :message="error" :on-retry="loadGroups" />
 
     <div v-else-if="groups.length === 0" class="card p-8 text-center">
-      <p class="text-lg font-medium">No error groups found</p>
+      <p class="text-lg font-medium">{{ $t('views.AdminErrorsView.no_error_groups_found') }}</p>
       <p class="mt-1 text-sm text-muted-foreground">
         Try adjusting your filters or wait for errors to be ingested.
       </p>
@@ -100,8 +100,8 @@
               <th class="px-4 py-3">Level</th>
               <th class="px-4 py-3">Message</th>
               <th class="px-4 py-3">Count</th>
-              <th class="px-4 py-3">First Seen</th>
-              <th class="px-4 py-3">Last Seen</th>
+              <th class="px-4 py-3">{{ $t('views.AdminErrorDetailView.first_seen') }}</th>
+              <th class="px-4 py-3">{{ $t('views.AdminErrorDetailView.last_seen') }}</th>
               <th class="px-4 py-3">Status</th>
               <th class="px-4 py-3">Assignee</th>
             </tr>

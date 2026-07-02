@@ -1,10 +1,10 @@
-<template>
+﻿<template>
   <FeatureGate feature-name="model-backend-management">
     <div class="mx-auto max-w-4xl space-y-8 p-6">
       <header class="flex items-center justify-between">
         <div>
-          <h1 class="text-3xl font-bold tracking-tight">Model Backends</h1>
-          <p class="mt-1 text-muted-foreground">Manage LLM backend connections and credentials</p>
+          <h1 class="text-3xl font-bold tracking-tight">{{ $t('views.AdminModelBackendsView.model_backends') }}</h1>
+          <p class="mt-1 text-muted-foreground">{{ $t('views.AdminModelBackendsView.manage_llm_backend_connections_and_credentials') }}</p>
         </div>
         <button
           class="btn-glow rounded-lg bg-primary px-4 py-2 text-sm font-semibold text-primary-foreground border border-primary/30 hover:border-primary/60 hover:brightness-110 transition-all duration-150"
@@ -21,7 +21,7 @@
 
       <template v-else>
         <div v-if="formMode === 'add'" class="card p-6">
-          <h2 class="mb-4 text-lg font-semibold">New Model Backend</h2>
+          <h2 class="mb-4 text-lg font-semibold">{{ $t('views.AdminModelBackendsView.new_model_backend') }}</h2>
           <form @submit.prevent="createBackend">
             <div class="space-y-4">
               <div>
@@ -35,12 +35,12 @@
                 />
               </div>
               <div>
-                <label class="mb-1 block text-sm font-medium">Display Name</label>
+                <label class="mb-1 block text-sm font-medium">{{ $t('views.AdminModelBackendsView.display_name') }}</label>
                 <input
                   v-model="formData.display_name"
                   type="text"
                   class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm"
-                  placeholder="My LLM Backend"
+                  :placeholder="$t('views.AdminModelBackendsView.my_llm_backend')"
                   data-testid="admin-model-backends-display-name-input"
                 />
               </div>
@@ -53,7 +53,7 @@
                 >
                   <option value="anthropic">Anthropic</option>
                   <option value="openai">OpenAI</option>
-                  <option value="azure_openai">Azure OpenAI</option>
+                  <option value="azure_openai">{{ $t('views.AdminModelBackendsView.azure_openai') }}</option>
                   <option value="ollama">Ollama</option>
                   <option value="groq">Groq</option>
                   <option value="deepseek">DeepSeek</option>
@@ -68,7 +68,7 @@
                 </select>
               </div>
               <div v-if="showBaseUrl">
-                <label class="mb-1 block text-sm font-medium">Base URL</label>
+                <label class="mb-1 block text-sm font-medium">{{ $t('views.AdminModelBackendsView.base_url') }}</label>
                 <input
                   v-model="formData.base_url"
                   type="text"
@@ -78,7 +78,7 @@
                 />
               </div>
               <div>
-                <label class="mb-1 block text-sm font-medium">Model ID</label>
+                <label class="mb-1 block text-sm font-medium">{{ $t('views.AdminModelBackendsView.model_id') }}</label>
                 <input
                   v-model="formData.model_id"
                   type="text"
@@ -88,7 +88,7 @@
                 />
               </div>
               <div>
-                <label class="mb-1 block text-sm font-medium">API Key</label>
+                <label class="mb-1 block text-sm font-medium">{{ $t('views.AdminModelBackendsView.api_key') }}</label>
                 <input
                   v-model="formData.api_key"
                   type="password"
@@ -98,7 +98,7 @@
                 />
               </div>
               <div>
-                <label class="mb-1 block text-sm font-medium">Default Params (JSON)</label>
+                <label class="mb-1 block text-sm font-medium">{{ $t('views.AdminModelBackendsView.default_params_json') }}</label>
                 <textarea
                   v-model="formData.default_params"
                   rows="4"
@@ -142,7 +142,7 @@
         </div>
 
         <div v-if="backends.length === 0" class="card p-8 text-center">
-          <p class="text-lg font-medium">No model backends configured</p>
+          <p class="text-lg font-medium">{{ $t('views.AdminModelBackendsView.no_model_backends_configured') }}</p>
           <p class="mt-1 text-sm text-muted-foreground">
             Add a model backend to connect to an LLM provider.
           </p>
@@ -154,8 +154,8 @@
               <tr>
                 <th class="px-4 py-3 font-medium">Name</th>
                 <th class="px-4 py-3 font-medium">Provider</th>
-                <th class="px-4 py-3 font-medium">Model ID</th>
-                <th class="px-4 py-3 font-medium">Display Name</th>
+                <th class="px-4 py-3 font-medium">{{ $t('views.AdminModelBackendsView.model_id') }}</th>
+                <th class="px-4 py-3 font-medium">{{ $t('views.AdminModelBackendsView.display_name') }}</th>
                 <th class="px-4 py-3 font-medium">Credentials</th>
                 <th class="px-4 py-3 font-medium">Visibility</th>
                 <th class="px-4 py-3 font-medium text-right">Actions</th>
@@ -195,8 +195,8 @@
                     <button
                       class="rounded p-1 text-muted-foreground hover:bg-accent"
                       data-testid="admin-model-backends-edit"
-                      :aria-label="'Edit model backend'"
-                      title="Edit model backend"
+                      ::aria-label="$t('views.AdminModelBackendsView.edit_model_backend_1')"
+                      :title="$t('views.AdminModelBackendsView.edit_model_backend')"
                       @click="openEditForm(backend)"
                     >
                       <svg class="h-4 w-4" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -206,8 +206,8 @@
                     <button
                       class="rounded p-1 text-destructive hover:bg-destructive/10"
                       data-testid="admin-model-backends-delete"
-                      :aria-label="'Delete model backend'"
-                      title="Delete model backend"
+                      ::aria-label="$t('views.AdminModelBackendsView.delete_model_backend')"
+                      :title="$t('views.AdminModelBackendsView.delete_model_backend_1')"
                       @click="confirmDelete(backend)"
                     >
                       <svg class="h-4 w-4" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -222,7 +222,7 @@
         </div>
 
         <div v-if="editBackendId" class="card p-6">
-          <h2 class="mb-4 text-lg font-semibold">Edit Model Backend</h2>
+          <h2 class="mb-4 text-lg font-semibold">{{ $t('views.AdminModelBackendsView.edit_model_backend') }}</h2>
           <form @submit.prevent="updateBackend">
             <div class="space-y-4">
               <div>
@@ -235,7 +235,7 @@
                 />
               </div>
               <div>
-                <label class="mb-1 block text-sm font-medium">Display Name</label>
+                <label class="mb-1 block text-sm font-medium">{{ $t('views.AdminModelBackendsView.display_name') }}</label>
                 <input
                   v-model="formData.display_name"
                   type="text"
@@ -244,7 +244,7 @@
                 />
               </div>
               <div>
-                <label class="mb-1 block text-sm font-medium">Model ID</label>
+                <label class="mb-1 block text-sm font-medium">{{ $t('views.AdminModelBackendsView.model_id') }}</label>
                 <input
                   v-model="formData.model_id"
                   type="text"
@@ -253,17 +253,17 @@
                 />
               </div>
               <div>
-                <label class="mb-1 block text-sm font-medium">API Key (leave blank to keep existing)</label>
+                <label class="mb-1 block text-sm font-medium">{{ $t('views.AdminModelBackendsView.api_key_leave_blank_to_keep_existing') }}</label>
                 <input
                   v-model="formData.api_key"
                   type="password"
                   class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm"
-                  placeholder="Enter new key to replace"
+                  :placeholder="$t('views.AdminModelBackendsView.enter_new_key_to_replace')"
                   data-testid="admin-model-backends-edit-api-key"
                 />
               </div>
               <div>
-                <label class="mb-1 block text-sm font-medium">Default Params (JSON)</label>
+                <label class="mb-1 block text-sm font-medium">{{ $t('views.AdminModelBackendsView.default_params_json') }}</label>
                 <textarea
                   v-model="formData.default_params"
                   rows="4"
@@ -307,7 +307,7 @@
 
         <div v-if="deleteConfirmBackendId" class="rounded-lg border border-destructive/50 bg-destructive/10 p-4">
           <p class="text-sm font-medium text-destructive">Delete "{{ deleteConfirmName }}"?</p>
-          <p class="mt-1 text-sm text-destructive/80">This action cannot be undone.</p>
+          <p class="mt-1 text-sm text-destructive/80">{{ $t('views.AdminModelBackendsView.this_action_cannot_be_undone') }}</p>
           <div class="mt-3 flex items-center gap-2">
             <button
               :disabled="deleting"

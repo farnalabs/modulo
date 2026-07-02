@@ -1,8 +1,8 @@
-<template>
+﻿<template>
   <div data-theme="agent" class="mx-auto max-w-6xl space-y-8 p-6">
     <header>
-      <h1 class="text-3xl font-bold tracking-tight">Remy Configuration</h1>
-      <p class="mt-1 text-muted-foreground">Configure Remy AI assistant behaviour, access, and skills</p>
+      <h1 class="text-3xl font-bold tracking-tight">{{ $t('views.AdminRemyView.remy_configuration') }}</h1>
+      <p class="mt-1 text-muted-foreground">{{ $t('views.AdminRemyView.configure_remy_ai_assistant_behaviour_access_and_skills') }}</p>
     </header>
 
     <LoadingSpinner v-if="loading" />
@@ -13,8 +13,8 @@
       <TooltipProvider>
       <!-- Configured Providers -->
       <div class="card p-4" data-testid="remy-providers">
-        <h2 class="mb-3 text-lg font-semibold">Configured Providers</h2>
-        <p class="mb-4 text-sm text-muted-foreground">API keys configured for each LLM provider — Remy will use these to route requests</p>
+        <h2 class="mb-3 text-lg font-semibold">{{ $t('views.AdminRemyView.configured_providers') }}</h2>
+        <p class="mb-4 text-sm text-muted-foreground">{{ $t('views.AdminRemyView.api_keys_configured_for_each_llm_provider_remy_will_use_thes') }}</p>
 
         <div v-if="providersLoading" class="py-4 text-center text-sm text-muted-foreground">
           Loading provider status...
@@ -51,10 +51,10 @@
         <div class="mt-3 text-xs text-muted-foreground">
           <Tooltip :delay-duration="300">
             <TooltipTrigger as-child>
-              <a href="/admin/model-backends" class="underline hover:text-foreground">Manage model backends →</a>
+              <a href="/admin/model-backends" class="underline hover:text-foreground">{{ $t('views.AdminRemyView.manage_model_backends') }}</a>
             </TooltipTrigger>
             <TooltipContent side="top">
-              <p>Add, edit, or remove API keys for LLM providers.</p>
+              <p>{{ $t('views.AdminRemyView.add_edit_or_remove_api_keys_for_llm_providers') }}</p>
             </TooltipContent>
           </Tooltip>
         </div>
@@ -62,51 +62,51 @@
 
       <!-- Access List -->
       <div class="card p-4">
-        <h2 class="mb-3 text-lg font-semibold">Access List</h2>
-        <p class="mb-4 text-sm text-muted-foreground">Control who can use Remy within the organisation</p>
+        <h2 class="mb-3 text-lg font-semibold">{{ $t('views.AdminRemyView.access_list') }}</h2>
+        <p class="mb-4 text-sm text-muted-foreground">{{ $t('views.AdminRemyView.control_who_can_use_remy_within_the_organisation') }}</p>
 
           <div class="space-y-4">
             <div>
               <Tooltip :delay-duration="300">
                 <TooltipTrigger as-child>
-                  <label class="mb-1 block text-sm font-medium cursor-help">User IDs</label>
+                  <label class="mb-1 block text-sm font-medium cursor-help">{{ $t('views.AdminRemyView.user_ids') }}</label>
                 </TooltipTrigger>
                 <TooltipContent side="right" class="max-w-xs">
-                  <p>Comma-separated or line-separated UUIDs of users who should have access to Remy. Leave empty to allow all users.</p>
+                  <p>{{ $t('views.AdminRemyView.commaseparated_or_lineseparated_uuids_of_users_who_should_ha') }}</p>
                 </TooltipContent>
               </Tooltip>
             <textarea
               v-model="accessList.userIds"
               rows="3"
               class="w-full rounded-lg border border-input bg-background px-3 py-2 font-mono text-sm"
-              placeholder="One per line or comma-separated UUIDs"
+              :placeholder="$t('views.AdminRemyView.one_per_line_or_commaseparated_uuids')"
               data-testid="remy-access-users"
             />
           </div>
             <div>
               <Tooltip :delay-duration="300">
                 <TooltipTrigger as-child>
-                  <label class="mb-1 block text-sm font-medium cursor-help">Team IDs</label>
+                  <label class="mb-1 block text-sm font-medium cursor-help">{{ $t('views.AdminRemyView.team_ids') }}</label>
                 </TooltipTrigger>
                 <TooltipContent side="right" class="max-w-xs">
-                  <p>Comma-separated or line-separated team UUIDs. Members of these teams will have access to Remy.</p>
+                  <p>{{ $t('views.AdminRemyView.commaseparated_or_lineseparated_team_uuids_members_of_these_') }}</p>
                 </TooltipContent>
               </Tooltip>
             <textarea
               v-model="accessList.teamIds"
               rows="3"
               class="w-full rounded-lg border border-input bg-background px-3 py-2 font-mono text-sm"
-              placeholder="One per line or comma-separated UUIDs"
+              :placeholder="$t('views.AdminRemyView.one_per_line_or_commaseparated_uuids')"
               data-testid="remy-access-teams"
             />
           </div>
             <div>
               <Tooltip :delay-duration="300">
                 <TooltipTrigger as-child>
-                  <label class="mb-1 block text-sm font-medium cursor-help">Org Roles</label>
+                  <label class="mb-1 block text-sm font-medium cursor-help">{{ $t('views.AdminRemyView.org_roles') }}</label>
                 </TooltipTrigger>
                 <TooltipContent side="right" class="max-w-xs">
-                  <p>Users with the selected organisation roles will have access to Remy. Admin is selected by default.</p>
+                  <p>{{ $t('views.AdminRemyView.users_with_the_selected_organisation_roles_will_have_access_') }}</p>
                 </TooltipContent>
               </Tooltip>
               <div class="flex flex-wrap gap-4">
@@ -142,7 +142,7 @@
                 </button>
               </TooltipTrigger>
               <TooltipContent side="top">
-                <p>Save current access list configuration.</p>
+                <p>{{ $t('views.AdminRemyView.save_current_access_list_configuration') }}</p>
               </TooltipContent>
             </Tooltip>
         </div>
@@ -150,12 +150,12 @@
 
       <!-- Default Model Configuration -->
       <div class="card p-4">
-        <h2 class="mb-3 text-lg font-semibold">Default Model Configuration</h2>
-        <p class="mb-4 text-sm text-muted-foreground">Set the default model and allowed providers for Remy</p>
+        <h2 class="mb-3 text-lg font-semibold">{{ $t('views.AdminRemyView.default_model_configuration') }}</h2>
+        <p class="mb-4 text-sm text-muted-foreground">{{ $t('views.AdminRemyView.set_the_default_model_and_allowed_providers_for_remy') }}</p>
 
         <div class="space-y-4">
           <div>
-            <label class="mb-1 block text-sm font-medium">Default Provider</label>
+            <label class="mb-1 block text-sm font-medium">{{ $t('views.AdminRemyView.default_provider') }}</label>
             <select
               v-model="modelConfig.defaultProvider"
               class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm"
@@ -163,13 +163,13 @@
             >
               <option value="anthropic">Anthropic</option>
               <option value="openai">OpenAI</option>
-              <option value="gemini">Google Gemini</option>
+              <option value="gemini">{{ $t('views.AdminRemyView.google_gemini') }}</option>
               <option value="deepseek">DeepSeek</option>
               <option value="groq">Groq</option>
             </select>
           </div>
           <div>
-            <label class="mb-1 block text-sm font-medium">Default Model</label>
+            <label class="mb-1 block text-sm font-medium">{{ $t('views.AdminRemyView.default_model') }}</label>
             <input
               v-model="modelConfig.defaultModel"
               type="text"
@@ -179,7 +179,7 @@
             />
           </div>
           <div>
-            <label class="mb-1 block text-sm font-medium">Default Context Window Size</label>
+            <label class="mb-1 block text-sm font-medium">{{ $t('views.AdminRemyView.default_context_window_size') }}</label>
             <input
               v-model.number="modelConfig.contextWindow"
               type="number"
@@ -191,7 +191,7 @@
             />
           </div>
           <div>
-            <label class="mb-1 block text-sm font-medium">Allowed Providers</label>
+            <label class="mb-1 block text-sm font-medium">{{ $t('views.AdminRemyView.allowed_providers') }}</label>
             <div class="flex flex-wrap gap-2" data-testid="remy-allowed-providers">
               <button
                 v-for="provider in allProviders"
@@ -206,12 +206,12 @@
             </div>
           </div>
           <div>
-            <label class="mb-1 block text-sm font-medium">Allowed Models</label>
+            <label class="mb-1 block text-sm font-medium">{{ $t('views.AdminRemyView.allowed_models') }}</label>
             <input
               v-model="modelConfig.allowedModels"
               type="text"
               class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm"
-              placeholder="claude-sonnet-4-20250514, gpt-4o, gemini-2.5-pro"
+              :placeholder="$t('views.AdminRemyView.claudesonnet420250514_gpt4o_gemini25pro')"
               data-testid="remy-allowed-models"
             />
           </div>
@@ -228,7 +228,7 @@
                 </button>
               </TooltipTrigger>
               <TooltipContent side="top">
-                <p>Save default model, provider, and allowed model configuration.</p>
+                <p>{{ $t('views.AdminRemyView.save_default_model_provider_and_allowed_model_configuration') }}</p>
               </TooltipContent>
             </Tooltip>
         </div>
@@ -236,8 +236,8 @@
 
       <!-- System Prompt -->
       <div class="card p-4">
-        <h2 class="mb-3 text-lg font-semibold">System Prompt</h2>
-        <p class="mb-4 text-sm text-muted-foreground">Base system prompt that guides Remy's behaviour</p>
+        <h2 class="mb-3 text-lg font-semibold">{{ $t('views.AdminRemyView.system_prompt') }}</h2>
+        <p class="mb-4 text-sm text-muted-foreground">{{ $t('views.AdminRemyView.base_system_prompt_that_guides_remys_behaviour') }}</p>
 
         <div class="space-y-4">
           <div>
@@ -245,7 +245,7 @@
               v-model="systemPrompt"
               rows="8"
               class="w-full rounded-lg border border-input bg-background px-3 py-2 font-mono text-sm"
-              placeholder="You are a helpful AI assistant..."
+              :placeholder="$t('views.AdminRemyView.you_are_a_helpful_ai_assistant')"
               data-testid="remy-system-prompt"
             />
           </div>
@@ -262,7 +262,7 @@
                 </button>
               </TooltipTrigger>
               <TooltipContent side="top">
-                <p>Save the base system prompt that guides Remy's behaviour.</p>
+                <p>{{ $t('views.AdminRemyView.save_the_base_system_prompt_that_guides_remys_behaviour') }}</p>
               </TooltipContent>
             </Tooltip>
         </div>
@@ -270,8 +270,8 @@
 
       <!-- Additional Guidance -->
       <div class="card p-4">
-        <h2 class="mb-3 text-lg font-semibold">Additional Guidance</h2>
-        <p class="mb-4 text-sm text-muted-foreground">Extra instructions to append to the system prompt</p>
+        <h2 class="mb-3 text-lg font-semibold">{{ $t('views.AdminRemyView.additional_guidance') }}</h2>
+        <p class="mb-4 text-sm text-muted-foreground">{{ $t('views.AdminRemyView.extra_instructions_to_append_to_the_system_prompt') }}</p>
 
         <div class="space-y-4">
           <div>
@@ -279,7 +279,7 @@
               v-model="guidance"
               rows="5"
               class="w-full rounded-lg border border-input bg-background px-3 py-2 font-mono text-sm"
-              placeholder="Additional instructions..."
+              :placeholder="$t('views.AdminRemyView.additional_instructions')"
               data-testid="remy-guidance"
             />
           </div>
@@ -296,7 +296,7 @@
                 </button>
               </TooltipTrigger>
               <TooltipContent side="top">
-                <p>Save extra instructions appended to the system prompt.</p>
+                <p>{{ $t('views.AdminRemyView.save_extra_instructions_appended_to_the_system_prompt') }}</p>
               </TooltipContent>
             </Tooltip>
         </div>
@@ -307,7 +307,7 @@
         <div class="flex items-center justify-between mb-4">
           <div>
             <h2 class="text-lg font-semibold">Skills</h2>
-            <p class="text-sm text-muted-foreground">Organisation-level skills that Remy can use</p>
+            <p class="text-sm text-muted-foreground">{{ $t('views.AdminRemyView.organisationlevel_skills_that_remy_can_use') }}</p>
           </div>
           <button
             class="rounded-lg bg-primary px-4 py-2 text-sm font-semibold text-primary-foreground border border-primary/30 hover:brightness-110 transition-all"
@@ -319,7 +319,7 @@
         </div>
 
         <div v-if="skills.length === 0" class="py-8 text-center">
-          <p class="text-sm text-muted-foreground">No skills configured yet.</p>
+          <p class="text-sm text-muted-foreground">{{ $t('views.AdminRemyView.no_skills_configured_yet') }}</p>
         </div>
         <div v-else class="overflow-hidden rounded-lg border">
           <table class="w-full text-left text-sm">
@@ -377,8 +377,8 @@
                   <div class="flex items-center justify-end gap-1">
                     <button
                       class="rounded p-1 text-muted-foreground hover:bg-accent"
-                      :aria-label="'Edit skill'"
-                      title="Edit skill"
+                      ::aria-label="$t('views.AdminRemyView.edit_skill')"
+                      :title="$t('views.AdminRemyView.edit_skill_1')"
                       @click="skillDialogRef?.openEdit(skill)"
                     >
                       <svg class="h-4 w-4" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -387,8 +387,8 @@
                     </button>
                     <button
                       class="rounded p-1 text-destructive hover:bg-destructive/10"
-                      :aria-label="'Delete skill'"
-                      title="Delete skill"
+                      ::aria-label="$t('views.AdminRemyView.delete_skill')"
+                      :title="$t('components.remy.RemySkillDialog.delete_skill')"
                       @click="skillDialogRef?.openDelete(skill)"
                     >
                       <svg class="h-4 w-4" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">

@@ -1,4 +1,4 @@
-<template>
+﻿<template>
   <div class="min-h-screen bg-background">
     <header class="bg-card border-b border-border px-6 py-4">
       <div class="max-w-3xl mx-auto">
@@ -9,8 +9,8 @@
         >
           &larr; {{ step === 1 ? 'Back to Pipelines' : 'Back' }}
         </button>
-        <h1 class="text-xl font-semibold text-foreground">Copy Pipeline</h1>
-        <p class="text-sm text-muted-foreground mt-1">Duplicate an existing pipeline and adapt it for a new purpose</p>
+        <h1 class="text-xl font-semibold text-foreground">{{ $t('views.CopyPipelineWizard.copy_pipeline') }}</h1>
+        <p class="text-sm text-muted-foreground mt-1">{{ $t('views.CopyPipelineWizard.duplicate_an_existing_pipeline_and_adapt_it_for_a_new_purpos') }}</p>
       </div>
     </header>
 
@@ -40,14 +40,14 @@
 
       <template v-else-if="step === 1">
         <div class="card p-6">
-          <h2 class="text-lg font-medium text-foreground mb-1">Select Source Pipeline</h2>
-          <p class="text-sm text-muted-foreground mb-4">Choose the pipeline you want to copy and adapt.</p>
+          <h2 class="text-lg font-medium text-foreground mb-1">{{ $t('views.CopyPipelineWizard.select_source_pipeline') }}</h2>
+          <p class="text-sm text-muted-foreground mb-4">{{ $t('views.CopyPipelineWizard.choose_the_pipeline_you_want_to_copy_and_adapt') }}</p>
 
           <div class="relative mb-4">
             <input
               v-model="searchQuery"
               type="text"
-              placeholder="Search pipelines by name..."
+              :placeholder="$t('views.CopyPipelineWizard.search_pipelines_by_name')"
               class="w-full pl-9 pr-3 py-2 border border-input bg-background rounded-lg text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
               data-testid="copy-wizard-search"
             />
@@ -68,7 +68,7 @@
           </div>
 
           <div v-if="!searchQuery && visibilityFilter === 'all' && pipelines.length === 0" class="card p-8 text-center">
-            <p class="text-lg font-medium">No pipelines available</p>
+            <p class="text-lg font-medium">{{ $t('views.CopyPipelineWizard.no_pipelines_available') }}</p>
             <p class="mt-1 text-sm text-muted-foreground">
               Create one from the Library first.
             </p>

@@ -1,4 +1,4 @@
-<template>
+﻿<template>
   <PageTabs :tabs="[
     { label: 'Browse', to: '/schemas' },
     { label: 'Editor', to: '/schemas/editor' },
@@ -6,8 +6,8 @@
   ]" />
   <div class="mx-auto max-w-4xl space-y-8 p-6">
     <header>
-      <h1 class="text-3xl font-bold tracking-tight">Schema Inference</h1>
-      <p class="mt-1 text-muted-foreground">Infer a schema from a connected data source</p>
+      <h1 class="text-3xl font-bold tracking-tight">{{ $t('views.SchemaInferenceView.schema_inference') }}</h1>
+      <p class="mt-1 text-muted-foreground">{{ $t('views.SchemaInferenceView.infer_a_schema_from_a_connected_data_source') }}</p>
     </header>
 
     <LoadingSpinner v-if="loadingConnectors" />
@@ -25,7 +25,7 @@
               data-testid="schema-inference-connector"
               class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
             >
-              <option value="" disabled>Select a connector...</option>
+              <option value="" disabled>{{ $t('views.SchemaInferenceView.select_a_connector') }}</option>
               <option
                 v-for="connector in connectors"
                 :key="connector.id"
@@ -40,13 +40,13 @@
           </div>
 
           <div>
-            <label class="mb-1 block text-sm font-medium">Resource type</label>
+            <label class="mb-1 block text-sm font-medium">{{ $t('views.SchemaInferenceView.resource_type') }}</label>
             <input
               v-model="resourceType"
               type="text"
               data-testid="schema-inference-resource-type"
               class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-              placeholder="e.g. issues, repositories, pull_requests"
+              :placeholder="$t('views.SchemaInferenceView.eg_issues_repositories_pullrequests')"
             />
           </div>
 
@@ -60,7 +60,7 @@
               rows="2"
               data-testid="schema-inference-sample-query"
               class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-              placeholder="e.g. state=open&sort=updated"
+              :placeholder="$t('views.SchemaInferenceView.eg_stateopensortupdated')"
             />
           </div>
 
@@ -79,7 +79,7 @@
       </section>
 
       <section v-if="draftSchema" class="rounded-lg border bg-card p-6 shadow-sm">
-        <h2 class="mb-4 text-lg font-semibold">Draft Schema</h2>
+        <h2 class="mb-4 text-lg font-semibold">{{ $t('views.SchemaInferenceView.draft_schema') }}</h2>
 
         <div class="mb-3">
           <label class="block text-sm font-medium text-muted-foreground">Name</label>
@@ -118,7 +118,7 @@
               </tr>
             </tbody>
           </table>
-          <p v-else class="text-sm text-muted-foreground">No fields inferred.</p>
+          <p v-else class="text-sm text-muted-foreground">{{ $t('views.SchemaInferenceView.no_fields_inferred') }}</p>
         </div>
 
         <div class="mb-4">

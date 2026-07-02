@@ -1,4 +1,4 @@
-<script setup lang="ts">
+﻿<script setup lang="ts">
 import { ref, computed } from "vue";
 import Button from "../../ui/button/Button.vue";
 import Input from "../../ui/input/Input.vue";
@@ -73,7 +73,7 @@ const evalCount = computed(() => props.evalDefinitions.length);
 <template>
   <div class="space-y-4">
     <div class="flex items-center justify-between">
-      <label class="text-sm font-medium">Output Validation</label>
+      <label class="text-sm font-medium">{{ $t('components.pipeline.composite.OutputValidationTab.output_validation') }}</label>
       <Badge variant="outline" class="text-xs">
         {{ evalCount }} eval{{ evalCount === 1 ? "" : "s" }} configured
       </Badge>
@@ -110,7 +110,7 @@ const evalCount = computed(() => props.evalDefinitions.length);
           <label class="text-xs text-muted-foreground">Name</label>
           <Input
             :model-value="evalDef.name"
-            placeholder="eval name"
+            :placeholder="$t('components.pipeline.composite.OutputValidationTab.eval_name')"
             @update:model-value="
               (val: string | number) =>
                 updateEval(evalDef.id, { name: String(val) })
@@ -131,14 +131,14 @@ const evalCount = computed(() => props.evalDefinitions.length);
             "
           >
             <option value="regex">Regex</option>
-            <option value="json_schema">JSON Schema</option>
-            <option value="llm_judge">LLM Judge</option>
+            <option value="json_schema">{{ $t('components.pipeline.composite.OutputValidationTab.json_schema') }}</option>
+            <option value="llm_judge">{{ $t('components.pipeline.composite.OutputValidationTab.llm_judge') }}</option>
           </select>
         </div>
       </div>
 
       <div class="space-y-1">
-        <label class="text-xs text-muted-foreground">Failure Behaviour</label>
+        <label class="text-xs text-muted-foreground">{{ $t('components.pipeline.composite.OutputValidationTab.failure_behaviour') }}</label>
         <select
           :value="evalDef.failure_behaviour"
           class="bg-background border-input focus-visible:border-ring h-8 w-full rounded-lg border px-2.5 py-1 text-sm"
@@ -161,7 +161,7 @@ const evalCount = computed(() => props.evalDefinitions.length);
           <label class="text-xs text-muted-foreground">Field</label>
           <Input
             :model-value="String(evalDef.config.field ?? '')"
-            placeholder="output field name"
+            :placeholder="$t('components.pipeline.composite.OutputValidationTab.output_field_name')"
             @update:model-value="
               (val: string | number) =>
                 updateConfig(evalDef.id, { field: String(val) })
@@ -173,7 +173,7 @@ const evalCount = computed(() => props.evalDefinitions.length);
           <textarea
             :value="String(evalDef.config.pattern ?? '')"
             class="bg-background border-input focus-visible:border-ring h-20 w-full rounded-lg border px-2.5 py-1.5 text-sm font-mono resize-none outline-none"
-            placeholder="regex pattern"
+            :placeholder="$t('components.pipeline.composite.OutputValidationTab.regex_pattern')"
             @change="
               (e: Event) =>
                 updateConfig(evalDef.id, {

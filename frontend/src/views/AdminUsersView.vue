@@ -1,9 +1,9 @@
-<template>
+﻿<template>
   <div class="p-6 max-w-5xl mx-auto space-y-6">
     <div class="flex items-center justify-between">
       <div>
         <h1 class="text-2xl font-bold tracking-tight">Users</h1>
-        <p class="text-muted-foreground mt-1">Manage user accounts and permissions.</p>
+        <p class="text-muted-foreground mt-1">{{ $t('views.AdminUsersView.manage_user_accounts_and_permissions') }}</p>
       </div>
       <button
         @click="showCreate = true"
@@ -21,7 +21,7 @@
     </div>
 
     <div v-else-if="users.length === 0" class="card p-8 text-center">
-      <p class="text-lg font-medium">No users found</p>
+      <p class="text-lg font-medium">{{ $t('views.AdminUsersView.no_users_found') }}</p>
       <p class="mt-1 text-sm text-muted-foreground">
         Users will appear here once they are created or sign up.
       </p>
@@ -144,14 +144,14 @@
 
     <div v-if="showCreate" class="fixed inset-0 z-50 flex items-center justify-center bg-black/50" @click.self="showCreate = false">
       <div class="bg-background rounded-xl border shadow-lg p-6 w-full max-w-md mx-4 space-y-4">
-        <h2 class="text-lg font-semibold">Create User</h2>
+        <h2 class="text-lg font-semibold">{{ $t('views.AdminUsersView.create_user') }}</h2>
         <form @submit.prevent="createUser">
           <div>
             <label class="block text-sm font-medium mb-1">Email</label>
             <input v-model="newUser.email" data-testid="admin-users-create-email" type="email" class="w-full px-3 py-2 border border-input bg-background rounded-lg text-sm" required />
           </div>
           <div>
-            <label class="block text-sm font-medium mb-1">Display Name</label>
+            <label class="block text-sm font-medium mb-1">{{ $t('views.AdminModelBackendsView.display_name') }}</label>
             <input v-model="newUser.display_name" data-testid="admin-users-create-display-name" type="text" class="w-full px-3 py-2 border border-input bg-background rounded-lg text-sm" required />
           </div>
           <div>
@@ -178,7 +178,7 @@
 
     <div v-if="showResetDialog" class="fixed inset-0 z-50 flex items-center justify-center bg-black/50" @click.self="showResetDialog = false">
       <div class="bg-background rounded-xl border shadow-lg p-6 w-full max-w-md mx-4 space-y-4">
-        <h2 class="text-lg font-semibold">Password Reset</h2>
+        <h2 class="text-lg font-semibold">{{ $t('views.AdminUsersView.password_reset') }}</h2>
         <p class="text-sm text-muted-foreground">
           A temporary password has been generated for <strong>{{ resetUserEmail }}</strong>.
           Share this password with the user — they will be prompted to change it on next login.

@@ -1,10 +1,10 @@
-<template>
+﻿<template>
   <div class="mx-auto max-w-6xl space-y-8 p-6">
     <LoadingSpinner v-if="loading" />
     <ErrorAlert v-else-if="error" :message="error" />
     <template v-else>
       <header>
-        <h1 class="text-3xl font-bold tracking-tight">Agent Output Diff</h1>
+        <h1 class="text-3xl font-bold tracking-tight">{{ $t('views.AgentOutputDiffView.agent_output_diff') }}</h1>
         <p class="mt-1 text-muted-foreground">
           Compare agent outputs across two pipeline runs
         </p>
@@ -12,7 +12,7 @@
 
       <div class="flex flex-wrap items-end gap-4 rounded-lg border bg-card p-6">
         <label class="flex flex-col gap-1.5">
-          <span class="text-xs font-medium text-muted-foreground">Run ID A</span>
+          <span class="text-xs font-medium text-muted-foreground">{{ $t('views.AgentOutputDiffView.run_id_a') }}</span>
           <input
             v-model="runIdA"
             data-testid="diff-run-id-a"
@@ -22,7 +22,7 @@
           />
         </label>
         <label class="flex flex-col gap-1.5">
-          <span class="text-xs font-medium text-muted-foreground">Node ID</span>
+          <span class="text-xs font-medium text-muted-foreground">{{ $t('views.AgentOutputDiffView.node_id') }}</span>
           <input
             v-model="nodeId"
             data-testid="diff-node-id"
@@ -32,7 +32,7 @@
           />
         </label>
         <label class="flex flex-col gap-1.5">
-          <span class="text-xs font-medium text-muted-foreground">Run ID B</span>
+          <span class="text-xs font-medium text-muted-foreground">{{ $t('views.AgentOutputDiffView.run_id_b') }}</span>
           <input
             v-model="runIdB"
             data-testid="diff-run-id-b"

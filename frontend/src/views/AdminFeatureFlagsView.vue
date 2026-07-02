@@ -1,8 +1,8 @@
-<template>
+﻿<template>
   <div data-theme="agent" class="mx-auto max-w-6xl space-y-6 p-6">
     <header>
-      <h1 class="text-3xl font-bold tracking-tight">Feature Flags</h1>
-      <p class="mt-1 text-muted-foreground">All known feature flags and their current activation status</p>
+      <h1 class="text-3xl font-bold tracking-tight">{{ $t('views.AdminFeatureFlagsView.feature_flags') }}</h1>
+      <p class="mt-1 text-muted-foreground">{{ $t('views.AdminFeatureFlagsView.all_known_feature_flags_and_their_current_activation_status') }}</p>
       <div v-if="planStore.isLoading" class="mt-2 flex items-center gap-2 text-sm text-muted-foreground">
         <div class="h-4 w-4 animate-spin rounded-full border-2 border-primary border-t-transparent" />
         Loading plan info...
@@ -17,12 +17,12 @@
           /
           <span>{{ allFlagsCount }}</span>
         </span>
-        <span v-if="planStore.isTeam" class="font-medium badge badge-context-purple">Team tier</span>
+        <span v-if="planStore.isTeam" class="font-medium badge badge-context-purple">{{ $t('views.AdminFeatureFlagsView.team_tier') }}</span>
       </div>
     </header>
 
     <div class="card p-4">
-      <h2 class="mb-3 text-lg font-semibold">License Status</h2>
+      <h2 class="mb-3 text-lg font-semibold">{{ $t('views.AdminFeatureFlagsView.license_status') }}</h2>
       <div v-if="loading" class="flex items-center justify-center py-8">
         <div class="h-6 w-6 animate-spin rounded-full border-4 border-primary border-t-transparent" />
       </div>
@@ -32,7 +32,7 @@
           <p class="mt-0.5 text-lg font-semibold">{{ license.tier }}</p>
         </div>
         <div>
-          <span class="text-xs font-medium text-muted-foreground">License Key</span>
+          <span class="text-xs font-medium text-muted-foreground">{{ $t('views.AdminFeatureFlagsView.license_key') }}</span>
           <p class="mt-0.5">
             <span :class="license.has_license_key ? 'badge badge-status-success' : 'badge badge-status-muted'">
               {{ license.has_license_key ? 'Active' : 'Not set' }}

@@ -1,8 +1,8 @@
-<template>
+﻿<template>
   <div data-theme="agent" data-loading="false" class="mx-auto max-w-4xl space-y-8 p-6">
     <header>
       <h1 data-testid="license-title" class="text-3xl font-bold tracking-tight">License</h1>
-      <p class="mt-1 text-muted-foreground">Manage your Modulo Team license key and view plan details</p>
+      <p class="mt-1 text-muted-foreground">{{ $t('views.SettingsLicenseView.manage_your_modulo_team_license_key_and_view_plan_details') }}</p>
     </header>
 
     <LoadingSpinner v-if="loading" />
@@ -48,7 +48,7 @@
       <!-- Active Features Checklist -->
       <div class="rounded-lg border bg-card shadow-sm">
         <div class="border-b px-6 py-4">
-          <h2 class="text-lg font-semibold">Active Features</h2>
+          <h2 class="text-lg font-semibold">{{ $t('views.SettingsLicenseView.active_features') }}</h2>
           <p class="mt-0.5 text-sm text-muted-foreground">
             {{ flagsEnabled }} of {{ allFlags.length }} features active
               <span v-if="flagsWouldActivate.length > 0" class="ml-2">
@@ -92,21 +92,21 @@
 
       <!-- License Key Management -->
       <div class="rounded-lg border bg-card p-6 shadow-sm">
-        <h2 class="mb-4 text-lg font-semibold">License Key</h2>
+        <h2 class="mb-4 text-lg font-semibold">{{ $t('views.AdminFeatureFlagsView.license_key') }}</h2>
 
         <div v-if="licenseInfo.has_license" class="mb-6 rounded-lg bg-muted/50 p-4">
-          <p class="text-xs font-medium text-muted-foreground uppercase tracking-wide">Current Key</p>
+          <p class="text-xs font-medium text-muted-foreground uppercase tracking-wide">{{ $t('views.SettingsLicenseView.current_key') }}</p>
           <p class="mt-1 font-mono text-sm">{{ maskedKey }}</p>
         </div>
 
         <div class="space-y-3">
-          <label class="block text-sm font-medium text-muted-foreground">New License Key</label>
+          <label class="block text-sm font-medium text-muted-foreground">{{ $t('views.SettingsLicenseView.new_license_key') }}</label>
           <textarea
             v-model="newLicenseKey"
             rows="4"
             data-testid="license-key-input"
             class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm font-mono placeholder:text-muted-foreground/50 focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 outline-none transition-all"
-            placeholder="Paste your MODULO_LICENSE_KEY value here..."
+            :placeholder="$t('views.SettingsLicenseView.paste_your_modulolicensekey_value_here')"
           />
           <p v-if="verifyResult" class="text-sm" :class="verifyResult.valid ? 'text-success' : 'text-destructive'">
             {{ verifyResult.message }}

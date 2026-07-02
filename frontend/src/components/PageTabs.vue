@@ -1,5 +1,5 @@
-<template>
-  <nav aria-label="Section navigation" class="page-tabs">
+﻿<template>
+  <nav :aria-label="$t('components.PageTabs.section_navigation')" class="page-tabs">
     <router-link
       v-for="tab in tabs"
       :key="tab.to"

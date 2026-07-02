@@ -1,10 +1,10 @@
-<template>
+﻿<template>
   <FeatureGate feature-name="plugin-management">
     <div class="mx-auto max-w-5xl space-y-8 p-6">
       <header class="flex items-center justify-between">
         <div>
           <h1 class="text-3xl font-bold tracking-tight">Plugins</h1>
-          <p class="mt-1 text-muted-foreground">Manage installed Modulo plugins and extensions</p>
+          <p class="mt-1 text-muted-foreground">{{ $t('views.AdminPluginsView.manage_installed_modulo_plugins_and_extensions') }}</p>
         </div>
         <button
           class="btn-glow rounded-lg bg-primary px-4 py-2 text-sm font-semibold text-primary-foreground border border-primary/30 hover:border-primary/60 hover:brightness-110 transition-all duration-150"
@@ -21,7 +21,7 @@
 
       <template v-else>
         <div v-if="plugins.length === 0" class="card p-8 text-center">
-          <p class="text-lg font-medium">No plugins installed</p>
+          <p class="text-lg font-medium">{{ $t('views.AdminPluginsView.no_plugins_installed') }}</p>
           <p class="mt-1 text-sm text-muted-foreground">
             Install plugins via pip to extend Modulo with additional connectors and model backends.
           </p>
@@ -98,7 +98,7 @@
                       <button
                         class="rounded p-1 text-muted-foreground hover:bg-accent"
                         data-testid="admin-plugins-expand"
-                        :aria-label="'Expand plugin details'"
+                        ::aria-label="$t('views.AdminPluginsView.expand_plugin_details')"
                         :title="expanded[plugin.PLUGIN_ID] ? 'Collapse details' : 'Expand details'"
                         @click="toggleExpand(plugin.PLUGIN_ID)"
                       >
@@ -118,7 +118,7 @@
                     <div class="space-y-3">
                       <div class="grid grid-cols-2 gap-4">
                         <div>
-                          <span class="text-xs font-medium text-muted-foreground">Plugin ID</span>
+                          <span class="text-xs font-medium text-muted-foreground">{{ $t('views.AdminPluginsView.plugin_id') }}</span>
                           <p class="font-mono text-xs">{{ plugin.PLUGIN_ID }}</p>
                         </div>
                         <div>
@@ -139,7 +139,7 @@
                           </div>
                         </div>
                         <div>
-                          <span class="text-xs font-medium text-muted-foreground">Health Detail</span>
+                          <span class="text-xs font-medium text-muted-foreground">{{ $t('views.AdminPluginsView.health_detail') }}</span>
                           <p
                             class="text-sm"
                             :class="plugin.health_ok ? 'text-success' : 'text-destructive'"
@@ -148,7 +148,7 @@
                           </p>
                         </div>
                         <div>
-                          <span class="text-xs font-medium text-muted-foreground">Last Checked</span>
+                          <span class="text-xs font-medium text-muted-foreground">{{ $t('views.AdminPluginsView.last_checked') }}</span>
                           <p class="text-sm">
                             {{ plugin.health_checked_at ? new Date(plugin.health_checked_at).toLocaleString() : '—' }}
                           </p>

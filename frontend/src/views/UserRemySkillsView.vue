@@ -1,10 +1,10 @@
-<template>
+﻿<template>
   <div data-theme="agent" class="mx-auto max-w-4xl space-y-6 p-6">
       <TooltipProvider>
     <header class="flex items-center justify-between">
       <div>
-        <h1 class="text-3xl font-bold tracking-tight">My Remy Skills</h1>
-        <p class="mt-1 text-muted-foreground">Manage your personal skills for the Remy AI assistant</p>
+        <h1 class="text-3xl font-bold tracking-tight">{{ $t('views.UserRemySkillsView.my_remy_skills') }}</h1>
+        <p class="mt-1 text-muted-foreground">{{ $t('views.UserRemySkillsView.manage_your_personal_skills_for_the_remy_ai_assistant') }}</p>
       </div>
       <button
         class="rounded-lg bg-primary px-4 py-2 text-sm font-semibold text-primary-foreground border border-primary/30 hover:brightness-110 transition-all"
@@ -20,7 +20,7 @@
     <ErrorAlert v-else-if="loadError" :message="loadError" :on-retry="loadSkills" />
 
     <div v-else-if="skills.length === 0" class="rounded-lg border bg-card p-8 text-center">
-      <p class="text-lg font-medium">No personal skills configured</p>
+      <p class="text-lg font-medium">{{ $t('views.UserRemySkillsView.no_personal_skills_configured') }}</p>
       <p class="mt-1 text-sm text-muted-foreground">
         Create skills to give Remy custom instructions and behaviours.
       </p>
@@ -82,8 +82,8 @@
                 <div class="flex items-center justify-end gap-1">
                   <button
                     class="rounded p-1 text-muted-foreground hover:bg-accent"
-                    :aria-label="'Edit skill'"
-                    title="Edit skill"
+                    ::aria-label="$t('views.AdminRemyView.edit_skill')"
+                    :title="$t('views.AdminRemyView.edit_skill_1')"
                     @click="skillDialogRef?.openEdit(skill)"
                   >
                     <svg class="h-4 w-4" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -92,8 +92,8 @@
                   </button>
                   <button
                     class="rounded p-1 text-destructive hover:bg-destructive/10"
-                    :aria-label="'Delete skill'"
-                    title="Delete skill"
+                    ::aria-label="$t('views.AdminRemyView.delete_skill')"
+                    :title="$t('components.remy.RemySkillDialog.delete_skill')"
                     @click="skillDialogRef?.openDelete(skill)"
                   >
                     <svg class="h-4 w-4" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">

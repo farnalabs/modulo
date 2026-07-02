@@ -1,4 +1,4 @@
-<template>
+﻿<template>
   <PageTabs :tabs="[
     { label: 'Browse', to: '/schemas' },
     { label: 'Editor', to: '/schemas/editor' },
@@ -7,7 +7,7 @@
   <div class="mx-auto max-w-4xl space-y-8 p-6">
     <header>
       <h1 class="text-3xl font-bold tracking-tight">Schemas</h1>
-      <p class="mt-1 text-muted-foreground">Manage schemas and deprecate outdated definitions</p>
+      <p class="mt-1 text-muted-foreground">{{ $t('views.SchemaListView.manage_schemas_and_deprecate_outdated_definitions') }}</p>
     </header>
 
     <LoadingSpinner v-if="loading" />
@@ -16,7 +16,7 @@
 
     <template v-else>
       <div v-if="schemas.length === 0" class="card p-8 text-center">
-        <p class="text-lg font-medium">No schemas found</p>
+        <p class="text-lg font-medium">{{ $t('views.SchemaListView.no_schemas_found') }}</p>
         <p class="mt-1 text-sm text-muted-foreground">
           Schemas are created through inference or direct creation.
         </p>
@@ -61,8 +61,8 @@
                   <button
                     class="rounded p-1 text-muted-foreground hover:bg-accent hover:text-destructive"
                     data-testid="schema-deprecate"
-                    :aria-label="'Deprecate schema'"
-                    title="Deprecate schema"
+                    ::aria-label="$t('views.SchemaListView.deprecate_schema')"
+                    :title="$t('views.SchemaListView.deprecate_schema_1')"
                     @click="confirmDeprecate(schema)"
                   >
                     <svg class="h-4 w-4" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">

@@ -1,4 +1,4 @@
-<template>
+﻿<template>
   <div class="min-h-screen">
     <header class="bg-card border-b border-border px-6 py-4">
       <div class="max-w-6xl mx-auto flex items-center justify-between gap-3">
@@ -7,7 +7,7 @@
           <input
             v-model="search"
             type="text"
-            placeholder="Search primitives..."
+            :placeholder="$t('views.LibraryView.search_primitives')"
             class="input-teal px-3 py-1.5 border border-input bg-background rounded-lg text-sm"
             @input="onSearchInput"
             data-testid="library-search"
@@ -18,13 +18,13 @@
             @change="onFilterChange"
             data-testid="library-type-filter"
           >
-            <option value="">All Types</option>
-            <option value="pipeline_template">Pipeline Templates</option>
+            <option value="">{{ $t('views.AdminNotificationDeliveryLogView.all_types') }}</option>
+            <option value="pipeline_template">{{ $t('views.LibraryView.pipeline_templates') }}</option>
             <option value="workflow">Workflows</option>
             <option value="agent">Agents</option>
             <option value="schema">Schemas</option>
             <option value="integration">Integrations</option>
-            <option value="test_fixture">Test Fixtures</option>
+            <option value="test_fixture">{{ $t('views.LibraryView.test_fixtures') }}</option>
             <option value="composite">Composites</option>
           </select>
         </div>

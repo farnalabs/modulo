@@ -1,25 +1,25 @@
-<template>
+﻿<template>
   <div class="mx-auto max-w-6xl space-y-6 p-6">
     <header>
-      <h1 class="text-3xl font-bold tracking-tight">Trigger Event Log</h1>
-      <p class="mt-1 text-muted-foreground">Event history for all triggers across the organisation</p>
+      <h1 class="text-3xl font-bold tracking-tight">{{ $t('views.SettingsTriggerEventLogView.trigger_event_log') }}</h1>
+      <p class="mt-1 text-muted-foreground">{{ $t('views.SettingsTriggerEventLogView.event_history_for_all_triggers_across_the_organisation') }}</p>
     </header>
 
     <div class="rounded-lg border bg-card p-4 shadow-sm">
       <div class="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
         <div>
-          <label class="mb-1 block text-xs font-medium text-muted-foreground">Trigger Type</label>
+          <label class="mb-1 block text-xs font-medium text-muted-foreground">{{ $t('views.SettingsTriggerEventLogView.trigger_type') }}</label>
           <select
             v-model="filterTriggerType"
             data-testid="settings-trigger-event-log-trigger-type"
             class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring"
           >
-            <option value="">All types</option>
+            <option value="">{{ $t('views.AdminNotificationDeliveryLogView.all_types') }}</option>
             <option value="manual">Manual</option>
             <option value="webhook">Webhook</option>
             <option value="cron">Cron</option>
             <option value="polling">Polling</option>
-            <option value="agent_signal">Agent Signal</option>
+            <option value="agent_signal">{{ $t('views.SettingsTriggerEventLogView.agent_signal') }}</option>
           </select>
         </div>
         <div>
@@ -29,21 +29,21 @@
             data-testid="settings-trigger-event-log-result"
             class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring"
           >
-            <option value="">All results</option>
+            <option value="">{{ $t('views.SettingsTriggerEventLogView.all_results') }}</option>
             <option value="accepted">Accepted</option>
             <option value="passed">Passed</option>
-            <option value="condition_met">Condition Met</option>
-            <option value="signal_fired">Signal Fired</option>
-            <option value="no_match">No Match</option>
-            <option value="hmac_failed">HMAC Failed</option>
-            <option value="schema_validation_failed">Schema Validation Failed</option>
+            <option value="condition_met">{{ $t('views.SettingsTriggerEventLogView.condition_met') }}</option>
+            <option value="signal_fired">{{ $t('views.SettingsTriggerEventLogView.signal_fired') }}</option>
+            <option value="no_match">{{ $t('views.SettingsTriggerEventLogView.no_match') }}</option>
+            <option value="hmac_failed">{{ $t('views.SettingsTriggerEventLogView.hmac_failed') }}</option>
+            <option value="schema_validation_failed">{{ $t('views.SettingsTriggerEventLogView.schema_validation_failed') }}</option>
             <option value="deduplicated">Deduplicated</option>
-            <option value="concurrency_limit_reached">Concurrency Limit Reached</option>
-            <option value="flood_rejected">Flood Rejected</option>
-            <option value="timestamp_expired">Timestamp Expired</option>
-            <option value="validation_failed">Validation Failed</option>
-            <option value="rate_limited">Rate Limited</option>
-            <option value="poll_error">Poll Error</option>
+            <option value="concurrency_limit_reached">{{ $t('views.SettingsTriggerEventLogView.concurrency_limit_reached') }}</option>
+            <option value="flood_rejected">{{ $t('views.SettingsTriggerEventLogView.flood_rejected') }}</option>
+            <option value="timestamp_expired">{{ $t('views.SettingsTriggerEventLogView.timestamp_expired') }}</option>
+            <option value="validation_failed">{{ $t('views.SettingsTriggerEventLogView.validation_failed') }}</option>
+            <option value="rate_limited">{{ $t('views.SettingsTriggerEventLogView.rate_limited') }}</option>
+            <option value="poll_error">{{ $t('views.SettingsTriggerEventLogView.poll_error') }}</option>
           </select>
         </div>
         <div class="flex items-end gap-2">
@@ -73,7 +73,7 @@
     <ErrorAlert v-else-if="error" :message="error" :on-retry="loadEvents" />
 
     <div v-else-if="items.length === 0" class="rounded-lg border bg-card p-8 text-center">
-      <p class="text-lg font-medium">No trigger events found</p>
+      <p class="text-lg font-medium">{{ $t('views.SettingsTriggerEventLogView.no_trigger_events_found') }}</p>
       <p class="mt-1 text-sm text-muted-foreground">
         Try adjusting your filters or wait for trigger activity to be recorded.
       </p>
@@ -88,8 +88,8 @@
               <th class="px-4 py-3">Result</th>
               <th class="px-4 py-3">Timestamp</th>
               <th class="px-4 py-3">Run</th>
-              <th class="px-4 py-3">Error Detail</th>
-              <th class="px-4 py-3">Trigger ID</th>
+              <th class="px-4 py-3">{{ $t('views.SettingsNotificationLogView.error_detail') }}</th>
+              <th class="px-4 py-3">{{ $t('views.SettingsTriggerEventLogView.trigger_id') }}</th>
             </tr>
           </thead>
           <tbody class="divide-y">

@@ -1,8 +1,8 @@
-<template>
+﻿<template>
   <div data-theme="agent" class="mx-auto max-w-4xl space-y-6 p-6">
     <header>
-      <h1 data-testid="changelog-title" class="text-3xl font-bold tracking-tight">API Changelog</h1>
-      <p class="mt-1 text-muted-foreground">Version history and deprecation notices for the Modulo API</p>
+      <h1 data-testid="changelog-title" class="text-3xl font-bold tracking-tight">{{ $t('views.ApiChangelogView.api_changelog') }}</h1>
+      <p class="mt-1 text-muted-foreground">{{ $t('views.ApiChangelogView.version_history_and_deprecation_notices_for_the_modulo_api') }}</p>
     </header>
 
     <LoadingSpinner v-if="loading" />
@@ -10,8 +10,8 @@
     <ErrorAlert v-else-if="error" :message="error" :on-retry="loadChangelog" />
 
     <div v-else-if="entries.length === 0" data-testid="changelog-empty" class="rounded-lg border bg-card p-8 text-center">
-      <p class="text-lg font-medium">No changelog entries</p>
-      <p class="mt-1 text-sm text-muted-foreground">No API version history is available yet.</p>
+      <p class="text-lg font-medium">{{ $t('views.ApiChangelogView.no_changelog_entries') }}</p>
+      <p class="mt-1 text-sm text-muted-foreground">{{ $t('views.ApiChangelogView.no_api_version_history_is_available_yet') }}</p>
     </div>
 
     <template v-else>

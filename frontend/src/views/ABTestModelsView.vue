@@ -1,4 +1,4 @@
-<template>
+﻿<template>
   <PageTabs :tabs="[
     { label: 'Evals', to: '/evals/editor' },
     { label: 'Proposals', to: '/evals/proposals' },
@@ -10,7 +10,7 @@
     <ErrorAlert v-else-if="error" :message="error" />
     <template v-else>
       <header>
-        <h1 class="text-3xl font-bold tracking-tight">A/B Test Models</h1>
+        <h1 class="text-3xl font-bold tracking-tight">{{ $t('views.ABTestModelsView.ab_test_models') }}</h1>
         <p class="mt-1 text-muted-foreground">
           Compare model backends side by side with weighted A/B testing — eval scores, costs, and token usage
         </p>
@@ -18,13 +18,13 @@
 
       <div class="flex flex-wrap items-center gap-4">
         <label class="flex items-center gap-2 text-sm">
-          <span class="text-muted-foreground">Pipeline:</span>
+          <span class="text-muted-foreground">{{ $t('views.ABTestModelsView.pipeline') }}</span>
           <select
             v-model="selectedPipelineId"
             data-testid="ab-test-models-pipeline-select"
             class="min-w-[280px] rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
           >
-            <option value="" disabled>Select a pipeline…</option>
+            <option value="" disabled>{{ $t('views.ABTestModelsView.select_a_pipeline') }}</option>
             <option v-for="p in pipelines" :key="p.id" :value="p.id">
               {{ p.name }}
             </option>
@@ -32,13 +32,13 @@
         </label>
 
         <label class="flex items-center gap-2 text-sm">
-          <span class="text-muted-foreground">Existing group:</span>
+          <span class="text-muted-foreground">{{ $t('views.ABTestModelsView.existing_group') }}</span>
           <select
             v-model="selectedGroupId"
             data-testid="ab-test-models-group-select"
             class="min-w-[200px] rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
           >
-            <option value="">New group</option>
+            <option value="">{{ $t('views.ABTestModelsView.new_group') }}</option>
             <option v-for="g in filteredGroups" :key="g.id" :value="g.id">
               {{ g.name }}
             </option>
@@ -53,12 +53,12 @@
           </h2>
           <div class="grid gap-4 sm:grid-cols-2">
             <div>
-              <label class="mb-1 block text-sm font-medium text-muted-foreground">Group Name</label>
+              <label class="mb-1 block text-sm font-medium text-muted-foreground">{{ $t('views.ABTestModelsView.group_name') }}</label>
               <input
                 v-model="groupName"
                 data-testid="ab-test-models-group-name"
                 type="text"
-                placeholder="e.g. Claude vs GPT-4o"
+                :placeholder="$t('views.ABTestModelsView.eg_claude_vs_gpt4o')"
                 class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
               />
             </div>
@@ -68,7 +68,7 @@
                 v-model="groupDescription"
                 data-testid="ab-test-models-group-description"
                 type="text"
-                placeholder="Compare accuracy and cost across model providers"
+                :placeholder="$t('views.ABTestModelsView.compare_accuracy_and_cost_across_model_providers')"
                 class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
               />
             </div>
@@ -118,18 +118,18 @@
                     v-model="v.name"
                     :data-testid="`ab-test-models-variant-name-${i}`"
                     type="text"
-                    placeholder="Variant A"
+                    :placeholder="$t('views.ABTestModelsView.variant_a')"
                     class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                   />
                 </div>
                 <div>
-                  <label class="mb-1 block text-xs font-medium text-muted-foreground">Model Backend</label>
+                  <label class="mb-1 block text-xs font-medium text-muted-foreground">{{ $t('views.ABTestModelsView.model_backend') }}</label>
                   <select
                     v-model="v.modelBackendId"
                     :data-testid="`ab-test-models-model-backend-${i}`"
                     class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                   >
-                    <option value="" disabled>Select model…</option>
+                    <option value="" disabled>{{ $t('views.ABTestModelsView.select_model') }}</option>
                     <option
                       v-for="mb in modelBackends"
                       :key="mb.id"
@@ -201,7 +201,7 @@
               </thead>
               <tbody>
                 <tr class="border-b hover:bg-muted/30">
-                  <td class="px-4 py-3 font-medium text-muted-foreground">Eval Pass Rate</td>
+                  <td class="px-4 py-3 font-medium text-muted-foreground">{{ $t('views.ABTestModelsView.eval_pass_rate') }}</td>
                   <td
                     v-for="s in summaryByVariant"
                     :key="`pass-${s.name}`"

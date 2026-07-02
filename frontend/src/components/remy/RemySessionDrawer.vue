@@ -1,4 +1,4 @@
-<template>
+﻿<template>
   <div class="remy-sessions">
     <div class="flex items-center justify-between p-3 border-b">
       <h3
@@ -10,7 +10,7 @@
         variant="ghost"
         size="icon"
         @click="handleNewSession"
-        title="New session"
+        :title="$t('components.remy.RemySessionDrawer.new_session')"
       >
         <svg
           xmlns="http://www.w3.org/2000/svg"
@@ -38,9 +38,9 @@
       v-else-if="store.sortedSessions.length === 0"
       class="flex flex-col items-center justify-center py-8 px-4 text-center"
     >
-      <p class="text-sm text-muted-foreground">No sessions yet</p>
+      <p class="text-sm text-muted-foreground">{{ $t('components.remy.RemySessionDrawer.no_sessions_yet') }}</p>
       <Button variant="link" size="sm" @click="handleNewSession" class="mt-2"
-        >Start a new chat</Button
+        >{{ $t('components.remy.RemySessionDrawer.start_a_new_chat') }}</Button
       >
     </div>
 

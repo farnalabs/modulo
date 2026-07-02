@@ -1,4 +1,4 @@
-<script setup lang="ts">
+﻿<script setup lang="ts">
 import { onMounted } from "vue";
 import { useCompositeStore } from "../../../stores/compositeStore";
 import Card from "../../ui/card/Card.vue";
@@ -21,7 +21,7 @@ onMounted(() => {
 <template>
   <div class="space-y-3">
     <div class="flex items-center justify-between">
-      <h4 class="text-sm font-medium">Composite Library</h4>
+      <h4 class="text-sm font-medium">{{ $t('components.pipeline.composite.CompositeLibraryPicker.composite_library') }}</h4>
       <span
         v-if="compositeStore.composites.length"
         class="text-xs text-muted-foreground"
@@ -37,7 +37,7 @@ onMounted(() => {
       <div
         class="mx-auto h-5 w-5 animate-spin rounded-full border-2 border-indigo-500 border-t-transparent"
       />
-      <p class="mt-2">Loading composites...</p>
+      <p class="mt-2">{{ $t('components.pipeline.composite.CompositeLibraryPicker.loading_composites') }}</p>
     </div>
 
     <div
@@ -51,7 +51,7 @@ onMounted(() => {
       v-else-if="compositeStore.composites.length === 0"
       class="rounded-lg border border-dashed border-muted-foreground/30 p-6 text-center text-sm text-muted-foreground"
     >
-      <p>No composites in library yet.</p>
+      <p>{{ $t('components.pipeline.composite.CompositeLibraryPicker.no_composites_in_library_yet') }}</p>
     </div>
 
     <div v-else class="grid grid-cols-1 gap-3">

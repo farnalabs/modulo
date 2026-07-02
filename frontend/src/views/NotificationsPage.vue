@@ -2,30 +2,30 @@
   <div class="mx-auto max-w-6xl space-y-6 p-6">
     <header>
       <h1 class="text-3xl font-bold tracking-tight">Notifications</h1>
-      <p class="mt-1 text-muted-foreground">View and manage your notifications</p>
+      <p class="mt-1 text-muted-foreground">{{ $t('views.NotificationsPage.view_and_manage_your_notifications') }}</p>
     </header>
 
     <!-- Filters -->
     <div class="card p-4">
       <div class="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
         <select v-model="filterLevel" class="rounded-md border bg-background px-3 py-2 text-sm">
-          <option value="">All Levels</option>
+          <option value="">{{ $t('views.AdminErrorsView.all_levels') }}</option>
           <option value="error">Error</option>
           <option value="warning">Warning</option>
           <option value="info">Info</option>
           <option value="debug">Debug</option>
         </select>
         <select v-model="filterScope" class="rounded-md border bg-background px-3 py-2 text-sm">
-          <option value="">All Scopes</option>
+          <option value="">{{ $t('views.NotificationsPage.all_scopes') }}</option>
           <option value="user">Personal</option>
-          <option value="org">Org-wide</option>
+          <option value="org">{{ $t('components.OwnershipPicker.orgwide') }}</option>
           <option value="admin">Admin</option>
         </select>
         <select v-model="filterStatus" class="rounded-md border bg-background px-3 py-2 text-sm">
-          <option value="">All Status</option>
+          <option value="">{{ $t('views.NotificationsPage.all_status') }}</option>
           <option value="active">Active</option>
-          <option value="dismissed_self">Dismissed (self)</option>
-          <option value="dismissed_scope">Dismissed (scope)</option>
+          <option value="dismissed_self">{{ $t('views.NotificationsPage.dismissed_self') }}</option>
+          <option value="dismissed_scope">{{ $t('views.NotificationsPage.dismissed_scope') }}</option>
         </select>
         <div class="flex items-end gap-2">
           <button
@@ -49,8 +49,8 @@
     <!-- States -->
     <LoadingSpinner v-if="loading" />
     <ErrorAlert v-else-if="error" :message="error" :on-retry="loadNotifications" />
-    <EmptyState v-else-if="notifications.length === 0" title="No notifications" description="No notifications matching your filters.">
-      <button type="button" class="text-sm text-primary hover:underline" @click="resetFilters">Clear filters</button>
+    <EmptyState v-else-if="notifications.length === 0" :title="$t('views.NotificationsPage.no_notifications')" description="No notifications matching your filters.">
+      <button type="button" class="text-sm text-primary hover:underline" @click="resetFilters">{{ $t('views.NotificationsPage.clear_filters') }}</button>
     </EmptyState>
     <template v-else>
       <div class="space-y-2">

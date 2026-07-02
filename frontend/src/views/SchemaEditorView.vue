@@ -1,4 +1,4 @@
-<template>
+﻿<template>
   <PageTabs :tabs="[
     { label: 'Browse', to: '/schemas' },
     { label: 'Editor', to: '/schemas/editor' },
@@ -12,7 +12,7 @@
           <input
             v-model="searchQuery"
             type="text"
-            placeholder="Search schemas..."
+            :placeholder="$t('views.SchemaEditorView.search_schemas')"
             data-testid="schema-editor-search"
             class="w-full rounded-lg border border-input bg-background px-3 py-2 pl-9 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
           />
