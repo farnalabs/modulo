@@ -121,7 +121,7 @@ class LinearConnector(ConnectorBase):
             body: dict[str, Any] = r.json()
             if "errors" in body:
                 raise ValueError(f"Linear API error: {body['errors']}")
-            data: dict[str, Any] = body.get("data", {})
+            data: dict[str, Any] = body.get("data") or {}
             return data
 
     async def health_check(self) -> HealthResult:
