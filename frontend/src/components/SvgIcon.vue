@@ -9,6 +9,8 @@
     fill="none"
     stroke="currentColor"
     stroke-width="2"
+    stroke-linecap="round"
+    stroke-linejoin="round"
   >
     <rect x="3" y="3" width="7" height="9" />
     <rect x="14" y="3" width="7" height="5" />
@@ -25,25 +27,11 @@
     fill="none"
     stroke="currentColor"
     stroke-width="2"
+    stroke-linecap="round"
+    stroke-linejoin="round"
   >
     <path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z" />
     <path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z" />
-  </svg>
-  <svg
-    aria-hidden="true"
-    v-else-if="name === 'GitBranch'"
-    xmlns="http://www.w3.org/2000/svg"
-    width="16"
-    height="16"
-    viewBox="0 0 24 24"
-    fill="none"
-    stroke="currentColor"
-    stroke-width="2"
-  >
-    <line x1="6" y1="3" x2="6" y2="15" />
-    <circle cx="18" cy="6" r="3" />
-    <circle cx="6" cy="18" r="3" />
-    <path d="M18 9a9 9 0 0 1-9 9" />
   </svg>
   <svg
     aria-hidden="true"
@@ -55,6 +43,8 @@
     fill="none"
     stroke="currentColor"
     stroke-width="2"
+    stroke-linecap="round"
+    stroke-linejoin="round"
   >
     <path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2" />
     <circle cx="9" cy="7" r="4" />
@@ -71,6 +61,8 @@
     fill="none"
     stroke="currentColor"
     stroke-width="2"
+    stroke-linecap="round"
+    stroke-linejoin="round"
   >
     <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" />
   </svg>
@@ -84,6 +76,8 @@
     fill="none"
     stroke="currentColor"
     stroke-width="2"
+    stroke-linecap="round"
+    stroke-linejoin="round"
   >
     <path d="M12 15.5v-3" />
     <path d="M9 12l3-3 3 3" />
@@ -99,6 +93,8 @@
     fill="none"
     stroke="currentColor"
     stroke-width="2"
+    stroke-linecap="round"
+    stroke-linejoin="round"
   >
     <circle cx="12" cy="12" r="3" />
     <path
@@ -115,6 +111,8 @@
     fill="none"
     stroke="currentColor"
     stroke-width="2"
+    stroke-linecap="round"
+    stroke-linejoin="round"
   >
     <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z" />
     <circle cx="12" cy="12" r="3" />
@@ -129,6 +127,8 @@
     fill="none"
     stroke="currentColor"
     stroke-width="2"
+    stroke-linecap="round"
+    stroke-linejoin="round"
   >
     <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
     <polyline points="14 2 14 8 20 8" />
@@ -146,6 +146,8 @@
     fill="none"
     stroke="currentColor"
     stroke-width="2"
+    stroke-linecap="round"
+    stroke-linejoin="round"
   >
     <path d="M4 15s1-1 4-1 5 2 8 2 4-1 4-1V3s-1 1-4 1-5-2-8-2-4 1-4 1z" />
     <line x1="4" y1="22" x2="4" y2="15" />
@@ -160,6 +162,8 @@
     fill="none"
     stroke="currentColor"
     stroke-width="2"
+    stroke-linecap="round"
+    stroke-linejoin="round"
   >
     <line x1="12" y1="20" x2="12" y2="10" />
     <line x1="18" y1="20" x2="18" y2="4" />
@@ -175,6 +179,8 @@
     fill="none"
     stroke="currentColor"
     stroke-width="2"
+    stroke-linecap="round"
+    stroke-linejoin="round"
   >
     <circle cx="12" cy="12" r="10" />
     <polyline points="12 6 12 12 16 14" />
@@ -725,7 +731,7 @@ const props = defineProps<{
 }>();
 
 const knownIcons = [
-  "LayoutDashboard", "BookOpen", "GitBranch", "Users", "Shield",
+  "LayoutDashboard", "BookOpen", "Users", "Shield",
   "Gauge", "Settings", "Eye", "FileText", "Flag", "BarChart",
   "History", "UserCircle", "CheckSquare", "GitFork", "Database",
   "MessageSquare", "Clipboard", "DollarSign", "Cable", "Plug",

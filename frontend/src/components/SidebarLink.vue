@@ -24,13 +24,8 @@ const props = defineProps<{
 
 const route = useRoute();
 
-const isActive = computed(() => {
-  if (props.exact) {
-    return route.path === props.to;
-  }
-  return (
-    route.path === props.to ||
-    (props.to !== "/" && route.path.startsWith(props.to + "/"))
-  );
-});
+const isActive = computed(() =>
+  route.path === props.to ||
+  (!props.exact && props.to !== "/" && route.path.startsWith(props.to + "/"))
+);
 </script>
