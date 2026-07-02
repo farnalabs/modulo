@@ -195,7 +195,7 @@
                     <button
                       class="rounded p-1 text-muted-foreground hover:bg-accent"
                       data-testid="admin-model-backends-edit"
-                      ::aria-label="$t('views.AdminModelBackendsView.edit_model_backend_1')"
+                      :aria-label="$t('views.AdminModelBackendsView.edit_model_backend_1')"
                       :title="$t('views.AdminModelBackendsView.edit_model_backend')"
                       @click="openEditForm(backend)"
                     >
@@ -206,7 +206,7 @@
                     <button
                       class="rounded p-1 text-destructive hover:bg-destructive/10"
                       data-testid="admin-model-backends-delete"
-                      ::aria-label="$t('views.AdminModelBackendsView.delete_model_backend')"
+                      :aria-label="$t('views.AdminModelBackendsView.delete_model_backend')"
                       :title="$t('views.AdminModelBackendsView.delete_model_backend_1')"
                       @click="confirmDelete(backend)"
                     >

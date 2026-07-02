@@ -123,7 +123,7 @@ foreach ($file in $vueFiles) {
     if ($DryRun) {
       Write-Host "  [DRY RUN] Would modify: $relPath ($($totalReplacements) replacements)" -ForegroundColor Yellow
     } else {
-      Set-Content -Path $file.FullName -Value $content -Encoding UTF8 -NoNewline
+      Set-Content -Path $file.FullName -Value $content -Encoding UTF8
       Write-Host "  Modified: $relPath" -ForegroundColor Green
     }
     $filesModified++

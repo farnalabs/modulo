@@ -36,7 +36,7 @@
         ref="mobileButtonRef"
         @click="mobileOpen = !mobileOpen"
         class="rounded-md p-2 text-muted-foreground hover:text-foreground hover:bg-muted transition-colors"
-        ::aria-label="$t('components.AppLayout.mobileopen_close_navigation_open_navigation')"
+        :aria-label="$t('components.AppLayout.mobileopen_close_navigation_open_navigation')"
         :aria-expanded="mobileOpen"
         aria-controls="mobile-sidebar"
       >
