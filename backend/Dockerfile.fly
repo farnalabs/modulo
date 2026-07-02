@@ -53,7 +53,7 @@ WORKDIR /app
 COPY backend/pyproject.toml backend/uv.lock ./
 COPY backend/src/ src/
 COPY backend/alembic.ini .
-RUN uv sync --frozen --no-dev --no-cache
+RUN uv sync --frozen --no-dev --no-cache --group redis
 
 # Frontend build output
 COPY --from=frontend-builder /build/dist/ /usr/share/nginx/html/
