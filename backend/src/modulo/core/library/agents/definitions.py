@@ -1,4 +1,4 @@
-"""21 canonical library agent primitives.
+"""22 canonical library agent primitives.
 
 Each dict follows the pattern established in
 :mod:`modulo.core.library.complexity_reviewer` — a
@@ -38,8 +38,8 @@ TICKET_TRIAGER: dict[str, Any] = {
         "type": "object",
         "required": ["title", "description"],
         "properties": {
-            "title": {"type": "string", "description": "Ticket title"},
-            "description": {"type": "string", "description": "Ticket body / description"},
+            "title": {"type": "string", "minLength": 1, "description": "Ticket title"},
+            "description": {"type": "string", "minLength": 1, "description": "Ticket body / description"},
         },
     },
     "output_schema": {
@@ -124,7 +124,7 @@ COMPLIANCE_CHECKER: dict[str, Any] = {
                         "description": {"type": "string"},
                         "remediation": {"type": "string"},
                     },
-                    "required": ["rule", "severity", "description"],
+                    "required": ["rule", "severity", "location", "description", "remediation"],
                 },
                 "description": "List of compliance violations found",
             },
@@ -196,6 +196,7 @@ DEPENDENCY_ANALYZER: dict[str, Any] = {
                 "type": "array",
                 "items": {
                     "type": "object",
+                    "required": ["package", "severity", "advisory"],
                     "properties": {
                         "package": {"type": "string"},
                         "severity": {"type": "string"},
@@ -432,6 +433,7 @@ SCHEMA_INFERRER: dict[str, Any] = {
             "sample_data": {
                 "type": "array",
                 "items": {"type": "object"},
+                "minItems": 1,
                 "description": "Array of sample data records",
             },
         },
@@ -502,7 +504,7 @@ CHANGELOG_WRITER: dict[str, Any] = {
         "properties": {
             "changelog_entry": {
                 "type": "object",
-                "required": ["type", "description"],
+                "required": ["type", "description", "references"],
                 "properties": {
                     "type": {
                         "type": "string",
@@ -567,7 +569,7 @@ SECURITY_REVIEWER: dict[str, Any] = {
                 "type": "array",
                 "items": {
                     "type": "object",
-                    "required": ["title", "severity", "cwe_id", "description", "remediation"],
+                    "required": ["title", "severity", "cwe_id", "location", "description", "remediation"],
                     "properties": {
                         "title": {"type": "string"},
                         "severity": {"type": "string", "enum": ["low", "medium", "high", "critical"]},
@@ -811,11 +813,13 @@ FEEDBACK_ANALYZER: dict[str, Any] = {
         "properties": {
             "feedback_items": {
                 "type": "array",
+                "minItems": 1,
                 "items": {
                     "type": "object",
+                    "required": ["comment"],
                     "properties": {
                         "rating": {"type": "number"},
-                        "comment": {"type": "string"},
+                        "comment": {"type": "string", "minLength": 1},
                         "category": {"type": "string"},
                     },
                 },
@@ -878,8 +882,10 @@ CHANGELOG_AGGREGATOR: dict[str, Any] = {
         "properties": {
             "entries": {
                 "type": "array",
+                "minItems": 1,
                 "items": {
                     "type": "object",
+                    "required": ["type", "description"],
                     "properties": {
                         "type": {"type": "string"},
                         "description": {"type": "string"},
@@ -950,12 +956,14 @@ STATUS_REPORTER: dict[str, Any] = {
         "properties": {
             "runs": {
                 "type": "array",
+                "minItems": 1,
                 "items": {
                     "type": "object",
+                    "required": ["id", "status"],
                     "properties": {
-                        "id": {"type": "string"},
-                        "status": {"type": "string"},
-                        "duration_seconds": {"type": "number"},
+                        "id": {"type": "string", "minLength": 1},
+                        "status": {"type": "string", "minLength": 1},
+                        "duration_seconds": {"type": "number", "minimum": 0},
                         "created_at": {"type": "string"},
                     },
                 },
@@ -971,23 +979,24 @@ STATUS_REPORTER: dict[str, Any] = {
             "report": {"type": "string", "description": "Markdown report"},
             "metrics": {
                 "type": "object",
-                "required": ["total_runs", "passed", "failed", "pass_rate"],
+                "required": ["total_runs", "passed", "failed", "average_duration_seconds", "pass_rate"],
                 "properties": {
-                    "total_runs": {"type": "integer"},
-                    "passed": {"type": "integer"},
-                    "failed": {"type": "integer"},
-                    "average_duration_seconds": {"type": "number"},
-                    "pass_rate": {"type": "number"},
+                    "total_runs": {"type": "integer", "minimum": 0},
+                    "passed": {"type": "integer", "minimum": 0},
+                    "failed": {"type": "integer", "minimum": 0},
+                    "average_duration_seconds": {"type": "number", "minimum": 0},
+                    "pass_rate": {"type": "number", "minimum": 0, "maximum": 1},
                 },
             },
             "trends": {
                 "type": "array",
                 "items": {
                     "type": "object",
+                    "required": ["period", "pass_rate", "total"],
                     "properties": {
                         "period": {"type": "string"},
-                        "pass_rate": {"type": "number"},
-                        "total": {"type": "integer"},
+                        "pass_rate": {"type": "number", "minimum": 0, "maximum": 1},
+                        "total": {"type": "integer", "minimum": 0},
                     },
                 },
             },
@@ -1057,9 +1066,9 @@ MIGRATION_PLANNER: dict[str, Any] = {
                         "type": "array",
                         "items": {
                             "type": "object",
-                            "required": ["order", "action", "description"],
+                            "required": ["order", "action", "description", "risk"],
                             "properties": {
-                                "order": {"type": "integer"},
+                                "order": {"type": "integer", "minimum": 0},
                                 "action": {"type": "string"},
                                 "description": {"type": "string"},
                                 "risk": {"type": "string", "enum": ["low", "medium", "high"]},
@@ -1136,9 +1145,9 @@ ROLLBACK_PLANNER: dict[str, Any] = {
                         "type": "array",
                         "items": {
                             "type": "object",
-                            "required": ["order", "action"],
+                            "required": ["order", "action", "command", "verification"],
                             "properties": {
-                                "order": {"type": "integer"},
+                                "order": {"type": "integer", "minimum": 0},
                                 "action": {"type": "string"},
                                 "command": {"type": "string"},
                                 "verification": {"type": "string"},
@@ -1320,10 +1329,10 @@ CODE_REVIEWER: dict[str, Any] = {
                 "type": "array",
                 "items": {
                     "type": "object",
-                    "required": ["file", "line", "severity", "message"],
+                    "required": ["file", "line", "severity", "message", "category"],
                     "properties": {
                         "file": {"type": "string"},
-                        "line": {"type": "integer"},
+                        "line": {"type": "integer", "minimum": 0},
                         "severity": {"type": "string", "enum": ["info", "warning", "error"]},
                         "message": {"type": "string"},
                         "category": {
@@ -1430,7 +1439,7 @@ SPEC_IMPLEMENTER: dict[str, Any] = {
     "role": "implementer",
     "prompt_template": (
         "You are an AI software engineer implementing a specification.\n\n"
-        "SPECIFICATION:\n{input}\n\n"
+        "SPECIFICATION:\n{spec_text}\n\n"
         "Read the specification above, understand the codebase at the code path, "
         "implement the required changes, run the test command to validate the changes, "
         "and fix any test failures. "
@@ -1445,6 +1454,7 @@ SPEC_IMPLEMENTER: dict[str, Any] = {
         "properties": {
             "spec_text": {
                 "type": "string",
+                "minLength": 1,
                 "description": "Markdown specification text describing what to implement",
             },
             "code_path": {
@@ -1472,6 +1482,7 @@ SPEC_IMPLEMENTER: dict[str, Any] = {
             },
             "test_summary": {
                 "type": "object",
+                "required": ["passed", "output"],
                 "properties": {
                     "passed": {"type": "boolean"},
                     "output": {"type": "string"},

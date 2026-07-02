@@ -36,6 +36,16 @@ COMPLEXITY_REVIEWER: dict[str, Any] = {
     ),
     "node_type": "agent",
     "role": "context_setter",
+    "input_schema": {
+        "type": "object",
+        "required": ["artifact"],
+        "properties": {
+            "artifact": {
+                "type": "string",
+                "description": "The artifact content to analyse for complexity",
+            },
+        },
+    },
     "prompt_template": (
         "You are a complexity reviewer for an agentic SDLC pipeline.\n\n"
         "Your task is to analyse the provided artifact and estimate:\n"

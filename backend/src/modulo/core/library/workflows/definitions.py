@@ -1,4 +1,4 @@
-"""12 canonical library workflow primitives.
+"""14 canonical library workflow primitives.
 
 Each dict defines a pre-built pipeline template that combines agents,
 schemas, and connector bindings into a reusable workflow.
