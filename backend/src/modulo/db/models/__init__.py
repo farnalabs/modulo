@@ -20,6 +20,7 @@ from modulo.db.models.model_backend import ModelBackend
 from modulo.db.models.node import Node
 from modulo.db.models.node_category import NodeCategory
 from modulo.db.models.node_observation import NodeObservation
+from modulo.db.models.notification import Dismissal, Notification
 from modulo.db.models.notification_delivery import NotificationDeliveryLog
 from modulo.db.models.notification_endpoint import NotificationEndpoint
 from modulo.db.models.oauth_client import OAuthClient
@@ -64,6 +65,7 @@ __all__ = [
     "ChatSession",
     "CompositeTemplate",
     "ConnectorInstance",
+    "Dismissal",
     "EnvironmentProfile",
     "ErrorEvent",
     "ErrorForwarderConfig",
@@ -79,6 +81,7 @@ __all__ = [
     "Node",
     "NodeCategory",
     "NodeObservation",
+    "Notification",
     "NotificationDeliveryLog",
     "NotificationEndpoint",
     "OAuthAuthorizationCode",
