@@ -41,13 +41,17 @@ const segments = computed<BreadcrumbSegment[]>(() => {
 
   let parentName = meta.parent as string | undefined
   while (parentName) {
-    const parentRoute = router.resolve({ name: parentName })
-    const parentMeta = parentRoute.meta as Record<string, unknown> | undefined
-    chain.unshift({
-      name: parentName,
-      label: (parentMeta?.breadcrumb as string) || parentName,
-    })
-    parentName = parentMeta?.parent as string | undefined
+    try {
+      const parentRoute = router.resolve({ name: parentName })
+      const parentMeta = parentRoute.meta as Record<string, unknown> | undefined
+      chain.unshift({
+        name: parentName,
+        label: (parentMeta?.breadcrumb as string) || parentName,
+      })
+      parentName = parentMeta?.parent as string | undefined
+    } catch {
+      break
+    }
   }
 
   return chain.map((item, index) => ({

@@ -1,4 +1,5 @@
 <template>
+  <BackLink to="/library" label="Back to Library" />
   <div class="flex h-[calc(100vh-3.5rem)]">
     <div v-if="loading" class="flex flex-1 items-center justify-center">
       <div class="h-8 w-8 animate-spin rounded-full border-4 border-primary border-t-transparent" />
@@ -501,6 +502,7 @@ import { Controls } from '@vue-flow/controls'
 import '@vue-flow/core/dist/style.css'
 import '@vue-flow/core/dist/theme-default.css'
 import { useApi } from '../composables/useApi'
+import BackLink from '../components/BackLink.vue'
 
 const { get, post, patch } = useApi()
 const route = useRoute()

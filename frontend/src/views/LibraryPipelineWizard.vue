@@ -1,4 +1,5 @@
 <template>
+  <BackLink to="/library" label="Back to Library" />
   <div class="min-h-screen bg-background">
     <header class="bg-card border-b border-border px-6 py-4">
       <div class="max-w-3xl mx-auto">
@@ -151,6 +152,7 @@ import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
 import OwnershipPicker from '../components/OwnershipPicker.vue'
 import type { OwnershipValue } from '../components/OwnershipPicker.vue'
+import BackLink from '../components/BackLink.vue'
 
 interface LibraryPrimitive {
   id: string
