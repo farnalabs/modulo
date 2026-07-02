@@ -11,16 +11,29 @@
       </header>
 
       <div class="flex flex-wrap items-end gap-4 rounded-lg border bg-card p-6">
-        <label class="flex flex-col gap-1.5">
-          <span class="text-xs font-medium text-muted-foreground">{{ $t('views.AgentOutputDiffView.run_id_a') }}</span>
-          <input
-            v-model="runIdA"
-            data-testid="diff-run-id-a"
-            type="text"
-            placeholder="00000000-0000-0000-0000-000000000000"
-            class="w-72 rounded-lg border border-input bg-background px-3 py-2 font-mono text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-          />
-        </label>
+        <div class="flex flex-col gap-1.5">
+          <span class="text-xs font-medium text-muted-foreground">Run A</span>
+          <div class="flex gap-2">
+            <select
+              data-testid="diff-recent-runs-a"
+              class="w-72 rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              @change="onSelectRunA"
+            >
+              <option v-if="loadingRuns" value="" disabled>Loading...</option>
+              <option v-else value="" disabled>Select recent run...</option>
+              <option v-for="run in recentRuns" :key="run.id" :value="run.id">
+                {{ run.pipeline_name }} — {{ run.status }} ({{ run.created_at }})
+              </option>
+            </select>
+            <input
+              v-model="runIdA"
+              data-testid="diff-run-id-a"
+              type="text"
+              placeholder="00000000-0000-0000-0000-000000000000"
+              class="w-48 rounded-lg border border-input bg-background px-3 py-2 font-mono text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            />
+          </div>
+        </div>
         <label class="flex flex-col gap-1.5">
           <span class="text-xs font-medium text-muted-foreground">{{ $t('views.AgentOutputDiffView.node_id') }}</span>
           <input
@@ -31,16 +44,29 @@
             class="w-48 rounded-lg border border-input bg-background px-3 py-2 font-mono text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
           />
         </label>
-        <label class="flex flex-col gap-1.5">
-          <span class="text-xs font-medium text-muted-foreground">{{ $t('views.AgentOutputDiffView.run_id_b') }}</span>
-          <input
-            v-model="runIdB"
-            data-testid="diff-run-id-b"
-            type="text"
-            placeholder="00000000-0000-0000-0000-000000000000"
-            class="w-72 rounded-lg border border-input bg-background px-3 py-2 font-mono text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-          />
-        </label>
+        <div class="flex flex-col gap-1.5">
+          <span class="text-xs font-medium text-muted-foreground">Run B</span>
+          <div class="flex gap-2">
+            <select
+              data-testid="diff-recent-runs-b"
+              class="w-72 rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              @change="onSelectRunB"
+            >
+              <option v-if="loadingRuns" value="" disabled>Loading...</option>
+              <option v-else value="" disabled>Select recent run...</option>
+              <option v-for="run in recentRuns" :key="run.id" :value="run.id">
+                {{ run.pipeline_name }} — {{ run.status }} ({{ run.created_at }})
+              </option>
+            </select>
+            <input
+              v-model="runIdB"
+              data-testid="diff-run-id-b"
+              type="text"
+              placeholder="00000000-0000-0000-0000-000000000000"
+              class="w-48 rounded-lg border border-input bg-background px-3 py-2 font-mono text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            />
+          </div>
+        </div>
         <button
           :disabled="!canCompare"
           data-testid="diff-compare-btn"
@@ -118,7 +144,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed } from 'vue'
+import { ref, computed, onMounted } from 'vue'
 import { api } from '../lib/api/client'
 import type { components } from '../lib/api/client'
 import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
@@ -133,6 +159,48 @@ const runIdB = ref('')
 const loading = ref(false)
 const error = ref<string | null>(null)
 const result = ref<NodeOutputDiffResponse | null>(null)
+
+interface RecentRun {
+  id: string
+  pipeline_name: string
+  status: string
+  created_at: string
+}
+
+const recentRuns = ref<RecentRun[]>([])
+const loadingRuns = ref(false)
+
+async function fetchRecentRuns() {
+  loadingRuns.value = true
+  try {
+    const { data, error: err } = await api.GET('/api/v1/admin/dashboard/summary')
+    if (!err && data) {
+      recentRuns.value = (data as any).recent_runs ?? []
+    }
+  } catch {
+    console.warn('Failed to fetch recent runs for diff selectors')
+  } finally {
+    loadingRuns.value = false
+  }
+}
+
+onMounted(() => {
+  fetchRecentRuns()
+})
+
+function onSelectRunA(event: Event) {
+  const target = event.target as HTMLSelectElement
+  if (target.value) {
+    runIdA.value = target.value
+  }
+}
+
+function onSelectRunB(event: Event) {
+  const target = event.target as HTMLSelectElement
+  if (target.value) {
+    runIdB.value = target.value
+  }
+}
 
 const canCompare = computed(() => {
   return runIdA.value.trim() && nodeId.value.trim() && runIdB.value.trim()
