@@ -54,6 +54,12 @@ HITL decision volume, rejection rates, review-time metrics, and trend visualisat
 - [x] Filterable by pipeline_name via dashboard variable
 - [x] Dashboard variables: datasource, pipeline_name
 
+### Error Handling
+
+- [x] `dashboard_summary` catches `ProgrammingError` and returns 501 Not Implemented
+- [x] `dashboard_trends` catches `ProgrammingError` and returns 501 Not Implemented
+- [ ] `daily_run_counts` does not catch `ProgrammingError` (only queries `Run` table that always exists)
+
 ### Frontend
 
 - [ ] HITL volume / rejection trend chart visualisation on dashboard page
@@ -71,9 +77,10 @@ HITL decision volume, rejection rates, review-time metrics, and trend visualisat
 - [x] test_all_trends_align_by_day_count — all series same length
 
 ## Known Gaps - No explicit PRD section reference — feature is part of nv7 batch, aligned with Grafana HITL dashboard (14 V1 Core — observability UI)
-- BDD feature file created with 7 scenarios covering HITL volume, rejection trend, correlation, feedback volume, array alignment, empty period, and invalid days
+- BDD step definitions exist but are not wired to running BDD pipeline — feature file created as reference/spec only
 - No frontend HITL trend visualisation — API endpoint is fully implemented but has no consuming UI
 - Grafana dashboard requires manual import (not provisioned as code)
 - No per-team HITL effort breakdown (only org-level in trends endpoint)
 - No HITL effort export (CSV, chart image)
-- No automated alert on HITL volume spikes or rejection rate thresholds 
+- No automated alert on HITL volume spikes or rejection rate thresholds
+- `daily_run_counts` endpoint lacks ProgrammingError catch (only queries Run table which always exists) 
