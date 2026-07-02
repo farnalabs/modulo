@@ -1,5 +1,6 @@
 <template>
   <div data-theme="agent" class="mx-auto max-w-4xl space-y-6 p-6">
+      <TooltipProvider>
     <header class="flex items-center justify-between">
       <div>
         <h1 class="text-3xl font-bold tracking-tight">My Remy Skills</h1>
@@ -44,7 +45,14 @@
               class="transition-colors hover:bg-muted/30"
             >
               <td class="px-4 py-3 font-medium">{{ skill.name }}</td>
-              <td class="px-4 py-3 text-muted-foreground max-w-xs truncate" :title="skill.description ?? undefined">{{ skill.description || '—' }}</td>
+              <Tooltip :delay-duration="300">
+                <TooltipTrigger as-child>
+                  <td class="px-4 py-3 text-muted-foreground max-w-xs truncate">{{ skill.description || '—' }}</td>
+                </TooltipTrigger>
+                <TooltipContent side="top" class="max-w-xs">
+                  <p>{{ skill.description || '—' }}</p>
+                </TooltipContent>
+              </Tooltip>
               <td class="px-4 py-3">
                 <div class="flex flex-wrap gap-1">
                   <span
@@ -110,6 +118,7 @@
       delete-endpoint="/api/v1/me/remy/skills/{skill_id}"
       @saved="loadSkills"
     />
+      </TooltipProvider>
   </div>
 </template>
 
@@ -119,6 +128,12 @@ import { api } from '../lib/api/client'
 import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
 import RemySkillDialog from '../components/remy/RemySkillDialog.vue'
+import {
+  TooltipProvider,
+  Tooltip,
+  TooltipTrigger,
+  TooltipContent,
+} from '../components/ui/tooltip'
 import type { SkillItem } from '../types/remy'
 
 const skills = ref<SkillItem[]>([])

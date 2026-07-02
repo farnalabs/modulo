@@ -32,13 +32,19 @@
       >
         <div class="flex items-start justify-between">
           <div class="min-w-0 flex-1">
-            <p
-              class="truncate font-mono text-sm"
-              :data-testid="'team-notif-url-' + ep.id"
-              :title="ep.url"
-            >
-              {{ ep.url }}
-            </p>
+            <Tooltip :delay-duration="300">
+              <TooltipTrigger as-child>
+                <p
+                  class="truncate font-mono text-sm"
+                  :data-testid="'team-notif-url-' + ep.id"
+                >
+                  {{ ep.url }}
+                </p>
+              </TooltipTrigger>
+              <TooltipContent side="top" class="max-w-xs">
+                <p class="break-all">{{ ep.url }}</p>
+              </TooltipContent>
+            </Tooltip>
             <p
               v-if="ep.description"
               class="mt-0.5 text-xs text-muted-foreground"
@@ -354,6 +360,11 @@
 import { ref, computed, onMounted } from "vue";
 import { api } from "../lib/api/client";
 import type { components } from "../lib/api/client";
+import {
+  Tooltip,
+  TooltipTrigger,
+  TooltipContent,
+} from "../components/ui/tooltip";
 
 type NotificationEndpointResponse =
   components["schemas"]["NotificationEndpointResponse"];

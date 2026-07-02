@@ -238,9 +238,14 @@
                 </span>
                 <span v-else class="text-muted-foreground/50">&mdash;</span>
               </td>
-              <td class="max-w-xs truncate px-4 py-3 text-sm text-muted-foreground" :title="summarize(event)">
-                {{ summarize(event) }}
-              </td>
+              <Tooltip :delay-duration="300">
+                <TooltipTrigger as-child>
+                  <td class="max-w-xs truncate px-4 py-3 text-sm text-muted-foreground">{{ summarize(event) }}</td>
+                </TooltipTrigger>
+                <TooltipContent side="top" class="max-w-xs">
+                  <p>{{ summarize(event) }}</p>
+                </TooltipContent>
+              </Tooltip>
               <td class="px-4 py-3 text-xs text-muted-foreground">
                 <svg
                   class="h-4 w-4 transition-transform"
@@ -265,11 +270,25 @@
                   <div v-if="expandedEvent?.previous_hash" class="grid grid-cols-1 gap-2 sm:grid-cols-2">
                     <div>
                       <h4 class="mb-1 text-xs font-semibold uppercase text-muted-foreground">Previous Hash</h4>
-                      <code class="block truncate rounded bg-background px-2 py-1 text-xs font-mono" :title="expandedEvent.previous_hash">{{ expandedEvent.previous_hash }}</code>
+                      <Tooltip :delay-duration="300">
+                        <TooltipTrigger as-child>
+                          <code class="block truncate rounded bg-background px-2 py-1 text-xs font-mono">{{ expandedEvent.previous_hash }}</code>
+                        </TooltipTrigger>
+                        <TooltipContent side="top" class="max-w-xs">
+                          <p class="font-mono text-xs break-all">{{ expandedEvent.previous_hash }}</p>
+                        </TooltipContent>
+                      </Tooltip>
                     </div>
                     <div>
                       <h4 class="mb-1 text-xs font-semibold uppercase text-muted-foreground">Event ID</h4>
-                      <code class="block truncate rounded bg-background px-2 py-1 text-xs font-mono" :title="expandedEvent.id">{{ expandedEvent.id }}</code>
+                      <Tooltip :delay-duration="300">
+                        <TooltipTrigger as-child>
+                          <code class="block truncate rounded bg-background px-2 py-1 text-xs font-mono">{{ expandedEvent.id }}</code>
+                        </TooltipTrigger>
+                        <TooltipContent side="top" class="max-w-xs">
+                          <p class="font-mono text-xs break-all">{{ expandedEvent.id }}</p>
+                        </TooltipContent>
+                      </Tooltip>
                     </div>
                   </div>
                   <div v-if="expandedEvent?.request_id">
@@ -319,6 +338,11 @@ import { formatError } from '../lib/utils'
 import { usePlanStore } from '../stores/planStore'
 import FeatureGate from '../components/FeatureGate.vue'
 import LockIcon from '../components/LockIcon.vue'
+import {
+  Tooltip,
+  TooltipTrigger,
+  TooltipContent,
+} from '../components/ui/tooltip'
 
 const planStore = usePlanStore()
 
