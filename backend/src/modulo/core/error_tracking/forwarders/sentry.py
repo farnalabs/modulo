@@ -44,9 +44,9 @@ class SentryErrorForwarder(BaseForwarder):
     async def _forward_via_sdk(
         self,
         sentry_sdk: Any,
-        dsn: str,
+        _dsn: str,
         org_id: Any,
-        error_group: Any,
+        _error_group: Any,
         error_event: Any,
     ) -> bool:
         try:
@@ -68,7 +68,7 @@ class SentryErrorForwarder(BaseForwarder):
 
     async def _forward_via_api(
         self,
-        dsn: str,
+        _dsn: str,
         org_slug: str,
         project_slug: str,
         org_id: Any,

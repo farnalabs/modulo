@@ -25,7 +25,7 @@ def celery_task_failure_handler(
     args: tuple[Any, ...] | None = None,
     kwargs: dict[str, Any] | None = None,
     einfo: Any = None,
-    **kw: Any,
+    **_kw: Any,
 ) -> None:
     """Capture Celery task failures and send to error tracking."""
     try:

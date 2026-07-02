@@ -64,7 +64,7 @@ class DatadogErrorForwarder(BaseForwarder):
             return False
 
     @staticmethod
-    def _build_text(org_id: Any, error_group: Any, error_event: Any) -> str:
+    def _build_text(_org_id: Any, error_group: Any, error_event: Any) -> str:
         parts = [
             f"Group: {error_group.fingerprint if error_group else 'unknown'}",
             f"Count: {error_group.count if error_group else 1}",
