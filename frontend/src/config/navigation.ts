@@ -5,17 +5,10 @@ export interface NavItem {
   exact?: boolean
 }
 
-export interface NavSubgroup {
-  label: string
-  items: NavItem[]
-  defaultOpen?: boolean
-}
-
 export interface NavGroup {
   id: string
   label: string
-  items?: NavItem[]
-  subgroups?: NavSubgroup[]
+  items: NavItem[]
   defaultCollapsed: boolean
   simpleMode: boolean
   systemAdminOnly?: boolean
@@ -97,60 +90,62 @@ export const navGroups: NavGroup[] = [
     ],
   },
   {
-    id: 'admin',
-    label: 'Admin',
+    id: 'admin-access-control',
+    label: 'Access Control',
     simpleMode: false,
     defaultCollapsed: true,
-    subgroups: [
-      {
-        label: 'Access Control',
-        defaultOpen: false,
-        items: [
-          { to: '/admin/users', icon: 'UserCircle', label: 'Users' },
-          { to: '/admin/org', icon: 'Building', label: 'Org Settings' },
-          { to: '/admin/audit', icon: 'FileText', label: 'Audit Log' },
-        ],
-      },
-      {
-        label: 'Cost Management',
-        defaultOpen: true,
-        items: [
-          { to: '/admin/costs', icon: 'DollarSign', label: 'Overview' },
-          { to: '/admin/costs/limits', icon: 'CreditCard', label: 'Spend Limits' },
-          { to: '/admin/costs/controls', icon: 'SlidersHorizontal', label: 'Cost Controls' },
-        ],
-      },
-      {
-        label: 'System',
-        defaultOpen: false,
-        items: [
-          { to: '/admin/connectors', icon: 'Plug', label: 'Connectors' },
-          { to: '/admin/model-backends', icon: 'Cpu', label: 'Model Backends' },
-          { to: '/admin/node-categories', icon: 'Tag', label: 'Node Categories' },
-          { to: '/admin/feature-flags', icon: 'Flag', label: 'Feature Flags' },
-          { to: '/admin/environments', icon: 'Container', label: 'Environments' },
-          { to: '/admin/run-retention', icon: 'Clock', label: 'Run Retention' },
-          { to: '/admin/views', icon: 'Eye', label: 'Saved Views' },
-        ],
-      },
-      {
-        label: 'Monitoring',
-        defaultOpen: false,
-        items: [
-          { to: '/admin/errors', icon: 'AlertTriangle', label: 'Error Dashboard' },
-          { to: '/admin/notification-delivery', icon: 'Bell', label: 'Notification Log' },
-          { to: '/admin/api-changelog', icon: 'History', label: 'API Changelog' },
-          { to: '/admin/teams/comparison', icon: 'BarChart', label: 'Team Comparison' },
-        ],
-      },
-      {
-        label: 'Extensions',
-        defaultOpen: false,
-        items: [
-          { to: '/admin/plugins', icon: 'Puzzle', label: 'Plugins' },
-          { to: '/feedback/inbox', icon: 'MessageSquare', label: 'Feedback Inbox' },
-        ],
-      },
+    items: [
+      { to: '/admin/users', icon: 'UserCircle', label: 'Users' },
+      { to: '/admin/org', icon: 'Building', label: 'Org Settings' },
+      { to: '/admin/audit', icon: 'FileText', label: 'Audit Log' },
+    ],
+  },
+  {
+    id: 'admin-cost-management',
+    label: 'Cost Management',
+    simpleMode: false,
+    defaultCollapsed: true,
+    items: [
+      { to: '/admin/costs', icon: 'DollarSign', label: 'Overview' },
+      { to: '/admin/costs/limits', icon: 'CreditCard', label: 'Spend Limits' },
+      { to: '/admin/costs/controls', icon: 'SlidersHorizontal', label: 'Cost Controls' },
+    ],
+  },
+  {
+    id: 'admin-system',
+    label: 'System',
+    simpleMode: false,
+    defaultCollapsed: true,
+    items: [
+      { to: '/admin/connectors', icon: 'Plug', label: 'Connectors' },
+      { to: '/admin/model-backends', icon: 'Cpu', label: 'Model Backends' },
+      { to: '/admin/node-categories', icon: 'Tag', label: 'Node Categories' },
+      { to: '/admin/feature-flags', icon: 'Flag', label: 'Feature Flags' },
+      { to: '/admin/environments', icon: 'Container', label: 'Environments' },
+      { to: '/admin/run-retention', icon: 'Clock', label: 'Run Retention' },
+      { to: '/admin/views', icon: 'Eye', label: 'Saved Views' },
+    ],
+  },
+  {
+    id: 'admin-monitoring',
+    label: 'Monitoring',
+    simpleMode: false,
+    defaultCollapsed: true,
+    items: [
+      { to: '/admin/errors', icon: 'AlertTriangle', label: 'Error Dashboard' },
+      { to: '/admin/notification-delivery', icon: 'Bell', label: 'Notification Log' },
+      { to: '/admin/api-changelog', icon: 'History', label: 'API Changelog' },
+      { to: '/admin/teams/comparison', icon: 'BarChart', label: 'Team Comparison' },
+    ],
+  },
+  {
+    id: 'admin-extensions',
+    label: 'Extensions',
+    simpleMode: false,
+    defaultCollapsed: true,
+    items: [
+      { to: '/admin/plugins', icon: 'Puzzle', label: 'Plugins' },
+      { to: '/feedback/inbox', icon: 'MessageSquare', label: 'Feedback Inbox' },
     ],
   },
   {
