@@ -340,6 +340,7 @@ class PipelineExecutor:
         error_code: str | None = None
         node_token_usage: dict[str, Any] | None = None
         broker = get_registry().get_or_create(run_id)
+        self._otel_bridge.set_run_context(str(org_id), str(pipeline_id))
         try:
             from modulo.settings import get_settings
 
@@ -493,6 +494,7 @@ class PipelineExecutor:
         completed_node_outputs: dict[str, Any] = {}
         broker = get_registry().get_or_create(run_id)
         set_cancellation_check(_check_db_cancellation)
+        self._otel_bridge.set_run_context(str(org_id), str(pipeline_id))
         try:
             # Compile (or retrieve from cache) the StateGraph.
             compiled = get_or_compile(
