@@ -20,7 +20,7 @@ from sqlalchemy.ext.asyncio import (
 
 from modulo.auth.dependencies import get_current_user
 from modulo.auth.jwt import AuthenticatedPrincipal
-from modulo.core.feature_flags import PlanContext, get_plan_for_org
+from modulo.core.feature_flags import PlanContext
 from modulo.settings import Settings, get_settings
 
 
@@ -118,14 +118,19 @@ async def get_plan_context(
     current_user: AuthenticatedPrincipal = Depends(get_current_user),
     session: AsyncSession = Depends(get_db_session),
 ) -> PlanContext:
-    """FastAPI dependency — resolve plan context per-org from Organisation.plan_id.
+    """FastAPI dependency — resolve plan context per-org.
 
     Resolution order:
-    1. Organisation.plan_id (per-org, from DB)
-    2. SystemConfig.default_plan (deployment-wide, from DB)
-    3. CommunityTier (default fallback)
+    1. Org-level license key (from ``org.settings_json["license_key"]``)
+    2. System-level license (in-memory store or env var)
+    3. Organisation.plan_id (per-org, from DB)
+    4. SystemConfig.default_plan (deployment-wide, from DB)
+    5. CommunityTier (default fallback)
     """
-    from modulo.core.feature_flags import DbPlanContext
+    from modulo.core.feature_flags import resolve_plan_context
+    from modulo.db.crud.organisation import get_organisation
 
-    plan_id = await get_plan_for_org(session, current_user.organisation_id)
-    return await DbPlanContext.from_db(session, plan_id)
+    org = None
+    if current_user.organisation_id is not None:
+        org = await get_organisation(session, current_user.organisation_id)
+    return await resolve_plan_context(get_settings(), session, org=org)

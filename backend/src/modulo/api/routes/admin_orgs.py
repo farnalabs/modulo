@@ -18,6 +18,7 @@ from modulo.db.crud.organisation import (
     get_organisation,
     get_organisation_by_slug,
     list_organisations,
+    update_organisation,
 )
 
 router = APIRouter(prefix="/api/v1/admin/orgs", tags=["admin"])
@@ -227,3 +228,121 @@ async def admin_delete_org(
     deleted = await delete_organisation(session, org_id)
     if not deleted:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Organisation not found")
+
+
+# ── Org License Management ──────────────────────────────────────────────
+
+
+class OrgLicenseResponse(BaseModel):
+    has_license: bool
+    tier: str = "community"
+    features: list[str] = Field(default_factory=list)
+    expires_at: str | None = None
+    org_id: str | None = None
+
+
+class SetOrgLicenseRequest(BaseModel):
+    license_key: str = Field(min_length=1)
+
+
+@router.get("/{org_id}/license", response_model=OrgLicenseResponse)
+async def admin_get_org_license(
+    org_id: uuid.UUID,
+    current_user: AuthenticatedPrincipal = Depends(get_current_user),
+    session: AsyncSession = Depends(get_db_session),
+) -> OrgLicenseResponse:
+    if not current_user.is_system_admin and current_user.organisation_id != org_id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
+
+    org = await get_organisation(session, org_id)
+    if org is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Organisation not found")
+
+    from modulo.core.license import get_license as get_sys_license, parse_and_verify
+
+    org_key = org.settings_json.get("license_key") if org.settings_json else None
+    if org_key:
+        validation = parse_and_verify(org_key)
+        if validation.valid and validation.license_data is not None:
+            d = validation.license_data
+            return OrgLicenseResponse(
+                has_license=True,
+                tier=d.tier,
+                features=d.features,
+                expires_at=d.expires_at or None,
+                org_id=d.org_id or None,
+            )
+
+    lic = get_sys_license()
+    if lic is not None:
+        return OrgLicenseResponse(
+            has_license=True,
+            tier=lic.tier,
+            features=lic.features,
+            expires_at=lic.expires_at or None,
+            org_id=lic.org_id or None,
+        )
+
+    return OrgLicenseResponse(has_license=False)
+
+
+@router.put("/{org_id}/license", response_model=OrgLicenseResponse)
+async def admin_set_org_license(
+    org_id: uuid.UUID,
+    body: SetOrgLicenseRequest,
+    current_user: AuthenticatedPrincipal = Depends(get_current_user),
+    session: AsyncSession = Depends(get_db_session),
+) -> OrgLicenseResponse:
+    if not current_user.is_system_admin and current_user.organisation_id != org_id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
+
+    org = await get_organisation(session, org_id)
+    if org is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Organisation not found")
+
+    from modulo.core.license import parse_and_verify
+
+    try:
+        validation = parse_and_verify(body.license_key)
+    except Exception as exc:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
+
+    if not validation.valid or validation.license_data is None:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=validation.error or "Invalid license key",
+        )
+
+    settings_json = dict(org.settings_json or {})
+    settings_json["license_key"] = body.license_key
+    await update_organisation(session, org_id, {"settings_json": settings_json})
+
+    d = validation.license_data
+    return OrgLicenseResponse(
+        has_license=True,
+        tier=d.tier,
+        features=d.features,
+        expires_at=d.expires_at or None,
+        org_id=d.org_id or None,
+    )
+
+
+@router.delete("/{org_id}/license", response_model=OrgLicenseResponse)
+async def admin_remove_org_license(
+    org_id: uuid.UUID,
+    current_user: AuthenticatedPrincipal = Depends(get_current_user),
+    session: AsyncSession = Depends(get_db_session),
+) -> OrgLicenseResponse:
+    if not current_user.is_system_admin and current_user.organisation_id != org_id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
+
+    org = await get_organisation(session, org_id)
+    if org is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Organisation not found")
+
+    settings_json = dict(org.settings_json or {})
+    had_key = "license_key" in settings_json
+    settings_json.pop("license_key", None)
+    await update_organisation(session, org_id, {"settings_json": settings_json})
+
+    return OrgLicenseResponse(has_license=False)

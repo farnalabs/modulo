@@ -13,7 +13,8 @@ from starlette.responses import Response
 from modulo.api.dependencies import get_db_session
 from modulo.auth.dependencies import get_current_user
 from modulo.auth.jwt import AuthenticatedPrincipal
-from modulo.core.feature_flags import FeatureFlagRegistry
+from modulo.core.feature_flags import DbPlanContext, resolve_plan_context
+from modulo.db.crud.organisation import get_organisation
 from modulo.settings import Settings, get_settings
 
 logger = logging.getLogger(__name__)
@@ -21,10 +22,12 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/v1/admin/feature-flags", tags=["admin-feature-flags"])
 
 
-async def _build_registry(settings: Settings, session: AsyncSession) -> FeatureFlagRegistry:
-    has_key = bool(settings.modulo_license_key)
-    tier = "team" if has_key else "community"
-    return await FeatureFlagRegistry.from_db(session, current_tier=tier, has_license_key=has_key)
+async def _build_registry(settings: Settings, session: AsyncSession, current_user: AuthenticatedPrincipal) -> tuple[DbPlanContext, str, bool]:
+    org = None
+    if current_user.organisation_id is not None:
+        org = await get_organisation(session, current_user.organisation_id)
+    plan_ctx = await resolve_plan_context(settings, session, org=org)
+    return plan_ctx, plan_ctx.tier(), plan_ctx.has_license_key()
 
 
 @router.get("")
@@ -34,9 +37,8 @@ async def list_feature_flags(
     current_user: AuthenticatedPrincipal = Depends(get_current_user),
 ) -> Response:
     try:
-        registry = await _build_registry(settings, session)
-        has_key = bool(settings.modulo_license_key)
-        tier = "team" if has_key else "community"
+        plan_ctx, tier, has_key = await _build_registry(settings, session, current_user)
+        registry = plan_ctx._registry
         return {
             "license": {
                 "tier": tier,
@@ -84,7 +86,8 @@ async def get_feature_flag(
     current_user: AuthenticatedPrincipal = Depends(get_current_user),
 ) -> Response:
     try:
-        registry = await _build_registry(settings, session)
+        plan_ctx, _, _ = await _build_registry(settings, session, current_user)
+        registry = plan_ctx._registry
         flag = registry.get_flag(flag_name)
         if flag is None:
             raise HTTPException(
@@ -126,7 +129,8 @@ async def toggle_feature_flag(
     current_user: AuthenticatedPrincipal = Depends(get_current_user),
 ) -> Response:
     try:
-        registry = await _build_registry(settings, session)
+        plan_ctx, _, _ = await _build_registry(settings, session, current_user)
+        registry = plan_ctx._registry
         flag = registry.get_flag(flag_name)
         if flag is None:
             raise HTTPException(
