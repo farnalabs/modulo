@@ -1,4 +1,5 @@
 <template>
+  <BackLink to="/" label="Back to Dashboard" />
   <div class="mx-auto max-w-6xl space-y-8 p-6">
     <LoadingSpinner v-if="loading" />
     <ErrorAlert v-else-if="error" :message="error" />
@@ -201,6 +202,7 @@ import { computed, onMounted, ref } from 'vue'
 import { useRoute } from 'vue-router'
 import { api } from '../lib/api/client'
 import type { components } from '../lib/api/client'
+import BackLink from '../components/BackLink.vue'
 import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
 import Dialog from '../components/ui/dialog/Dialog.vue'

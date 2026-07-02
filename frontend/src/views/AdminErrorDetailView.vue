@@ -1,4 +1,5 @@
 <template>
+  <BackLink to="/admin/errors" label="Back to Error Dashboard" />
   <div class="mx-auto max-w-6xl space-y-6 p-6">
     <header class="flex items-center justify-between">
       <div class="flex items-center gap-3">
@@ -215,6 +216,7 @@ import { fetchErrorGroup, updateErrorGroup, fetchErrorGroupEvents, type ErrorGro
 import { api } from '../lib/api/client'
 import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
+import BackLink from '../components/BackLink.vue'
 
 const route = useRoute()
 const router = useRouter()

@@ -21,14 +21,18 @@ interface Tab {
   to: string
 }
 
-defineProps<{
+const props = defineProps<{
   tabs: Tab[]
 }>()
 
 const route = useRoute()
 
 function isActive(to: string): boolean {
-  return route.path === to || route.path.startsWith(to + '/')
+  if (route.path === to) return true
+  if (!route.path.startsWith(to + '/')) return false
+  return !(props.tabs as Tab[]).some(
+    (tab) => tab.to !== to && route.path.startsWith(tab.to + '/') && tab.to.length > to.length,
+  )
 }
 </script>
 
