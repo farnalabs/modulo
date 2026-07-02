@@ -52,7 +52,7 @@
                 v-model="pipelineName"
                 type="text"
                 class="w-full px-3 py-2 border border-input bg-background rounded-lg text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                ::placeholder="$t('views.LibraryPipelineWizard.primitivename_pipeline_from_template')"
+                :placeholder="$t('views.LibraryPipelineWizard.primitivename_pipeline_from_template')"
                 data-testid="library-wizard-pipeline-name"
               />
             </div>
@@ -63,7 +63,7 @@
                 v-model="pipelineDescription"
                 rows="3"
                 class="w-full px-3 py-2 border border-input bg-background rounded-lg text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                ::placeholder="$t('views.LibraryPipelineWizard.primitivedescription_pipeline_created_from_library_template')"
+                :placeholder="$t('views.LibraryPipelineWizard.primitivedescription_pipeline_created_from_library_template')"
                 data-testid="library-wizard-description"
               />
             </div>

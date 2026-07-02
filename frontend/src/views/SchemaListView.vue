@@ -61,7 +61,7 @@
                   <button
                     class="rounded p-1 text-muted-foreground hover:bg-accent hover:text-destructive"
                     data-testid="schema-deprecate"
-                    ::aria-label="$t('views.SchemaListView.deprecate_schema')"
+                    :aria-label="$t('views.SchemaListView.deprecate_schema')"
                     :title="$t('views.SchemaListView.deprecate_schema_1')"
                     @click="confirmDeprecate(schema)"
                   >

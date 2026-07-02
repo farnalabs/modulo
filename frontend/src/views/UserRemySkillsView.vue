@@ -82,7 +82,7 @@
                 <div class="flex items-center justify-end gap-1">
                   <button
                     class="rounded p-1 text-muted-foreground hover:bg-accent"
-                    ::aria-label="$t('views.AdminRemyView.edit_skill')"
+                    :aria-label="$t('views.AdminRemyView.edit_skill')"
                     :title="$t('views.AdminRemyView.edit_skill_1')"
                     @click="skillDialogRef?.openEdit(skill)"
                   >
@@ -92,7 +92,7 @@
                   </button>
                   <button
                     class="rounded p-1 text-destructive hover:bg-destructive/10"
-                    ::aria-label="$t('views.AdminRemyView.delete_skill')"
+                    :aria-label="$t('views.AdminRemyView.delete_skill')"
                     :title="$t('components.remy.RemySkillDialog.delete_skill')"
                     @click="skillDialogRef?.openDelete(skill)"
                   >
