@@ -14,8 +14,10 @@ from modulo.db.crud.account import create_account, get_account_by_email
 from modulo.db.crud.org_membership import create_membership
 from modulo.db.crud.organisation import (
     create_organisation,
+    delete_organisation,
     get_organisation,
     get_organisation_by_slug,
+    list_organisations,
 )
 
 router = APIRouter(prefix="/api/v1/admin/orgs", tags=["admin"])
@@ -76,6 +78,40 @@ async def admin_create_org(
         status=org.status,
         created_at=org.created_at.isoformat(),
     )
+
+
+# ── List Orgs ──────────────────────────────────────────────────────────
+
+
+class ListOrgItem(BaseModel):
+    id: str
+    name: str
+    slug: str
+    plan_id: str | None = None
+    status: str
+    created_at: str
+
+
+@router.get("", response_model=list[ListOrgItem])
+async def admin_list_orgs(
+    current_user: AuthenticatedPrincipal = Depends(get_current_user),
+    session: AsyncSession = Depends(get_db_session),
+) -> list[ListOrgItem]:
+    if not current_user.is_system_admin:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="System admin role required")
+
+    orgs = await list_organisations(session)
+    return [
+        ListOrgItem(
+            id=str(o.id),
+            name=o.name,
+            slug=o.slug,
+            plan_id=o.plan_id,
+            status=o.status,
+            created_at=o.created_at.isoformat(),
+        )
+        for o in orgs
+    ]
 
 
 # ── Create User in Org ─────────────────────────────────────────────────
@@ -170,3 +206,24 @@ async def admin_create_org_user(
         auth_provider=account.auth_provider,
         created_at=account.created_at.isoformat(),
     )
+
+
+# ── Delete Org ─────────────────────────────────────────────────────────
+
+
+@router.delete("/{org_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def admin_delete_org(
+    org_id: uuid.UUID,
+    current_user: AuthenticatedPrincipal = Depends(get_current_user),
+    session: AsyncSession = Depends(get_db_session),
+) -> None:
+    if not current_user.is_system_admin:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="System admin role required")
+
+    org = await get_organisation(session, org_id)
+    if org is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Organisation not found")
+
+    deleted = await delete_organisation(session, org_id)
+    if not deleted:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Organisation not found")

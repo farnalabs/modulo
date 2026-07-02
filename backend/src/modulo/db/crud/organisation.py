@@ -45,6 +45,30 @@ async def get_organisation_by_slug(
     return result.scalar_one_or_none()
 
 
+async def list_organisations(
+    session: AsyncSession,
+    *,
+    limit: int = 100,
+    offset: int = 0,
+) -> list[Organisation]:
+    result = await session.execute(
+        select(Organisation).order_by(Organisation.created_at.desc()).offset(offset).limit(limit)
+    )
+    return list(result.scalars().all())
+
+
+async def delete_organisation(
+    session: AsyncSession,
+    org_id: uuid.UUID,
+) -> bool:
+    org = await get_organisation(session, org_id)
+    if org is None:
+        return False
+    await session.delete(org)
+    await session.flush()
+    return True
+
+
 async def update_organisation(
     session: AsyncSession,
     org_id: uuid.UUID,
