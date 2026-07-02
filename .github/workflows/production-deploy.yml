@@ -1,0 +1,124 @@
+name: Production Deploy
+
+on:
+  workflow_dispatch:
+    inputs:
+      reason:
+        description: 'Reason for production deploy'
+        required: false
+        default: 'Manual production deploy'
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    name: Deploy ${{ matrix.env.name }}
+    runs-on: [self-hosted, windows, docker]
+    strategy:
+      matrix:
+        env:
+          - name: app
+            fly-app: app-modulo
+            fly-config: fly.toml
+            host: app.modulo.run
+          - name: demo
+            fly-app: demo-modulo
+            fly-config: fly.demo.toml
+            host: demo.modulo.run
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Capture git metadata
+        shell: powershell
+        run: |
+          "GIT_SHA=$(git rev-parse HEAD)" | Out-File $env:GITHUB_ENV -Encoding utf8 -Append
+          "GIT_BRANCH=$(git rev-parse --abbrev-ref HEAD)" | Out-File $env:GITHUB_ENV -Encoding utf8 -Append
+          "GIT_COMMIT_TIMESTAMP=$(git log -1 --format=%cI)" | Out-File $env:GITHUB_ENV -Encoding utf8 -Append
+          "GIT_COMMIT_MESSAGE=$(git log -1 --format=%s)" | Out-File $env:GITHUB_ENV -Encoding utf8 -Append
+          "BUILD_TIMESTAMP=$(Get-Date -Format 'yyyy-MM-ddTHH:mm:ssZ')" | Out-File $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - name: Deploy to ${{ matrix.env.name }}.modulo.run
+        working-directory: Development/Product
+        shell: powershell
+        run: |
+          fly deploy --app ${{ matrix.env.fly-app }} --config ${{ matrix.env.fly-config }} --strategy immediate `
+            --build-arg "GIT_SHA=$env:GIT_SHA" `
+            --build-arg "GIT_BRANCH=$env:GIT_BRANCH" `
+            --build-arg "GIT_COMMIT_TIMESTAMP=$env:GIT_COMMIT_TIMESTAMP" `
+            --build-arg "GIT_COMMIT_MESSAGE=$env:GIT_COMMIT_MESSAGE" `
+            --build-arg "BUILD_TIMESTAMP=$env:BUILD_TIMESTAMP"
+
+      - name: Wait for healthz
+        shell: powershell
+        run: |
+          $url = "https://${{ matrix.env.host }}/healthz"
+          Write-Host "Waiting for $url ..."
+          for ($i=0; $i -lt 30; $i++) {
+            try {
+              $r = curl.exe -s -f $url 2>$null
+              if ($LASTEXITCODE -eq 0) { Write-Host "Healthy after ${i}s"; exit 0 }
+            } catch {}
+            Start-Sleep -Seconds 2
+          }
+          Write-Host "Health check failed after 60s"
+          exit 1
+
+      - name: Smoke test frontend
+        shell: powershell
+        run: |
+          $resp = curl.exe -s -m 10 "https://${{ matrix.env.host }}/" 2>$null
+          if ($resp -match '<title>Modulo') {
+            Write-Host "${{ matrix.env.host }} — OK"
+          } else {
+            Write-Host "${{ matrix.env.host }} — FAILED (title not found)"
+            exit 1
+          }
+
+  consistency:
+    name: Cross-environment check
+    needs: deploy
+    runs-on: [self-hosted, windows, docker]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Verify deployed SHAs
+        shell: powershell
+        run: |
+          $expectedSha = git rev-parse HEAD
+          $allOk = $true
+          foreach ($url in @("https://app.modulo.run", "https://demo.modulo.run")) {
+            $info = curl.exe -s -m 10 "$url/api/v1/deployment" 2>$null
+            if ($info) {
+              $deployInfo = $info | ConvertFrom-Json
+              $deployedSha = if ($deployInfo.git_sha) { $deployInfo.git_sha.Substring(0, 7) } else { "?" }
+              $expectedSha7 = $expectedSha.Substring(0, 7)
+              if ($deployedSha -ne $expectedSha7) {
+                Write-Host "$url — SHA MISMATCH: $deployedSha != $expectedSha7"
+                $allOk = $false
+              } else {
+                Write-Host "$url — SHA match: $deployedSha"
+              }
+            } else {
+              Write-Host "$url — no deployment info available"
+              $allOk = $false
+            }
+          }
+          if (-not $allOk) { exit 1 }
+
+  # Future release stages — add as needs: [consistency]
+  # publish-pypi:
+  #   needs: consistency
+  #   runs-on: ubuntu-latest
+  #   steps:
+  #     - uses: actions/checkout@v4
+  #     - name: Publish to PyPI
+  #       run: ...
+
+  # publish-dockerhub:
+  #   needs: consistency
+  #   runs-on: ubuntu-latest
+  #   steps:
+  #     - name: Publish to Docker Hub
+  #       run: ...
