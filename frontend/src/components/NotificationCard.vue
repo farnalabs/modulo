@@ -1,0 +1,111 @@
+﻿<template>
+  <div
+    class="notification-card group relative flex items-start gap-3 rounded-lg border p-3 transition-colors hover:bg-muted/50"
+  >
+    <span
+      class="notification-level-badge mt-0.5 shrink-0 inline-flex h-5 w-5 items-center justify-center rounded-full text-[10px] font-bold"
+      :class="levelClass"
+    >
+      {{ levelAbbreviation }}
+    </span>
+    <div class="min-w-0 flex-1">
+      <div class="flex items-center gap-2 text-xs text-muted-foreground">
+        <span class="notification-scope-badge rounded bg-muted px-1.5 py-0.5 font-medium">{{ scopeLabel }}</span>
+        <span>{{ relativeTime }}</span>
+      </div>
+      <p class="mt-0.5 text-sm font-medium leading-snug text-foreground">{{ notification.title }}</p>
+      <p v-if="showBody" class="mt-0.5 line-clamp-3 text-xs text-muted-foreground">{{ notification.body }}</p>
+      <div class="mt-2 flex items-center gap-2">
+        <a
+          v-if="notification.action_url"
+          :href="notification.action_url"
+          class="text-xs font-medium text-primary hover:underline"
+        >
+          View
+        </a>
+      </div>
+    </div>
+    <div class="notification-actions absolute right-2 top-2 hidden gap-1 group-hover:flex">
+      <button
+        type="button"
+        class="rounded px-2 py-1 text-[11px] font-medium text-muted-foreground hover:bg-muted hover:text-foreground transition-colors"
+        @click="$emit('review-later', notification.id)"
+        title="Hide from dashboard, keep in notifications page"
+      >
+        Review Later
+      </button>
+      <button
+        type="button"
+        class="rounded px-2 py-1 text-[11px] font-medium text-muted-foreground hover:bg-muted hover:text-destructive transition-colors"
+        @click="showDismiss = true"
+        title="Dismiss this notification"
+      >
+        Dismiss
+      </button>
+    </div>
+  </div>
+  <DismissDialog
+    v-if="showDismiss"
+    :notification="notification"
+    @confirm="onDismiss"
+    @cancel="showDismiss = false"
+  />
+</template>
+
+<script setup lang="ts">
+import { ref, computed } from "vue";
+import type { NotificationResponse } from "../lib/api/notifications";
+import { dismissNotification } from "../lib/api/notifications";
+import DismissDialog from "./DismissDialog.vue";
+
+const props = defineProps<{
+  notification: NotificationResponse;
+  showBody?: boolean;
+}>();
+
+const emit = defineEmits<{
+  dismissed: [id: string];
+  "review-later": [id: string];
+}>();
+
+const showDismiss = ref(false);
+
+const levelClass = computed(() => {
+  const map: Record<string, string> = {
+    error: "bg-destructive/10 text-destructive",
+    warning: "bg-warning/10 text-warning",
+    info: "bg-primary/10 text-primary",
+    debug: "bg-muted text-muted-foreground",
+  };
+  return map[props.notification.level] || "bg-muted text-muted-foreground";
+});
+
+const levelAbbreviation = computed(() => {
+  return props.notification.level.charAt(0).toUpperCase();
+});
+
+const scopeLabel = computed(() => props.notification.scope_label);
+
+const relativeTime = computed(() => {
+  const now = Date.now();
+  const created = new Date(props.notification.created_at).getTime();
+  const diff = now - created;
+  const minutes = Math.floor(diff / 60000);
+  if (minutes < 1) return "just now";
+  if (minutes < 60) return `${minutes}m ago`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours}h ago`;
+  const days = Math.floor(hours / 24);
+  return `${days}d ago`;
+});
+
+async function onDismiss(scope: "self" | "scope") {
+  try {
+    await dismissNotification(props.notification.id, scope);
+    showDismiss.value = false;
+    emit("dismissed", props.notification.id);
+  } catch {
+    showDismiss.value = false;
+  }
+}
+</script>
