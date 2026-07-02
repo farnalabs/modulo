@@ -66,6 +66,14 @@ Weighted random variant selection, run_context_overrides merging, quota enforcem
 - [x] 404 if variant group not found
 - [x] RLS enforced
 
+### Error Handling
+
+- [x] 501 ProgrammingError catch on create, list, get, update, delete, run, coverage-gaps, prompt-diffs endpoints
+- [x] 404 on GET/PUT/DELETE for unknown group_id
+- [x] 204 No Content on successful DELETE
+- [x] 429 on run_variant when pipeline concurrent run quota exceeded
+- [x] 429 when no variant selected or quota exceeded in run_variant_weighted
+
 ## Known Gaps
 
 - PRD 8.19 specifies batch firing N variants (all-or-nothing pre-flight) but current code fires one per call — no batch endpoint exists
@@ -73,3 +81,5 @@ Weighted random variant selection, run_context_overrides merging, quota enforcem
 - PRD 8.19 specifies cancel/abandon variant endpoint — not implemented
 - No frontend exists for variant group creation, comparison view, or coverage signal
 - No all-or-nothing N-variant quota pre-flight
+- No website docs page — stub exists at Website/src/docs/variant-execution.md
+- Integration tests skipped (all `@pytest.mark.skip`)
