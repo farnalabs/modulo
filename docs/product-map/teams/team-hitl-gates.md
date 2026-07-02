@@ -2,8 +2,8 @@
 id: feat-teams-team-hitl-gates
 prd: 8.8, 9.3
 delivery-tasks: [task-nv1-team-hitl-gates]
-bdd: []
-unit-tests: []
+bdd: [backend/tests/bdd/features/teams/team_hitl_gate.feature]
+unit-tests: [backend/tests/unit/hitl_manager/test_hitl_manager.py]
 code:
   - backend/src/modulo/core/hitl_manager/__init__.py
   - backend/src/modulo/db/models/hitl_claim.py
@@ -22,57 +22,61 @@ A HITL gate may specify `required_team_id` to restrict claim/approve to members 
 ## Behaviours
 
 ### Gate definition
-- [ ] `HitlGateConfig.required_team_id` is optional (UUID | null)
-- [ ] `required_team_id` may be set independently of `human_only`
-- [ ] Setting both `human_only` + `required_team_id` enforces both conditions additively
-- [ ] `required_team_id` FK references `teams.id` with `ondelete=RESTRICT`
-- [ ] Migration 0027 adds `required_team_id` column to `hitl_claims` table
+- [x] `HitlGateConfig.required_team_id` is optional (UUID | null)
+- [x] `required_team_id` may be set independently of `human_only`
+- [x] Setting both `human_only` + `required_team_id` enforces both conditions additively
+- [x] `required_team_id` FK references `teams.id` with `ondelete=RESTRICT`
+- [x] Migration 0027 adds `required_team_id` column to `hitl_claims` table
 
 ### Gate creation
-- [ ] `HITLManager.create_gate()` accepts and stores `required_team_id` on the `HitlClaim` row
-- [ ] Gate without `required_team_id` stores null (no team restriction)
+- [x] `HITLManager.create_gate()` accepts and stores `required_team_id` on the `HitlClaim` row
+- [x] Gate without `required_team_id` stores null (no team restriction)
 
 ### Claim — team enforcement
-- [ ] `HITLManager.claim()` performs a DB-live membership check when `gate.required_team_id` is set
-- [ ] Membership check queries `TeamMembership` where `team_id == required_team_id` AND `user_id == claimant_id` AND `organisation_id == org_id`
-- [ ] Team member with `runner` or `operator` team role can claim a team-scoped gate
-- [ ] Non-team member receives `NotTeamMemberError` (PermissionError)
-- [ ] Gate without `required_team_id` does not query team membership at claim time
-- [ ] Team membership check happens after gate-exists/not-decided/not-claimed pre-checks but before UPDATE
-- [ ] Pre-check uses SELECT (not a lock) — race window between pre-check and UPDATE is handled by the atomic UPDATE RETURNING pattern
+- [x] `HITLManager.claim()` performs a DB-live membership check when `gate.required_team_id` is set
+- [x] Membership check queries `TeamMembership` where `team_id == required_team_id` AND `user_id == claimant_id` AND `organisation_id == org_id`
+- [x] Team member with `runner` or `operator` team role can claim a team-scoped gate
+- [x] Non-team member receives `NotTeamMemberError` (PermissionError)
+- [x] Gate without `required_team_id` does not query team membership at claim time
+- [x] Team membership check happens after gate-exists/not-decided/not-claimed pre-checks but before UPDATE
+- [x] Pre-check uses SELECT (not a lock) — race window between pre-check and UPDATE is handled by the atomic UPDATE RETURNING pattern
 
 ### Claim — existing invariants preserved
-- [ ] Gate not found → `GateNotFoundError`
-- [ ] Gate already decided → `GateAlreadyDecidedError`
-- [ ] Gate already claimed → `AlreadyClaimedError`
-- [ ] Claim expiry and token generation work identically for team-scoped and non-team gates
+- [x] Gate not found → `GateNotFoundError`
+- [x] Gate already decided → `GateAlreadyDecidedError`
+- [x] Gate already claimed → `AlreadyClaimedError`
+- [x] Claim expiry and token generation work identically for team-scoped and non-team gates
 
 ### Approve / reject
-- [ ] `approve()` / `reject()` do not re-check team membership (enforced at claim time)
-- [ ] Token validation (JWT or opaque) works identically regardless of `required_team_id`
-- [ ] Decision recorded as `approved` or `rejected`; claim released
+- [x] `approve()` / `reject()` do not re-check team membership (enforced at claim time)
+- [x] Token validation (JWT or opaque) works identically regardless of `required_team_id`
+- [x] Decision recorded as `approved` or `rejected`; claim released
 
 ### MCP exposure
-- [ ] `list_pending_hitl` exposes `required_team_id` in the gate resource
-- [ ] Gate context resource exposes `required_team_id` and `required_team_name` to LLM clients and reviewers
+- [x] `list_pending_hitl` exposes `required_team_id` in the gate resource
+- [x] Gate context resource exposes `required_team_id` and `required_team_name` to LLM clients and reviewers
 
 ### Expiry and overdue
-- [ ] `expire_stale()` resets claims regardless of `required_team_id` (column is not reset — only claim fields)
-- [ ] `list_overdue()` / `count_overdue()` work identically for team-scoped gates
+- [x] `expire_stale()` resets claims regardless of `required_team_id` (column is not reset — only claim fields)
+- [x] `list_overdue()` / `count_overdue()` work identically for team-scoped gates
 
 ### Notification routing
 - [ ] `hitl_awaiting` for `required_team_id` gates dispatches to team notification endpoints (falls back to org-wide endpoints if team has none)
 
 ### Unit test coverage
-- [ ] `test_create_gate_with_required_team_id` — gate stores the team ref
-- [ ] `test_claim_team_member_can_claim` — team member successfully claims
-- [ ] `test_claim_non_team_member_raises` — non-member gets `NotTeamMemberError`
-- [ ] `test_claim_no_required_team_still_works` — gate without team restriction is unchanged
+- [x] `test_create_gate_with_required_team_id` — gate stores the team ref
+- [x] `test_claim_team_member_can_claim` — team member successfully claims
+- [x] `test_claim_non_team_member_raises` — non-member gets `NotTeamMemberError`
+- [x] `test_claim_no_required_team_still_works` — gate without team restriction is unchanged
+
+### Error Handling
+- [ ] HITLManager.create_gate() is defined but NEVER called from production code — gate row is never created. Claim endpoint returns GateNotFoundError for any gate reached during a pipeline run. This is a CRITICAL gap.
 
 ## Known Gaps
 
-- No BDD feature files exist for team-scoped HITL gates
-- `view_as_team` enforcement for HITL gate visibility not yet tested
+- `HITLManager.create_gate()` is never called from production code - HitlClaim rows not created during pipeline execution
+- `ViewAsTeam` enforcement for HITL gate visibility not yet tested
 - No test for `human_only` + `required_team_id` additive enforcement at ViewModel layer
 - No test for team notification fallback chain (team endpoints → org endpoints)
-- No performance test for DB-live membership check on high-claim-contention gates 
+- No performance test for DB-live membership check on high-claim-contention gates
+- `PendingHitlGate` in viewmodel still needs `required_team_name` propagation from `HitlClaim` model 
