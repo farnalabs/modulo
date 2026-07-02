@@ -3,15 +3,15 @@ id: feat-core-hitl-effort-trend
 prd: 8.8
 delivery-tasks: []
 bdd:
-  - backend/tests/bdd/features/observability/metrics.feature 
-  - backend/tests/bdd/features/ui/eval_dashboard.feature 
+  - backend/tests/bdd/features/dashboard/hitl_trends.feature
 code:
   - backend/src/modulo/api/routes/dashboard.py
   - backend/tests/unit/api/test_dashboard.py
   - docs/grafana/hitl-review.json
   - docs/grafana/README.md
 depends-on: [feat-evals-eval-engine, feat-evals-feedback-records]
-unit-tests: []
+unit-tests:
+  - backend/tests/unit/api/test_dashboard.py
 status: partial
 ---
 
@@ -32,9 +32,9 @@ HITL decision volume, rejection rates, review-time metrics, and trend visualisat
 - [x] Accepts `days` parameter (default 7); works with 30 and 90
 - [x] Rejects `days=0` and `days=91`
 - [x] Requires authentication
-- [ ] BDD feature for HITL effort trends (metrics.feature is placeholder)
-- [ ] BDD scenario: dashboard shows HITL volume over time
-- [ ] BDD scenario: rejection trend is computed and visible
+- [x] BDD feature for HITL effort trends (hitl_trends.feature)
+- [x] BDD scenario: dashboard shows HITL volume over time (hitl_trends.feature)
+- [x] BDD scenario: rejection trend is computed and visible (hitl_trends.feature)
 
 ### API — Shape and edge cases
 
@@ -71,7 +71,7 @@ HITL decision volume, rejection rates, review-time metrics, and trend visualisat
 - [x] test_all_trends_align_by_day_count — all series same length
 
 ## Known Gaps - No explicit PRD section reference — feature is part of nv7 batch, aligned with Grafana HITL dashboard (14 V1 Core — observability UI)
-- No BDD feature for HITL effort trends (`metrics.feature` is a placeholder; `eval_dashboard.feature` is a placeholder)
+- BDD feature file created with 7 scenarios covering HITL volume, rejection trend, correlation, feedback volume, array alignment, empty period, and invalid days
 - No frontend HITL trend visualisation — API endpoint is fully implemented but has no consuming UI
 - Grafana dashboard requires manual import (not provisioned as code)
 - No per-team HITL effort breakdown (only org-level in trends endpoint)
