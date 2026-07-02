@@ -131,7 +131,7 @@ describe('ViewToggle', () => {
 
     const items = document.body.querySelectorAll('[data-testid="view-toggle-item"]')
     if (items.length > 0) {
-      ;(items[0] as HTMLElement).click()
+      (items[0] as HTMLElement).click()
     } else {
       const select = wrapper.findComponent({ name: 'Select' })
       await (select as any).vm.$emit('update:model-value', 'view-1')

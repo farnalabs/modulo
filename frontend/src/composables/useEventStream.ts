@@ -65,7 +65,7 @@ async function doConnect(): Promise<void> {
     let buffer = ''
     let currentEvent = ''
 
-    while (true) {
+    for (;;) {
       const { done, value } = await reader.read()
       if (done) break
 

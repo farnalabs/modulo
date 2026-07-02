@@ -37,7 +37,7 @@ async def tenant(tenant_matrix: TenantMatrix, tenant_key: str) -> TenantContext:
     return tenant_matrix.by_key(tenant_key)
 
 
-@pytest_asyncio.fixture
+@pytest_asyncio.fixture(loop_scope="function")
 async def tenant_client(tenant: TenantContext) -> AsyncGenerator[httpx.AsyncClient, None]:
     """Authenticated httpx client for a specific tenant."""
     async with httpx.AsyncClient(base_url=tenant.base_url, verify=False, timeout=60.0) as client:
