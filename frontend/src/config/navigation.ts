@@ -4,10 +4,17 @@ export interface NavItem {
   label: string
 }
 
+export interface NavSubgroup {
+  label: string
+  items: NavItem[]
+  defaultOpen?: boolean
+}
+
 export interface NavGroup {
   id: string
   label: string
-  items: NavItem[]
+  items?: NavItem[]
+  subgroups?: NavSubgroup[]
   defaultCollapsed: boolean
   simpleMode: boolean
   systemAdminOnly?: boolean
@@ -19,33 +26,53 @@ export const navGroups: NavGroup[] = [
     label: 'Core',
     simpleMode: true,
     defaultCollapsed: false,
-    items: [
-      { to: '/', icon: 'LayoutDashboard', label: 'Dashboard' },
-      { to: '/library', icon: 'BookOpen', label: 'Library' },
+    subgroups: [
+      {
+        label: '',
+        items: [
+          { to: '/', icon: 'LayoutDashboard', label: 'Dashboard' },
+        ],
+      },
+      {
+        label: 'Pipelines',
+        defaultOpen: true,
+        items: [
+          { to: '/library', icon: 'BookOpen', label: 'Library' },
+          { to: '/templates', icon: 'LayoutTemplate', label: 'Templates' },
+          { to: '/pipelines/copy', icon: 'Copy', label: 'Copy Pipeline' },
+          { to: '/stages', icon: 'Columns', label: 'Stages Board' },
+        ],
+      },
+      {
+        label: 'Runs & Evaluation',
+        defaultOpen: false,
+        items: [
+          { to: '/runs/diff', icon: 'GitCommit', label: 'Output Diff' },
+          { to: '/evals/editor', icon: 'CheckSquare', label: 'Evals' },
+          { to: '/evals/proposals', icon: 'Clipboard', label: 'Eval Proposals' },
+          { to: '/variants/compare', icon: 'GitFork', label: 'Variants' },
+          { to: '/variants/ab-test', icon: 'FlaskConical', label: 'AB Test Models' },
+        ],
+      },
+      {
+        label: 'Schemas',
+        defaultOpen: false,
+        items: [
+          { to: '/schemas', icon: 'Database', label: 'Browse' },
+          { to: '/schemas/editor', icon: 'Database', label: 'Editor' },
+          { to: '/schemas/infer', icon: 'Database', label: 'Infer' },
+        ],
+      },
     ],
   },
   {
-    id: 'pipelines',
-    label: 'Pipelines',
-    simpleMode: true,
-    defaultCollapsed: false,
-    items: [
-      { to: '/library', icon: 'GitBranch', label: 'Pipelines & Library' },
-      { to: '/pipelines/copy', icon: 'Copy', label: 'Copy Pipeline' },
-      { to: '/templates', icon: 'LayoutTemplate', label: 'Pipeline Templates' },
-      { to: '/stages', icon: 'Columns', label: 'Stages' },
-    ],
-  },
-  {
-    id: 'evaluation',
-    label: 'Evaluation',
+    id: 'remy',
+    label: 'Remy',
     simpleMode: true,
     defaultCollapsed: true,
     items: [
-      { to: '/evals/editor', icon: 'CheckSquare', label: 'Evals' },
-      { to: '/evals/proposals', icon: 'Clipboard', label: 'Eval Proposals' },
-      { to: '/variants/compare', icon: 'GitFork', label: 'Variants' },
-      { to: '/variants/ab-test', icon: 'FlaskConical', label: 'AB Test Models' },
+      { to: '/settings/remy', icon: 'Bot', label: 'My Skills' },
+      { to: '/admin/remy', icon: 'Settings', label: 'Admin Config' },
     ],
   },
   {
@@ -62,20 +89,8 @@ export const navGroups: NavGroup[] = [
       { to: '/settings/runtime-config', icon: 'Settings', label: 'Runtime Config' },
       { to: '/settings/rate-limits', icon: 'Gauge', label: 'Rate Limits' },
       { to: '/settings/hitl-review', icon: 'ShieldQuestion', label: 'HITL Review' },
-      { to: '/settings/remy', icon: 'Bot', label: 'Remy Skills' },
       { to: '/settings/observability', icon: 'Eye', label: 'Observability' },
       { to: '/settings/error-forwarders', icon: 'AlertTriangle', label: 'Error Forwarders' },
-    ],
-  },
-  {
-    id: 'schemas',
-    label: 'Schemas',
-    simpleMode: false,
-    defaultCollapsed: true,
-    items: [
-      { to: '/schemas', icon: 'Database', label: 'Schemas' },
-      { to: '/schemas/editor', icon: 'Database', label: 'Schema Editor' },
-      { to: '/schemas/infer', icon: 'Database', label: 'Schema Inference' },
     ],
   },
   {
@@ -83,27 +98,56 @@ export const navGroups: NavGroup[] = [
     label: 'Admin',
     simpleMode: false,
     defaultCollapsed: true,
-    items: [
-      { to: '/admin/users', icon: 'UserCircle', label: 'Users' },
-      { to: '/admin/audit', icon: 'FileText', label: 'Audit Log' },
-      { to: '/admin/connectors', icon: 'Plug', label: 'Connectors' },
-      { to: '/admin/model-backends', icon: 'Cpu', label: 'Model Backends' },
-      { to: '/admin/node-categories', icon: 'Tag', label: 'Node Categories' },
-      { to: '/admin/views', icon: 'Eye', label: 'Saved Views' },
-      { to: '/admin/costs', icon: 'DollarSign', label: 'Cost Breakdown' },
-      { to: '/admin/costs/limits', icon: 'CreditCard', label: 'Spend Limits' },
-      { to: '/admin/costs/controls', icon: 'SlidersHorizontal', label: 'Cost Controls' },
-      { to: '/admin/run-retention', icon: 'Clock', label: 'Run Retention' },
-      { to: '/admin/feature-flags', icon: 'Flag', label: 'Feature Flags' },
-      { to: '/admin/org', icon: 'Building', label: 'Org Settings' },
-      { to: '/admin/plugins', icon: 'Puzzle', label: 'Plugins' },
-      { to: '/admin/api-changelog', icon: 'History', label: 'Changelog' },
-      { to: '/admin/teams/comparison', icon: 'BarChart', label: 'Team Comparison' },
-      { to: '/admin/environments', icon: 'Container', label: 'Environments' },
-      { to: '/admin/remy', icon: 'Bot', label: 'Remy Config' },
-      { to: '/admin/notification-delivery', icon: 'Bell', label: 'Notification Delivery' },
-      { to: '/admin/errors', icon: 'AlertTriangle', label: 'Error Dashboard' },
-      { to: '/feedback/inbox', icon: 'MessageSquare', label: 'Feedback Inbox' },
+    subgroups: [
+      {
+        label: 'Access Control',
+        defaultOpen: false,
+        items: [
+          { to: '/admin/users', icon: 'UserCircle', label: 'Users' },
+          { to: '/admin/org', icon: 'Building', label: 'Org Settings' },
+          { to: '/admin/audit', icon: 'FileText', label: 'Audit Log' },
+        ],
+      },
+      {
+        label: 'Cost Management',
+        defaultOpen: true,
+        items: [
+          { to: '/admin/costs', icon: 'DollarSign', label: 'Overview' },
+          { to: '/admin/costs/limits', icon: 'CreditCard', label: 'Spend Limits' },
+          { to: '/admin/costs/controls', icon: 'SlidersHorizontal', label: 'Cost Controls' },
+        ],
+      },
+      {
+        label: 'System',
+        defaultOpen: false,
+        items: [
+          { to: '/admin/connectors', icon: 'Plug', label: 'Connectors' },
+          { to: '/admin/model-backends', icon: 'Cpu', label: 'Model Backends' },
+          { to: '/admin/node-categories', icon: 'Tag', label: 'Node Categories' },
+          { to: '/admin/feature-flags', icon: 'Flag', label: 'Feature Flags' },
+          { to: '/admin/environments', icon: 'Container', label: 'Environments' },
+          { to: '/admin/run-retention', icon: 'Clock', label: 'Run Retention' },
+          { to: '/admin/views', icon: 'Eye', label: 'Saved Views' },
+        ],
+      },
+      {
+        label: 'Monitoring',
+        defaultOpen: false,
+        items: [
+          { to: '/admin/errors', icon: 'AlertTriangle', label: 'Error Dashboard' },
+          { to: '/admin/notification-delivery', icon: 'Bell', label: 'Notification Log' },
+          { to: '/admin/api-changelog', icon: 'History', label: 'API Changelog' },
+          { to: '/admin/teams/comparison', icon: 'BarChart', label: 'Team Comparison' },
+        ],
+      },
+      {
+        label: 'Extensions',
+        defaultOpen: false,
+        items: [
+          { to: '/admin/plugins', icon: 'Puzzle', label: 'Plugins' },
+          { to: '/feedback/inbox', icon: 'MessageSquare', label: 'Feedback Inbox' },
+        ],
+      },
     ],
   },
   {
