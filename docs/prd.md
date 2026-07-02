@@ -1,9 +1,10 @@
 # Modulo — Product Requirements Document
 
-**Version**: 0.27  
-**Date**: 2026-07-01  
+**Version**: 0.28  
+**Date**: 2026-07-02  
 **Status**: Pre-development  
 **Changelog**:  
+- v0.28 — §8.26 Navigation Restructure: Breadcrumb component with route meta chain, sidebar hierarchical subgroups (SidebarSubgroup), new Remy group consolidating user skills + admin config, secondary nav tab bars (PageTabs), back-to-parent links on 5 detail views.
 - v0.27 — §8.25 Native Error Tracking: backend + frontend error capture, Postgres-backed storage, fingerprinting/dedup, admin dashboard, built-in alerting, Prometheus metrics, external forwarders to Sentry/DataDog/PagerDuty/Rollbar/OpsGenie/Grafana Loki; Community tier for core, Team tier for integrations.
 - v0.26 — §8.23 Remy In-App AI Assistant: floating draggable/dockable/maximisable chat panel on every page, page awareness via `useRemyContext()`, Multi-window independent sessions with last-activity-winner, tool execution via ViewModel API + MCP server, Markdown skill loading from `remy_skills` table (org-level admin-managed + user-level self-service), context-window-aware conversation reconstruction with automatic pruning and summarization, `chat_sessions` + `chat_messages` + `remy_skills` data model, full CRUD API + SSE streaming endpoint, admin config page at `/admin/remy`, Team-tier feature gate with org-level access list.
 - v0.25 — §8.22 SSE Event Bus (Real-Time Frontend Sync): in-memory EventBus with optional Redis overlay for multi-worker, SSE endpoint at GET /api/v1/events, SQLAlchemy event listeners for automatic publishing, frontend EventSource composable with dirtyIds conflict detection pattern.
@@ -2122,6 +2123,144 @@ Each forwarder: per-org enable/disable toggle, test-connection button, status in
 | External forwarders (all 6) | Team |
 | Extended retention (>30 days) | Team |
 | Rules max 10 + webhook action | Team |
+
+---
+
+### 8.26 Navigation Restructure (Frontend UX)
+
+The frontend navigation system was built piecemeal — 56 routes, 44 sidebar links across 7 flat groups, zero breadcrumbs, and no hierarchy or sub-navigation within page domains. This section specifies the restructured navigation to give users clear orientation and contextual movement between pages.
+
+#### 8.26.1 Breadcrumb Component
+
+A `Breadcrumb.vue` component renders a horizontal trail at the top of every page:
+
+```
+Dashboard > Admin > Cost Management > Spend Limits
+```
+
+Each breadcrumb segment is a `<router-link>` to the parent page, except the current page (plain text). The trail is built from route `meta`:
+
+- `meta.breadcrumb`: display label for the current page
+- `meta.parent`: route name of the parent page for breadcrumb chain resolution
+
+The `Breadcrumb.vue` component walks the `parent` chain up to root, rendering each segment. Route definitions are updated with these two fields for all 50 non-auth routes.
+
+#### 8.26.2 Sidebar Hierarchical Groups
+
+The sidebar supports nested subgroups inside groups. A new `SidebarSubgroup.vue` component renders a collapsible sub-header with indented children, visually nested under its parent group.
+
+**Sidebar structure after restructure:**
+
+```
+Core (default expanded)
+  Dashboard           /
+  Pipelines           (subgroup, default expanded)
+    Library           /library
+    Templates         /templates
+    Copy Pipeline     /pipelines/copy
+    Stages Board      /stages
+  Runs & Evaluation   (subgroup, default collapsed)
+    Run Detail        /runs/:id         (not in sidebar)
+    Output Diff       /runs/diff
+    Evals             /evals/editor
+    Eval Proposals    /evals/proposals
+    Variants          /variants/compare
+    AB Test Models    /variants/ab-test
+  Schemas             (subgroup, default collapsed)
+    Browse            /schemas
+    Editor            /schemas/editor
+    Infer             /schemas/infer
+
+Remy (default collapsed, simple mode)
+  My Skills           /settings/remy
+  Admin Config        /admin/remy
+
+Settings (default collapsed, simple mode)
+  Teams               /settings/teams
+  SSO                 /settings/sso
+  License             /settings/license
+  MCP                 /settings/mcp
+  Triggers            /settings/triggers
+  Runtime Config      /settings/runtime-config
+  Rate Limits         /settings/rate-limits
+  HITL Review         /settings/hitl-review
+  Observability       /settings/observability
+  Error Forwarders    /settings/error-forwarders
+
+Admin (advanced mode, default collapsed)
+  Access Control      (subgroup)
+    Users             /admin/users
+    Org Settings      /admin/org
+    Audit Log         /admin/audit
+  Cost Management     (subgroup)
+    Overview          /admin/costs
+    Spend Limits      /admin/costs/limits
+    Cost Controls     /admin/costs/controls
+  System              (subgroup)
+    Connectors        /admin/connectors
+    Model Backends    /admin/model-backends
+    Node Categories   /admin/node-categories
+    Feature Flags     /admin/feature-flags
+    Environments      /admin/environments
+    Run Retention     /admin/run-retention
+    Saved Views       /admin/views
+  Monitoring          (subgroup)
+    Error Dashboard   /admin/errors
+    Notification Log  /admin/notification-delivery
+    API Changelog     /admin/api-changelog
+    Team Comparison   /admin/teams/comparison
+  Extensions          (subgroup)
+    Plugins           /admin/plugins
+    Remy Config       (moved to Remy group above)
+    Feedback Inbox    /feedback/inbox
+
+System (advanced mode + system_admin, default collapsed)
+  Organisations       /admin/system/orgs
+  System Config       /admin/system/config
+```
+
+Key structural changes:
+- Pipelines and Evaluation merged into Core as collapsible subgroups (removes duplicate Library entry)
+- Schemas demoted from standalone group to a subgroup under Core
+- New **Remy** group consolidates user-level skills (`/settings/remy`) and admin config (`/admin/remy`) — both previously scattered across Settings and Admin
+- Admin gets 5 visual subgroups (Access Control, Cost Management, System, Monitoring, Extensions) replacing a flat 20-item list
+- Sidebar active-state: exact path match wins; child routes no longer highlight parent links to avoid ambiguity
+
+#### 8.26.3 Secondary Navigation (Page Tabs)
+
+For page domains with 2–5 sibling routes, horizontal tab bars provide in-page context switching:
+
+| Domain | Routes | Tabs |
+|---|---|---|
+| Cost Management | `/admin/costs`, `/admin/costs/limits`, `/admin/costs/controls` | Overview \| Spend Limits \| Cost Controls |
+| Errors | `/admin/errors`, `/admin/errors/:id` | Dashboard \| *(Error Detail — not in tabs, has back link)* |
+| Schemas | `/schemas`, `/schemas/editor/:id?`, `/schemas/infer` | Browse \| Editor \| Infer |
+| Evaluation | `/evals/editor`, `/evals/proposals`, `/variants/compare`, `/variants/ab-test` | Evals \| Proposals \| Variants \| AB Test |
+
+A reusable `PageTabs.vue` component accepts a `tabs` array of `{ label, to }` highlighting the active tab via route matching.
+
+#### 8.26.4 Back-to-Parent Links
+
+Detail and editor pages not in the sidebar get a prominent back link above the page title:
+
+| View | Link | Target |
+|---|---|---|
+| PipelineEditorView | `← Back to Library` | `/library` |
+| LibraryPipelineWizard | `← Back to Library` | `/library` |
+| CompositeEditorView | `← Back to Library` | `/library` |
+| RunDetailView | `← Back to Dashboard` | `/` |
+| AdminErrorDetailView | `← Back to Error Dashboard` | `/admin/errors` |
+
+The back link uses a left-arrow chevron icon and is rendered via a shared `BackLink.vue` component or inline `<router-link>`.
+
+#### 8.26.5 Feature Gating
+
+| Feature | Tier |
+|---|---|
+| All navigation components (Breadcrumb, PageTabs, BackLink, SidebarSubgroup) | Community |
+| Sidebar restructure (new groups, subgroups, Remy consolidation) | Community |
+
+Navigation is a UI concern, not a feature gate. All changes apply to every tier.
 
 ---
 
