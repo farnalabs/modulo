@@ -122,7 +122,7 @@ class TestWriteJsonl:
     def test_writes_header_and_records(self, tmp_path: Path) -> None:
         path = tmp_path / "out.jsonl"
         bundle = {
-            "users": [{"id": "u1", "name": "alice"}],
+            "accounts": [{"id": "u1", "name": "alice"}],
             "exported_at": "2024-01-01T00:00:00",
         }
         hashes = _write_jsonl(bundle, path)
@@ -181,10 +181,12 @@ class TestExportOrg:
     @patch("modulo.cli.migrate.decode_principal")
     @patch("modulo.cli.migrate.AsyncSessionLocal")
     @patch("modulo.cli.migrate.get_organisation")
-    @patch("modulo.cli.migrate.get_user_by_id")
+    @patch("modulo.cli.migrate.get_account_by_id", new_callable=AsyncMock)
+    @patch("modulo.cli.migrate.get_membership_by_account_and_org")
     def test_export_basic(
         self,
-        mock_get_user: MagicMock,
+        mock_get_membership: MagicMock,
+        mock_get_account: AsyncMock,
         mock_get_org: MagicMock,
         mock_session_local: MagicMock,
         mock_decode: MagicMock,
@@ -203,7 +205,8 @@ class TestExportOrg:
         mock_admin = MagicMock()
         mock_admin.org_role = "admin"
         mock_admin.organisation_id = org_id
-        mock_get_user.return_value = mock_admin
+        mock_get_account.return_value = mock_admin
+        mock_get_membership.return_value = MagicMock(role="admin")
 
         mock_org = MockModel(id=org_id, name="Test Org", slug="test-org", status="active")
         mock_get_org.return_value = mock_org
@@ -245,10 +248,12 @@ class TestExportOrg:
     @patch("modulo.cli.migrate.decode_principal")
     @patch("modulo.cli.migrate.AsyncSessionLocal")
     @patch("modulo.cli.migrate.get_organisation")
-    @patch("modulo.cli.migrate.get_user_by_id")
+    @patch("modulo.cli.migrate.get_account_by_id", new_callable=AsyncMock)
+    @patch("modulo.cli.migrate.get_membership_by_account_and_org")
     def test_export_org_not_found(
         self,
-        mock_get_user: MagicMock,
+        mock_get_membership: MagicMock,
+        mock_get_account: AsyncMock,
         mock_get_org: MagicMock,
         mock_session_local: MagicMock,
         mock_decode: MagicMock,
@@ -267,7 +272,8 @@ class TestExportOrg:
         mock_admin = MagicMock()
         mock_admin.org_role = "admin"
         mock_admin.organisation_id = org_id
-        mock_get_user.return_value = mock_admin
+        mock_get_account.return_value = mock_admin
+        mock_get_membership.return_value = MagicMock(role="admin")
         mock_get_org.return_value = None
 
         mock_session = AsyncMock()
@@ -297,10 +303,12 @@ class TestImportOrg:
     @patch("modulo.cli.migrate.decode_principal")
     @patch("modulo.cli.migrate.AsyncSessionLocal")
     @patch("modulo.cli.migrate.get_organisation")
-    @patch("modulo.cli.migrate.get_user_by_id")
+    @patch("modulo.cli.migrate.get_account_by_id", new_callable=AsyncMock)
+    @patch("modulo.cli.migrate.get_membership_by_account_and_org")
     def test_import_basic(
         self,
-        mock_get_user: MagicMock,
+        mock_get_membership: MagicMock,
+        mock_get_account: AsyncMock,
         mock_get_org: MagicMock,
         mock_session_local: MagicMock,
         mock_decode: MagicMock,
@@ -319,7 +327,8 @@ class TestImportOrg:
         mock_admin = MagicMock()
         mock_admin.org_role = "admin"
         mock_admin.organisation_id = org_id
-        mock_get_user.return_value = mock_admin
+        mock_get_account.return_value = mock_admin
+        mock_get_membership.return_value = MagicMock(role="admin")
         mock_get_org.return_value = MagicMock()
 
         mock_session = AsyncMock()
@@ -349,10 +358,12 @@ class TestImportOrg:
     @patch("modulo.cli.migrate.decode_principal")
     @patch("modulo.cli.migrate.AsyncSessionLocal")
     @patch("modulo.cli.migrate.get_organisation")
-    @patch("modulo.cli.migrate.get_user_by_id")
+    @patch("modulo.cli.migrate.get_account_by_id", new_callable=AsyncMock)
+    @patch("modulo.cli.migrate.get_membership_by_account_and_org")
     def test_import_with_conflict_strategies(
         self,
-        mock_get_user: MagicMock,
+        mock_get_membership: MagicMock,
+        mock_get_account: AsyncMock,
         mock_get_org: MagicMock,
         mock_session_local: MagicMock,
         mock_decode: MagicMock,
@@ -371,7 +382,8 @@ class TestImportOrg:
         mock_admin = MagicMock()
         mock_admin.org_role = "admin"
         mock_admin.organisation_id = org_id
-        mock_get_user.return_value = mock_admin
+        mock_get_account.return_value = mock_admin
+        mock_get_membership.return_value = MagicMock(role="admin")
         mock_get_org.return_value = MagicMock()
 
         mock_session = AsyncMock()
@@ -473,10 +485,12 @@ class TestFlags:
     @patch("modulo.cli.migrate.decode_principal")
     @patch("modulo.cli.migrate.AsyncSessionLocal")
     @patch("modulo.cli.migrate.get_organisation")
-    @patch("modulo.cli.migrate.get_user_by_id")
+    @patch("modulo.cli.migrate.get_account_by_id", new_callable=AsyncMock)
+    @patch("modulo.cli.migrate.get_membership_by_account_and_org")
     def test_export_pipelines_only(
         self,
-        mock_get_user: MagicMock,
+        mock_get_membership: MagicMock,
+        mock_get_account: AsyncMock,
         mock_get_org: MagicMock,
         mock_session_local: MagicMock,
         mock_decode: MagicMock,
@@ -495,7 +509,8 @@ class TestFlags:
         mock_admin = MagicMock()
         mock_admin.org_role = "admin"
         mock_admin.organisation_id = org_id
-        mock_get_user.return_value = mock_admin
+        mock_get_account.return_value = mock_admin
+        mock_get_membership.return_value = MagicMock(role="admin")
 
         mock_org = MockModel(id=org_id)
         mock_get_org.return_value = mock_org
@@ -534,10 +549,12 @@ class TestFlags:
     @patch("modulo.cli.migrate.decode_principal")
     @patch("modulo.cli.migrate.AsyncSessionLocal")
     @patch("modulo.cli.migrate.get_organisation")
-    @patch("modulo.cli.migrate.get_user_by_id")
+    @patch("modulo.cli.migrate.get_account_by_id", new_callable=AsyncMock)
+    @patch("modulo.cli.migrate.get_membership_by_account_and_org")
     def test_import_users_only(
         self,
-        mock_get_user: MagicMock,
+        mock_get_membership: MagicMock,
+        mock_get_account: AsyncMock,
         mock_get_org: MagicMock,
         mock_session_local: MagicMock,
         mock_decode: MagicMock,
@@ -556,7 +573,8 @@ class TestFlags:
         mock_admin = MagicMock()
         mock_admin.org_role = "admin"
         mock_admin.organisation_id = org_id
-        mock_get_user.return_value = mock_admin
+        mock_get_account.return_value = mock_admin
+        mock_get_membership.return_value = MagicMock(role="admin")
         mock_get_org.return_value = MagicMock()
 
         mock_session = AsyncMock()
@@ -590,10 +608,10 @@ class TestAdminSecretAuth:
     @patch.dict("os.environ", {"MODULO_ADMIN_SECRET": "super_secret", "MODULO_ADMIN_TOKEN": ""})
     @patch("modulo.cli.migrate.AsyncSessionLocal")
     @patch("modulo.cli.migrate.get_organisation")
-    @patch("modulo.cli.migrate.get_user_by_id")
+    @patch("modulo.cli.migrate.get_account_by_id")
     def test_auth_with_env_secret(
         self,
-        mock_get_user: MagicMock,
+        mock_get_account: MagicMock,
         mock_get_org: MagicMock,
         mock_session_local: MagicMock,
         org_id: uuid.UUID,
@@ -603,7 +621,7 @@ class TestAdminSecretAuth:
         mock_admin = MagicMock()
         mock_admin.org_role = "admin"
         mock_admin.organisation_id = org_id
-        mock_get_user.return_value = mock_admin
+        mock_get_account.return_value = mock_admin
 
         mock_org = MockModel(id=org_id)
         mock_get_org.return_value = mock_org
