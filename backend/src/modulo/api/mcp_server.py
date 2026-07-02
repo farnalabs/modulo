@@ -401,7 +401,7 @@ async def update_pipeline_graph(
             "edge_count": len(updated_edges),
         }
     except MCPAuthorizationError as exc:
-        return {"error": "insufficient_scope", "detail": exc.message}
+        return {"error": "insufficient_scope", "detail": str(exc)}
     except Exception:
         _log.exception("update_pipeline_graph failed")
         return _tool_error("Failed to update pipeline graph")
@@ -448,7 +448,7 @@ async def trigger_pipeline(
             "langgraph_thread_id": thread_id,
         }
     except MCPAuthorizationError as exc:
-        return {"error": "insufficient_scope", "detail": exc.message}
+        return {"error": "insufficient_scope", "detail": str(exc)}
     except Exception:
         _log.exception("trigger_pipeline failed")
         return _tool_error("Failed to trigger pipeline")
@@ -523,7 +523,7 @@ async def get_run_output(run_id: str, node_id: str) -> dict[str, Any]:
             "masked_fields": masked_fields,
         }
     except MCPAuthorizationError as exc:
-        return {"error": "insufficient_scope", "detail": exc.message}
+        return {"error": "insufficient_scope", "detail": str(exc)}
     except Exception:
         _log.exception("get_run_output failed")
         return _tool_error("Failed to get node output")
@@ -545,7 +545,7 @@ async def cancel_run(run_id: str) -> dict[str, Any]:
             return {"error": "run_not_found", "run_id": run_id}
         return {"run_id": run_id, "cancellation_requested": True}
     except MCPAuthorizationError as exc:
-        return {"error": "insufficient_scope", "detail": exc.message}
+        return {"error": "insufficient_scope", "detail": str(exc)}
     except Exception:
         _log.exception("cancel_run failed")
         return _tool_error("Failed to cancel run")
@@ -586,7 +586,7 @@ async def list_pending_hitl(page: int = 1, page_size: int = 20) -> dict[str, Any
             ]
         }
     except MCPAuthorizationError as exc:
-        return {"error": "insufficient_scope", "detail": exc.message}
+        return {"error": "insufficient_scope", "detail": str(exc)}
     except Exception:
         _log.exception("list_pending_hitl failed")
         return _tool_error("Failed to list pending HITL gates")
@@ -625,7 +625,7 @@ async def review_hitl(
     try:
         check_tool_scope(_ctx_role.get(None), "review_hitl", action=action)
     except MCPAuthorizationError as exc:
-        return {"error": "insufficient_scope", "detail": exc.message}
+        return {"error": "insufficient_scope", "detail": str(exc)}
 
     if action == "approve" and claim_token is None:
         return {"error": "claim_token_required", "detail": "approve requires claim_token"}
@@ -745,7 +745,7 @@ async def copy_library_primitive(
     try:
         check_tool_scope(_ctx_role.get(None), "copy_library_primitive")
     except MCPAuthorizationError as exc:
-        return {"error": "insufficient_scope", "detail": exc.message}
+        return {"error": "insufficient_scope", "detail": str(exc)}
 
     org_id = _ctx_org_id.get(_PLACEHOLDER_ORG_ID)
     pid = uuid.UUID(primitive_id)
@@ -889,7 +889,7 @@ async def get_trigger_events(
             "limit": limit,
         }
     except MCPAuthorizationError as exc:
-        return {"error": "insufficient_scope", "detail": exc.message}
+        return {"error": "insufficient_scope", "detail": str(exc)}
     except Exception:
         _log.exception("get_trigger_events failed")
         return _tool_error("Failed to get trigger events")
