@@ -44,7 +44,7 @@ async def tenant_client(tenant: TenantContext) -> AsyncGenerator[httpx.AsyncClie
     async with httpx.AsyncClient(base_url=tenant.base_url, verify=False) as client:
         resp = await client.post(
             "/api/v1/auth/login",
-            json={"username": tenant.user_email, "password": tenant.user_password},
+            json={"email": tenant.user_email, "password": tenant.user_password},
         )
         assert resp.status_code == 200, f"Auth failed for {tenant.slug}: {resp.text}"
         token = resp.json().get("access_token", resp.json().get("token", ""))
