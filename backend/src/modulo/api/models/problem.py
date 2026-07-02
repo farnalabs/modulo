@@ -1,0 +1,144 @@
+"""RFC 9457 Problem Details for HTTP APIs."""
+
+from __future__ import annotations
+
+import enum
+from typing import Any
+
+from fastapi import HTTPException, Request
+from fastapi.responses import JSONResponse
+from pydantic import BaseModel
+
+
+class ProblemType(enum.StrEnum):
+    BAD_REQUEST = "bad_request"
+    VALIDATION_ERROR = "validation_error"
+    UNAUTHORIZED = "unauthorized"
+    FORBIDDEN = "forbidden"
+    NOT_FOUND = "not_found"
+    CONFLICT = "conflict"
+    RATE_LIMITED = "rate_limited"
+    FEATURE_REQUIRED = "feature_required"
+    PIPELINE_ERROR = "pipeline_error"
+    MIGRATION_REQUIRED = "migration_required"
+    INTERNAL_ERROR = "internal_error"
+
+
+_PROBLEM_METADATA: dict[ProblemType, dict[str, Any]] = {
+    ProblemType.BAD_REQUEST: {"status": 400, "title": "Bad Request"},
+    ProblemType.VALIDATION_ERROR: {"status": 422, "title": "Validation Error"},
+    ProblemType.UNAUTHORIZED: {"status": 401, "title": "Unauthorized"},
+    ProblemType.FORBIDDEN: {"status": 403, "title": "Forbidden"},
+    ProblemType.NOT_FOUND: {"status": 404, "title": "Not Found"},
+    ProblemType.CONFLICT: {"status": 409, "title": "Conflict"},
+    ProblemType.RATE_LIMITED: {"status": 429, "title": "Rate Limited"},
+    ProblemType.FEATURE_REQUIRED: {"status": 402, "title": "Feature Not Available"},
+    ProblemType.PIPELINE_ERROR: {"status": 500, "title": "Pipeline Error"},
+    ProblemType.MIGRATION_REQUIRED: {"status": 501, "title": "Migration Required"},
+    ProblemType.INTERNAL_ERROR: {"status": 500, "title": "Internal Error"},
+}
+
+
+class ProblemDetail(BaseModel):
+    type: str
+    title: str
+    status: int
+    detail: str
+    instance: str | None = None
+    request_id: str | None = None
+
+    @classmethod
+    def from_type(
+        cls,
+        problem_type: ProblemType,
+        detail: str,
+        instance: str | None = None,
+        request_id: str | None = None,
+    ) -> ProblemDetail:
+        meta = _PROBLEM_METADATA[problem_type]
+        return cls(
+            type=f"urn:problem:modulo:{problem_type.value}",
+            title=meta["title"],
+            status=meta["status"],
+            detail=detail,
+            instance=instance,
+            request_id=request_id,
+        )
+
+    def to_response(self, headers: dict[str, str] | None = None) -> JSONResponse:
+        merged = dict(headers or {})
+        if self.request_id:
+            merged.setdefault("X-Request-ID", self.request_id)
+        return JSONResponse(
+            status_code=self.status,
+            content=self.model_dump(mode="json", exclude_none=True),
+            headers=merged,
+        )
+
+
+class ProblemException(HTTPException):
+    """Raise this anywhere to produce a structured ProblemDetail response."""
+
+    def __init__(
+        self,
+        problem_type: ProblemType,
+        detail: str,
+        instance: str | None = None,
+        headers: dict[str, str] | None = None,
+    ) -> None:
+        self.problem = ProblemDetail.from_type(
+            problem_type=problem_type,
+            detail=detail,
+            instance=instance,
+        )
+        super().__init__(
+            status_code=self.problem.status,
+            detail=self.problem.detail,
+            headers=headers,
+        )
+
+
+def problem_from_http_exception(
+    request: Request,
+    exc: HTTPException,
+) -> ProblemDetail:
+    """Map a plain HTTPException to a ProblemDetail (no ProblemException)."""
+    status = exc.status_code
+    # Handle dict detail (from FastAPI's raise HTTPException(detail={...}))
+    raw = exc.detail
+    if isinstance(raw, dict):
+        detail = raw.get("detail", str(raw))
+    else:
+        detail = str(raw)
+
+    lookup = {
+        400: ProblemType.BAD_REQUEST,
+        401: ProblemType.UNAUTHORIZED,
+        403: ProblemType.FORBIDDEN,
+        404: ProblemType.NOT_FOUND,
+        405: ProblemType.BAD_REQUEST,
+        409: ProblemType.CONFLICT,
+        422: ProblemType.VALIDATION_ERROR,
+        429: ProblemType.RATE_LIMITED,
+    }
+    problem_type = lookup.get(status, ProblemType.INTERNAL_ERROR)
+    return ProblemDetail.from_type(
+        problem_type=problem_type,
+        detail=detail,
+        request_id=getattr(request.state, "request_id", None),
+    )
+
+
+def problem_from_validation_error(
+    request: Request,
+    errors: list[dict[str, Any]],
+) -> ProblemDetail:
+    detail = "; ".join(
+        f"{'.'.join(str(p) for p in e.get('loc', []))}: {e.get('msg', '')}"
+        for e in errors
+    )
+    return ProblemDetail.from_type(
+        problem_type=ProblemType.VALIDATION_ERROR,
+        detail=detail or "Request validation failed",
+        request_id=getattr(request.state, "request_id", None),
+    )
