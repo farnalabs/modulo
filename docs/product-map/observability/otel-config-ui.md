@@ -12,7 +12,9 @@ code:
   - frontend/src/views/SettingsObservabilityView.vue
   - frontend/src/lib/api/schema.ts
 depends-on: []
-unit-tests: []
+unit-tests:
+  - backend/tests/unit/api/test_observability_routes.py
+  - backend/tests/bdd/steps/test_observability.py
 status: partial
 ---
 
@@ -44,7 +46,7 @@ Settings page at `/settings/observability`.
 - [x] Empty string LangSmith key on write clears stored key (sets null)
 - [x] Sensitive OTLP header keys masked on read (authorization, x-api-key, api-key, x-otlp-token → ••••••)
 - [x] Test endpoint distinguishes TimeoutException vs ConnectError vs generic errors with user-friendly messages
-- [x] Test endpoint returns 400 if no endpoint configured
+- [x] Test endpoint returns 200 with `success: false` if no endpoint configured (not a 400 error — returns user-friendly error in message field)
 - [x] PUT returns 422 on invalid OTLP endpoint URL format
 - [x] Env var override: OTEL_EXPORTER_OTLP_ENDPOINT env var shadows DB config — effective_otlp_endpoint returned in response
 
@@ -79,7 +81,8 @@ Settings page at `/settings/observability`.
 
 ### BDD coverage
 
-- [ ] Gherkin scenarios in otel_traces.feature — file is a TODO placeholder, no scenarios
+- [x] 4 scenarios in otel_traces.feature: chain span capture, tool child spans, no credentials in attributes, disabled produces no spans
+- [ ] Step definitions exist but are mock-based — no DB-level or integration-level coverage
 
 ### Not yet implemented — gaps
 
@@ -87,15 +90,13 @@ Settings page at `/settings/observability`.
 - [ ] Configurable trace sampling / rate-limiting (no head-based or tail-based sampling config)
 - [ ] BatchSpanProcessor (currently uses SimpleSpanProcessor — synchronous, one-at-a-time export)
 - [ ] Effective endpoint read-only display in normal mode (only shown in env-override banner)
-- [ ] ExportPreviewResponse TypeScript type missing from schema.ts
 - [ ] Per-org telemetry toggle in UI (currently controlled by global env var only — per-org is DB-stored but needs UI control)
+- [ ] ProgrammingError not caught on observability endpoints — raw 500 if DB table missing
 
 ## Known Gaps
 
-- **BDD placeholder:** `backend/tests/bdd/features/observability/otel_traces.feature`
-  has zero scenarios; step definitions in `test_observability.py` all just `pass`
+- **BDD step definitions are mock-only:** `otel_traces.feature` has 4 real scenarios and matching step definitions, but they use mock/patch rather than real DB or OTel exporter integration
 - **ExportPreview not wired:** `GET /api/v1/settings/observability/preview` endpoint exists but frontend never calls it — no "preview config" button or display
 - **SimpleSpanProcessor:** Uses synchronous per-span export instead of production-grade BatchSpanProcessor with buffering, batching, and backpressure
 - **No sampling config:** No UI field or DB schema for trace sampling rate — every span is either exported or not
-- **TypeScript gap:** `ExportPreviewResponse` type not generated in `schema.ts`
 - **Per-org telemetry control:** LangSmith toggle exists but the core OTLP enable/disable is global env-var-only at startup, not per-org through the UI
