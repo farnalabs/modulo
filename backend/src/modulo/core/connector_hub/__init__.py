@@ -34,6 +34,7 @@ from modulo.connectors.base import (
     ConnectorType,
     HealthResult,
 )
+from modulo.connectors.bitbucket import BitbucketConnector
 from modulo.connectors.buildkite import BuildkiteConnector
 from modulo.connectors.ci_runner import GitHubActionsCIRunner, GitLabCIRunner
 from modulo.connectors.circleci import CircleCIConnector
@@ -346,6 +347,8 @@ def _build_connector(
             if not organization:
                 raise ValueError("AzureReposConnector requires 'organization' in config_json")
             return AzureReposConnector(token=_get_cred(creds, "token", type_id), organization=organization)
+        case "bitbucket":
+            return BitbucketConnector(token=_get_cred(creds, "token", type_id))
         case "github":
             return GitHubConnector(token=_get_cred(creds, "token", type_id))
         case "github_actions_ci":
