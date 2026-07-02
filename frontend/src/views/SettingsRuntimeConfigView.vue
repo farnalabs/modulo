@@ -169,7 +169,7 @@
 <script setup lang="ts">
 import { ref, reactive, onMounted, onBeforeUnmount } from 'vue'
 import { api } from '../lib/api/client'
-import { formatApiError } from '../lib/api/formatError'
+import { formatApiError, type ProblemDetail } from '../lib/api/formatError'
 import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
 
@@ -254,7 +254,9 @@ async function loadConfig() {
   try {
     const { data, error: err } = await api.GET('/api/v1/admin/runtime-config')
     if (err) {
-      error.value = `Failed to load runtime config: ${formatApiError(err)}`
+      error.value = err && typeof err === 'object' && 'detail' in err
+        ? `Failed to load runtime config: ${(err as ProblemDetail).detail}`
+        : `Failed to load runtime config: ${formatApiError(err)}`
     } else if (data) {
       applyResponse(data as unknown as ConfigResponse)
     }
@@ -271,7 +273,9 @@ async function reloadConfig() {
   try {
     const { data, error: err } = await api.POST('/api/v1/admin/runtime-config/reload')
     if (err) {
-      error.value = `Failed to reload config: ${formatApiError(err)}`
+      error.value = err && typeof err === 'object' && 'detail' in err
+        ? `Failed to reload config: ${(err as ProblemDetail).detail}`
+        : `Failed to reload config: ${formatApiError(err)}`
     } else if (data) {
       applyResponse(data as unknown as ConfigResponse)
     }
@@ -291,7 +295,9 @@ async function applyOverride(key: string) {
       body: { overrides: { [key]: editedValues[key] } },
     })
     if (err) {
-      formError.value = `Failed to apply override: ${formatApiError(err)}`
+      formError.value = err && typeof err === 'object' && 'detail' in err
+        ? `Failed to apply override: ${(err as ProblemDetail).detail}`
+        : `Failed to apply override: ${formatApiError(err)}`
     } else if (data) {
       applyResponse(data as unknown as ConfigResponse)
       formSuccess.value = `Override applied for ${key}.`
@@ -314,7 +320,9 @@ async function clearOverride(key: string) {
       body: { clear: [key] },
     })
     if (err) {
-      formError.value = `Failed to clear override: ${formatApiError(err)}`
+      formError.value = err && typeof err === 'object' && 'detail' in err
+        ? `Failed to clear override: ${(err as ProblemDetail).detail}`
+        : `Failed to clear override: ${formatApiError(err)}`
     } else if (data) {
       applyResponse(data as unknown as ConfigResponse)
       formSuccess.value = `Override cleared for ${key}.`

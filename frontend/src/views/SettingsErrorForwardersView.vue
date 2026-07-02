@@ -262,7 +262,7 @@
 
 <script setup lang="ts">
 import { ref, reactive, onMounted, onBeforeUnmount } from 'vue'
-import { formatApiError } from '../lib/api/formatError'
+import { formatApiError, type ProblemDetail } from '../lib/api/formatError'
 import { usePlanStore } from '../stores/planStore'
 import { api } from '../lib/api/client'
 import FeatureGate from '../components/FeatureGate.vue'
@@ -321,7 +321,9 @@ async function loadForwarders() {
   try {
     const { data, error: err } = await (api as any).GET('/api/v1/errors/forwarders')
     if (err) {
-      loadError.value = `Failed to load forwarders: ${formatApiError(err)}`
+      loadError.value = err && typeof err === 'object' && 'detail' in err
+        ? `Failed to load forwarders: ${(err as ProblemDetail).detail}`
+        : `Failed to load forwarders: ${formatApiError(err)}`
     } else if (data) {
       forwarders.value = data.forwarders
       for (const fwd of data.forwarders) {
@@ -365,7 +367,9 @@ async function saveConfig(fwd: ForwarderItem) {
       },
     })
     if (err) {
-      formErrors.value[ftype] = `Save failed: ${formatApiError(err)}`
+      formErrors.value[ftype] = err && typeof err === 'object' && 'detail' in err
+        ? `Save failed: ${(err as ProblemDetail).detail}`
+        : `Save failed: ${formatApiError(err)}`
     } else {
       formSuccess.value[ftype] = 'Configuration saved.'
       if (errorFwdTimeouts.value[ftype]) clearTimeout(errorFwdTimeouts.value[ftype])
