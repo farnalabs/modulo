@@ -39,6 +39,8 @@ class LangGraphOtelBridge(BaseCallbackHandler):
         self,
         tracer: trace.Tracer | None = None,
         tracer_name: str = "modulo.langgraph",
+        org_id: str | None = None,
+        pipeline_id: str | None = None,
     ) -> None:
         super().__init__()
         # Accept an injected tracer so tests can provide a TracerProvider with
@@ -49,6 +51,13 @@ class LangGraphOtelBridge(BaseCallbackHandler):
         self._spans: dict[str, Span] = {}
         # Protects _spans from concurrent access in async/coroutine contexts.
         self._lock = threading.Lock()
+        # Run context — set by set_run_context() or constructor.
+        self._org_id: str | None = org_id
+        self._pipeline_id: str | None = pipeline_id
+
+    def set_run_context(self, org_id: str, pipeline_id: str) -> None:
+        self._org_id = org_id
+        self._pipeline_id = pipeline_id
 
     # ------------------------------------------------------------------
     # Internal helpers
@@ -72,7 +81,12 @@ class LangGraphOtelBridge(BaseCallbackHandler):
         tags: list[str] | None = None,
     ) -> None:
         ctx = self._parent_context(parent_run_id)
-        span = self._tracer.start_span(name, context=ctx, attributes=attributes or {})
+        attrs = dict(attributes or {})
+        if self._org_id is not None:
+            attrs["organisation_id"] = self._org_id
+        if self._pipeline_id is not None:
+            attrs["pipeline_id"] = self._pipeline_id
+        span = self._tracer.start_span(name, context=ctx, attributes=attrs)
         self._set_tags(span, tags)
         with self._lock:
             self._spans[str(run_id)] = span
