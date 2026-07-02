@@ -88,6 +88,7 @@ from modulo.api.routes.triggers import router as triggers_router
 from modulo.api.routes.variants import router as variants_router
 from modulo.api.routes.viewmodel import router as viewmodel_router
 from modulo.api.routes.views import router as views_router
+from modulo.api.routes.in_app_notifications import router as in_app_notifications_router
 from modulo.api.routes.webhooks import router as webhooks_router
 from modulo.core.events.event_bus import configure_event_bus
 from modulo.core.events.listeners import register_listeners
@@ -594,6 +595,7 @@ app.include_router(admin_orgs_router)
 app.include_router(admin_remy_router)
 app.include_router(admin_rotation_router)
 app.include_router(notifications_router)
+app.include_router(in_app_notifications_router)
 app.include_router(sensitive_router)
 app.include_router(observability_router)
 app.include_router(variants_router)

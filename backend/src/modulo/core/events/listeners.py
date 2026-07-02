@@ -17,6 +17,7 @@ from modulo.db.models.eval_definition import EvalDefinition
 from modulo.db.models.feedback_record import FeedbackRecord
 from modulo.db.models.library_primitive import LibraryPrimitive
 from modulo.db.models.model_backend import ModelBackend
+from modulo.db.models.notification import Notification
 from modulo.db.models.pipeline import Pipeline
 from modulo.db.models.run import Run
 from modulo.db.models.schema import Schema
@@ -37,6 +38,7 @@ _RESOURCE_TYPES: dict[type, str] = {
     EvalDefinition: "eval",
     FeedbackRecord: "feedback",
     LibraryPrimitive: "library",
+    Notification: "notification",
 }
 
 _ACTION_MAP: dict[str, str] = {
