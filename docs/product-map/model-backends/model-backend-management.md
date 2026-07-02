@@ -2,16 +2,68 @@
 id: feat-model-backends-management
 prd: 8.1
 delivery-tasks: []
-  - backend/tests/bdd/features/model_backends/rate_limiting.feature
+bdd:
+  - backend/tests/bdd/features/model_backends/backend_crud.feature
   - backend/tests/bdd/features/model_backends/backend_selection.feature
-unit-tests: []
+  - backend/tests/bdd/features/model_backends/backend_health_check.feature
+  - backend/tests/bdd/features/model_backends/backend_error_handling.feature
+  - backend/tests/bdd/features/model_backends/rate_limiting.feature
+unit-tests:
+  - backend/tests/unit/model_backends/test_ai21.py
+  - backend/tests/unit/model_backends/test_anthropic.py
+  - backend/tests/unit/model_backends/test_azure_openai.py
+  - backend/tests/unit/model_backends/test_bedrock.py
+  - backend/tests/unit/model_backends/test_cohere.py
+  - backend/tests/unit/model_backends/test_deepseek.py
+  - backend/tests/unit/model_backends/test_fireworks.py
+  - backend/tests/unit/model_backends/test_gemini.py
+  - backend/tests/unit/model_backends/test_grok.py
+  - backend/tests/unit/model_backends/test_groq.py
+  - backend/tests/unit/model_backends/test_jan.py
+  - backend/tests/unit/model_backends/test_llamacpp.py
+  - backend/tests/unit/model_backends/test_lm_studio.py
+  - backend/tests/unit/model_backends/test_localai.py
+  - backend/tests/unit/model_backends/test_mistral.py
+  - backend/tests/unit/model_backends/test_ollama.py
+  - backend/tests/unit/model_backends/test_openai.py
+  - backend/tests/unit/model_backends/test_openrouter.py
+  - backend/tests/unit/model_backends/test_perplexity.py
+  - backend/tests/unit/model_backends/test_qwen.py
+  - backend/tests/unit/model_backends/test_stub.py
+  - backend/tests/unit/model_backends/test_tgi.py
+  - backend/tests/unit/model_backends/test_togetherai.py
+  - backend/tests/unit/model_backends/test_vertexai.py
+  - backend/tests/unit/model_backends/test_vllm.py
+  - backend/tests/unit/model_backends/test_watsonx.py
 code:
   - backend/src/modulo/model_backends/base.py
   - backend/src/modulo/model_backends/anthropic/__init__.py
   - backend/src/modulo/model_backends/openai/__init__.py
   - backend/src/modulo/model_backends/ollama/__init__.py
   - backend/src/modulo/model_backends/stub/backend.py
-
+  - backend/src/modulo/model_backends/ai21/__init__.py
+  - backend/src/modulo/model_backends/azure_openai/__init__.py
+  - backend/src/modulo/model_backends/bedrock/__init__.py
+  - backend/src/modulo/model_backends/cohere/__init__.py
+  - backend/src/modulo/model_backends/deepseek/__init__.py
+  - backend/src/modulo/model_backends/fireworks/__init__.py
+  - backend/src/modulo/model_backends/gemini/__init__.py
+  - backend/src/modulo/model_backends/grok/__init__.py
+  - backend/src/modulo/model_backends/groq/__init__.py
+  - backend/src/modulo/model_backends/jan/__init__.py
+  - backend/src/modulo/model_backends/llamacpp/__init__.py
+  - backend/src/modulo/model_backends/lm_studio/__init__.py
+  - backend/src/modulo/model_backends/localai/__init__.py
+  - backend/src/modulo/model_backends/mistral/__init__.py
+  - backend/src/modulo/model_backends/openrouter/__init__.py
+  - backend/src/modulo/model_backends/perplexity/__init__.py
+  - backend/src/modulo/model_backends/qwen/__init__.py
+  - backend/src/modulo/model_backends/tgi/__init__.py
+  - backend/src/modulo/model_backends/togetherai/__init__.py
+  - backend/src/modulo/model_backends/vertexai/__init__.py
+  - backend/src/modulo/model_backends/vllm/__init__.py
+  - backend/src/modulo/model_backends/watsonx/__init__.py
+depends-on: []
 status: partial
 ---
 
@@ -45,8 +97,28 @@ Model backends are a first-class resource, parallel to connector instances. Ever
 - [x] `StubModelBackend`: deterministic test double keyed by normalized input
 - [x] All backends expose `invoke(messages)` returning `BaseMessage`
 - [x] All backends expose `stream(messages)` returning `AsyncIterator[BaseMessage]`
-- [ ] `AzureOpenAI` backend — not implemented
-- [ ] `Bedrock` backend — not implemented
+- [x] `AzureOpenAIBackend`: wraps `AzureChatOpenAI`
+- [x] `BedrockBackend`: wraps `ChatBedrock`
+- [x] `Ai21Backend`: wraps `langchain_ai21`
+- [x] `CohereBackend`: wraps `ChatCohere`
+- [x] `DeepSeekBackend`: wraps `ChatOpenAI`
+- [x] `FireworksBackend`: wraps `ChatFireworks`
+- [x] `GeminiBackend`: wraps `ChatGoogleGenerativeAI`
+- [x] `GrokBackend`: wraps `ChatOpenAI`
+- [x] `GroqBackend`: wraps `ChatGroq`
+- [x] `JanBackend`: wraps `ChatOpenAI`
+- [x] `LLamaCppBackend`: wraps `ChatLiteLLM`
+- [x] `LmStudioBackend`: wraps `ChatOpenAI`
+- [x] `LocalAIBackend`: wraps `ChatOpenAI`
+- [x] `MistralBackend`: wraps `ChatMistralAI`
+- [x] `OpenRouterBackend`: wraps `ChatOpenAI`
+- [x] `PerplexityBackend`: wraps `ChatPerplexity`
+- [x] `QwenBackend`: wraps `ChatOpenAI`
+- [x] `TgiBackend`: wraps `ChatHuggingFace`
+- [x] `TogetherAIBackend`: wraps `ChatTogether`
+- [x] `VertexAIBackend`: wraps `ChatVertexAI`
+- [x] `VllmBackend`: wraps `ChatOpenAI`
+- [x] `WatsonXBackend`: wraps `WatsonxLLM`
 - [ ] `Custom` backend (user-provided endpoint) — not implemented
 - [ ] Provider-specific `invoke()` param forwarding (e.g. `max_tokens` to Anthropic) — not validated
 
@@ -61,11 +133,14 @@ Model backends are a first-class resource, parallel to connector instances. Ever
 
 ### Health Check — connectivity and auth validation
 
+- [x] `HealthResult` dataclass defined in `base.py` with `ok: bool` and `detail: str`
+- [x] `ModelBackendBase.health_check()` method exists in `base.py` with default implementation using `asyncio.wait_for`
 - [ ] Test inference call on save validates credentials
 - [ ] Surfaces auth failures with named error (e.g. `authentication_failed`, `quota_exceeded`)
 - [ ] Surfaces network errors with endpoint info
 - [ ] Health check result cached with 5-minute staleness bound
 - [ ] On-demand revalidation at pipeline validation time
+- [ ] health_check base timeout is hardcoded at 10s in base.py
 
 ### Deletion Protection — safe removal lifecycle
 
@@ -101,7 +176,9 @@ Model backends are a first-class resource, parallel to connector instances. Ever
 - [ ] **No deletion protection**: no DB constraints preventing delete when referenced
 - [ ] **No `model_backend_pins_json` in PipelineSnapshot**: runtime resolution model not yet implemented
 - [ ] **No cost tracking**: no pricing config, no cost calculation against model_id
-- [ ] **BDD placeholders**: both `rate_limiting.feature` and `backend_selection.feature` are 3-line placeholders with no real scenarios
-- [ ] **No unit tests**: `unit-tests` field is empty
-- [ ] **Azure OpenAI and Bedrock not implemented**: only Anthropic, OpenAI, Ollama, and stub are wired
+- [ ] **BDD steps not wired**: 5 BDD feature files exist (backend_crud, backend_selection, backend_health_check, backend_error_handling, rate_limiting) but have no step definitions or conftest — scenarios not runnable
 - [ ] **No REST API**: no routes for CRUD, health check trigger, or credential rotation
+
+## QA History
+
+- 2026-07-02 (improve-architecture index 53): Cross-cutting QA pass 1. Fixed frontmatter YAML (bdd/unit-tests/code paths). Added 22 missing provider backends (Ai21, AzureOpenAI, Bedrock, Cohere, DeepSeek, Fireworks, Gemini, Grok, Groq, Jan, LLamaCpp, LmStudio, LocalAI, Mistral, OpenRouter, Perplexity, Qwen, Tgi, TogetherAI, VertexAI, Vllm, WatsonX) with unit test refs and code paths. Added 5 BDD feature file refs. Marked health_check method and HealthResult dataclass as [x]. Added health_check timeout discrepancy to known gaps. All 205 unit tests pass.
