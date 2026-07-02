@@ -26,8 +26,6 @@ jobs:
           file: Dockerfile.backend
           push: true
           tags: ghcr.io/${{ github.repository }}/backend:latest,ghcr.io/${{ github.repository }}/backend:${{ github.sha }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
 
   frontend:
     runs-on: ubuntu-latest
@@ -48,5 +46,4 @@ jobs:
           file: Dockerfile.frontend
           push: true
           tags: ghcr.io/${{ github.repository }}/frontend:latest,ghcr.io/${{ github.repository }}/frontend:${{ github.sha }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+
