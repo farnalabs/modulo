@@ -1876,6 +1876,29 @@ def then_diff_contains_changes(request):
     assert any(k in body for k in ("nodes_added", "nodes_removed", "nodes_modified"))
 
 
+@given(parsers.parse('org "{org}" has pipeline "{name}" with no agents or connectors'))
+def org_has_empty_pipeline(org: str, name: str, client, request: pytest.FixtureRequest) -> None:
+    from tests.bdd.conftest import make_mock_pipeline
+
+    pipeline = make_mock_pipeline(name=name)
+    pipeline.graph_nodes_json = []
+    pipeline.run_context_defaults = {}
+    request.node._mock_pipeline = pipeline
+    request.node._pipeline_name = name
+
+
+@then("the snapshot has an empty graph with no nodes and no edges")
+def snapshot_has_empty_graph(request):
+    body = request.node._resp_body
+    assert body is not None
+    snapshot = body
+    graph = snapshot.get("graph_json", {})
+    nodes = graph.get("nodes", [])
+    edges = graph.get("edges", [])
+    assert len(nodes) == 0, f"Expected 0 nodes, got {len(nodes)}"
+    assert len(edges) == 0, f"Expected 0 edges, got {len(edges)}"
+
+
 def _store_response(request: pytest.FixtureRequest, resp) -> None:
     """Store a TestClient response on the request node for later ``then`` steps.
 
