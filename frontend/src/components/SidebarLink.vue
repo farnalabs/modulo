@@ -6,7 +6,7 @@
     v-bind="$attrs"
   >
     <span class="h-4 w-4 shrink-0"><SvgIcon :name="icon" /></span>
-    <span class="truncate">{{ label }}</span>
+    <span class="truncate" :title="label">{{ label }}</span>
   </router-link>
 </template>
 
@@ -19,11 +19,15 @@ const props = defineProps<{
   to: string;
   icon: string;
   label: string;
+  exact?: boolean;
 }>();
 
 const route = useRoute();
 
 const isActive = computed(() => {
+  if (props.exact) {
+    return route.path === props.to;
+  }
   return (
     route.path === props.to ||
     (props.to !== "/" && route.path.startsWith(props.to + "/"))

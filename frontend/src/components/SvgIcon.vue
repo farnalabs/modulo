@@ -664,10 +664,84 @@
     <line x1="12" y1="9" x2="12" y2="13" />
     <line x1="12" y1="17" x2="12.01" y2="17" />
   </svg>
-</template>
+  <svg
+    aria-hidden="true"
+    v-else-if="name === 'GitCommit'"
+    xmlns="http://www.w3.org/2000/svg"
+    width="16"
+    height="16"
+    viewBox="0 0 24 24"
+    fill="none"
+    stroke="currentColor"
+    stroke-width="2"
+    stroke-linecap="round"
+    stroke-linejoin="round"
+  >
+    <circle cx="12" cy="12" r="3" />
+    <line x1="3" y1="12" x2="9" y2="12" />
+    <line x1="15" y1="12" x2="21" y2="12" />
+  </svg>
+  <svg
+    aria-hidden="true"
+    v-else-if="name === 'FlaskConical'"
+    xmlns="http://www.w3.org/2000/svg"
+    width="16"
+    height="16"
+    viewBox="0 0 24 24"
+    fill="none"
+    stroke="currentColor"
+    stroke-width="2"
+    stroke-linecap="round"
+    stroke-linejoin="round"
+  >
+    <path d="M14 2v6l4.7 7.52a1 1 0 0 1-.85 1.48H6.15a1 1 0 0 1-.85-1.48L10 8V2" />
+    <path d="M10 2h4" />
+    <path d="M7.5 13.5A5.5 5.5 0 0 1 12 11" />
+  </svg>
+  <svg
+    aria-hidden="true"
+    v-else
+    xmlns="http://www.w3.org/2000/svg"
+    width="16"
+    height="16"
+    viewBox="0 0 24 24"
+    fill="none"
+    stroke="currentColor"
+    stroke-width="2"
+    stroke-linecap="round"
+    stroke-linejoin="round"
+  >
+    <circle cx="12" cy="12" r="10" />
+    <path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3" />
+    <line x1="12" y1="17" x2="12.01" y2="17" />
+  </svg>
+  </template>
 
 <script setup lang="ts">
-defineProps<{
+import { watch } from "vue";
+
+const props = defineProps<{
   name: string;
 }>();
+
+const knownIcons = [
+  "LayoutDashboard", "BookOpen", "GitBranch", "Users", "Shield",
+  "Gauge", "Settings", "Eye", "FileText", "Flag", "BarChart",
+  "History", "UserCircle", "CheckSquare", "GitFork", "Database",
+  "MessageSquare", "Clipboard", "DollarSign", "Cable", "Plug",
+  "CreditCard", "Copy", "Columns", "KeyRound", "Tag", "Puzzle",
+  "Clock", "Cpu", "Zap", "Building", "ShieldQuestion", "Bell",
+  "Container", "LayoutTemplate", "SlidersHorizontal", "Building2",
+  "Bot", "AlertTriangle", "GitCommit", "FlaskConical",
+];
+
+watch(
+  () => props.name,
+  (name) => {
+    if (!knownIcons.includes(name)) {
+      console.warn(`SvgIcon: unknown icon "${name}"`);
+    }
+  },
+  { immediate: true },
+);
 </script>

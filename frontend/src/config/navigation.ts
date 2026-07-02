@@ -2,6 +2,7 @@ export interface NavItem {
   to: string
   icon: string
   label: string
+  exact?: boolean
 }
 
 export interface NavSubgroup {
@@ -26,44 +27,45 @@ export const navGroups: NavGroup[] = [
     label: 'Core',
     simpleMode: true,
     defaultCollapsed: false,
-    subgroups: [
-      {
-        label: '',
-        items: [
-          { to: '/', icon: 'LayoutDashboard', label: 'Dashboard' },
-          { to: '/notifications', icon: 'Bell', label: 'Notifications' },
-        ],
-      },
-      {
-        label: 'Pipelines',
-        defaultOpen: true,
-        items: [
-          { to: '/library', icon: 'BookOpen', label: 'Library' },
-          { to: '/templates', icon: 'LayoutTemplate', label: 'Templates' },
-          { to: '/pipelines/copy', icon: 'Copy', label: 'Copy Pipeline' },
-          { to: '/stages', icon: 'Columns', label: 'Stages Board' },
-        ],
-      },
-      {
-        label: 'Runs & Evaluation',
-        defaultOpen: false,
-        items: [
-          { to: '/runs/diff', icon: 'GitCommit', label: 'Output Diff' },
-          { to: '/evals/editor', icon: 'CheckSquare', label: 'Evals' },
-          { to: '/evals/proposals', icon: 'Clipboard', label: 'Eval Proposals' },
-          { to: '/variants/compare', icon: 'GitFork', label: 'Variants' },
-          { to: '/variants/ab-test', icon: 'FlaskConical', label: 'AB Test Models' },
-        ],
-      },
-      {
-        label: 'Schemas',
-        defaultOpen: false,
-        items: [
-          { to: '/schemas', icon: 'Database', label: 'Browse' },
-          { to: '/schemas/editor', icon: 'Database', label: 'Editor' },
-          { to: '/schemas/infer', icon: 'Database', label: 'Infer' },
-        ],
-      },
+    items: [
+      { to: '/', icon: 'LayoutDashboard', label: 'Dashboard' },
+      { to: '/notifications', icon: 'Bell', label: 'Notifications' },
+    ],
+  },
+  {
+    id: 'pipelines',
+    label: 'Pipelines',
+    simpleMode: true,
+    defaultCollapsed: false,
+    items: [
+      { to: '/library', icon: 'BookOpen', label: 'Library' },
+      { to: '/templates', icon: 'LayoutTemplate', label: 'Templates' },
+      { to: '/pipelines/copy', icon: 'Copy', label: 'Copy Pipeline' },
+      { to: '/stages', icon: 'Columns', label: 'Stages Board' },
+    ],
+  },
+  {
+    id: 'runs-evaluation',
+    label: 'Runs & Evaluation',
+    simpleMode: true,
+    defaultCollapsed: true,
+    items: [
+      { to: '/runs/diff', icon: 'GitCommit', label: 'Output Diff' },
+      { to: '/evals/editor', icon: 'CheckSquare', label: 'Evals' },
+      { to: '/evals/proposals', icon: 'Clipboard', label: 'Eval Proposals' },
+      { to: '/variants/compare', icon: 'GitFork', label: 'Variants' },
+      { to: '/variants/ab-test', icon: 'FlaskConical', label: 'AB Test Models' },
+    ],
+  },
+  {
+    id: 'schemas',
+    label: 'Schemas',
+    simpleMode: true,
+    defaultCollapsed: true,
+    items: [
+      { to: '/schemas', icon: 'Database', label: 'Browse', exact: true },
+      { to: '/schemas/editor', icon: 'Database', label: 'Editor' },
+      { to: '/schemas/infer', icon: 'Database', label: 'Infer' },
     ],
   },
   {
