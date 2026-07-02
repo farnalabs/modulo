@@ -68,7 +68,7 @@ async def get_admin_token(
     email: str = ADMIN_EMAIL,
     password: str = ADMIN_PASSWORD,
 ) -> str:
-    async with httpx.AsyncClient(base_url=base_url, verify=False) as client:
+    async with httpx.AsyncClient(base_url=base_url, verify=False, timeout=60.0) as client:
         resp = await client.post(
             "/api/v1/auth/login",
             json={"email": email, "password": password},
@@ -130,7 +130,7 @@ async def setup_tenants(
 
     matrix = TenantMatrix()
 
-    async with httpx.AsyncClient(base_url=base_url, verify=False, headers=headers) as client:
+    async with httpx.AsyncClient(base_url=base_url, verify=False, headers=headers, timeout=60.0) as client:
         matrix.community_new = await create_tenant_org(client, "community")
         matrix.team_new = await create_tenant_org(client, "team")
 
