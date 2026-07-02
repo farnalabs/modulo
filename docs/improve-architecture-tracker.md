@@ -1,8 +1,9 @@
 # improve-architecture Tracker
 
-Current product-map entry index: 30
-Last updated: 2026-07-02T01:30:00Z
+Current product-map entry index: 47
+Last updated: 2026-07-02T12:30:00Z
 
+- 2026-07-02: feat-core-api-versioning → partial, cross-cutting QA (index 47): marked 4 behaviours [x], added 9 unit tests for DeprecationHeaderMiddleware, fixed middleware _registry initialization bug. 9/9 tests pass. Status: partial.
 - 2026-07-02: feat-core-schema-system → partial (was gap), cross-cutting QA: enriched product map from stub to comprehensive entry (12 BDD refs, 13 unit-test refs, 8 code paths, 60+ behaviour checkboxes). Expanded deletion protection scope to check PipelineSnapshot (schema_pins_json) and LibraryPrimitive (content_json) references. Added `force=true` query parameter to DELETE endpoint. Added 2 unit tests. Status: gap→partial.
 
 ## In-flight
