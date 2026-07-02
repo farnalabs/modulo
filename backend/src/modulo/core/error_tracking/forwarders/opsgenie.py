@@ -81,7 +81,7 @@ class OpsGenieErrorForwarder(BaseForwarder):
             return False
 
     @staticmethod
-    def _build_description(org_id: Any, error_group: Any, error_event: Any) -> str:
+    def _build_description(_org_id: Any, error_group: Any, error_event: Any) -> str:
         parts = [
             f"Group fingerprint: {error_group.fingerprint if error_group else 'unknown'}",
             f"Count: {error_group.count if error_group else 1}",
