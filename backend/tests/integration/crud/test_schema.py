@@ -133,6 +133,36 @@ async def test_delete_schema_protected_by_agent_reference(
 
 
 # ---------------------------------------------------------------------------
+# Schema deprecation
+# ---------------------------------------------------------------------------
+
+
+async def test_deprecate_schema(rls_session: AsyncSession, test_org: uuid.UUID, test_user: uuid.UUID) -> None:
+    s = await create_schema(rls_session, org_id=test_org, name="DeprecateSchema", created_by=test_user)
+    assert s.deprecated is False
+    assert s.deprecated_at is None
+
+    deprecated = await deprecate_schema(rls_session, s.id)
+    assert deprecated is not None
+    assert deprecated.deprecated is True
+    assert deprecated.deprecated_at is not None
+
+
+async def test_deprecate_schema_twice_is_idempotent(
+    rls_session: AsyncSession, test_org: uuid.UUID, test_user: uuid.UUID,
+) -> None:
+    s = await create_schema(rls_session, org_id=test_org, name="DeprecateTwice", created_by=test_user)
+    first = await deprecate_schema(rls_session, s.id)
+    assert first is not None
+    assert first.deprecated is True
+
+    second = await deprecate_schema(rls_session, s.id)
+    assert second is not None
+    assert second.deprecated is True
+    assert second.deprecated_at is not None
+
+
+# ---------------------------------------------------------------------------
 # SchemaVersion
 # ---------------------------------------------------------------------------
 
