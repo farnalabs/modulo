@@ -268,7 +268,7 @@ async def viewmodel_current(
             all_views = []
             current_view = None
 
-    plan_ctx = await resolve_plan_context(settings, session)
+    plan_ctx = await resolve_plan_context(settings, session, org=org)
     enabled_features = plan_ctx.list_enabled_features()
     feature_flags = [
         FeatureFlagInfo(
@@ -296,7 +296,7 @@ async def viewmodel_current(
         preferences=account.preferences,
         feature_flags=feature_flags,
         plan=PlanInfo(
-            tier=_resolve_tier(settings),
+            tier=_resolve_tier(settings, org=org),
             daily_spend_limit=(
                 float(org.daily_spend_limit)
                 if org is not None and org.daily_spend_limit is not None
@@ -344,8 +344,15 @@ def _enrich_view(view: SavedView, user_id: uuid.UUID) -> ViewInfo:
     return info
 
 
-def _resolve_tier(settings: Settings) -> str:
-    from modulo.core.license import get_license
+def _resolve_tier(settings: Settings, org: Any | None = None) -> str:
+    from modulo.core.license import get_license, parse_and_verify
+
+    if org is not None:
+        org_key = org.settings_json.get("license_key") if hasattr(org, "settings_json") else None
+        if org_key:
+            validation = parse_and_verify(org_key)
+            if validation.valid and validation.license_data is not None:
+                return validation.license_data.tier
 
     lic = get_license()
     if lic is not None:
