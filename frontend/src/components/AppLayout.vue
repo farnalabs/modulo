@@ -68,6 +68,7 @@
           <line x1="6" y1="6" x2="18" y2="18" />
         </svg>
       </button>
+      <NotificationBell class="ml-auto mr-2" />
       <div class="flex items-center gap-2.5">
         <div
           class="flex items-center justify-center rounded-lg bg-gradient-to-br from-teal-500/20 to-transparent p-1.5"
@@ -133,6 +134,7 @@ import { getAccessToken, clearAccessToken } from "../lib/api/client";
 import { usePlanStore } from "../stores/planStore";
 import Breadcrumb from "./Breadcrumb.vue";
 import LogoMark from "./LogoMark.vue";
+import NotificationBell from "./NotificationBell.vue";
 import RemyPanel from "./remy/RemyPanel.vue";
 import SidebarFooter from "./SidebarFooter.vue";
 import SidebarNav from "./SidebarNav.vue";
