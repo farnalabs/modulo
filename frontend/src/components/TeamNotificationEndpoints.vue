@@ -35,6 +35,7 @@
             <p
               class="truncate font-mono text-sm"
               :data-testid="'team-notif-url-' + ep.id"
+              :title="ep.url"
             >
               {{ ep.url }}
             </p>

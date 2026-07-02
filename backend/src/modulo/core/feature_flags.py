@@ -70,12 +70,13 @@ _KNOWN_FLAGS: list[FeatureFlag] = [
         description="Helm chart for production Kubernetes deployment",
         tier="community",
     ),
-    # ── Team tier ──────────────────────────────────────────────────────
+    # ── Community tier ─────────────────────────────────────────────────
     FeatureFlag(
         name="remy",
         description="Remy in-app AI assistant",
-        tier="team",
+        tier="community",
     ),
+    # ── Team tier ──────────────────────────────────────────────────────
     FeatureFlag(
         name="sso",
         description="Single sign-on via OIDC / SAML 2.0 providers",

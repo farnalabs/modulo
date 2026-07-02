@@ -161,7 +161,7 @@
               <td class="px-4 py-3">
                 <span class="inline-flex rounded-full bg-primary/10 px-2.5 py-0.5 text-xs font-medium text-primary capitalize">{{ v.view_type }}</span>
               </td>
-              <td class="px-4 py-3 text-muted-foreground max-w-[200px] truncate font-mono text-xs">{{ filtersSummary(v.filters) }}</td>
+              <td class="px-4 py-3 text-muted-foreground max-w-[200px] truncate font-mono text-xs" :title="filtersSummary(v.filters)">{{ filtersSummary(v.filters) }}</td>
               <td class="px-4 py-3 text-muted-foreground">{{ v.created_by || '—' }}</td>
               <td class="px-4 py-3 text-muted-foreground">{{ formatDate(v.created_at) }}</td>
               <td class="px-4 py-3 text-right">

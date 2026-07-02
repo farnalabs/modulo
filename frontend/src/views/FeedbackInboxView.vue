@@ -118,11 +118,11 @@
             </span>
 
             <div class="min-w-0 flex-1">
-              <p class="truncate text-sm font-medium">{{ record.pipeline_name }}</p>
+              <p class="truncate text-sm font-medium" :title="record.pipeline_name">{{ record.pipeline_name }}</p>
             </div>
 
             <div class="min-w-0 flex-1">
-              <p class="truncate text-sm text-muted-foreground">
+              <p class="truncate text-sm text-muted-foreground" :title="record.rejection_reason || record.summary || '-'">
                 {{ record.rejection_reason || record.summary || '-' }}
               </p>
             </div>

@@ -188,7 +188,7 @@
         <div v-if="summary.recent_runs && summary.recent_runs.length > 0" class="divide-y">
           <div v-for="run in summary.recent_runs" :key="run.id" class="flex items-center justify-between py-2.5 first:pt-0 last:pb-0">
             <div class="min-w-0 flex-1">
-              <p class="text-sm font-medium truncate">{{ run.pipeline_name }}</p>
+              <p class="text-sm font-medium truncate" :title="run.pipeline_name">{{ run.pipeline_name }}</p>
               <p class="text-xs text-muted-foreground">{{ formatTimestamp(run.created_at) }}</p>
             </div>
             <div class="flex items-center gap-2 ml-3">

@@ -122,7 +122,7 @@
                     >
                       <div class="flex items-center justify-between">
                         <div class="min-w-0 flex-1">
-                          <p class="text-sm font-medium truncate">{{ pe.pipelineName }}</p>
+                          <p class="text-sm font-medium truncate" :title="pe.pipelineName">{{ pe.pipelineName }}</p>
                           <p class="text-xs text-muted-foreground">
                             {{ pe.totalEvals }} eval{{ pe.totalEvals === 1 ? '' : 's' }}
                             · {{ pe.passedEvals }} passed
