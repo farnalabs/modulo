@@ -282,7 +282,7 @@ describe('BreadcrumbCollector', () => {
   })
 
   it('respects __MODULO_ERROR_TRACKING_DISABLED__', () => {
-    ;(window as unknown as Record<string, unknown>).__MODULO_ERROR_TRACKING_DISABLED__ = true
+    (window as unknown as Record<string, unknown>).__MODULO_ERROR_TRACKING_DISABLED__ = true
     const collector = new BreadcrumbCollector(50)
     collector.startAutoCapture()
 

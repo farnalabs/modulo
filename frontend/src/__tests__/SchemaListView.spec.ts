@@ -116,7 +116,7 @@ describe('SchemaListView', () => {
     expect(wrapper.text()).toContain('Deprecate "Active Schema"?')
 
     // Cancel deprecation
-    let cancelBtn = wrapper.find('[data-testid="schema-deprecate-cancel"]')
+    const cancelBtn = wrapper.find('[data-testid="schema-deprecate-cancel"]')
     await cancelBtn.trigger('click')
     await nextTick()
     expect(wrapper.text()).not.toContain('Deprecate "Active Schema"?')

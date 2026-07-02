@@ -11,7 +11,7 @@ let endStream: () => void
 beforeEach(() => {
   vi.resetModules()
 
-  let queue: Array<{ done: boolean; value: Uint8Array }> = []
+  const queue: Array<{ done: boolean; value: Uint8Array }> = []
   let resolveNext: ((value: { done: boolean; value: Uint8Array }) => void) | null = null
 
   const encoder = new TextEncoder()

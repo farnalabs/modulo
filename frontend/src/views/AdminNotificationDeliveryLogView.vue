@@ -176,7 +176,8 @@
                 </button>
               </td>
             </tr>
-            <tr v-if="expandedId" v-for="entry in expandedEntries" :key="`exp-${entry.id}`">
+            <template v-if="expandedId">
+              <tr v-for="entry in expandedEntries" :key="`exp-${entry.id}`">
               <td colspan="8" class="bg-muted/20 px-4 py-3">
                 <div class="space-y-2 text-sm">
                   <div v-if="entry.response_body" class="rounded border bg-card p-3">
@@ -197,6 +198,7 @@
                 </div>
               </td>
             </tr>
+            </template>
           </tbody>
         </table>
       </div>
