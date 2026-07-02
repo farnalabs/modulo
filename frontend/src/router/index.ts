@@ -49,6 +49,7 @@ const AdminViewsView = () => import('../views/AdminViewsView.vue')
 const AdminModelBackendsView = () => import('../views/AdminModelBackendsView.vue')
 const AdminOrgSettingsView = () => import('../views/AdminOrgSettingsView.vue')
 const AdminRunRetentionView = () => import('../views/AdminRunRetentionView.vue')
+const NotificationsPage = () => import('../views/NotificationsPage.vue')
 const MyProfileView = () => import('../views/MyProfileView.vue')
 const SettingsLicenseView = () => import('../views/SettingsLicenseView.vue')
 const SettingsMcpView = () => import('../views/SettingsMcpView.vue')
@@ -106,6 +107,12 @@ const router = createRouter({
       name: 'settings-observability',
       component: SettingsObservabilityView,
       meta: { breadcrumb: 'Observability', parent: 'dashboard' },
+    },
+    {
+      path: '/notifications',
+      name: 'notifications',
+      component: NotificationsPage,
+      meta: { breadcrumb: 'Notifications', parent: 'dashboard' },
     },
     {
       path: '/settings/teams',
