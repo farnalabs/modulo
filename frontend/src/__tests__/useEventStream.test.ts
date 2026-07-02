@@ -1,47 +1,92 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import type { EventBusEvent } from '../types/events'
 
-const mockInstances: any[] = []
+vi.mock('@/lib/api/client', () => ({
+  getAccessToken: vi.fn(() => 'test-token'),
+}))
 
-  beforeEach(() => {
-    mockInstances.splice(0)
-    vi.resetModules()
-  ;(globalThis as any).EventSource = vi.fn().mockImplementation((url: string) => {
-    const instance = {
-      url,
-      onopen: null,
-      onmessage: null,
-      onerror: null,
-      close: vi.fn(),
-    }
-    mockInstances.push(instance)
-    return instance
+let pushEvent: (eventType: string, data: Record<string, unknown>) => void
+let endStream: () => void
+
+beforeEach(() => {
+  vi.resetModules()
+
+  let queue: Array<{ done: boolean; value: Uint8Array }> = []
+  let resolveNext: ((value: { done: boolean; value: Uint8Array }) => void) | null = null
+
+  const encoder = new TextEncoder()
+
+  const mockReader = {
+    read: vi.fn().mockImplementation(() => {
+      if (queue.length > 0) {
+        return Promise.resolve(queue.shift()!)
+      }
+      return new Promise((resolve) => {
+        resolveNext = resolve
+      })
+    }),
+    cancel: vi.fn().mockResolvedValue(undefined),
+  }
+
+  globalThis.fetch = vi.fn().mockResolvedValue({
+    ok: true,
+    body: { getReader: () => mockReader },
   })
+
+  pushEvent = (eventType: string, data: Record<string, unknown>) => {
+    const sse = `event: ${eventType}\ndata: ${JSON.stringify(data)}\n\n`
+    const encoded = encoder.encode(sse)
+    if (resolveNext) {
+      const resolve = resolveNext
+      resolveNext = null
+      resolve({ done: false, value: encoded })
+    } else {
+      queue.push({ done: false, value: encoded })
+    }
+  }
+
+  endStream = () => {
+    if (resolveNext) {
+      const resolve = resolveNext
+      resolveNext = null
+      resolve({ done: true, value: new Uint8Array() })
+    } else {
+      queue.push({ done: true, value: new Uint8Array() })
+    }
+  }
 })
 
 function triggerEvent(data: Record<string, unknown>) {
-  const instance = mockInstances[0]
-  if (instance?.onmessage) {
-    instance.onmessage({ data: JSON.stringify(data) })
-  }
+  pushEvent('resource_changed', data)
+}
+
+function tick() {
+  return new Promise<void>((resolve) => setTimeout(resolve, 10))
 }
 
 describe('eventBus', () => {
-  it('subscribe adds handler and connects EventSource', async () => {
+  it('subscribe adds handler and connects', async () => {
     const { eventBus } = await import('../composables/useEventStream')
     const handler = vi.fn()
     const unsub = eventBus.subscribe('run', handler)
-    expect(mockInstances.length).toBe(1)
-    expect(mockInstances[0].url).toBe('/api/v1/events')
+    await tick()
+    expect(fetch).toHaveBeenCalledWith(
+      '/api/v1/events',
+      expect.objectContaining({
+        headers: expect.objectContaining({ Authorization: 'Bearer test-token' }),
+      }),
+    )
     unsub()
   })
 
-  it('EventSource message triggers handler', async () => {
+  it('SSE message triggers handler', async () => {
     const { eventBus } = await import('../composables/useEventStream')
     const handler = vi.fn()
     eventBus.subscribe('run', handler)
+    await tick()
     const event = { type: 'run', id: 'r-1', action: 'updated', version: 2, org_id: 'org-1' }
     triggerEvent(event)
+    await tick()
     expect(handler).toHaveBeenCalledWith(event)
   })
 
@@ -49,8 +94,10 @@ describe('eventBus', () => {
     const { eventBus } = await import('../composables/useEventStream')
     const handler = vi.fn()
     const unsub = eventBus.subscribe('run', handler)
+    await tick()
     unsub()
     triggerEvent({ type: 'run', id: 'r-1', action: 'updated', version: 2, org_id: 'org-1' })
+    await tick()
     expect(handler).not.toHaveBeenCalled()
   })
 
@@ -58,7 +105,9 @@ describe('eventBus', () => {
     const { eventBus } = await import('../composables/useEventStream')
     const handler = vi.fn()
     eventBus.subscribe('pipeline', handler)
+    await tick()
     triggerEvent({ type: 'run', id: 'r-1', action: 'updated', version: 2, org_id: 'org-1' })
+    await tick()
     expect(handler).not.toHaveBeenCalled()
   })
 
@@ -67,25 +116,29 @@ describe('eventBus', () => {
     expect(eventBus.connected).toBe(false)
     const handler = vi.fn()
     eventBus.subscribe('run', handler)
+    await tick()
     triggerEvent({ type: 'run', id: 'r-1', action: 'updated', version: 2, org_id: 'org-1' })
-    expect(eventBus.connected).toBe(false)
+    await tick()
+    expect(eventBus.connected).toBe(true)
   })
 
   it('connected becomes true on open', async () => {
     const { eventBus } = await import('../composables/useEventStream')
     const handler = vi.fn()
     eventBus.subscribe('run', handler)
-    mockInstances[0].onopen?.()
+    await tick()
     expect(eventBus.connected).toBe(true)
   })
 
-  it('connected becomes false on error', async () => {
+  it('connected becomes false on stream end', async () => {
     const { eventBus } = await import('../composables/useEventStream')
     const handler = vi.fn()
     eventBus.subscribe('run', handler)
-    mockInstances[0].onopen?.()
+    await tick()
     expect(eventBus.connected).toBe(true)
-    mockInstances[0].onerror?.()
+    endStream()
+    await tick()
+    await tick()
     expect(eventBus.connected).toBe(false)
   })
 })
