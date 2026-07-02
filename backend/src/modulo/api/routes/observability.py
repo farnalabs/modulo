@@ -7,8 +7,9 @@ from typing import Any
 
 import httpx
 from cryptography.fernet import Fernet
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field
+from sqlalchemy.exc import ProgrammingError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.api.dependencies import get_db_session
@@ -145,6 +146,11 @@ async def get_observability_settings(
                 await set_rls_org(session, principal.organisation_id)
                 merged = await _fetch_and_cache(session, principal.organisation_id)
         return _config_to_response(merged)
+    except ProgrammingError:
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="Feature is not available. Run database migrations to enable it.",
+        )
     except TimeoutError:
         _log.warning(
             "observability.get.timeout",
@@ -188,6 +194,11 @@ async def update_observability_settings(
                 merged = await update_otel_config(session, principal.organisation_id, updates)
         _invalidate_cache(str(principal.organisation_id))
         return _config_to_response(merged)
+    except ProgrammingError:
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="Feature is not available. Run database migrations to enable it.",
+        )
     except TimeoutError:
         _log.warning(
             "observability.put.timeout",
@@ -280,6 +291,11 @@ async def get_export_preview(
             async with session.begin():
                 await set_rls_org(session, principal.organisation_id)
                 merged = await _fetch_and_cache(session, principal.organisation_id)
+    except ProgrammingError:
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="Feature is not available. Run database migrations to enable it.",
+        )
     except TimeoutError:
         _log.warning(
             "observability.preview.timeout",
