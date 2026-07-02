@@ -123,6 +123,8 @@ dev = [
     "types-PyYAML>=6.0.12.20260518",
     "types-passlib>=1.7.7",
     "aiodocker>=0.21.0",
+    "schemathesis>=3.30.0",
+    "pytest-recording>=0.13.0",
 
 ]
 docker = ["aiodocker>=0.21.0"]
@@ -242,4 +244,6 @@ dev = [
     "types-passlib>=1.7.7",
     "types-PyYAML>=6.0.12.20260518",
     "aiodocker>=0.21.0",
+    "schemathesis>=3.30.0",
+    "pytest-recording>=0.13.0",
 ]
