@@ -51,11 +51,12 @@ class DeprecationHeaderMiddleware(BaseHTTPMiddleware):
     @classmethod
     def clear(cls) -> None:
         """Clear all deprecation rules (useful in tests)."""
-        cls._registry.clear()
+        cls._registry = {}
 
     def __init__(self, app: FastAPI) -> None:
         super().__init__(app)
-        type(self)._registry = {}
+        if not hasattr(type(self), "_registry"):
+            type(self)._registry = {}
 
     async def dispatch(
         self,
