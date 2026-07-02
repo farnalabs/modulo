@@ -1,8 +1,9 @@
 # improve-architecture Tracker
 
-Current product-map entry index: 47
-Last updated: 2026-07-02T12:30:00Z
+Current product-map entry index: 48
+Last updated: 2026-07-02T15:00:00Z
 
+- 2026-07-02: feat-core-audit-trail → partial, cross-cutting QA (index 48): added 8 missing dispatched event types to product map (pipeline.node.convert_to_agent, pipeline.node.revert_to_manual, sso_provider.created/deleted/toggled/updated, schema_inference_completed, team_deleted), added BDD placeholder steps gap, marked BDD wrong-event-types known gap as [RESOLVED], fixed 4 placeholder @then BDD steps with assertions against request.node metadata, added ProgrammingError catches (501 Not Implemented) to all 4 audit API routes. Status: partial.
 - 2026-07-02: feat-core-api-versioning → partial, cross-cutting QA (index 47): marked 4 behaviours [x], added 9 unit tests for DeprecationHeaderMiddleware, fixed middleware _registry initialization bug. 9/9 tests pass. Status: partial.
 - 2026-07-02: feat-core-schema-system → partial (was gap), cross-cutting QA: enriched product map from stub to comprehensive entry (12 BDD refs, 13 unit-test refs, 8 code paths, 60+ behaviour checkboxes). Expanded deletion protection scope to check PipelineSnapshot (schema_pins_json) and LibraryPrimitive (content_json) references. Added `force=true` query parameter to DELETE endpoint. Added 2 unit tests. Status: gap→partial.
 
