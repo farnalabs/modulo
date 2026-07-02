@@ -31,6 +31,7 @@ class CreateOrgRequest(BaseModel):
         max_length=63,
         pattern=r"^[a-z0-9-]+$",
     )
+    plan_id: str | None = None
 
 
 class CreateOrgResponse(BaseModel):
@@ -64,7 +65,8 @@ async def admin_create_org(
         session,
         name=body.name,
         slug=body.slug,
-        account_id=current_user.account_id,
+        plan_id=body.plan_id,
+        created_by=current_user.account_id,
     )
 
     return CreateOrgResponse(
