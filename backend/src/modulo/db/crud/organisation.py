@@ -22,11 +22,13 @@ async def create_organisation(
     *,
     name: str,
     slug: str,
+    plan_id: str | None = None,
     created_by: uuid.UUID | None = None,
 ) -> Organisation:
     org = Organisation(
         name=name,
         slug=slug,
+        plan_id=plan_id,
         created_by=created_by,
     )
     session.add(org)
