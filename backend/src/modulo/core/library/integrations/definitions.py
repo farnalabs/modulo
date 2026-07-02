@@ -30,6 +30,9 @@ SENTRY_INTEGRATION: dict[str, Any] = {
         "base_url": "https://sentry.io/api/0",
         "poll_interval_seconds": 60,
         "max_issues_per_poll": 50,
+        "request_timeout_seconds": 30,
+        "retry_max_attempts": 3,
+        "retry_backoff_base_seconds": 1,
     },
     "credential_fields": {
         "auth_token": {
@@ -123,7 +126,7 @@ PROMETHEUS_INTEGRATION: dict[str, Any] = {
     "tags": ["monitoring", "metrics", "observability", "promql", "canonical"],
     "connector_type": "custom",
     "default_config": {
-        "base_url": "http://localhost:9090",
+        "base_url": "",
         "query_timeout_seconds": 30,
         "max_series": 1000,
         "step": "30s",
@@ -165,6 +168,9 @@ DATADOG_INTEGRATION: dict[str, Any] = {
     "default_config": {
         "site": "datadoghq.com",
         "poll_interval_seconds": 60,
+        "request_timeout_seconds": 30,
+        "retry_max_attempts": 3,
+        "retry_backoff_base_seconds": 1,
     },
     "credential_fields": {
         "api_key": {
@@ -415,7 +421,7 @@ SONARQUBE_INTEGRATION: dict[str, Any] = {
     "tags": ["code-quality", "static-analysis", "linting", "canonical"],
     "connector_type": "sonarqube",
     "default_config": {
-        "base_url": "http://localhost:9000",
+        "base_url": "",
         "project_key": "",
         "quality_gate": "SQALE",
     },
@@ -444,7 +450,7 @@ ELASTIC_INTEGRATION: dict[str, Any] = {
     "tags": ["search", "observability", "logs", "analytics", "canonical"],
     "connector_type": "custom",
     "default_config": {
-        "base_url": "http://localhost:9200",
+        "base_url": "",
         "index_pattern": "",
         "max_results": 1000,
         "request_timeout_seconds": 30,
@@ -483,7 +489,7 @@ N8N_INTEGRATION: dict[str, Any] = {
     "tags": ["automation", "workflow", "integration", "canonical"],
     "connector_type": "n8n",
     "default_config": {
-        "base_url": "http://localhost:5678",
+        "base_url": "",
         "api_version": "v1",
         "workflow_activation": True,
     },
@@ -627,9 +633,12 @@ JENKINS_INTEGRATION: dict[str, Any] = {
     "tags": ["ci-cd", "automation", "jenkins", "build", "canonical"],
     "connector_type": "jenkins",
     "default_config": {
-        "base_url": "http://localhost:8080",
+        "base_url": "",
         "job_name": "",
         "poll_interval_seconds": 30,
+        "request_timeout_seconds": 30,
+        "retry_max_attempts": 3,
+        "retry_backoff_base_seconds": 1,
     },
     "credential_fields": {
         "username": {
@@ -665,6 +674,9 @@ GITHUB_ACTIONS_INTEGRATION: dict[str, Any] = {
         "repo": "",
         "default_branch": "main",
         "poll_interval_seconds": 15,
+        "request_timeout_seconds": 30,
+        "retry_max_attempts": 3,
+        "retry_backoff_base_seconds": 1,
     },
     "credential_fields": {
         "github_token": {
@@ -726,6 +738,9 @@ KUBERNETES_INTEGRATION: dict[str, Any] = {
         "namespace": "default",
         "cluster_url": "",
         "poll_interval_seconds": 30,
+        "request_timeout_seconds": 30,
+        "retry_max_attempts": 3,
+        "retry_backoff_base_seconds": 1,
     },
     "credential_fields": {
         "kubeconfig_data": {
@@ -766,7 +781,7 @@ DOCKER_INTEGRATION: dict[str, Any] = {
     "tags": ["containers", "docker", "build", "deployment", "canonical"],
     "connector_type": "custom",
     "default_config": {
-        "base_url": "unix:///var/run/docker.sock",
+        "base_url": "",
         "api_version": "1.45",
         "registry_url": "",
     },
@@ -808,6 +823,9 @@ CIRCLECI_INTEGRATION: dict[str, Any] = {
         "project_slug": "",
         "branch": "main",
         "poll_interval_seconds": 15,
+        "request_timeout_seconds": 30,
+        "retry_max_attempts": 3,
+        "retry_backoff_base_seconds": 1,
     },
     "credential_fields": {
         "personal_api_token": {
