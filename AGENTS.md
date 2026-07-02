@@ -530,10 +530,21 @@ Wait-Process -Name "uv" -ErrorAction SilentlyContinue  # doesn't block; just con
 - **Error forwarders must isolate failures per-forwarder.** A single forwarder's HTTP failure (network error, bad API key) must not prevent other forwarders from delivering, and must not crash the error ingestion pipeline. Wrap each `forward()` call in `try/except` and log the failure.
 - **Alert evaluation cooldown keys should include both rule_id and fingerprint.** Without the fingerprint in the cooldown key, all errors matching a rule share a single cooldown — the first error that fires an alert suppresses alerts for entirely different errors. The key format should be `alert_cooldown:{org_id}:{rule_id}:{fingerprint}`.
 
+### Backend / Caching & Init Ordering
+
+- In-memory caches that store mutable dicts must return a defensive copy (`json.loads(json.dumps(data))` or `copy.deepcopy(data)`) rather than the original reference. Returning the raw reference allows concurrent callers to mutate the cached data, corrupting the cache for subsequent requests within the TTL window.
+- Initialization flags (`initialized = true`) must be set AFTER the init logic completes, not before. Setting `initialized = true` before `await loadLocaleMessages()` or `await setLocale()` means a failure in those async calls leaves the app in a half-initialized state where no retry is possible — the flag already blocks re-entry.
+- When DB migration errors need to be caught for 501 responses, use `except ProgrammingError` (not `except SQLAlchemyError`). `ProgrammingError` indicates a missing table/column (migration not yet applied), while `SQLAlchemyError` is the base class that also catches `IntegrityError`, `DataError`, etc. — real data errors should surface as 500, not as misleading "Run database migrations" messages.
+
 ### Backend / Dashboard & Aggregations
 
 - Idle run count must use tracked-status-only total when computing `idle = total - active - failed`, not `sum(status_counts.values())`. The latter includes non-tracked statuses (complete, cancelled, eval_failed) which silently inflate idle.
 - Redis async connections (`Redis.from_url(...)`) must always be wrapped in `try/finally` with `await redis.aclose()` in the finally block. A bare try/except without finally leaks TCP connections on exception.
+
+### Frontend / Internationalization
+
+- `en-US.json` can accumulate non-user-facing artifacts (SVG path data, JS expressions with `??`/`||`, template literals, function calls) from the auto-extraction script. After extraction, verify all JSON values are human-readable text. Remove keys containing `??`, `${`, `||`, function calls, or SVG path data.
+- When adding locale sync between frontend and backend, verify the Pinia store's payload shape matches the API model. `PUT /api/v1/me/settings` expects `{ locale: "..." }` at top level (flat), not `{ preferences: { locale: "..." } }` (nested). Misaligned shapes silently fail — the locale is never persisted. Verify both the send direction (`syncToBackend`) and the read direction (`initLocale`) match the backend's `SettingsResponse`/`SettingsUpdate` Pydantic models.
 
 ### Frontend / Store & View Patterns
 
