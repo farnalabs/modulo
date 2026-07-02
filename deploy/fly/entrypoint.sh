@@ -53,29 +53,59 @@ echo "=== Ensuring app.modulo.run admin user exists ==="
 .venv/bin/python3 -c "
 import os
 os.environ['DATABASE_URL'] = os.environ.get('DATABASE_URL', '')
-from modulo.db.session import AsyncSessionLocal
-from modulo.auth.passwords import hash_password
-from sqlalchemy import select, text
 import asyncio
 import uuid
+from sqlalchemy import select
+from modulo.db.session import AsyncSessionLocal
+from modulo.auth.passwords import hash_password
+from modulo.db.models.account import Account
+from modulo.db.models.organisation import Organisation
+from modulo.db.models.org_membership import OrgMembership
+
 async def fix():
     async with AsyncSessionLocal() as s:
         async with s.begin():
+            org_r = await s.execute(select(Organisation).order_by(Organisation.created_at).limit(1))
+            org = org_r.scalar_one_or_none()
+            if org is None:
+                print('No organisation found — cannot create admin users')
+                return
+
             for email, role in [('admin@modulo.run', 'admin'), ('admin', 'admin')]:
-                r = await s.execute(select(text('id')).select_from(text('users')).where(text(f\"email = '{email}'\")))
-                row = r.one_or_none()
+                r = await s.execute(select(Account).where(Account.email == email))
+                account = r.scalar_one_or_none()
                 pw = hash_password('admin123')
-                if row:
-                    await s.execute(text(f\"UPDATE users SET password_hash = :pw, org_role = :role WHERE email = :email\"), {'pw': pw, 'role': role, 'email': email})
-                    print(f'{email} updated with known password + admin role')
+                if account:
+                    account.password_hash = pw
+                    if not account.active:
+                        account.active = True
+                    print(f'{email} updated with known password')
                 else:
-                    org_r = await s.execute(select(text('id')).select_from(text('organisations')).order_by(text('created_at')).limit(1))
-                    org_row = org_r.one_or_none()
-                    if org_row:
-                        await s.execute(text(f\"INSERT INTO users (id, organisation_id, email, display_name, password_hash, org_role, auth_provider) VALUES (:id, :oid, :email, :disp, :pw, :role, 'local')\"), {'id': uuid.uuid4(), 'oid': org_row[0], 'email': email, 'disp': email.split('@')[0], 'pw': pw, 'role': role})
-                        print(f'{email} created with admin role')
-                    else:
-                        print(f'No org found — skipping {email}')
+                    display_name = email.split('@')[0]
+                    account = Account(
+                        id=uuid.uuid4(),
+                        email=email,
+                        display_name=display_name,
+                        password_hash=pw,
+                        auth_provider='local',
+                    )
+                    s.add(account)
+                    await s.flush()
+                    print(f'{email} created')
+
+                mr = await s.execute(
+                    select(OrgMembership).where(
+                        OrgMembership.account_id == account.id,
+                        OrgMembership.organisation_id == org.id,
+                    )
+                )
+                if not mr.scalar_one_or_none():
+                    s.add(OrgMembership(
+                        account_id=account.id,
+                        organisation_id=org.id,
+                        role=role,
+                    ))
+                    print(f'{email} linked to org as {role}')
 asyncio.run(fix())
 " 2>&1 || echo "WARNING: Admin password fix failed — continuing anyway"
 
