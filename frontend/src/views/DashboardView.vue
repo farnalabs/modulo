@@ -1,5 +1,6 @@
 <template>
   <div class="mx-auto max-w-6xl space-y-8 p-6">
+    <DashboardNotificationsPanel class="mb-4" />
     <header>
       <h1 data-testid="dashboard-title" class="text-3xl font-bold tracking-tight">Dashboard</h1>
       <p class="mt-1 text-muted-foreground">Overview of your organisation's pipelines and runs</p>
@@ -231,6 +232,7 @@
 
 <script setup lang="ts">
 import { ref, computed, onMounted } from 'vue'
+import DashboardNotificationsPanel from '../components/DashboardNotificationsPanel.vue'
 import { usePlanStore } from '../stores/planStore'
 import { useDashboardStore } from '../stores/dashboard'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
