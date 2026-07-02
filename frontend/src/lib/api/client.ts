@@ -66,7 +66,7 @@ function withAuth(fn: (...args: any[]) => any) {
     const resp = await fn(url, { ...options, headers })
     if (resp.response?.status === 401) {
       clearAccessToken()
-      if (window.location.pathname !== '/login') {
+      if (!window.location.pathname.startsWith('/login')) {
         window.location.href = '/login'
       }
     }

@@ -44,7 +44,7 @@ export const useLocaleStore = defineStore('locale', () => {
     let detected: SupportedLocale = 'en-US'
 
     // 1. Try backend preferences
-    if (getAccessToken()) {
+    if (getAccessToken() && !window.location.pathname.startsWith('/login')) {
       try {
         const res = await api.GET('/api/v1/me/settings')
         if (res.data) {
