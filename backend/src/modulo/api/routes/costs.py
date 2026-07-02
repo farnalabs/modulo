@@ -10,6 +10,7 @@ from typing import Any
 from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 from pydantic import BaseModel, Field
 from sqlalchemy import func, select
+from sqlalchemy.exc import ProgrammingError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.api.dependencies import get_db_session, require_feature
@@ -94,13 +95,19 @@ async def get_spend_limits(
 ) -> SpendLimitResponse:
     _require_admin(current_user)
 
-    async with session.begin():
-        await set_rls_org(session, current_user.organisation_id)
-        org = await get_organisation(session, current_user.organisation_id)
+    try:
+        async with session.begin():
+            await set_rls_org(session, current_user.organisation_id)
+            org = await get_organisation(session, current_user.organisation_id)
 
-        from modulo.db.crud.team import list_teams
+            from modulo.db.crud.team import list_teams
 
-        teams_result = await list_teams(session, org_id=current_user.organisation_id, page=1, page_size=1000)
+            teams_result = await list_teams(session, org_id=current_user.organisation_id, page=1, page_size=1000)
+    except ProgrammingError:
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="Feature is not available. Run database migrations to enable it.",
+        ) from None
 
     return SpendLimitResponse(
         organisation_id=str(current_user.organisation_id),

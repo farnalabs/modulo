@@ -7,6 +7,7 @@ import httpx
 from defusedxml import ElementTree as ET
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field
+from sqlalchemy.exc import ProgrammingError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.api.dependencies import get_db_session, require_feature
@@ -128,7 +129,13 @@ async def get_providers(
     session: AsyncSession = Depends(get_db_session),
 ) -> list[SsoProviderResponse]:
     _require_admin(current_user)
-    providers = await list_providers(session)
+    try:
+        providers = await list_providers(session)
+    except ProgrammingError:
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="Feature is not available. Run database migrations to enable it.",
+        ) from None
     return [SsoProviderResponse.from_orm(p) for p in providers]  # type: ignore[pydantic-orm]
 
 
