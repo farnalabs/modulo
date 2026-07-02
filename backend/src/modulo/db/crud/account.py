@@ -68,7 +68,8 @@ async def update_account_preferences(
     account = await get_account_by_id(session, account_id)
     if account is None:
         return preferences
-    merged = {**account.preferences, **preferences}
+    current = account.preferences if isinstance(account.preferences, dict) else {}
+    merged = {**current, **preferences}
     await session.execute(update(Account).where(Account.id == account_id).values(preferences=merged))
     return merged
 

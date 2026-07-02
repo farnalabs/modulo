@@ -174,7 +174,11 @@ async function handleSend() {
   inputText.value = "";
   await store.sendMessage(text);
   if (store.activeSessionId) {
-    connectStream(store.activeSessionId);
+    try {
+      connectStream(store.activeSessionId);
+    } catch (e) {
+      console.error("Failed to start Remy stream:", e);
+    }
   }
 }
 
