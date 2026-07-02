@@ -6,6 +6,7 @@ from uuid import UUID as _UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel
+from sqlalchemy.exc import ProgrammingError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.api.dependencies import get_db_session, require_feature
@@ -60,18 +61,24 @@ async def list_audit_events_endpoint(
     """
     actor_uid = _UUID(actor_user_id) if actor_user_id else None
     _require_admin(principal)
-    async with session.begin():
-        await set_rls_org(session, principal.organisation_id)
-        result = await list_audit_events(
-            session,
-            principal.organisation_id,
-            cursor=cursor,
-            limit=limit,
-            event_type=event_type,
-            actor_user_id=actor_uid,
-            resource_type=resource_type,
-            from_date=from_date,
-            to_date=to_date,
+    try:
+        async with session.begin():
+            await set_rls_org(session, principal.organisation_id)
+            result = await list_audit_events(
+                session,
+                principal.organisation_id,
+                cursor=cursor,
+                limit=limit,
+                event_type=event_type,
+                actor_user_id=actor_uid,
+                resource_type=resource_type,
+                from_date=from_date,
+                to_date=to_date,
+            )
+    except ProgrammingError:
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="Feature is not available. Run database migrations to enable it.",
         )
     return result
 
@@ -83,13 +90,19 @@ async def batch_detail_endpoint(
     principal: AuthenticatedPrincipal = Depends(get_current_user),
 ) -> list[dict[str, object]]:
     """Return full details for a batch of audit event IDs."""
-    async with session.begin():
-        _require_admin(principal)
-        await set_rls_org(session, principal.organisation_id)
-        result = await get_audit_events_batch(
-            session,
-            principal.organisation_id,
-            body.event_ids,
+    try:
+        async with session.begin():
+            _require_admin(principal)
+            await set_rls_org(session, principal.organisation_id)
+            result = await get_audit_events_batch(
+                session,
+                principal.organisation_id,
+                body.event_ids,
+            )
+    except ProgrammingError:
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="Feature is not available. Run database migrations to enable it.",
         )
     return result
 
@@ -100,10 +113,16 @@ async def verify_chain_endpoint(
     principal: AuthenticatedPrincipal = Depends(get_current_user),
 ) -> dict[str, object]:
     """Verify the cryptographic integrity of the org's audit chain."""
-    async with session.begin():
-        _require_admin(principal)
-        await set_rls_org(session, principal.organisation_id)
-        result = await verify_chain(session, principal.organisation_id)
+    try:
+        async with session.begin():
+            _require_admin(principal)
+            await set_rls_org(session, principal.organisation_id)
+            result = await verify_chain(session, principal.organisation_id)
+    except ProgrammingError:
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="Feature is not available. Run database migrations to enable it.",
+        )
     return result
 
 
@@ -115,8 +134,14 @@ async def export_chain_endpoint(
     principal: AuthenticatedPrincipal = Depends(get_current_user),
 ) -> dict[str, object]:
     """Export audit events as paginated JSON."""
-    async with session.begin():
-        _require_admin(principal)
-        await set_rls_org(session, principal.organisation_id)
-        result = await export_chain(session, principal.organisation_id, page=page, page_size=page_size)
+    try:
+        async with session.begin():
+            _require_admin(principal)
+            await set_rls_org(session, principal.organisation_id)
+            result = await export_chain(session, principal.organisation_id, page=page, page_size=page_size)
+    except ProgrammingError:
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="Feature is not available. Run database migrations to enable it.",
+        )
     return result
