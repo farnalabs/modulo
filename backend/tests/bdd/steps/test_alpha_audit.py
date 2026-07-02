@@ -6,7 +6,7 @@ from unittest.mock import patch
 
 from pytest_bdd import given, parsers, scenarios, then, when
 
-scenarios("../features/audit/event_recording.feature")
+scenarios("../../features/audit/event_recording.feature")
 
 
 _ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
@@ -76,12 +76,24 @@ def event_records_actor(actor: str, request):
 
 @then("each event has a previous_hash linking to the prior event")
 def check_previous_hash(request):
-    events = getattr(request.node, "_appended_events", [])
-    for i, event in enumerate(events):
-        if i == 0:
-            continue
-        assert "previous_hash" in event, f"Event {i} missing previous_hash"
-        assert event["previous_hash"] is not None
+    events = getattr(request.node, "_appended_events", None)
+    if events is not None:
+        for i, event in enumerate(events):
+            if i == 0:
+                continue
+            assert "previous_hash" in event, f"Event {i} missing previous_hash"
+            assert event["previous_hash"] is not None
+    else:
+        resp_body = getattr(request.node, "_resp", None)
+        if resp_body is not None and hasattr(resp_body, "json"):
+            data = resp_body.json()
+            items = data.get("items", data)
+            if isinstance(items, list) and len(items) > 1:
+                for i, item in enumerate(items):
+                    if i == 0:
+                        continue
+                    assert "previous_hash" in item, f"Event {i} missing previous_hash"
+                    assert item["previous_hash"] is not None
 
 
 @then("the chain is valid")
