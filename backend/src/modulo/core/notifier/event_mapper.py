@@ -206,12 +206,8 @@ class NotificationEventMapper:
         return notification
 
     def _resolve_template(self, template: str, payload: dict[str, Any]) -> str:
-        """Simple string.format-based template resolution.
-
-        Falls back to the template string itself if a key is missing.
-        """
         try:
             return template.format(**payload)
-        except KeyError:
-            _log.debug("mapper.template_key_missing", extra={"template": template})
-            return template
+        except KeyError as exc:
+            _log.warning("mapper.template_key_missing", extra={"template": template, "key": str(exc)})
+            return template.replace(f"{{{exc.args[0]}}}", "[unknown]")

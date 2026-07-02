@@ -57,28 +57,29 @@ async def admin_create_org(
             detail="System admin role required",
         )
 
-    existing = await get_organisation_by_slug(session, body.slug)
-    if existing is not None:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail=f"An organisation with slug '{body.slug}' already exists",
+    async with session.begin():
+        existing = await get_organisation_by_slug(session, body.slug)
+        if existing is not None:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=f"An organisation with slug '{body.slug}' already exists",
+            )
+
+        org = await create_organisation(
+            session,
+            name=body.name,
+            slug=body.slug,
+            plan_id=body.plan_id,
+            created_by=current_user.account_id,
         )
 
-    org = await create_organisation(
-        session,
-        name=body.name,
-        slug=body.slug,
-        plan_id=body.plan_id,
-        created_by=current_user.account_id,
-    )
-
-    return CreateOrgResponse(
-        id=str(org.id),
-        name=org.name,
-        slug=org.slug,
-        status=org.status,
-        created_at=org.created_at.isoformat(),
-    )
+        return CreateOrgResponse(
+            id=str(org.id),
+            name=org.name,
+            slug=org.slug,
+            status=org.status,
+            created_at=org.created_at.isoformat(),
+        )
 
 
 # ── List Orgs ──────────────────────────────────────────────────────────

@@ -86,7 +86,7 @@ async function login() {
     })
     if (!res.ok) {
       const body = await res.json().catch(() => ({}))
-      error.value = `Login failed: ${body.error?.message || res.statusText}`
+      error.value = body.detail || res.statusText
       return
     }
     const data = await res.json()

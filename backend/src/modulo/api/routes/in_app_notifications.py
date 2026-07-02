@@ -6,18 +6,20 @@ page, dismiss flow, and user preferences.
 
 from __future__ import annotations
 
+import logging
 import uuid
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, Field
+from sqlalchemy.exc import ProgrammingError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.api.dependencies import get_db_session
 from modulo.auth.dependencies import get_current_user
 from modulo.auth.jwt import AuthenticatedPrincipal
+from modulo.core.events.event_bus import get_event_bus
 from modulo.db.crud.notifications import (
     count_notifications_for_user,
-    create_notification,
     dismiss_notification,
     get_dashboard_notifications,
     get_notification,
@@ -25,8 +27,10 @@ from modulo.db.crud.notifications import (
     get_unread_count,
     review_later,
 )
+from modulo.db.models.notification import Notification
 from modulo.db.rls import set_rls_org, set_rls_user_context
-from modulo.core.events.event_bus import get_event_bus
+
+_log = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/v1/notifications/in-app", tags=["notifications"])
 
@@ -71,8 +75,14 @@ class PaginatedNotificationsResponse(BaseModel):
     page_size: int
 
 
-def _notification_to_response(n: object) -> NotificationResponse:
-    scope_labels = {"user": "Personal", "org": "Org-wide", "admin": "Admin"}
+SCOPE_LABELS: dict[str, str] = {
+    "user": "Personal",
+    "org": "Org-wide",
+    "admin": "Admin",
+}
+
+
+def _notification_to_response(n: Notification) -> NotificationResponse:
     return NotificationResponse(
         id=n.id,
         scope=n.scope,
@@ -84,7 +94,7 @@ def _notification_to_response(n: object) -> NotificationResponse:
         dismiss_strategy=n.dismiss_strategy,
         dismissible_at_scope=n.dismissible_at_scope,
         created_at=n.created_at.isoformat() if n.created_at else "",
-        scope_label=scope_labels.get(n.scope, n.scope),
+        scope_label=SCOPE_LABELS.get(n.scope, n.scope),
     )
 
 
@@ -93,20 +103,26 @@ async def get_dashboard(
     session: AsyncSession = Depends(get_db_session),
     principal: AuthenticatedPrincipal = Depends(get_current_user),
 ) -> DashboardNotificationResponse:
-    async with session.begin():
-        await set_rls_org(session, principal.organisation_id)
-        await set_rls_user_context(session, principal.account_id, principal.org_role)
-        notifications = await get_dashboard_notifications(
-            session=session,
-            org_id=principal.organisation_id,
-            user_id=principal.account_id,
-            limit=5,
-        )
-        unread = await get_unread_count(
-            session=session,
-            org_id=principal.organisation_id,
-            user_id=principal.account_id,
-        )
+    try:
+        async with session.begin():
+            await set_rls_org(session, principal.organisation_id)
+            await set_rls_user_context(session, principal.account_id, principal.org_role)
+            notifications = await get_dashboard_notifications(
+                session=session,
+                org_id=principal.organisation_id,
+                user_id=principal.account_id,
+                limit=5,
+            )
+            unread = await get_unread_count(
+                session=session,
+                org_id=principal.organisation_id,
+                user_id=principal.account_id,
+            )
+    except ProgrammingError:
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="Feature is not available. Run database migrations to enable it.",
+        ) from None
     return DashboardNotificationResponse(
         notifications=[_notification_to_response(n) for n in notifications],
         total_unread=unread,
@@ -118,14 +134,20 @@ async def get_unread(
     session: AsyncSession = Depends(get_db_session),
     principal: AuthenticatedPrincipal = Depends(get_current_user),
 ) -> dict:
-    async with session.begin():
-        await set_rls_org(session, principal.organisation_id)
-        await set_rls_user_context(session, principal.account_id, principal.org_role)
-        count = await get_unread_count(
-            session=session,
-            org_id=principal.organisation_id,
-            user_id=principal.account_id,
-        )
+    try:
+        async with session.begin():
+            await set_rls_org(session, principal.organisation_id)
+            await set_rls_user_context(session, principal.account_id, principal.org_role)
+            count = await get_unread_count(
+                session=session,
+                org_id=principal.organisation_id,
+                user_id=principal.account_id,
+            )
+    except ProgrammingError:
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="Feature is not available. Run database migrations to enable it.",
+        ) from None
     return {"count": count}
 
 
@@ -140,30 +162,36 @@ async def list_notifications(
     category: str | None = Query(None),
     status: str | None = Query(None),
 ) -> PaginatedNotificationsResponse:
-    async with session.begin():
-        await set_rls_org(session, principal.organisation_id)
-        await set_rls_user_context(session, principal.account_id, principal.org_role)
-        offset = (page - 1) * page_size
-        notifications = await get_notifications_for_user(
-            session=session,
-            org_id=principal.organisation_id,
-            user_id=principal.account_id,
-            level=level,
-            scope=scope,
-            category=category,
-            status_filter=status,
-            limit=page_size,
-            offset=offset,
-        )
-        total = await count_notifications_for_user(
-            session=session,
-            org_id=principal.organisation_id,
-            user_id=principal.account_id,
-            level=level,
-            scope=scope,
-            category=category,
-            status_filter=status,
-        )
+    try:
+        async with session.begin():
+            await set_rls_org(session, principal.organisation_id)
+            await set_rls_user_context(session, principal.account_id, principal.org_role)
+            offset = (page - 1) * page_size
+            notifications = await get_notifications_for_user(
+                session=session,
+                org_id=principal.organisation_id,
+                user_id=principal.account_id,
+                level=level,
+                scope=scope,
+                category=category,
+                status_filter=status,
+                limit=page_size,
+                offset=offset,
+            )
+            total = await count_notifications_for_user(
+                session=session,
+                org_id=principal.organisation_id,
+                user_id=principal.account_id,
+                level=level,
+                scope=scope,
+                category=category,
+                status_filter=status,
+            )
+    except ProgrammingError:
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="Feature is not available. Run database migrations to enable it.",
+        ) from None
     return PaginatedNotificationsResponse(
         items=[_notification_to_response(n) for n in notifications],
         total=total,
@@ -178,16 +206,22 @@ async def get_notification_detail(
     session: AsyncSession = Depends(get_db_session),
     principal: AuthenticatedPrincipal = Depends(get_current_user),
 ) -> NotificationResponse:
-    async with session.begin():
-        await set_rls_org(session, principal.organisation_id)
-        await set_rls_user_context(session, principal.account_id, principal.org_role)
-        n = await get_notification(
-            session=session,
-            org_id=principal.organisation_id,
-            notification_id=notification_id,
-        )
-        if n is None:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Notification not found")
+    try:
+        async with session.begin():
+            await set_rls_org(session, principal.organisation_id)
+            await set_rls_user_context(session, principal.account_id, principal.org_role)
+            n = await get_notification(
+                session=session,
+                org_id=principal.organisation_id,
+                notification_id=notification_id,
+            )
+            if n is None:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Notification not found")
+    except ProgrammingError:
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="Feature is not available. Run database migrations to enable it.",
+        ) from None
     return _notification_to_response(n)
 
 
@@ -197,17 +231,37 @@ async def review_later_endpoint(
     session: AsyncSession = Depends(get_db_session),
     principal: AuthenticatedPrincipal = Depends(get_current_user),
 ) -> dict:
-    async with session.begin():
-        await set_rls_org(session, principal.organisation_id)
-        await set_rls_user_context(session, principal.account_id, principal.org_role)
-        try:
-            await review_later(
-                session=session,
-                notification_id=notification_id,
-                user_id=principal.account_id,
-            )
-        except ValueError as exc:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    try:
+        async with session.begin():
+            await set_rls_org(session, principal.organisation_id)
+            await set_rls_user_context(session, principal.account_id, principal.org_role)
+            try:
+                await review_later(
+                    session=session,
+                    notification_id=notification_id,
+                    user_id=principal.account_id,
+                    org_id=principal.organisation_id,
+                )
+            except ValueError as exc:
+                raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    except ProgrammingError:
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="Feature is not available. Run database migrations to enable it.",
+        ) from None
+
+    try:
+        event_bus = get_event_bus()
+        await event_bus.publish(
+            org_id=str(principal.organisation_id),
+            resource_type="notification",
+            resource_id=str(notification_id),
+            action="dismissed",
+            version=1,
+        )
+    except Exception:
+        _log.warning("review_later_endpoint.publish_failed", exc_info=True)
+
     return {"status": "dismissed_for_self"}
 
 
@@ -218,28 +272,38 @@ async def dismiss_endpoint(
     session: AsyncSession = Depends(get_db_session),
     principal: AuthenticatedPrincipal = Depends(get_current_user),
 ) -> dict:
-    async with session.begin():
-        await set_rls_org(session, principal.organisation_id)
-        await set_rls_user_context(session, principal.account_id, principal.org_role)
-        try:
-            await dismiss_notification(
-                session=session,
-                notification_id=notification_id,
-                user_id=principal.account_id,
-                dismiss_scope=body.dismiss_scope,
-                is_admin=principal.org_role == "admin",
-            )
-        except ValueError as exc:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    try:
+        async with session.begin():
+            await set_rls_org(session, principal.organisation_id)
+            await set_rls_user_context(session, principal.account_id, principal.org_role)
+            try:
+                await dismiss_notification(
+                    session=session,
+                    notification_id=notification_id,
+                    user_id=principal.account_id,
+                    org_id=principal.organisation_id,
+                    dismiss_scope=body.dismiss_scope,
+                    is_admin=principal.org_role == "admin",
+                )
+            except ValueError as exc:
+                raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    except ProgrammingError:
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="Feature is not available. Run database migrations to enable it.",
+        ) from None
 
-    event_bus = get_event_bus()
-    await event_bus.publish(
-        org_id=str(principal.organisation_id),
-        resource_type="notification",
-        resource_id=str(notification_id),
-        action="dismissed",
-        version=1,
-    )
+    try:
+        event_bus = get_event_bus()
+        await event_bus.publish(
+            org_id=str(principal.organisation_id),
+            resource_type="notification",
+            resource_id=str(notification_id),
+            action="dismissed",
+            version=1,
+        )
+    except Exception:
+        _log.warning("dismiss_endpoint.publish_failed", exc_info=True)
 
     scope_label = "for_everyone" if body.dismiss_scope == "scope" else "for_self"
     return {"status": f"dismissed_{scope_label}"}
@@ -250,10 +314,10 @@ async def get_preferences(
     session: AsyncSession = Depends(get_db_session),
     principal: AuthenticatedPrincipal = Depends(get_current_user),
 ) -> NotificationPreferencesResponse:
-    async with session.begin():
-        await set_rls_org(session, principal.organisation_id)
-        await set_rls_user_context(session, principal.account_id, principal.org_role)
-    return NotificationPreferencesResponse()
+    raise HTTPException(
+        status_code=status.HTTP_501_NOT_IMPLEMENTED,
+        detail="Notification preferences are not yet implemented.",
+    )
 
 
 @router.put("/preferences", response_model=NotificationPreferencesResponse)
@@ -262,7 +326,7 @@ async def update_preferences(
     session: AsyncSession = Depends(get_db_session),
     principal: AuthenticatedPrincipal = Depends(get_current_user),
 ) -> NotificationPreferencesResponse:
-    async with session.begin():
-        await set_rls_org(session, principal.organisation_id)
-        await set_rls_user_context(session, principal.account_id, principal.org_role)
-    return NotificationPreferencesResponse()
+    raise HTTPException(
+        status_code=status.HTTP_501_NOT_IMPLEMENTED,
+        detail="Notification preferences are not yet implemented.",
+    )

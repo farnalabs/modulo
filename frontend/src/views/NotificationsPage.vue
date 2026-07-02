@@ -163,8 +163,8 @@ async function onReviewLater(id: string) {
     await reviewLater(id);
     notifications.value = notifications.value.filter((n) => n.id !== id);
     total.value = Math.max(0, total.value - 1);
-  } catch {
-    // Silent
+  } catch (e: unknown) {
+    error.value = e instanceof Error ? e.message : "Failed to dismiss notification";
   }
 }
 

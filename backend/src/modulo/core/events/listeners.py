@@ -111,7 +111,14 @@ def _make_listener(action: str) -> Callable[[Any, Any, Any], None]:
             ),
         )
         _background_tasks.add(task)
-        task.add_done_callback(_background_tasks.discard)
+
+        def _on_task_done(t: asyncio.Task[Any]) -> None:
+            _background_tasks.discard(t)
+            exc = t.exception()
+            if exc is not None:
+                _log.warning("event_listener.publish_failed", exc_info=exc)
+
+        task.add_done_callback(_on_task_done)
 
     return listener
 

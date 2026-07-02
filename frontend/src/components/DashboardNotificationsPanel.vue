@@ -61,10 +61,12 @@ import { registerHandler } from "../stores/syncRegistry";
 import NotificationCard from "./NotificationCard.vue";
 import LoadingSpinner from "./shared/LoadingSpinner.vue";
 
+const DASHBOARD_LIMIT = 5;
 const collapsed = ref(localStorage.getItem("notif-panel-collapsed") !== "false");
 const notifications = ref<NotificationResponse[]>([]);
 const loading = ref(false);
 const error = ref<string | null>(null);
+const reviewLaterError = ref("");
 const unreadCount = ref(0);
 const hasMore = ref(false);
 
@@ -79,12 +81,13 @@ function onDismissed(id: string) {
 }
 
 async function onReviewLater(id: string) {
+  reviewLaterError.value = "";
   try {
     await reviewLater(id);
     notifications.value = notifications.value.filter((n) => n.id !== id);
     if (unreadCount.value > 0) unreadCount.value--;
-  } catch {
-    // Silent
+  } catch (e: unknown) {
+    reviewLaterError.value = e instanceof Error ? e.message : "Failed to dismiss notification";
   }
 }
 
@@ -108,7 +111,7 @@ async function loadDashboard() {
     const result = await fetchDashboardNotifications();
     notifications.value = result.notifications;
     unreadCount.value = result.total_unread;
-    hasMore.value = result.notifications.length >= 5 || result.total_unread > result.notifications.length;
+    hasMore.value = result.notifications.length >= DASHBOARD_LIMIT && result.total_unread > result.notifications.length;
   } catch (e: unknown) {
     error.value = e instanceof Error ? e.message : String(e);
   } finally {
