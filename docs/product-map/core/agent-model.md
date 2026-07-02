@@ -122,6 +122,14 @@ Two categories exist:
 - [x] `is_executable` persists and round-trips correctly
 - [x] Default `is_executable` is `True`
 
+### Error Handling
+
+- [x] `GET /api/v1/agents` returns 501 Not Implemented on `ProgrammingError` (missing DB table)
+- [x] `POST /api/v1/agents` returns 501 Not Implemented on `ProgrammingError`
+- [x] `GET /api/v1/agents/{id}` returns 501 Not Implemented on `ProgrammingError`
+- [x] `PATCH /api/v1/agents/{id}` returns 501 Not Implemented on `ProgrammingError`
+- [x] `DELETE /api/v1/agents/{id}` returns 501 Not Implemented on `ProgrammingError`
+
 ## Known Gaps
 
 - **Website docs stub missing.** No website docs page exists for the Agent Model feature.
@@ -145,3 +153,19 @@ Two categories exist:
 - **Generic agent promotion workflow.** No UI workflow exists to promote
   a generic agent to a library primitive. The data model supports it
   (setting `library_id`), but there is no "Publish to library" action.
+- **BDD step definitions patch dead code.** The legacy BDD step definitions at
+  `tests/bdd/steps/test_alpha_agents.py` patch `modulo.core.pipeline_engine.run_crud.*`
+  and test the old `/api/agents` endpoint. The actual routes live at `/api/v1/agents`
+  with `modulo.api.routes.agents.*` as the call target. The BDD patches are dead code
+  and do not exercise any real route logic.
+
+## QA History
+
+- **2026-07-02 — improve-architecture index 46**: Added `ProgrammingError` catches to 5
+  unprotected endpoints (create, list, get, update, delete) — all now return 501 Not
+  Implemented when the DB table is missing. Pattern matched from existing 6 endpoints
+  (optimize, apply, list_versions, get_version, rollback, diff) that already had the catch.
+  All 23 unit tests pass (test_agent_prompt_versioning: 11, test_agent_prompts: 7,
+  test_agents_endpoint copy-to-adapt tests: 5 — 10 pre-existing Pydantic validation failures
+  in test_agents_endpoint.py are unrelated to these changes).
+  Status: partial (same 6 known gaps remain, 1 new gap added for BDD dead code).
