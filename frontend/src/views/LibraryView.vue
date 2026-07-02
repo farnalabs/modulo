@@ -4,6 +4,13 @@
       <div class="max-w-6xl mx-auto flex items-center justify-between gap-3">
         <h1 class="text-xl font-semibold text-foreground">Library</h1>
         <div class="flex items-center gap-3">
+          <router-link
+            to="/templates"
+            class="rounded-lg bg-primary px-4 py-1.5 text-sm font-semibold text-primary-foreground hover:brightness-110 transition-all"
+            data-testid="library-create-pipeline-header"
+          >
+            Create Pipeline
+          </router-link>
           <input
             v-model="search"
             type="text"
