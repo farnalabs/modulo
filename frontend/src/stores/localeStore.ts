@@ -1,7 +1,7 @@
 import { defineStore } from 'pinia'
 import { ref, watch } from 'vue'
 import i18n, { detectBrowserLocale, isSupportedLocale, loadLocaleMessages, type SupportedLocale, SUPPORTED_LOCALES } from '../i18n'
-import { api } from '../lib/api/client'
+import { api, getAccessToken } from '../lib/api/client'
 
 const STORAGE_KEY = 'modulo_locale'
 
@@ -27,6 +27,7 @@ export const useLocaleStore = defineStore('locale', () => {
   }
 
   async function syncToBackend(code: SupportedLocale): Promise<void> {
+    if (!getAccessToken()) return
     try {
       await api.PUT('/api/v1/me/settings', {
         locale: code,
@@ -43,17 +44,19 @@ export const useLocaleStore = defineStore('locale', () => {
     let detected: SupportedLocale = 'en-US'
 
     // 1. Try backend preferences
-    try {
-      const res = await api.GET('/api/v1/me/settings')
-      if (res.data) {
-        const data = res.data as Record<string, unknown>
-        const backendLocale = data?.locale as string | undefined
-        if (backendLocale && isSupportedLocale(backendLocale)) {
-          detected = backendLocale
+    if (getAccessToken()) {
+      try {
+        const res = await api.GET('/api/v1/me/settings')
+        if (res.data) {
+          const data = res.data as Record<string, unknown>
+          const backendLocale = data?.locale as string | undefined
+          if (backendLocale && isSupportedLocale(backendLocale)) {
+            detected = backendLocale
+          }
         }
+      } catch {
+        // Fall through
       }
-    } catch {
-      // Fall through
     }
 
     // 2. Try localStorage
