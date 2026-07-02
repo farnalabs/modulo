@@ -61,10 +61,11 @@
         <p v-if="passSuccess" class="text-sm text-success">{{ passSuccess }}</p>
         <button
           type="submit"
-          class="px-4 py-2 bg-primary text-primary-foreground text-sm font-medium rounded-lg border border-primary/30 hover:brightness-110 transition-all"
+          :disabled="passSaving"
+          class="px-4 py-2 bg-primary text-primary-foreground text-sm font-medium rounded-lg border border-primary/30 hover:brightness-110 transition-all disabled:opacity-50"
           data-testid="my-profile-update-password"
         >
-          Update Password
+          {{ passSaving ? 'Saving...' : 'Update Password' }}
         </button>
       </form>
     </div>
@@ -92,6 +93,7 @@ const newPassword = ref('')
 const confirmPassword = ref('')
 const passError = ref('')
 const passSuccess = ref('')
+const passSaving = ref(false)
 
 const userInitial = computed(() => {
   const email = profile.value.email
@@ -118,6 +120,7 @@ async function changePassword() {
     passError.value = 'Password must be at least 8 characters'
     return
   }
+  passSaving.value = true
   try {
     await put('/api/v1/me/password', {
       current_password: currentPassword.value,
@@ -129,6 +132,8 @@ async function changePassword() {
     confirmPassword.value = ''
   } catch (e: any) {
     passError.value = e instanceof Error ? e.message : 'Failed to change password'
+  } finally {
+    passSaving.value = false
   }
 }
 

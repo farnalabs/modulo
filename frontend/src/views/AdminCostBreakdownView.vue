@@ -108,8 +108,8 @@
                     {{ anomaly.percent_above > 0 ? '+' : '' }}{{ anomaly.percent_above.toFixed(0) }}% above)
                   </p>
                 </div>
-                <Button size="sm" variant="outline" :data-testid="'cost-anomaly-dismiss-' + anomaly.id" @click="dismissAnomaly(anomaly.id)">
-                  Dismiss
+                <Button size="sm" variant="outline" :disabled="dismissLoading[anomaly.id]" :data-testid="'cost-anomaly-dismiss-' + anomaly.id" @click="dismissAnomaly(anomaly.id)">
+                  {{ dismissLoading[anomaly.id] ? '...' : 'Dismiss' }}
                 </Button>
               </div>
               <p v-if="dismissedAnomalies.length > 0" class="pt-2 text-xs text-muted-foreground">
@@ -211,13 +211,17 @@ async function loadAnomalies() {
   }
 }
 
+const dismissLoading = ref<Record<string, boolean>>({})
+
 async function dismissAnomaly(id: string) {
+  dismissLoading.value[id] = true
   try {
     await (api as any).GET(`/api/v1/admin/costs/anomalies/dismiss/${id}`)
-    const found = anomalies.value.find((a) => a.id === id)
-    if (found) found.dismissed = true
+    await loadAnomalies()
   } catch {
-    // Silently fail — user can retry
+    anomaliesError.value = 'Failed to dismiss anomaly'
+  } finally {
+    dismissLoading.value[id] = false
   }
 }
 

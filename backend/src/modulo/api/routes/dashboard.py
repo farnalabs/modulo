@@ -8,7 +8,7 @@ from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import Date, case, cast, func, select
-from sqlalchemy.exc import ProgrammingError
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.api.dependencies import get_db_session
@@ -406,7 +406,7 @@ async def dashboard_summary(
 
         await _set_cached_dashboard(org_id_str, result)
         return result
-    except ProgrammingError:
+    except SQLAlchemyError:
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
@@ -609,7 +609,7 @@ async def dashboard_trends(
             "correlation": correlation,
             "feedback_volume": feedback_volume,
         }
-    except ProgrammingError:
+    except SQLAlchemyError:
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",

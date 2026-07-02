@@ -11,7 +11,7 @@ import uuid
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, Field
-from sqlalchemy.exc import ProgrammingError
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.api.dependencies import get_db_session
@@ -118,7 +118,7 @@ async def get_dashboard(
                 org_id=principal.organisation_id,
                 user_id=principal.account_id,
             )
-    except ProgrammingError:
+    except SQLAlchemyError:
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
@@ -143,7 +143,7 @@ async def get_unread(
                 org_id=principal.organisation_id,
                 user_id=principal.account_id,
             )
-    except ProgrammingError:
+    except SQLAlchemyError:
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
@@ -187,7 +187,7 @@ async def list_notifications(
                 category=category,
                 status_filter=status,
             )
-    except ProgrammingError:
+    except SQLAlchemyError:
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
@@ -217,7 +217,7 @@ async def get_notification_detail(
             )
             if n is None:
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Notification not found")
-    except ProgrammingError:
+    except SQLAlchemyError:
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
@@ -244,7 +244,7 @@ async def review_later_endpoint(
                 )
             except ValueError as exc:
                 raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
-    except ProgrammingError:
+    except SQLAlchemyError:
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
@@ -287,7 +287,7 @@ async def dismiss_endpoint(
                 )
             except ValueError as exc:
                 raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
-    except ProgrammingError:
+    except SQLAlchemyError:
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
