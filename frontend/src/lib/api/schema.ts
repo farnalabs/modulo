@@ -1003,6 +1003,17 @@ export interface paths {
       }
     }
   }
+  '/api/v1/settings/observability/preview': {
+    get: {
+      responses: {
+        200: {
+          content: {
+            'application/json': components['schemas']['ExportPreviewResponse']
+          }
+        }
+      }
+    }
+  }
   '/api/v1/notifications': {
     get: {
       responses: {
@@ -1327,6 +1338,10 @@ export interface components {
     TestSpanResult: {
       success: boolean
       message: string
+    }
+    ExportPreviewResponse: {
+      sample_span: { [key: string]: unknown }
+      config_used: { [key: string]: unknown }
     }
     AdminUserListItem: {
       id: string
