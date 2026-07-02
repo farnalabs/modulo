@@ -44,7 +44,7 @@ def _random_slug() -> str:
 async def create_isolated_org(
     *,
     base_url: str = BASE_URL,
-    admin_email: str = "admin@staging.modulo",
+    admin_email: str = "admin@modulo.run",
     admin_password: str = "admin123",
 ) -> IsolatedOrgContext:
     """Create an isolated org + user via the admin API.
