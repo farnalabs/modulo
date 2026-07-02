@@ -293,7 +293,7 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { api } from '../lib/api/client'
-import { formatApiError } from '../lib/api/formatError'
+import { formatApiError, type ProblemDetail } from '../lib/api/formatError'
 import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
 import { usePlanStore } from '../stores/planStore'
@@ -419,7 +419,9 @@ async function loadGates() {
   try {
     const { data, error: err } = await api.GET('/api/v1/hitl/pending')
     if (err) {
-      error.value = `Failed to load gates: ${formatApiError(err)}`
+      error.value = err && typeof err === 'object' && 'detail' in err
+        ? `Failed to load gates: ${(err as ProblemDetail).detail}`
+        : `Failed to load gates: ${formatApiError(err)}`
     } else if (data) {
       gates.value = ((data as any).gates || []).map((g: any) => ({
         ...g,
@@ -445,7 +447,12 @@ async function claimGate(gate: GateItem) {
       body: { expiry_minutes: 15 },
     })
     if (err) {
-      actionMessage.value[key] = { type: 'error', text: `Claim failed: ${formatApiError(err)}` }
+      actionMessage.value[key] = {
+        type: 'error',
+        text: err && typeof err === 'object' && 'detail' in err
+          ? `Claim failed: ${(err as ProblemDetail).detail}`
+          : `Claim failed: ${formatApiError(err)}`,
+      }
     } else if (data) {
       const d = data as any
       claimTokens.value[key] = d.claim_token
@@ -479,7 +486,12 @@ async function approveGate(gate: GateItem) {
       body: { claim_token: token, notes: reviewNotes.value[key] || null },
     })
     if (err) {
-      actionMessage.value[key] = { type: 'error', text: `Approve failed: ${formatApiError(err)}` }
+      actionMessage.value[key] = {
+        type: 'error',
+        text: err && typeof err === 'object' && 'detail' in err
+          ? `Approve failed: ${(err as ProblemDetail).detail}`
+          : `Approve failed: ${formatApiError(err)}`,
+      }
     } else {
       const idx = gates.value.findIndex(g => expandKey(g) === key)
       if (idx !== -1) {
@@ -513,7 +525,12 @@ async function rejectGate(gate: GateItem) {
       body: { claim_token: token, reason },
     })
     if (err) {
-      actionMessage.value[key] = { type: 'error', text: `Reject failed: ${formatApiError(err)}` }
+      actionMessage.value[key] = {
+        type: 'error',
+        text: err && typeof err === 'object' && 'detail' in err
+          ? `Reject failed: ${(err as ProblemDetail).detail}`
+          : `Reject failed: ${formatApiError(err)}`,
+      }
     } else {
       const idx = gates.value.findIndex(g => expandKey(g) === key)
       if (idx !== -1) {

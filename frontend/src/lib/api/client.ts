@@ -1,6 +1,6 @@
 import createClient from 'openapi-fetch'
 import type { paths } from './schema'
-import { formatApiError } from './formatError'
+import { formatApiError, toProblemDetail, type ProblemDetail } from './formatError'
 
 const TOKEN_KEY = 'modulo_access_token'
 
@@ -68,8 +68,10 @@ function withAuth(fn: (...args: any[]) => any) {
       clearAccessToken()
       window.location.href = '/login'
     }
+    // Normalize API errors to ProblemDetail so views and ErrorAlert
+    // get structured error information they can branch on.
     if (resp.error && typeof resp.error === 'object') {
-      resp.error = formatApiError(resp.error) as any
+      resp.error = toProblemDetail(resp.error) as any
     }
     return resp
   }
