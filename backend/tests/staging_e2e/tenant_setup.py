@@ -15,7 +15,7 @@ from dataclasses import dataclass
 import httpx
 
 STAGING_URL = "https://staging.modulo.run"
-ADMIN_EMAIL = "admin@staging.modulo"
+ADMIN_EMAIL = "admin@modulo.run"
 ADMIN_PASSWORD = "admin123"
 SLUG_PREFIX = "e2e-"  # used by cleanup to identify test orgs
 
