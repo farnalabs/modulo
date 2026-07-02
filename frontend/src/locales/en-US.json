@@ -538,7 +538,7 @@
       "toggle_failed": "Toggle failed:"
     },
     "AdminViewsView": {
-      "filterssummaryvfilters": "filtersSummary(v.filters)",
+      "filter_results": "Filter results",
       "delete_view_1": "Delete view",
       "created_at": "Created At",
       "duplicate_view_1": "Duplicate view",
@@ -681,7 +681,7 @@
       "mobileopen_close_navigation_open_navigation": "mobileOpen ? 'Close navigation' : 'Open navigation'"
     },
     "SidebarFooter": {
-      "planstoreisteam_planstoreexpiresat_expires_new_dateplanstore": "planStore.isTeam && planStore.expiresAt\n            ? 'Expires: ' +\n              new Date(planStore.expiresAt).toLocaleDateString('en-US', {\n                year: 'numeric',\n                month: 'long',\n                day: 'numeric',\n              })\n            : undefined",
+      "plan_expires_on": "Plan expires on",
       "expires": "Expires:"
     },
     "shared": {
@@ -765,8 +765,7 @@
       "delete_failed": "Delete failed:"
     },
     "NotificationBell": {
-      "notificationsunreadcount_0_unreadcount_unread": "`Notifications${unreadCount > 0 ? ` (${unreadCount} unread)` : ''}`",
-      "notificationsunreadcount_0": "Notifications${unreadCount > 0 ?"
+      "notifications": "Notifications"
     },
     "PageTabs": {
       "section_navigation": "Section navigation"
