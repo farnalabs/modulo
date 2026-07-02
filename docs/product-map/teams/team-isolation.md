@@ -20,6 +20,7 @@ code:
   - backend/src/modulo/db/migrations/versions/0025_team_visibility_rls.py
 unit-tests:
   - backend/tests/integration/test_rls_isolation.py
+  - backend/tests/integration/test_cross_tenant_isolation.py
 depends-on: [feat-teams-team-crud]
 status: partial
 ---
@@ -37,14 +38,14 @@ equivalent filtering via an ORM `do_orm_execute` listener. Team-visibility RLS
 
 - [x] Org A user sees only Org A's resources — cross-org data is invisible across pipelines, agents, schemas, and connector instances
 - [x] Org admin sees all resources within their org regardless of team membership
-- [ ] Team member sees resources with `visibility: team` owned by their team
+- [x] Team member sees resources with `visibility: team` owned by their team
 - [x] User sees resources with `visibility: org` irrespective of team membership
 - [x] `set_rls_org` applies the org context within an active transaction (used in all route handlers and MCP `_session()` context)
 - [x] `set_rls_user_context` sets `user_id` and `org_role` for team-scoped RLS evaluation (called in MCP `_session()` context at mcp_server.py:94-96 and in admin routes; not yet universal across all API route handlers)
-- [ ] Pool checkout hook resets `app.organisation_id`, `app.user_id`, `app.org_role` to the empty-string sentinel
-- [ ] ORM `do_orm_execute` listener injects `WHERE organisation_id = :oid` for non-Postgres backends
+- [x] Pool checkout hook resets `app.organisation_id`, `app.user_id`, `app.org_role` to the empty-string sentinel
+- [x] ORM `do_orm_execute` listener injects `WHERE organisation_id = :oid` for non-Postgres backends
 - [x] All 21 org-scoped tables receive `rls_org_isolation` policy on migration 0002
-- [ ] Five team-scoped tables (pipelines, stages, connector_instances, model_backends, library_primitives) receive `rls_team_isolation` policy on migration 0025
+- [x] Five team-scoped tables (pipelines, stages, connector_instances, model_backends, library_primitives) receive `rls_team_isolation` policy on migration 0025
 
 ### Edge Cases
 
@@ -74,7 +75,7 @@ equivalent filtering via an ORM `do_orm_execute` listener. Team-visibility RLS
 - [x] RLS `rls_org_isolation` policy exists on every org-scoped table (migration 0002)
 - [x] `nullif(current_setting('app.organisation_id', true), '')::uuid` converts missing/empty context to NULL — no rows visible when org context is unset
 - [x] `set_config(is_local=true)` prevents org_id leakage across transactions (proven by integration tests)
-- [ ] Pool checkout hook sets all three session vars to empty string — defense-in-depth against stale context
+- [x] Pool checkout hook sets all three session vars to empty string — defense-in-depth against stale context
 - [x] FORCE ROW LEVEL SECURITY intentionally omitted — relies on non-superuser app connection role (infrastructure responsibility)
 - [x] ORM tenant filter (`_inject_tenant_filter`) covers SELECT, UPDATE, DELETE for non-Postgres backends
 - [x] `team_memberships` table itself is org-scoped (inherits `OrgScoped`) — memberships are isolated per tenant
@@ -86,8 +87,8 @@ equivalent filtering via an ORM `do_orm_execute` listener. Team-visibility RLS
 
 - [x] Two concurrent transactions on different orgs do not interfere — `set_config` is per-backend-connection and `is_local=true` scopes to the transaction
 - [x] Advisory locks are org-scoped — different orgs can lock the same pipeline name concurrently
-- [ ] Connection pool checkout with reset hook prevents context bleed across requests sharing a connection
-- [ ] `register_rls_reset_hook` is safe to call once at engine init — uses `@event.listens_for` which supports multiple engines
+- [x] Connection pool checkout with reset hook prevents context bleed across requests sharing a connection
+- [x] `register_rls_reset_hook` is safe to call once at engine init — uses `@event.listens_for` which supports multiple engines
 
 ### Backward Compatibility
 
@@ -100,11 +101,6 @@ equivalent filtering via an ORM `do_orm_execute` listener. Team-visibility RLS
 
 ## Known Gaps
 
-- No integration test for `set_rls_user_context` function — code exists (rls.py:78-99) but untested
-- No integration test for pool checkout hook (`register_rls_reset_hook`) — code exists (rls.py:136-152) but untested
-- No integration test for ORM tenant filter (`_inject_tenant_filter` / `register_tenant_filter`) — code exists (rls.py:155-211) but untested
-- No integration test for `rls_team_isolation` policy existence on the five team-scoped tables (migration 0025)
-- No BDD scenarios cover the `rls_team_isolation` policy (team-scoped visibility) — only org-level tenant isolation is covered
 - No BDD scenario for connector_team_mismatch error path
 - No BDD scenario for privilege escalation prevention in team membership grants
 - No BDD scenario for `set_rls_user_context` error paths
