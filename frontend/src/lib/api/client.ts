@@ -66,7 +66,9 @@ function withAuth(fn: (...args: any[]) => any) {
     const resp = await fn(url, { ...options, headers })
     if (resp.response?.status === 401) {
       clearAccessToken()
-      window.location.href = '/login'
+      if (window.location.pathname !== '/login') {
+        window.location.href = '/login'
+      }
     }
     // Normalize API errors to ProblemDetail so views and ErrorAlert
     // get structured error information they can branch on.
