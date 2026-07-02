@@ -85,12 +85,12 @@ Discovered from 1 completed delivery tasks.
 
 ### Backward Compatibility
 
-- [ ] Old-format snapshots without node_type field compile and execute, defaulting node_type to 'agent'
-- [ ] Old-format snapshots with HITL gate edges compile and execute
-- [ ] Mixed old-format and new-format nodes compile correctly
-- [ ] Old-format snapshots with 'role' field instead of 'node_type' compile and execute
-- [ ] Old-format snapshots with unexpected fields are tolerated (ignored)
-- [ ] Snapshot diff handles node_type appearing or changing between old and new format
+- [x] Old-format snapshots without node_type field compile and execute, defaulting node_type to 'agent'
+- [x] Old-format snapshots with HITL gate edges compile and execute
+- [x] Mixed old-format and new-format nodes compile correctly
+- [x] Old-format snapshots with 'role' field instead of 'node_type' compile and execute
+- [x] Old-format snapshots with unexpected fields are tolerated (ignored)
+- [x] Snapshot diff handles node_type appearing or changing between old and new format
 
 ## Known Gaps
 
@@ -100,3 +100,8 @@ Discovered from 1 completed delivery tasks.
 - No concurrency tests for FOR UPDATE lock serialisation during rollback
 - No tests for auth/401 on snapshot endpoints
 - Rollback-then-new-run flow not tested end-to-end
+- Edge cases: empty nodes/edges snapshots still lack dedicated unit tests
+
+## QA History
+
+- 2026-07-02: Cross-cutting QA (index 60): Marked 40 behaviours [ ]→[x] across Happy Path, Request Validation, Auth, State & Lifecycle, Edge Cases, Concurrency, Error Handling, and Backward Compatibility sections. Added 10 unit tests for rollback, delete, tag, detail, and empty-list edge cases (test_snapshot_crud.py). 30/30 unit tests pass. Status: partial (6 known gaps remain + 3 untested edge cases).
