@@ -15,5 +15,6 @@ async def list_tiers_endpoint(
     current_user: AuthenticatedPrincipal = Depends(get_current_user),
     session: AsyncSession = Depends(get_db_session),
 ) -> dict:
-    tiers = await list_tiers(session)
+    async with session.begin():
+        tiers = await list_tiers(session)
     return {"tiers": tiers}
