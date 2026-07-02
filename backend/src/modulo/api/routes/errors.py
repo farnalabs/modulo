@@ -221,9 +221,21 @@ async def list_error_groups(
             search=search,
         )
 
+        sample_ids = [g.sample_event_id for g in groups if g.sample_event_id is not None]
+        sample_events: dict[uuid.UUID, ErrorEvent] = {}
+        if sample_ids:
+            result = await session.execute(
+                select(ErrorEvent).where(
+                    ErrorEvent.organisation_id == org_id,
+                    ErrorEvent.id.in_(sample_ids),
+                )
+            )
+            for event in result.scalars().all():
+                sample_events[event.id] = event
+
         items = []
         for g in groups:
-            sample = await _fetch_sample_event(session, org_id, g)
+            sample = sample_events.get(g.sample_event_id) if g.sample_event_id else None
             items.append(_serialize_error_group_summary(g, sample))
 
     return {"items": items, "total": total, "limit": limit, "offset": offset}
