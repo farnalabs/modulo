@@ -45,8 +45,7 @@ async def test_authenticated_endpoint_with_valid_token(tenant_client: httpx.Asyn
     resp = await tenant_client.get("/api/v1/me")
     assert resp.status_code == 200
     me = resp.json()
-    assert "email" in me
-    assert "organisation_id" in me
+    assert "user" in me, f"/api/v1/me missing 'user' key: {list(me.keys())}"
 
 
 @pytest.mark.asyncio

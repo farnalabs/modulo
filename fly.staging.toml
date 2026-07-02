@@ -15,7 +15,6 @@ primary_region = 'lhr'
 [env]
   MODULO_DB = "postgres"
   MODULO_PUBLIC_URL = "https://staging.modulo.run"
-  MODULO_DEMO_MODE = "true"
   MODULO_PLUGIN_DISCOVERY = "false"
   MODULO_MAX_LOCAL_CONCURRENCY = "4"
   REDIS_URL = ""
