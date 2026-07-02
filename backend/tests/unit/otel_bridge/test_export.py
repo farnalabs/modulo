@@ -11,7 +11,7 @@ import pytest
 from opentelemetry import trace
 from opentelemetry.sdk.trace import TracerProvider
 
-from modulo.otel_bridge.export import setup_otel
+from modulo.otel_bridge.export import setup_otel, shutdown_otel
 
 
 @pytest.fixture(autouse=True)
@@ -69,3 +69,10 @@ def test_setup_otel_handles_bad_otlp_endpoint() -> None:
         assert isinstance(provider, TracerProvider)
     finally:
         os.environ.pop("OTEL_EXPORTER_OTLP_ENDPOINT", None)
+
+
+def test_shutdown_otel_multi_call_safe() -> None:
+    """shutdown_otel() should be safe to call multiple times — second call is a no-op."""
+    setup_otel(telemetry_enabled=True)
+    shutdown_otel()  # First call — flush & shut down
+    shutdown_otel()  # Second call — should be a no-op, not raise
