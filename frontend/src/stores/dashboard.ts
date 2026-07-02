@@ -2,7 +2,7 @@ import { defineStore } from "pinia";
 import { ref, computed } from "vue";
 import { api } from "../lib/api/client";
 import { registerHandler } from "./syncRegistry";
-import { formatApiError } from "../lib/api/formatError";
+import { formatApiError, type ProblemDetail } from "../lib/api/formatError";
 import type { EventBusEvent } from "@/types/events";
 
 interface TeamMetrics {
@@ -90,7 +90,7 @@ function validateDashboardSummary(data: unknown): DashboardSummary | null {
 export const useDashboardStore = defineStore("dashboard", () => {
   const summary = ref<DashboardSummary | null>(null);
   const loading = ref(false);
-  const error = ref<string | null>(null);
+  const error = ref<string | ProblemDetail | null>(null);
   const syncingIds = ref(new Set<string>());
   const unsubHandlers: (() => void)[] = [];
 
@@ -108,7 +108,7 @@ export const useDashboardStore = defineStore("dashboard", () => {
         "/api/v1/dashboard/summary",
       );
       if (err) {
-        error.value = formatApiError(err);
+        error.value = err;
       } else {
         summary.value = validateDashboardSummary(result);
         if (!summary.value) error.value = "Received invalid dashboard data from server.";
@@ -169,7 +169,7 @@ export const useDashboardStore = defineStore("dashboard", () => {
         { params: { query: { days } } },
       );
       if (err) {
-        error.value = formatApiError(err);
+        error.value = err;
       } else if (result && typeof result === "object" && "run_counts" in result) {
         trends.value = result as TrendsResponse;
       } else {
