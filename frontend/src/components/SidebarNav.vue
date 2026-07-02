@@ -7,17 +7,18 @@
         :collapsed="isGroupCollapsed(group.id, group.defaultCollapsed)"
         @toggle="toggleGroup(group.id, group.defaultCollapsed)"
       >
-        <template v-if="group.items">
+        <template v-if="group.items && group.items.length">
           <SidebarLink
             v-for="item in group.items"
             :key="item.to"
             :to="item.to"
             :icon="item.icon"
             :label="item.label"
+            :exact="item.exact"
             @click="$emit('navigate')"
           />
         </template>
-        <template v-else-if="group.subgroups">
+        <template v-else-if="group.subgroups && group.subgroups.length">
           <template v-for="sub in group.subgroups" :key="sub.label">
             <SidebarSubgroup
               v-if="sub.label"
@@ -30,6 +31,7 @@
                 :to="item.to"
                 :icon="item.icon"
                 :label="item.label"
+                :exact="item.exact"
                 @click="$emit('navigate')"
               />
             </SidebarSubgroup>
@@ -40,6 +42,7 @@
                 :to="item.to"
                 :icon="item.icon"
                 :label="item.label"
+                :exact="item.exact"
                 @click="$emit('navigate')"
               />
             </template>
