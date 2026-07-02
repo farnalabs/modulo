@@ -329,6 +329,7 @@ class CIRunLog:
     run_id: str
     lines: list[str]
     next_cursor: str | None = None
+    truncated: bool = False
 
 
 class ConnectorBase(ABC):

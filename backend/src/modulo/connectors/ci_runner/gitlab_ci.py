@@ -131,10 +131,16 @@ class GitLabCIRunner(CIRunnerBase):
                 jobs = jobs_r.json()
 
                 all_lines: list[str] = []
+                skipped_jobs = 0
                 for job in jobs:
                     job_id = job.get("id")
                     if not job_id:
-                        logger.warning("Skipping job with missing id in pipeline %s", pipeline_id)
+                        skipped_jobs += 1
+                        logger.warning(
+                            "Skipping job with missing id in pipeline %s (%d skipped so far)",
+                            pipeline_id,
+                            skipped_jobs,
+                        )
                         continue
                     trace_r = await client.get(
                         f"/projects/{project_id}/jobs/{job_id}/trace",
@@ -146,16 +152,19 @@ class GitLabCIRunner(CIRunnerBase):
                         all_lines.extend(job_lines)
                         all_lines.append("")
                     else:
+                        skipped_jobs += 1
                         logger.warning(
-                            "Failed to fetch trace for job %s (HTTP %s) — skipping",
+                            "Failed to fetch trace for job %s (HTTP %s) — skipping (%d skipped so far)",
                             job_id,
                             trace_r.status_code,
+                            skipped_jobs,
                         )
 
                 return CIRunLog(
                     run_id=run_id,
                     lines=all_lines,
                     next_cursor=str(len(all_lines)) if cursor is not None else None,
+                    truncated=skipped_jobs > 0,
                 )
         except httpx.HTTPStatusError as exc:
             raise ValueError(f"GitLab API error ({exc.response.status_code}): {exc.response.text[:200]}") from exc
