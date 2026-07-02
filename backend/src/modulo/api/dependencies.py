@@ -130,5 +130,6 @@ async def get_plan_context(
 
     org = None
     if current_user.organisation_id is not None:
-        org = await get_organisation(session, current_user.organisation_id)
+        async with session.begin():
+            org = await get_organisation(session, current_user.organisation_id)
     return await resolve_plan_context(get_settings(), session, org=org)
