@@ -226,9 +226,15 @@ async def list_agents_endpoint(
     session: AsyncSession = Depends(get_db_session),
     principal: AuthenticatedPrincipal = Depends(get_current_user),
 ) -> AgentListResponse:
-    async with session.begin():
-        await set_rls_org(session, principal.organisation_id)
-        result = await list_agents(session, page=page, page_size=page_size)
+    try:
+        async with session.begin():
+            await set_rls_org(session, principal.organisation_id)
+            result = await list_agents(session, page=page, page_size=page_size)
+    except ProgrammingError:
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="Feature is not available. Run database migrations to enable it.",
+        ) from None
     return AgentListResponse(
         items=[AgentResponse.model_validate(a) for a in result.items],
         total=result.total,
@@ -250,28 +256,34 @@ async def create_agent_endpoint(
         evals=body.evals,
         library_id=body.library_id,
     )
-    async with session.begin():
-        await set_rls_org(session, principal.organisation_id)
-        agent = await create_agent(
-            session,
-            org_id=principal.organisation_id,
-            name=body.name,
-            account_id=principal.account_id,
-            input_schema_id=body.input_schema_id,
-            input_schema_version=body.input_schema_version,
-            output_schema_id=body.output_schema_id,
-            output_schema_version=body.output_schema_version,
-            prompt_template=body.prompt_template,
-            model_backend_id=body.model_backend_id,
-            is_executable=body.is_executable,
-            description=body.description,
-            connector_type_refs=body.connector_type_refs,
-            evals=body.evals,
-            retry_policy=body.retry_policy,
-            token_budget=body.token_budget,
-            max_input_length=body.max_input_length,
-            library_id=body.library_id,
-        )
+    try:
+        async with session.begin():
+            await set_rls_org(session, principal.organisation_id)
+            agent = await create_agent(
+                session,
+                org_id=principal.organisation_id,
+                name=body.name,
+                account_id=principal.account_id,
+                input_schema_id=body.input_schema_id,
+                input_schema_version=body.input_schema_version,
+                output_schema_id=body.output_schema_id,
+                output_schema_version=body.output_schema_version,
+                prompt_template=body.prompt_template,
+                model_backend_id=body.model_backend_id,
+                is_executable=body.is_executable,
+                description=body.description,
+                connector_type_refs=body.connector_type_refs,
+                evals=body.evals,
+                retry_policy=body.retry_policy,
+                token_budget=body.token_budget,
+                max_input_length=body.max_input_length,
+                library_id=body.library_id,
+            )
+    except ProgrammingError:
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="Feature is not available. Run database migrations to enable it.",
+        ) from None
     return AgentResponse.model_validate(agent)
 
 
@@ -281,9 +293,15 @@ async def get_agent_endpoint(
     session: AsyncSession = Depends(get_db_session),
     principal: AuthenticatedPrincipal = Depends(get_current_user),
 ) -> AgentResponse:
-    async with session.begin():
-        await set_rls_org(session, principal.organisation_id)
-        agent = await get_agent(session, agent_id)
+    try:
+        async with session.begin():
+            await set_rls_org(session, principal.organisation_id)
+            agent = await get_agent(session, agent_id)
+    except ProgrammingError:
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="Feature is not available. Run database migrations to enable it.",
+        ) from None
     if agent is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Agent not found")
     return AgentResponse.model_validate(agent)
@@ -296,9 +314,15 @@ async def update_agent_endpoint(
     session: AsyncSession = Depends(get_db_session),
     principal: AuthenticatedPrincipal = Depends(get_current_user),
 ) -> AgentResponse:
-    async with session.begin():
-        await set_rls_org(session, principal.organisation_id)
-        agent = await get_agent(session, agent_id)
+    try:
+        async with session.begin():
+            await set_rls_org(session, principal.organisation_id)
+            agent = await get_agent(session, agent_id)
+    except ProgrammingError:
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="Feature is not available. Run database migrations to enable it.",
+        ) from None
     if agent is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Agent not found")
 
@@ -315,9 +339,15 @@ async def update_agent_endpoint(
     )
 
     updates = {k: v for k, v in body.model_dump().items() if v is not None}
-    async with session.begin():
-        await set_rls_org(session, principal.organisation_id)
-        updated = await update_agent(session, agent_id, updates)
+    try:
+        async with session.begin():
+            await set_rls_org(session, principal.organisation_id)
+            updated = await update_agent(session, agent_id, updates)
+    except ProgrammingError:
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="Feature is not available. Run database migrations to enable it.",
+        ) from None
     if updated is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Agent not found")
     return AgentResponse.model_validate(updated)
@@ -650,8 +680,14 @@ async def delete_agent_endpoint(
     session: AsyncSession = Depends(get_db_session),
     principal: AuthenticatedPrincipal = Depends(get_current_user),
 ) -> None:
-    async with session.begin():
-        await set_rls_org(session, principal.organisation_id)
-        deleted = await delete_agent(session, agent_id)
+    try:
+        async with session.begin():
+            await set_rls_org(session, principal.organisation_id)
+            deleted = await delete_agent(session, agent_id)
+    except ProgrammingError:
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="Feature is not available. Run database migrations to enable it.",
+        ) from None
     if not deleted:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Agent not found")
