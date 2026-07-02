@@ -289,6 +289,7 @@ def single_run_triggered(ctx: dict[str, Any]) -> None:
 
         scalar_result = MagicMock()
         scalar_result.scalar_one.return_value = 0
+        scalar_result.scalar_one_or_none.return_value = ctx["variant_group"]
         session.execute = AsyncMock(return_value=scalar_result)
 
         mock_run = MagicMock()

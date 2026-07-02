@@ -1289,6 +1289,20 @@ def get_variant_coverage_gaps(name: str, client, request: pytest.FixtureRequest,
     _store_response(request, resp)
 
 
+@when(parsers.parse("I GET /api/v1/variant-groups/{group_id}"))
+def get_variant_group_by_id(group_id: str, client, request: pytest.FixtureRequest, patches: list[Any]) -> None:
+    _patch_set_rls(patches, "modulo.api.routes.variants.set_rls_org")
+    patcher = patch(
+        "modulo.api.routes.variants.get_variant_group",
+        new_callable=AsyncMock,
+        return_value=None,
+    )
+    patcher.start()
+    patches.append(patcher)
+    resp = client.get(f"/api/v1/variant-groups/{group_id}")
+    _store_response(request, resp)
+
+
 # ---------------------------------------------------------------------------
 #  Variant assertions
 # ---------------------------------------------------------------------------
