@@ -1,4 +1,5 @@
 import { createI18n } from 'vue-i18n'
+import enUS from '../locales/en-US.js'
 
 const DEFAULT_LOCALE = 'en-US'
 
@@ -24,7 +25,9 @@ const i18n = createI18n({
   legacy: false,
   locale: DEFAULT_LOCALE,
   fallbackLocale: DEFAULT_LOCALE,
-  messages: {},
+  messages: {
+    'en-US': enUS,
+  },
   datetimeFormats: {
     'en-US': {
       short: { year: 'numeric', month: 'short', day: 'numeric' },
@@ -43,7 +46,7 @@ const i18n = createI18n({
 
 export async function loadLocaleMessages(locale: SupportedLocale): Promise<void> {
   if (i18n.global.availableLocales.includes(locale)) return
-  const messages = await import(`../locales/${locale}.json`)
+  const messages = await import(`../locales/${locale}.js`)
   i18n.global.setLocaleMessage(locale, messages.default ?? messages)
 }
 
