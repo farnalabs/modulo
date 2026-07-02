@@ -115,13 +115,16 @@ async function loadNotifications(p?: number) {
   loading.value = true;
   error.value = null;
   try {
-    const result = await fetchNotifications({
-      page: p ?? page.value,
-      page_size: pageSize.value,
-      level: filterLevel.value || undefined,
-      scope: filterScope.value || undefined,
-      status: filterStatus.value || undefined,
-    });
+    const result = await Promise.race([
+      fetchNotifications({
+        page: p ?? page.value,
+        page_size: pageSize.value,
+        level: filterLevel.value || undefined,
+        scope: filterScope.value || undefined,
+        status: filterStatus.value || undefined,
+      }),
+      new Promise<never>((_, reject) => setTimeout(() => reject(new Error('Notifications request timed out after 30s')), 30000)),
+    ]);
     notifications.value = result.items;
     total.value = result.total;
     page.value = result.page;
