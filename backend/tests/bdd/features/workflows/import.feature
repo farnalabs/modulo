@@ -9,7 +9,6 @@ Feature: Import workflow from bundle
     And has a model backend "claude-sonnet-4"
     And has a schema "PRD Input Schema" with abstract_name "prd-input"
 
-  @awaiting-implementation
   Scenario: Import valid pipeline bundle
     When the user sends POST /api/v1/libraries/import/confirm with bundle_json
     Then the response status is 200
@@ -17,7 +16,6 @@ Feature: Import workflow from bundle
     And connector bindings are resolved to local instances
     And schema references are resolved to local schemas by abstract_name
 
-  @awaiting-implementation
   Scenario: Import rejects tampered bundle with invalid Ed25519 signature
     Given a bundle with a mismatched Ed25519 signature
     When the user sends POST /api/v1/libraries/import/confirm with bundle_json
@@ -25,7 +23,6 @@ Feature: Import workflow from bundle
     And the error message mentions the tampered bundle
     And no pipeline entity is created
 
-  @awaiting-implementation
   Scenario: Import resolves connector type conflicts with disambiguation
     Given the bundle references connector type "filesystem"
     And the organisation has 2 "filesystem" connector instances
@@ -33,7 +30,6 @@ Feature: Import workflow from bundle
     Then a connector conflict is detected
     And the available connector instances are listed for user selection
 
-  @awaiting-implementation
   Scenario: Import resolves schema version conflicts with disambiguation suffix
     Given the bundle embeds a schema with abstract_name "prd-input"
     And the local schema has a different field structure than the bundle
@@ -42,7 +38,6 @@ Feature: Import workflow from bundle
     And the imported schema is saved with a disambiguation suffix
     And the local schema is unchanged
 
-  @awaiting-implementation
   Scenario: Import handles duplicate pipeline names with suffix
     Given a pipeline named "PRD to Tickets" already exists
     When the user imports a bundle containing pipeline "PRD to Tickets"
