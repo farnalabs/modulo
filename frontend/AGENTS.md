@@ -21,3 +21,5 @@
  - Composables should wrap mutable refs in `readonly()` when exporting them, to prevent consumers from bypassing the composable's mutation API and creating inconsistent state (e.g. mutating `groupPrefs` directly without calling `save()`).
 
  - Empty `catch {}` blocks in async API calls → at minimum log the error with `console.warn(err)`. Silent catches make debugging impossible and hide network failures, 500s, and auth errors from both developers and users. For user-visible features, also show a brief inline error or toast.
+
+- `new Date(invalidStr)` never throws — it silently creates an invalid Date object. Always check `isNaN(d.getTime())` after constructing a Date from a string before calling any Date methods. A `try/catch` around Date construction will not catch invalid input.

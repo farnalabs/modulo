@@ -27,3 +27,7 @@
 - Integer fields that must be non-negative (retry counts, pages, sizes) → always add `Field(ge=0)`. Without it, negative values pass Pydantic validation and cause logic errors (e.g. `retry_count (0) >= -1` → immediate exhaustion).
 
 - PUT endpoints that accept only a subset of a JSON blob (e.g. `{nodes, edges}` from a graph editor) → merge with the existing blob, don't replace entirely. `db_obj.field | update_dict` preserves unmanaged metadata keys (viewport, zoom, comments) that would otherwise be silently deleted on every save.
+
+- Base64 padding for `urlsafe_b64decode` — always compute proper padding with `'=' * (-len(b64) % 4)`. Python < 3.13 rejects unpadded input, and assuming exactly 2 chars of padding fails when the input is already padded or has a different length.
+
+- Module-level mutable lists (e.g. `_KNOWN_FLAGS`) must not be assigned directly as default instance attributes — use `list(source)` to create an independent copy per instance. Direct assignment shares the same list object across all instances, so mutations in one instance affect all others.
