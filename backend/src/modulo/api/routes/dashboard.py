@@ -8,7 +8,7 @@ from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import Date, case, cast, func, select
-from sqlalchemy.exc import SQLAlchemyError
+from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.api.dependencies import get_db_session
@@ -58,7 +58,7 @@ async def _get_cached_dashboard(org_id: str) -> dict[str, Any] | None:
                 await redis.aclose()
     entry = _in_memory_cache.get(org_id)
     if entry is not None and (_time.monotonic() - entry[0]) < _DASHBOARD_CACHE_TTL:
-        return entry[1]
+        return json.loads(json.dumps(entry[1], default=str))
     return None
 
 
@@ -406,10 +406,15 @@ async def dashboard_summary(
 
         await _set_cached_dashboard(org_id_str, result)
         return result
-    except SQLAlchemyError:
+    except ProgrammingError:
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
+        )
+    except SQLAlchemyError:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="A database error occurred.",
         )
 
 
@@ -609,10 +614,15 @@ async def dashboard_trends(
             "correlation": correlation,
             "feedback_volume": feedback_volume,
         }
-    except SQLAlchemyError:
+    except ProgrammingError:
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
+        )
+    except SQLAlchemyError:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="A database error occurred.",
         )
 
 
@@ -651,8 +661,13 @@ async def daily_run_counts(
             daily[day][dr_row.status] = dr_row.cnt
 
         return {"daily_counts": daily, "days": days}
-    except SQLAlchemyError:
+    except ProgrammingError:
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
+        )
+    except SQLAlchemyError:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="A database error occurred.",
         )
