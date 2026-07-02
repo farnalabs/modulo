@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from collections import defaultdict
 from collections.abc import Callable
 from typing import Any
 
@@ -45,6 +46,7 @@ _ACTION_MAP: dict[str, str] = {
 }
 
 _background_tasks: set[asyncio.Task[Any]] = set()
+_version_counters: dict[str, int] = defaultdict(int)
 
 
 def _make_listener(action: str) -> Callable[[Any, Any, Any], None]:
@@ -94,13 +96,16 @@ def _make_listener(action: str) -> Callable[[Any, Any, Any], None]:
             )
             return
 
+        version = _version_counters[org_id] + 1
+        _version_counters[org_id] = version
+
         task = loop.create_task(
             get_event_bus().publish(
                 org_id=org_id,
                 resource_type=resource_type,
                 resource_id=resource_id,
                 action=action_name,
-                version=0,
+                version=version,
             ),
         )
         _background_tasks.add(task)
