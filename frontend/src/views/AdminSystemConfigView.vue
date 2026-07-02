@@ -59,7 +59,7 @@
 <script setup lang="ts">
 import { ref, onMounted } from 'vue'
 import { api } from '../lib/api/client'
-import { formatApiError } from '../lib/api/formatError'
+import { formatApiError, type ProblemDetail } from '../lib/api/formatError'
 import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
 
@@ -91,7 +91,9 @@ async function loadConfig() {
   try {
     const { data, error: err } = await api.GET('/api/v1/system-admin/config')
     if (err) {
-      error.value = `Failed to load system config: ${formatApiError(err)}`
+      error.value = err && typeof err === 'object' && 'detail' in err
+        ? `Failed to load system config: ${(err as ProblemDetail).detail}`
+        : `Failed to load system config: ${formatApiError(err)}`
     } else if (data) {
       items.value = data as unknown as ConfigEntry[]
     }

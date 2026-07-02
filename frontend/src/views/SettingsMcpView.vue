@@ -270,7 +270,7 @@
 <script setup lang="ts">
 import { ref, onMounted, onUnmounted } from 'vue'
 import { api } from '../lib/api/client'
-import { formatApiError } from '../lib/api/formatError'
+import { formatApiError, type ProblemDetail } from '../lib/api/formatError'
 import type { components } from '../lib/api/client'
 import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
@@ -365,19 +365,21 @@ async function loadAll() {
     ])
 
     if (mcpResp.error) {
-      loadError.value = `Failed to load MCP config: ${mcpResp.error}`
+      loadError.value = `Failed to load MCP config: ${formatApiError(mcpResp.error)}`
       return
     }
     const mcpData = mcpResp.data as McpConfigResponse
     mcpUrl.value = mcpData.mcp_url
 
     if (keysResp.error) {
-      loadError.value = `Failed to load API keys: ${keysResp.error}`
+      loadError.value = `Failed to load API keys: ${formatApiError(keysResp.error)}`
       return
     }
     apiKeys.value = (keysResp.data as { items: ApiKeyItem[] }).items
   } catch (e: unknown) {
-    loadError.value = `Failed to load data: ${formatApiError(e)}`
+      loadError.value = e && typeof e === 'object' && 'detail' in e
+        ? `Failed to load data: ${(e as ProblemDetail).detail}`
+        : `Failed to load data: ${formatApiError(e)}`
   } finally {
     loading.value = false
   }
@@ -400,7 +402,7 @@ async function createKey() {
       body: { name: createKeyName.value.trim(), role: createKeyRole.value },
     })
     if (err) {
-      createKeyError.value = formatApiError(err)
+      createKeyError.value = err
     } else if (data) {
       const created = data as ApiKeyCreatedResponse
       createdKeyValue.value = created.key_value
@@ -411,7 +413,7 @@ async function createKey() {
       await loadAll()
     }
   } catch (e: unknown) {
-    createKeyError.value = formatApiError(e)
+    createKeyError.value = e
   } finally {
     creatingKey.value = false
   }
@@ -433,14 +435,14 @@ async function revokeKey() {
       body: { is_active: false },
     })
     if (err) {
-      revokeKeyError.value = formatApiError(err)
+      revokeKeyError.value = err
     } else {
       revokeKeyDialogOpen.value = false
       revokeKeyTarget.value = null
       await loadAll()
     }
   } catch (e: unknown) {
-    revokeKeyError.value = formatApiError(e)
+    revokeKeyError.value = e
   } finally {
     revokingKey.value = false
   }
