@@ -189,6 +189,8 @@ class ModuloPostgresSaver(AsyncPostgresSaver):
         self._org_id = organisation_id
         self._fernet = Fernet(fernet_key.encode()) if fernet_key else None
         self._fernet_old = Fernet(fernet_key_old.encode()) if fernet_key_old else None
+        if fernet_key is None:
+            _log.warning("checkpoint.encryption_disabled", extra={"detail": "No Fernet key configured — checkpoint data stored in plaintext"})
 
     # ------------------------------------------------------------------
     # Encryption helpers
@@ -214,7 +216,8 @@ class ModuloPostgresSaver(AsyncPostgresSaver):
                     plain = self._decrypt_with_fallback(wrapper["data"].encode())
                     return _deserialize_checkpoint(plain.decode())
             except Exception:
-                _log.warning("checkpoint.decrypt_fallback", exc_info=True)
+                _log.exception("checkpoint.decrypt_failed")
+                raise
         return _deserialize_checkpoint(raw)
 
     def _encrypt_blob(self, blob: bytes) -> bytes:

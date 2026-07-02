@@ -55,7 +55,8 @@ def get_or_compile(
         if key in _CACHE:
             return _CACHE[key]
         if len(_CACHE) >= _MAX_SIZE:
-            _CACHE.popitem(last=False)
+            evicted_key = _CACHE.popitem(last=False)[0]
+            _compile_locks.pop(evicted_key, None)
         result = factory()
         _CACHE[key] = result
     return result
