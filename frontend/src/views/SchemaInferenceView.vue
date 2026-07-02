@@ -1,4 +1,9 @@
 <template>
+  <PageTabs :tabs="[
+    { label: 'Browse', to: '/schemas' },
+    { label: 'Editor', to: '/schemas/editor' },
+    { label: 'Infer', to: '/schemas/infer' },
+  ]" />
   <div class="mx-auto max-w-4xl space-y-8 p-6">
     <header>
       <h1 class="text-3xl font-bold tracking-tight">Schema Inference</h1>
@@ -169,6 +174,7 @@ import { api } from '../lib/api/client'
 import type { components } from '../lib/api/client'
 import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
+import PageTabs from "../components/PageTabs.vue"
 
 type ConnectorItem = components['schemas']['ConnectorItem']
 type SchemaInferResponse = components['schemas']['SchemaInferResponse']

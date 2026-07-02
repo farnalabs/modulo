@@ -1,4 +1,10 @@
 <template>
+  <PageTabs :tabs="[
+    { label: 'Evals', to: '/evals/editor' },
+    { label: 'Proposals', to: '/evals/proposals' },
+    { label: 'Variants', to: '/variants/compare' },
+    { label: 'AB Test', to: '/variants/ab-test' },
+  ]" />
   <div class="mx-auto max-w-6xl space-y-8 p-6">
     <LoadingSpinner v-if="loading" />
     <ErrorAlert v-else-if="error" :message="error" />
@@ -284,6 +290,7 @@ import { api } from '../lib/api/client'
 import type { components } from '../lib/api/client'
 import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
+import PageTabs from "../components/PageTabs.vue"
 
 type PipelineItem = components['schemas']['PipelineItem']
 type VariantGroup = components['schemas']['VariantGroupResponse']

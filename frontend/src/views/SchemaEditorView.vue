@@ -1,4 +1,9 @@
 <template>
+  <PageTabs :tabs="[
+    { label: 'Browse', to: '/schemas' },
+    { label: 'Editor', to: '/schemas/editor' },
+    { label: 'Infer', to: '/schemas/infer' },
+  ]" />
   <div class="flex h-[calc(100vh-3.5rem)]">
     <aside class="flex w-80 flex-col border-r bg-background">
       <div class="border-b p-4">
@@ -332,6 +337,7 @@ import { api, getAccessToken } from '../lib/api/client'
 import type { components } from '../lib/api/client'
 import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
 import FeatureGate from '../components/FeatureGate.vue'
+import PageTabs from "../components/PageTabs.vue"
 
 type SchemaItem = components['schemas']['SchemaItem']
 

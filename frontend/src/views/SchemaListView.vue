@@ -1,4 +1,9 @@
 <template>
+  <PageTabs :tabs="[
+    { label: 'Browse', to: '/schemas' },
+    { label: 'Editor', to: '/schemas/editor' },
+    { label: 'Infer', to: '/schemas/infer' },
+  ]" />
   <div class="mx-auto max-w-4xl space-y-8 p-6">
     <header>
       <h1 class="text-3xl font-bold tracking-tight">Schemas</h1>
@@ -108,6 +113,7 @@ import { formatApiError } from '../lib/api/formatError'
 import type { components } from '../lib/api/client'
 import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
+import PageTabs from "../components/PageTabs.vue"
 
 type SchemaItem = components['schemas']['SchemaItem']
 

@@ -1,4 +1,9 @@
 <template>
+  <PageTabs :tabs="[
+    { label: 'Overview', to: '/admin/costs' },
+    { label: 'Spend Limits', to: '/admin/costs/limits' },
+    { label: 'Cost Controls', to: '/admin/costs/controls' },
+  ]" />
   <div data-theme="agent" class="mx-auto max-w-6xl space-y-6 p-6">
     <header>
       <h1 class="text-3xl font-bold tracking-tight">Cost Controls</h1>
@@ -243,6 +248,7 @@ import ErrorAlert from '../components/shared/ErrorAlert.vue'
 import { Card, CardHeader, CardTitle, CardDescription, CardContent } from '../components/ui/card'
 import { Input } from '../components/ui/input'
 import { Button } from '../components/ui/button'
+import PageTabs from "../components/PageTabs.vue"
 
 const planStore = usePlanStore()
 

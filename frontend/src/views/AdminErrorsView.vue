@@ -1,4 +1,7 @@
 <template>
+  <PageTabs :tabs="[
+    { label: 'Dashboard', to: '/admin/errors' },
+  ]" />
   <div class="mx-auto max-w-6xl space-y-6 p-6">
     <header>
       <h1 class="text-3xl font-bold tracking-tight">Error Dashboard</h1>
@@ -176,6 +179,7 @@ import { useRouter } from 'vue-router'
 import { fetchErrorGroups, type ErrorGroupSummary, type FetchErrorGroupsParams } from '../lib/api/errors'
 import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
+import PageTabs from "../components/PageTabs.vue"
 
 const router = useRouter()
 
