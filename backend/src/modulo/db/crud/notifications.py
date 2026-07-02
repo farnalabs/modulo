@@ -6,14 +6,32 @@ All functions enforce org scoping via organisation_id filter.
 from __future__ import annotations
 
 import uuid
-from datetime import UTC, datetime
-from typing import Any
+from datetime import datetime
 
 from sqlalchemy import func, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased
 
 from modulo.db.models.notification import Dismissal, Notification
+
+LEVEL_RANK: dict[str, int] = {
+    "debug": 0,
+    "info": 1,
+    "warning": 2,
+    "error": 3,
+}
+
+DASHBOARD_LIMIT_MAX = 50
+NOTIFICATIONS_LIMIT_MAX = 200
+
+
+def _visible_to_user_clause(user_id: uuid.UUID):
+    return (
+        (Notification.scope == "org")
+        | (Notification.scope == "admin")
+        | ((Notification.scope == "user") & (Notification.target_user_id == user_id))
+    )
 
 
 async def create_notification(
@@ -72,9 +90,10 @@ async def get_dashboard_notifications(
     min_level: str = "warning",
     limit: int = 5,
 ) -> list[Notification]:
-    level_rank = {"debug": 0, "info": 1, "warning": 2, "error": 3}
-    min_rank = level_rank.get(min_level, 1)
-    allowed_levels = [lvl for lvl, rnk in level_rank.items() if rnk >= min_rank]
+    if limit < 1 or limit > DASHBOARD_LIMIT_MAX:
+        limit = 5
+    min_rank = LEVEL_RANK.get(min_level, 1)
+    allowed_levels = [lvl for lvl, rnk in LEVEL_RANK.items() if rnk >= min_rank]
 
     dismissal_alias = aliased(Dismissal)
     dismissed_subq = (
@@ -89,11 +108,7 @@ async def get_dashboard_notifications(
             Notification.organisation_id == org_id,
             Notification.level.in_(allowed_levels),
             Notification.id.notin_(select(dismissed_subq.c.notification_id)),
-            (
-                (Notification.scope == "org")
-                | (Notification.scope == "admin")
-                | ((Notification.scope == "user") & (Notification.target_user_id == user_id))
-            ),
+            _visible_to_user_clause(user_id),
         )
         .order_by(Notification.created_at.desc())
         .limit(limit)
@@ -116,11 +131,7 @@ async def get_notifications_for_user(
 ) -> list[Notification]:
     q = select(Notification).where(
         Notification.organisation_id == org_id,
-        (
-            (Notification.scope == "org")
-            | (Notification.scope == "admin")
-            | ((Notification.scope == "user") & (Notification.target_user_id == user_id))
-        ),
+        _visible_to_user_clause(user_id),
     )
 
     if level is not None:
@@ -175,11 +186,7 @@ async def count_notifications_for_user(
 ) -> int:
     q = select(func.count(Notification.id)).where(
         Notification.organisation_id == org_id,
-        (
-            (Notification.scope == "org")
-            | (Notification.scope == "admin")
-            | ((Notification.scope == "user") & (Notification.target_user_id == user_id))
-        ),
+        _visible_to_user_clause(user_id),
     )
 
     if level is not None:
@@ -196,9 +203,27 @@ async def count_notifications_for_user(
             .subquery()
         )
         q = q.where(Notification.id.notin_(select(dismissed_subq.c.notification_id)))
+    elif status_filter == "dismissed_self":
+        q = q.where(
+            Notification.id.in_(
+                select(Dismissal.notification_id).where(
+                    Dismissal.dismissed_by_user_id == user_id,
+                    Dismissal.dismiss_scope == "self",
+                )
+            )
+        )
+    elif status_filter == "dismissed_scope":
+        q = q.where(
+            Notification.id.in_(
+                select(Dismissal.notification_id).where(
+                    Dismissal.dismissed_by_user_id == user_id,
+                    Dismissal.dismiss_scope == "scope",
+                )
+            )
+        )
 
     result = await session.execute(q)
-    return result.scalar_one() or 0
+    return result.scalar_one()
 
 
 async def dismiss_notification(
@@ -206,10 +231,17 @@ async def dismiss_notification(
     *,
     notification_id: uuid.UUID,
     user_id: uuid.UUID,
+    org_id: uuid.UUID,
     dismiss_scope: str = "self",
     is_admin: bool = False,
 ) -> Dismissal:
-    notification = await session.get(Notification, notification_id)
+    result = await session.execute(
+        select(Notification).where(
+            Notification.organisation_id == org_id,
+            Notification.id == notification_id,
+        )
+    )
+    notification = result.scalar_one_or_none()
     if notification is None:
         raise ValueError("Notification not found")
 
@@ -234,7 +266,10 @@ async def dismiss_notification(
         dismiss_scope=dismiss_scope,
     )
     session.add(dismissal)
-    await session.flush()
+    try:
+        await session.flush()
+    except IntegrityError:
+        raise ValueError("Notification already dismissed by this user (concurrent)") from None
     return dismissal
 
 
@@ -243,11 +278,13 @@ async def review_later(
     *,
     notification_id: uuid.UUID,
     user_id: uuid.UUID,
+    org_id: uuid.UUID,
 ) -> Dismissal:
     return await dismiss_notification(
         session=session,
         notification_id=notification_id,
         user_id=user_id,
+        org_id=org_id,
         dismiss_scope="self",
         is_admin=False,
     )
@@ -260,9 +297,8 @@ async def get_unread_count(
     user_id: uuid.UUID,
     min_level: str = "warning",
 ) -> int:
-    level_rank = {"debug": 0, "info": 1, "warning": 2, "error": 3}
-    min_rank = level_rank.get(min_level, 1)
-    allowed_levels = [lvl for lvl, rnk in level_rank.items() if rnk >= min_rank]
+    min_rank = LEVEL_RANK.get(min_level, 1)
+    allowed_levels = [lvl for lvl, rnk in LEVEL_RANK.items() if rnk >= min_rank]
 
     dismissed_subq = (
         select(Dismissal.notification_id)
@@ -274,11 +310,7 @@ async def get_unread_count(
         Notification.organisation_id == org_id,
         Notification.level.in_(allowed_levels),
         Notification.id.notin_(select(dismissed_subq.c.notification_id)),
-        (
-            (Notification.scope == "org")
-            | (Notification.scope == "admin")
-            | ((Notification.scope == "user") & (Notification.target_user_id == user_id))
-        ),
+        _visible_to_user_clause(user_id),
     )
     result = await session.execute(q)
-    return result.scalar_one() or 0
+    return result.scalar_one()

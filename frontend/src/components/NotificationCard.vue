@@ -16,13 +16,13 @@
       <p class="mt-0.5 text-sm font-medium leading-snug text-foreground">{{ notification.title }}</p>
       <p v-if="showBody" class="mt-0.5 line-clamp-3 text-xs text-muted-foreground">{{ notification.body }}</p>
       <div class="mt-2 flex items-center gap-2">
-        <a
+        <router-link
           v-if="notification.action_url"
-          :href="notification.action_url"
+          :to="notification.action_url"
           class="text-xs font-medium text-primary hover:underline"
         >
           View
-        </a>
+        </router-link>
       </div>
     </div>
     <div class="notification-actions absolute right-2 top-2 hidden gap-1 group-hover:flex">
@@ -69,6 +69,7 @@ const emit = defineEmits<{
 }>();
 
 const showDismiss = ref(false);
+const dismissError = ref("");
 
 const levelClass = computed(() => {
   const map: Record<string, string> = {
@@ -100,12 +101,13 @@ const relativeTime = computed(() => {
 });
 
 async function onDismiss(scope: "self" | "scope") {
+  dismissError.value = "";
   try {
     await dismissNotification(props.notification.id, scope);
     showDismiss.value = false;
     emit("dismissed", props.notification.id);
-  } catch {
-    showDismiss.value = false;
+  } catch (e: unknown) {
+    dismissError.value = e instanceof Error ? e.message : "Failed to dismiss notification";
   }
 }
 </script>

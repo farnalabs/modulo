@@ -1,5 +1,10 @@
 import { api } from './client'
 
+function throwOnError<T>(result: { data?: T; error?: unknown }): T {
+  if (result.error) throw new Error(typeof result.error === 'string' ? result.error : JSON.stringify(result.error))
+  return result.data as T
+}
+
 export interface NotificationResponse {
   id: string
   scope: string
@@ -27,24 +32,20 @@ export interface PaginatedNotificationsResponse {
 }
 
 export async function fetchDashboardNotifications(): Promise<DashboardNotificationResponse> {
-  const { data, error } = await api.GET('/api/v1/notifications/in-app/dashboard')
-  if (error) throw new Error(typeof error === 'string' ? error : JSON.stringify(error))
-  return data as unknown as DashboardNotificationResponse
+  return throwOnError(await api.GET('/api/v1/notifications/in-app/dashboard'))
 }
 
 export async function reviewLater(notificationId: string): Promise<void> {
-  const { error } = await api.POST('/api/v1/notifications/in-app/{notification_id}/review-later', {
+  throwOnError(await api.POST('/api/v1/notifications/in-app/{notification_id}/review-later', {
     params: { path: { notification_id: notificationId } },
-  })
-  if (error) throw new Error(typeof error === 'string' ? error : JSON.stringify(error))
+  }))
 }
 
 export async function dismissNotification(notificationId: string, dismissScope: 'self' | 'scope'): Promise<void> {
-  const { error } = await api.POST('/api/v1/notifications/in-app/{notification_id}/dismiss', {
+  throwOnError(await api.POST('/api/v1/notifications/in-app/{notification_id}/dismiss', {
     params: { path: { notification_id: notificationId } },
     body: { dismiss_scope: dismissScope },
-  })
-  if (error) throw new Error(typeof error === 'string' ? error : JSON.stringify(error))
+  }))
 }
 
 export async function fetchNotifications(params: {
@@ -55,23 +56,17 @@ export async function fetchNotifications(params: {
   category?: string
   status?: string
 } = {}): Promise<PaginatedNotificationsResponse> {
-  const { data, error } = await api.GET('/api/v1/notifications/in-app', {
-    params: { query: params as any },
-  })
-  if (error) throw new Error(typeof error === 'string' ? error : JSON.stringify(error))
-  return data as unknown as PaginatedNotificationsResponse
+  return throwOnError(await api.GET('/api/v1/notifications/in-app', {
+    params: { query: params },
+  }))
 }
 
 export async function fetchNotificationDetail(id: string): Promise<NotificationResponse> {
-  const { data, error } = await api.GET('/api/v1/notifications/in-app/{notification_id}', {
+  return throwOnError(await api.GET('/api/v1/notifications/in-app/{notification_id}', {
     params: { path: { notification_id: id } },
-  })
-  if (error) throw new Error(typeof error === 'string' ? error : JSON.stringify(error))
-  return data as unknown as NotificationResponse
+  }))
 }
 
 export async function fetchUnreadCount(): Promise<number> {
-  const { data, error } = await api.GET('/api/v1/notifications/in-app/unread-count')
-  if (error) throw new Error(typeof error === 'string' ? error : JSON.stringify(error))
-  return (data as { count: number }).count
+  return (throwOnError(await api.GET('/api/v1/notifications/in-app/unread-count')) as { count: number }).count
 }
