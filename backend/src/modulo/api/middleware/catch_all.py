@@ -7,7 +7,7 @@ from fastapi.responses import JSONResponse
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.responses import Response
 
-from modulo.api.models.error import ErrorDetail, ErrorResponse
+from modulo.api.models.problem import ProblemDetail, ProblemType
 from modulo.core.logging_config import correlation_id_var
 from modulo.version import get_version
 
@@ -77,24 +77,20 @@ async def _ingest_unhandled_error(request: Request) -> None:
 def _make_500_response(request_id: str | None) -> JSONResponse:
     """Build a 500 response, defensively handling serialisation failures."""
     try:
-        body = ErrorResponse(
-            error=ErrorDetail(
-                code="INTERNAL_ERROR",
-                message="An unexpected error occurred",
-                detail=None,
-                request_id=request_id,
-            )
-        )
-        content = body.model_dump(mode="json")
-        return JSONResponse(
-            status_code=500,
-            content=content,
-            headers={"X-Request-ID": request_id or ""},
-        )
+        return ProblemDetail.from_type(
+            problem_type=ProblemType.INTERNAL_ERROR,
+            detail="An unexpected error occurred",
+            request_id=request_id,
+        ).to_response()
     except Exception:
         logger.exception("middleware.error_response_failed")
         return JSONResponse(
             status_code=500,
-            content={"error": {"code": "INTERNAL_ERROR", "message": "An unexpected error occurred"}},
+            content={
+                "type": "urn:problem:modulo:internal_error",
+                "title": "Internal Error",
+                "detail": "An unexpected error occurred",
+                "status": 500,
+            },
             headers={"X-Request-ID": request_id or ""},
         )
