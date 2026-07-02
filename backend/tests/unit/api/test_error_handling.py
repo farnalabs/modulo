@@ -1,4 +1,4 @@
-"""Unit tests for standardised error handling — ErrorResponse model, exception handlers, request_id middleware."""
+"""Unit tests for standardised error handling — ProblemDetail model, exception handlers, request_id middleware."""
 
 import uuid
 from collections.abc import AsyncGenerator, Generator
@@ -18,7 +18,7 @@ from modulo.api.exception_handlers import (
 )
 from modulo.api.middleware.catch_all import CatchAllMiddleware
 from modulo.api.middleware.request_id import RequestIdMiddleware
-from modulo.api.models.error import ErrorDetail, ErrorResponse
+from modulo.api.models.problem import ProblemDetail, ProblemType
 from modulo.auth.dependencies import get_current_user
 from modulo.auth.jwt import AuthenticatedPrincipal
 from modulo.settings import Settings, get_settings
@@ -120,39 +120,53 @@ def client() -> Generator[TestClient, None, None]:
     app.dependency_overrides.clear()
 
 
-class TestErrorModel:
-    def test_error_detail_creation(self) -> None:
-        detail = ErrorDetail(code="NOT_FOUND", message="Resource not found")
-        assert detail.code == "NOT_FOUND"
-        assert detail.message == "Resource not found"
-        assert detail.detail is None
-        assert detail.request_id is None
+class TestProblemModel:
+    def test_problem_detail_creation(self) -> None:
+        problem = ProblemDetail.from_type(ProblemType.NOT_FOUND, detail="Resource not found")
+        assert problem.type == "urn:problem:modulo:not_found"
+        assert problem.title == "Not Found"
+        assert problem.status == 404
+        assert problem.detail == "Resource not found"
+        assert problem.instance is None
+        assert problem.request_id is None
 
-    def test_error_detail_with_optional_fields(self) -> None:
+    def test_problem_detail_with_optional_fields(self) -> None:
         rid = str(uuid.uuid4())
-        detail = ErrorDetail(
-            code="VALIDATION_ERROR",
-            message="Request validation failed",
+        problem = ProblemDetail.from_type(
+            ProblemType.VALIDATION_ERROR,
             detail="name: field required",
+            instance="/test/validation",
             request_id=rid,
         )
-        assert detail.detail == "name: field required"
-        assert detail.request_id == rid
+        assert problem.detail == "name: field required"
+        assert problem.instance == "/test/validation"
+        assert problem.request_id == rid
 
-    def test_error_response_serialization(self) -> None:
-        body = ErrorResponse(
-            error=ErrorDetail(
-                code="NOT_FOUND",
-                message="Resource not found",
-                detail="Pipeline with id 123 not found",
-                request_id="req-abc",
-            )
+    def test_problem_detail_serialization(self) -> None:
+        problem = ProblemDetail.from_type(
+            ProblemType.NOT_FOUND,
+            detail="Pipeline with id 123 not found",
+            request_id="req-abc",
         )
-        dumped = body.model_dump(mode="json")
-        assert dumped["error"]["code"] == "NOT_FOUND"
-        assert dumped["error"]["message"] == "Resource not found"
-        assert dumped["error"]["detail"] == "Pipeline with id 123 not found"
-        assert dumped["error"]["request_id"] == "req-abc"
+        dumped = problem.model_dump(mode="json", exclude_none=True)
+        assert dumped["type"] == "urn:problem:modulo:not_found"
+        assert dumped["title"] == "Not Found"
+        assert dumped["status"] == 404
+        assert dumped["detail"] == "Pipeline with id 123 not found"
+        assert dumped["request_id"] == "req-abc"
+
+    def test_problem_detail_to_response(self) -> None:
+        problem = ProblemDetail.from_type(
+            ProblemType.NOT_FOUND,
+            detail="Not found",
+            request_id="req-123",
+        )
+        resp = problem.to_response()
+        assert resp.status_code == 404
+        body = resp.body
+        import json
+        data = json.loads(body)
+        assert data["type"] == "urn:problem:modulo:not_found"
 
 
 class TestExceptionHandlers:
@@ -161,59 +175,60 @@ class TestExceptionHandlers:
         assert resp.status_code == 200
         assert resp.json() == {"status": "ok"}
 
-    def test_404_returns_standard_error(self, client: TestClient) -> None:
+    def test_404_returns_problem_detail(self, client: TestClient) -> None:
         resp = client.get("/test/not-found")
         assert resp.status_code == 404
         body = resp.json()
-        assert "error" in body
-        assert body["error"]["code"] == "NOT_FOUND"
-        assert body["error"]["message"] == "Resource not found"
+        assert body["type"] == "urn:problem:modulo:not_found"
+        assert body["title"] == "Not Found"
+        assert body["status"] == 404
+        assert body["detail"] == "Resource not found"
 
-    def test_401_returns_standard_error(self, client: TestClient) -> None:
+    def test_401_returns_problem_detail(self, client: TestClient) -> None:
         resp = client.get("/test/unauthorized")
         assert resp.status_code == 401
         body = resp.json()
-        assert body["error"]["code"] == "UNAUTHORIZED"
+        assert body["type"] == "urn:problem:modulo:unauthorized"
 
-    def test_403_returns_standard_error(self, client: TestClient) -> None:
+    def test_403_returns_problem_detail(self, client: TestClient) -> None:
         resp = client.get("/test/forbidden")
         assert resp.status_code == 403
         body = resp.json()
-        assert body["error"]["code"] == "FORBIDDEN"
+        assert body["type"] == "urn:problem:modulo:forbidden"
 
-    def test_409_returns_standard_error(self, client: TestClient) -> None:
+    def test_409_returns_problem_detail(self, client: TestClient) -> None:
         resp = client.get("/test/conflict")
         assert resp.status_code == 409
         body = resp.json()
-        assert body["error"]["code"] == "CONFLICT"
+        assert body["type"] == "urn:problem:modulo:conflict"
 
-    def test_429_returns_standard_error(self, client: TestClient) -> None:
+    def test_429_returns_problem_detail(self, client: TestClient) -> None:
         resp = client.get("/test/rate-limited")
         assert resp.status_code == 429
         body = resp.json()
-        assert body["error"]["code"] == "RATE_LIMITED"
+        assert body["type"] == "urn:problem:modulo:rate_limited"
 
-    def test_400_returns_standard_error(self, client: TestClient) -> None:
+    def test_400_returns_problem_detail(self, client: TestClient) -> None:
         resp = client.get("/test/bad-request")
         assert resp.status_code == 400
         body = resp.json()
-        assert body["error"]["code"] == "BAD_REQUEST"
+        assert body["type"] == "urn:problem:modulo:bad_request"
 
     def test_unhandled_exception_returns_500(self, client: TestClient) -> None:
         resp = client.get("/test/internal-error")
         assert resp.status_code == 500
         body = resp.json()
-        assert "error" in body
-        assert body["error"]["code"] == "INTERNAL_ERROR"
-        assert body["error"]["message"] == "An unexpected error occurred"
+        assert body["type"] == "urn:problem:modulo:internal_error"
+        assert body["title"] == "Internal Error"
+        assert body["detail"] == "An unexpected error occurred"
 
     def test_validation_error(self, client: TestClient) -> None:
         resp = client.post("/test/validation", json={"name": ""})
         assert resp.status_code == 422
         body = resp.json()
-        assert body["error"]["code"] == "VALIDATION_ERROR"
-        assert body["error"]["message"] == "Request validation failed"
-        assert body["error"]["detail"] is not None
+        assert body["type"] == "urn:problem:modulo:validation_error"
+        assert body["title"] == "Validation Error"
+        assert body["detail"] is not None
 
     def test_request_id_header_present(self, client: TestClient) -> None:
         resp = client.get("/test/ok")
@@ -228,7 +243,7 @@ class TestExceptionHandlers:
         rid = resp.headers["X-Request-ID"]
         uuid.UUID(rid)
         body = resp.json()
-        assert body["error"]["request_id"] == rid
+        assert body["request_id"] == rid
 
 
 class TestRequestIdMiddleware:
