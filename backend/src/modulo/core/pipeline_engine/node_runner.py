@@ -164,6 +164,7 @@ def make_hitl_gate_fn(
     human_only: bool = hitl_gate_config.get("human_only", False)
     condition_expr: str | None = hitl_gate_config.get("condition")
     eval_condition_raw: dict[str, Any] | None = hitl_gate_config.get("eval_condition")
+    required_team_id: str | None = hitl_gate_config.get("required_team_id")
 
     async def _hitl_gate(state: dict[str, Any]) -> dict[str, Any]:
         # --- Resume check — always first so condition/evals aren't re-evaluated. ---
@@ -321,6 +322,7 @@ def make_hitl_gate_fn(
                 "autonomy_level": autonomy.value,
                 "human_only": human_only_effective,
                 "overdue_threshold_minutes": hitl_gate_config.get("overdue_threshold_minutes"),
+                "required_team_id": required_team_id,
             }
         )
 
