@@ -65,86 +65,84 @@
         <h2 class="mb-3 text-lg font-semibold">{{ $t('views.AdminRemyView.access_list') }}</h2>
         <p class="mb-4 text-sm text-muted-foreground">{{ $t('views.AdminRemyView.control_who_can_use_remy_within_the_organisation') }}</p>
 
-          <div class="space-y-4">
-            <div>
-              <Tooltip :delay-duration="300">
-                <TooltipTrigger as-child>
-                  <label class="mb-1 block text-sm font-medium cursor-help">{{ $t('views.AdminRemyView.user_ids') }}</label>
-                </TooltipTrigger>
-                <TooltipContent side="right" class="max-w-xs">
-                  <p>{{ $t('views.AdminRemyView.commaseparated_or_lineseparated_uuids_of_users_who_should_ha') }}</p>
-                </TooltipContent>
-              </Tooltip>
-            <textarea
+        <div class="space-y-6">
+          <!-- Users -->
+          <div>
+            <label class="mb-2 block text-sm font-medium">{{ $t('views.AdminRemyView.users') }}</label>
+            <AccessEntitySelector
               v-model="accessList.userIds"
-              rows="3"
-              class="w-full rounded-lg border border-input bg-background px-3 py-2 font-mono text-sm"
-              :placeholder="$t('views.AdminRemyView.one_per_line_or_commaseparated_uuids')"
-              data-testid="remy-access-users"
+              :entities="users"
+              label-field="display_name"
+              description-field="email"
+              :placeholder="$t('views.AdminRemyView.search_users_placeholder')"
+              :no-results-text="$t('views.AdminRemyView.no_users_found')"
+              :empty-text="$t('views.AdminRemyView.no_users_selected')"
+              test-id="remy-access-users"
             />
           </div>
-            <div>
-              <Tooltip :delay-duration="300">
-                <TooltipTrigger as-child>
-                  <label class="mb-1 block text-sm font-medium cursor-help">{{ $t('views.AdminRemyView.team_ids') }}</label>
-                </TooltipTrigger>
-                <TooltipContent side="right" class="max-w-xs">
-                  <p>{{ $t('views.AdminRemyView.commaseparated_or_lineseparated_team_uuids_members_of_these_') }}</p>
-                </TooltipContent>
-              </Tooltip>
-            <textarea
+
+          <!-- Teams -->
+          <div>
+            <label class="mb-2 block text-sm font-medium">{{ $t('views.AdminRemyView.teams') }}</label>
+            <AccessEntitySelector
               v-model="accessList.teamIds"
-              rows="3"
-              class="w-full rounded-lg border border-input bg-background px-3 py-2 font-mono text-sm"
-              :placeholder="$t('views.AdminRemyView.one_per_line_or_commaseparated_uuids')"
-              data-testid="remy-access-teams"
+              :entities="teams"
+              label-field="name"
+              description-field="member_count_label"
+              :placeholder="$t('views.AdminRemyView.search_teams_placeholder')"
+              :no-results-text="$t('views.AdminRemyView.no_teams_found')"
+              :empty-text="$t('views.AdminRemyView.no_teams_selected')"
+              test-id="remy-access-teams"
             />
           </div>
-            <div>
-              <Tooltip :delay-duration="300">
-                <TooltipTrigger as-child>
-                  <label class="mb-1 block text-sm font-medium cursor-help">{{ $t('views.AdminRemyView.org_roles') }}</label>
-                </TooltipTrigger>
-                <TooltipContent side="right" class="max-w-xs">
-                  <p>{{ $t('views.AdminRemyView.users_with_the_selected_organisation_roles_will_have_access_') }}</p>
-                </TooltipContent>
-              </Tooltip>
-              <div class="flex flex-wrap gap-4">
-                <Tooltip v-for="role in orgRoles" :key="role" :delay-duration="300">
-                  <TooltipTrigger as-child>
-                    <label class="flex items-center gap-2 text-sm cursor-pointer">
-                      <input
-                        type="checkbox"
-                        :value="role"
-                        :checked="accessList.selectedRoles.includes(role)"
-                        class="rounded border-input"
-                        @change="toggleRole(role)"
-                      />
-                      {{ role }}
-                    </label>
-                  </TooltipTrigger>
-                  <TooltipContent side="top" class="max-w-xs">
-                    <p>{{ role === 'admin' ? 'Full access to all settings and Remy configuration.' : role === 'operator' ? 'Can create and manage pipelines, use Remy.' : role === 'runner' ? 'Can execute pipeline runs, use Remy.' : 'Read-only access — can view but not edit, use Remy.' }}</p>
-                  </TooltipContent>
-                </Tooltip>
-            </div>
-          </div>
-            <div v-if="accessError" class="text-sm text-destructive">{{ accessError }}</div>
+
+          <!-- Org roles -->
+          <div>
             <Tooltip :delay-duration="300">
               <TooltipTrigger as-child>
-                <button
-                  :disabled="accessSaving"
-                  class="rounded-lg bg-primary px-4 py-2 text-sm font-semibold text-primary-foreground hover:brightness-110 disabled:opacity-50 transition-all"
-                  data-testid="remy-access-save"
-                  @click="saveAccessList"
-                >
-                  {{ accessSaving ? 'Saving...' : 'Save Access List' }}
-                </button>
+                <label class="mb-1 block text-sm font-medium cursor-help">{{ $t('views.AdminRemyView.org_roles') }}</label>
               </TooltipTrigger>
-              <TooltipContent side="top">
-                <p>{{ $t('views.AdminRemyView.save_current_access_list_configuration') }}</p>
+              <TooltipContent side="right" class="max-w-xs">
+                <p>{{ $t('views.AdminRemyView.users_with_the_selected_organisation_roles_will_have_access_') }}</p>
               </TooltipContent>
             </Tooltip>
+            <div class="flex flex-wrap gap-4">
+              <Tooltip v-for="role in orgRoles" :key="role" :delay-duration="300">
+                <TooltipTrigger as-child>
+                  <label class="flex items-center gap-2 text-sm cursor-pointer">
+                    <input
+                      type="checkbox"
+                      :value="role"
+                      :checked="accessList.selectedRoles.includes(role)"
+                      class="rounded border-input"
+                      @change="toggleRole(role)"
+                    />
+                    {{ role }}
+                  </label>
+                </TooltipTrigger>
+                <TooltipContent side="top" class="max-w-xs">
+                  <p>{{ role === 'admin' ? 'Full access to all settings and Remy configuration.' : role === 'operator' ? 'Can create and manage pipelines, use Remy.' : role === 'runner' ? 'Can execute pipeline runs, use Remy.' : 'Read-only access — can view but not edit, use Remy.' }}</p>
+                </TooltipContent>
+              </Tooltip>
+            </div>
+          </div>
+
+          <div v-if="accessError" class="text-sm text-destructive">{{ accessError }}</div>
+          <Tooltip :delay-duration="300">
+            <TooltipTrigger as-child>
+              <button
+                :disabled="accessSaving"
+                class="rounded-lg bg-primary px-4 py-2 text-sm font-semibold text-primary-foreground hover:brightness-110 disabled:opacity-50 transition-all"
+                data-testid="remy-access-save"
+                @click="saveAccessList"
+              >
+                {{ accessSaving ? 'Saving...' : 'Save Access List' }}
+              </button>
+            </TooltipTrigger>
+            <TooltipContent side="top">
+              <p>{{ $t('views.AdminRemyView.save_current_access_list_configuration') }}</p>
+            </TooltipContent>
+          </Tooltip>
         </div>
       </div>
 
@@ -161,11 +159,7 @@
               class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm"
               data-testid="remy-model-provider"
             >
-              <option value="anthropic">Anthropic</option>
-              <option value="openai">OpenAI</option>
-              <option value="gemini">{{ $t('views.AdminRemyView.google_gemini') }}</option>
-              <option value="deepseek">DeepSeek</option>
-              <option value="groq">Groq</option>
+              <option v-for="p in REMY_PROVIDERS" :key="p.id" :value="p.id">{{ p.label }}</option>
             </select>
           </div>
           <div>
@@ -339,14 +333,16 @@
                 class="hover:bg-muted/30 transition-colors"
               >
                 <td class="px-4 py-3 font-medium">{{ skill.name }}</td>
-                <Tooltip :delay-duration="300">
-                  <TooltipTrigger as-child>
-                    <td class="px-4 py-3 text-muted-foreground max-w-xs truncate">{{ skill.description || '—' }}</td>
-                  </TooltipTrigger>
-                  <TooltipContent side="top" class="max-w-xs">
-                    <p>{{ skill.description || '—' }}</p>
-                  </TooltipContent>
-                </Tooltip>
+                <td class="px-4 py-3 text-muted-foreground max-w-xs truncate">
+                  <Tooltip :delay-duration="300">
+                    <TooltipTrigger as-child>
+                      <span>{{ skill.description || '—' }}</span>
+                    </TooltipTrigger>
+                    <TooltipContent side="top" class="max-w-xs">
+                      <p>{{ skill.description || '—' }}</p>
+                    </TooltipContent>
+                  </Tooltip>
+                </td>
                 <td class="px-4 py-3">
                   <div class="flex flex-wrap gap-1">
                     <span
@@ -421,6 +417,7 @@ import { api } from '../lib/api/client'
 import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
 import RemySkillDialog from '../components/remy/RemySkillDialog.vue'
+import AccessEntitySelector from '../components/remy/AccessEntitySelector.vue'
 import {
   TooltipProvider,
   Tooltip,
@@ -443,13 +440,7 @@ const REMY_PROVIDERS: { id: string; label: string }[] = [
   { id: 'groq', label: 'Groq' },
 ]
 
-const PROVIDER_TOOLTIPS: Record<string, string> = {
-  anthropic: 'Configure an Anthropic API key to enable Claude models (claude-sonnet, claude-haiku).',
-  openai: 'Configure an OpenAI API key to enable GPT models (GPT-4o, GPT-4o-mini).',
-  gemini: 'Configure a Google AI API key to enable Gemini models (Gemini 2.5 Pro, Gemini 2.0 Flash).',
-  deepseek: 'Configure a DeepSeek API key to enable DeepSeek models (DeepSeek V3, DeepSeek R1).',
-  groq: 'Configure a Groq API key to enable fast inference on open-weight models.',
-}
+
 
 const loading = ref(true)
 const loadError = ref<string | null>(null)
@@ -461,37 +452,36 @@ const orgRoles = ['admin', 'operator', 'runner', 'viewer']
 
 // Access list
 const accessList = reactive({
-  userIds: '',
-  teamIds: '',
-  selectedRoles: [] as string[],
+  userIds: [] as string[],
+  teamIds: [] as string[],
+  selectedRoles: ['admin'] as string[],
 })
+
+const users = ref<Array<{ id: string; display_name: string; email: string }>>([])
+const teams = ref<Array<{ id: string; name: string; member_count?: number; member_count_label?: string }>>([])
 const accessSaving = ref(false)
 const accessError = ref<string | null>(null)
 
+function toggleInArray(arr: string[], item: string) {
+  const idx = arr.indexOf(item)
+  if (idx >= 0) { arr.splice(idx, 1) } else { arr.push(item) }
+}
+
 function toggleRole(role: string) {
-  const idx = accessList.selectedRoles.indexOf(role)
-  if (idx >= 0) {
-    accessList.selectedRoles.splice(idx, 1)
-  } else {
-    accessList.selectedRoles.push(role)
-  }
+  toggleInArray(accessList.selectedRoles, role)
 }
 
 async function saveAccessList() {
   accessSaving.value = true
   accessError.value = null
   try {
-    const userIds = accessList.userIds.split(/[\n,]+/).map(s => s.trim()).filter(Boolean)
-    const teamIds = accessList.teamIds.split(/[\n,]+/).map(s => s.trim()).filter(Boolean)
     const { error: err } = await (api as any).PUT('/api/v1/admin/remy/config', {
       body: {
-        access_list: { user_ids: userIds, team_ids: teamIds, org_roles: accessList.selectedRoles },
+        access_list: { user_ids: accessList.userIds, team_ids: accessList.teamIds, org_roles: accessList.selectedRoles },
       },
     })
     if (err) {
       accessError.value = `Failed to save access list: ${err}`
-    } else {
-      accessError.value = null
     }
   } catch (e: unknown) {
     accessError.value = `Failed to save access list: ${e instanceof Error ? e.message : String(e)}`
@@ -501,7 +491,7 @@ async function saveAccessList() {
 }
 
 // Model config
-const allProviders = ['anthropic', 'openai', 'gemini', 'deepseek', 'groq']
+const allProviders = REMY_PROVIDERS.map(p => p.id)
 
 const modelConfig = reactive({
   defaultProvider: 'anthropic',
@@ -514,12 +504,7 @@ const modelSaving = ref(false)
 const modelError = ref<string | null>(null)
 
 function toggleAllowedProvider(provider: string) {
-  const idx = modelConfig.allowedProviders.indexOf(provider)
-  if (idx >= 0) {
-    modelConfig.allowedProviders.splice(idx, 1)
-  } else {
-    modelConfig.allowedProviders.push(provider)
-  }
+  toggleInArray(modelConfig.allowedProviders, provider)
 }
 
 async function saveModelConfig() {
@@ -538,8 +523,6 @@ async function saveModelConfig() {
     })
     if (err) {
       modelError.value = `Failed to save model config: ${err}`
-    } else {
-      modelError.value = null
     }
   } catch (e: unknown) {
     modelError.value = `Failed to save model config: ${e instanceof Error ? e.message : String(e)}`
@@ -562,8 +545,6 @@ async function saveSystemPrompt() {
     })
     if (err) {
       promptError.value = `Failed to save system prompt: ${err}`
-    } else {
-      promptError.value = null
     }
   } catch (e: unknown) {
     promptError.value = `Failed to save system prompt: ${e instanceof Error ? e.message : String(e)}`
@@ -586,13 +567,49 @@ async function saveGuidance() {
     })
     if (err) {
       guidanceError.value = `Failed to save guidance: ${err}`
-    } else {
-      guidanceError.value = null
     }
   } catch (e: unknown) {
     guidanceError.value = `Failed to save guidance: ${e instanceof Error ? e.message : String(e)}`
   } finally {
     guidanceSaving.value = false
+  }
+}
+
+async function loadUsers() {
+  try {
+    const { data, error: err } = await (api as any).GET('/api/v1/admin/users', {
+      params: { query: { page_size: 1000 } },
+    })
+    if (err) {
+      console.warn('Failed to load users:', err)
+    } else if (data) {
+      users.value = (data as { items: Array<{ id: string; display_name: string; email: string }> }).items || []
+      users.value.sort((a, b) => a.display_name.localeCompare(b.display_name))
+    }
+  } catch (e: unknown) {
+    const msg = e instanceof Error ? e.message : String(e)
+    console.warn('Failed to load users:', msg)
+  }
+}
+
+async function loadTeams() {
+  try {
+    const { data, error: err } = await (api as any).GET('/api/v1/admin/teams', {
+      params: { query: { page_size: 1000 } },
+    })
+    if (err) {
+      console.warn('Failed to load teams:', err)
+    } else if (data) {
+      const items = (data as { items: Array<{ id: string; name: string; member_count: number }> }).items || []
+      teams.value = items.map(t => ({
+        ...t,
+        member_count_label: `${t.member_count ?? 0} member${(t.member_count ?? 0) !== 1 ? 's' : ''}`,
+      }))
+      teams.value.sort((a, b) => a.name.localeCompare(b.name))
+    }
+  } catch (e: unknown) {
+    const msg = e instanceof Error ? e.message : String(e)
+    console.warn('Failed to load teams:', msg)
   }
 }
 
@@ -626,12 +643,13 @@ async function loadSkills() {
   try {
     const { data, error: err } = await (api as any).GET('/api/v1/admin/remy/skills')
     if (err) {
-      loadError.value = `Failed to load skills: ${err}`
+      skillError.value = `Failed to load skills: ${err}`
     } else if (data) {
-      skills.value = (data as { items: SkillItem[] }).items || (data as SkillItem[])
+      const items = (data as { items?: SkillItem[] }).items
+      skills.value = Array.isArray(items) ? items : []
     }
   } catch (e: unknown) {
-    loadError.value = `Failed to load skills: ${e instanceof Error ? e.message : String(e)}`
+    skillError.value = `Failed to load skills: ${e instanceof Error ? e.message : String(e)}`
   }
 }
 
@@ -650,21 +668,21 @@ async function loadConfig() {
         additional_guidance?: string
       }
       const acl = cfg.access_list || {}
-      accessList.userIds = (acl.user_ids || []).join('\n')
-      accessList.teamIds = (acl.team_ids || []).join('\n')
+      accessList.userIds = acl.user_ids || []
+      accessList.teamIds = acl.team_ids || []
       accessList.selectedRoles = acl.org_roles || []
       modelConfig.defaultProvider = cfg.default_provider || 'anthropic'
       modelConfig.defaultModel = cfg.default_model || ''
-      modelConfig.contextWindow = cfg.default_context_window || 200000
+      modelConfig.contextWindow = cfg.default_context_window ?? 200000
       modelConfig.allowedProviders = cfg.allowed_providers || ['anthropic']
       modelConfig.allowedModels = (cfg.allowed_models || []).join(', ')
       systemPrompt.value = cfg.system_prompt || ''
       guidance.value = cfg.additional_guidance || ''
     }
-    } catch (e: unknown) {
-      const msg = e instanceof Error ? e.message : String(e)
-      console.warn('Failed to load Remy config:', msg)
-    }
+  } catch (e: unknown) {
+    const msg = e instanceof Error ? e.message : String(e)
+    loadError.value = `Failed to load Remy config: ${msg}`
+  }
 }
 
 async function loadProviders() {
@@ -697,6 +715,8 @@ async function loadAll() {
   try {
     await Promise.all([
       loadConfig(),
+      loadUsers(),
+      loadTeams(),
       loadSkills(),
       loadProviders(),
     ])
