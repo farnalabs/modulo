@@ -1,5 +1,6 @@
 """Unit tests for /api/v1/schemas endpoints."""
 
+import json
 import uuid
 from collections.abc import AsyncGenerator, Generator
 from datetime import UTC, datetime
@@ -37,7 +38,8 @@ def _make_schema() -> MagicMock:
     s.name = "Test Schema"
     s.description = None
     s.abstract_name = None
-    s.created_by = uuid.uuid4()
+    s.account_id = uuid.uuid4()
+    s.created_by = s.account_id
     s.created_at = _NOW
     s.updated_at = _NOW
     return s
@@ -52,7 +54,8 @@ def _make_schema_version(schema_id: uuid.UUID) -> MagicMock:
     sv.version_number = 1
     sv.definition_json = {"type": "object"}
     sv.published = False
-    sv.created_by = uuid.uuid4()
+    sv.account_id = uuid.uuid4()
+    sv.created_by = sv.account_id
     sv.created_at = _NOW
     sv.updated_at = _NOW
     return sv
@@ -401,3 +404,109 @@ def test_migration_plan_no_changes(client: TestClient) -> None:
     assert body["field_additions"] == {}
     assert body["field_removals"] == []
     assert body["renames"] == {}
+
+
+# ---------------------------------------------------------------------------
+# Schema deprecate
+# ---------------------------------------------------------------------------
+
+
+def test_deprecate_schema_returns_200(client: TestClient) -> None:
+    schema = _make_schema()
+    schema.deprecated = True
+    schema.deprecated_at = _NOW
+    with (
+        patch("modulo.api.routes.schemas.deprecate_schema", return_value=schema),
+        patch("modulo.api.routes.schemas.set_rls_org"),
+    ):
+        resp = client.patch(f"/api/v1/schemas/{_SCHEMA_ID}/deprecate")
+    assert resp.status_code == 200
+    assert resp.json()["deprecated"] is True
+
+
+def test_deprecate_schema_not_found_returns_404(client: TestClient) -> None:
+    with (
+        patch("modulo.api.routes.schemas.deprecate_schema", return_value=None),
+        patch("modulo.api.routes.schemas.set_rls_org"),
+    ):
+        resp = client.patch(f"/api/v1/schemas/{uuid.uuid4()}/deprecate")
+    assert resp.status_code == 404
+
+
+# ---------------------------------------------------------------------------
+# Schema validate
+# ---------------------------------------------------------------------------
+
+
+def test_validate_schema_valid_returns_valid_true(client: TestClient) -> None:
+    resp = client.post(
+        "/api/v1/schemas/validate",
+        json={"definition": {"type": "object", "properties": {"name": {"type": "string"}}}},
+    )
+    assert resp.status_code == 200
+    assert resp.json()["valid"] is True
+    assert resp.json()["errors"] == []
+
+
+def test_validate_schema_invalid_returns_valid_false(client: TestClient) -> None:
+    resp = client.post(
+        "/api/v1/schemas/validate",
+        json={"definition": {"type": 123}},
+    )
+    assert resp.status_code == 200
+    assert resp.json()["valid"] is False
+    assert len(resp.json()["errors"]) > 0
+
+
+# ---------------------------------------------------------------------------
+# Schema import
+# ---------------------------------------------------------------------------
+
+
+def test_import_schema_returns_200(client: TestClient) -> None:
+    resp = client.post(
+        "/api/v1/schemas/import",
+        json={
+            "content": json.dumps(
+                {
+                    "type": "object",
+                    "title": "TestSchema",
+                    "description": "A test schema",
+                    "properties": {
+                        "name": {"type": "string", "description": "The name"},
+                        "age": {"type": "integer", "description": "The age"},
+                    },
+                    "required": ["name"],
+                }
+            )
+        },
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["name"] == "TestSchema"
+    assert body["description"] == "A test schema"
+    assert len(body["fields"]) == 2
+    assert body["fields"][0]["name"] == "name"
+    assert body["fields"][0]["required"] is True
+    assert body["fields"][1]["name"] == "age"
+    assert body["fields"][1]["required"] is False
+
+
+def test_import_schema_invalid_json_returns_400(client: TestClient) -> None:
+    resp = client.post(
+        "/api/v1/schemas/import",
+        json={"content": "not valid json"},
+    )
+    assert resp.status_code == 400
+    assert "Invalid JSON" in resp.json()["detail"]
+
+
+def test_import_schema_invalid_schema_returns_422(client: TestClient) -> None:
+    resp = client.post(
+        "/api/v1/schemas/import",
+        json={
+            "content": json.dumps({"type": 123})
+        },
+    )
+    assert resp.status_code == 422
+    assert "Invalid JSON Schema" in resp.json()["detail"]
