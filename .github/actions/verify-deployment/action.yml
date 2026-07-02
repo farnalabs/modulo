@@ -1,0 +1,54 @@
+name: Verify deployment
+description: Wait for /healthz endpoint and smoke test frontend title
+
+inputs:
+  url:
+    description: Base URL of the deployment (e.g. https://staging.modulo.run)
+    required: true
+  max-retries:
+    description: Maximum health check retries (2s apart)
+    required: false
+    default: '60'
+  smoke-retries:
+    description: Maximum smoke test retries
+    required: false
+    default: '2'
+
+runs:
+  using: composite
+  steps:
+    - name: Wait for healthz
+      shell: pwsh
+      run: |
+        $url = "${{ inputs.url }}/healthz"
+        $maxRetries = [int]::Parse("${{ inputs.max-retries }}")
+        Write-Host "Waiting for $url ..."
+        for ($i=0; $i -lt $maxRetries; $i++) {
+          try {
+            $r = curl.exe -s --connect-timeout 5 --max-time 10 $url 2>&1
+            if ($LASTEXITCODE -eq 0) { Write-Host "Healthy after ${i}s"; exit 0 }
+          } catch {
+            Write-Host "[$i/$maxRetries] $url - $_"
+          }
+          Start-Sleep -Seconds 2
+        }
+        Write-Host "Health check failed after $($maxRetries * 2)s"
+        exit 1
+
+    - name: Smoke test frontend
+      shell: pwsh
+      run: |
+        $maxAttempts = [int]::Parse("${{ inputs.smoke-retries }}")
+        for ($attempt=1; $attempt -le $maxAttempts; $attempt++) {
+          $resp = curl.exe -s -m 30 "${{ inputs.url }}/" 2>$null
+          if ($resp -match '<title>Modulo') {
+            Write-Host "${{ inputs.url }} - OK"
+            exit 0
+          }
+          if ($attempt -lt $maxAttempts) {
+            Write-Host "Smoke test attempt $attempt/$maxAttempts failed - retrying..."
+            Start-Sleep -Seconds 15
+          }
+        }
+        Write-Host "${{ inputs.url }} - FAILED (title not found)"
+        exit 1

@@ -1,0 +1,37 @@
+name: Capture git metadata
+description: Extract git SHA, branch, timestamps, and commit message for Docker build args
+
+outputs:
+  git-sha:
+    description: Git commit SHA
+    value: ${{ steps.metadata.outputs.git-sha }}
+  git-branch:
+    description: Git branch name
+    value: ${{ steps.metadata.outputs.git-branch }}
+  git-commit-timestamp:
+    description: Git commit timestamp
+    value: ${{ steps.metadata.outputs.git-commit-timestamp }}
+  git-commit-message:
+    description: Git commit message (sanitised)
+    value: ${{ steps.metadata.outputs.git-commit-message }}
+  build-timestamp:
+    description: Build timestamp
+    value: ${{ steps.metadata.outputs.build-timestamp }}
+
+runs:
+  using: composite
+  steps:
+    - id: metadata
+      shell: pwsh
+      run: |
+        $sha = git rev-parse HEAD
+        $branch = git rev-parse --abbrev-ref HEAD
+        $ts = git log -1 --format=%cI
+        $msg = (git log -1 --format=%s) -replace "`r`n"," " -replace "`n"," "
+        $build = (Get-Date -Format 'yyyy-MM-ddTHH:mm:ssZ')
+
+        Add-Content $env:GITHUB_OUTPUT "git-sha=$sha"
+        Add-Content $env:GITHUB_OUTPUT "git-branch=$branch"
+        Add-Content $env:GITHUB_OUTPUT "git-commit-timestamp=$ts"
+        Add-Content $env:GITHUB_OUTPUT "git-commit-message=$msg"
+        Add-Content $env:GITHUB_OUTPUT "build-timestamp=$build"
