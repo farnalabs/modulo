@@ -4,6 +4,7 @@ import uuid
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, Field, field_validator
+from sqlalchemy.exc import ProgrammingError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.api.dependencies import get_db_session, require_feature
@@ -116,10 +117,16 @@ async def list_teams_endpoint(
     current_user: AuthenticatedPrincipal = Depends(get_current_user),
     session: AsyncSession = Depends(get_db_session),
 ) -> TeamListResponse:
-    async with session.begin():
-        await set_rls_org(session, current_user.organisation_id)
-        await set_rls_user_context(session, current_user.account_id, current_user.org_role)
-        result = await list_teams(session, org_id=current_user.organisation_id, page=page, page_size=page_size)
+    try:
+        async with session.begin():
+            await set_rls_org(session, current_user.organisation_id)
+            await set_rls_user_context(session, current_user.account_id, current_user.org_role)
+            result = await list_teams(session, org_id=current_user.organisation_id, page=page, page_size=page_size)
+    except ProgrammingError:
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="Feature is not available. Run database migrations to enable it.",
+        ) from None
 
     return TeamListResponse(
         items=[

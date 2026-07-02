@@ -458,6 +458,37 @@ class OrgProfileResponse(BaseModel):
     created_at: str
 
 
+@router.get("/org", response_model=OrgProfileResponse)
+async def admin_get_org(
+    current_user: AuthenticatedPrincipal = Depends(get_current_user),
+    session: AsyncSession = Depends(get_db_session),
+) -> OrgProfileResponse:
+    if current_user.org_role != "admin":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only admin users can view org profile",
+        )
+
+    async with session.begin():
+        await set_rls_org(session, current_user.organisation_id)
+        org = await get_organisation(session, current_user.organisation_id)
+        if org is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Organisation not found",
+            )
+
+    current_settings = org.settings_json or {}
+    return OrgProfileResponse(
+        id=str(org.id),
+        name=org.name,
+        slug=org.slug,
+        logo_url=current_settings.get("logo_url"),
+        plan_id=org.plan_id,
+        created_at=org.created_at.isoformat(),
+    )
+
+
 @router.put("/org", response_model=OrgProfileResponse)
 async def admin_update_org(
     body: UpdateOrgRequest,
