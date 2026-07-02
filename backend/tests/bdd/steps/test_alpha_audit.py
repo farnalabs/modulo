@@ -86,12 +86,16 @@ def check_previous_hash(request):
 
 @then("the chain is valid")
 def chain_valid(request):
-    pass
+    resp = getattr(request.node, "_resp", None)
+    assert resp is not None, "No response stored — chain verification step must run before this"
+    data = resp.json()
+    assert data.get("valid") is True
 
 
 @then(parsers.parse('an audit event is created with type "{event_type}"'))
 def audit_event_created(event_type: str, request):
-    pass
+    actual = getattr(request.node, "_audit_event_type", None)
+    assert actual == event_type, f"Expected audit event type {event_type!r}, got {actual!r}"
 
 
 @then("the event records the run ID")
