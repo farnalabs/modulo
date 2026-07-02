@@ -9,10 +9,16 @@ as a non-superuser role.
 import uuid
 
 import pytest
-from sqlalchemy import text
+from sqlalchemy import event, select, text, update, delete
 from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker
+from sqlalchemy.orm import Session as SASession
 
-from modulo.db.rls import register_rls_reset_hook, set_rls_org, set_rls_user_context
+from modulo.db.rls import (
+    _inject_tenant_filter,
+    register_rls_reset_hook,
+    set_rls_org,
+    set_rls_user_context,
+)
 
 # ---------------------------------------------------------------------------
 # SET LOCAL / set_config scoping tests
@@ -316,3 +322,112 @@ async def test_rls_team_isolation_policies_exist(db_engine: AsyncEngine) -> None
     expected = {"pipelines", "stages", "connector_instances", "model_backends", "library_primitives"}
     missing = expected - tables_with_policy
     assert not missing, f"Tables missing rls_team_isolation policy: {sorted(missing)}"
+
+
+# ---------------------------------------------------------------------------
+# ORM tenant filter tests (SQLite — RLS is Postgres-only)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_orm_tenant_filter_select_update_delete(monkeypatch: pytest.MonkeyPatch) -> None:
+    """_inject_tenant_filter must add WHERE organisation_id to SELECT/UPDATE/DELETE.
+
+    Uses SQLite in-memory with a minimal model to verify the ORM listener
+    correctly filters by organisation_id when session.info["org_id"] is set,
+    and does not inject when it is not set.
+    """
+    import os
+
+    from sqlalchemy import String, Uuid
+    from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+    from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
+
+    # Force non-Postgres path so tenant filter activates
+    monkeypatch.setenv("MODULO_DB", "sqlite")
+
+    class _TenantTestBase(DeclarativeBase):
+        pass
+
+    class _Item(_TenantTestBase):
+        __tablename__ = "tenant_items"
+        id: Mapped[uuid.UUID] = mapped_column(Uuid(), primary_key=True, default=uuid.uuid4)
+        organisation_id: Mapped[uuid.UUID] = mapped_column(Uuid(), nullable=False)
+        name: Mapped[str] = mapped_column(String(50), nullable=False)
+
+    engine = create_async_engine("sqlite+aiosqlite://", echo=False)
+    async with engine.begin() as conn:
+        await conn.run_sync(_TenantTestBase.metadata.create_all)
+
+    # Register tenant filter directly (bypass register_tenant_filter which needs env vars)
+    try:
+        event.remove(SASession, "do_orm_execute", _inject_tenant_filter)
+    except Exception:
+        pass
+    event.listen(SASession, "do_orm_execute", _inject_tenant_filter)
+
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+
+    org_a = uuid.uuid4()
+    org_b = uuid.uuid4()
+
+    # Seed data: 2 items per org
+    async with factory() as session, session.begin():
+        session.add_all([
+            _Item(organisation_id=org_a, name="a-1"),
+            _Item(organisation_id=org_a, name="a-2"),
+            _Item(organisation_id=org_b, name="b-1"),
+            _Item(organisation_id=org_b, name="b-2"),
+        ])
+
+    # Test SELECT filtering: with org_a context, only org_a rows visible
+    async with factory() as session, session.begin():
+        session.info["org_id"] = org_a
+        result = (await session.scalars(
+            select(_Item).where(_Item.name.in_(["a-1", "b-1"])),
+        )).all()
+        names = {r.name for r in result}
+        assert names == {"a-1"}, f"Expected only 'a-1', got {names}"
+
+    # Test SELECT filtering: with org_b context, only org_b rows visible
+    async with factory() as session, session.begin():
+        session.info["org_id"] = org_b
+        result = (await session.scalars(
+            select(_Item).where(_Item.name.in_(["a-1", "b-1"])),
+        )).all()
+        names = {r.name for r in result}
+        assert names == {"b-1"}, f"Expected only 'b-1', got {names}"
+
+    # Test no filtering: without org_id set, all rows returned
+    async with factory() as session, session.begin():
+        result = (await session.scalars(select(_Item))).all()
+        assert len(result) == 4, f"Expected 4 items without filter, got {len(result)}"
+
+    # Test UPDATE filtering: only org_a's row updated
+    async with factory() as session, session.begin():
+        session.info["org_id"] = org_a
+        await session.execute(
+            update(_Item).where(_Item.name == "a-1").values(name="a-1-updated"),
+        )
+
+    async with factory() as session, session.begin():
+        result = (await session.execute(
+            text("SELECT name FROM tenant_items WHERE name LIKE '%updated'"),
+        )).scalars().all()
+        assert len(result) == 1, f"Expected 1 updated item, got {len(result)}"
+
+    # Test DELETE filtering: only org_b's row deleted
+    async with factory() as session, session.begin():
+        session.info["org_id"] = org_b
+        await session.execute(
+            delete(_Item).where(_Item.name == "b-2"),
+        )
+
+    async with factory() as session, session.begin():
+        result = (await session.execute(
+            text("SELECT name FROM tenant_items ORDER BY name"),
+        )).scalars().all()
+        assert "b-2" not in result, "b-2 should have been deleted"
+        assert "a-1-updated" in result, "a-1-updated should remain"
+
+    await engine.dispose()

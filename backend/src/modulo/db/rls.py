@@ -180,7 +180,7 @@ def _inject_tenant_filter(execute_state: ORMExecuteState) -> None:
                 injected = True
 
     # ORM UPDATE/DELETE expose entities via all_mapper_classes.
-    if not injected and execute_state.all_mapper_classes:
+    if not injected and hasattr(execute_state, "all_mapper_classes") and execute_state.all_mapper_classes:
         for mapper in execute_state.all_mapper_classes:
             entity = mapper.class_
             if hasattr(entity, _TENANT_COLUMN):

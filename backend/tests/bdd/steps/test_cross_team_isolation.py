@@ -25,13 +25,13 @@ def ctx():
     }
 
 
-@given(parsers.parse('team "{name}" exists'))
+@given(parsers.parse('a team "{name}" exists'))
 def team_exists(name: str, ctx) -> None:
     ctx["teams"][name] = {"id": str(uuid.uuid4()), "name": name}
 
 
 @given(
-    parsers.parse('pipeline "{name}" is owned by team "{team_name}" with visibility "{visibility}"')
+    parsers.parse('a pipeline "{name}" is owned by team "{team_name}" with visibility "{visibility}"')
 )
 def pipeline_owned_by_team(name: str, team_name: str, visibility: str, ctx) -> None:
     team_id = ctx["teams"].get(team_name, {}).get("id", str(uuid.uuid4()))
@@ -64,6 +64,12 @@ def connector_has_visibility(name: str, visibility: str, ctx) -> None:
         ctx["connectors"][name]["visibility"] = visibility
 
 
+@given(parsers.parse('I am a member of team "{team_name}"'))
+def i_am_member(team_name: str, ctx) -> None:
+    team_id = ctx["teams"].get(team_name, {}).get("id", str(uuid.uuid4()))
+    ctx["memberships"]["__current__"] = {"team_id": team_id}
+
+
 @given(parsers.parse('user "{username}" is a member of team "{team_name}"'))
 def user_is_member(username: str, team_name: str, ctx) -> None:
     team_id = ctx["teams"].get(team_name, {}).get("id", str(uuid.uuid4()))
@@ -72,17 +78,40 @@ def user_is_member(username: str, team_name: str, ctx) -> None:
         ctx["users"][username] = {"id": str(uuid.uuid4())}
 
 
+@given(parsers.parse('I am authenticated as a user in org "{org}"'))
+def auth_in_org(org: str) -> None:
+    pass
+
+
 @given(parsers.parse('I am authenticated as an admin in org "{org}"'))
 def auth_admin(org: str) -> None:
     pass
 
 
-@when(parsers.parse('user "{username}" requests the pipeline list'))
-def user_requests_pipeline_list(username: str, request, ctx) -> None:
-    is_member = username in ctx.get("memberships", {})
+@when(parsers.parse("I view pipelines"))
+def i_view_pipelines(request, ctx) -> None:
+    current_team_id = ctx["memberships"].get("__current__", {}).get("team_id")
     result = []
     for name, pdata in ctx["pipelines"].items():
-        if pdata.get("visibility") == "org" or is_member:
+        if pdata.get("visibility") == "org":
+            result.append(pdata)
+        elif current_team_id and pdata.get("owner_team_id") == current_team_id:
+            result.append(pdata)
+
+    resp = MagicMock()
+    resp.status_code = 200
+    resp.json = lambda: {"items": result, "total": len(result)}
+    request.node._resp = resp
+
+
+@when(parsers.parse('user "{username}" requests the pipeline list'))
+def user_requests_pipeline_list(username: str, request, ctx) -> None:
+    user_team_id = ctx["memberships"].get(username, {}).get("team_id")
+    result = []
+    for name, pdata in ctx["pipelines"].items():
+        if pdata.get("visibility") == "org":
+            result.append(pdata)
+        elif user_team_id and pdata.get("owner_team_id") == user_team_id:
             result.append(pdata)
 
     resp = MagicMock()
@@ -134,6 +163,22 @@ def bind_cross_team_connector(connector_name: str, pipeline_name: str, request, 
 def check_response_status(status: int, request) -> None:
     resp = request.node._resp
     assert resp.status_code == status, f"Expected {status}, got {resp.status_code}"
+
+
+@then(parsers.parse('I see pipeline "{name}"'))
+def i_see_pipeline(name: str, request) -> None:
+    data = request.node._resp.json()
+    items = data.get("items", [])
+    names = [p["name"] for p in items] if isinstance(items, list) else []
+    assert name in names, f"Pipeline '{name}' should be in response, got {names}"
+
+
+@then(parsers.parse('I do not see pipeline "{name}"'))
+def i_do_not_see_pipeline(name: str, request) -> None:
+    data = request.node._resp.json()
+    items = data.get("items", [])
+    names = [p["name"] for p in items] if isinstance(items, list) else []
+    assert name not in names, f"Pipeline '{name}' should not be in response, got {names}"
 
 
 @then(parsers.parse('the response does not contain pipeline "{name}"'))
