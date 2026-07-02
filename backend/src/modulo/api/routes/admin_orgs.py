@@ -155,24 +155,6 @@ async def admin_create_org_user(
             detail=f"Invalid role: {body.org_role}. Must be one of: admin, operator, runner, viewer",
         )
 
-    org = await get_organisation(session, org_id)
-    if org is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Organisation not found",
-        )
-
-    existing = await get_account_by_email(session, body.email)
-    if existing is not None:
-        from modulo.db.crud.org_membership import get_membership_by_account_and_org
-
-        membership = await get_membership_by_account_and_org(session, existing.id, org_id)
-        if membership is not None:
-            raise HTTPException(
-                status_code=status.HTTP_409_CONFLICT,
-                detail="A user with this email already exists in this organisation",
-            )
-
     try:
         validate_password_strength(body.password)
     except ValueError as exc:
@@ -181,34 +163,53 @@ async def admin_create_org_user(
             detail=str(exc),
         ) from exc
 
-    pw_hash = hash_password(body.password)
+    async with session.begin():
+        org = await get_organisation(session, org_id)
+        if org is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Organisation not found",
+            )
 
-    if existing is not None:
-        account = existing
-        account.password_hash = pw_hash
-    else:
-        account = await create_account(
+        existing = await get_account_by_email(session, body.email)
+        if existing is not None:
+            from modulo.db.crud.org_membership import get_membership_by_account_and_org
+
+            membership = await get_membership_by_account_and_org(session, existing.id, org_id)
+            if membership is not None:
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail="A user with this email already exists in this organisation",
+                )
+
+        pw_hash = hash_password(body.password)
+
+        if existing is not None:
+            account = existing
+            account.password_hash = pw_hash
+        else:
+            account = await create_account(
+                session,
+                email=body.email,
+                display_name=body.display_name,
+                password_hash=pw_hash,
+            )
+
+        membership = await create_membership(
             session,
-            email=body.email,
-            display_name=body.display_name,
-            password_hash=pw_hash,
+            account_id=account.id,
+            org_id=org_id,
+            role=body.org_role,
         )
 
-    membership = await create_membership(
-        session,
-        account_id=account.id,
-        org_id=org_id,
-        role=body.org_role,
-    )
-
-    return CreateOrgUserResponse(
-        id=str(account.id),
-        email=account.email,
-        display_name=account.display_name,
-        org_role=membership.role,
-        auth_provider=account.auth_provider,
-        created_at=account.created_at.isoformat(),
-    )
+        return CreateOrgUserResponse(
+            id=str(account.id),
+            email=account.email,
+            display_name=account.display_name,
+            org_role=membership.role,
+            auth_provider=account.auth_provider,
+            created_at=account.created_at.isoformat(),
+        )
 
 
 # ── Delete Org ─────────────────────────────────────────────────────────
