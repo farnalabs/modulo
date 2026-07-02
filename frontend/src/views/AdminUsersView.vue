@@ -86,25 +86,28 @@
                 <button
                   :data-testid="`admin-users-reset-password-${u.id}`"
                   @click="resetPassword(u)"
-                  class="text-xs text-muted-foreground hover:text-foreground hover:underline"
+                  :disabled="actionLoading[u.id]"
+                  class="text-xs text-muted-foreground hover:text-foreground hover:underline disabled:opacity-30"
                 >
-                  Reset Password
+                  {{ actionLoading[u.id] ? '...' : 'Reset Password' }}
                 </button>
                 <button
                   v-if="u.is_active"
                   :data-testid="`admin-users-deactivate-${u.id}`"
                   @click="deactivate(u)"
-                  class="text-xs text-destructive hover:underline"
+                  :disabled="actionLoading[u.id]"
+                  class="text-xs text-destructive hover:underline disabled:opacity-30"
                 >
-                  Deactivate
+                  {{ actionLoading[u.id] ? '...' : 'Deactivate' }}
                 </button>
                 <button
                   v-else
                   :data-testid="`admin-users-reactivate-${u.id}`"
                   @click="reactivate(u)"
-                  class="text-xs text-success hover:underline"
+                  :disabled="actionLoading[u.id]"
+                  class="text-xs text-success hover:underline disabled:opacity-30"
                 >
-                  Reactivate
+                  {{ actionLoading[u.id] ? '...' : 'Reactivate' }}
                 </button>
               </div>
             </td>
@@ -133,6 +136,10 @@
           Next
         </button>
       </div>
+    </div>
+
+    <div v-if="flashMessage" :class="['rounded-lg border px-4 py-3 text-sm', flashMessage.type === 'success' ? 'border-success/50 bg-success/10 text-success' : 'border-destructive/50 bg-destructive/10 text-destructive']">
+      {{ flashMessage.text }}
     </div>
 
     <div v-if="showCreate" class="fixed inset-0 z-50 flex items-center justify-center bg-black/50" @click.self="showCreate = false">
@@ -238,10 +245,24 @@ const showResetDialog = ref(false)
 const tempPassword = ref('')
 const resetUserEmail = ref('')
 const copied = ref(false)
+const flashMessage = ref<{ type: 'success' | 'error'; text: string } | null>(null)
+const actionLoading = ref<Record<string, boolean>>({})
 let copyTimeout: ReturnType<typeof setTimeout> | null = null
+let flashTimeout: ReturnType<typeof setTimeout> | null = null
 
 function initialOf(name: string): string {
   return name ? name.charAt(0).toUpperCase() : '?'
+}
+
+function showFlash(type: 'success' | 'error', text: string) {
+  flashMessage.value = { type, text }
+  if (flashTimeout) clearTimeout(flashTimeout)
+  flashTimeout = setTimeout(() => { flashMessage.value = null }, 4000)
+}
+
+function updateUserInList(data: UserItem) {
+  const idx = users.value.findIndex(x => x.id === data.id)
+  if (idx !== -1) users.value[idx] = data
 }
 
 async function loadUsers() {
@@ -264,32 +285,48 @@ async function loadUsers() {
 }
 
 async function updateRole(u: UserItem) {
+  const prevRole = u.org_role
+  actionLoading.value[u.id] = true
   try {
-    await httpPut(`/api/v1/admin/users/${u.id}`, { org_role: u.org_role })
-  } catch {
-    loadUsers()
+    const data = await httpPut<UserItem>(`/api/v1/admin/users/${u.id}`, { org_role: u.org_role })
+    updateUserInList(data)
+    showFlash('success', `Role changed to ${data.org_role} for ${u.email}`)
+  } catch (e) {
+    u.org_role = prevRole
+    showFlash('error', e instanceof Error ? e.message : 'Failed to update role')
+  } finally {
+    actionLoading.value[u.id] = false
   }
 }
 
 async function deactivate(u: UserItem) {
+  actionLoading.value[u.id] = true
   try {
-    await post(`/api/v1/admin/users/${u.id}/deactivate`)
-    u.is_active = false
-  } catch {
-    loadUsers()
+    const data = await post<UserItem>(`/api/v1/admin/users/${u.id}/deactivate`)
+    updateUserInList(data)
+    showFlash('success', `User ${u.email} deactivated`)
+  } catch (e) {
+    showFlash('error', e instanceof Error ? e.message : 'Failed to deactivate user')
+  } finally {
+    actionLoading.value[u.id] = false
   }
 }
 
 async function reactivate(u: UserItem) {
+  actionLoading.value[u.id] = true
   try {
-    await post(`/api/v1/admin/users/${u.id}/reactivate`)
-    u.is_active = true
-  } catch {
-    loadUsers()
+    const data = await post<UserItem>(`/api/v1/admin/users/${u.id}/reactivate`)
+    updateUserInList(data)
+    showFlash('success', `User ${u.email} reactivated`)
+  } catch (e) {
+    showFlash('error', e instanceof Error ? e.message : 'Failed to reactivate user')
+  } finally {
+    actionLoading.value[u.id] = false
   }
 }
 
 async function resetPassword(u: UserItem) {
+  actionLoading.value[u.id] = true
   try {
     const data = await post<{ temporary_password: string }>(`/api/v1/admin/users/${u.id}/reset-password`)
     tempPassword.value = data.temporary_password
@@ -297,7 +334,9 @@ async function resetPassword(u: UserItem) {
     copied.value = false
     showResetDialog.value = true
   } catch {
-    loadUsers()
+    showFlash('error', 'Failed to reset password')
+  } finally {
+    actionLoading.value[u.id] = false
   }
 }
 
@@ -331,6 +370,7 @@ async function createUser() {
     await post('/api/v1/admin/users', newUser.value)
     showCreate.value = false
     newUser.value = { email: '', display_name: '', password: '', org_role: 'runner' }
+    showFlash('success', `User ${email} created`)
     loadUsers()
   } catch (e: any) {
     createError.value = e instanceof Error ? e.message : 'Failed to create user'
@@ -339,6 +379,7 @@ async function createUser() {
 
 onBeforeUnmount(() => {
   if (copyTimeout) clearTimeout(copyTimeout)
+  if (flashTimeout) clearTimeout(flashTimeout)
 })
 onMounted(loadUsers)
 </script>

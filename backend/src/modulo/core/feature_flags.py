@@ -6,6 +6,8 @@ import uuid
 from dataclasses import dataclass
 from typing import Any, ClassVar, Protocol
 
+from modulo.core.license import LicenseData
+
 
 @dataclass
 class FeatureFlag:
@@ -158,6 +160,54 @@ _KNOWN_FLAGS: list[FeatureFlag] = [
 
 
 TIER_RANK: dict[str, int] = {"community": 0, "team": 1, "v1": 2, "v2": 3}
+
+
+class CommunityTier:
+    """Default plan — community-tier features active without a license key.
+    Backward-compatible class satisfying the PlanContext protocol."""
+
+    def __init__(self) -> None:
+        self._registry = FeatureFlagRegistry(current_tier="community", has_license_key=False)
+
+    def feature_enabled(self, name: str) -> bool:
+        flag = self._registry.get_flag(name)
+        if flag is None:
+            return False
+        return flag.currently_active
+
+    def list_enabled_features(self) -> list[FeatureFlag]:
+        return [f for f in self._registry.list_flags() if f.currently_active]
+
+    def tier(self) -> str:
+        return self._registry.current_tier
+
+    def has_license_key(self) -> bool:
+        return self._registry.has_license_key
+
+
+class LicenseKeyTier:
+    """Licensed plan — activates features based on license tier and explicit feature list.
+    Backward-compatible class satisfying the PlanContext protocol."""
+
+    def __init__(self, license_data: LicenseData) -> None:
+        self._tier = license_data.tier
+        self._features = set(license_data.features)
+        self._registry = FeatureFlagRegistry(current_tier=license_data.tier, has_license_key=True)
+
+    def feature_enabled(self, name: str) -> bool:
+        flag = self._registry.get_flag(name)
+        if flag is None:
+            return False
+        return flag.currently_active or name in self._features
+
+    def list_enabled_features(self) -> list[FeatureFlag]:
+        return [f for f in self._registry.list_flags() if f.currently_active or f.name in self._features]
+
+    def tier(self) -> str:
+        return self._registry.current_tier
+
+    def has_license_key(self) -> bool:
+        return self._registry.has_license_key
 
 
 class PlanContext(Protocol):
