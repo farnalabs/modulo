@@ -1,0 +1,38 @@
+# Chaos engineering overlay.
+# Activate: docker compose -f docker-compose.yml -f docker-compose.chaos.yml up
+# Then inject failures via toxiproxy's API (port 8474):
+#   curl -X POST http://localhost:8474/proxies/github-api/toxics \
+#     -d '{"type":"timeout","attributes":{"timeout":5000}}'
+
+services:
+  toxiproxy:
+    image: shopify/toxiproxy:latest
+    ports:
+      - "8474:8474"
+    entrypoint:
+      - sh
+      - -c
+      - |
+        toxiproxy-server &
+        PID=$$!
+        sleep 1
+        toxiproxy-cli create github-api  --listen :18443 --upstream api.github.com:443
+        toxiproxy-cli create linear-api  --listen :18444 --upstream api.linear.app:443
+        toxiproxy-cli create notion-api  --listen :18445 --upstream api.notion.com:443
+        toxiproxy-cli create slack-api   --listen :18446 --upstream slack.com:443
+        wait $$PID
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:8474/proxies"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  backend:
+    environment:
+      GITHUB_API_PROXY: http://toxiproxy:18443
+      LINEAR_API_PROXY: http://toxiproxy:18444
+      NOTION_API_PROXY: http://toxiproxy:18445
+      SLACK_API_PROXY: http://toxiproxy:18446
+    depends_on:
+      toxiproxy:
+        condition: service_healthy
