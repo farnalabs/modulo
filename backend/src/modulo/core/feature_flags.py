@@ -145,12 +145,12 @@ _KNOWN_FLAGS: list[FeatureFlag] = [
         tier="v2",
     ),
     FeatureFlag(
-        name="environment-profiles",
+        name="environment_profiles",
         description="Sandbox environment profiles for code execution",
         tier="team",
     ),
     FeatureFlag(
-        name="plugin-management",
+        name="plugin_management",
         description="Manage plugins, connectors, and node categories",
         tier="team",
     ),
@@ -166,6 +166,10 @@ class PlanContext(Protocol):
     def feature_enabled(self, name: str) -> bool: ...
 
     def list_enabled_features(self) -> list[FeatureFlag]: ...
+
+    def tier(self) -> str: ...
+
+    def has_license_key(self) -> bool: ...
 
 
 class DbPlanContext:
@@ -192,6 +196,12 @@ class DbPlanContext:
 
         return cls(registry)
 
+    def tier(self) -> str:
+        return self._registry.current_tier
+
+    def has_license_key(self) -> bool:
+        return self._registry.has_license_key
+
     def feature_enabled(self, name: str) -> bool:
         flag = self._registry.get_flag(name)
         if flag is None:
@@ -202,10 +212,30 @@ class DbPlanContext:
         return [f for f in self._registry.list_flags() if f.currently_active]
 
 
-async def resolve_plan_context(settings: Any, session: Any) -> PlanContext:
-    """Resolve a PlanContext from a stored license, env-var license key, or CommunityTier (no license)."""
+async def resolve_plan_context(settings: Any, session: Any, org: Any | None = None) -> PlanContext:
+    """Resolve a PlanContext from an org-level license, system-level license, or CommunityTier.
+
+    Resolution order:
+    1. Org-level license key (from ``org.settings_json["license_key"]``)
+    2. System-level in-memory license (``store_license()``)
+    3. System-level env-var license (``settings.modulo_license_key``)
+    4. Community tier (default fallback)
+    """
     from modulo.core.license import get_license, parse_and_verify
 
+    # 1. Org-level license key
+    if org is not None:
+        org_settings = getattr(org, "settings_json", None)
+        org_license_key = org_settings.get("license_key") if isinstance(org_settings, dict) else None
+        if org_license_key:
+            validation = parse_and_verify(org_license_key)
+            if validation.valid and validation.license_data is not None:
+                return await DbPlanContext.from_db(
+                    session, validation.license_data.tier, has_license_key=True,
+                    license_features=set(validation.license_data.features),
+                )
+
+    # 2. System-level in-memory license
     lic = get_license()
     if lic is not None:
         return await DbPlanContext.from_db(
@@ -213,6 +243,7 @@ async def resolve_plan_context(settings: Any, session: Any) -> PlanContext:
             license_features=set(lic.features),
         )
 
+    # 3. System-level env-var license
     raw_key: str = getattr(settings, "modulo_license_key", "") or ""
     if raw_key:
         validation = parse_and_verify(raw_key)
@@ -221,8 +252,8 @@ async def resolve_plan_context(settings: Any, session: Any) -> PlanContext:
                 session, validation.license_data.tier, has_license_key=True,
                 license_features=set(validation.license_data.features),
             )
-        return await DbPlanContext.from_db(session, "team", has_license_key=True)
 
+    # 4. Community fallback
     return await DbPlanContext.from_db(session, "community")
 
 
@@ -273,6 +304,14 @@ class FeatureFlagRegistry:
         await instance.load_from_db(session)
         return instance
 
+    @property
+    def current_tier(self) -> str:
+        return self._current_tier
+
+    @property
+    def has_license_key(self) -> bool:
+        return self._has_license_key
+
     def _refresh(self) -> None:
         tier_rank: dict[str, int] = getattr(self, "_tier_rank", TIER_RANK)
         current_rank = tier_rank.get(self._current_tier, 0)
@@ -281,11 +320,9 @@ class FeatureFlagRegistry:
             flag_tier_rank = tier_rank.get(flag.tier, 0)
             flag.currently_active = flag_tier_rank <= current_rank
 
-        for name, enabled in self._overrides.items():
-            for flag in self._flags:
-                if flag.name == name:
-                    flag.currently_active = enabled
-                    break
+            override = self._overrides.get(flag.name)
+            if override is not None:
+                flag.currently_active = override
 
     def refresh(self, current_tier: str, has_license_key: bool) -> None:
         self._current_tier = current_tier
