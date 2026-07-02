@@ -148,6 +148,14 @@ def store_license(_key: str, data: LicenseData) -> None:
 
 
 def get_license() -> LicenseData | None:
+    """Return the in-memory license if present and not expired."""
+    if _current_license is None:
+        return None
+    if _current_license.expires_at:
+        error = _check_expired(_current_license.expires_at)
+        if error:
+            clear_license()
+            return None
     return _current_license
 
 
