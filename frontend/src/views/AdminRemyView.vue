@@ -445,6 +445,7 @@ const REMY_PROVIDERS: { id: string; label: string }[] = [
 
 const loading = ref(true)
 const loadError = ref<string | null>(null)
+const configSaving = ref(false)
 
 const providerStatus = ref<ProviderStatus[]>([])
 const providersLoading = ref(true)
@@ -473,6 +474,8 @@ function toggleRole(role: string) {
 }
 
 async function saveAccessList() {
+  if (configSaving.value) return
+  configSaving.value = true
   accessSaving.value = true
   accessError.value = null
   try {
@@ -488,6 +491,7 @@ async function saveAccessList() {
     accessError.value = `Failed to save access list: ${formatApiError(e)}`
   } finally {
     accessSaving.value = false
+    configSaving.value = false
   }
 }
 
@@ -509,6 +513,8 @@ function toggleAllowedProvider(provider: string) {
 }
 
 async function saveModelConfig() {
+  if (configSaving.value) return
+  configSaving.value = true
   modelSaving.value = true
   modelError.value = null
   try {
@@ -529,6 +535,7 @@ async function saveModelConfig() {
     modelError.value = `Failed to save model config: ${formatApiError(e)}`
   } finally {
     modelSaving.value = false
+    configSaving.value = false
   }
 }
 
@@ -538,6 +545,8 @@ const promptSaving = ref(false)
 const promptError = ref<string | null>(null)
 
 async function saveSystemPrompt() {
+  if (configSaving.value) return
+  configSaving.value = true
   promptSaving.value = true
   promptError.value = null
   try {
@@ -551,6 +560,7 @@ async function saveSystemPrompt() {
     promptError.value = `Failed to save system prompt: ${formatApiError(e)}`
   } finally {
     promptSaving.value = false
+    configSaving.value = false
   }
 }
 
@@ -560,6 +570,8 @@ const guidanceSaving = ref(false)
 const guidanceError = ref<string | null>(null)
 
 async function saveGuidance() {
+  if (configSaving.value) return
+  configSaving.value = true
   guidanceSaving.value = true
   guidanceError.value = null
   try {
@@ -573,6 +585,7 @@ async function saveGuidance() {
     guidanceError.value = `Failed to save guidance: ${formatApiError(e)}`
   } finally {
     guidanceSaving.value = false
+    configSaving.value = false
   }
 }
 
