@@ -26,56 +26,27 @@ jobs:
         with:
           fetch-depth: 1
 
+      - uses: superfly/flyctl-actions/setup-flyctl@master
+
       - name: Capture git metadata
-        shell: powershell
-        run: |
-          "GIT_SHA=$(git rev-parse HEAD)" | Out-File $env:GITHUB_ENV -Encoding utf8 -Append
-          "GIT_BRANCH=$(git rev-parse --abbrev-ref HEAD)" | Out-File $env:GITHUB_ENV -Encoding utf8 -Append
-          $timestamp = git log -1 --format=%cI
-          Add-Content -Path $env:GITHUB_ENV -Value "GIT_COMMIT_TIMESTAMP=$timestamp" -Encoding utf8
-          $msg = git log -1 --format=%s
-          $msg = $msg -replace "`r`n"," " -replace "`n"," "
-          Add-Content -Path $env:GITHUB_ENV -Value "GIT_COMMIT_MESSAGE=$msg" -Encoding utf8
-          $buildTimestamp = (Get-Date -Format 'yyyy-MM-ddTHH:mm:ssZ')
-          Add-Content -Path $env:GITHUB_ENV -Value "BUILD_TIMESTAMP=$buildTimestamp" -Encoding utf8
+        id: git
+        uses: ./.github/actions/capture-git-metadata
 
       - id: deploy
         name: Deploy to staging
         shell: powershell
         run: |
           fly deploy --app staging-modulo --config fly.staging.toml --strategy immediate `
-            --build-arg "GIT_SHA=$env:GIT_SHA" `
-            --build-arg "GIT_BRANCH=$env:GIT_BRANCH" `
-            --build-arg "GIT_COMMIT_TIMESTAMP=$env:GIT_COMMIT_TIMESTAMP" `
-            --build-arg "GIT_COMMIT_MESSAGE=$env:GIT_COMMIT_MESSAGE" `
-            --build-arg "BUILD_TIMESTAMP=$env:BUILD_TIMESTAMP"
+            --build-arg "GIT_SHA=${{ steps.git.outputs.git-sha }}" `
+            --build-arg "GIT_BRANCH=${{ steps.git.outputs.git-branch }}" `
+            --build-arg "GIT_COMMIT_TIMESTAMP=${{ steps.git.outputs.git-commit-timestamp }}" `
+            --build-arg "GIT_COMMIT_MESSAGE=${{ steps.git.outputs.git-commit-message }}" `
+            --build-arg "BUILD_TIMESTAMP=${{ steps.git.outputs.build-timestamp }}"
 
-      - name: Wait for healthz
-        shell: powershell
-        run: |
-          Write-Host "Waiting for https://staging-modulo.fly.dev/healthz ..."
-          for ($i=0; $i -lt 60; $i++) {
-            try {
-              $r = curl.exe -s --connect-timeout 5 --max-time 10 "https://staging-modulo.fly.dev/healthz" 2>&1
-              if ($LASTEXITCODE -eq 0) { Write-Host "Healthy after ${i}s"; exit 0 }
-            } catch {
-              Write-Host "[$i/60] Health check failed: $_"
-            }
-            Start-Sleep -Seconds 2
-          }
-          Write-Host "Health check failed after 120s"
-          exit 1
-
-      - name: Smoke test frontend
-        shell: powershell
-        run: |
-          for ($attempt=1; $attempt -le 2; $attempt++) {
-            $resp = curl.exe -s -m 30 "https://staging-modulo.fly.dev/" 2>$null
-            if ($resp -match '<title>Modulo') { Write-Host "staging-modulo.fly.dev - OK"; exit 0 }
-            if ($attempt -eq 1) { Write-Host "Smoke test attempt 1 failed - retrying..."; Start-Sleep -Seconds 15 }
-          }
-          Write-Host "staging-modulo.fly.dev - FAILED (title not found)"
-          exit 1
+      - name: Verify deployment
+        uses: ./.github/actions/verify-deployment
+        with:
+          url: https://staging.modulo.run
 
       - name: Rollback on verification failure
         if: failure() && steps.deploy.outcome == 'success'
@@ -98,9 +69,9 @@ jobs:
         run: |
           $expectedSha = git rev-parse HEAD
           $expectedSha7 = $expectedSha.Substring(0, 7)
-          $info = curl.exe -s -m 10 "https://staging-modulo.fly.dev/api/v1/deployment" 2>$null
+          $info = curl.exe -s -m 10 "https://staging.modulo.run/api/v1/deployment" 2>$null
           if (-not $info) {
-            Write-Host "staging-modulo.fly.dev - no deployment info available"
+            Write-Host "staging.modulo.run - no deployment info available"
             exit 1
           }
           $deployInfo = $info | ConvertFrom-Json
@@ -109,4 +80,4 @@ jobs:
             Write-Host "SHA MISMATCH: deployed=$deployedSha expected=$expectedSha7"
             exit 1
           }
-          Write-Host "https://staging-modulo.fly.dev - SHA match: $deployedSha"
+          Write-Host "staging.modulo.run - SHA match: $deployedSha"
