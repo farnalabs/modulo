@@ -162,7 +162,7 @@
                   v-model="pipelineName"
                   type="text"
                   class="w-full px-3 py-2 border border-input bg-background rounded-lg text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                  ::placeholder="$t('views.PipelineTemplateGallery.selectedtemplatename_pipeline')"
+                  :placeholder="$t('views.PipelineTemplateGallery.selectedtemplatename_pipeline')"
                   data-testid="template-gallery-dialog-name"
                 />
               </div>

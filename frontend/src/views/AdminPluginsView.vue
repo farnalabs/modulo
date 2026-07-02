@@ -98,7 +98,7 @@
                       <button
                         class="rounded p-1 text-muted-foreground hover:bg-accent"
                         data-testid="admin-plugins-expand"
-                        ::aria-label="$t('views.AdminPluginsView.expand_plugin_details')"
+                        :aria-label="$t('views.AdminPluginsView.expand_plugin_details')"
                         :title="expanded[plugin.PLUGIN_ID] ? 'Collapse details' : 'Expand details'"
                         @click="toggleExpand(plugin.PLUGIN_ID)"
                       >

@@ -51,22 +51,18 @@ $allTexts = [System.Collections.ArrayList]@()
   '^space-',                      # Tailwind space
   '^divide-',                     # Tailwind divide
   '^overflow',                    # Tailwind overflow
-  '^whitespace',                  # Tailwind whitespace
-  '^break-',                      # Tailword break
   '^truncate',                    # Tailwind truncate
   '^list-',                       # Tailwind list
   '^font-',                       # Tailwind font
   '^tracking-',                   # Tailwind tracking
   '^leading-',                    # Tailwind leading
-  '^align-',                      # Tailwind align
   '^float-',                      # Tailwind float
   '^clear-',                      # Tailwind clear
   '^object-',                     # Tailwind object
   '^select-',                     # Tailwind select
   '^appearance',                  # Tailwind appearance
   '^indent-',                     # Tailwind indent
-  '^align-',                      # Tailwind align
-  '^col-',                        # Tailwind col
+  '^col-',                        # Tailwind col/columns
   '^row-',                        # Tailwind row
   '^order-',                      # Tailwind order
   '^decoration-',                 # Tailwind decoration
@@ -76,15 +72,12 @@ $allTexts = [System.Collections.ArrayList]@()
   '^capitalize',                  # Tailwind capitalize
   '^normal-',                     # Tailwind normal
   '^tab[s]?',                     # Tailwind tab
-  '^whitespace',                  # Tailwind whitespace
-  '^break-',                      # Tailwind break
-  '^col-',                        # Tailwind columns
   '^box-',                        # Tailwind box
-  '^block',                        # Tailwind block
-  '^inline',                       # Tailwind inline
-  '^table',                        # Tailwind table
-  '^contents',                     # Tailwind contents
-  '^hidden'                        # Tailwind hidden
+  '^block',                       # Tailwind block
+  '^inline',                      # Tailwind inline
+  '^table',                       # Tailwind table
+  '^contents',                    # Tailwind contents
+  '^hidden'                       # Tailwind hidden
 )
 
 function Is-UserText($t) {
@@ -115,6 +108,7 @@ function Is-UserText($t) {
 
 foreach ($file in $vueFiles) {
   $content = Get-Content -Path $file.FullName -Raw -Encoding UTF8
+  $content = $content.TrimStart("`u{FEFF}")
   $relPath = $file.FullName.Substring($srcDir.Length + 1).Replace('\', '/')
   $relKey = $relPath -replace '\.vue$', ''
 
