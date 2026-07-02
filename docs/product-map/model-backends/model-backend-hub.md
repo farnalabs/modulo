@@ -3,10 +3,13 @@ id: feat-model-backends-hub
 prd: 8.1
 delivery-tasks: []
 bdd: []
-unit-tests: []
+unit-tests:
+  - backend/tests/unit/model_backend_hub/test_hub.py
+  - backend/tests/unit/core/model_backend_hub/test_failover.py
 code:
   - backend/src/modulo/model_backends/__init__.py
   - backend/src/modulo/model_backends/base.py
+  - backend/src/modulo/core/model_backend_hub/__init__.py
 depends-on:
   - feat-model-backends-management
 status: partial
@@ -20,7 +23,7 @@ The runtime registry and resolution layer for model backends — parallel to Con
 
 ### Registry — backend instantiation and lifecycle
 
-- [ ] All model backends for an org registered in the ModelBackendHub — not yet implemented
+- [x] All model backends for an org registered in the ModelBackendHub — via hub.initialise()
 - [ ] Agents reference a `model_backend_id` instead of embedding provider/model config
 - [ ] `model_backend_id` resolved to a concrete `ModelBackendBase` instance at run-start
 - [ ] Same resolution pattern as ConnectorHub (ConnectorHub and ModelBackendHub are parallel)
@@ -29,11 +32,11 @@ The runtime registry and resolution layer for model backends — parallel to Con
 
 ### Credential Decryption — one-decrypt-per-run
 
-- [ ] Credentials decrypted once at run-start during ModelBackend initialisation for that run
-- [ ] Decrypted backend instance held in run-scoped context object
-- [ ] One Fernet decrypt call per ModelBackend per run — not per node invocation
-- [ ] Run-scoped context never enters LangGraph state, checkpoint blobs, OTel spans, or logs (§6.13 credential-in-state rule)
-- [ ] Decrypted backend discarded at run end
+- [x] Credentials decrypted once at run-start during ModelBackend initialisation for that run
+- [x] Decrypted backend instance held in run-scoped context object
+- [x] One Fernet decrypt call per ModelBackend per run — not per node invocation
+- [x] Run-scoped context never enters LangGraph state, checkpoint blobs, OTel spans, or logs (§6.13 credential-in-state rule)
+- [x] Decrypted backend discarded at run end
 - [ ] Balances performance (one decrypt) with shortest practical credential lifetime
 
 ### Runtime Resolution — model_id pinning
@@ -63,19 +66,20 @@ The runtime registry and resolution layer for model backends — parallel to Con
 
 - [ ] Referencing a non-existent `model_backend_id` in a pipeline returns validation error at save time
 - [ ] Referencing a deprecated backend in a new agent definition returns validation error
-- [ ] Decrypt failure at run-start — Fernet key mismatch, corrupted ciphertext
+- [x] Decrypt failure at run-start — Fernet key mismatch, corrupted ciphertext
 - [ ] All referenced backends must pass health check before run start — single failure blocks entire run
 - [ ] Backend becomes unreachable mid-run — current run continues, error logged, subsequent runs blocked
 - [ ] Concurrent credential rotation and Hub cache — stale cache invalidated on rotation
 
 ## Known Gaps
 
-- [ ] **No Hub implementation exists**: ModelBackendHub is a design concept with no code — no registry, no decryption logic, no run-scoped context wiring
-- [ ] **No credential decryption at run-start**: all backends are currently instantiated with plaintext credentials passed at construction time
 - [ ] **No pre-run health check**: no gate before run start that validates model backend health
 - [ ] **No `model_backend_pins_json`**: PipelineSnapshot has no field for pinned model backend resolution
 - [ ] **No caching**: no org-scoped backend instance cache
 - [ ] **No Hub API endpoint**: no route for listing available backends per org
 - [ ] **No BDD tests**: no feature file exists for the Hub
-- [ ] **No unit tests**: no Hub test file exists
-- [ ] **ConnectorHub pattern not replicated**: ModelBackendHub was deferred; ConnectorHub credential lifetime was specified first
+- **ConnectorHub pattern not replicated**: ModelBackendHub exists but is NOT yet wired into the run execution pipeline (node_runner.py has a TODO comment). The Hub is used for schema inference (routes/schemas.py) but not for pipeline runs.
+
+## QA History
+
+- 2026-07-02 (improve-architecture index 54): Cross-cutting QA pass 1. Updated frontmatter (added code path for Hub implementation, added 2 unit test file refs). Marked 7 stale [ ]→[x] behaviours (registration, decryption, run-scoped lifecycle, ABC pattern, stub test double). Removed 3 stale known gaps (No Hub implementation, No credential decryption, No unit tests). Updated ConnectorHub pattern gap description to reflect current state. All Hub unit tests pass.
