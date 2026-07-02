@@ -9,7 +9,10 @@ code:
   - backend/src/modulo/core/audit_logger/__init__.py
   - backend/src/modulo/core/audit_logger/append_only.py
 depends-on: [feat-core-audit-trail]
-unit-tests: []
+unit-tests:
+  - backend/tests/unit/audit_logger/test_audit_logger.py
+  - backend/tests/unit/audit_logger/test_append_only.py
+  - backend/tests/integration/test_audit_append_only.py
 status: partial
 ---
 

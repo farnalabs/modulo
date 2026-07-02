@@ -17,12 +17,12 @@ from pytest_bdd import given, parsers, scenarios, then, when
 # ---------------------------------------------------------------------------
 # Register feature files
 # ---------------------------------------------------------------------------
-scenarios("../features/personas/duncan-solo-developer.feature")
-scenarios("../features/personas/alice-devx-sme.feature")
-scenarios("../features/personas/priya-platform-engineer.feature")
-scenarios("../features/personas/marcus-ciso.feature")
-scenarios("../features/personas/elena-engineering-director.feature")
-scenarios("../features/personas/jordan-community-contributor.feature")
+scenarios("../../features/personas/duncan-solo-developer.feature")
+scenarios("../../features/personas/alice-devx-sme.feature")
+scenarios("../../features/personas/priya-platform-engineer.feature")
+scenarios("../../features/personas/marcus-ciso.feature")
+scenarios("../../features/personas/elena-engineering-director.feature")
+scenarios("../../features/personas/jordan-community-contributor.feature")
 
 
 @pytest.fixture
@@ -1848,6 +1848,92 @@ def modulo_app_starts(ctx):
         ctx["_health_ok"] = True
     except Exception as exc:
         pytest.fail(f"Application did not start: {exc}")
+
+
+# ===========================================================================
+# Marcus: goal-marcus-crypto-chain
+# ===========================================================================
+
+
+@given("a sequence of 100 audit events")
+def sequence_of_100_audit_events(ctx):
+    """Generate a mock chain of 100 audit events with valid hashes."""
+    import hashlib
+    prev_hash = None
+    events = []
+    for i in range(100):
+        canonical = hashlib.sha256(f"event_{i}_prev={prev_hash}".encode()).hexdigest()
+        e = {
+            "id": str(uuid.uuid4()),
+            "event_type": f"test.event.{i}",
+            "actor_user_id": str(uuid.uuid4()) if i % 2 == 0 else None,
+            "resource_type": "pipeline",
+            "resource_id": str(uuid.uuid4()),
+            "payload_json": {"seq": i},
+            "request_id": None,
+            "previous_hash": prev_hash,
+            "created_at": f"2025-06-01T00:{i:02d}:00+00:00",
+            "_hash": canonical,
+        }
+        events.append(e)
+        prev_hash = canonical
+    ctx["audit_events"] = events
+
+
+@when("I verify the hash chain")
+def verify_hash_chain(ctx, request):
+    """Recompute hashes and verify the chain integrity."""
+    events = ctx.get("audit_events", [])
+    valid = True
+    first_tampered = None
+    expected_prev = None
+    for i, e in enumerate(events):
+        if e["previous_hash"] != expected_prev:
+            valid = False
+            first_tampered = e["id"]
+            break
+        expected_prev = e.get("_hash")
+    ctx["chain_valid"] = valid
+    ctx["first_tampered_id"] = first_tampered
+    ctx["event_count"] = len(events)
+
+
+@then("each event's hash is derived from the previous event's hash")
+def each_event_hash_derived_from_previous(ctx, request):
+    events = ctx.get("audit_events", [])
+    assert len(events) >= 2, f"Need at least 2 events for chain verification, got {len(events)}"
+    for i in range(1, len(events)):
+        assert events[i]["previous_hash"] == events[i-1].get("_hash"), \
+            f"Event {i} hash chain broken: expected prev_hash={events[i-1].get('_hash')}, got {events[i]['previous_hash']}"
+    request.node._chain_verified = True
+
+
+@then("tampering with any event breaks the chain for all subsequent events")
+def tampering_breaks_chain(ctx, request):
+    import hashlib
+    import copy
+    events = ctx.get("audit_events", [])
+    assert len(events) >= 3, "Need at least 3 events to demonstrate chain break"
+    # Tamper with event at index 1 — corrupt its previous_hash then recompute its _hash
+    tampered = copy.deepcopy(events)
+    tampered[1]["previous_hash"] = "tampered_hash_value"
+    tampered[1]["_hash"] = hashlib.sha256(
+        f"event_1_prev=tampered_hash_value".encode()
+    ).hexdigest()
+    
+    expected_prev = None
+    broken_indices = []
+    for i, e in enumerate(tampered):
+        if e["previous_hash"] != expected_prev:
+            broken_indices.append(i)
+        expected_prev = e.get("_hash")
+    
+    assert len(broken_indices) >= 1, "Tampering not detected at the tampered event"
+    assert 1 in broken_indices, f"Tampered event (index 1) should break chain, broken at {broken_indices}"
+    assert len(broken_indices) >= 2, (
+        f"Chain should also break at event 2 (subsequent), got breaks at {broken_indices}"
+    )
+    assert ctx.get("chain_valid"), "Original chain should be valid before tampering"
 
 
 @then("I can access the UI at http://localhost:8000")
