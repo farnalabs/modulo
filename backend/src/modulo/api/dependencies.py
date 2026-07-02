@@ -10,7 +10,7 @@ if test isolation is needed.
 from collections.abc import AsyncGenerator
 from typing import Any
 
-from fastapi import Depends, HTTPException, status
+from fastapi import Depends
 from sqlalchemy.ext.asyncio import (
     AsyncEngine,
     AsyncSession,
@@ -18,6 +18,7 @@ from sqlalchemy.ext.asyncio import (
     create_async_engine,
 )
 
+from modulo.api.models.problem import ProblemException, ProblemType
 from modulo.auth.dependencies import get_current_user
 from modulo.auth.jwt import AuthenticatedPrincipal
 from modulo.core.feature_flags import PlanContext
@@ -38,13 +39,10 @@ def require_feature(feature_name: str):
 
     async def _check(ctx: PlanContext = Depends(get_plan_context)) -> None:
         if not ctx.feature_enabled(feature_name):
-            raise HTTPException(
-                status_code=status.HTTP_402_PAYMENT_REQUIRED,
-                detail={
-                    "detail": f"{feature_name} is not available on your plan",
-                    "code": "feature_required",
-                    "feature": feature_name,
-                },
+            raise ProblemException(
+                ProblemType.FEATURE_REQUIRED,
+                detail=f"{feature_name} is not available on your plan",
+                instance=feature_name,
             )
 
     return Depends(_check)

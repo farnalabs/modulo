@@ -12,8 +12,8 @@ from typing import Any, ClassVar
 from fastapi import FastAPI, Request, Response
 from jose import jwt as jose_jwt
 from starlette.middleware.base import BaseHTTPMiddleware
-from starlette.status import HTTP_429_TOO_MANY_REQUESTS
 
+from modulo.api.models.problem import ProblemDetail, ProblemType
 from modulo.core.rate_limiter import AuthRateLimiter as AuthRateLimiterCls
 from modulo.core.rate_limiter import RateLimiterRegistry
 from modulo.settings import Settings, get_settings
@@ -104,12 +104,10 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
             )
             if not allowed:
                 _log.warning("ratelimit.exceeded", extra={"client_key": client_key})
-                return Response(
-                    status_code=HTTP_429_TOO_MANY_REQUESTS,
-                    content=('{"detail":"Rate limit exceeded. Try again later.","error_code":"rate_limit_exceeded"}'),
-                    media_type="application/json",
-                    headers={"Retry-After": str(rule[2])},
-                )
+                return ProblemDetail.from_type(
+                    ProblemType.RATE_LIMITED,
+                    detail="Rate limit exceeded. Try again later.",
+                ).to_response(headers={"Retry-After": str(rule[2])})
         response: Response = await call_next(request)
         return response
 
@@ -239,12 +237,10 @@ class AuthRateLimitMiddleware(BaseHTTPMiddleware):
         allowed, retry_after = await self._rate_limiter.check_login(ip)
         if not allowed:
             _log.warning("auth_ratelimit.exceeded", extra={"ip": ip, "retry_after": retry_after})
-            return Response(
-                status_code=HTTP_429_TOO_MANY_REQUESTS,
-                content='{"detail":"Too many login attempts. Try again later.","error_code":"rate_limit_exceeded"}',
-                media_type="application/json",
-                headers={"Retry-After": str(retry_after)},
-            )
+            return ProblemDetail.from_type(
+                ProblemType.RATE_LIMITED,
+                detail="Too many login attempts. Try again later.",
+            ).to_response(headers={"Retry-After": str(retry_after)})
 
         return await call_next(request)
 
