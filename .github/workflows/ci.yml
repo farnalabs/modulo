@@ -51,6 +51,13 @@ jobs:
           DATABASE_URL: "postgresql+asyncpg://unused:unused@localhost/unused"
           SECRET_KEY: "ci-secret-key-for-github-actions-testing-only"
           FERNET_KEY: "vK-xU7GqHLflg_GqzJ1FqWI7pHWoHSIyukf4wx-tMHI="
+      - name: Schemathesis API fuzz testing
+        shell: pwsh
+        run: uv run --no-sync pytest tests/integration/test_schemathesis.py -x --timeout=120
+        env:
+          DATABASE_URL: "postgresql+asyncpg://unused:unused@localhost/unused"
+          SECRET_KEY: "ci-secret-key-for-github-actions-testing-only"
+          FERNET_KEY: "vK-xU7GqHLflg_GqzJ1FqWI7pHWoHSIyukf4wx-tMHI="
       - uses: actions/upload-artifact@v4
         if: always()
         with:
