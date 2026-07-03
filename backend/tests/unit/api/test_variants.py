@@ -6,6 +6,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi import HTTPException
+from sqlalchemy.exc import ProgrammingError
 
 from modulo.api.routes.variants import (
     _variant_to_response,
@@ -395,3 +396,164 @@ class TestListGroups:
             )
         assert len(result) == 1
         assert result[0]["name"] == "listed"
+
+
+@pytest.mark.asyncio
+class TestRunVariantGroupNotFound:
+    async def test_raises_404_when_group_not_found(self) -> None:
+        principal = make_mock_principal()
+        mock_session = make_session_mock()
+        group_id = uuid.uuid4()
+        body = MagicMock()
+        body.input_payload = {}
+
+        with patch(
+            "modulo.api.routes.variants.get_variant_group",
+            new_callable=AsyncMock,
+            return_value=None,
+        ):
+            with pytest.raises(HTTPException) as exc:
+                await run_variant(group_id, body, mock_session, principal)
+            assert exc.value.status_code == 404
+            assert "not found" in exc.value.detail.lower()
+
+
+@pytest.mark.asyncio
+class TestRunVariantEmptyVariants:
+    async def test_raises_429_when_variants_empty(self) -> None:
+        principal = make_mock_principal()
+        mock_session = make_session_mock()
+        group_id = uuid.uuid4()
+        body = MagicMock()
+        body.input_payload = {}
+
+        with patch(
+            "modulo.api.routes.variants.get_variant_group",
+            new_callable=AsyncMock,
+        ) as mock_get:
+            mock_group = MagicMock()
+            mock_group.variants = []
+            mock_get.return_value = mock_group
+
+            with pytest.raises(HTTPException) as exc:
+                await run_variant(group_id, body, mock_session, principal)
+            assert exc.value.status_code == 429
+            assert "no variants" in exc.value.detail.lower()
+
+
+@pytest.mark.asyncio
+class TestCoverageGapsGroupNotFound:
+    async def test_raises_404_when_group_not_found(self) -> None:
+        principal = make_mock_principal()
+        mock_session = make_session_mock()
+        group_id = uuid.uuid4()
+
+        with patch(
+            "modulo.api.routes.variants.get_variant_group",
+            new_callable=AsyncMock,
+            return_value=None,
+        ):
+            with pytest.raises(HTTPException) as exc:
+                await coverage_gaps(group_id, mock_session, principal)
+            assert exc.value.status_code == 404
+            assert "not found" in exc.value.detail.lower()
+
+
+@pytest.mark.asyncio
+class TestPromptDiffsGroupNotFound:
+    async def test_raises_404_when_group_not_found(self) -> None:
+        principal = make_mock_principal()
+        mock_session = make_session_mock()
+        group_id = uuid.uuid4()
+
+        with patch(
+            "modulo.api.routes.variants.get_variant_group",
+            new_callable=AsyncMock,
+            return_value=None,
+        ):
+            with pytest.raises(HTTPException) as exc:
+                await prompt_diffs(group_id, mock_session, principal)
+            assert exc.value.status_code == 404
+            assert "not found" in exc.value.detail.lower()
+
+
+@pytest.mark.asyncio
+class TestCreateGroupProgrammingError:
+    async def test_raises_501_on_programming_error(self) -> None:
+        principal = make_mock_principal()
+        mock_session = make_session_mock()
+
+        with patch(
+            "modulo.api.routes.variants.create_variant_group",
+            new_callable=AsyncMock,
+            side_effect=ProgrammingError("mock", "mock", "mock"),
+        ):
+            body = MagicMock()
+            body.pipeline_id = uuid.uuid4()
+            body.name = "test"
+            body.description = None
+            body.variants = []
+            body.selection_strategy = "weighted"
+            body.max_concurrent_runs = 5
+            body.degraded_evals = False
+            body.model_dump.return_value = {}
+
+            with pytest.raises(HTTPException) as exc:
+                await create_group(body, mock_session, principal)
+            assert exc.value.status_code == 501
+
+
+@pytest.mark.asyncio
+class TestGetGroupProgrammingError:
+    async def test_raises_501_on_programming_error(self) -> None:
+        principal = make_mock_principal()
+        mock_session = make_session_mock()
+
+        with patch(
+            "modulo.api.routes.variants.get_variant_group",
+            new_callable=AsyncMock,
+            side_effect=ProgrammingError("mock", "mock", "mock"),
+        ):
+            with pytest.raises(HTTPException) as exc:
+                await get_group(uuid.uuid4(), mock_session, principal)
+            assert exc.value.status_code == 501
+
+
+class TestVariantToResponseEmptyRunCount:
+    def test_handles_none_run_count(self) -> None:
+        group = MagicMock()
+        group.id = uuid.uuid4()
+        group.pipeline_id = uuid.uuid4()
+        group.name = "test"
+        group.description = None
+        group.variants = []
+        group.selection_strategy = "weighted"
+        group.run_count = None
+        group.max_concurrent_runs = 5
+        group.degraded_evals = False
+        from datetime import datetime
+
+        group.created_at = datetime.now(UTC)
+        group.updated_at = datetime.now(UTC)
+
+        result = _variant_to_response(group)
+        assert result["run_count"] == 0
+
+    def test_handles_zero_run_count(self) -> None:
+        group = MagicMock()
+        group.id = uuid.uuid4()
+        group.pipeline_id = uuid.uuid4()
+        group.name = "test"
+        group.description = None
+        group.variants = []
+        group.selection_strategy = "weighted"
+        group.run_count = 0
+        group.max_concurrent_runs = 5
+        group.degraded_evals = False
+        from datetime import datetime
+
+        group.created_at = datetime.now(UTC)
+        group.updated_at = datetime.now(UTC)
+
+        result = _variant_to_response(group)
+        assert result["run_count"] == 0
