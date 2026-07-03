@@ -34,6 +34,9 @@ def upgrade() -> None:
     # Make run_number non-nullable now
     op.alter_column("runs", "run_number", nullable=False)
     
+    # Add unique constraint on (organisation_id, run_number) to prevent race-condition duplicates
+    op.create_unique_constraint("uq_runs_org_run_number", "runs", ["organisation_id", "run_number"])
+    
     # Add session_number to chat_sessions (nullable initially)
     op.add_column("chat_sessions", sa.Column("session_number", sa.Integer(), nullable=True))
 
@@ -50,8 +53,13 @@ def upgrade() -> None:
     
     # Make session_number non-nullable now
     op.alter_column("chat_sessions", "session_number", nullable=False)
+    
+    # Add unique constraint on (user_id, session_number)
+    op.create_unique_constraint("uq_chat_sessions_user_session_number", "chat_sessions", ["user_id", "session_number"])
 
 
 def downgrade() -> None:
+    op.drop_constraint("uq_runs_org_run_number", "runs", type_="unique")
     op.drop_column("runs", "run_number")
+    op.drop_constraint("uq_chat_sessions_user_session_number", "chat_sessions", type_="unique")
     op.drop_column("chat_sessions", "session_number")

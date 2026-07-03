@@ -14,6 +14,7 @@ from sqlalchemy import (
     Integer,
     Numeric,
     String,
+    UniqueConstraint,
     Uuid,
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
@@ -39,6 +40,7 @@ class Run(OrgScoped):
             "'waiting_for_lock', 'complete', 'failed', 'cancelled', 'eval_failed')",
             name="ck_runs_status",
         ),
+        UniqueConstraint("organisation_id", "run_number", name="uq_runs_org_run_number"),
     )
 
     pipeline_id: Mapped[uuid.UUID] = mapped_column(
