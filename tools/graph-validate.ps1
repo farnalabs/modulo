@@ -46,4 +46,11 @@ foreach($e in $entries){$c2=Get-Content -Raw -Encoding UTF8 -LiteralPath $e.path
 # 6. Fix _index.md
 if($Fix){$idx=Join-Path $productMap "_index.md";$ic=Get-Content -Raw -Encoding UTF8 -LiteralPath $idx;$ni=@("## Index","");$grps=$entries|Group-Object{[System.IO.Path]::GetFileName((Split-Path -Parent $_.path))}|Sort-Object Name;$gl=@{core="Core Platform";auth="Auth and Security";teams="Teams";evals="Evals and Feedback";connectors="Connectors";pipelines="Pipelines";frontend="Frontend";observability="Observability";"model-backends"="Model Backends";variants="Run Variants"};foreach($g in $grps){$l=$gl[$g.Name];if(-not$l){$l=$g.Name};$ni+="### $l";foreach($e in $g.Group|Sort-Object id){$rp=$e.path.Replace($productMap,"").TrimStart("\").Replace("\","/");if($e.prd){$ni+="- [$($e.id)]($rp) => PRD $($e.prd)"}else{$ni+="- [$($e.id)]($rp)"}};$ni+=""};$h=$ic-replace'(?s)## Index.*','';$f=$ic-replace'(?s).*## Index.*?\n##','##';$nc=$h.TrimEnd()+"``n``n"+($ni-join"``n")+"``n``n"+$f;Set-Content -Encoding UTF8 -LiteralPath $idx -Value $nc;Write-Host "Updated _index.md" -ForegroundColor Green}
 
+# ---- Manifest validation ----
+Write-Host "Manifest validation" -ForegroundColor Cyan
+$manifestValidator = Join-Path $PSScriptRoot "validate-manifest.ps1"
+if (Test-Path -LiteralPath $manifestValidator) {
+    & $manifestValidator -CI
+}
+
 if($issues.Count-eq 0){if(-not$CI){Write-Host "Graph is clean - $($entries.Count) entries, all refs resolve." -ForegroundColor Green};exit 0}else{if(-not$CI){Write-Host "$($issues.Count) issues found:" -ForegroundColor Red;$issues|ForEach-Object{$p=$_-split'\|';Write-Host "  [$($p[0])] $($p[1]) -> $($p[2])" -ForegroundColor Yellow}}else{$issues|ForEach-Object{Write-Host $_}};exit 1}
