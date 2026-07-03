@@ -7,7 +7,7 @@
       @click="$emit('toggle')"
       class="sidebar-group-header"
     >
-      <span class="sidebar-group-label">{{ label }}</span>
+      <span class="sidebar-group-label">{{ labelKey ? $t(labelKey) : label }}</span>
       <span class="sidebar-group-chevron" :class="{ rotated: !collapsed }">
         <svg
           xmlns="http://www.w3.org/2000/svg"
@@ -30,7 +30,7 @@
         :id="`sidebar-group-${id}`"
         class="sidebar-group-items"
         role="region"
-        :aria-label="label"
+        :aria-label="labelKey ? $t(labelKey) : label"
       >
         <slot />
       </div>
@@ -42,6 +42,7 @@
 defineProps<{
   id: string;
   label: string;
+  labelKey: string;
   collapsed: boolean;
 }>();
 

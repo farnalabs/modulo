@@ -4,6 +4,7 @@
       <SidebarGroup
         :id="group.id"
         :label="group.label"
+        :label-key="group.labelKey"
         :collapsed="isGroupCollapsed(group.id, group.defaultCollapsed)"
         @toggle="toggleGroup(group.id, group.defaultCollapsed)"
       >
@@ -13,6 +14,7 @@
           :to="item.to"
           :icon="item.icon"
           :label="item.label"
+          :label-key="item.labelKey"
           :exact="item.exact"
           @click="$emit('navigate')"
         /></SidebarGroup>
