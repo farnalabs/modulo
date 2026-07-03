@@ -339,6 +339,7 @@ import type { components } from '../lib/api/client'
 import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
 import FeatureGate from '../components/FeatureGate.vue'
+import { formatApiError } from '../lib/api/formatError'
 
 type ModelBackendItem = components['schemas']['ModelBackendResponse']
 
@@ -392,12 +393,12 @@ async function loadBackends() {
   try {
     const { data, error: err } = await api.GET('/api/v1/model-backends')
     if (err) {
-      error.value = `Failed to load model backends: ${err}`
+      error.value = `Failed to load model backends: ${formatApiError(err)}`
     } else if (data) {
       backends.value = data.items
     }
   } catch (e: unknown) {
-    error.value = `Failed to load model backends: ${e instanceof Error ? e.message : String(e)}`
+    error.value = `Failed to load model backends: ${formatApiError(e)}`
   } finally {
     loading.value = false
   }
