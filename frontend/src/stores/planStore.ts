@@ -82,6 +82,9 @@ export const usePlanStore = defineStore("plan", () => {
       }
 
       error.value = apiErrors.length > 0 ? apiErrors.join("; ") : null;
+    } catch (e: unknown) {
+      apiErrors.push(e instanceof Error ? e.message : String(e));
+      error.value = apiErrors.join("; ");
     } finally {
       isLoading.value = false;
     }

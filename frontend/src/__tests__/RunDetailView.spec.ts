@@ -3,6 +3,10 @@ import { mount } from '@vue/test-utils'
 import { createRouter, createWebHistory } from 'vue-router'
 import { nextTick } from 'vue'
 
+function flushPromises() {
+  return new Promise((resolve) => setTimeout(resolve, 0))
+}
+
 vi.mock('../lib/api/client', () => {
   const mockPost = vi.fn().mockImplementation((url: string) => {
     if (url === '/api/v1/runs/{run_id}/nodes/{node_id}/prompt/reveal') {
@@ -49,6 +53,45 @@ vi.mock('../lib/api/client', () => {
   }
 })
 
+const testRoute = vi.hoisted(() => ({
+  params: { id: 'test-run-id' },
+  fullPath: '/runs/test-run-id',
+  path: '/runs/test-run-id',
+  query: {},
+  hash: '',
+  matched: [],
+  name: 'run-detail',
+  redirectedFrom: undefined,
+  meta: {},
+} as const))
+
+vi.mock('vue-router', () => {
+  const mockRouter = {
+    push: vi.fn().mockResolvedValue(undefined),
+    replace: vi.fn(),
+    resolve: vi.fn(),
+    go: vi.fn(),
+    back: vi.fn(),
+    forward: vi.fn(),
+    beforeEach: vi.fn(),
+    afterEach: vi.fn(),
+    onError: vi.fn(),
+    currentRoute: { value: testRoute },
+    getRoutes: vi.fn(() => []),
+    addRoute: vi.fn(),
+    removeRoute: vi.fn(),
+    hasRoute: vi.fn(() => false),
+    isReady: vi.fn().mockResolvedValue(undefined),
+    install: vi.fn(),
+  }
+  return {
+    useRoute: vi.fn(() => testRoute),
+    useRouter: vi.fn(() => mockRouter),
+    createRouter: vi.fn(() => mockRouter),
+    createWebHistory: vi.fn(() => ({})),
+  }
+})
+
 import RunDetailView from '../views/RunDetailView.vue'
 
 const router = createRouter({
@@ -78,7 +121,7 @@ describe('RunDetailView', () => {
     await router.isReady()
     const wrapper = createWrapper()
     await nextTick()
-    await new Promise(r => setTimeout(r, 0))
+    await flushPromises()
     expect(wrapper.exists()).toBe(true)
     expect(wrapper.text()).toContain('Run Detail')
     wrapper.unmount()
@@ -89,7 +132,7 @@ describe('RunDetailView', () => {
     await router.isReady()
     const wrapper = createWrapper()
     await nextTick()
-    await new Promise(r => setTimeout(r, 0))
+    await flushPromises()
     await nextTick()
     const revealBtns = wrapper.findAll('[data-testid="run-detail-reveal-prompt"]')
     expect(revealBtns.length).toBeGreaterThanOrEqual(1)
@@ -102,14 +145,14 @@ describe('RunDetailView', () => {
     await router.isReady()
     const wrapper = createWrapper()
     await nextTick()
-    await new Promise(r => setTimeout(r, 0))
+    await flushPromises()
     await nextTick()
 
     const revealBtn = wrapper.find('[data-testid="run-detail-reveal-prompt"]')
     expect(revealBtn.exists()).toBe(true)
     await revealBtn.trigger('click')
     await nextTick()
-    await new Promise(r => setTimeout(r, 0))
+    await flushPromises()
 
     const showBtn = wrapper.find('[data-testid="run-detail-show-prompt"]')
     expect(showBtn.exists()).toBe(true)
@@ -129,13 +172,13 @@ describe('RunDetailView', () => {
     await router.isReady()
     const wrapper = createWrapper()
     await nextTick()
-    await new Promise(r => setTimeout(r, 0))
+    await flushPromises()
     await nextTick()
 
     const revealBtn = wrapper.find('[data-testid="run-detail-reveal-prompt"]')
     await revealBtn.trigger('click')
     await nextTick()
-    await new Promise(r => setTimeout(r, 0))
+    await flushPromises()
 
     const showBtn = wrapper.find('[data-testid="run-detail-show-prompt"]')
     await showBtn.trigger('click')

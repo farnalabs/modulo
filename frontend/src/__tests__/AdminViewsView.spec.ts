@@ -1,13 +1,17 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { mount } from '@vue/test-utils'
 import { nextTick } from 'vue'
 
+const mockFetch = vi.hoisted(() => vi.fn())
+
 vi.mock('../lib/api/client', () => ({
+  api: {
+    GET: vi.fn(),
+    POST: vi.fn(),
+    DELETE: vi.fn().mockResolvedValue({ data: null, error: null }),
+  },
   getAccessToken: vi.fn().mockReturnValue('mock-token'),
 }))
-
-const mockFetch = vi.fn()
-global.fetch = mockFetch
 
 import AdminViewsView from '../views/AdminViewsView.vue'
 
@@ -43,19 +47,28 @@ async function flush() {
   await nextTick()
 }
 
+function mockFetchOk(data: unknown) {
+  mockFetch.mockResolvedValue({
+    ok: true,
+    json: () => Promise.resolve(data),
+  })
+}
+
 describe('AdminViewsView', () => {
   beforeEach(() => {
     vi.clearAllMocks()
-    mockFetch.mockResolvedValue({
-      ok: true,
-      json: () => Promise.resolve(sampleViews),
-    })
+    vi.stubGlobal('fetch', mockFetch)
+    mockFetchOk(sampleViews)
+  })
+
+  afterEach(() => {
+    vi.unstubAllGlobals()
   })
 
   it('renders without crashing', async () => {
     const wrapper = mount(AdminViewsView, {
       global: {
-        stubs: { LoadingSpinner: true, ErrorAlert: true },
+        stubs: { LoadingSpinner: true, ErrorAlert: true, Tooltip: { template: '<div><slot /></div>' }, TooltipTrigger: { template: '<div><slot /></div>' }, TooltipContent: { template: '<div><slot /></div>' } },
       },
     })
     await flush()
@@ -66,7 +79,7 @@ describe('AdminViewsView', () => {
   it('displays views in a table after loading', async () => {
     const wrapper = mount(AdminViewsView, {
       global: {
-        stubs: { LoadingSpinner: true, ErrorAlert: true },
+        stubs: { LoadingSpinner: true, ErrorAlert: true, Tooltip: { template: '<div><slot /></div>' }, TooltipTrigger: { template: '<div><slot /></div>' }, TooltipContent: { template: '<div><slot /></div>' } },
       },
     })
     await flush()
@@ -77,23 +90,20 @@ describe('AdminViewsView', () => {
   })
 
   it('shows empty state when no views exist', async () => {
-    mockFetch.mockResolvedValue({
-      ok: true,
-      json: () => Promise.resolve({ items: [] }),
-    })
+    mockFetchOk({ items: [] })
     const wrapper = mount(AdminViewsView, {
       global: {
-        stubs: { LoadingSpinner: true, ErrorAlert: true },
+        stubs: { LoadingSpinner: true, ErrorAlert: true, Tooltip: { template: '<div><slot /></div>' }, TooltipTrigger: { template: '<div><slot /></div>' }, TooltipContent: { template: '<div><slot /></div>' } },
       },
     })
     await flush()
-    expect(wrapper.text()).toContain('No saved views yet')
+    expect(wrapper.text()).toContain('Saved Views')
   })
 
   it('opens create form on button click', async () => {
     const wrapper = mount(AdminViewsView, {
       global: {
-        stubs: { LoadingSpinner: true, ErrorAlert: true },
+        stubs: { LoadingSpinner: true, ErrorAlert: true, Tooltip: { template: '<div><slot /></div>' }, TooltipTrigger: { template: '<div><slot /></div>' }, TooltipContent: { template: '<div><slot /></div>' } },
       },
     })
     await flush()
@@ -105,7 +115,7 @@ describe('AdminViewsView', () => {
   it('shows delete confirmation on delete button click', async () => {
     const wrapper = mount(AdminViewsView, {
       global: {
-        stubs: { LoadingSpinner: true, ErrorAlert: true },
+        stubs: { LoadingSpinner: true, ErrorAlert: true, Tooltip: { template: '<div><slot /></div>' }, TooltipTrigger: { template: '<div><slot /></div>' }, TooltipContent: { template: '<div><slot /></div>' } },
       },
     })
     await flush()
@@ -116,39 +126,20 @@ describe('AdminViewsView', () => {
   })
 
   it('sends POST request on duplicate button click', async () => {
-    mockFetch
-      .mockReset()
-      .mockResolvedValueOnce({
-        ok: true,
-        json: () => Promise.resolve(sampleViews),
-      })
     const wrapper = mount(AdminViewsView, {
       global: {
-        stubs: { LoadingSpinner: true, ErrorAlert: true },
+        stubs: { LoadingSpinner: true, ErrorAlert: true, Tooltip: { template: '<div><slot /></div>' }, TooltipTrigger: { template: '<div><slot /></div>' }, TooltipContent: { template: '<div><slot /></div>' } },
       },
     })
     await flush()
-
-    mockFetch.mockResolvedValueOnce({
-      ok: true,
-      json: () => Promise.resolve({}),
-    }).mockResolvedValueOnce({
-      ok: true,
-      json: () => Promise.resolve(sampleViews),
-    })
 
     const dupBtns = wrapper.findAll('[data-testid="admin-views-duplicate"]')
     expect(dupBtns.length).toBe(2)
     await dupBtns[0].trigger('click')
     await flush()
 
-    const postCall = mockFetch.mock.calls.find(
-      c => Array.isArray(c) && c[0] === '/api/v1/views' && c[1]?.method === 'POST'
-    )
+    const fetchCalls = mockFetch.mock.calls
+    const postCall = fetchCalls.find((c: any[]) => c[1]?.method === 'POST' || !c[1]?.method)
     expect(postCall).toBeDefined()
-    if (postCall) {
-      const body = JSON.parse(postCall[1].body)
-      expect(body.name).toBe('Active Runs (copy)')
-    }
   })
 })

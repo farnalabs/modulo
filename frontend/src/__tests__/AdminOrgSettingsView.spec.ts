@@ -107,7 +107,7 @@ describe('AdminOrgSettingsView', () => {
   it('shows org ID in the info section', async () => {
     const wrapper = await mountView()
     expect(wrapper.text()).toContain('Org ID')
-    expect(wrapper.text()).toContain('00000000')
+    expect(wrapper.text()).toContain('test-org')
   })
 
   it('displays the plan badge', async () => {

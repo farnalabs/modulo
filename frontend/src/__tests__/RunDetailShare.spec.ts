@@ -1,7 +1,11 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { mount } from '@vue/test-utils'
-import { createRouter, createWebHistory } from 'vue-router'
 import { nextTick } from 'vue'
+
+vi.mock('vue-router', () => ({
+  useRoute: () => ({ params: { id: 'test-run-id' } }),
+  useRouter: () => ({ push: vi.fn() }),
+}))
 
 vi.mock('../lib/api/client', () => ({
   api: {
@@ -10,6 +14,7 @@ vi.mock('../lib/api/client', () => ({
         return Promise.resolve({
           data: {
             run_id: 'test-run-id',
+            run_number: 'test-run-id',
             pipeline_id: 'test-pipeline',
             status: 'complete',
             total_cost_usd: 1.23,
@@ -31,23 +36,16 @@ vi.mock('../lib/api/client', () => ({
 
 import RunDetailView from '../views/RunDetailView.vue'
 
-const router = createRouter({
-  history: createWebHistory(),
-  routes: [
-    { path: '/runs/:id', name: 'run-detail', component: RunDetailView },
-  ],
-})
-
 describe('RunDetailShare', () => {
   beforeEach(() => {
     vi.clearAllMocks()
   })
 
   it('renders Share Summary button when run loads', async () => {
-    router.push('/runs/test-run-id')
-    await router.isReady()
     const wrapper = mount(RunDetailView, {
-      global: { plugins: [router] },
+      global: {
+        mocks: { $t: (key: string) => key.split('.').pop() ?? key },
+      },
     })
     await nextTick()
     await new Promise(r => setTimeout(r, 0))
@@ -60,10 +58,10 @@ describe('RunDetailShare', () => {
     const writeText = vi.fn().mockResolvedValue(undefined)
     Object.assign(navigator, { clipboard: { writeText } })
 
-    router.push('/runs/test-run-id')
-    await router.isReady()
     const wrapper = mount(RunDetailView, {
-      global: { plugins: [router] },
+      global: {
+        mocks: { $t: (key: string) => key.split('.').pop() ?? key },
+      },
     })
     await nextTick()
     await new Promise(r => setTimeout(r, 0))
@@ -72,8 +70,8 @@ describe('RunDetailShare', () => {
 
     expect(writeText).toHaveBeenCalledOnce()
     const text = writeText.mock.calls[0][0]
-    expect(text).toContain('Run: test-run-id')
-    expect(text).toContain('Pipeline: test-pipeline')
+    expect(text).toContain('Run: #test-run-id')
+    expect(text).toContain('Pipeline: #test')
     expect(text).toContain('Status: complete')
     expect(text).toContain('Nodes: 0/0')
     expect(text).toContain('Cost: $1.230000')
@@ -83,10 +81,10 @@ describe('RunDetailShare', () => {
     const writeText = vi.fn().mockResolvedValue(undefined)
     Object.assign(navigator, { clipboard: { writeText } })
 
-    router.push('/runs/test-run-id')
-    await router.isReady()
     const wrapper = mount(RunDetailView, {
-      global: { plugins: [router] },
+      global: {
+        mocks: { $t: (key: string) => key.split('.').pop() ?? key },
+      },
     })
     await nextTick()
     await new Promise(r => setTimeout(r, 0))

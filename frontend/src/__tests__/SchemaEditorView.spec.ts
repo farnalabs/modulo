@@ -3,7 +3,7 @@ import { mount } from '@vue/test-utils'
 import { nextTick } from 'vue'
 
 vi.mock('vue-router', () => ({
-  useRoute: vi.fn(() => ({ params: {} })),
+  useRoute: vi.fn(() => ({ params: {}, path: '/schemas/editor' })),
   useRouter: vi.fn(() => ({ push: vi.fn() })),
 }))
 
