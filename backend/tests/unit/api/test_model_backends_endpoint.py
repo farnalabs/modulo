@@ -47,7 +47,7 @@ def _make_backend(credentials_ciphertext: bytes = b"encrypted") -> MagicMock:
     mb.default_params = {}
     mb.visibility = "org"
     mb.fallback_backend_ids = None
-    mb.created_by = uuid.uuid4()
+    mb.account_id = uuid.uuid4()
     mb.created_at = _NOW
     mb.updated_at = _NOW
     return mb
@@ -266,6 +266,65 @@ def test_model_backend_no_credentials_shows_false(client: TestClient) -> None:
 def test_list_model_backends_unauthenticated_returns_4xx(unauth_client: TestClient) -> None:
     resp = unauth_client.get("/api/v1/model-backends")
     assert resp.status_code in (401, 403)
+
+
+def test_list_model_backends_programming_error_returns_501(client: TestClient) -> None:
+    from sqlalchemy.exc import ProgrammingError as PE
+    with (
+        patch("modulo.api.routes.model_backends.list_model_backends", side_effect=PE("mock", "mock", "mock")),
+        patch("modulo.api.routes.model_backends.set_rls_org"),
+        patch("modulo.api.routes.model_backends.set_rls_user_context"),
+    ):
+        resp = client.get("/api/v1/model-backends")
+    assert resp.status_code == 501
+    assert "migrations" in resp.json()["detail"].lower()
+
+
+def test_create_model_backend_programming_error_returns_501(client: TestClient) -> None:
+    from sqlalchemy.exc import ProgrammingError as PE
+    with (
+        patch("modulo.api.routes.model_backends.create_model_backend", side_effect=PE("mock", "mock", "mock")),
+        patch("modulo.api.routes.model_backends.set_rls_org"),
+        patch("modulo.api.routes.model_backends.set_rls_user_context"),
+    ):
+        resp = client.post("/api/v1/model-backends", json={
+            "name": "x", "display_name": "x", "provider": "openai",
+            "model_id": "gpt-4", "api_key": "sk-test",
+        })
+    assert resp.status_code == 501
+
+
+def test_get_model_backend_programming_error_returns_501(client: TestClient) -> None:
+    from sqlalchemy.exc import ProgrammingError as PE
+    with (
+        patch("modulo.api.routes.model_backends.get_model_backend", side_effect=PE("mock", "mock", "mock")),
+        patch("modulo.api.routes.model_backends.set_rls_org"),
+        patch("modulo.api.routes.model_backends.set_rls_user_context"),
+    ):
+        resp = client.get(f"/api/v1/model-backends/{uuid.uuid4()}")
+    assert resp.status_code == 501
+
+
+def test_update_model_backend_programming_error_returns_501(client: TestClient) -> None:
+    from sqlalchemy.exc import ProgrammingError as PE
+    with (
+        patch("modulo.api.routes.model_backends.update_model_backend", side_effect=PE("mock", "mock", "mock")),
+        patch("modulo.api.routes.model_backends.set_rls_org"),
+        patch("modulo.api.routes.model_backends.set_rls_user_context"),
+    ):
+        resp = client.patch(f"/api/v1/model-backends/{uuid.uuid4()}", json={"name": "x"})
+    assert resp.status_code == 501
+
+
+def test_delete_model_backend_programming_error_returns_501(client: TestClient) -> None:
+    from sqlalchemy.exc import ProgrammingError as PE
+    with (
+        patch("modulo.api.routes.model_backends.delete_model_backend", side_effect=PE("mock", "mock", "mock")),
+        patch("modulo.api.routes.model_backends.set_rls_org"),
+        patch("modulo.api.routes.model_backends.set_rls_user_context"),
+    ):
+        resp = client.delete(f"/api/v1/model-backends/{uuid.uuid4()}")
+    assert resp.status_code == 501
 
 
 def test_create_azure_openai_model_backend_round_trips(client: TestClient) -> None:
