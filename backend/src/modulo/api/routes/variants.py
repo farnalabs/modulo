@@ -231,6 +231,12 @@ async def run_variant(
                     detail="Variant group not found",
                 )
 
+            if not group.variants:
+                raise HTTPException(
+                    status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                    detail="Variant group has no variants configured",
+                )
+
             if not await check_pipeline_run_quota(session, group):
                 raise HTTPException(
                     status_code=status.HTTP_429_TOO_MANY_REQUESTS,
@@ -253,7 +259,7 @@ async def run_variant(
     if result is None:
         raise HTTPException(
             status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-            detail="No variant selected or quota exceeded",
+            detail="Pipeline concurrent run quota exceeded",
         )
 
     return {
