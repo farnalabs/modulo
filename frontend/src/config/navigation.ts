@@ -35,6 +35,7 @@ export const navGroups: NavGroup[] = [
     simpleMode: true,
     defaultCollapsed: false,
     items: [
+      { to: '/pipelines', icon: 'GitBranch', label: 'My Pipelines', labelKey: 'components.SidebarNav.item_my_pipelines', exact: true },
       { to: '/library', icon: 'BookOpen', label: 'Library', labelKey: 'components.SidebarNav.item_library' },
       { to: '/templates', icon: 'LayoutTemplate', label: 'Templates', labelKey: 'components.SidebarNav.item_templates' },
       { to: '/pipelines/copy', icon: 'Copy', label: 'Copy Pipeline', labelKey: 'components.SidebarNav.item_copy_pipeline' },
