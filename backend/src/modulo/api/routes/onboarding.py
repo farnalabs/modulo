@@ -6,6 +6,7 @@ from typing import Any, cast
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel
 from sqlalchemy import select
+from sqlalchemy.exc import ProgrammingError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.api.dependencies import get_db_session
@@ -118,12 +119,18 @@ async def get_onboarding_status(
     session: AsyncSession = Depends(get_db_session),
     principal: AuthenticatedPrincipal = Depends(get_current_user),
 ) -> OnboardingStatusResponse:
-    async with session.begin():
-        await set_rls_org(session, principal.organisation_id)
-        result = await session.execute(
-            select(Pipeline).where(Pipeline.organisation_id == principal.organisation_id).limit(1)
+    try:
+        async with session.begin():
+            await set_rls_org(session, principal.organisation_id)
+            result = await session.execute(
+                select(Pipeline).where(Pipeline.organisation_id == principal.organisation_id).limit(1)
+            )
+            has_pipelines = result.scalar_one_or_none() is not None
+    except ProgrammingError:
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="Feature is not available. Run database migrations to enable it.",
         )
-        has_pipelines = result.scalar_one_or_none() is not None
 
     state = _load_onboarding_state()
 
@@ -198,20 +205,21 @@ async def get_step_data(
     data = _STEP_DATA.get(step_id, {})
 
     if step_id == "select_template":
-        async with session.begin():
-            await set_rls_org(session, principal.organisation_id)
-            from modulo.db.models.library_primitive import LibraryPrimitive
+        try:
+            async with session.begin():
+                await set_rls_org(session, principal.organisation_id)
+                from modulo.db.models.library_primitive import LibraryPrimitive
 
-            templates_result = await session.execute(
-                select(LibraryPrimitive)
-                .where(
-                    LibraryPrimitive.organisation_id == principal.organisation_id,
-                    LibraryPrimitive.primitive_type == "pipeline_template",
+                templates_result = await session.execute(
+                    select(LibraryPrimitive)
+                    .where(
+                        LibraryPrimitive.organisation_id == principal.organisation_id,
+                        LibraryPrimitive.primitive_type == "pipeline_template",
+                    )
+                    .limit(3)
                 )
-                .limit(3)
-            )
-            templates = templates_result.scalars().all()
-            data["templates"] = [
+                templates = templates_result.scalars().all()
+                data["templates"] = [
                 {
                     "id": str(t.id),
                     "name": t.name,
@@ -221,6 +229,11 @@ async def get_step_data(
                 }
                 for t in templates
             ]
+        except ProgrammingError:
+            raise HTTPException(
+                status_code=status.HTTP_501_NOT_IMPLEMENTED,
+                detail="Feature is not available. Run database migrations to enable it.",
+            )
 
     return OnboardingStepDataResponse(
         step_id=step["id"],
