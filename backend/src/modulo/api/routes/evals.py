@@ -14,6 +14,7 @@ from typing import Any
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, Field
 from sqlalchemy import select
+from sqlalchemy.exc import ProgrammingError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.api.dependencies import get_db_session
@@ -126,23 +127,29 @@ async def create_eval_definition(
             detail="Only admins can create eval definitions",
         )
 
-    async with session.begin():
-        await set_rls_org(session, principal.organisation_id)
-        await set_rls_user_context(session, principal.account_id, principal.org_role)
-        eval_def = EvalDefinition(
-            organisation_id=principal.organisation_id,
-            pipeline_id=body.pipeline_id,
-            node_id=body.node_id,
-            name=body.name,
-            eval_type=body.eval_type,
-            config_json=body.config_json,
-            failure_behaviour=body.failure_behaviour,
-            pass_threshold=body.pass_threshold,
-            suite_id=body.suite_id,
-            account_id=principal.account_id,
+    try:
+        async with session.begin():
+            await set_rls_org(session, principal.organisation_id)
+            await set_rls_user_context(session, principal.account_id, principal.org_role)
+            eval_def = EvalDefinition(
+                organisation_id=principal.organisation_id,
+                pipeline_id=body.pipeline_id,
+                node_id=body.node_id,
+                name=body.name,
+                eval_type=body.eval_type,
+                config_json=body.config_json,
+                failure_behaviour=body.failure_behaviour,
+                pass_threshold=body.pass_threshold,
+                suite_id=body.suite_id,
+                account_id=principal.account_id,
+            )
+            session.add(eval_def)
+            await session.flush()
+    except ProgrammingError:
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="Feature is not available. Run database migrations to enable it.",
         )
-        session.add(eval_def)
-        await session.flush()
 
     return _eval_def_to_dict(eval_def)
 
@@ -167,21 +174,27 @@ async def list_eval_definitions(
     if pipeline_id:
         conditions.append(EvalDefinition.pipeline_id == pipeline_id)
 
-    async with session.begin():
-        await set_rls_org(session, principal.organisation_id)
-        await set_rls_user_context(session, principal.account_id, principal.org_role)
+    try:
+        async with session.begin():
+            await set_rls_org(session, principal.organisation_id)
+            await set_rls_user_context(session, principal.account_id, principal.org_role)
 
-        total_q = select(sa_func.count(EvalDefinition.id)).where(*conditions)
-        total = (await session.execute(total_q)).scalar() or 0
+            total_q = select(sa_func.count(EvalDefinition.id)).where(*conditions)
+            total = (await session.execute(total_q)).scalar() or 0
 
-        q = (
-            select(EvalDefinition)
-            .where(*conditions)
-            .order_by(EvalDefinition.created_at.desc())
-            .offset((page - 1) * page_size)
-            .limit(page_size)
+            q = (
+                select(EvalDefinition)
+                .where(*conditions)
+                .order_by(EvalDefinition.created_at.desc())
+                .offset((page - 1) * page_size)
+                .limit(page_size)
+            )
+            rows = (await session.execute(q)).scalars().all()
+    except ProgrammingError:
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="Feature is not available. Run database migrations to enable it.",
         )
-        rows = (await session.execute(q)).scalars().all()
 
     return EvalDefinitionListResponse(
         items=[EvalDefinitionResponse(**_eval_def_to_dict(d)) for d in rows],
@@ -203,35 +216,41 @@ async def eval_coverage(
     principal: AuthenticatedPrincipal = Depends(get_current_user),
 ) -> dict[str, Any]:
     """Return eval coverage map for a pipeline."""
-    async with session.begin():
-        await set_rls_org(session, principal.organisation_id)
-        await set_rls_user_context(session, principal.account_id, principal.org_role)
+    try:
+        async with session.begin():
+            await set_rls_org(session, principal.organisation_id)
+            await set_rls_user_context(session, principal.account_id, principal.org_role)
 
-        pipeline = (
-            await session.execute(
-                select(Pipeline).where(
-                    Pipeline.id == pipeline_id,
-                    Pipeline.organisation_id == principal.organisation_id,
-                )
-            )
-        ).scalar_one_or_none()
-        if pipeline is None:
-            raise HTTPException(status_code=404, detail="Pipeline not found")
-
-        nodes_raw = pipeline.graph_nodes_json or []
-        node_ids = [str(n.get("id")) for n in nodes_raw if n.get("id")]
-
-        eval_defs_rows = (
-            (
+            pipeline = (
                 await session.execute(
-                    select(EvalDefinition).where(
-                        EvalDefinition.pipeline_id == pipeline_id,
-                        EvalDefinition.node_id.in_([uuid.UUID(nid) for nid in node_ids if nid]),
+                    select(Pipeline).where(
+                        Pipeline.id == pipeline_id,
+                        Pipeline.organisation_id == principal.organisation_id,
                     )
                 )
+            ).scalar_one_or_none()
+            if pipeline is None:
+                raise HTTPException(status_code=404, detail="Pipeline not found")
+
+            nodes_raw = pipeline.graph_nodes_json or []
+            node_ids = [str(n.get("id")) for n in nodes_raw if n.get("id")]
+
+            eval_defs_rows = (
+                (
+                    await session.execute(
+                        select(EvalDefinition).where(
+                            EvalDefinition.pipeline_id == pipeline_id,
+                            EvalDefinition.node_id.in_([uuid.UUID(nid) for nid in node_ids if nid]),
+                        )
+                    )
+                )
+                .scalars()
+                .all()
             )
-            .scalars()
-            .all()
+    except ProgrammingError:
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="Feature is not available. Run database migrations to enable it.",
         )
 
     eval_count_by_node: dict[str, int] = {}
@@ -278,16 +297,22 @@ async def get_eval_definition(
     principal: AuthenticatedPrincipal = Depends(get_current_user),
 ) -> dict[str, Any]:
     """Get a single eval definition by ID."""
-    async with session.begin():
-        await set_rls_org(session, principal.organisation_id)
-        await set_rls_user_context(session, principal.account_id, principal.org_role)
-        result = await session.execute(
-            select(EvalDefinition).where(
-                EvalDefinition.id == eval_id,
-                EvalDefinition.organisation_id == principal.organisation_id,
+    try:
+        async with session.begin():
+            await set_rls_org(session, principal.organisation_id)
+            await set_rls_user_context(session, principal.account_id, principal.org_role)
+            result = await session.execute(
+                select(EvalDefinition).where(
+                    EvalDefinition.id == eval_id,
+                    EvalDefinition.organisation_id == principal.organisation_id,
+                )
             )
+            eval_def = result.scalar_one_or_none()
+    except ProgrammingError:
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="Feature is not available. Run database migrations to enable it.",
         )
-        eval_def = result.scalar_one_or_none()
     if eval_def is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Eval definition not found")
     return _eval_def_to_dict(eval_def)
@@ -304,23 +329,29 @@ async def update_eval_definition(
     if principal.org_role != "admin":
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Only admins can update eval definitions")
 
-    async with session.begin():
-        await set_rls_org(session, principal.organisation_id)
-        await set_rls_user_context(session, principal.account_id, principal.org_role)
-        result = await session.execute(
-            select(EvalDefinition).where(
-                EvalDefinition.id == eval_id,
-                EvalDefinition.organisation_id == principal.organisation_id,
+    try:
+        async with session.begin():
+            await set_rls_org(session, principal.organisation_id)
+            await set_rls_user_context(session, principal.account_id, principal.org_role)
+            result = await session.execute(
+                select(EvalDefinition).where(
+                    EvalDefinition.id == eval_id,
+                    EvalDefinition.organisation_id == principal.organisation_id,
+                )
             )
-        )
-        eval_def = result.scalar_one_or_none()
-        if eval_def is None:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Eval definition not found")
+            eval_def = result.scalar_one_or_none()
+            if eval_def is None:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Eval definition not found")
 
-        updates = body.model_dump(exclude_unset=True)
-        for key, value in updates.items():
-            setattr(eval_def, key, value)
-        await session.flush()
+            updates = body.model_dump(exclude_unset=True)
+            for key, value in updates.items():
+                setattr(eval_def, key, value)
+            await session.flush()
+    except ProgrammingError:
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="Feature is not available. Run database migrations to enable it.",
+        )
 
     return _eval_def_to_dict(eval_def)
 
@@ -335,19 +366,25 @@ async def delete_eval_definition(
     if principal.org_role != "admin":
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Only admins can delete eval definitions")
 
-    async with session.begin():
-        await set_rls_org(session, principal.organisation_id)
-        await set_rls_user_context(session, principal.account_id, principal.org_role)
-        result = await session.execute(
-            select(EvalDefinition).where(
-                EvalDefinition.id == eval_id,
-                EvalDefinition.organisation_id == principal.organisation_id,
+    try:
+        async with session.begin():
+            await set_rls_org(session, principal.organisation_id)
+            await set_rls_user_context(session, principal.account_id, principal.org_role)
+            result = await session.execute(
+                select(EvalDefinition).where(
+                    EvalDefinition.id == eval_id,
+                    EvalDefinition.organisation_id == principal.organisation_id,
+                )
             )
+            eval_def = result.scalar_one_or_none()
+            if eval_def is None:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Eval definition not found")
+            await session.delete(eval_def)
+    except ProgrammingError:
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="Feature is not available. Run database migrations to enable it.",
         )
-        eval_def = result.scalar_one_or_none()
-        if eval_def is None:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Eval definition not found")
-        await session.delete(eval_def)
 
 
 @router.get("/runs/{run_id}/evals", response_model=dict[str, Any], status_code=status.HTTP_200_OK)
@@ -364,40 +401,46 @@ async def list_run_evals(
     included for convenience. Requires the run to belong to the caller's
     organisation.
     """
-    async with session.begin():
-        await set_rls_org(session, principal.organisation_id)
-        await set_rls_user_context(session, principal.account_id, principal.org_role)
+    try:
+        async with session.begin():
+            await set_rls_org(session, principal.organisation_id)
+            await set_rls_user_context(session, principal.account_id, principal.org_role)
 
-        run_result = await session.execute(
-            select(Run).where(
-                Run.id == run_id,
-                Run.organisation_id == principal.organisation_id,
+            run_result = await session.execute(
+                select(Run).where(
+                    Run.id == run_id,
+                    Run.organisation_id == principal.organisation_id,
+                )
             )
-        )
-        run = run_result.scalar_one_or_none()
-        if run is None:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Run not found")
+            run = run_result.scalar_one_or_none()
+            if run is None:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Run not found")
 
-        from sqlalchemy import func as sa_func
+            from sqlalchemy import func as sa_func
 
-        total_q = select(sa_func.count(EvalResult.id)).where(
-            EvalResult.run_id == run_id,
-            EvalResult.organisation_id == principal.organisation_id,
-        )
-        total = (await session.execute(total_q)).scalar() or 0
-
-        offset = (page - 1) * page_size
-        q = (
-            select(EvalResult)
-            .where(
+            total_q = select(sa_func.count(EvalResult.id)).where(
                 EvalResult.run_id == run_id,
                 EvalResult.organisation_id == principal.organisation_id,
             )
-            .order_by(EvalResult.evaluated_at.desc())
-            .offset(offset)
-            .limit(page_size)
+            total = (await session.execute(total_q)).scalar() or 0
+
+            offset = (page - 1) * page_size
+            q = (
+                select(EvalResult)
+                .where(
+                    EvalResult.run_id == run_id,
+                    EvalResult.organisation_id == principal.organisation_id,
+                )
+                .order_by(EvalResult.evaluated_at.desc())
+                .offset(offset)
+                .limit(page_size)
+            )
+            rows = (await session.execute(q)).scalars().all()
+    except ProgrammingError:
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="Feature is not available. Run database migrations to enable it.",
         )
-        rows = (await session.execute(q)).scalars().all()
 
     return {
         "items": [
@@ -575,25 +618,31 @@ async def create_eval_from_run(
             detail="Only admins can create eval definitions",
         )
 
-    async with session.begin():
-        await set_rls_org(session, principal.organisation_id)
-        await set_rls_user_context(session, principal.account_id, principal.org_role)
+    try:
+        async with session.begin():
+            await set_rls_org(session, principal.organisation_id)
+            await set_rls_user_context(session, principal.account_id, principal.org_role)
 
-        run = (
-            await session.execute(
-                select(Run).where(
-                    Run.id == body.run_id,
-                    Run.organisation_id == principal.organisation_id,
+            run = (
+                await session.execute(
+                    select(Run).where(
+                        Run.id == body.run_id,
+                        Run.organisation_id == principal.organisation_id,
+                    )
                 )
-            )
-        ).scalar_one_or_none()
-        if run is None:
-            raise HTTPException(status_code=404, detail="Run not found")
+            ).scalar_one_or_none()
+            if run is None:
+                raise HTTPException(status_code=404, detail="Run not found")
 
-        outputs = run.outputs_json or {}
-        node_output = outputs.get(str(body.node_id)) or outputs.get(body.node_id.hex) or {}
+            outputs = run.outputs_json or {}
+            node_output = outputs.get(str(body.node_id)) or outputs.get(body.node_id.hex) or {}
 
-        sample_output = node_output if isinstance(node_output, dict) else {"output": str(node_output)}
+            sample_output = node_output if isinstance(node_output, dict) else {"output": str(node_output)}
+    except ProgrammingError:
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="Feature is not available. Run database migrations to enable it.",
+        )
 
     config_json: dict[str, Any] = {}
     if body.eval_type == "regex":
@@ -617,19 +666,25 @@ async def create_eval_from_run(
             "function": "",
         }
 
-    async with session.begin():
-        eval_def = EvalDefinition(
-            organisation_id=principal.organisation_id,
-            pipeline_id=run.pipeline_id,
-            node_id=body.node_id,
-            name=body.name,
-            eval_type=body.eval_type,
-            config_json=config_json,
-            failure_behaviour="warn",
-            account_id=principal.account_id,
+    try:
+        async with session.begin():
+            eval_def = EvalDefinition(
+                organisation_id=principal.organisation_id,
+                pipeline_id=run.pipeline_id,
+                node_id=body.node_id,
+                name=body.name,
+                eval_type=body.eval_type,
+                config_json=config_json,
+                failure_behaviour="warn",
+                account_id=principal.account_id,
+            )
+            session.add(eval_def)
+            await session.flush()
+    except ProgrammingError:
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="Feature is not available. Run database migrations to enable it.",
         )
-        session.add(eval_def)
-        await session.flush()
 
     result = _eval_def_to_dict(eval_def)
     result["sample_output"] = sample_output
