@@ -8,6 +8,8 @@ signatures.
 from __future__ import annotations
 
 import base64
+import binascii
+import threading
 
 from cryptography.exceptions import InvalidSignature
 from cryptography.hazmat.primitives import serialization
@@ -15,6 +17,15 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import (
     Ed25519PrivateKey,
     Ed25519PublicKey,
 )
+
+__all__ = [
+    "generate_keypair",
+    "sign",
+    "verify",
+    "get_trust_anchor_public_key_pem",
+    "sign_with_trust_anchor",
+    "verify_trust_anchor",
+]
 
 
 def generate_keypair() -> tuple[str, str]:
@@ -78,7 +89,7 @@ def verify(public_key_pem: str, data: bytes, signature: str) -> bool:
         sig_bytes = base64.b64decode(signature)
         public_key.verify(sig_bytes, data)
         return True
-    except (InvalidSignature, TypeError, ValueError):
+    except (InvalidSignature, TypeError, ValueError, binascii.Error):
         return False
 
 
@@ -87,12 +98,15 @@ def verify(public_key_pem: str, data: bytes, signature: str) -> bool:
 # ---------------------------------------------------------------------------
 
 _TRUST_ANCHOR: Ed25519PrivateKey | None = None
+_TRUST_ANCHOR_LOCK = threading.Lock()
 
 
 def _get_trust_anchor() -> Ed25519PrivateKey:
     global _TRUST_ANCHOR
     if _TRUST_ANCHOR is None:
-        _TRUST_ANCHOR = Ed25519PrivateKey.generate()
+        with _TRUST_ANCHOR_LOCK:
+            if _TRUST_ANCHOR is None:
+                _TRUST_ANCHOR = Ed25519PrivateKey.generate()
     return _TRUST_ANCHOR
 
 
