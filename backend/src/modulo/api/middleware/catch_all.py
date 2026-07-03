@@ -19,10 +19,20 @@ class CatchAllMiddleware(BaseHTTPMiddleware):
         try:
             response = await call_next(request)
             return response  # type: ignore[no-any-return]
-        except Exception:
+        except Exception as exc:
             rid = getattr(request.state, "request_id", None)
-            logger.exception(
+            logger.error(
                 "middleware.unhandled_exception",
+                extra={
+                    "method": request.method,
+                    "path": str(request.url.path),
+                    "request_id": rid,
+                    "exc_type": type(exc).__name__,
+                    "exc_msg": str(exc)[:500],
+                },
+            )
+            logger.exception(
+                "middleware.unhandled_exception_traceback",
                 extra={"method": request.method, "path": str(request.url.path), "request_id": rid},
             )
             try:
@@ -67,9 +77,10 @@ async def _ingest_unhandled_error(request: Request) -> None:
 
         service = ErrorIngestionService()
         async with factory() as session:
-            await set_rls_org(session, org_id)
             async with session.begin():
-                await service.ingest(session, org_id, event_data)
+                await set_rls_org(session, org_id)
+                if org_id is not None:
+                    await service.ingest(session, org_id, event_data)
     except Exception:
         logger.exception("middleware.error_ingest_failed")
 
