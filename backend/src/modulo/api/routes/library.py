@@ -3,7 +3,6 @@
 import copy
 import json
 import logging
-import traceback
 import uuid
 from datetime import datetime
 from typing import Any
@@ -952,11 +951,11 @@ def _build_pipeline_from_template(
 )
 async def create_pipeline_from_template_endpoint(
     primitive_id: uuid.UUID,
-    body: CreatePipelineFromTemplateRequest,
+    req: CreatePipelineFromTemplateRequest,
     session: AsyncSession = Depends(get_db_session),
     principal: AuthenticatedPrincipal = Depends(get_current_user),
 ) -> PipelineFromTemplateResponse:
-    _log.warning("DBG_START called primitive_id=%s body=%s", primitive_id, body.model_dump() if hasattr(body, 'model_dump') else body)
+    _log.warning("DBG_START called primitive_id=%s", primitive_id)
     try:
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
@@ -972,10 +971,8 @@ async def create_pipeline_from_template_endpoint(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Primitive {primitive_id} not found",
         )
-    print(f"DBG: primitive={primitive.id} type={primitive.primitive_type} name={primitive.name}", flush=True)
 
     if primitive.primitive_type != "pipeline_template":
-        print(f"DBG: type mismatch", flush=True)
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=f"Primitive type must be 'pipeline_template', got '{primitive.primitive_type}'",
@@ -983,11 +980,9 @@ async def create_pipeline_from_template_endpoint(
 
     name, description, graph_nodes, edges, agent_count, edge_count = _build_pipeline_from_template(
         primitive,
-        body.name,
-        body.description,
+        req.name,
+        req.description,
     )
-
-    print(f"DBG: built pipeline: nodes={len(graph_nodes)} edges={len(edges)}", flush=True)
 
     try:
         async with session.begin():
@@ -1030,12 +1025,9 @@ async def create_pipeline_from_template_endpoint(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
         ) from None
-    except Exception as exc:
-        print(f"DBG: EXCEPTION in second try block: {type(exc).__name__}: {exc}", flush=True)
+    except Exception:
         _log.exception("create_pipeline_from_template — unexpected error")
         raise
-
-    print(f"DBG: returning response", flush=True)
 
     return PipelineFromTemplateResponse(
         id=pipeline.id,
