@@ -15,7 +15,7 @@ export interface ChatSession {
 export interface ChatMessage {
   id: string
   session_id: string
-  role: string
+  role: 'user' | 'assistant' | 'tool_use' | 'tool_result' | 'summary'
   content: string | null
   tool_calls_json: Record<string, unknown> | null
   tool_results_json: Record<string, unknown> | null
@@ -33,9 +33,9 @@ export interface PageContext {
 export interface SkillItem {
   id: string
   name: string
-  description?: string
-  triggers?: string[]
-  body?: string
+  description: string | null
+  triggers: string[] | null
+  body: string | null
   active: boolean
 }
 

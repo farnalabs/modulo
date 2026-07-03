@@ -4,29 +4,29 @@ export interface ParameterPort {
   id: string
   name: string
   label: string
-  description?: string
+  description: string | null
   type: ParameterPortType
   required: boolean
-  default?: unknown
-  options?: { label: string; value: string }[]
-  multiline?: boolean
+  default: unknown | null
+  options: { label: string; value: string }[] | null
+  multiline: boolean | null
 }
 
 export interface SchemaField {
   name: string
-  type: string
-  description?: string | null
+  type: 'string' | 'number' | 'integer' | 'boolean' | 'array' | 'object' | 'null'
+  description: string | null
   required: boolean
 }
 
 export interface CompositeDefinition {
   id: string
   name: string
-  description?: string
+  description: string | null
   version: string
   ports: ParameterPort[]
-  input_schema_id?: string | null
-  output_schema_id?: string | null
+  input_schema_id: string | null
+  output_schema_id: string | null
   created_at: string
   updated_at: string
 }
