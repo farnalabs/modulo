@@ -52,6 +52,11 @@ def vcr_config(**overrides: Any) -> dict[str, Any]:
         )
 
     for key, value in overrides.items():
+        if key == "record_mode" and value not in _VALID_RECORD_MODES:
+            raise ValueError(
+                f"Invalid record_mode={value!r}. "
+                f"Valid modes: {', '.join(sorted(_VALID_RECORD_MODES))}"
+            )
         if isinstance(value, list) and isinstance(config.get(key), list):
             config[key] = config[key] + value
         else:
