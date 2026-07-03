@@ -1,7 +1,5 @@
 import logging
 import os
-import traceback as _traceback
-from datetime import datetime, timezone
 from typing import Any
 
 from fastapi import Request
@@ -21,15 +19,8 @@ class CatchAllMiddleware(BaseHTTPMiddleware):
         try:
             response = await call_next(request)
             return response  # type: ignore[no-any-return]
-        except BaseException as exc:
+        except Exception:
             rid = getattr(request.state, "request_id", None)
-            try:
-                with open("/tmp/exception_log.txt", "a") as f:
-                    f.write(f"[{datetime.now(timezone.utc).isoformat()}] {type(exc).__name__}: {exc}\n")
-                    _traceback.print_exc(file=f)
-                    f.write("---\n")
-            except Exception:
-                pass
             logger.exception(
                 "middleware.unhandled_exception",
                 extra={"method": request.method, "path": str(request.url.path), "request_id": rid},
