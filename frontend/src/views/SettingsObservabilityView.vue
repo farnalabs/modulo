@@ -5,13 +5,7 @@
       <p class="mt-1 text-muted-foreground">{{ $t('views.SettingsObservabilityView.configure_opentelemetry_export_and_langsmith_integration') }}</p>
     </header>
 
-    <FeatureGate feature-name="observability" required-tier="team">
-      <template #locked="{ tooltip }">
-        <div class="mb-4 flex items-center gap-2 rounded-lg border border-warning/30 bg-warning/5 p-4 text-sm text-warning">
-          <LockIcon :locked="true" :tooltip="tooltip" />
-          <span>{{ $t('views.SettingsObservabilityView.observability_settings_are_not_available_on_your_current_pla') }}</span>
-        </div>
-      </template>
+    <FeatureGate feature-name="observability" required-tier="team" show-disabled>
 
       <div v-if="envOverrideActive" data-testid="settings-observability-env-override" class="rounded-lg border border-warning/50 bg-warning/10 p-4 text-sm text-warning">
         <p class="font-medium">Environment variable override active</p>
@@ -204,7 +198,6 @@ import { api } from '../lib/api/client'
 import type { components } from '../lib/api/client'
 import { usePlanStore } from '../stores/planStore'
 import FeatureGate from '../components/FeatureGate.vue'
-import LockIcon from '../components/LockIcon.vue'
 import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
 

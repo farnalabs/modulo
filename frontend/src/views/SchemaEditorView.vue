@@ -266,6 +266,7 @@
             </div>
 
             <div class="space-y-6">
+<<<<<<< HEAD
               <FeatureGate feature-name="schema_version_history" required-tier="team">
                 <template #default>
                   <section class="rounded-lg border bg-card p-6 shadow-sm">
@@ -293,16 +294,37 @@
                         >
                           Restore
                         </button>
+=======
+              <FeatureGate feature-name="schema_version_history" required-tier="team" show-disabled>
+                <section class="rounded-lg border bg-card p-6 shadow-sm">
+                  <h2 class="mb-4 text-lg font-semibold">Version History</h2>
+                  <LoadingSpinner v-if="loadingVersions" />
+                  <p v-else-if="versions.length === 0" class="text-sm text-muted-foreground">No version history.</p>
+                  <div v-else class="space-y-2">
+                    <div
+                      v-for="version in versions"
+                      :key="version.id"
+                      class="flex items-center justify-between rounded-lg border bg-background px-3 py-2"
+                    >
+                      <div class="flex items-center gap-2">
+                        <span class="text-sm font-medium">v{{ version.version }}</span>
+                        <span
+                          v-if="version.published"
+                          class="rounded bg-success/10 px-1.5 py-0.5 text-[10px] font-medium text-success"
+                        >Published</span>
+                        <span class="text-xs text-muted-foreground">{{ formatDate(version.created_at) }}</span>
+>>>>>>> feat/gating-show-disabled
                       </div>
+                      <button
+                        data-testid="schema-editor-restore-version"
+                        class="rounded px-2 py-1 text-xs font-medium text-primary hover:bg-primary/10"
+                        @click="restoreVersion(version)"
+                      >
+                        Restore
+                      </button>
                     </div>
-                  </section>
-                </template>
-                <template #locked="{ tooltip }">
-                  <section class="rounded-lg border bg-card p-6 shadow-sm opacity-40">
-                    <h2 class="mb-4 text-lg font-semibold">Version History</h2>
-                    <p class="text-sm text-muted-foreground">{{ tooltip }}</p>
-                  </section>
-                </template>
+                  </div>
+                </section>
               </FeatureGate>
 
               <section class="rounded-lg border bg-card p-6 shadow-sm">
