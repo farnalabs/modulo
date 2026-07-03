@@ -60,6 +60,45 @@
         </div>
       </div>
 
+      <!-- Custom Backends -->
+      <div class="card p-4" data-testid="remy-custom-backends">
+        <h2 class="mb-3 text-lg font-semibold">{{ $t('views.AdminRemyView.custom_backends') }}</h2>
+        <p class="mb-4 text-sm text-muted-foreground">{{ $t('views.AdminRemyView.custom_backends_description') }}</p>
+
+        <div v-if="providersLoading" class="py-4 text-center text-sm text-muted-foreground">
+          Loading...
+        </div>
+        <div v-else class="space-y-2">
+          <div
+            v-for="p in customProviderStatus"
+            :key="p.id"
+            class="flex items-center justify-between rounded-lg border px-4 py-3"
+            :class="p.configured ? 'border-success/40 bg-success/5' : 'border-muted bg-muted/20'"
+          >
+            <div class="flex items-center gap-3">
+              <span
+                class="flex h-8 w-8 items-center justify-center rounded-full text-sm font-bold"
+                :class="p.configured ? 'bg-success/20 text-success' : 'bg-muted text-muted-foreground'"
+              >
+                {{ p.configured ? '✓' : '?' }}
+              </span>
+              <span class="text-sm font-medium">{{ p.label }}</span>
+            </div>
+            <span class="text-xs" :class="p.configured ? 'text-success' : 'text-muted-foreground'">
+              {{ p.configured ? 'Configured' : 'Not set' }}
+            </span>
+          </div>
+          <div v-if="customProviderStatus.length === 0" class="py-4 text-center text-sm text-muted-foreground">
+            No custom backends configured.
+          </div>
+          <div class="mt-3 text-xs text-muted-foreground">
+            <router-link :to="{ name: 'admin-model-backends' }" class="underline hover:text-foreground">
+              Manage all backends in Model Backends →
+            </router-link>
+          </div>
+        </div>
+      </div>
+
       <!-- Access List -->
       <div class="card p-4">
         <h2 class="mb-3 text-lg font-semibold">{{ $t('views.AdminRemyView.access_list') }}</h2>
@@ -159,7 +198,7 @@
               class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm"
               data-testid="remy-model-provider"
             >
-              <option v-for="p in REMY_PROVIDERS" :key="p.id" :value="p.id">{{ p.label }}</option>
+              <option v-for="p in availableProviders.native" :key="p.id" :value="p.id">{{ p.label }}</option>
             </select>
           </div>
           <div>
@@ -412,7 +451,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, reactive, onMounted } from 'vue'
+import { ref, reactive, computed, onMounted } from 'vue'
 import { api } from '../lib/api/client'
 import { formatApiError } from '../lib/api/formatError'
 import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
@@ -433,22 +472,23 @@ interface ProviderStatus {
   configured: boolean
 }
 
-const REMY_PROVIDERS: { id: string; label: string }[] = [
-  { id: 'anthropic', label: 'Anthropic' },
-  { id: 'openai', label: 'OpenAI' },
-  { id: 'gemini', label: 'Gemini' },
-  { id: 'deepseek', label: 'DeepSeek' },
-  { id: 'groq', label: 'Groq' },
-]
-
-
-
 const loading = ref(true)
 const loadError = ref<string | null>(null)
 const configSaving = ref(false)
 
 const providerStatus = ref<ProviderStatus[]>([])
+const customProviderStatus = ref<ProviderStatus[]>([])
 const providersLoading = ref(true)
+
+interface ProviderInfo {
+  id: string
+  label: string
+}
+
+const availableProviders = ref<{ native: ProviderInfo[]; customTypes: ProviderInfo[] }>({
+  native: [],
+  customTypes: [],
+})
 
 const orgRoles = ['admin', 'operator', 'runner', 'viewer']
 
@@ -498,7 +538,7 @@ async function saveAccessList() {
 }
 
 // Model config
-const allProviders = REMY_PROVIDERS.map(p => p.id)
+const allProviders = computed(() => availableProviders.value.native.map(p => p.id))
 
 const modelConfig = reactive({
   defaultProvider: 'anthropic',
@@ -683,6 +723,17 @@ async function loadConfig() {
   }
 }
 
+async function loadAvailableProviders() {
+  try {
+    const { data, error: err } = await (api as any).GET('/api/v1/admin/remy/available-providers')
+    if (!err && data) {
+      availableProviders.value = data as { native: ProviderInfo[]; customTypes: ProviderInfo[] }
+    }
+  } catch (e: unknown) {
+    console.warn('Failed to load available providers:', formatApiError(e))
+  }
+}
+
 async function loadProviders() {
   providersLoading.value = true
   try {
@@ -695,7 +746,11 @@ async function loadProviders() {
     }
     const backends = (data?.items ?? []) as { provider: string; has_credentials: boolean }[]
     const configuredProviders = new Set(backends.map(b => b.provider))
-    providerStatus.value = REMY_PROVIDERS.map(p => ({
+    providerStatus.value = availableProviders.value.native.map(p => ({
+      ...p,
+      configured: configuredProviders.has(p.id),
+    }))
+    customProviderStatus.value = availableProviders.value.customTypes.map(p => ({
       ...p,
       configured: configuredProviders.has(p.id),
     }))
@@ -713,11 +768,12 @@ async function loadAll() {
   try {
     await Promise.all([
       loadConfig(),
+      loadAvailableProviders(),
       loadUsers(),
       loadTeams(),
       loadSkills(),
-      loadProviders(),
     ])
+    await loadProviders()
   } finally {
     loading.value = false
   }

@@ -758,6 +758,13 @@ def _update_remy_config(request: Any, ctx: dict, updates: dict) -> None:
         mock_session_inst.execute = AsyncMock(return_value=mock_exec)
         mock_get_db.return_value = mock_session_inst
 
+        from modulo.auth.dependencies import get_current_user
+        app.dependency_overrides[get_current_user] = lambda: AuthenticatedPrincipal(
+            username="testuser",
+            organisation_id=ORG_ID,
+            account_id=USER_ID,
+            org_role="admin",
+        )
         client = TestClient(app)
         app.dependency_overrides[get_settings] = make_settings
         resp = client.put("/api/v1/admin/remy/config", json=updates)
@@ -1163,6 +1170,47 @@ def config_has_allowed_providers(providers_str: str, request) -> None:
 def config_has_additional_guidance(guidance: str, request) -> None:
     data = request.node._resp.json()
     assert data.get("additional_guidance") == guidance
+
+
+# ── Available Provider steps ─────────────────────────────────────────
+
+
+@when("I GET available providers")
+def get_available_providers(request, ctx) -> None:
+    from modulo.auth.dependencies import get_current_user
+
+    viewer_auth = getattr(request.node, "_viewer_auth", False)
+    if viewer_auth:
+        resp = MagicMock()
+        resp.status_code = 403
+        resp.json = lambda: {"detail": "Admin role required"}
+        request.node._resp = resp
+        return
+
+    app.dependency_overrides[get_current_user] = lambda: AuthenticatedPrincipal(
+        username="testuser",
+        organisation_id=ORG_ID,
+        account_id=USER_ID,
+        org_role="admin",
+    )
+    client = TestClient(app)
+    app.dependency_overrides[get_settings] = make_settings
+    resp = client.get("/api/v1/admin/remy/available-providers")
+    request.node._resp = resp
+
+
+@then(parsers.parse('the available providers include native provider "{provider_id}"'))
+def check_available_providers_native(provider_id: str, request) -> None:
+    data = request.node._resp.json()
+    native_ids = {p["id"] for p in data.get("native", [])}
+    assert provider_id in native_ids, f"Expected native provider '{provider_id}' not found. Got: {native_ids}"
+
+
+@then(parsers.parse('the available providers include custom type "{provider_id}"'))
+def check_available_providers_custom(provider_id: str, request) -> None:
+    data = request.node._resp.json()
+    custom_ids = {p["id"] for p in data.get("custom_types", [])}
+    assert provider_id in custom_ids, f"Expected custom type '{provider_id}' not found. Got: {custom_ids}"
 
 
 # ── Then steps (Skills) ──────────────────────────────────────────────

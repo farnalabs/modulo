@@ -21,6 +21,38 @@ from modulo.db.rls import set_rls_org
 
 logger = logging.getLogger(__name__)
 
+# Labels for all known providers (both native and custom).
+# Derived from _SIMPLE_BACKENDS (native) and ModelBackendProvider enum (custom).
+_PROVIDER_LABELS: dict[str, str] = {
+    "ai21": "AI21",
+    "anthropic": "Anthropic",
+    "deepseek": "DeepSeek",
+    "fireworks": "Fireworks AI",
+    "gemini": "Gemini",
+    "grok": "Grok",
+    "groq": "Groq",
+    "openai": "OpenAI",
+    "openrouter": "OpenRouter",
+    "perplexity": "Perplexity",
+    "qwen": "Qwen",
+    "togetherai": "Together AI",
+    "azure_openai": "Azure OpenAI",
+    "bedrock": "Amazon Bedrock",
+    "ollama": "Ollama",
+    "cohere": "Cohere",
+    "mistral": "Mistral",
+    "replicate": "Replicate",
+    "vertexai": "Vertex AI",
+    "watsonx": "IBM watsonx",
+    "vllm": "vLLM",
+    "tgi": "TGI",
+    "lm_studio": "LM Studio",
+    "jan": "Jan",
+    "localai": "LocalAI",
+    "llamacpp": "llama.cpp",
+    "custom": "Custom",
+}
+
 router = APIRouter(prefix="/api/v1/admin/remy", tags=["admin-remy"])
 
 
@@ -61,6 +93,16 @@ class RemyConfigUpdate(BaseModel):
     default_context_window: int | None = None
     allowed_providers: list[str] | None = None
     allowed_models: list[str] | None = None
+
+
+class AvailableProviderInfo(BaseModel):
+    id: str
+    label: str
+
+
+class AvailableProvidersResponse(BaseModel):
+    native: list[AvailableProviderInfo]
+    custom_types: list[AvailableProviderInfo]
 
 
 # ── Skill models (shared with user endpoints) ─────────────────────────
@@ -130,6 +172,30 @@ async def get_remy_config(
         ) from None
 
 
+@router.get("/available-providers", response_model=AvailableProvidersResponse)
+async def get_available_providers(
+    principal: AuthenticatedPrincipal = Depends(get_current_user),
+) -> AvailableProvidersResponse:
+    _require_admin(principal)
+    from modulo.api.routes.remy import _SIMPLE_BACKENDS
+    from modulo.db.enums import ModelBackendProvider
+
+    native_ids = set(_SIMPLE_BACKENDS.keys())
+    native = [
+        AvailableProviderInfo(id=k, label=_PROVIDER_LABELS.get(k, k.replace("_", " ").title()))
+        for k in sorted(native_ids)
+    ]
+    custom_types = [
+        AvailableProviderInfo(
+            id=v.value,
+            label=_PROVIDER_LABELS.get(v.value, v.name.replace("_", " ").title())
+        )
+        for v in ModelBackendProvider
+        if v.value not in native_ids
+    ]
+    return AvailableProvidersResponse(native=native, custom_types=custom_types)
+
+
 @router.put("/config", response_model=RemyConfigResponse)
 async def update_remy_config(
     body: RemyConfigUpdate,
@@ -137,6 +203,15 @@ async def update_remy_config(
     principal: AuthenticatedPrincipal = Depends(get_current_user),
 ) -> RemyConfigResponse:
     _require_admin(principal)
+    if body.allowed_providers is not None:
+        from modulo.api.routes.remy import _SIMPLE_BACKENDS
+
+        invalid = [p for p in body.allowed_providers if p not in _SIMPLE_BACKENDS]
+        if invalid:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=f"Unsupported providers: {invalid}. Supported: {sorted(_SIMPLE_BACKENDS)}",
+            )
     try:
         async with session.begin():
             result = await session.execute(
