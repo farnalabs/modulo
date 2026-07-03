@@ -43,8 +43,8 @@
               </span>
             </TooltipTrigger>
             <TooltipContent side="top" class="max-w-xs text-left">
-              <p>{{ p.configured ? 'API key configured — Remy can route to ' + p.label + '.' : 'No API key set. Remy will skip ' + p.label + ' until a backend is configured.' }}</p>
-              <p v-if="!p.configured" class="mt-1 text-xs opacity-70">Add a model backend for {{ p.label }} in the Model Backends page.</p>
+              <p class="font-semibold">{{ p.configured ? 'Remy can route to ' + p.label : 'No API key for ' + p.label }}</p>
+              <p v-if="!p.configured" class="text-muted-foreground text-[10px]">Add one in Model Backends</p>
             </TooltipContent>
           </Tooltip>
         </div>

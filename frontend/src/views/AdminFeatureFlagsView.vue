@@ -145,8 +145,8 @@
                         </TooltipTrigger>
                         <TooltipContent side="top" class="max-w-xs">
                           <p>{{ flag.description }}</p>
-                          <p v-if="flag.depends_on" class="mt-1 text-xs opacity-70">
-                            Depends on: {{ flag.depends_on.join(', ') }}
+                          <p v-if="flag.depends_on" class="text-muted-foreground text-[10px]">
+                            Depends on {{ flag.depends_on.join(', ') }}
                           </p>
                         </TooltipContent>
                       </Tooltip>
