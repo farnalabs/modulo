@@ -68,7 +68,7 @@ async function fetchSessionKey(): Promise<string | null> {
     })
     if (!res.ok) return null
     const data: SessionKeyResponse = await res.json()
-    return data.session_key
+    return data.key
   } catch {
     return null
   }
