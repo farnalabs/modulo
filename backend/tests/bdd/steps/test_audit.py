@@ -297,12 +297,6 @@ def authenticate_as_org(org: str, request) -> None:
 # -- Then steps --
 
 
-@then(parsers.parse("the response status is {status:d}"))
-def check_response_status(status: int, request) -> None:
-    resp = request.node._resp
-    assert resp.status_code == status, f"Expected status {status}, got {resp.status_code}"
-
-
 @then(parsers.parse("the response contains {count:d} audit events"))
 def check_audit_count(count: int, request) -> None:
     data = request.node._resp.json()

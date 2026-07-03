@@ -206,12 +206,6 @@ def get_viewmodel_without_view_as_team(
     _store_response(request, resp)
 
 
-@then(parsers.parse("the response status is {status:d}"))
-def check_response_status(status: int, request) -> None:
-    resp = request.node._resp
-    assert resp.status_code == status, f"Expected status {status}, got {resp.status_code}"
-
-
 @then(parsers.parse('the response contains only team-scoped resources for "{team_name}"'))
 def check_response_team_scoped(team_name: str, request) -> None:
     body = request.node._resp.json()

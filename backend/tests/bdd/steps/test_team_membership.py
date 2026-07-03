@@ -191,12 +191,6 @@ def request_my_profile(request) -> None:
         request.node._resp = resp
 
 
-@then(parsers.parse("the response status is {status:d}"))
-def check_response_status(status: int, request) -> None:
-    resp = request.node._resp
-    assert resp.status_code == status, f"Expected {status}, got {resp.status_code}"
-
-
 @then(parsers.parse('user "{username}" is a member of team "{team_name}"'))
 def user_is_member_of_team(username: str, team_name: str, ctx) -> None:
     assert f"{username}:{team_name}" in ctx["memberships"], (

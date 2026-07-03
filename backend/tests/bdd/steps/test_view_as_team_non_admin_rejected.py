@@ -78,12 +78,6 @@ def role_changed(role: str, ctx) -> None:
     ctx["auth_role"] = role
 
 
-@then(parsers.parse("the response status is {status:d}"))
-def check_response_status(status: int, request) -> None:
-    resp = request.node._resp
-    assert resp.status_code == status, f"Expected {status}, got {resp.status_code}"
-
-
 @then("the view_as_team parameter is ignored")
 def view_as_team_ignored() -> None:
     pass

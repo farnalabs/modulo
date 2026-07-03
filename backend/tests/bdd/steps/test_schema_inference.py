@@ -236,12 +236,6 @@ def step_infer_schema_no_limit(request, client):
     request.node._inferred_definition = expected_schema
 
 
-@then(parsers.parse("the response status is {status:d}"))
-def step_check_response_status(status: int, request) -> None:
-    resp = request.node._resp
-    assert resp.status_code == status, f"Expected status {status}, got {resp.status_code}"
-
-
 @when(parsers.parse('I POST /api/v1/schemas/infer with connector id "{name}"'))
 def step_infer_schema_by_name(name: str, request, client):
     mock_ci = request.node._mock_ci

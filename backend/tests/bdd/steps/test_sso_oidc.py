@@ -280,14 +280,6 @@ def no_duplicate_account(ctx: dict[str, Any]) -> None:
     )
 
 
-@then(parsers.parse("the response status is {status:d}"))
-def check_response_status(status: int, request: Any) -> None:
-    resp = request.node._resp
-    assert resp.status_code == status, (
-        f"Expected status {status}, got {resp.status_code} - body: {resp.text}"
-    )
-
-
 @then(parsers.parse('the error detail mentions "{text}"'))
 def error_detail_mentions(text: str, request: Any) -> None:
     resp = request.node._resp

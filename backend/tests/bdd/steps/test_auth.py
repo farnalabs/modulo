@@ -319,6 +319,8 @@ def step_create_api_key(
         request.node._resp = _make_key_response(201, name=name, full_key=full_key)
     except Exception:
         request.node._resp = _make_key_response(500)
+    finally:
+        loop.close()
 
 
 @when(
@@ -359,6 +361,8 @@ def step_revoke_api_key(
     except Exception as exc:
         ctx["_error"] = str(exc)
         request.node._resp = _make_key_response(500)
+    finally:
+        loop.close()
 
 
 @when("I GET /api/api-keys")
@@ -402,6 +406,8 @@ def step_list_api_keys(
     except Exception as exc:
         ctx["_error"] = str(exc)
         request.node._resp = _make_key_response(500)
+    finally:
+        loop.close()
 
 
 @then('the response contains a full_key starting with "mk_"')
@@ -461,6 +467,8 @@ def step_wrong_api_key_request(
         resp = _make_key_response(401)
         request.node._resp = resp
         request.node.response = resp
+    finally:
+        loop.close()
 
 
 # ===========================================================================

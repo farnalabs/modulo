@@ -78,12 +78,6 @@ def delete_team_endpoint(team_identifier: str, request, client, ctx) -> None:
     request.node._resp = resp
 
 
-@then(parsers.parse("the response status is {status:d}"))
-def check_response_status(status: int, request) -> None:
-    resp = request.node._resp
-    assert resp.status_code == status, f"Expected status {status}, got {resp.status_code}"
-
-
 @then("the error indicates the team has active runs")
 def error_indicates_active_runs(request) -> None:
     resp = request.node._resp

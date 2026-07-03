@@ -27,12 +27,6 @@ def _store_response(request: Any, ctx: dict[str, Any], resp: Any) -> None:
     ctx["response"] = resp
 
 
-@then(parsers.parse("the response status is {status:d}"))
-def step_check_status(status: int, request: Any) -> None:
-    resp = request.node._resp
-    assert resp.status_code == status, f"Expected status {status}, got {resp.status_code}: {resp.text}"
-
-
 @then(parsers.parse('the error mentions "{text}"'))
 def step_error_mentions(text: str, request: Any) -> None:
     body = request.node.response.json()

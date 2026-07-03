@@ -297,14 +297,6 @@ def admin_auth_in_org(org: str) -> None:
 # ---------------------------------------------------------------------------
 
 
-@then(parsers.parse("the response status is {status:d}"))
-def check_response_status(status: int, request) -> None:
-    resp = request.node._resp
-    assert resp.status_code == status, (
-        f"Expected status {status}, got {resp.status_code}: {resp.text[:500]}"
-    )
-
-
 @then('the response visibility is "org"')
 def response_visibility_org(request) -> None:
     body = request.node._resp.json()

@@ -684,12 +684,6 @@ def checkpoint_persisted(request: pytest.FixtureRequest) -> None:
 # ---------------------------------------------------------------------------
 
 
-@then(parsers.parse("the response status is {status:d}"))
-def check_status(request: pytest.FixtureRequest, status: int) -> None:
-    resp = request.node._resp
-    assert resp.status_code == status, f"Expected status {status}, got {resp.status_code}. Body: {resp.text[:500]}"
-
-
 @then("the response contains id and slug")
 def check_response_has_id_and_slug(request: pytest.FixtureRequest) -> None:
     """Verify the response body contains ``id`` and optionally ``slug``.

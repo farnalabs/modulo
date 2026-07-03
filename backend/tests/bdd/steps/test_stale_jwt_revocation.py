@@ -180,12 +180,6 @@ def user_redirected_to_auth(username: str, ctx) -> None:
     assert ctx.get("tokens_valid") is False
 
 
-@then(parsers.parse("the response status is {status:d}"))
-def check_response_status(status: int, request) -> None:
-    resp = request.node._resp
-    assert resp.status_code == status, f"Expected {status}, got {resp.status_code}"
-
-
 @then("the response respects the old role until token refresh")
 def response_respects_old_role(request) -> None:
     pass
