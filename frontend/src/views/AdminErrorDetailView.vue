@@ -12,7 +12,7 @@
         <div>
           <h1 class="text-2xl font-bold tracking-tight">{{ $t('views.AdminErrorDetailView.error_group_detail') }}</h1>
           <p v-if="group" class="mt-0.5 text-sm text-muted-foreground font-mono">
-            {{ group.fingerprint.slice(0, 16) }}...
+            {{ shortId(group.fingerprint) }}
           </p>
         </div>
       </div>
