@@ -73,7 +73,7 @@
         <dl class="space-y-3 text-sm">
           <div>
             <dt class="text-muted-foreground">ID</dt>
-            <dd class="font-mono text-xs">{{ selectedNodeData.id }}</dd>
+            <dd class="font-mono text-xs">{{ shortId(selectedNodeData.id) }}</dd>
           </div>
           <div>
             <dt class="text-muted-foreground">Type</dt>
@@ -93,15 +93,15 @@
           </div>
           <div v-if="selectedNodeData.node_type === 'manual' && selectedNodeData.output_schema_id">
             <dt class="text-muted-foreground">Output Schema</dt>
-            <dd class="font-mono text-xs">{{ selectedNodeData.output_schema_id }}</dd>
+            <dd class="font-mono text-xs">{{ shortId(selectedNodeData.output_schema_id) }}</dd>
           </div>
           <div v-if="selectedNodeData.node_type === 'agent' && selectedNodeData.agent_id">
             <dt class="text-muted-foreground">Agent</dt>
-            <dd class="font-mono text-xs">{{ selectedNodeData.agent_id }}</dd>
+            <dd class="font-mono text-xs">{{ shortId(selectedNodeData.agent_id) }}</dd>
           </div>
           <div v-if="selectedNodeData.node_type === 'agent' && selectedNodeData.connector_binding">
             <dt class="text-muted-foreground">Connector</dt>
-            <dd class="font-mono text-xs">{{ selectedNodeData.connector_binding.type }} / {{ selectedNodeData.connector_binding.instance_id }}</dd>
+            <dd class="font-mono text-xs">{{ selectedNodeData.connector_binding.type }}{{ selectedNodeData.connector_binding.instance_id ? ' / ' + shortId(selectedNodeData.connector_binding.instance_id) : '' }}</dd>
           </div>
         </dl>
 
@@ -131,11 +131,11 @@
         <dl class="space-y-3 text-sm">
           <div>
             <dt class="text-muted-foreground">Source</dt>
-            <dd class="font-mono text-xs">{{ selectedEdgeData.source_node_id }}</dd>
+            <dd class="font-mono text-xs">{{ shortId(selectedEdgeData.source_node_id) }}</dd>
           </div>
           <div>
             <dt class="text-muted-foreground">Target</dt>
-            <dd class="font-mono text-xs">{{ selectedEdgeData.target_node_id }}</dd>
+            <dd class="font-mono text-xs">{{ shortId(selectedEdgeData.target_node_id) }}</dd>
           </div>
           <div>
             <dt class="text-muted-foreground">Type</dt>
@@ -465,7 +465,7 @@
                   :value="node.id"
                   class="h-4 w-4 rounded border-gray-300 text-indigo-500 focus:ring-indigo-500"
                 />
-                <span>{{ node.label || node.id.slice(0, 8) }}</span>
+                <span>{{ node.label || 'Node ' + shortId(node.id) }}</span>
               </label>
             </div>
           </div>
@@ -503,6 +503,7 @@ import '@vue-flow/core/dist/style.css'
 import '@vue-flow/core/dist/theme-default.css'
 import { useApi } from '../composables/useApi'
 import BackLink from '../components/BackLink.vue'
+import { shortId } from '../../utils/format'
 
 const { get, post, patch } = useApi()
 const route = useRoute()
@@ -592,7 +593,7 @@ function convertBackendNode(n: any): any {
     id: n.id,
     type: nodeType,
     position: n.position || { x: 0, y: 0 },
-    data: { label: n.label || n.id.slice(0, 8) },
+    data: { label: n.label || 'Node ' + shortId(n.id) },
   }
 }
 

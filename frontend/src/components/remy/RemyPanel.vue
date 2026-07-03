@@ -12,7 +12,7 @@
             {{ store.activeSession.name }}
           </template>
           <template v-else-if="store.activeSession">
-            Session {{ store.activeSession.id.slice(0, 8) }}
+            Session {{ store.activeSession.session_number ? '#' + store.activeSession.session_number : shortId(store.activeSession.id) }}
           </template>
           <template v-else>Remy</template>
         </span>
