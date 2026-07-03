@@ -15,6 +15,7 @@ from sqlalchemy import select as sa_select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.db.crud.base import PageResult
+from modulo.db.rls import set_rls_org
 
 
 def extract_orm_entity(stmt: Select[Any]) -> type | None:
@@ -43,14 +44,14 @@ class BaseRepository(ABC):
     ) -> None:
         self._session_factory = session_factory
 
-    @abstractmethod
     async def set_org_context(self, session: AsyncSession, org_id: uuid.UUID) -> None:
         """Establish tenant identity for the current transaction.
 
-        Called once per request inside the active transaction.  Postgres
-        uses ``SELECT set_config('app.organisation_id', :oid, true)``;
-        generic backends are no-ops.
+        Called once per request inside the active transaction.  Delegates
+        to ``set_rls_org`` to configure the session-level ``organisation_id``
+        parameter, which Postgres RLS policies enforce.
         """
+        await set_rls_org(session, org_id)
 
     @abstractmethod
     def apply_tenant_filter(self, stmt: Select[Any], org_id: uuid.UUID) -> Select[Any]:
@@ -83,7 +84,7 @@ class BaseRepository(ABC):
         total: int = (await session.execute(count_stmt)).scalar_one()
 
         result = await session.execute(stmt.offset(offset).limit(page_size))
-        items = list(result.scalars().all())
+        items = result.scalars().all()
 
         return PageResult(items=items, total=total, page=page, page_size=page_size)
 

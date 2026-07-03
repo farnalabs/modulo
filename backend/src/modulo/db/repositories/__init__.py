@@ -7,9 +7,12 @@ Usage:
     result = await repo.paginate(session, stmt, page=1, page_size=20)
 """
 
+import logging
 import uuid
 from collections.abc import AsyncGenerator, Callable
 from typing import Any
+
+logger = logging.getLogger(__name__)
 
 from sqlalchemy import Select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -29,6 +32,7 @@ def _build_repository(
         case "postgres":
             return PostgresRepository(session_factory)
         case _:
+            logger.warning("Unknown db_type=%r — falling back to GenericRepository", db_type)
             return GenericRepository(session_factory)
 
 

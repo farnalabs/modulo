@@ -7,7 +7,6 @@ from sqlalchemy import Select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.db.repositories.base import BaseRepository
-from modulo.db.rls import set_rls_org
 
 _TENANT_COLUMN = "organisation_id"
 
@@ -24,10 +23,9 @@ class GenericRepository(BaseRepository):
     ``do_orm_execute`` listener in ``rls._inject_tenant_filter``.
     """
 
-    async def set_org_context(self, session: AsyncSession, org_id: uuid.UUID) -> None:
-        await set_rls_org(session, org_id)
-
     def apply_tenant_filter(self, stmt: Select[Any], org_id: uuid.UUID) -> Select[Any]:
+        if org_id is None:
+            raise ValueError("org_id must not be None")
         for desc in stmt.column_descriptions:
             entity = desc.get("entity")
             if entity is None or entity is object:
