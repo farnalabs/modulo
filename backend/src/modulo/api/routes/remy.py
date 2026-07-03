@@ -49,6 +49,7 @@ from modulo.model_backends.gemini import GeminiBackend
 from modulo.model_backends.grok import GrokBackend
 from modulo.model_backends.groq import GroqBackend
 from modulo.model_backends.openai import OpenAIBackend
+from modulo.model_backends.opencode import OpenCodeBackend
 from modulo.model_backends.openrouter import OpenRouterBackend
 from modulo.model_backends.perplexity import PerplexityBackend
 from modulo.model_backends.qwen import QwenBackend
@@ -69,6 +70,7 @@ _SIMPLE_BACKENDS: dict[str, type[ModelBackendBase]] = {
     "grok": GrokBackend,
     "groq": GroqBackend,
     "openai": OpenAIBackend,
+    "opencode": OpenCodeBackend,
     "openrouter": OpenRouterBackend,
     "perplexity": PerplexityBackend,
     "qwen": QwenBackend,
