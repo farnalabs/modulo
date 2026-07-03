@@ -84,7 +84,7 @@ def _eval_def_to_dict(eval_def: EvalDefinition) -> dict[str, Any]:
         "failure_behaviour": eval_def.failure_behaviour,
         "pass_threshold": eval_def.pass_threshold,
         "suite_id": eval_def.suite_id,
-        "created_by": str(eval_def.account_id),
+        "account_id": str(eval_def.account_id),
     }
 
 

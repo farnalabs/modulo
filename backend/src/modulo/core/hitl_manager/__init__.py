@@ -188,7 +188,7 @@ class HITLManager:
             tm_result = await session.execute(
                 select(TeamMembership).where(
                     TeamMembership.team_id == gate_check.required_team_id,
-                    TeamMembership.user_id == claimant_id,
+                    TeamMembership.account_id == claimant_id,
                     TeamMembership.organisation_id == org_id,
                 )
             )

@@ -32,7 +32,7 @@ _GATE = "review-step"
 
 def _gate(
     *,
-    claimed_by: uuid.UUID | None = None,
+    account_id: uuid.UUID | None = None,
     claim_token: str | None = None,
     expires_at: datetime | None = None,
     decision: str | None = None,
@@ -45,8 +45,8 @@ def _gate(
     g.gate_id = _GATE
     g.pipeline_id = _PIPELINE
     g.organisation_id = _ORG
-    g.claimed_by = claimed_by
-    g.claimed_at = claimed_at or (datetime.now(UTC) if claimed_by else None)
+    g.account_id = account_id
+    g.claimed_at = claimed_at or (datetime.now(UTC) if account_id else None)
     g.claim_token = claim_token
     g.expires_at = expires_at
     g.decision = decision
@@ -165,7 +165,7 @@ async def test_create_gate_inserts_new_row():
     added = session.add.call_args[0][0]
     assert added.run_id == _RUN
     assert added.gate_id == _GATE
-    assert added.claimed_by is None
+    assert added.account_id is None
 
 
 async def test_create_gate_idempotent_if_exists():
@@ -183,9 +183,9 @@ async def test_create_gate_idempotent_if_exists():
 
 
 async def test_claim_success_sets_token_and_expiry():
-    pre_check = _gate(claimed_by=None)
+    pre_check = _gate(account_id=None)
     claimed_gate = _gate(
-        claimed_by=_USER,
+        account_id=_USER,
         claim_token="tok",
         expires_at=datetime.now(UTC) + timedelta(minutes=15),
     )
@@ -196,7 +196,7 @@ async def test_claim_success_sets_token_and_expiry():
 
 
 async def test_claim_already_claimed_raises():
-    existing = _gate(claimed_by=uuid.uuid4(), claim_token="tok")
+    existing = _gate(account_id=uuid.uuid4(), claim_token="tok")
     session = _session_update(rows_returned=0, gate=existing, pre_check_gate=existing)
     mgr = HITLManager()
     with pytest.raises(AlreadyClaimedError):
@@ -212,9 +212,9 @@ async def test_claim_gate_not_found_raises():
 
 async def test_claim_custom_expiry_minutes_is_applied():
     """claim() with custom expiry_minutes passes the right interval to the UPDATE."""
-    pre_check = _gate(claimed_by=None)
+    pre_check = _gate(account_id=None)
     claimed_gate = _gate(
-        claimed_by=_USER,
+        account_id=_USER,
         claim_token="tok",
         expires_at=datetime.now(UTC) + timedelta(minutes=60),
     )
@@ -243,16 +243,16 @@ async def test_create_gate_with_required_team_id():
 
 async def test_claim_team_member_can_claim():
     """Team member can claim a team-scoped gate."""
-    unclaimed = _gate(claimed_by=None, required_team_id=_TEAM)
+    unclaimed = _gate(account_id=None, required_team_id=_TEAM)
     claimed = _gate(
-        claimed_by=_USER,
+        account_id=_USER,
         claim_token="tok",
         expires_at=datetime.now(UTC) + timedelta(minutes=15),
         required_team_id=_TEAM,
     )
     membership = MagicMock(spec=TeamMembership)
     membership.team_id = _TEAM
-    membership.user_id = _USER
+    membership.account_id = _USER
 
     session = AsyncMock()
     session.add = MagicMock()
@@ -294,7 +294,7 @@ async def test_claim_team_member_can_claim():
 
 async def test_claim_non_team_member_raises():
     """Non-team member gets NotTeamMemberError on a team-scoped gate."""
-    gate = _gate(claimed_by=None, required_team_id=_TEAM)
+    gate = _gate(account_id=None, required_team_id=_TEAM)
 
     session = AsyncMock()
     session.add = MagicMock()
@@ -328,9 +328,9 @@ async def test_claim_non_team_member_raises():
 
 async def test_claim_no_required_team_still_works():
     """Gate without required_team_id still allows existing claim behavior."""
-    unclaimed = _gate(claimed_by=None)
+    unclaimed = _gate(account_id=None)
     claimed = _gate(
-        claimed_by=_USER,
+        account_id=_USER,
         claim_token="tok",
         expires_at=datetime.now(UTC) + timedelta(minutes=15),
     )
@@ -371,19 +371,19 @@ async def test_claim_no_required_team_still_works():
 
 async def test_approve_valid_token_records_decision():
     future = datetime.now(UTC) + timedelta(minutes=5)
-    gate = _gate(claimed_by=_USER, claim_token="good-token", expires_at=future)
-    gate_decided = _gate(claimed_by=None, claim_token=None, expires_at=None, decision="approved")
+    gate = _gate(account_id=_USER, claim_token="good-token", expires_at=future)
+    gate_decided = _gate(account_id=None, claim_token=None, expires_at=None, decision="approved")
     session = _session_decide(update_returns_id=gate.id, session_get_gate=gate_decided)
     mgr = HITLManager()
     result = await mgr.approve(session, run_id=_RUN, gate_id=_GATE, org_id=_ORG, claim_token="good-token")
     assert result.decision == "approved"
     assert result.claim_token is None
-    assert result.claimed_by is None
+    assert result.account_id is None
 
 
 async def test_approve_wrong_token_raises():
     future = datetime.now(UTC) + timedelta(minutes=5)
-    gate = _gate(claimed_by=_USER, claim_token="correct", expires_at=future)
+    gate = _gate(account_id=_USER, claim_token="correct", expires_at=future)
     session = _session_decide(update_returns_id=None, diagnosis_gate=gate)
     mgr = HITLManager()
     with pytest.raises(ClaimTokenInvalidError):
@@ -392,7 +392,7 @@ async def test_approve_wrong_token_raises():
 
 async def test_approve_expired_token_raises():
     past = datetime.now(UTC) - timedelta(minutes=1)
-    gate = _gate(claimed_by=_USER, claim_token="tok", expires_at=past)
+    gate = _gate(account_id=_USER, claim_token="tok", expires_at=past)
     session = _session_decide(update_returns_id=None, diagnosis_gate=gate)
     mgr = HITLManager()
     with pytest.raises(ClaimTokenExpiredError):
@@ -417,7 +417,7 @@ async def test_approve_already_decided_raises():
 async def test_approve_null_expires_at_raises_expired():
     """expires_at=None on a claimed gate (defensive guard) → ClaimTokenExpiredError."""
     # This state is unreachable via normal API flow but guard is defensive.
-    gate = _gate(claimed_by=_USER, claim_token="tok", expires_at=None)
+    gate = _gate(account_id=_USER, claim_token="tok", expires_at=None)
     session = _session_decide(update_returns_id=None, diagnosis_gate=gate)
     mgr = HITLManager()
     with pytest.raises(ClaimTokenExpiredError):
@@ -432,8 +432,8 @@ async def test_approve_null_expires_at_raises_expired():
 async def test_approve_with_modification_valid_token_and_audit():
     """approve_with_modification records decision, logs audit, and sets delivered_at."""
     future = datetime.now(UTC) + timedelta(minutes=5)
-    gate = _gate(claimed_by=_USER, claim_token="good-token", expires_at=future)
-    gate_decided = _gate(claimed_by=None, claim_token=None, expires_at=None, decision="approved")
+    gate = _gate(account_id=_USER, claim_token="good-token", expires_at=future)
+    gate_decided = _gate(account_id=None, claim_token=None, expires_at=None, decision="approved")
     session = _session_decide(update_returns_id=gate.id, session_get_gate=gate_decided)
     modified = {"summary": "Modified output from human review"}
 
@@ -449,7 +449,7 @@ async def test_approve_with_modification_valid_token_and_audit():
     )
     assert result.decision == "approved"
     assert result.claim_token is None
-    assert result.claimed_by is None
+    assert result.account_id is None
 
     # Verify that two audit events were appended: output_modified + output_delivered
     assert session.add.call_count >= 2
@@ -457,7 +457,7 @@ async def test_approve_with_modification_valid_token_and_audit():
 
 async def test_approve_with_modification_wrong_token_raises():
     future = datetime.now(UTC) + timedelta(minutes=5)
-    gate = _gate(claimed_by=_USER, claim_token="correct", expires_at=future)
+    gate = _gate(account_id=_USER, claim_token="correct", expires_at=future)
     session = _session_decide(update_returns_id=None, diagnosis_gate=gate)
     mgr = HITLManager()
     with pytest.raises(ClaimTokenInvalidError):
@@ -473,7 +473,7 @@ async def test_approve_with_modification_wrong_token_raises():
 
 async def test_approve_with_modification_expired_token_raises():
     past = datetime.now(UTC) - timedelta(minutes=1)
-    gate = _gate(claimed_by=_USER, claim_token="tok", expires_at=past)
+    gate = _gate(account_id=_USER, claim_token="tok", expires_at=past)
     session = _session_decide(update_returns_id=None, diagnosis_gate=gate)
     mgr = HITLManager()
     with pytest.raises(ClaimTokenExpiredError):
@@ -523,8 +523,8 @@ async def test_approve_with_modification_already_decided_raises():
 
 async def test_reject_valid_token_records_decision():
     future = datetime.now(UTC) + timedelta(minutes=5)
-    gate = _gate(claimed_by=_USER, claim_token="tok", expires_at=future)
-    gate_decided = _gate(claimed_by=None, claim_token=None, decision="rejected")
+    gate = _gate(account_id=_USER, claim_token="tok", expires_at=future)
+    gate_decided = _gate(account_id=None, claim_token=None, decision="rejected")
     session = _session_decide(update_returns_id=gate.id, session_get_gate=gate_decided)
     mgr = HITLManager()
     result = await mgr.reject(session, run_id=_RUN, gate_id=_GATE, org_id=_ORG, claim_token="tok")
@@ -534,7 +534,7 @@ async def test_reject_valid_token_records_decision():
 
 async def test_reject_wrong_token_raises():
     future = datetime.now(UTC) + timedelta(minutes=5)
-    gate = _gate(claimed_by=_USER, claim_token="correct", expires_at=future)
+    gate = _gate(account_id=_USER, claim_token="correct", expires_at=future)
     session = _session_decide(update_returns_id=None, diagnosis_gate=gate)
     mgr = HITLManager()
     with pytest.raises(ClaimTokenInvalidError):
@@ -549,8 +549,8 @@ async def test_reject_wrong_token_raises():
 async def test_deliver_manual_valid_token_records_decision():
     """deliver_manual with valid token records decision and output in audit."""
     future = datetime.now(UTC) + timedelta(minutes=5)
-    gate = _gate(claimed_by=_USER, claim_token="good-token", expires_at=future)
-    gate_decided = _gate(claimed_by=None, claim_token=None, expires_at=None, decision="deliver_manual")
+    gate = _gate(account_id=_USER, claim_token="good-token", expires_at=future)
+    gate_decided = _gate(account_id=None, claim_token=None, expires_at=None, decision="deliver_manual")
     session = _session_decide(update_returns_id=gate.id, session_get_gate=gate_decided)
     manual_output = {"summary": "Manually provided output", "status": "approved"}
     mgr = HITLManager()
@@ -565,14 +565,14 @@ async def test_deliver_manual_valid_token_records_decision():
     )
     assert result.decision == "deliver_manual"
     assert result.claim_token is None
-    assert result.claimed_by is None
+    assert result.account_id is None
 
 
 async def test_deliver_manual_with_empty_output_accepts():
     """deliver_manual accepts an empty output dict (validation at API layer)."""
     future = datetime.now(UTC) + timedelta(minutes=5)
-    gate = _gate(claimed_by=_USER, claim_token="tok", expires_at=future)
-    gate_decided = _gate(claimed_by=None, claim_token=None, expires_at=None, decision="deliver_manual")
+    gate = _gate(account_id=_USER, claim_token="tok", expires_at=future)
+    gate_decided = _gate(account_id=None, claim_token=None, expires_at=None, decision="deliver_manual")
     session = _session_decide(update_returns_id=gate.id, session_get_gate=gate_decided)
     mgr = HITLManager()
     result = await mgr.deliver_manual(
@@ -589,7 +589,7 @@ async def test_deliver_manual_with_empty_output_accepts():
 
 async def test_deliver_manual_wrong_token_raises():
     future = datetime.now(UTC) + timedelta(minutes=5)
-    gate = _gate(claimed_by=_USER, claim_token="correct", expires_at=future)
+    gate = _gate(account_id=_USER, claim_token="correct", expires_at=future)
     session = _session_decide(update_returns_id=None, diagnosis_gate=gate)
     mgr = HITLManager()
     with pytest.raises(ClaimTokenInvalidError):
@@ -605,7 +605,7 @@ async def test_deliver_manual_wrong_token_raises():
 
 async def test_deliver_manual_expired_token_raises():
     past = datetime.now(UTC) - timedelta(minutes=1)
-    gate = _gate(claimed_by=_USER, claim_token="tok", expires_at=past)
+    gate = _gate(account_id=_USER, claim_token="tok", expires_at=past)
     session = _session_decide(update_returns_id=None, diagnosis_gate=gate)
     mgr = HITLManager()
     with pytest.raises(ClaimTokenExpiredError):
@@ -650,7 +650,7 @@ async def test_deliver_manual_already_decided_raises():
 
 async def test_deliver_manual_null_expires_at_raises_expired():
     """expires_at=None on a claimed gate (defensive guard) -> ClaimTokenExpiredError."""
-    gate = _gate(claimed_by=_USER, claim_token="tok", expires_at=None)
+    gate = _gate(account_id=_USER, claim_token="tok", expires_at=None)
     session = _session_decide(update_returns_id=None, diagnosis_gate=gate)
     mgr = HITLManager()
     with pytest.raises(ClaimTokenExpiredError):
@@ -737,7 +737,7 @@ async def test_list_overdue_returns_overdue_gates():
 
     now = datetime.now(UTC)
     past = now - timedelta(minutes=45)
-    gate = _gate(claimed_by=_USER, claim_token="tok", expires_at=past, claimed_at=past)
+    gate = _gate(account_id=_USER, claim_token="tok", expires_at=past, claimed_at=past)
 
     session = AsyncMock()
     scalars = MagicMock()
@@ -771,7 +771,7 @@ async def test_list_overdue_below_threshold_returns_empty():
 async def test_count_overdue_returns_zero():
     session = AsyncMock()
     result = MagicMock()
-    result.scalars.return_value.__iter__ = lambda self: iter([])
+    result.scalar.return_value = 0
     session.execute = AsyncMock(return_value=result)
 
     mgr = HITLManager()
