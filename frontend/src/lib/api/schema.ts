@@ -1263,6 +1263,7 @@ export interface components {
       }>
       recent_runs: Array<{
         id: string
+        run_number: number | null
         pipeline_name: string
         status: string
         created_at: string

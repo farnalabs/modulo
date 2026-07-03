@@ -419,7 +419,7 @@ async def export_run_fixture(
     masked_input = _mask_output_value(run.input_payload) if run.input_payload else None
     masked_outputs = _mask_output_value(run.outputs_json) if run.outputs_json else None
     fixture_map = _build_fixture_map(masked_input, masked_outputs)
-    short_id = str(run.id).split("-")[0]
+    short_id = str(run.id)[:8]
 
     return FixtureExportResponse(
         fixture_name=f"run_{short_id}_io",
