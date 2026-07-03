@@ -3,9 +3,11 @@ import VueI18nPlugin from '@intlify/unplugin-vue-i18n/vite'
 import { defineConfig } from 'vitest/config'
 import { fileURLToPath, URL } from 'node:url'
 import { resolve, dirname } from 'node:path'
+import yaml from '@rollup/plugin-yaml'
 
 export default defineConfig({
   plugins: [
+    yaml(),
     vue(),
     VueI18nPlugin({
       include: [resolve(dirname(fileURLToPath(import.meta.url)), './src/locales/*.js')],
