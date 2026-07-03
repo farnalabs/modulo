@@ -6,12 +6,19 @@ from typing import Any
 
 from pydantic import BaseModel
 from sqlalchemy import select
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.core.remy.config_service import RemyConfigService
 from modulo.db.models.remy_skill import RemySkill
 
 logger = logging.getLogger(__name__)
+
+_SECTION_ORG_SKILLS = "## Organisation Skills"
+_SECTION_USER_SKILLS = "## User Skills"
+_SECTION_PAGE_CONTEXT = "## Page Context"
+_DELIMITER = "---"
+_DELIMITER_LEN = 3
 
 
 class SkillEntry(BaseModel):
@@ -24,28 +31,40 @@ class SkillEntry(BaseModel):
 
 
 class SkillLoader:
-    def __init__(self, session: AsyncSession) -> None:
+    def __init__(
+        self,
+        session: AsyncSession,
+        config_service: RemyConfigService | None = None,
+    ) -> None:
         self._session = session
+        self._config_service = config_service
+
+    async def _get_skills(self, **filters: Any) -> list[SkillEntry]:
+        try:
+            stmt = select(RemySkill).where(
+                *[getattr(RemySkill, k) == v for k, v in filters.items()],
+                RemySkill.active.is_(True),
+            )
+            result = await self._session.execute(stmt)
+            return [self._to_entry(s) for s in result.scalars().all()]
+        except SQLAlchemyError:
+            logger.exception("Failed to query skills with filters %s", filters)
+            return []
 
     async def get_org_skills(self, org_id: uuid.UUID) -> list[SkillEntry]:
-        result = await self._session.execute(
-            select(RemySkill).where(
-                RemySkill.organisation_id == org_id,
-                RemySkill.user_id.is_(None),
-                RemySkill.active.is_(True),
-            )
-        )
-        return [self._to_entry(s) for s in result.scalars().all()]
+        return await self._get_skills(organisation_id=org_id, user_id=None)
 
     async def get_user_skills(self, user_id: uuid.UUID) -> list[SkillEntry]:
-        result = await self._session.execute(
-            select(RemySkill).where(
-                RemySkill.user_id == user_id,
-                RemySkill.organisation_id.is_(None),
-                RemySkill.active.is_(True),
-            )
-        )
-        return [self._to_entry(s) for s in result.scalars().all()]
+        return await self._get_skills(user_id=user_id, organisation_id=None)
+
+    def _append_skills_block(
+        self, parts: list[str], skills: list[SkillEntry], heading: str
+    ) -> None:
+        if not skills:
+            return
+        parts.append(heading)
+        for skill in skills:
+            parts.append(f"### {skill.name}\n\n{skill.body}")
 
     async def build_system_prompt(
         self,
@@ -54,47 +73,49 @@ class SkillLoader:
         page_context: str | None = None,
         system_prompt_override: str | None = None,
     ) -> str:
-        config_service = RemyConfigService(self._session)
-        config = await config_service.get_config(org_id)
+        config_service = self._config_service or RemyConfigService(self._session)
+        try:
+            config = await config_service.get_config(org_id)
+        except Exception:
+            logger.exception("Failed to load Remy config for org %s", org_id)
+            config = None
 
         parts: list[str] = []
 
-        base_prompt = system_prompt_override if system_prompt_override is not None else config.system_prompt
-        if base_prompt:
-            parts.append(base_prompt)
+        if config:
+            base_prompt = system_prompt_override if system_prompt_override is not None else config.system_prompt
+            if base_prompt:
+                parts.append(base_prompt)
 
-        if config.additional_guidance:
-            parts.append(config.additional_guidance)
+            if config.additional_guidance:
+                parts.append(config.additional_guidance)
 
         if page_context:
-            parts.append(f"## Page Context\n\n{page_context}")
+            parts.append(f"{_SECTION_PAGE_CONTEXT}\n\n{page_context}")
 
         org_skills = await self.get_org_skills(org_id)
-        if org_skills:
-            parts.append("## Organisation Skills\n\n")
-            for skill in org_skills:
-                parts.append(f"### {skill.name}\n\n{skill.body}\n")
+        self._append_skills_block(parts, org_skills, _SECTION_ORG_SKILLS)
 
         user_skills = await self.get_user_skills(user_id)
-        if user_skills:
-            parts.append("## User Skills\n\n")
-            for skill in user_skills:
-                parts.append(f"### {skill.name}\n\n{skill.body}\n")
+        self._append_skills_block(parts, user_skills, _SECTION_USER_SKILLS)
 
         return "\n\n".join(parts)
 
     @staticmethod
-    def parse_skill_markdown(markdown: str) -> tuple[dict[str, Any] | None, str]:
+    def parse_skill_markdown(markdown: str | None) -> tuple[dict[str, Any] | None, str]:
+        if not markdown:
+            return None, ""
+
         stripped = markdown.lstrip()
-        if not stripped.startswith("---"):
+        if not stripped.startswith(_DELIMITER):
             return None, markdown
 
-        end_idx = stripped.find("---", 3)
+        end_idx = stripped.find(_DELIMITER, _DELIMITER_LEN)
         if end_idx == -1:
             return None, markdown
 
-        frontmatter_text = stripped[3:end_idx].strip()
-        body = stripped[end_idx + 3 :].lstrip()
+        frontmatter_text = stripped[_DELIMITER_LEN:end_idx].strip()
+        body = stripped[end_idx + _DELIMITER_LEN :].lstrip()
 
         frontmatter: dict[str, Any] = {}
         for line in frontmatter_text.split("\n"):
@@ -123,6 +144,6 @@ class SkillLoader:
             name=skill.name,
             description=skill.description,
             triggers=skill.triggers,
-            body=body if fm else skill.body,
+            body=body if fm is not None else skill.body,
             frontmatter=fm,
         )
