@@ -985,6 +985,9 @@ async def get_primitive(
                 item = await get_library_primitive(session, primitive_id)
     except ProgrammingError:
         return None
+    except Exception as exc:
+        _log.exception("get_primitive — unexpected error for %s", primitive_id)
+        return None
     if item is not None:
         return item
     return _MODULO_BY_ID.get(primitive_id)
