@@ -36,7 +36,7 @@ jobs:
         name: Deploy to staging
         shell: powershell
         run: |
-          fly deploy --app staging-modulo --config fly.staging.toml --strategy immediate `
+          fly deploy --app staging-modulo --config fly.staging.toml `
             --build-arg "GIT_SHA=${{ steps.git.outputs.git-sha }}" `
             --build-arg "GIT_BRANCH=${{ steps.git.outputs.git-branch }}" `
             --build-arg "GIT_COMMIT_TIMESTAMP=${{ steps.git.outputs.git-commit-timestamp }}" `
