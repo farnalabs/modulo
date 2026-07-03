@@ -51,6 +51,8 @@ _log = logging.getLogger(__name__)
 
 _ENGINE: AsyncEngine | None = None
 
+_TEST_ENGINE: AsyncEngine | None = None
+
 # ---------------------------------------------------------------------------
 # Type aliases
 # ---------------------------------------------------------------------------
@@ -108,10 +110,18 @@ def get_deliverer(report_type: str) -> ReportDeliverer | None:
 
 
 def _get_engine() -> AsyncEngine:
+    if _TEST_ENGINE is not None:
+        return _TEST_ENGINE
     global _ENGINE
     if _ENGINE is None:
         _ENGINE = create_async_engine(get_settings().database_url)
     return _ENGINE
+
+
+def _set_test_engine(engine: AsyncEngine | None) -> None:
+    """Override the engine for testing. Pass None to reset."""
+    global _TEST_ENGINE
+    _TEST_ENGINE = engine
 
 
 # ---------------------------------------------------------------------------
@@ -267,69 +277,43 @@ async def _deliver_via_config(
     return await _deliver_webhook(payload, recipient_config)
 
 
-async def _deliver_slack_webhook(payload: Any, webhook_urls: list[str]) -> list[dict[str, Any]]:
-    """POST payload as Slack blocks to each webhook URL."""
-    results: list[dict[str, Any]] = []
-    async with httpx.AsyncClient(timeout=30.0) as client:
-        for url in webhook_urls:
-            try:
-                body = payload if isinstance(payload, dict) else {"text": str(payload)}
-                resp = await client.post(
-                    url,
-                    json=body,
-                    headers={"Content-Type": "application/json"},
-                )
-                results.append(
-                    {
-                        "url": url,
-                        "status": "delivered" if resp.is_success else "failed",
-                        "status_code": resp.status_code,
-                        "error": None if resp.is_success else resp.text[:200],
-                    }
-                )
-            except httpx.RequestError as exc:
-                results.append(
-                    {
-                        "url": url,
-                        "status": "failed",
-                        "status_code": None,
-                        "error": str(exc),
-                    }
-                )
-    return results
-
-
-async def _deliver_webhook(payload: Any, recipient_config: dict[str, Any]) -> list[dict[str, Any]]:
-    """POST payload as JSON to configured webhook URLs."""
-    urls = recipient_config.get("urls", [])
-    headers = recipient_config.get("headers", {})
+async def _deliver_to_urls(
+    urls: list[str],
+    body: dict[str, Any] | list[Any],
+    headers: dict[str, str] | None = None,
+) -> list[dict[str, Any]]:
+    """POST JSON body to each URL, returning per-URL results."""
     results: list[dict[str, Any]] = []
     async with httpx.AsyncClient(timeout=30.0) as client:
         for url in urls:
             try:
-                resp = await client.post(
-                    url,
-                    json=payload if isinstance(payload, (dict, list)) else {"data": str(payload)},
-                    headers={"Content-Type": "application/json", **headers},
-                )
-                results.append(
-                    {
-                        "url": url,
-                        "status": "delivered" if resp.is_success else "failed",
-                        "status_code": resp.status_code,
-                        "error": None if resp.is_success else resp.text[:200],
-                    }
-                )
+                resp = await client.post(url, json=body, headers=headers or {})
+                results.append({
+                    "url": url,
+                    "status": "delivered" if resp.is_success else "failed",
+                    "status_code": resp.status_code,
+                    "error": None if resp.is_success else resp.text[:200],
+                })
             except httpx.RequestError as exc:
-                results.append(
-                    {
-                        "url": url,
-                        "status": "failed",
-                        "status_code": None,
-                        "error": str(exc),
-                    }
-                )
+                results.append({
+                    "url": url,
+                    "status": "failed",
+                    "status_code": None,
+                    "error": str(exc),
+                })
     return results
+
+
+async def _deliver_slack_webhook(payload: Any, webhook_urls: list[str]) -> list[dict[str, Any]]:
+    body = payload if isinstance(payload, dict) else {"text": str(payload)}
+    return await _deliver_to_urls(webhook_urls, body)
+
+
+async def _deliver_webhook(payload: Any, recipient_config: dict[str, Any]) -> list[dict[str, Any]]:
+    urls = recipient_config.get("urls", [])
+    headers = recipient_config.get("headers", {})
+    body = payload if isinstance(payload, (dict, list)) else {"data": str(payload)}
+    return await _deliver_to_urls(urls, body, headers=headers)
 
 
 # ---------------------------------------------------------------------------
