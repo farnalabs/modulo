@@ -94,15 +94,6 @@ def create_team(name: str, description: str, request, ctx) -> None:
         request.node._resp = resp
 
 
-@then(parsers.parse("the response status is {status:d}"))
-def check_response_status(status: int, request) -> None:
-    resp = request.node._resp
-    if hasattr(resp, "status_code"):
-        assert resp.status_code == status, f"Expected {status}, got {resp.status_code}"
-    else:
-        assert resp.status_code == status
-
-
 @then(parsers.parse('the response contains a team with name "{name}"'))
 def response_has_team_name(name: str, request) -> None:
     data = request.node._resp.json()

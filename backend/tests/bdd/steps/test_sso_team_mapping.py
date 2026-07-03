@@ -390,14 +390,6 @@ def saml_acs_with_groups(groups: str, request: Any, ctx: dict[str, Any], client:
 # ── Then: assertions ──────────────────────────────────────────────────────
 
 
-@then(parsers.parse("the response status is {status:d}"))
-def check_response_status(status: int, request: Any) -> None:
-    resp = request.node._resp
-    assert resp.status_code == status, (
-        f"Expected status {status}, got {resp.status_code} - body: {resp.text[:500]}"
-    )
-
-
 @then("the group mappings are persisted")
 def group_mappings_persisted(ctx: dict[str, Any]) -> None:
     mock_set = ctx.get("mock_set")

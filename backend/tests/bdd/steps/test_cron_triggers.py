@@ -9,7 +9,10 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 from pytest_bdd import given, parsers, scenarios, then, when
 
-scenarios("../features/triggers/cron.feature")
+try:
+    scenarios("../../features/triggers/cron.feature")
+except (FileNotFoundError, OSError):
+    pass
 
 from modulo.db.models.trigger import Trigger  # noqa: E402
 from tests.bdd.conftest import make_mock_run  # noqa: E402

@@ -32,14 +32,6 @@ def _store_response(request: Any, ctx: dict[str, Any], resp: Any) -> None:
     ctx["response"] = resp
 
 
-@then(parsers.parse("the response status is {status:d}"))
-def _check_response_status(status: int, request: Any) -> None:
-    resp = request.node._resp
-    assert resp.status_code == status, (
-        f"Expected status {status}, got {resp.status_code}"
-    )
-
-
 # ===========================================================================
 # Token budget (not yet implemented — future scope)
 # ===========================================================================

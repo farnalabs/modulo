@@ -593,7 +593,3 @@ def _then_user_not_in_team(user_id: str, team_name: str, ctx: dict[str, Any]) ->
     assert removed_id is not None, "No member was removed in the previous step"
 
 
-@then(parsers.parse("the response status is {status:d}"))
-def _then_response_status(status: int, request: Any) -> None:
-    resp = request.node._resp
-    assert resp.status_code == status, f"Expected {status}, got {resp.status_code}: {resp.text}"

@@ -124,12 +124,6 @@ def reassign_all(when_arg, request, ctx):
     pass
 
 
-@then(parsers.parse("the response status is {status:d}"))
-def check_response_status(status: int, request) -> None:
-    resp = request.node._resp
-    assert resp.status_code == status, f"Expected {status}, got {resp.status_code}"
-
-
 @then("the error indicates the team still has resources")
 def error_has_resources(request) -> None:
     data = request.node._resp.json()

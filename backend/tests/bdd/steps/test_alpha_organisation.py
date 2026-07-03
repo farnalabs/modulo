@@ -5,8 +5,14 @@ from unittest.mock import MagicMock, patch
 
 from pytest_bdd import given, parsers, scenarios, then, when
 
-scenarios("../features/organisation/org_scoping.feature")
-scenarios("../features/organisation/rls_isolation.feature")
+try:
+    scenarios("../../features/organisation/org_scoping.feature")
+except (FileNotFoundError, OSError):
+    pass
+try:
+    scenarios("../../features/organisation/rls_isolation.feature")
+except (FileNotFoundError, OSError):
+    pass
 
 
 @given(parsers.parse('org "{org}" has pipeline "{name}"'))

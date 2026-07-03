@@ -233,14 +233,6 @@ def get_license_status(request: Any, ctx: dict[str, Any], client: Any) -> None:
 # ── Then steps ────────────────────────────────────────────────────────────────
 
 
-@then(parsers.parse("the response status is {status:d}"))
-def check_response_status(status: int, request: Any) -> None:
-    resp = request.node._resp
-    assert resp.status_code == status, (
-        f"Expected status {status}, got {resp.status_code} - body: {resp.text}"
-    )
-
-
 @then(parsers.parse('the response contains tier "{tier}"'))
 def response_contains_tier(tier: str, request: Any) -> None:
     resp = request.node._resp

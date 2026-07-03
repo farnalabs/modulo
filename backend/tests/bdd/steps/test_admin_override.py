@@ -154,12 +154,6 @@ def request_pipeline(pipeline_name: str, request, ctx) -> None:
     request.node._resp = resp
 
 
-@then(parsers.parse("the response status is {status:d}"))
-def check_response_status(status: int, request) -> None:
-    resp = request.node._resp
-    assert resp.status_code == status, f"Expected {status}, got {resp.status_code}"
-
-
 @then(parsers.parse('the response contains pipeline "{name}"'))
 def response_contains_pipeline(name: str, request) -> None:
     data = request.node._resp.json()

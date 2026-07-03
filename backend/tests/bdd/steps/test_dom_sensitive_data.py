@@ -195,14 +195,6 @@ def request_reveal_resource_type(
     _store_response(request, resp)
 
 
-@then(parsers.parse("the response status is {status:d}"))
-def check_response_status(request: Any, status: int) -> None:
-    resp = request.node._resp
-    assert resp.status_code == status, (
-        f"Expected status {status}, got {resp.status_code}: {resp.text}"
-    )
-
-
 @then(parsers.parse('I receive the plaintext value "{expected}"'))
 def check_revealed_value(request: Any, expected: str) -> None:
     body = request.node._resp.json()

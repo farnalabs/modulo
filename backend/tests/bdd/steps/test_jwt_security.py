@@ -392,7 +392,3 @@ def refresh_rejected_after_logout(request: Any, ctx: dict[str, Any], token_clien
         assert resp.status_code == 401, f"Expected 401, got {resp.status_code}: {resp.text}"
 
 
-@then(parsers.parse("the response status is {status:d}"))
-def check_response_status(status: int, request: Any) -> None:
-    resp = request.node.response
-    assert resp.status_code == status, f"Expected status {status}, got {resp.status_code}"
