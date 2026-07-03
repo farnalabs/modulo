@@ -10,7 +10,7 @@ from typing import Any
 from fastapi import APIRouter, Depends, File, HTTPException, Query, Response, UploadFile, status
 from pydantic import BaseModel, Field, model_validator
 from sqlalchemy import select
-from sqlalchemy.exc import ProgrammingError
+from sqlalchemy.exc import DBAPIError, ProgrammingError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.api.dependencies import get_db_session
@@ -889,14 +889,23 @@ def _build_pipeline_from_template(
     name = name_override or getattr(primitive, "name", "Pipeline from Template")
     description = description_override or getattr(primitive, "description", None)
 
+    # Build a map from template string IDs to stable UUIDs so PipelineEdge
+    # foreign keys (Uuid columns) don't crash on human-readable IDs.
+    node_id_map: dict[str, str] = {}
+    for node in graph_nodes:
+        tid = node.get("id", "")
+        if tid:
+            node_id_map[tid] = str(uuid.uuid4())
+
     # Convert template graph nodes to pipeline graph nodes.
     # Template nodes use agent_index to reference template agents.
     # We embed the agent definition in the node metadata so the frontend
     # can resolve it later when the user configures real agents.
     pipeline_nodes: list[dict[str, Any]] = []
     for node in graph_nodes:
+        tid = node.get("id", "")
         pipeline_node: dict[str, Any] = {
-            "id": node.get("id", str(uuid.uuid4())),
+            "id": node_id_map.get(tid, tid or str(uuid.uuid4())),
             "node_type": node.get("node_type", "agent"),
             "position": node.get("position", {"x": 0, "y": 0}),
         }
@@ -913,13 +922,16 @@ def _build_pipeline_from_template(
 
         pipeline_nodes.append(pipeline_node)
 
-    # Convert template edges to pipeline edge format
+    # Convert template edges to pipeline edge format, mapping source/target
+    # through node_id_map so human-readable template IDs become UUIDs.
     pipeline_edges: list[dict[str, Any]] = []
     for edge in edges:
+        old_source = edge.get("source", edge.get("source_node_id", ""))
+        old_target = edge.get("target", edge.get("target_node_id", ""))
         pipeline_edge = {
             "id": str(uuid.uuid4()),
-            "source_node_id": edge.get("source", edge.get("source_node_id", "")),
-            "target_node_id": edge.get("target", edge.get("target_node_id", "")),
+            "source_node_id": node_id_map.get(old_source, old_source),
+            "target_node_id": node_id_map.get(old_target, old_target),
             "edge_type": edge.get("edge_type", "normal"),
         }
         hitl_config = edge.get("hitl_gate_config")
@@ -1002,7 +1014,7 @@ async def create_pipeline_from_template_endpoint(
             session.add(edge)
 
         await session.flush()
-    except ProgrammingError:
+    except (ProgrammingError, DBAPIError):
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
