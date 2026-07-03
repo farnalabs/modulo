@@ -29,3 +29,18 @@ Feature: GitHub Connector
     Given a GitHub connector with valid token
     When I query resource "invalid"
     Then the result is an error
+
+  Scenario: Query returns error with 429 rate limit
+    Given a GitHub connector with valid token
+    When the API returns HTTP 429 "Rate limit exceeded"
+    Then the connector raises a ValueError with "429"
+
+  Scenario: Query returns error with 500 server error
+    Given a GitHub connector with valid token
+    When the API returns HTTP 500 "Server Error"
+    Then the connector raises a ValueError with "500"
+
+  Scenario: Write returns error with 422 unprocessable
+    Given a GitHub connector with valid token
+    When writing a file to GitHub returns HTTP 422 "Unprocessable"
+    Then the connector raises a ValueError with "422"

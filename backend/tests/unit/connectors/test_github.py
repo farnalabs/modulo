@@ -195,7 +195,7 @@ async def test_write_issue_missing_title(connector):
 @respx.mock
 async def test_query_repos_http_error(connector):
     respx.get("https://api.github.com/user/repos").mock(return_value=httpx.Response(403, text="Forbidden"))
-    with pytest.raises(httpx.HTTPStatusError):
+    with pytest.raises(ValueError, match="403"):
         await connector.query(ConnectorQuery(resource="repos"))
 
 
@@ -204,7 +204,7 @@ async def test_query_file_http_error(connector):
     respx.get("https://api.github.com/repos/owner/repo/contents/missing.py").mock(
         return_value=httpx.Response(404, text="Not Found")
     )
-    with pytest.raises(httpx.HTTPStatusError):
+    with pytest.raises(ValueError, match="404"):
         await connector.query(
             ConnectorQuery(resource="file", filters={"repo": "owner/repo", "path": "missing.py"})
         )
@@ -215,7 +215,7 @@ async def test_query_pulls_http_error(connector):
     respx.get("https://api.github.com/repos/owner/repo/pulls").mock(
         return_value=httpx.Response(500, text="Server Error")
     )
-    with pytest.raises(httpx.HTTPStatusError):
+    with pytest.raises(ValueError, match="500"):
         await connector.query(ConnectorQuery(resource="pulls", filters={"repo": "owner/repo"}))
 
 
@@ -224,7 +224,7 @@ async def test_write_file_http_error(connector):
     respx.put("https://api.github.com/repos/owner/repo/contents/bad.txt").mock(
         return_value=httpx.Response(422, text="Unprocessable")
     )
-    with pytest.raises(httpx.HTTPStatusError):
+    with pytest.raises(ValueError, match="422"):
         await connector.write(
             ConnectorPayload(
                 resource="file",
@@ -258,8 +258,9 @@ async def test_health_check_non_json_response(connector):
     respx.get("https://api.github.com/user").mock(
         return_value=httpx.Response(200, text="not-json", headers={"X-OAuth-Scopes": "repo, read:org"})
     )
-    with pytest.raises((ValueError, KeyError)):
-        await connector.health_check()
+    result = await connector.health_check()
+    assert result.ok is False
+    assert "invalid JSON" in result.detail
 
 
 @respx.mock
