@@ -1,8 +1,11 @@
 """Unit tests for variant group CRUD — pure functions only (no DB)."""
 
 import uuid
+from unittest.mock import AsyncMock, MagicMock
 
-from modulo.db.crud.variant_group import pick_variant_weighted
+import pytest
+
+from modulo.db.crud.variant_group import increment_run_count, pick_variant_weighted
 
 
 class TestPickVariantWeighted:
@@ -67,3 +70,35 @@ class TestPickVariantWeighted:
             assert result is not None
             seen.add(result["name"])
         assert seen == {"x", "y", "z"}
+
+
+@pytest.mark.asyncio
+class TestIncrementRunCount:
+    async def test_increments_count(self) -> None:
+        session = AsyncMock()
+        group_id = uuid.uuid4()
+        mock_group = MagicMock()
+        mock_group.run_count = 5
+        result_mock = MagicMock()
+        result_mock.scalar_one_or_none = MagicMock(return_value=mock_group)
+        session.execute = AsyncMock(return_value=result_mock)
+
+        returned = await increment_run_count(session, group_id)
+
+        assert returned is mock_group
+        assert mock_group.run_count == 6
+        session.execute.assert_awaited_once()
+        session.flush.assert_awaited_once()
+
+    async def test_returns_none_when_not_found(self) -> None:
+        session = AsyncMock()
+        group_id = uuid.uuid4()
+        result_mock = MagicMock()
+        result_mock.scalar_one_or_none = MagicMock(return_value=None)
+        session.execute = AsyncMock(return_value=result_mock)
+
+        returned = await increment_run_count(session, group_id)
+
+        assert returned is None
+        session.execute.assert_awaited_once()
+        session.flush.assert_not_called()
