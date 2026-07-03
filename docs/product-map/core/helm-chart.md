@@ -9,6 +9,12 @@ code:
   - docker-compose.test.yml
   - docker-compose.mariadb.yml
   - backend/Dockerfile
+  - Dockerfile.backend
+  - frontend/Dockerfile.prod
+  - frontend/Dockerfile
+  - .github/workflows/publish-images.yml
+  - .github/workflows/docker-build.yml
+  - backend/entrypoint.sh
 bdd: []
 depends-on: []
 unit-tests: []
@@ -38,7 +44,7 @@ Packages Modulo for self-hosted deployment via Docker Compose (dev/alpha/poc) an
 
 - [x] Backend image builds from `python:3.12-slim` via uv-based install
 - [x] Frontend image builds as nginx serving the Vue 3 SPA — **Fixed: `Dockerfile.prod` created as multi-stage build (Node build → nginx serve)**
-- [ ] Images publishable to `ghcr.io/anomalyco/modulo` (or custom registry)
+- [x] Images publishable to `ghcr.io/anomalyco/modulo` (or custom registry)
 
 ### Helm chart — production Kubernetes deployment
 
@@ -66,6 +72,9 @@ Packages Modulo for self-hosted deployment via Docker Compose (dev/alpha/poc) an
 - [x] Helm chart can deploy to namespaces other than `modulo`
 - [x] Existing Postgres/Redis can be used instead of sub-charts (external DB mode)
 
+### QA History
+- 2026-07-03: Cross-cutting QA (feat-core-helm-chart, index 96): Fixed stale ghcr.io-publishing checkbox ([ ]→[x]). Removed stale "no CI/CD workflow for ghcr.io" known gap. Added 4 new known gaps (no docker-build CI gate, no SQLite Compose profile, Dockerfile.prod hardcoded nginx config, dual backend Dockerfile divergence risk). Added code paths to frontmatter (Dockerfile.backend, frontend/Dockerfile.prod, frontend/Dockerfile, publish-images.yml, docker-build.yml, entrypoint.sh). Status: partial.
+
 ## Known Gaps
 
 - No end-to-end Helm deployment test in CI
@@ -73,4 +82,7 @@ Packages Modulo for self-hosted deployment via Docker Compose (dev/alpha/poc) an
 - No documented upgrade path between chart versions
 - No automated backup/restore hooks in Helm chart
 - No multi-replica backend deployment tested (advisory locks, rate limiter, scheduler)
-- No CI/CD workflow for building/publishing Docker images to ghcr.io
+- No `docker-build` CI gate — the `docker-build.yml` workflow only runs on push-to-main and tag, not on PR/merge. Broken Dockerfiles could reach main without feedback.
+- No SQLite Docker Compose profile for zero-dependency local dev — PRD §13 requires "SQLite fallback" in "Docker-compose: Postgres + API + UI; SQLite fallback"
+- Frontend `Dockerfile.prod` nginx config hardcodes `backend:8000` — works only in Docker Compose context; Helm chart uses its own nginx config from `_helpers.tpl` template
+- Two backend Dockerfiles (`backend/Dockerfile` for dev, `Dockerfile.backend` for CI/prod) — risk of divergence; the CI build uses multi-stage with `uv sync --frozen` while the dev file uses `uv pip install --system -e .`
