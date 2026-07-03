@@ -127,8 +127,11 @@ def _run_pg_dump(raw_url: str, output: Path, timeout: int = 300) -> None:
         "--format=plain",
         raw_url,
     ]
-    with output.open("wb") as f:
-        result = subprocess.run(cmd, stdout=f, stderr=subprocess.PIPE, timeout=timeout)  # noqa: S603 — cmd is a hardcoded list, not user input
+    try:
+        with output.open("wb") as f:
+            result = subprocess.run(cmd, stdout=f, stderr=subprocess.PIPE, timeout=timeout)  # noqa: S603 — cmd is a hardcoded list, not user input
+    except subprocess.TimeoutExpired:
+        raise RuntimeError(f"pg_dump timed out after {timeout}s")
     if result.returncode != 0:
         raise RuntimeError(f"pg_dump failed: {result.stderr.decode(errors='replace').strip()}")
 
@@ -136,8 +139,11 @@ def _run_pg_dump(raw_url: str, output: Path, timeout: int = 300) -> None:
 def _run_psql(raw_url: str, input_path: Path, timeout: int = 600) -> None:
     _check_tool("psql")
     cmd = ["psql", "-q", "-v", "ON_ERROR_STOP=1", raw_url]
-    with input_path.open("rb") as f:
-        result = subprocess.run(cmd, stdin=f, capture_output=True, timeout=timeout)  # noqa: S603 — cmd is a hardcoded list with trusted input
+    try:
+        with input_path.open("rb") as f:
+            result = subprocess.run(cmd, stdin=f, capture_output=True, timeout=timeout)  # noqa: S603 — cmd is a hardcoded list with trusted input
+    except subprocess.TimeoutExpired:
+        raise RuntimeError(f"psql restore timed out after {timeout}s")
     if result.returncode != 0:
         raise RuntimeError(f"psql restore failed: {result.stderr.decode(errors='replace').strip()}")
 
