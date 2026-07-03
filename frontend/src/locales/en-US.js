@@ -794,6 +794,7 @@ export default {
       "group_system_admin": "System",
       "item_dashboard": "Dashboard",
       "item_notifications": "Notifications",
+      "item_my_pipelines": "My Pipelines",
       "item_library": "Library",
       "item_templates": "Templates",
       "item_copy_pipeline": "Copy Pipeline",
