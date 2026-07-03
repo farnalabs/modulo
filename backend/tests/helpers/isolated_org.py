@@ -8,10 +8,12 @@ rather than mock sessions.
 from __future__ import annotations
 
 import secrets
+from typing import Any
 
 import httpx
 
 BASE_URL: str = "https://staging-modulo.fly.dev"
+_HTTP_TIMEOUT: float = 30.0
 
 
 class IsolatedOrgContext:
@@ -41,6 +43,52 @@ def _random_slug() -> str:
     return f"e2e-{suffix}"
 
 
+def _make_client(
+    base_url: str, token: str | None = None
+) -> httpx.AsyncClient:
+    """Create an httpx client for the staging API."""
+    headers = {}
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+    return httpx.AsyncClient(
+        base_url=base_url,
+        verify=False,
+        headers=headers or None,
+        timeout=_HTTP_TIMEOUT,
+    )
+
+
+def _raise_on_bad_status(
+    response: httpx.Response, expected: int, action: str
+) -> None:
+    """Check HTTP response status and raise if unexpected."""
+    if response.status_code != expected:
+        raise RuntimeError(
+            f"{action} failed ({response.status_code}): {response.text}"
+        )
+
+
+def _extract_token(data: dict[str, Any]) -> str:
+    """Extract access token from auth response or raise."""
+    token = data.get("access_token") or data.get("token")
+    if not token:
+        raise RuntimeError(
+            "Auth response missing access_token and token keys"
+        )
+    return token
+
+
+def _parse_json_response(response: httpx.Response, action: str) -> dict[str, Any]:
+    """Parse JSON from an HTTP response with a descriptive error."""
+    try:
+        return response.json()
+    except Exception as exc:
+        raise RuntimeError(
+            f"Failed to parse {action} response as JSON "
+            f"({response.status_code}): {response.text}"
+        ) from exc
+
+
 async def create_isolated_org(
     *,
     base_url: str = BASE_URL,
@@ -54,41 +102,50 @@ async def create_isolated_org(
     slug = _random_slug()
     org_name = f"E2E Test {slug}"
 
-    # Authenticate as admin
     admin_token = await get_admin_token(
         base_url=base_url, email=admin_email, password=admin_password
     )
 
-    auth_headers = {"Authorization": f"Bearer {admin_token}"}
-    async with httpx.AsyncClient(
-        base_url=base_url, verify=False, headers=auth_headers
-    ) as client:
-        org_resp = await client.post(
-            "/api/v1/admin/orgs",
-            json={"name": org_name, "slug": slug},
-        )
-        if org_resp.status_code != 201:
-            raise RuntimeError(
-                f"Org creation failed ({org_resp.status_code}): {org_resp.text}"
+    org_id: str | None = None
+    try:
+        async with _make_client(base_url, token=admin_token) as client:
+            org_resp = await client.post(
+                "/api/v1/admin/orgs",
+                json={"name": org_name, "slug": slug},
             )
-        org_data = org_resp.json()
-        org_id = org_data["id"]
+            _raise_on_bad_status(org_resp, 201, "Org creation")
+            org_data = _parse_json_response(org_resp, "org creation")
+            org_id = org_data.get("id")
+            if not org_id:
+                raise RuntimeError(
+                    f"Org creation response missing 'id': {org_data}"
+                )
 
-        user_email = f"runner-{slug}@e2e.modulo"
-        user_password = secrets.token_urlsafe(16)
-        user_resp = await client.post(
-            f"/api/v1/admin/orgs/{org_id}/users",
-            json={
-                "email": user_email,
-                "display_name": f"E2E Runner {slug}",
-                "password": user_password,
-                "org_role": "admin",
-            },
-        )
-        if user_resp.status_code != 201:
-            raise RuntimeError(
-                f"User creation failed ({user_resp.status_code}): {user_resp.text}"
+            user_email = f"runner-{slug}@e2e.modulo"
+            user_password = secrets.token_urlsafe(16)
+            user_resp = await client.post(
+                f"/api/v1/admin/orgs/{org_id}/users",
+                json={
+                    "email": user_email,
+                    "display_name": f"E2E Runner {slug}",
+                    "password": user_password,
+                    "org_role": "admin",
+                },
             )
+            _raise_on_bad_status(user_resp, 201, "User creation")
+    except Exception:
+        if org_id:
+            try:
+                async with _make_client(
+                    base_url, token=admin_token
+                ) as cleanup_client:
+                    await cleanup_client.post(
+                        "/api/v1/admin/org/deletion-request",
+                        json={"org_id": org_id},
+                    )
+            except Exception:
+                pass
+        raise
 
     return IsolatedOrgContext(
         org_id=org_id,
@@ -102,25 +159,31 @@ async def create_isolated_org(
 
 async def destroy_isolated_org(ctx: IsolatedOrgContext) -> None:
     """Best-effort teardown: delete the test org."""
-    auth_headers = {"Authorization": f"Bearer {ctx.admin_token}"}
-    async with httpx.AsyncClient(
-        base_url=ctx.base_url, verify=False, headers=auth_headers
-    ) as client:
-        await client.post("/api/v1/admin/org/deletion-request")
+    try:
+        async with _make_client(
+            ctx.base_url, token=ctx.admin_token
+        ) as client:
+            resp = await client.post(
+                "/api/v1/admin/org/deletion-request",
+                json={"org_id": ctx.org_id},
+            )
+            if resp.status_code not in (200, 201, 202, 204):
+                raise RuntimeError(
+                    f"Org deletion failed ({resp.status_code}): {resp.text}"
+                )
+    except Exception:
+        pass
 
 
 async def get_admin_token(
     *, base_url: str = BASE_URL, email: str, password: str
 ) -> str:
     """Authenticate and return a Bearer token."""
-    async with httpx.AsyncClient(base_url=base_url, verify=False) as client:
+    async with _make_client(base_url) as client:
         resp = await client.post(
             "/api/v1/auth/login",
             json={"username": email, "password": password},
         )
-        if resp.status_code != 200:
-            raise RuntimeError(
-                f"Auth failed ({resp.status_code}): {resp.text}"
-            )
-        data = resp.json()
-        return data.get("access_token", data.get("token", ""))
+        _raise_on_bad_status(resp, 200, "Auth")
+        data = _parse_json_response(resp, "auth")
+        return _extract_token(data)
