@@ -12,9 +12,36 @@ const mockFlagsResponse = {
   would_activate: [],
 }
 
+const mockTiersResponse = {
+  tiers: [
+    { tier_id: 'community', label: 'Community', rank: 0 },
+    { tier_id: 'team', label: 'Team', rank: 1 },
+    { tier_id: 'enterprise', label: 'Enterprise', rank: 2 },
+  ],
+}
+
+const mockLicenseResponse = {
+  has_license: true,
+  tier: 'team',
+  features: [],
+  expires_at: '2026-12-31T23:59:59Z',
+  org_id: 'Acme Corp',
+}
+
 vi.mock('../lib/api/client', () => ({
   api: {
-    GET: vi.fn(),
+    GET: vi.fn().mockImplementation((path: string) => {
+      if (path === '/api/v1/admin/feature-flags') {
+        return Promise.resolve({ data: mockFlagsResponse, error: null })
+      }
+      if (path === '/api/v1/admin/license') {
+        return Promise.resolve({ data: mockLicenseResponse, error: null })
+      }
+      if (path === '/api/v1/admin/tiers') {
+        return Promise.resolve({ data: mockTiersResponse, error: null })
+      }
+      return Promise.resolve({ data: null, error: null })
+    }),
   },
 }))
 
@@ -62,12 +89,17 @@ describe('usePlanStore', () => {
 
   it('fetchPlan sets error on failure', async () => {
     const { api } = await import('../lib/api/client')
-    ;(api.GET as any).mockResolvedValue({ data: null, error: 'Network error' })
+    ;(api.GET as any).mockImplementation((path: string) => {
+      if (path === '/api/v1/admin/feature-flags') {
+        return Promise.resolve({ data: null, error: 'Network error' })
+      }
+      return Promise.resolve({ data: null, error: null })
+    })
 
     const store = usePlanStore()
     await store.fetchPlan()
 
-    expect(store.error).toBe('Network error')
+    expect(store.error).toContain('Network error')
     expect(store.isLoading).toBe(false)
   })
 
@@ -78,7 +110,7 @@ describe('usePlanStore', () => {
     const store = usePlanStore()
     await store.fetchPlan()
 
-    expect(store.error).toBe('Request failed')
+    expect(store.error).toContain('Request failed')
     expect(store.isLoading).toBe(false)
   })
 
@@ -90,6 +122,9 @@ describe('usePlanStore', () => {
           data: { has_license: true, tier: 'team', features: [], expires_at: '2026-12-31T23:59:59Z', org_id: 'Acme Corp' },
           error: undefined,
         })
+      }
+      if (path === '/api/v1/admin/tiers') {
+        return Promise.resolve({ data: mockTiersResponse, error: null })
       }
       return Promise.resolve({ data: mockFlagsResponse, error: null })
     })

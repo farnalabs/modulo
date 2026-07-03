@@ -122,6 +122,6 @@ describe('AdminCostControlsView', () => {
     })
     await flushPromises()
 
-    expect(wrapper.text()).toContain('Cost controls are not available')
+    expect(wrapper.text()).toContain('Available on higher plan tier')
   })
 })

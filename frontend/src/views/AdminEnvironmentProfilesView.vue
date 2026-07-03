@@ -1,15 +1,6 @@
 <template>
   <div class="mx-auto max-w-5xl space-y-8 p-6">
-<<<<<<< HEAD
-    <FeatureGate feature-name="environment_profiles" required-tier="team">
-      <template #locked="{ tooltip }">
-        <div class="flex items-center justify-center min-h-[200px] text-muted-foreground">
-          {{ tooltip }}
-        </div>
-      </template>
-=======
     <FeatureGate feature-name="environment_profiles" required-tier="team" show-disabled>
->>>>>>> feat/gating-show-disabled
 
       <header class="flex items-center justify-between">
         <div>

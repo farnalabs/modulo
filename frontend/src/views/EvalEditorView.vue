@@ -262,7 +262,7 @@ import { ref, reactive, computed, onMounted } from 'vue'
 import { useApi } from '../composables/useApi'
 import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
-import { shortId } from '../../utils/format'
+import { shortId } from '../utils/format'
 import { usePlanStore } from '../stores/planStore'
 import FeatureGate from '../components/FeatureGate.vue'
 import PageTabs from "../components/PageTabs.vue"

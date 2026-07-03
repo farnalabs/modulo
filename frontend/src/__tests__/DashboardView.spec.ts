@@ -202,17 +202,17 @@ describe('DashboardView', () => {
     setupEnterpriseMocks()
     const wrapper = mount(DashboardView)
     await flushPromises()
-    expect(wrapper.text()).not.toContain('Active pipelines')
+    expect(wrapper.text()).not.toContain('Active Pipelines:')
 
     const alphaRow = wrapper.findAll('tbody tr')[0]
     await alphaRow.trigger('click')
     await nextTick()
 
-    expect(wrapper.text()).toContain('Active pipelines')
+    expect(wrapper.text()).toContain('Active Pipelines:')
 
     await alphaRow.trigger('click')
     await nextTick()
-    expect(wrapper.text()).not.toContain('Active pipelines')
+    expect(wrapper.text()).not.toContain('Active Pipelines:')
   })
 
   it('renders run activity trend section', async () => {

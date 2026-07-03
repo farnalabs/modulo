@@ -1,9 +1,5 @@
 ﻿<template>
-<<<<<<< HEAD
   <FeatureGate feature-name="plugin_management">
-=======
-  <FeatureGate feature-name="plugin_management" show-disabled>
->>>>>>> feat/gating-show-disabled
     <div class="mx-auto max-w-5xl space-y-8 p-6">
       <header class="flex items-center justify-between">
         <div>
