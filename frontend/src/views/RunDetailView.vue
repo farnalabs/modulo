@@ -12,10 +12,17 @@
             <span :class="statusBadgeClass" class="capitalize">{{ run.status }}</span>
           </div>
           <p class="mt-1 text-sm text-muted-foreground">
-            Pipeline: <span class="font-medium text-foreground">{{ run.pipeline_id }}</span>
+            Pipeline: <span class="font-medium text-foreground">{{ formatRun(run) }}</span>
           </p>
           <p class="text-xs text-muted-foreground">
-            Run ID: <code class="rounded bg-muted px-1.5 py-0.5 font-mono">{{ run.run_id }}</code>
+            Run ID: <code class="rounded bg-muted px-1.5 py-0.5 font-mono text-xs">{{ shortId(run.run_id) }}</code>
+            <button
+              :aria-label="$t('views.RunDetailView.copy_run_id')"
+              class="ml-1 inline-flex items-center gap-1 rounded-md px-2 py-0.5 text-xs font-medium text-primary hover:bg-primary/10"
+              @click="copyRunId"
+            >
+              {{ copied ? 'Copied!' : 'Copy' }}
+            </button>
           </p>
         </div>
         <div class="text-right text-xs text-muted-foreground">
@@ -212,6 +219,7 @@ import DialogTitle from '../components/ui/dialog/DialogTitle.vue'
 import DialogDescription from '../components/ui/dialog/DialogDescription.vue'
 import DialogFooter from '../components/ui/dialog/DialogFooter.vue'
 import Button from '../components/ui/button/Button.vue'
+import { shortId, formatRun } from '../utils/format'
 
 type RunResponse = components['schemas']['RunResponse']
 type RunIOResponse = components['schemas']['RunIOResponse']
@@ -255,8 +263,8 @@ const shareSummary = computed(() => {
   const tokens = totalTokens.value?.toLocaleString() ?? '—'
   const cost = r.total_cost_usd != null ? `$${Number(r.total_cost_usd).toFixed(6)}` : '—'
   return [
-    `Run: ${r.run_id}`,
-    `Pipeline: ${r.pipeline_id}`,
+    `Run: ${r.run_number != null ? `#${r.run_number}` : shortId(r.run_id)}`,
+    `Pipeline: ${r.pipeline_name || shortId(r.pipeline_id)}`,
     `Status: ${r.status}`,
     `Nodes: ${completed}/${total}`,
     `Tokens: ${tokens}`,
@@ -286,6 +294,11 @@ function toggleNodeIO(name: string) {
 async function copyTraceId() {
   if (!run.value?.trace_id) return
   await copyText(run.value.trace_id)
+}
+
+async function copyRunId() {
+  if (!run.value?.run_id) return
+  await copyText(run.value.run_id)
 }
 
 async function copyText(text: string) {

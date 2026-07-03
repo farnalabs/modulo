@@ -20,3 +20,4 @@ class ChatSession(OrgScoped):
     model: Mapped[str] = mapped_column(String(100), nullable=False)
     context_window_tokens: Mapped[int] = mapped_column(Integer, nullable=False)
     system_prompt_hash: Mapped[str | None] = mapped_column(String(64))
+    session_number: Mapped[int | None] = mapped_column(Integer, nullable=True)

@@ -56,6 +56,7 @@ class Run(OrgScoped):
     parent_run_id: Mapped[uuid.UUID | None] = mapped_column(
         Uuid(), ForeignKey("runs.id", ondelete="SET NULL"), nullable=True, index=True
     )
+    run_number: Mapped[int | None] = mapped_column(Integer, nullable=True)
     owner_team_id: Mapped[uuid.UUID | None] = mapped_column(Uuid(), ForeignKey("teams.id", ondelete="RESTRICT"))
     account_id: Mapped[uuid.UUID | None] = mapped_column(Uuid(), ForeignKey("accounts.id", ondelete="SET NULL"))
     input_hash: Mapped[str] = mapped_column(String(64), nullable=False)
