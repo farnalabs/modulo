@@ -94,8 +94,9 @@ class Settings(BaseSettings):
     modulo_csrf_enabled: bool = Field(True)
     modulo_csrf_exempt_paths: str = Field("/api/v1/health,/api/v1/triggers,/api/v1/auth")
 
-    # Comma-separated list of additional origins to allow in connect-src CSP.
+    # Space-separated list of additional CSP source expressions for connect-src.
     # Used for custom Grafana Faro collectors, self-hosted Sentry instances, etc.
+    # Entries are validated to not contain semicolons (which would break CSP).
     modulo_monitor_domains: str = Field("")
 
     # Plugin discovery — when enabled, scans installed packages for entry points
@@ -151,6 +152,15 @@ class Settings(BaseSettings):
         for origin in origins:
             if origin.endswith("/"):
                 raise ValueError(f"CORS origin must not have trailing slash: {origin}")
+        return v
+
+    @field_validator("modulo_monitor_domains")
+    @classmethod
+    def _validate_monitor_domains(cls, v: str) -> str:
+        if ";" in v:
+            raise ValueError(
+                "MODULO_MONITOR_DOMAINS must not contain semicolons (would break CSP)"
+            )
         return v
 
     @field_validator("modulo_db")
