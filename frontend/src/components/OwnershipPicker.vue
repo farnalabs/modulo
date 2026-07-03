@@ -2,6 +2,7 @@
 import { ref, computed, onMounted } from "vue";
 import { PopoverRoot, PopoverTrigger, PopoverContent } from "radix-vue";
 import type { Component } from "vue";
+import { useI18n } from "vue-i18n";
 
 // Inline SVG icon components (lucide-vue-next bundle is broken in this version)
 const ChevronDown: Component = {
@@ -35,6 +36,8 @@ const emit = defineEmits<{
   (e: "update:modelValue", value: OwnershipValue): void;
 }>();
 
+const { t } = useI18n();
+
 const open = ref(false);
 const teams = ref<TeamItem[]>([]);
 const loading = ref(true);
@@ -64,7 +67,7 @@ async function loadTeams() {
   fetchError.value = null;
   const { data, error } = await api.GET("/api/v1/admin/teams");
   if (error) {
-    fetchError.value = "Failed to load teams";
+    fetchError.value = t("components.OwnershipPicker.failed_to_load_teams");
   } else if (data) {
     teams.value = data.items;
   }
@@ -117,7 +120,7 @@ onMounted(loadTeams);
         />
         <template v-if="loading">
           <div class="px-2 py-4 text-center text-sm text-muted-foreground">
-            Loading teams...
+            {{ $t('components.OwnershipPicker.loading_teams') }}
           </div>
         </template>
         <template v-else-if="fetchError">
@@ -127,7 +130,7 @@ onMounted(loadTeams);
         </template>
         <template v-else-if="teams.length > 0">
           <div class="px-2 py-1.5 text-xs font-medium text-muted-foreground">
-            Teams
+            {{ $t('components.OwnershipPicker.teams_header') }}
           </div>
           <button
             v-for="team in teams"
@@ -144,7 +147,7 @@ onMounted(loadTeams);
             <span class="flex-1">{{ team.name }}</span>
             <span class="text-xs text-muted-foreground"
               >{{ team.member_count }}
-              {{ team.member_count === 1 ? "member" : "members" }}</span
+              {{ team.member_count === 1 ? $t('components.OwnershipPicker.member') : $t('components.OwnershipPicker.members') }}</span
             >
           </button>
         </template>
