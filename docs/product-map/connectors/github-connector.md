@@ -7,6 +7,8 @@ bdd:
 unit-tests:
   - backend/tests/unit/connectors/test_github.py
   - backend/tests/unit/connectors/test_github_scopes.py
+  - backend/tests/unit/connectors/test_github_issues.py
+  - backend/tests/unit/connectors/test_github_resilience.py
 code:
   - backend/src/modulo/connectors/github/__init__.py
   - backend/src/modulo/connectors/base.py
@@ -108,6 +110,19 @@ Async GitHub REST API connector implementing `ConnectorBase`. Provides read/writ
 - [ ] `CREATE_PR` capability declared but `write("pr")` not implemented — capability mismatch
 - [x] `ISSUE_READ` and `ISSUE_WRITE` assigned to `ConnectorType.GITHUB` in `base.py`
 
+## Error Handling
+
+### API & Network Resilience
+
+- [x] HTTP 429 rate limit raises `ValueError` with status code — tested
+- [x] HTTP 500 server error raises `ValueError` with status code — tested
+- [x] HTTP 422 unprocessable on write raises `ValueError` with status code — tested
+- [x] HTTP 403 forbidden raises `ValueError` with status code — tested
+- [x] Connection error raises `ValueError` with "connection error" message — tested
+- [x] Invalid JSON response raises `ValueError` with "invalid JSON" message — tested
+- [x] Health check catches all exceptions returning `HealthResult(ok=False)` with truncated detail — tested
+- [x] Health check returns `HealthResult(ok=False)` with status detail on non-200 — tested
+
 ## Known Gaps
 
 - [ ] **No OAuth flow**: PAT-only auth; no OAuth 2.0 authorization code flow for user-context operations
@@ -118,8 +133,8 @@ Async GitHub REST API connector implementing `ConnectorBase`. Provides read/writ
 - [ ] **No pagination**: `query("pulls")` and `query("repos")` don't return `next_cursor`
 - [ ] **No GHES support**: API base URL is hard-coded to `https://api.github.com`
 - [ ] **No rate-limit handling**: no 429 retry, no `X-RateLimit-Remaining` header inspection
-- [ ] **No retry on transient HTTP errors**: `raise_for_status()` propagates all non-2xx as exceptions; no retry logic for 5xx or 429
-- [ ] **Token expiry not distinguished from other errors**: expired PAT, insufficient scopes, and network errors all return `HTTP {code}: {body}` with no structured error type
+- [ ] **No retry on transient HTTP errors**: errors are now wrapped as ValueError but no retry/backoff logic exists for 5xx or 429
+- [ ] **Token expiry not distinguished from other errors**: errors are now wrapped as ValueError with status code/structure, but expired PAT, insufficient scopes, and network errors still lack distinct structured error types
 - [ ] **Fine-grained PAT not supported**: code requires classic PAT `repo` scope; fine-grained PAT with `contents:read`, `contents:write`, `pull_requests:write` would fail `REQUIRED_SCOPES` check
 - [ ] **`read:org` scope requirement unclear**: product map doesn't explain why `read:org` is required — may be unnecessary for most agent workflows
-- [ ] **No unit tests for issue operations**: `write("issue")`, `query("issues")`, `write("issue_comment")`, `write("issue_label")`, `write("issue_update")` have no test coverage
+
