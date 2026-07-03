@@ -4,14 +4,23 @@ from __future__ import annotations
 
 import hashlib
 import json
-from collections.abc import Mapping
+from typing import TYPE_CHECKING
 
 from cryptography.exceptions import InvalidSignature
+
+if TYPE_CHECKING:
+    from collections.abc import Mapping
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import (
     Ed25519PrivateKey,
     Ed25519PublicKey,
 )
+
+__all__ = [
+    "generate_keypair",
+    "sign_primitive",
+    "verify_signature",
+]
 
 
 def _canonical_json(obj: Mapping[str, object]) -> bytes:
@@ -65,6 +74,7 @@ def verify_signature(primitive_data: Mapping[str, object], signature_hex: str, p
     canonical = _canonical_json(primitive_data)
     try:
         public_key.verify(bytes.fromhex(signature_hex), canonical)
-        return True
     except InvalidSignature:
         return False
+    else:
+        return True
