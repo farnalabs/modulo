@@ -81,6 +81,24 @@ def test_fernet_key_optional_for_aws_backend():
                 assert isinstance(backend, AWSSecretsManagerBackend)
 
 
+def test_backend_name_case_insensitive():
+    """Factory lowercases and strips backend_name before matching."""
+    with patch("modulo.core.secrets_backend.vault._MODULE_AVAILABLE", True):
+        with patch("modulo.core.secrets_backend.vault._hvac"):
+            with patch.dict(os.environ, {"VAULT_ADDR": "http://vault:8200", "VAULT_TOKEN": "x"}):
+                backend = create_secrets_backend(fernet_key=None, backend_name="  Vault  ")
+                assert isinstance(backend, VaultSecretsBackend)
+
+
+def test_backend_name_whitespace_trimmed():
+    """Factory strips whitespace from backend_name."""
+    with patch("modulo.core.secrets_backend.vault._MODULE_AVAILABLE", True):
+        with patch("modulo.core.secrets_backend.vault._hvac"):
+            with patch.dict(os.environ, {"VAULT_ADDR": "http://vault:8200", "VAULT_TOKEN": "x"}):
+                backend = create_secrets_backend(fernet_key=None, backend_name="  vault  ")
+                assert isinstance(backend, VaultSecretsBackend)
+
+
 def test_fernet_key_required_when_backend_is_fernet():
     with pytest.raises(ValueError, match="fernet_key is required"):
         create_secrets_backend(fernet_key=None)
