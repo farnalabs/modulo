@@ -15,8 +15,29 @@ code:
   - backend/src/modulo/db/migrations/versions/0001_initial_schema.py
   - docs/plugin-api.md
 depends-on: [feat-core-contribute-primitive]
-bdd: []
-unit-tests: []
+bdd:
+  - backend/tests/bdd/features/library/browse.feature
+  - backend/tests/bdd/features/library/copy_to_adapt.feature
+  - backend/tests/bdd/features/library/contribute.feature
+  - backend/tests/bdd/features/library/ratings.feature
+  - backend/tests/bdd/features/library/auto_update.feature
+  - backend/tests/bdd/features/personas/jordan-community-contributor.feature
+  - backend/tests/bdd/features/personas/alice-devx-sme.feature
+  - backend/tests/bdd/features/composites/composite_library.feature
+unit-tests:
+  - backend/tests/unit/registry/test_crypto.py
+  - backend/tests/unit/registry/test_registry.py
+  - backend/tests/unit/registry/test_publisher_trust.py
+  - backend/tests/unit/api/test_community_registry.py
+  - backend/tests/unit/api/test_registry_publishers.py
+  - backend/tests/unit/api/test_contributions.py
+  - backend/tests/unit/api/test_plugin_registry_bdd.py
+  - backend/tests/unit/library_service/test_library_service.py
+  - backend/tests/unit/plugin_registry/test_plugin_registry.py
+  - backend/tests/integration/test_initial_migration.py
+  - backend/tests/unit/mcp/test_library_list_resource.py
+  - backend/tests/unit/mcp/test_library_detail_resource.py
+  - backend/tests/unit/mcp/test_browse_library.py
 status: partial
 ---
 
@@ -28,27 +49,27 @@ Cryptographic signing, verification, and fork tracking for community library pri
 
 ### Data model & fork provenance
 
-- [ ] `library_primitives` table has `source` discriminator (`local` | `registry`)
-- [ ] `forked_from` is immutable after creation (enforced by DB trigger `enforce_library_fork_provenance()`)
-- [ ] `forked_from` must reference a `source: registry` entry (enforced by same trigger)
-- [ ] Registry primitives carry `checksum` (SHA-256) and `ed25519_signature`
-- [ ] Local primitives have `ed25519_signature` null; CHECK constraint enforces this
-- [ ] Registry primitives have `ed25519_signature` not null; CHECK constraint enforces this
+- [x] `library_primitives` table has `source` discriminator (`local` | `registry`)
+- [x] `forked_from` is immutable after creation (enforced by DB trigger `enforce_library_fork_provenance()`)
+- [x] `forked_from` must reference a `source: registry` entry (enforced by same trigger)
+- [x] Registry primitives carry `checksum` (SHA-256) and `ed25519_signature`
+- [x] Local primitives have `ed25519_signature` null; CHECK constraint enforces this
+- [x] Registry primitives have `ed25519_signature` not null; CHECK constraint enforces this
 
 ### Registry protocol (publish / pull / verify)
 
-- [ ] Registry v1 and v2 publish endpoints accept a primitive and store it with Ed25519 signature
-- [ ] Publisher generates keypair via `generate_keypair()` and signs primitive with `sign_primitive()`
-- [ ] Registry get/download endpoints return the primitive with its `ed25519_signature_hex`
-- [ ] Registry pull endpoint verifies Ed25519 signature before returning the entry
-- [ ] Registry verify endpoint checks payload signature against a provided or built-in public key
-- [ ] Built-in in-memory registry (`_BUILTIN_REGISTRY`) with pre-seeded primitives
-- [ ] `Publisher` dataclass with trust status; `register_publisher()` / `revoke_publisher()` API
-- [ ] `compute_popularity_score()` and `list_registry_primitives_ranked()` for search ranking
+- [x] Registry v1 and v2 publish endpoints accept a primitive and store it with Ed25519 signature
+- [x] Publisher generates keypair via `generate_keypair()` and signs primitive with `sign_primitive()`
+- [x] Registry get/download endpoints return the primitive with its `ed25519_signature_hex`
+- [x] Registry pull endpoint verifies Ed25519 signature before returning the entry
+- [x] Registry verify endpoint checks payload signature against a provided or built-in public key
+- [x] Built-in in-memory registry (`_BUILTIN_REGISTRY`) with pre-seeded primitives
+- [x] `Publisher` dataclass with trust status; `register_publisher()` / `revoke_publisher()` API
+- [x] `compute_popularity_score()` and `list_registry_primitives_ranked()` for search ranking
 
 ### Signature verification & trust tiers
 
-- [ ] `verify_primitive_signature()` verifies Ed25519 signature against built-in or provided public key
+- [x] `verify_primitive_signature()` verifies Ed25519 signature against built-in or provided public key
 - [ ] Trust tier display: **Verified publisher** (green badge) vs **Community** (amber badge)
 - [ ] Verified publisher program: key issuance, application process, revocation (v2)
 - [ ] Community (unsigned/self-signed) primitives show warning on copy requiring `confirm: true`
@@ -56,20 +77,20 @@ Cryptographic signing, verification, and fork tracking for community library pri
 
 ### Copy-to-adapt flow
 
-- [ ] Copy creates new row with `source: local`, `forked_from` set to registry entry ID
-- [ ] Local copy has `ed25519_signature` null (no signature carried forward)
+- [x] Copy creates new row with `source: local`, `forked_from` set to registry entry ID
+- [x] Local copy has `ed25519_signature` null (no signature carried forward)
 - [ ] Ownership picker shown during copy: defaults to org for registry sources, same team for local sources
-- [ ] Community primitives are read-only via MCP (returns 403 `community_primitive_read_only`)
-- [ ] Browser POST to `/api/v1/libraries/{id}/adapt` succeeds (201) and creates local copy
+- [x] Community primitives are read-only via MCP (returns 403 `community_primitive_read_only`)
+- [x] Browser POST to `/api/v1/libraries/{id}/adapt` succeeds (201) and creates local copy
 
 ### Rating system
 
 - [ ] One rating per user per primitive (unique constraint)
-- [ ] Self-rating blocked at application layer
-- [ ] Rating requires at least one prior copy-to-adapt of the primitive
-- [ ] 10-minute submission cooldown per user
-- [ ] Ratings displayed as weighted average with review count
-- [ ] Report abuse: admin review queue
+- [x] Self-rating blocked at application layer
+- [x] Rating requires at least one prior copy-to-adapt of the primitive
+- [x] 10-minute submission cooldown per user
+- [x] Ratings displayed as weighted average with review count
+- [x] Report abuse: admin review queue
 
 ### Plugin registry (ConnectorType discovery)
 
@@ -89,26 +110,45 @@ Cryptographic signing, verification, and fork tracking for community library pri
 - [x] Manual `register_connector_type()` / `register_model_backend()` available for in-tree registration
 - [x] Plugin API documented at `docs/plugin-api.md`
 
+### Error handling
+
+- [ ] `verify_manifest()` returns `False` (not raises) on `InvalidSignature` — tested?
+- [ ] `verify_bundle_integrity()` comparison handles empty/mismatched strings
+- [ ] `revoke_publisher()` returns `False` on missing fingerprint (not raises)
+- [ ] `get_publisher_status()` returns `"community"` for unknown fingerprints (not raises)
+- [ ] `CommunityPrimitiveReadOnlyError` raised for MCP adapt of community primitives → 403
+- [ ] `ContributionInvalidTransitionError` for bad contribution status transitions
+- [ ] `ContributionNotFoundError` for missing primitives → 404
+- [ ] `ProgrammingError` caught in `get_primitive()` / `get_primitive_by_slug()` → returns `None` gracefully
+- [ ] Registry 404 for missing slug in get/pull/verify endpoints
+- [ ] Registry 403 for signature verification failure in v2 publish
+- [ ] Registry 400 for invalid Ed25519 PEM format in v2 publish
+- [ ] Registry 404 for publisher not found on revoke
+- [ ] Registry 404 for missing primitive in download endpoint
+- [ ] `MarketingError` (no DB) — registry endpoints do NOT catch `ProgrammingError` (correct, in-memory only)
+
 ### BDD-tested scenarios
 
-- [ ] Browse: list all primitives, filter by type, search by name, filter to local only, view single primitive
-- [ ] Copy-to-adapt: browser adapt succeeds, MCP adapt returns 403, team assignment, non-existent returns 404
-- [ ] Ratings: view aggregate, submit thumbs-up/down, list ratings, aggregate updates after new rating
+- [x] Browse: list all primitives, filter by type, search by name, filter to local only, view single primitive
+- [x] Copy-to-adapt: browser adapt succeeds, MCP adapt returns 403, team assignment, non-existent returns 404
+- [x] Ratings: view aggregate, submit thumbs-up/down, list ratings, aggregate updates after new rating
 
 ## Known Gaps
 
 ### Registry & signing
-- No BDD tests for registry publish or pull endpoints
-- No BDD tests for Ed25519 signature verification
-- No BDD tests for fork provenance immutability (DB trigger)
-- No BDD tests for trust tier display or community warning flow
-- No BDD tests for publisher registration or revocation
+- No BDD feature files on disk for `community_registry.feature`, `plugin_registry.feature`, `signing.feature` (step definitions exist as dead code; feature files are at `tests/features/` not `tests/bdd/features/`)
+- No frontend trust tier display (green/amber badges) or community warning flow
+- No frontend ownership picker for copy-to-adapt
+- No Unit tests for `forked_from` constraints at the service layer (only integration test covers DB-level)
+- No API-layer Ed25519 verification test for downloaded primitives (mock only)
+- Verified publisher program is v2 roadmap — not yet implemented
 
 ### Plugin registry
 - No BDD tests for plugin registry discovery or health check
 - No BDD tests for connector type unavailability on missing plugin
 - No BDD tests for plugin REST API (`GET /api/v1/plugins`)
 - Admin UI warning badge for unavailable connector types not yet implemented
+- `@awaiting-implementation` scenarios in `plugin_registry.feature` are not runnable
 
 ### Ratings
 - No BDD tests for rating submission cooldown enforcement
