@@ -411,6 +411,26 @@ After regenerating, verify the frontend still compiles with `npm run build`.
 
 ---
 
+## Schema Generation
+
+The frontend TypeScript types in `frontend/src/lib/api/schema.ts` are auto-generated from
+the backend FastAPI OpenAPI schema. When backend API contracts change (new/modified routes,
+request/response models), the schema must be regenerated:
+
+```powershell
+cd frontend
+npm run generate:api
+```
+
+This runs `scripts/generate-api-types.ps1` which imports the backend, dumps the OpenAPI
+schema as JSON, and feeds it to `openapi-typescript` to produce the typed client.
+
+A pre-commit hook triggers this automatically whenever any file under `backend/src/` changes.
+If the generated `schema.ts` differs from what's staged, the commit fails — stage the
+updated `schema.ts` and retry.
+
+---
+
 ### Startup scripts (non-blocking)
 
 Use these to launch services without getting blocked:
