@@ -384,7 +384,15 @@ async def optimize_prompt(
     if agent is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Agent not found")
 
-    eval_results, eval_defs = await get_eval_results_with_defs(session, body.eval_result_ids, principal.organisation_id)
+    try:
+        eval_results, eval_defs = await get_eval_results_with_defs(
+            session, body.eval_result_ids, principal.organisation_id
+        )
+    except ProgrammingError:
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="Feature is not available. Run database migrations to enable it.",
+        ) from None
 
     if not eval_results:
         raise HTTPException(
@@ -394,12 +402,18 @@ async def optimize_prompt(
 
     backend_id = body.model_backend_id or agent.model_backend_id
 
-    mb_result = await session.execute(
-        select(ModelBackend).where(
-            ModelBackend.id == backend_id,
-            ModelBackend.organisation_id == principal.organisation_id,
+    try:
+        mb_result = await session.execute(
+            select(ModelBackend).where(
+                ModelBackend.id == backend_id,
+                ModelBackend.organisation_id == principal.organisation_id,
+            )
         )
-    )
+    except ProgrammingError:
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="Feature is not available. Run database migrations to enable it.",
+        ) from None
     mb = mb_result.scalar_one_or_none()
     if mb is None:
         raise HTTPException(
