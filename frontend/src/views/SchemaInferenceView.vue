@@ -177,7 +177,12 @@ import ErrorAlert from '../components/shared/ErrorAlert.vue'
 import PageTabs from "../components/PageTabs.vue"
 
 type ConnectorItem = components['schemas']['ConnectorItem']
-type SchemaInferResponse = components['schemas']['SchemaInferResponse']
+
+interface DraftSchema {
+  name: string
+  description: string | null
+  fields: Array<{name: string; type: string; required: boolean; description: string | null}>
+}
 
 const router = useRouter()
 
@@ -191,7 +196,8 @@ const sampleQuery = ref('')
 
 const inferring = ref(false)
 const inferError = ref<string | null>(null)
-const draftSchema = ref<SchemaInferResponse | null>(null)
+const draftSchema = ref<DraftSchema | null>(null)
+const rawDefinitionJson = ref<Record<string, unknown> | null>(null)
 
 const publishing = ref(false)
 const publishError = ref<string | null>(null)
@@ -200,8 +206,8 @@ const publishSuccess = ref<string | null>(null)
 const showRawJson = ref(false)
 
 const formattedJson = computed(() => {
-  if (!draftSchema.value) return ''
-  return JSON.stringify(draftSchema.value, null, 2)
+  if (!rawDefinitionJson.value) return ''
+  return JSON.stringify(rawDefinitionJson.value, null, 2)
 })
 
 async function loadConnectors() {
@@ -221,24 +227,47 @@ async function loadConnectors() {
   }
 }
 
+function extractFieldsFromDefinition(def: Record<string, unknown>): DraftSchema['fields'] {
+  const properties = (def.properties as Record<string, unknown>) || {}
+  const required = (def.required as string[]) || []
+  return Object.entries(properties).map(([name, schema]) => {
+    const s = schema as Record<string, unknown>
+    return {
+      name,
+      type: (s.type as string) || 'string',
+      required: required.includes(name),
+      description: (s.description as string) || null,
+    }
+  })
+}
+
 async function inferSchema() {
   if (!selectedConnectorId.value || !resourceType.value.trim()) return
   inferring.value = true
   inferError.value = null
   draftSchema.value = null
+  rawDefinitionJson.value = null
   showRawJson.value = false
   try {
     const { data, error: err } = await api.POST('/api/v1/schemas/infer', {
       body: {
         connector_instance_id: selectedConnectorId.value,
-        resource_type: resourceType.value.trim(),
-        sample_query: sampleQuery.value.trim() || null,
+        sample_query: {
+          resource: resourceType.value.trim(),
+          filters: {},
+          limit: 10,
+        },
       },
     })
     if (err) {
       inferError.value = `Schema inference failed: ${err}`
     } else if (data) {
-      draftSchema.value = data
+      rawDefinitionJson.value = data.definition_json
+      draftSchema.value = {
+        name: data.suggestion_name,
+        description: data.suggestion_description,
+        fields: extractFieldsFromDefinition(data.definition_json),
+      }
     }
   } catch (e: unknown) {
     inferError.value = `Schema inference failed: ${e instanceof Error ? e.message : String(e)}`
@@ -253,21 +282,39 @@ async function publishSchema() {
   publishError.value = null
   publishSuccess.value = null
   try {
-    const { data, error: err } = await api.POST('/api/v1/schemas', {
+    const { data: schemaData, error: schemaErr } = await api.POST('/api/v1/schemas', {
       body: {
         name: draftSchema.value.name,
         description: draftSchema.value.description,
-        fields: draftSchema.value.fields,
       },
     })
-    if (err) {
-      publishError.value = `Publish failed: ${err}`
-    } else if (data) {
-      publishSuccess.value = `Schema "${data.name}" published.`
-      setTimeout(() => {
-        router.push({ name: 'library' })
-      }, 1500)
+    if (schemaErr) {
+      publishError.value = `Publish failed: ${schemaErr}`
+      return
     }
+    if (!schemaData) {
+      publishError.value = 'Publish failed: no response'
+      return
+    }
+
+    const { error: versionErr } = await api.POST('/api/v1/schemas/{schema_id}/versions', {
+      params: { path: { schema_id: schemaData.id } },
+      body: {
+        version: 'v1',
+        version_number: 1,
+        definition_json: rawDefinitionJson.value || { type: 'object', properties: {} },
+        published: true,
+      },
+    })
+    if (versionErr) {
+      publishError.value = `Publish failed: ${versionErr}`
+      return
+    }
+
+    publishSuccess.value = `Schema "${schemaData.name}" published.`
+    setTimeout(() => {
+      router.push({ name: 'library' })
+    }, 1500)
   } catch (e: unknown) {
     publishError.value = `Publish failed: ${e instanceof Error ? e.message : String(e)}`
   } finally {
@@ -277,6 +324,7 @@ async function publishSchema() {
 
 function resetForm() {
   draftSchema.value = null
+  rawDefinitionJson.value = null
   showRawJson.value = false
   inferError.value = null
   publishError.value = null

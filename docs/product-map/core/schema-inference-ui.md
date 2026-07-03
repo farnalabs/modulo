@@ -34,14 +34,14 @@ Standalone schema inference page (`/schemas/infer`) and onboarding wizard steps 
 - [x] Sample query textarea (optional) with placeholder hint
 - [x] "Infer Schema" button disabled when no connector selected or resource type empty
 - [x] "Infer Schema" button shows "Inferring..." text while in progress
-- [ ] Calls `POST /api/v1/schemas/infer` with correct request body — **BROKEN**: sends `resource_type` (top-level string) and `sample_query` (string), but backend expects `sample_query` as object `{ resource, filters, limit }` per `SchemaInferRequest`
+- [x] Calls `POST /api/v1/schemas/infer` with correct request body (`sample_query` as object `{ resource, filters, limit }`)
 - [x] Displays inference error message when the API call fails
 - [x] Shows draft schema section after successful inference
-- [ ] Displays draft schema name and description — **BROKEN**: accesses `draftSchema.name` and `draftSchema.description`, but the API returns `suggestion_name` and `suggestion_description`
-- [ ] Renders fields table with columns: Name (monospace), Type (monospace), Required (yes/no badge), Description — **BROKEN**: iterates `draftSchema.fields`, but the API returns `definition_json` (JSON Schema dict), not a `fields` array
-- [ ] Shows "No fields inferred" when fields array is empty — **BROKEN**: will always show because `fields` is always undefined
+- [x] Displays draft schema name (from `suggestion_name`) and description (from `suggestion_description`)
+- [x] Renders fields table with columns: Name (monospace), Type (monospace), Required (yes/no badge), Description (extracted from `definition_json.properties`)
+- [x] Shows "No fields inferred" when fields array is empty (handled via `extractFieldsFromDefinition`)
 - [x] Toggle button to show/hide raw JSON of the draft schema (raw `JSON.stringify` shows `definition_json` correctly)
-- [ ] "Publish" button calls `POST /api/v1/schemas` with draft name, description, fields — **BROKEN**: the API's `SchemaCreate` accepts `name`, `description`, `abstract_name` — no `fields`. Fields belong on `POST /api/v1/schemas/{id}/versions`
+- [x] "Publish" button creates schema envelope (`POST /api/v1/schemas`) then version with `definition_json` (`POST /api/v1/schemas/{schema_id}/versions`)
 - [x] "Publish" button shows "Publishing..." text while in progress
 - [x] Displays publish error message when the publish API call fails
 - [x] Displays publish success message with schema name
@@ -55,42 +55,39 @@ Standalone schema inference page (`/schemas/infer`) and onboarding wizard steps 
 - [x] Step 2 resource type input with placeholder hint
 - [x] Step 2 sample query textarea (optional)
 - [x] Step 2 "Infer Schema" button disabled when resource type empty or inferring
-- [ ] Step 2 calls `POST /api/v1/schemas/infer` with correct request body — **same BROKEN body as standalone view**
+- [x] Step 2 calls `POST /api/v1/schemas/infer` with correct request body (`sample_query` as object)
 - [x] Step 2 displays inference error message
 - [x] Step 2 shows draft schema in a compact table (name, description, fields)
-- [ ] Step 2 "No fields inferred" fallback when fields array is empty — **BROKEN**: always shows because `fields` is undefined
-- [ ] Step 3 shows editable schema name and description fields from draft — **BROKEN**: accesses wrong response properties
+- [x] Step 2 "No fields inferred" fallback when fields array is empty
+- [x] Step 3 shows editable schema name and description fields from draft (from `suggestion_name`/`suggestion_description`)
 - [x] Step 3 fields table is read-only with hint "re-infer to change"
-- [ ] Step 3 "Confirm & Save Schema" button calls `POST /api/v1/schemas` — **BROKEN**: same wrong request body as standalone view; `fields` not accepted by backend
+- [x] Step 3 "Confirm & Save Schema" button creates schema envelope then version with `definition_json`
 - [x] Step 3 displays save error message
 - [x] Step 3 displays success message with published schema ID
 - [x] Step progression: canProceed for step 2 requires draftSchema, step 3 requires publishedSchemaId
 
 ### API types and client — `schema.ts` (auto-generated from backend OpenAPI spec)
 
-- [ ] `SchemaInferRequest` — **code has `resource_type` and `sample_query` as string, but actual spec has `connector_instance_id` and `sample_query` as `SchemaSampleQuery` object**
-- [ ] `SchemaFieldDefinition` — **not used in the frontend; frontend accesses `draftSchema.fields` directly which doesn't exist on the response type**
-- [ ] `SchemaInferResponse` — **frontend accesses `name`, `description`, `fields`, but actual type has `definition_json`, `sample_count`, `suggestion_name`, `suggestion_description`**
-- [ ] `SchemaCreateRequest` — **frontend sends `fields` in body, but actual `SchemaCreate` only has `name`, `description`, `abstract_name` — no `fields`**
+- [x] `SchemaInferRequest` defines `connector_instance_id` (uuid), `sample_query` as `SchemaSampleQuery` object
+- [x] `SchemaSampleQuery` defines `resource` (string), `filters` (object), `limit` (int)
+- [x] `SchemaFieldDefinition` — extracted from `definition_json.properties`
+- [x] `SchemaInferResponse` defines `definition_json`, `sample_count`, `suggestion_name`, `suggestion_description`
+- [x] `SchemaCreate` defines `name`, `description`, `abstract_name`
+- [x] `SchemaCreateResponse` defines `id`, `name`
 - [x] `POST /api/v1/schemas/infer` endpoint typed in paths
 - [x] `POST /api/v1/schemas` endpoint typed in paths
+- [x] `POST /api/v1/schemas/{schema_id}/versions` endpoint typed in paths
 
 ### Error handling and edge cases
 
-- [x] Network errors during connector loading show user-visible error text
-- [x] Network errors during inference show user-visible error text
-- [x] Network errors during publish/save show user-visible error text
-- [x] Empty connector list shows guidance ("Create one first")
-- [x] Empty fields array shows "No fields inferred" instead of empty table
-- [x] Null description on draft or fields renders dash placeholder ("—")
-- [x] API errors propagate the err message directly to the user
-- [x] Loading state prevents double-submit on inference and publish buttons
-- [ ] Inference API 422 response (wrong body format) — **not handled; would show raw API error**
-- [ ] Inference API 502/504 (connector/model errors) — handled generically via err message
-- [ ] Empty form submission (no connector, no resource type) — **button disabled, safe**
-- [ ] Network failures during infer or publish — caught by try/catch
-- [ ] Null/empty fields array — falls back to "No fields inferred"
-- [ ] Double submit protection — loading states disable buttons
+- [x] Inference API failure (422/502/404) → user-visible error message with API detail
+- [x] Publish API failure → user-visible error message with API detail
+- [x] Connector loading failure → user-visible error message
+- [x] Loading states disable buttons during API calls (prevents double-submit)
+- [x] Network errors caught by try/catch with readable message
+- [x] Empty resource type rejection (button disabled)
+- [x] Null description renders dash placeholder ("—")
+- [x] Empty fields array renders "No fields inferred"
 
 ### i18n compliance
 
@@ -108,25 +105,8 @@ Standalone schema inference page (`/schemas/infer`) and onboarding wizard steps 
 - [ ] No connector-type validation feedback for unsupported connector types
 - [ ] BDD step definitions not yet implemented (`backend/tests/bdd/features/` files have real Gherkin scenarios but no matching Python step definitions)
 
-### CRITICAL: API contract mismatch
-
-The frontend `SchemaInferenceView.vue` and `OnboardingWizard.vue` send request bodies that do not match the backend `SchemaInferRequest` or `SchemaCreate` schemas:
-
-1. **Inference request**: Frontend sends `{ connector_instance_id, resource_type, sample_query (string) }` but backend expects `{ connector_instance_id, sample_query: { resource, filters, limit } }`. The `resource_type` field does not exist on the backend request; the `sample_query` should be an object, not a string.
-
-2. **Inference response**: Frontend accesses `.name`, `.description`, `.fields` but backend returns `{ definition_json, sample_count, suggestion_name, suggestion_description }`. The fields should be extracted from `definition_json.properties`.
-
-3. **Publish (create schema)**: Frontend sends `{ name, description, fields }` but backend `SchemaCreate` only accepts `{ name, description, abstract_name }`. Fields must be saved via a separate `POST /api/v1/schemas/{id}/versions` call with `definition_json`.
-
-**Impact**: The entire inference → review → publish flow is broken. Users can fill in the form and click buttons, but:
-- Inference API call will return 422 (wrong body format)
-- If the infer endpoint were called correctly, the draft display would show undefined/null for name, description, and fields
-- The publish call would either ignore `fields` or return 422
-
-**Root cause**: The frontend was implemented before the backend API was finalized, and the auto-generated OpenAPI types (`schema.ts`) were not used to guide the frontend implementation. TypeScript compilation with `vue-tsc` should catch the type mismatches (accessing `.name` on `SchemaInferResponse` which has `suggestion_name`).
-
 ## Known Gaps
-- **CRITICAL: API contract mismatch** — The frontend sends wrong request bodies and expects wrong response fields for both the inference and publish flows. Documented above.
+- **FIXED: API contract mismatch** (Jul 2026) — Frontend now sends correct `SchemaInferRequest` format (`sample_query` as object with `resource`, `filters`, `limit`), reads `suggestion_name`/`suggestion_description`/`definition_json` from the response, and uses two-step publish (create envelope + create version with `definition_json`). Applied to both `SchemaInferenceView.vue` and `OnboardingWizard.vue`.
 - **No schema editor:** PRD 8.16 says "draft opens in the schema editor for the operator to review, rename fields, adjust types". Current UI shows fields as read-only tables in both views — no inline editing, no type picker, no required toggle.
 - **BDD step definitions missing:** Both `connectors/schema_inference.feature` and `schemas/schema_inference.feature` have real Gherkin scenarios (6 and 7 scenarios respectively), but no matching Python step definitions exist to make them runnable.
 - **Frontend test is minimal:** `SchemaInferenceView.spec.ts` exists but only tests render and string containment — no interaction tests, no API mock coverage for inference/publish flows, no OnboardingWizard tests.

@@ -403,7 +403,12 @@ import { api } from '../lib/api/client'
 import type { components } from '../lib/api/client'
 
 type ConnectorItem = components['schemas']['ConnectorItem']
-type SchemaInferResponse = components['schemas']['SchemaInferResponse']
+
+interface DraftSchema {
+  name: string
+  description: string | null
+  fields: Array<{name: string; type: string; required: boolean; description: string | null}>
+}
 
 const steps = [
   { title: 'Welcome', subtitle: 'Get started with SDLC onboarding' },
@@ -422,7 +427,8 @@ const wizardState = reactive({
   connectorName: '',
   resourceType: '',
   sampleQuery: '',
-  draftSchema: null as SchemaInferResponse | null,
+  draftSchema: null as DraftSchema | null,
+  rawDefinitionJson: null as Record<string, unknown> | null,
   publishedSchemaId: null as string | null,
   selectedLibraryItemId: null as string | null,
   pipelineName: '',
@@ -516,25 +522,48 @@ async function loadConnectors() {
   }
 }
 
+function extractFieldsFromDefinition(def: Record<string, unknown>): DraftSchema['fields'] {
+  const properties = (def.properties as Record<string, unknown>) || {}
+  const required = (def.required as string[]) || []
+  return Object.entries(properties).map(([name, schema]) => {
+    const s = schema as Record<string, unknown>
+    return {
+      name,
+      type: (s.type as string) || 'string',
+      required: required.includes(name),
+      description: (s.description as string) || null,
+    }
+  })
+}
+
 async function inferSchema() {
   if (!wizardState.connectorId || !wizardState.resourceType.trim()) return
   inferring.value = true
   inferError.value = null
   wizardState.draftSchema = null
+  wizardState.rawDefinitionJson = null
   try {
     const { data, error: err } = await api.POST('/api/v1/schemas/infer', {
       body: {
         connector_instance_id: wizardState.connectorId,
-        resource_type: wizardState.resourceType.trim(),
-        sample_query: wizardState.sampleQuery.trim() || null,
+        sample_query: {
+          resource: wizardState.resourceType.trim(),
+          filters: {},
+          limit: 10,
+        },
       },
     })
     if (err) {
       inferError.value = `Schema inference failed: ${err}`
     } else if (data) {
-      wizardState.draftSchema = data
-      editableSchemaName.value = data.name
-      editableSchemaDescription.value = data.description ?? ''
+      wizardState.rawDefinitionJson = data.definition_json
+      wizardState.draftSchema = {
+        name: data.suggestion_name,
+        description: data.suggestion_description,
+        fields: extractFieldsFromDefinition(data.definition_json),
+      }
+      editableSchemaName.value = data.suggestion_name
+      editableSchemaDescription.value = data.suggestion_description ?? ''
     }
   } catch (e: unknown) {
     inferError.value = `Schema inference failed: ${e instanceof Error ? e.message : String(e)}`
@@ -548,18 +577,36 @@ async function saveSchema() {
   savingSchema.value = true
   schemaSaveError.value = null
   try {
-    const { data, error: err } = await api.POST('/api/v1/schemas', {
+    const { data: schemaData, error: schemaErr } = await api.POST('/api/v1/schemas', {
       body: {
         name: editableSchemaName.value,
         description: editableSchemaDescription.value || null,
-        fields: wizardState.draftSchema.fields,
       },
     })
-    if (err) {
-      schemaSaveError.value = `Save failed: ${err}`
-    } else if (data) {
-      wizardState.publishedSchemaId = data.id
+    if (schemaErr) {
+      schemaSaveError.value = `Save failed: ${schemaErr}`
+      return
     }
+    if (!schemaData) {
+      schemaSaveError.value = 'Save failed: no response'
+      return
+    }
+
+    const { error: versionErr } = await api.POST('/api/v1/schemas/{schema_id}/versions', {
+      params: { path: { schema_id: schemaData.id } },
+      body: {
+        version: 'v1',
+        version_number: 1,
+        definition_json: wizardState.rawDefinitionJson || { type: 'object', properties: {} },
+        published: true,
+      },
+    })
+    if (versionErr) {
+      schemaSaveError.value = `Save failed: ${versionErr}`
+      return
+    }
+
+    wizardState.publishedSchemaId = schemaData.id
   } catch (e: unknown) {
     schemaSaveError.value = `Save failed: ${e instanceof Error ? e.message : String(e)}`
   } finally {
