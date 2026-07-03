@@ -971,7 +971,10 @@ async def create_pipeline_from_template_endpoint(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Primitive {primitive_id} not found",
         )
+    print(f"DBG: primitive={primitive.id} type={primitive.primitive_type} name={primitive.name}", flush=True)
+
     if primitive.primitive_type != "pipeline_template":
+        print(f"DBG: type mismatch", flush=True)
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=f"Primitive type must be 'pipeline_template', got '{primitive.primitive_type}'",
@@ -983,10 +986,13 @@ async def create_pipeline_from_template_endpoint(
         body.description,
     )
 
+    print(f"DBG: built pipeline: nodes={len(graph_nodes)} edges={len(edges)}", flush=True)
+
     try:
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
             await set_rls_user_context(session, principal.account_id, principal.org_role)
+            print(f"DBG: creating pipeline", flush=True)
             pipeline = await create_pipeline(
                 session,
                 org_id=principal.organisation_id,
@@ -1023,9 +1029,12 @@ async def create_pipeline_from_template_endpoint(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
         ) from None
-    except Exception:
+    except Exception as exc:
+        print(f"DBG: EXCEPTION in second try block: {type(exc).__name__}: {exc}", flush=True)
         _log.exception("create_pipeline_from_template — unexpected error")
         raise
+
+    print(f"DBG: returning response", flush=True)
 
     return PipelineFromTemplateResponse(
         id=pipeline.id,
