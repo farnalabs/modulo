@@ -19,6 +19,13 @@ from typing import Any
 import click
 from cryptography.fernet import Fernet
 
+try:
+    import psycopg
+    from psycopg.rows import dict_row
+except ImportError:
+    psycopg = None
+    dict_row = None
+
 from modulo.settings import get_settings
 
 _log = logging.getLogger(__name__)
@@ -64,37 +71,53 @@ def _write_json(path: Path, data: Any) -> None:
 # ── Metadata helpers ─────────────────────────────────────────────────────────
 
 
+def _get_backend_dir() -> Path:
+    for candidate in (Path(__file__).resolve().parent.parent.parent, Path(__file__).resolve().parent.parent.parent.parent):
+        if (candidate / "pyproject.toml").exists() and (candidate / "alembic.ini").exists():
+            return candidate
+    return Path(__file__).resolve().parent.parent.parent.parent
+
+
 def _get_schema_versions() -> list[str]:
     try:
         from alembic.config import Config
         from alembic.script import ScriptDirectory
 
-        backend_dir = Path(__file__).resolve().parent.parent.parent.parent  # src -> backend
+        backend_dir = _get_backend_dir()
         alembic_ini = backend_dir / "alembic.ini"
         if not alembic_ini.exists():
             return ["unknown"]
         cfg = Config(str(alembic_ini))
         script = ScriptDirectory.from_config(cfg)
         return sorted(script.get_heads())
-    except Exception:
+    except Exception as exc:
+        _log.warning("Failed to read schema versions: %s", exc)
         return ["unknown"]
 
 
 def _get_db_version(raw_url: str) -> str:
+    if psycopg is None:
+        return "unknown"
     try:
-        import psycopg
-
-        with psycopg.connect(raw_url) as conn:
+        with psycopg.connect(raw_url, connect_timeout=5) as conn:
             row = conn.execute("SELECT version()").fetchone()
             return row[0] if row else "unknown"
-    except Exception:
+    except Exception as exc:
+        _log.warning("Failed to read DB version: %s", exc)
         return "unknown"
 
 
 # ── pg_dump / psql helpers ────────────────────────────────────────────────────
 
 
+def _check_tool(name: str) -> None:
+    import shutil
+    if shutil.which(name) is None:
+        raise RuntimeError(f"Required system tool '{name}' not found on PATH. Install PostgreSQL client tools.")
+
+
 def _run_pg_dump(raw_url: str, output: Path, timeout: int = 300) -> None:
+    _check_tool("pg_dump")
     cmd = [
         "pg_dump",
         "--clean",
@@ -107,53 +130,58 @@ def _run_pg_dump(raw_url: str, output: Path, timeout: int = 300) -> None:
     with output.open("wb") as f:
         result = subprocess.run(cmd, stdout=f, stderr=subprocess.PIPE, timeout=timeout)  # noqa: S603 — cmd is a hardcoded list, not user input
     if result.returncode != 0:
-        raise RuntimeError(f"pg_dump failed: {result.stderr.decode().strip()}")
+        raise RuntimeError(f"pg_dump failed: {result.stderr.decode(errors='replace').strip()}")
 
 
 def _run_psql(raw_url: str, input_path: Path, timeout: int = 600) -> None:
+    _check_tool("psql")
     cmd = ["psql", "-q", "-v", "ON_ERROR_STOP=1", raw_url]
     with input_path.open("rb") as f:
         result = subprocess.run(cmd, stdin=f, capture_output=True, timeout=timeout)  # noqa: S603 — cmd is a hardcoded list with trusted input
     if result.returncode != 0:
-        raise RuntimeError(f"psql restore failed: {result.stderr.decode().strip()}")
+        raise RuntimeError(f"psql restore failed: {result.stderr.decode(errors='replace').strip()}")
 
 
 # ── Sync data export (via psycopg) ────────────────────────────────────────────
 
 
 def _export_checkpoint_blobs_sync(raw_url: str) -> list[dict[str, Any]]:
-    import psycopg
-    from psycopg.rows import dict_row
-
+    if psycopg is None:
+        raise RuntimeError("psycopg library is not available")
     rows: list[dict[str, Any]] = []
-    with psycopg.connect(raw_url, row_factory=dict_row) as conn:
+    with psycopg.connect(raw_url, row_factory=dict_row, connect_timeout=10) as conn:
         with conn.cursor() as cur:
             cur.execute(
                 "SELECT * FROM checkpoint_blobs ORDER BY organisation_id, thread_id, checkpoint_ns, channel, version"
             )
             for row in cur:
-                row["organisation_id"] = str(row["organisation_id"])
+                org_id = row.get("organisation_id")
+                row["organisation_id"] = str(org_id) if org_id is not None else None
                 if isinstance(row.get("blob"), (bytes, memoryview)):
                     row["blob"] = bytes(row["blob"]).hex()
                 rows.append(row)
     return rows
 
 
-def _export_credentials_references_sync(raw_url: str) -> dict[str, list[dict[str, Any]]]:
-    import psycopg
-    from psycopg.rows import dict_row
+_CREDENTIALS_TABLES: list[str] = ["connector_instances", "model_backends"]
 
+
+def _export_credentials_references_sync(raw_url: str) -> dict[str, list[dict[str, Any]]]:
+    if psycopg is None:
+        raise RuntimeError("psycopg library is not available")
     result: dict[str, list[dict[str, Any]]] = {}
-    tables = ["connector_instances", "model_backends"]
-    with psycopg.connect(raw_url, row_factory=dict_row) as conn:
-        for table in tables:
+    with psycopg.connect(raw_url, row_factory=dict_row, connect_timeout=10) as conn:
+        for table in _CREDENTIALS_TABLES:
             rows: list[dict[str, Any]] = []
             with conn.cursor() as cur:
-                _sql = f"SELECT id, organisation_id, name, credentials_ciphertext FROM {table} ORDER BY id"  # noqa: S608  # nosec B608
-                cur.execute(_sql)
+                cur.execute(
+                    "SELECT id, organisation_id, name, credentials_ciphertext"
+                    " FROM %s ORDER BY id" % table  # nosec B608 — table is from a hardcoded whitelist
+                )
                 for row in cur:
+                    org_id = row.get("organisation_id")
                     row["id"] = str(row["id"])
-                    row["organisation_id"] = str(row["organisation_id"])
+                    row["organisation_id"] = str(org_id) if org_id is not None else None
                     if isinstance(row.get("credentials_ciphertext"), (bytes, memoryview)):
                         ct = bytes(row["credentials_ciphertext"])
                         row["credentials_ciphertext"] = ct.hex()  # nosemgrep: credential-not-in-state
@@ -163,26 +191,31 @@ def _export_credentials_references_sync(raw_url: str) -> dict[str, list[dict[str
 
 
 def _restore_checkpoint_blobs_sync(raw_url: str, blobs: list[dict[str, Any]]) -> int:
-    import psycopg
-
-    with psycopg.connect(raw_url) as conn:
+    if psycopg is None:
+        raise RuntimeError("psycopg library is not available")
+    with psycopg.connect(raw_url, connect_timeout=10) as conn:
         with conn.cursor() as cur:
             cur.execute("TRUNCATE TABLE checkpoint_blobs")
             for row in blobs:
                 blob: bytes | None = None
-                if row.get("blob"):
-                    blob = bytes.fromhex(row["blob"])
+                raw_blob = row.get("blob")
+                if raw_blob is not None:
+                    blob = bytes.fromhex(raw_blob) if raw_blob else b""
+                try:
+                    org_uuid = uuid.UUID(row["organisation_id"]) if row.get("organisation_id") else None
+                except (ValueError, TypeError):
+                    org_uuid = None
                 cur.execute(
                     "INSERT INTO checkpoint_blobs "
                     "(organisation_id, thread_id, checkpoint_ns, channel, version, type, blob) "
                     "VALUES (%s, %s, %s, %s, %s, %s, %s)",
                     (
-                        uuid.UUID(row["organisation_id"]),
-                        row["thread_id"],
-                        row["checkpoint_ns"],
-                        row["channel"],
-                        row["version"],
-                        row["type"],
+                        org_uuid,
+                        row.get("thread_id"),
+                        row.get("checkpoint_ns"),
+                        row.get("channel"),
+                        row.get("version"),
+                        row.get("type"),
                         blob,
                     ),
                 )
@@ -196,15 +229,18 @@ def _re_encrypt_credentials_sync(
     old_fernet_key: str,
     new_fernet_key: str,
 ) -> dict[str, int]:
-    import psycopg
-
+    if psycopg is None:
+        raise RuntimeError("psycopg library is not available")
     old_fernet = Fernet(old_fernet_key.encode())
     new_fernet = Fernet(new_fernet_key.encode())
     counts: dict[str, int] = {}
 
-    with psycopg.connect(raw_url) as conn:
+    with psycopg.connect(raw_url, connect_timeout=10) as conn:
         with conn.cursor() as cur:
             for table, rows in creds.items():
+                if table not in _CREDENTIALS_TABLES:
+                    _log.warning("Skipping unknown credentials table: %s", table)
+                    continue
                 rekeyed = 0
                 for row in rows:
                     hex_ct = row.get("credentials_ciphertext", "")
@@ -213,9 +249,14 @@ def _re_encrypt_credentials_sync(
                     old_ct = bytes.fromhex(hex_ct)
                     plaintext = old_fernet.decrypt(old_ct)
                     new_ct = new_fernet.encrypt(plaintext)
+                    try:
+                        row_id = uuid.UUID(row["id"])
+                    except (ValueError, TypeError):
+                        _log.warning("Invalid UUID in credentials row: %s", row.get("id", "?"))
+                        continue
                     cur.execute(
-                        f"UPDATE {table} SET credentials_ciphertext = %s WHERE id = %s",  # noqa: S608  # nosec B608
-                        (new_ct, uuid.UUID(row["id"])),
+                        "UPDATE " + table + " SET credentials_ciphertext = %s WHERE id = %s",
+                        (new_ct, row_id),
                     )
                     rekeyed += 1
                 counts[table] = rekeyed
@@ -227,7 +268,11 @@ def _re_encrypt_credentials_sync(
 
 
 def _print_size(backup_dir: Path) -> None:
-    total = sum(f.stat().st_size for f in backup_dir.rglob("*") if f.is_file())
+    try:
+        total = sum(f.stat().st_size for f in backup_dir.rglob("*") if f.is_file())
+    except (OSError, PermissionError) as exc:
+        _log.warning("Could not compute backup size: %s", exc)
+        return
     click.echo(f"Total size: {_human_size(total)}")
 
 
@@ -306,6 +351,7 @@ def backup(db_url: str | None, output_dir: Path | None) -> None:
         _print_size(backup_dir)
 
     except Exception as exc:
+        _log.exception("Backup failed")
         click.echo(f"Backup failed: {exc}", err=True)
         raise click.ClickException(str(exc)) from exc
 
@@ -385,5 +431,6 @@ def restore(backup_dir: Path, db_url: str | None, yes: bool, previous_fernet_key
         click.echo("\nRestore complete.")
 
     except Exception as exc:
+        _log.exception("Restore failed")
         click.echo(f"Restore failed: {exc}", err=True)
         raise click.ClickException(str(exc)) from exc
