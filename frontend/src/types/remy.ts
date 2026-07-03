@@ -2,6 +2,7 @@ export interface ChatSession {
   id: string
   user_id: string
   name: string | null
+  session_number: number | null
   provider: string
   model: string
   context_window_tokens: number
