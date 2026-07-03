@@ -60,6 +60,20 @@
         </button>
       </div>
 
+      <div v-if="run?.status === 'complete' && lastNodeOutput" class="card p-5 mb-6">
+        <div class="flex items-center justify-between mb-3">
+          <h2 class="text-lg font-semibold text-foreground">Final Output</h2>
+          <button
+            class="px-3 py-1.5 text-xs font-medium rounded-lg border border-input bg-background hover:bg-accent transition-colors"
+            @click="copyOutput"
+            data-testid="run-detail-copy-output"
+          >
+            {{ outputCopied ? 'Copied!' : 'Copy' }}
+          </button>
+        </div>
+        <pre class="bg-muted/30 rounded-lg p-4 text-sm overflow-x-auto whitespace-pre-wrap">{{ formattedOutput }}</pre>
+      </div>
+
       <!-- Per-Node Execution Trace -->
       <section class="space-y-4 rounded-lg border bg-card p-6">
         <h2 class="text-lg font-semibold tracking-tight">{{ $t('views.RunDetailView.execution_trace') }}</h2>
@@ -205,7 +219,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, onUnmounted, ref } from 'vue'
 import { useRoute } from 'vue-router'
 import { api } from '../lib/api/client'
 import type { components } from '../lib/api/client'
@@ -251,6 +265,8 @@ const expandedNodes = ref(new Set<string>())
 const copied = ref(false)
 const shareCopied = ref(false)
 const promptCopied = ref(false)
+const outputCopied = ref(false)
+const pollInterval = ref<ReturnType<typeof setInterval> | null>(null)
 const promptLoading = ref(new Set<string>())
 const revealedPrompts = ref<Record<string, null | { prompt: string; messages: { role: string; content: string }[]; tokenCount: number; promptAlwaysVisible: boolean }>>({})
 const selectedPrompt = ref<{ nodeName: string; prompt: string; tokenCount: number | null } | null>(null)
@@ -416,6 +432,39 @@ const formattedCost = computed(() => {
   return Number(c).toFixed(6)
 })
 
+const TERMINAL_STATUSES = ['complete', 'failed', 'cancelled']
+
+const lastNodeOutput = computed(() => {
+  const outputs = runIO.value?.outputs_json as Record<string, { input?: unknown; output?: unknown }> | null | undefined
+  if (!outputs) return null
+  const keys = Object.keys(outputs)
+  if (keys.length === 0) return null
+  for (let i = keys.length - 1; i >= 0; i--) {
+    const entry = outputs[keys[i]]
+    if (entry?.output != null) return entry.output
+  }
+  return null
+})
+
+const formattedOutput = computed(() => {
+  const output = lastNodeOutput.value
+  if (output == null) return ''
+  if (typeof output === 'string') return output
+  return JSON.stringify(output, null, 2)
+})
+
+async function copyOutput() {
+  const text = formattedOutput.value
+  if (!text) return
+  try {
+    await navigator.clipboard.writeText(text)
+    outputCopied.value = true
+    setTimeout(() => { outputCopied.value = false }, 2000)
+  } catch {
+    // clipboard not available
+  }
+}
+
 const nodeEntries = computed<NodeEntry[]>(() => {
   const r = run.value
   if (!r) return []
@@ -448,6 +497,28 @@ const nodeEntries = computed<NodeEntry[]>(() => {
   })
 })
 
+async function fetchRunData(runId: string) {
+  const { data: runData } = await api.GET('/api/v1/runs/{run_id}', {
+    params: { path: { run_id: runId } },
+  })
+  if (runData) run.value = runData as unknown as RunResponse
+  const { data: ioData } = await api.GET('/api/v1/runs/{run_id}/io', {
+    params: { path: { run_id: runId } },
+  })
+  if (ioData) runIO.value = ioData as unknown as RunIOResponse
+}
+
+function startPolling(runId: string) {
+  pollInterval.value = setInterval(async () => {
+    if (run.value && TERMINAL_STATUSES.includes(run.value.status)) {
+      clearInterval(pollInterval.value!)
+      pollInterval.value = null
+      return
+    }
+    await fetchRunData(runId)
+  }, 3000)
+}
+
 onMounted(async () => {
   const runId = route.params.id as string
   if (!runId) {
@@ -457,25 +528,22 @@ onMounted(async () => {
   }
 
   try {
-    const { data: runData } = await api.GET('/api/v1/runs/{run_id}', {
-      params: { path: { run_id: runId } },
-    })
-    if (!runData) {
-      error.value = 'Run not found'
-      return
+    await fetchRunData(runId)
+    if (run.value?.status === 'complete' && nodeEntries.value.length > 0) {
+      const last = nodeEntries.value[nodeEntries.value.length - 1]
+      expandedNodes.value.add(last.name)
     }
-    run.value = runData as unknown as RunResponse
-
-    const { data: ioData } = await api.GET('/api/v1/runs/{run_id}/io', {
-      params: { path: { run_id: runId } },
-    })
-    if (ioData) {
-      runIO.value = ioData as unknown as RunIOResponse
-    }
+    startPolling(runId)
   } catch (e: unknown) {
     error.value = `Failed to load run: ${e instanceof Error ? e.message : String(e)}`
   } finally {
     loading.value = false
+  }
+})
+
+onUnmounted(() => {
+  if (pollInterval.value) {
+    clearInterval(pollInterval.value)
   }
 })
 </script>
