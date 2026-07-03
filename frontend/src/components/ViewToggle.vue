@@ -1,5 +1,5 @@
 ﻿<template>
-  <FeatureGate feature-name="saved_views" data-testid="view-toggle-gate">
+  <FeatureGate feature-name="saved_views" data-testid="view-toggle-gate" show-disabled>
     <div class="flex items-center gap-2" data-testid="view-toggle">
       <Select v-model="selectedViewId" @update:model-value="onViewSelect($event as string)">
         <SelectTrigger class="w-[200px]" data-testid="view-toggle-trigger">

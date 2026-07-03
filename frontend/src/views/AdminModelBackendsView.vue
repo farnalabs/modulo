@@ -1,5 +1,5 @@
 ﻿<template>
-  <FeatureGate feature-name="model-backend-management">
+  <FeatureGate feature-name="model_backend_management" show-disabled>
     <div class="mx-auto max-w-4xl space-y-8 p-6">
       <header class="flex items-center justify-between">
         <div>

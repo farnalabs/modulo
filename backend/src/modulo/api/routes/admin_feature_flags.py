@@ -22,8 +22,14 @@ router = APIRouter(prefix="/api/v1/admin/feature-flags", tags=["admin-feature-fl
 
 
 async def _build_registry(settings: Settings, session: AsyncSession) -> FeatureFlagRegistry:
-    has_key = bool(settings.modulo_license_key)
-    tier = "team" if has_key else "community"
+    from modulo.core.license import get_license
+
+    lic = get_license()
+    has_key = bool(settings.modulo_license_key) or lic is not None
+    if lic is not None:
+        tier = lic.tier
+    else:
+        tier = "team" if settings.modulo_license_key else "community"
     async with session.begin():
         return await FeatureFlagRegistry.from_db(session, current_tier=tier, has_license_key=has_key)
 
@@ -36,12 +42,10 @@ async def list_feature_flags(
 ) -> Response:
     try:
         registry = await _build_registry(settings, session)
-        has_key = bool(settings.modulo_license_key)
-        tier = "team" if has_key else "community"
         return {
             "license": {
-                "tier": tier,
-                "has_license_key": has_key,
+                "tier": registry.current_tier,
+                "has_license_key": registry.has_license_key,
                 "is_valid": True,
             },
             "flags": [

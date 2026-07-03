@@ -10,13 +10,7 @@
       <p class="mt-1 text-muted-foreground">{{ $t('views.AdminSpendLimitsView.configure_daily_spend_limits_at_the_org_and_team_level') }}</p>
     </header>
 
-    <FeatureGate feature-name="admin_spend_limits" required-tier="team">
-      <template #locked="{ tooltip }">
-        <div class="mb-4 flex items-center gap-2 rounded-lg border border-warning/30 bg-warning/5 p-4 text-sm text-warning">
-          <LockIcon :locked="true" :tooltip="tooltip" />
-          <span>{{ $t('views.AdminSpendLimitsView.spend_limits_are_not_available_on_your_current_plan') }}</span>
-        </div>
-      </template>
+    <FeatureGate feature-name="admin_spend_limits" required-tier="team" show-disabled>
 
       <LoadingSpinner v-if="loading" />
 
@@ -127,7 +121,6 @@ import { ref, onMounted, computed } from 'vue'
 import { api } from '../lib/api/client'
 import { usePlanStore } from '../stores/planStore'
 import FeatureGate from '../components/FeatureGate.vue'
-import LockIcon from '../components/LockIcon.vue'
 import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
 import { Card, CardHeader, CardTitle, CardDescription, CardContent } from '../components/ui/card'

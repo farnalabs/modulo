@@ -76,6 +76,11 @@ _KNOWN_FLAGS: list[FeatureFlag] = [
         description="Remy in-app AI assistant",
         tier="community",
     ),
+    FeatureFlag(
+        name="model_backend_management",
+        description="Manage LLM backend connections and credentials",
+        tier="community",
+    ),
     # ── Team tier ──────────────────────────────────────────────────────
     FeatureFlag(
         name="sso",
@@ -155,6 +160,31 @@ _KNOWN_FLAGS: list[FeatureFlag] = [
     FeatureFlag(
         name="plugin_management",
         description="Manage plugins, connectors, and node categories",
+        tier="team",
+    ),
+    FeatureFlag(
+        name="admin_cost_breakdown",
+        description="Monthly cost breakdown and anomaly detection across teams",
+        tier="team",
+    ),
+    FeatureFlag(
+        name="admin_run_retention",
+        description="Configure run retention policies and manual purge",
+        tier="team",
+    ),
+    FeatureFlag(
+        name="error_forwarders",
+        description="External error tracking and alerting integrations",
+        tier="team",
+    ),
+    FeatureFlag(
+        name="admin_cost_controls",
+        description="Budget overview, team budgets, alert thresholds, and billing settings",
+        tier="team",
+    ),
+    FeatureFlag(
+        name="schema_version_history",
+        description="Version history and diff for schema definitions",
         tier="team",
     ),
 ]
