@@ -28,7 +28,7 @@ _GATE = "review-step"
 
 def _gate(
     *,
-    claimed_by: uuid.UUID | None = None,
+    account_id: uuid.UUID | None = None,
     claim_token: str | None = None,
     expires_at: datetime | None = None,
     decision: str | None = None,
@@ -40,8 +40,8 @@ def _gate(
     g.gate_id = _GATE
     g.pipeline_id = _PIPELINE
     g.organisation_id = _ORG
-    g.claimed_by = claimed_by
-    g.claimed_at = claimed_at or (datetime.now(UTC) if claimed_by else None)
+    g.account_id = account_id
+    g.claimed_at = claimed_at or (datetime.now(UTC) if account_id else None)
     g.claim_token = claim_token
     g.expires_at = expires_at
     g.decision = decision
@@ -146,9 +146,9 @@ def _make_jwt_kwargs(**overrides: Any) -> dict[str, Any]:
 
 async def test_claim_succeeds_with_jwt_secret_key() -> None:
     """claim() with a secret_key still succeeds and returns the gate."""
-    unclaimed_gate = _gate()  # no decision, no claimed_by
+    unclaimed_gate = _gate()  # no decision, no account_id
     claimed_gate = _gate(
-        claimed_by=_USER,
+        account_id=_USER,
         claim_token="jwt-will-be-set",
         expires_at=datetime.now(UTC) + timedelta(minutes=15),
     )
@@ -202,8 +202,8 @@ async def test_approve_validates_jwt_scope() -> None:
         gate_id=_GATE,
         client_id=str(_USER),
     )
-    gate = _gate(claimed_by=_USER, claim_token=token, expires_at=future)
-    gate_decided = _gate(decision="approved", claim_token=None, claimed_by=None)
+    gate = _gate(account_id=_USER, claim_token=token, expires_at=future)
+    gate_decided = _gate(decision="approved", claim_token=None, account_id=None)
     session = _session_decide(update_returns_id=gate.id, session_get_gate=gate_decided)
     mgr = HITLManager(secret_key=_KEY)
     result = await mgr.approve(
@@ -318,8 +318,8 @@ async def test_reject_validates_jwt() -> None:
         gate_id=_GATE,
         client_id=str(_USER),
     )
-    gate = _gate(claimed_by=_USER, claim_token=token, expires_at=future)
-    gate_decided = _gate(decision="rejected", claim_token=None, claimed_by=None)
+    gate = _gate(account_id=_USER, claim_token=token, expires_at=future)
+    gate_decided = _gate(decision="rejected", claim_token=None, account_id=None)
     session = _session_decide(update_returns_id=gate.id, session_get_gate=gate_decided)
     mgr = HITLManager(secret_key=_KEY)
     result = await mgr.reject(
@@ -362,8 +362,8 @@ async def test_reject_rejects_expired_jwt() -> None:
 
 async def test_approve_opaque_token_backwards_compat() -> None:
     """approve() still works with opaque (non-JWT) tokens when secret_key is set."""
-    gate_decided = _gate(decision="approved", claim_token=None, claimed_by=None)
-    gate = _gate(claimed_by=_USER, claim_token="opaque-token-123")
+    gate_decided = _gate(decision="approved", claim_token=None, account_id=None)
+    gate = _gate(account_id=_USER, claim_token="opaque-token-123")
     session = _session_decide(update_returns_id=gate.id, session_get_gate=gate_decided)
     mgr = HITLManager(secret_key=_KEY)
     result = await mgr.approve(
@@ -378,8 +378,8 @@ async def test_approve_opaque_token_backwards_compat() -> None:
 
 async def test_reject_opaque_token_backwards_compat() -> None:
     """reject() still works with opaque (non-JWT) tokens when secret_key is set."""
-    gate_decided = _gate(decision="rejected", claim_token=None, claimed_by=None)
-    gate = _gate(claimed_by=_USER, claim_token="opaque-token-456")
+    gate_decided = _gate(decision="rejected", claim_token=None, account_id=None)
+    gate = _gate(account_id=_USER, claim_token="opaque-token-456")
     session = _session_decide(update_returns_id=gate.id, session_get_gate=gate_decided)
     mgr = HITLManager(secret_key=_KEY)
     result = await mgr.reject(
@@ -394,8 +394,8 @@ async def test_reject_opaque_token_backwards_compat() -> None:
 
 async def test_approve_no_secret_key_still_uses_opaque() -> None:
     """Without a secret_key, HITLManager uses opaque tokens (no change)."""
-    gate_decided = _gate(decision="approved", claim_token=None, claimed_by=None)
-    gate = _gate(claimed_by=_USER, claim_token="plain-token")
+    gate_decided = _gate(decision="approved", claim_token=None, account_id=None)
+    gate = _gate(account_id=_USER, claim_token="plain-token")
     session = _session_decide(update_returns_id=gate.id, session_get_gate=gate_decided)
     mgr = HITLManager()  # no secret_key
     result = await mgr.approve(
