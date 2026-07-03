@@ -13,7 +13,11 @@ code:
   - backend/src/modulo/db/crud/run.py
   - backend/src/modulo/api/routes/feedback.py
 depends-on: [feat-evals-feedback-records, feat-evals-feedback-routing]
-unit-tests: []
+unit-tests:
+  - backend/tests/unit/api/test_feedback_endpoint.py
+  - backend/tests/unit/api/test_feedback_programming_error.py
+  - backend/tests/unit/core/feedback_manager/test_feedback_manager.py
+  - backend/tests/integration/feedback_manager/test_feedback_flow.py
 status: partial
 ---
 
@@ -69,17 +73,33 @@ Correction run spawning, linking, and post-correction evaluation for the Feedbac
 - [ ] Correction run fails to start — linking stays in "correcting" status
 - [ ] Post-correction eval fails — correction run succeeded, eval is missing
 
-### Error handling
+### Error Handling
 
-- [x] FeedbackRecord not found returns ValueError
+- [x] ProgrammingError on DB query returns 501 Not Implemented with migration hint
+- [x] FeedbackRecord not found returns 404 (ValueError propagated)
 - [x] Original run not found returns ValueError
 - [x] FeedbackRecord not in expected state returns ValueError with transition message
 - [x] Correction run not found in DB returns ValueError
+- [x] Run not found returns 404
+- [x] Invalid status value returns 422
+- [x] Invalid review action returns 422
+- [x] Double-correction guard — link_correction_run allows re-linking with concurrent-status check
+- [x] Feedback with no run_id rejects create_correction_run with 422
 - [ ] Eval engine failure during post-correction eval — error propagates or falls back?
+
+## QA History (index 75 — cross-cutting)
+
+### Findings fixed
+- Added ProgrammingError→501 catch to all 9 feedback API route handlers
+- Added 9 unit tests for ProgrammingError handling (test_feedback_programming_error.py)
+- Updated frontmatter: unit-tests populated with 4 real test file refs
+- Removed stale known gap: "No BDD feature files for correction flow" (feedback_system.feature exists)
+- Added Error Handling section with 8 behaviour checkboxes
+- Added feedback-routing.md dependency noted as stub gap
 
 ## Known Gaps
 
-- No BDD feature files exist for the correction flow — only backend unit tests
+- No BDD feature files for the correction error paths — only happy-path BDD scenarios exist
 - No integration test for full correction lifecycle: reject → spawn → run → eval → resolve
 - No guard against double-correction on same feedback record
 - No frontend UI for viewing correction runs linked to a feedback record
