@@ -10,4 +10,7 @@ COPY src/ src/
 RUN uv pip install --system -e . psycopg2-binary
 RUN chmod +x entrypoint.sh
 
+# Core Shared Manifest — build context must include frontend/ directory
+COPY frontend/src/manifest.yaml /app/manifest.yaml
+
 CMD ["./entrypoint.sh"]

@@ -89,6 +89,7 @@ from modulo.api.routes.variants import router as variants_router
 from modulo.api.routes.viewmodel import router as viewmodel_router
 from modulo.api.routes.views import router as views_router
 from modulo.api.routes.in_app_notifications import router as in_app_notifications_router
+from modulo.api.routes.manifest import router as manifest_router
 from modulo.api.routes.webhooks import router as webhooks_router
 from modulo.core.events.event_bus import configure_event_bus
 from modulo.core.events.listeners import register_listeners
@@ -611,6 +612,7 @@ app.include_router(error_forwarder_config_router)
 app.include_router(error_notification_rules_router)
 app.include_router(events_router)
 app.include_router(remy_router)
+app.include_router(manifest_router)
 
 # Remote MCP server — mounted as a Starlette sub-app at /mcp.
 # Auth is enforced by McpAuthMiddleware inside the sub-app.
