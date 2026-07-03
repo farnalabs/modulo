@@ -10,15 +10,15 @@ Feature: Webhook Signing
     Given pipeline "my-pipeline" has a webhook configured
     And the pipeline has webhook secret "whsec_abc123"
     When a webhook notification is sent
-    Then the request includes header "X-Modulo-Signature-256"
+    Then the request includes header "X-Modulo-Signature"
     And the signature is a valid HMAC-SHA256 of the payload
 
-  Scenario: Signature uses different secrets per org
-    Given org "acme" has webhook secret "whsec_acme"
-    And org "othercorp" has webhook secret "whsec_other"
-    When a webhook is sent from org "acme"
-    Then the signature is computed with "whsec_acme"
-    And a webhook from org "othercorp" uses "whsec_other"
+  Scenario: Signature uses different secrets per endpoint
+    Given endpoint "webhook-1" has secret "whsec_endpoint1"
+    And endpoint "webhook-2" has secret "whsec_endpoint2"
+    When a webhook is sent from endpoint "webhook-1"
+    Then the signature is computed with "whsec_endpoint1"
+    And a webhook from endpoint "webhook-2" uses "whsec_endpoint2"
 
   Scenario: Timestamp is included in signature
     Given pipeline "my-pipeline" has a webhook configured

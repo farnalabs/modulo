@@ -28,7 +28,7 @@ Feature: Failure Webhook Notification
 
   Scenario: Endpoint auto-disabled after repeated failures
     Given pipeline "my-pipeline" has a failure webhook configured
-    And the failure webhook endpoint has failed 5 consecutive times
+    And the failure webhook endpoint has failed 10 consecutive times
     When a new failure occurs
     Then the webhook endpoint is disabled
     And an alert is logged

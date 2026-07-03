@@ -287,23 +287,30 @@ async def retry_all_failed_deliveries(
     _require_admin(principal)
     import httpx
 
-    async with session.begin():
-        await set_rls_org(session, principal.organisation_id)
-        failed = list(
-            (
-                await session.execute(
-                    select(NotificationDeliveryLog, NotificationEndpoint)
-                    .join(
-                        NotificationEndpoint,
-                        NotificationDeliveryLog.endpoint_id == NotificationEndpoint.id,
+    try:
+        async with session.begin():
+            await set_rls_org(session, principal.organisation_id)
+            failed = list(
+                (
+                    await session.execute(
+                        select(NotificationDeliveryLog, NotificationEndpoint)
+                        .join(
+                            NotificationEndpoint,
+                            NotificationDeliveryLog.endpoint_id == NotificationEndpoint.id,
+                        )
+                        .where(
+                            NotificationDeliveryLog.organisation_id == principal.organisation_id,
+                            NotificationDeliveryLog.status.in_(["failed", "dead_lettered"]),
+                        )
                     )
-                    .where(
-                        NotificationDeliveryLog.organisation_id == principal.organisation_id,
-                        NotificationDeliveryLog.status.in_(["failed", "dead_lettered"]),
-                    )
-                )
-            ).all()
-        )
+                ).all()
+            )
+    except ProgrammingError:
+        logger.exception("notifications.delivery_table_missing")
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="Notification delivery logging is not available. Run database migrations to enable it.",
+        ) from None
 
     retried = 0
     errors: list[str] = []
@@ -337,35 +344,49 @@ async def retry_all_failed_deliveries(
             async with httpx.AsyncClient(timeout=15.0) as client:
                 resp = await client.post(ep.url, content=body, headers=headers)
 
-            async with session.begin():
-                await set_rls_org(session, principal.organisation_id)
-                new_log = NotificationDeliveryLog(
-                    organisation_id=principal.organisation_id,
-                    event_type=delivery.event_type,
-                    endpoint_id=delivery.endpoint_id,
-                    status="delivered" if resp.is_success else "failed",
-                    attempt_count=delivery.attempt_count + 1,
-                    response_code=resp.status_code,
-                    response_body=resp.text[:500] if resp.is_success else None,
-                    last_error=(None if resp.is_success else f"HTTP {resp.status_code}: {resp.text[:200]}"),
-                )
-                session.add(new_log)
+            try:
+                async with session.begin():
+                    await set_rls_org(session, principal.organisation_id)
+                    new_log = NotificationDeliveryLog(
+                        organisation_id=principal.organisation_id,
+                        event_type=delivery.event_type,
+                        endpoint_id=delivery.endpoint_id,
+                        status="delivered" if resp.is_success else "failed",
+                        attempt_count=delivery.attempt_count + 1,
+                        response_code=resp.status_code,
+                        response_body=resp.text[:500] if resp.is_success else None,
+                        last_error=(None if resp.is_success else f"HTTP {resp.status_code}: {resp.text[:200]}"),
+                    )
+                    session.add(new_log)
+            except ProgrammingError:
+                logger.exception("notifications.delivery_table_missing")
+                raise HTTPException(
+                    status_code=status.HTTP_501_NOT_IMPLEMENTED,
+                    detail="Notification delivery logging is not available. Run database migrations to enable it.",
+                ) from None
 
             retried += 1
         except httpx.RequestError as exc:
-            async with session.begin():
-                await set_rls_org(session, principal.organisation_id)
-                new_log = NotificationDeliveryLog(
-                    organisation_id=principal.organisation_id,
-                    event_type=delivery.event_type,
-                    endpoint_id=delivery.endpoint_id,
-                    status="failed",
-                    attempt_count=delivery.attempt_count + 1,
-                    response_code=None,
-                    response_body=None,
-                    last_error=str(exc),
-                )
-                session.add(new_log)
+            try:
+                async with session.begin():
+                    await set_rls_org(session, principal.organisation_id)
+                    new_log = NotificationDeliveryLog(
+                        organisation_id=principal.organisation_id,
+                        event_type=delivery.event_type,
+                        endpoint_id=delivery.endpoint_id,
+                        status="failed",
+                        attempt_count=delivery.attempt_count + 1,
+                        response_code=None,
+                        response_body=None,
+                        last_error=str(exc),
+                    )
+                    session.add(new_log)
+            except ProgrammingError:
+                logger.exception("notifications.delivery_table_missing")
+                raise HTTPException(
+                    status_code=status.HTTP_501_NOT_IMPLEMENTED,
+                    detail="Notification delivery logging is not available. Run database migrations to enable it.",
+                ) from None
 
             errors.append(str(exc))
             retried += 1
@@ -390,14 +411,21 @@ async def list_webhooks(
     principal: AuthenticatedPrincipal = Depends(get_current_user),
 ) -> list[WebhookResponse]:
     _require_admin(principal)
-    async with session.begin():
-        await set_rls_org(session, principal.organisation_id)
-        result = await session.execute(
-            select(NotificationEndpoint)
-            .where(NotificationEndpoint.organisation_id == principal.organisation_id)
-            .order_by(NotificationEndpoint.created_at.desc())
-        )
-        endpoints = list(result.scalars())
+    try:
+        async with session.begin():
+            await set_rls_org(session, principal.organisation_id)
+            result = await session.execute(
+                select(NotificationEndpoint)
+                .where(NotificationEndpoint.organisation_id == principal.organisation_id)
+                .order_by(NotificationEndpoint.created_at.desc())
+            )
+            endpoints = list(result.scalars())
+    except ProgrammingError:
+        logger.exception("notifications.endpoint_table_missing")
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="Notifications are not available. Run database migrations to enable this feature.",
+        ) from None
     return [_ep_to_response(ep) for ep in endpoints]
 
 
@@ -414,19 +442,26 @@ async def create_webhook(
     if body.secret:
         secret_ciphertext = fernet.encrypt(body.secret.encode())
 
-    async with session.begin():
-        await set_rls_org(session, principal.organisation_id)
-        ep = NotificationEndpoint(
-            id=uuid.uuid4(),
-            organisation_id=principal.organisation_id,
-            url=body.url,
-            secret_ciphertext=secret_ciphertext,
-            events=json.dumps(body.events),
-            description=body.description,
-            account_id=principal.account_id,
-        )
-        session.add(ep)
-        await session.flush()
+    try:
+        async with session.begin():
+            await set_rls_org(session, principal.organisation_id)
+            ep = NotificationEndpoint(
+                id=uuid.uuid4(),
+                organisation_id=principal.organisation_id,
+                url=body.url,
+                secret_ciphertext=secret_ciphertext,
+                events=json.dumps(body.events),
+                description=body.description,
+                account_id=principal.account_id,
+            )
+            session.add(ep)
+            await session.flush()
+    except ProgrammingError:
+        logger.exception("notifications.endpoint_table_missing")
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="Notifications are not available. Run database migrations to enable this feature.",
+        ) from None
 
     return _ep_to_response(ep)
 
@@ -438,11 +473,18 @@ async def get_webhook(
     principal: AuthenticatedPrincipal = Depends(get_current_user),
 ) -> WebhookResponse:
     _require_admin(principal)
-    async with session.begin():
-        await set_rls_org(session, principal.organisation_id)
-        ep = await session.get(NotificationEndpoint, webhook_id)
-        if ep is None or ep.organisation_id != principal.organisation_id:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Webhook not found")
+    try:
+        async with session.begin():
+            await set_rls_org(session, principal.organisation_id)
+            ep = await session.get(NotificationEndpoint, webhook_id)
+            if ep is None or ep.organisation_id != principal.organisation_id:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Webhook not found")
+    except ProgrammingError:
+        logger.exception("notifications.endpoint_table_missing")
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="Notifications are not available. Run database migrations to enable this feature.",
+        ) from None
     return _ep_to_response(ep)
 
 
@@ -455,23 +497,30 @@ async def update_webhook(
     settings: Settings = Depends(get_settings),
 ) -> WebhookResponse:
     _require_admin(principal)
-    async with session.begin():
-        await set_rls_org(session, principal.organisation_id)
-        ep = await session.get(NotificationEndpoint, webhook_id)
-        if ep is None or ep.organisation_id != principal.organisation_id:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Webhook not found")
+    try:
+        async with session.begin():
+            await set_rls_org(session, principal.organisation_id)
+            ep = await session.get(NotificationEndpoint, webhook_id)
+            if ep is None or ep.organisation_id != principal.organisation_id:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Webhook not found")
 
-        if body.url is not None:
-            ep.url = body.url
-        if body.secret is not None:
-            fernet = Fernet(settings.fernet_key.encode())
-            ep.secret_ciphertext = fernet.encrypt(body.secret.encode())
-        if body.events is not None:
-            ep.events = json.dumps(body.events)
-        if body.description is not None:
-            ep.description = body.description
+            if body.url is not None:
+                ep.url = body.url
+            if body.secret is not None:
+                fernet = Fernet(settings.fernet_key.encode())
+                ep.secret_ciphertext = fernet.encrypt(body.secret.encode())
+            if body.events is not None:
+                ep.events = json.dumps(body.events)
+            if body.description is not None:
+                ep.description = body.description
 
-        await session.flush()
+            await session.flush()
+    except ProgrammingError:
+        logger.exception("notifications.endpoint_table_missing")
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="Notifications are not available. Run database migrations to enable this feature.",
+        ) from None
 
     return _ep_to_response(ep)
 
@@ -483,12 +532,19 @@ async def delete_webhook(
     principal: AuthenticatedPrincipal = Depends(get_current_user),
 ) -> None:
     _require_admin(principal)
-    async with session.begin():
-        await set_rls_org(session, principal.organisation_id)
-        ep = await session.get(NotificationEndpoint, webhook_id)
-        if ep is None or ep.organisation_id != principal.organisation_id:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Webhook not found")
-        await session.delete(ep)
+    try:
+        async with session.begin():
+            await set_rls_org(session, principal.organisation_id)
+            ep = await session.get(NotificationEndpoint, webhook_id)
+            if ep is None or ep.organisation_id != principal.organisation_id:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Webhook not found")
+            await session.delete(ep)
+    except ProgrammingError:
+        logger.exception("notifications.endpoint_table_missing")
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="Notifications are not available. Run database migrations to enable this feature.",
+        ) from None
 
 
 # ── Test ───────────────────────────────────────────────────────────────
@@ -502,11 +558,18 @@ async def test_webhook(
     settings: Settings = Depends(get_settings),
 ) -> TestResult:
     _require_admin(principal)
-    async with session.begin():
-        await set_rls_org(session, principal.organisation_id)
-        ep = await session.get(NotificationEndpoint, webhook_id)
-        if ep is None or ep.organisation_id != principal.organisation_id:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Webhook not found")
+    try:
+        async with session.begin():
+            await set_rls_org(session, principal.organisation_id)
+            ep = await session.get(NotificationEndpoint, webhook_id)
+            if ep is None or ep.organisation_id != principal.organisation_id:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Webhook not found")
+    except ProgrammingError:
+        logger.exception("notifications.endpoint_table_missing")
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="Notifications are not available. Run database migrations to enable this feature.",
+        ) from None
 
     import httpx
 
@@ -562,15 +625,22 @@ async def re_enable_webhook(
     principal: AuthenticatedPrincipal = Depends(get_current_user),
 ) -> WebhookResponse:
     _require_admin(principal)
-    async with session.begin():
-        await set_rls_org(session, principal.organisation_id)
-        ep = await session.get(NotificationEndpoint, webhook_id)
-        if ep is None or ep.organisation_id != principal.organisation_id:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Webhook not found")
-        ep.auto_disabled = False
-        ep.disabled_at = None
-        ep.consecutive_dead_letter_count = 0
-        await session.flush()
+    try:
+        async with session.begin():
+            await set_rls_org(session, principal.organisation_id)
+            ep = await session.get(NotificationEndpoint, webhook_id)
+            if ep is None or ep.organisation_id != principal.organisation_id:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Webhook not found")
+            ep.auto_disabled = False
+            ep.disabled_at = None
+            ep.consecutive_dead_letter_count = 0
+            await session.flush()
+    except ProgrammingError:
+        logger.exception("notifications.endpoint_table_missing")
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="Notifications are not available. Run database migrations to enable this feature.",
+        ) from None
     return _ep_to_response(ep)
 
 
@@ -589,33 +659,40 @@ async def list_deliveries(
     _require_admin(principal)
     from sqlalchemy import func as sa_func
 
-    async with session.begin():
-        await set_rls_org(session, principal.organisation_id)
-        ep = await session.get(NotificationEndpoint, webhook_id)
-        if ep is None or ep.organisation_id != principal.organisation_id:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Webhook not found")
+    try:
+        async with session.begin():
+            await set_rls_org(session, principal.organisation_id)
+            ep = await session.get(NotificationEndpoint, webhook_id)
+            if ep is None or ep.organisation_id != principal.organisation_id:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Webhook not found")
 
-        query = select(NotificationDeliveryLog).where(
-            NotificationDeliveryLog.endpoint_id == webhook_id,
-            NotificationDeliveryLog.organisation_id == principal.organisation_id,
-        )
+            query = select(NotificationDeliveryLog).where(
+                NotificationDeliveryLog.endpoint_id == webhook_id,
+                NotificationDeliveryLog.organisation_id == principal.organisation_id,
+            )
 
-        if status_filter:
-            query = query.where(NotificationDeliveryLog.status == status_filter)
+            if status_filter:
+                query = query.where(NotificationDeliveryLog.status == status_filter)
 
-        if cursor:
-            try:
-                cursor_dt = datetime.fromisoformat(cursor)
-            except ValueError as exc:
-                raise HTTPException(
-                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-                    detail="Invalid cursor format",
-                ) from exc
-            query = query.where(NotificationDeliveryLog.created_at < cursor_dt)
+            if cursor:
+                try:
+                    cursor_dt = datetime.fromisoformat(cursor)
+                except ValueError as exc:
+                    raise HTTPException(
+                        status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                        detail="Invalid cursor format",
+                    ) from exc
+                query = query.where(NotificationDeliveryLog.created_at < cursor_dt)
 
-        query = query.order_by(NotificationDeliveryLog.created_at.desc()).limit(limit + 1)
+            query = query.order_by(NotificationDeliveryLog.created_at.desc()).limit(limit + 1)
 
-        rows = list((await session.execute(query)).scalars())
+            rows = list((await session.execute(query)).scalars())
+    except ProgrammingError:
+        logger.exception("notifications.delivery_table_missing")
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="Notification delivery logging is not available. Run database migrations to enable it.",
+        ) from None
 
     has_more = len(rows) > limit
     if has_more:
@@ -668,18 +745,26 @@ async def retry_delivery(
     _require_admin(principal)
     import httpx
 
-    async with session.begin():
-        await set_rls_org(session, principal.organisation_id)
-        ep = await session.get(NotificationEndpoint, webhook_id)
-        if ep is None or ep.organisation_id != principal.organisation_id:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Webhook not found")
+    try:
+        async with session.begin():
+            await set_rls_org(session, principal.organisation_id)
+            ep = await session.get(NotificationEndpoint, webhook_id)
+            if ep is None or ep.organisation_id != principal.organisation_id:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Webhook not found")
 
-        delivery = await session.get(NotificationDeliveryLog, delivery_id)
-        if delivery is None or delivery.endpoint_id != webhook_id:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail="Delivery log not found",
-            )
+            delivery = await session.get(NotificationDeliveryLog, delivery_id)
+    except ProgrammingError:
+        logger.exception("notifications.delivery_table_missing")
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="Notifications are not available. Run database migrations to enable this feature.",
+        ) from None
+
+    if delivery is None or delivery.endpoint_id != webhook_id:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Delivery log not found",
+        )
 
     event_type = delivery.event_type
     body = json.dumps(
@@ -709,19 +794,26 @@ async def retry_delivery(
         async with httpx.AsyncClient(timeout=15.0) as client:
             resp = await client.post(ep.url, content=body, headers=headers)
 
-        async with session.begin():
-            await set_rls_org(session, principal.organisation_id)
-            new_log = NotificationDeliveryLog(
-                organisation_id=principal.organisation_id,
-                event_type=delivery.event_type,
-                endpoint_id=webhook_id,
-                status="delivered" if resp.is_success else "failed",
-                attempt_count=delivery.attempt_count + 1,
-                response_code=resp.status_code,
-                response_body=resp.text[:500] if resp.is_success else None,
-                last_error=(None if resp.is_success else f"HTTP {resp.status_code}: {resp.text[:200]}"),
-            )
-            session.add(new_log)
+        try:
+            async with session.begin():
+                await set_rls_org(session, principal.organisation_id)
+                new_log = NotificationDeliveryLog(
+                    organisation_id=principal.organisation_id,
+                    event_type=delivery.event_type,
+                    endpoint_id=webhook_id,
+                    status="delivered" if resp.is_success else "failed",
+                    attempt_count=delivery.attempt_count + 1,
+                    response_code=resp.status_code,
+                    response_body=resp.text[:500] if resp.is_success else None,
+                    last_error=(None if resp.is_success else f"HTTP {resp.status_code}: {resp.text[:200]}"),
+                )
+                session.add(new_log)
+        except ProgrammingError:
+            logger.exception("notifications.delivery_table_missing")
+            raise HTTPException(
+                status_code=status.HTTP_501_NOT_IMPLEMENTED,
+                detail="Notification delivery logging is not available. Run database migrations to enable it.",
+            ) from None
 
         return TestResult(
             success=resp.is_success,
@@ -730,19 +822,26 @@ async def retry_delivery(
             error=None,
         )
     except httpx.RequestError as exc:
-        async with session.begin():
-            await set_rls_org(session, principal.organisation_id)
-            new_log = NotificationDeliveryLog(
-                organisation_id=principal.organisation_id,
-                event_type=delivery.event_type,
-                endpoint_id=webhook_id,
-                status="failed",
-                attempt_count=delivery.attempt_count + 1,
-                response_code=None,
-                response_body=None,
-                last_error=str(exc),
-            )
-            session.add(new_log)
+        try:
+            async with session.begin():
+                await set_rls_org(session, principal.organisation_id)
+                new_log = NotificationDeliveryLog(
+                    organisation_id=principal.organisation_id,
+                    event_type=delivery.event_type,
+                    endpoint_id=webhook_id,
+                    status="failed",
+                    attempt_count=delivery.attempt_count + 1,
+                    response_code=None,
+                    response_body=None,
+                    last_error=str(exc),
+                )
+                session.add(new_log)
+        except ProgrammingError:
+            logger.exception("notifications.delivery_table_missing")
+            raise HTTPException(
+                status_code=status.HTTP_501_NOT_IMPLEMENTED,
+                detail="Notification delivery logging is not available. Run database migrations to enable it.",
+            ) from None
 
         return TestResult(
             success=False,

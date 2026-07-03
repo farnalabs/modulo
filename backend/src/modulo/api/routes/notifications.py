@@ -12,7 +12,10 @@ import uuid
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field, field_validator
 from sqlalchemy import select
+from sqlalchemy.exc import ProgrammingError
 from sqlalchemy.ext.asyncio import AsyncSession
+
+import logging
 
 from modulo.api.dependencies import get_db_session
 from modulo.auth.dependencies import get_current_user
@@ -20,6 +23,8 @@ from modulo.auth.jwt import AuthenticatedPrincipal
 from modulo.db.models.notification_endpoint import NotificationEndpoint
 from modulo.db.rls import set_rls_org, set_rls_user_context
 from modulo.settings import Settings, get_settings
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/v1/notifications", tags=["notifications"])
 
@@ -72,13 +77,20 @@ async def list_endpoints(
     session: AsyncSession = Depends(get_db_session),
     principal: AuthenticatedPrincipal = Depends(get_current_user),
 ) -> list[NotificationEndpointResponse]:
-    async with session.begin():
-        await set_rls_org(session, principal.organisation_id)
-        await set_rls_user_context(session, principal.account_id, principal.org_role)
-        result = await session.execute(
-            select(NotificationEndpoint).where(NotificationEndpoint.organisation_id == principal.organisation_id)
-        )
-        endpoints = list(result.scalars())
+    try:
+        async with session.begin():
+            await set_rls_org(session, principal.organisation_id)
+            await set_rls_user_context(session, principal.account_id, principal.org_role)
+            result = await session.execute(
+                select(NotificationEndpoint).where(NotificationEndpoint.organisation_id == principal.organisation_id)
+            )
+            endpoints = list(result.scalars())
+    except ProgrammingError:
+        logger.exception("notifications.endpoint_table_missing")
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="Notifications are not available. Run database migrations to enable this feature.",
+        ) from None
     return [_ep_to_response(ep) for ep in endpoints]
 
 
@@ -106,21 +118,28 @@ async def create_endpoint(
     if body.team_id is not None:
         team_id = uuid.UUID(body.team_id)
 
-    async with session.begin():
-        await set_rls_org(session, principal.organisation_id)
-        await set_rls_user_context(session, principal.account_id, principal.org_role)
-        ep = NotificationEndpoint(
-            id=uuid.uuid4(),
-            organisation_id=principal.organisation_id,
-            url=body.url,
-            secret_ciphertext=secret_ciphertext,
-            events=json.dumps(body.events),
-            description=body.description,
-            account_id=principal.account_id,
-            team_id=team_id,
-        )
-        session.add(ep)
-        await session.flush()
+    try:
+        async with session.begin():
+            await set_rls_org(session, principal.organisation_id)
+            await set_rls_user_context(session, principal.account_id, principal.org_role)
+            ep = NotificationEndpoint(
+                id=uuid.uuid4(),
+                organisation_id=principal.organisation_id,
+                url=body.url,
+                secret_ciphertext=secret_ciphertext,
+                events=json.dumps(body.events),
+                description=body.description,
+                account_id=principal.account_id,
+                team_id=team_id,
+            )
+            session.add(ep)
+            await session.flush()
+    except ProgrammingError:
+        logger.exception("notifications.endpoint_table_missing")
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="Notifications are not available. Run database migrations to enable this feature.",
+        ) from None
 
     return _ep_to_response(ep)
 
@@ -131,12 +150,19 @@ async def get_endpoint(
     session: AsyncSession = Depends(get_db_session),
     principal: AuthenticatedPrincipal = Depends(get_current_user),
 ) -> NotificationEndpointResponse:
-    async with session.begin():
-        await set_rls_org(session, principal.organisation_id)
-        await set_rls_user_context(session, principal.account_id, principal.org_role)
-        ep = await session.get(NotificationEndpoint, endpoint_id)
-        if ep is None or ep.organisation_id != principal.organisation_id:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Endpoint not found")
+    try:
+        async with session.begin():
+            await set_rls_org(session, principal.organisation_id)
+            await set_rls_user_context(session, principal.account_id, principal.org_role)
+            ep = await session.get(NotificationEndpoint, endpoint_id)
+            if ep is None or ep.organisation_id != principal.organisation_id:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Endpoint not found")
+    except ProgrammingError:
+        logger.exception("notifications.endpoint_table_missing")
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="Notifications are not available. Run database migrations to enable this feature.",
+        ) from None
     return _ep_to_response(ep)
 
 
@@ -156,26 +182,33 @@ async def update_endpoint(
             detail="Only admins can assign team-scoped notification endpoints",
         )
 
-    async with session.begin():
-        await set_rls_org(session, principal.organisation_id)
-        await set_rls_user_context(session, principal.account_id, principal.org_role)
-        ep = await session.get(NotificationEndpoint, endpoint_id)
-        if ep is None or ep.organisation_id != principal.organisation_id:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Endpoint not found")
+    try:
+        async with session.begin():
+            await set_rls_org(session, principal.organisation_id)
+            await set_rls_user_context(session, principal.account_id, principal.org_role)
+            ep = await session.get(NotificationEndpoint, endpoint_id)
+            if ep is None or ep.organisation_id != principal.organisation_id:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Endpoint not found")
 
-        if body.url is not None:
-            ep.url = body.url
-        if body.secret is not None:
-            fernet = Fernet(settings.fernet_key.encode())
-            ep.secret_ciphertext = fernet.encrypt(body.secret.encode())
-        if body.events is not None:
-            ep.events = json.dumps(body.events)
-        if body.description is not None:
-            ep.description = body.description
-        if body.team_id is not None:
-            ep.team_id = uuid.UUID(body.team_id)
+            if body.url is not None:
+                ep.url = body.url
+            if body.secret is not None:
+                fernet = Fernet(settings.fernet_key.encode())
+                ep.secret_ciphertext = fernet.encrypt(body.secret.encode())
+            if body.events is not None:
+                ep.events = json.dumps(body.events)
+            if body.description is not None:
+                ep.description = body.description
+            if body.team_id is not None:
+                ep.team_id = uuid.UUID(body.team_id)
 
-        await session.flush()
+            await session.flush()
+    except ProgrammingError:
+        logger.exception("notifications.endpoint_table_missing")
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="Notifications are not available. Run database migrations to enable this feature.",
+        ) from None
 
     return _ep_to_response(ep)
 
@@ -186,13 +219,20 @@ async def delete_endpoint(
     session: AsyncSession = Depends(get_db_session),
     principal: AuthenticatedPrincipal = Depends(get_current_user),
 ) -> None:
-    async with session.begin():
-        await set_rls_org(session, principal.organisation_id)
-        await set_rls_user_context(session, principal.account_id, principal.org_role)
-        ep = await session.get(NotificationEndpoint, endpoint_id)
-        if ep is None or ep.organisation_id != principal.organisation_id:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Endpoint not found")
-        await session.delete(ep)
+    try:
+        async with session.begin():
+            await set_rls_org(session, principal.organisation_id)
+            await set_rls_user_context(session, principal.account_id, principal.org_role)
+            ep = await session.get(NotificationEndpoint, endpoint_id)
+            if ep is None or ep.organisation_id != principal.organisation_id:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Endpoint not found")
+            await session.delete(ep)
+    except ProgrammingError:
+        logger.exception("notifications.endpoint_table_missing")
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="Notifications are not available. Run database migrations to enable this feature.",
+        ) from None
 
 
 def _ep_to_response(ep: NotificationEndpoint) -> NotificationEndpointResponse:
