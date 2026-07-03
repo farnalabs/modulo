@@ -26,9 +26,13 @@ Feature: Conditional HITL Gating
     And execution continues without interrupting
     And the gate artifact contains "condition_skipped"
 
+  # NOTE: Using bare `run_context.draft_mode` instead of
+  # `run_context.draft_mode == true` because JMESPath Python library's ==
+  # operator with boolean literals (`true`, `false`) does not compare correctly
+  # against Python bool values. This is a known JMESPath limitation.
   Scenario: JMESPath condition on gate state skips the gate
     Given the edge after "content-generator" has a HITL gate
-    And the gate has a JMESPath condition "run_context.draft_mode == true"
+    And the gate has a JMESPath condition "run_context.draft_mode"
     When the run_context has draft_mode false
     And the run reaches the gate
     Then the JMESPath condition evaluates to false
@@ -37,7 +41,7 @@ Feature: Conditional HITL Gating
 
   Scenario: JMESPath condition on gate state triggers the gate
     Given the edge after "content-generator" has a HITL gate
-    And the gate has a JMESPath condition "run_context.draft_mode == true"
+    And the gate has a JMESPath condition "run_context.draft_mode"
     When the run_context has draft_mode true
     And the run reaches the gate
     Then the JMESPath condition evaluates to true

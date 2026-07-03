@@ -205,7 +205,7 @@ def make_hitl_gate_fn(
             return result
 
         # --- Conditional gate (§8.17) — evaluate condition against state. ---
-        if condition_expr is not None:
+        if condition_expr:
             try:
                 compiled = jmespath.compile(condition_expr)
             except Exception:
