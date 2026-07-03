@@ -394,14 +394,21 @@ async def list_schema_fields_endpoint(
     and returns each property as a ``SchemaFieldResponse`` with
     name, type, description, and required status.
     """
-    async with session.begin():
-        await set_rls_org(session, principal.organisation_id)
-        schema = await get_schema(session, schema_id)
-        if schema is None:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Schema not found")
-        sv = await _get_latest_version(session, schema_id)
-        if sv is None:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Schema has no versions")
+    try:
+        async with session.begin():
+            await set_rls_org(session, principal.organisation_id)
+            schema = await get_schema(session, schema_id)
+            if schema is None:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Schema not found")
+            sv = await _get_latest_version(session, schema_id)
+            if sv is None:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Schema has no versions")
+    except ProgrammingError:
+        logger.exception("schemas.list_fields")
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="Schema management is not available. Run database migrations to enable it.",
+        ) from None
 
     definition = sv.definition_json
     properties: dict[str, Any] = definition.get("properties", {})
