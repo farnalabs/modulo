@@ -42,6 +42,7 @@ services:
       - "8000:8000"
     volumes:
       - ./backend/src:/app/src
+      - ./frontend/src/manifest.yaml:/app/manifest.yaml
 
   frontend:
     build: ./frontend

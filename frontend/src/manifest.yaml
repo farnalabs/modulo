@@ -1,0 +1,851 @@
+schema_version: 1
+
+x-community: &community
+  required_tier: community
+  required_roles: null
+  required_permissions: null
+
+x-team: &team
+  required_tier: team
+  required_roles: [admin]
+  required_permissions: null
+
+routes:
+  /:
+    name: dashboard
+    testid: page-dashboard
+    breadcrumb: Dashboard
+    parent: null
+    product_map: null
+    i18n_key: nav.dashboard
+    sidebar_group: core
+    sidebar_order: 1
+    type: page
+    <<: *community
+    deprecated: false
+
+  /notifications:
+    name: notifications
+    testid: page-notifications
+    breadcrumb: Notifications
+    parent: /
+    product_map: null
+    i18n_key: nav.notifications
+    sidebar_group: core
+    sidebar_order: 2
+    type: page
+    <<: *community
+    deprecated: false
+
+  /pipelines:
+    name: pipeline-list
+    testid: page-pipelines
+    breadcrumb: Pipelines
+    parent: /library
+    product_map: null
+    i18n_key: nav.pipelines
+    sidebar_group: core
+    sidebar_order: 3
+    type: list_page
+    <<: *community
+    deprecated: false
+
+  /library:
+    name: library
+    testid: page-library
+    breadcrumb: Library
+    parent: /
+    product_map: null
+    i18n_key: nav.library
+    sidebar_group: core
+    sidebar_order: 4
+    type: list_page
+    <<: *community
+    deprecated: false
+
+  /templates:
+    name: pipeline-templates
+    testid: page-templates
+    breadcrumb: Templates
+    parent: /library
+    product_map: null
+    i18n_key: nav.templates
+    sidebar_group: core
+    sidebar_order: 5
+    type: list_page
+    <<: *community
+    deprecated: false
+
+  /pipelines/copy:
+    name: pipeline-copy
+    testid: page-pipeline-copy
+    breadcrumb: Copy Pipeline
+    parent: /library
+    product_map: null
+    i18n_key: nav.copy_pipeline
+    sidebar_group: core
+    sidebar_order: 6
+    type: form_page
+    <<: *community
+    deprecated: false
+
+  /stages:
+    name: stages
+    testid: page-stages-board
+    breadcrumb: Stages Board
+    parent: /
+    product_map: null
+    i18n_key: nav.stages_board
+    sidebar_group: core
+    sidebar_order: 7
+    type: page
+    <<: *community
+    deprecated: false
+
+  /runs/diff:
+    name: runs-diff
+    testid: page-output-diff
+    breadcrumb: Output Diff
+    parent: /
+    product_map: null
+    i18n_key: nav.output_diff
+    sidebar_group: core
+    sidebar_order: 8
+    type: page
+    <<: *community
+    deprecated: false
+
+  /runs/:id:
+    name: run-detail
+    testid: page-run-detail
+    breadcrumb: Run Detail
+    parent: /
+    product_map: null
+    i18n_key: nav.run_detail
+    sidebar_group: core
+    sidebar_order: 9
+    type: detail_page
+    pattern: /runs/:id
+    dynamic_params:
+      - id
+    <<: *community
+    deprecated: false
+
+  /evals/editor:
+    name: eval-editor
+    testid: page-eval-editor
+    breadcrumb: Evals
+    parent: /
+    product_map: null
+    i18n_key: nav.evals
+    sidebar_group: core
+    sidebar_order: 10
+    type: form_page
+    <<: *community
+    deprecated: false
+
+  /evals/proposals:
+    name: eval-proposals-queue
+    testid: page-eval-proposals
+    breadcrumb: Eval Proposals
+    parent: /
+    product_map: null
+    i18n_key: nav.eval_proposals
+    sidebar_group: core
+    sidebar_order: 11
+    type: list_page
+    <<: *community
+    deprecated: false
+
+  /variants/compare:
+    name: variant-compare
+    testid: page-variant-compare
+    breadcrumb: Variants
+    parent: /
+    product_map: null
+    i18n_key: nav.variants
+    sidebar_group: core
+    sidebar_order: 12
+    type: page
+    <<: *community
+    deprecated: false
+
+  /variants/ab-test:
+    name: ab-test-models
+    testid: page-ab-test-models
+    breadcrumb: AB Test Models
+    parent: /
+    product_map: null
+    i18n_key: nav.ab_test_models
+    sidebar_group: core
+    sidebar_order: 13
+    type: page
+    <<: *community
+    deprecated: false
+
+  /schemas:
+    name: schemas
+    testid: page-schemas
+    breadcrumb: Schemas
+    parent: /
+    product_map: null
+    i18n_key: nav.schemas
+    sidebar_group: core
+    sidebar_order: 14
+    type: list_page
+    <<: *community
+    deprecated: false
+
+  /schemas/editor/:id:
+    name: schema-editor
+    testid: page-schema-editor
+    breadcrumb: Schema Editor
+    parent: /schemas
+    product_map: null
+    i18n_key: nav.schema_editor
+    sidebar_group: core
+    sidebar_order: 15
+    type: form_page
+    pattern: /schemas/editor/:id
+    dynamic_params:
+      - id
+    <<: *community
+    deprecated: false
+
+  /schemas/infer:
+    name: schema-infer
+    testid: page-schema-infer
+    breadcrumb: Schema Inference
+    parent: /schemas
+    product_map: null
+    i18n_key: nav.schema_infer
+    sidebar_group: core
+    sidebar_order: 16
+    type: form_page
+    <<: *community
+    deprecated: false
+
+  /admin/remy:
+    name: admin-remy
+    testid: page-remy-config
+    breadcrumb: Remy Config
+    parent: /
+    product_map: null
+    i18n_key: nav.remy_config
+    sidebar_group: remy
+    sidebar_order: 1
+    type: form_page
+    <<: *team
+    deprecated: false
+
+  /settings/remy:
+    name: settings-remy
+    testid: page-remy-skills
+    breadcrumb: Remy Skills
+    parent: /
+    product_map: null
+    i18n_key: nav.remy_skills
+    sidebar_group: remy
+    sidebar_order: 2
+    type: form_page
+    <<: *community
+    deprecated: false
+
+  /settings/teams:
+    name: settings-teams
+    testid: page-settings-teams
+    breadcrumb: Teams
+    parent: /
+    product_map: null
+    i18n_key: nav.teams
+    sidebar_group: settings
+    sidebar_order: 1
+    type: list_page
+    <<: *community
+    deprecated: false
+
+  /settings/sso:
+    name: settings-sso
+    testid: page-settings-sso
+    breadcrumb: SSO
+    parent: /
+    product_map: null
+    i18n_key: nav.sso
+    sidebar_group: settings
+    sidebar_order: 2
+    type: form_page
+    <<: *team
+    deprecated: false
+
+  /settings/license:
+    name: settings-license
+    testid: page-settings-license
+    breadcrumb: License
+    parent: /
+    product_map: null
+    i18n_key: nav.license
+    sidebar_group: settings
+    sidebar_order: 3
+    type: form_page
+    <<: *team
+    deprecated: false
+
+  /settings/mcp:
+    name: settings-mcp
+    testid: page-settings-mcp
+    breadcrumb: MCP
+    parent: /
+    product_map: null
+    i18n_key: nav.mcp
+    sidebar_group: settings
+    sidebar_order: 4
+    type: form_page
+    <<: *community
+    deprecated: false
+
+  /settings/triggers:
+    name: settings-triggers
+    testid: page-settings-triggers
+    breadcrumb: Triggers
+    parent: /
+    product_map: null
+    i18n_key: nav.triggers
+    sidebar_group: settings
+    sidebar_order: 5
+    type: form_page
+    <<: *community
+    deprecated: false
+
+  /admin/triggers:
+    name: admin-triggers
+    testid: page-admin-triggers
+    breadcrumb: Admin Triggers
+    parent: /
+    product_map: null
+    i18n_key: nav.admin_triggers
+    sidebar_group: settings
+    sidebar_order: 6
+    type: list_page
+    <<: *team
+    deprecated: false
+
+  /settings/runtime-config:
+    name: settings-runtime-config
+    testid: page-runtime-config
+    breadcrumb: Runtime Config
+    parent: /
+    product_map: null
+    i18n_key: nav.runtime_config
+    sidebar_group: settings
+    sidebar_order: 7
+    type: form_page
+    <<: *team
+    deprecated: false
+
+  /settings/rate-limits:
+    name: settings-rate-limits
+    testid: page-rate-limits
+    breadcrumb: Rate Limits
+    parent: /
+    product_map: null
+    i18n_key: nav.rate_limits
+    sidebar_group: settings
+    sidebar_order: 8
+    type: form_page
+    <<: *team
+    deprecated: false
+
+  /settings/hitl-review:
+    name: settings-hitl-review
+    testid: page-hitl-review
+    breadcrumb: HITL Review
+    parent: /
+    product_map: null
+    i18n_key: nav.hitl_review
+    sidebar_group: settings
+    sidebar_order: 9
+    type: page
+    <<: *community
+    deprecated: false
+
+  /settings/observability:
+    name: settings-observability
+    testid: page-settings-observability
+    breadcrumb: Observability
+    parent: /
+    product_map: null
+    i18n_key: nav.observability
+    sidebar_group: settings
+    sidebar_order: 10
+    type: form_page
+    <<: *team
+    deprecated: false
+
+  /settings/error-forwarders:
+    name: settings-error-forwarders
+    testid: page-error-forwarders
+    breadcrumb: Error Forwarders
+    parent: /
+    product_map: null
+    i18n_key: nav.error_forwarders
+    sidebar_group: settings
+    sidebar_order: 11
+    type: form_page
+    <<: *team
+    deprecated: false
+
+  /admin/users:
+    name: admin-users
+    testid: page-users
+    breadcrumb: Users
+    parent: /
+    product_map: null
+    i18n_key: nav.users
+    sidebar_group: access-control
+    sidebar_order: 1
+    type: list_page
+    <<: *team
+    deprecated: false
+
+  /admin/org:
+    name: admin-org
+    testid: page-org-settings
+    breadcrumb: Org Settings
+    parent: /
+    product_map: null
+    i18n_key: nav.org_settings
+    sidebar_group: access-control
+    sidebar_order: 2
+    type: form_page
+    <<: *team
+    deprecated: false
+
+  /admin/audit:
+    name: admin-audit
+    testid: page-audit-log
+    breadcrumb: Audit Log
+    parent: /
+    product_map: null
+    i18n_key: nav.audit_log
+    sidebar_group: access-control
+    sidebar_order: 3
+    type: list_page
+    <<: *team
+    deprecated: false
+
+  /admin/costs:
+    name: admin-costs
+    testid: page-cost-overview
+    breadcrumb: Cost Overview
+    parent: /
+    product_map: null
+    i18n_key: nav.cost_overview
+    sidebar_group: cost-management
+    sidebar_order: 1
+    type: page
+    <<: *team
+    deprecated: false
+
+  /admin/costs/limits:
+    name: admin-costs-limits
+    testid: page-spend-limits
+    breadcrumb: Spend Limits
+    parent: /admin/costs
+    product_map: null
+    i18n_key: nav.spend_limits
+    sidebar_group: cost-management
+    sidebar_order: 2
+    type: form_page
+    <<: *team
+    deprecated: false
+
+  /admin/costs/controls:
+    name: admin-costs-controls
+    testid: page-cost-controls
+    breadcrumb: Cost Controls
+    parent: /admin/costs
+    product_map: null
+    i18n_key: nav.cost_controls
+    sidebar_group: cost-management
+    sidebar_order: 3
+    type: form_page
+    <<: *team
+    deprecated: false
+
+  /admin/connectors:
+    name: admin-connectors
+    testid: page-connectors
+    breadcrumb: Connectors
+    parent: /
+    product_map: null
+    i18n_key: nav.connectors
+    sidebar_group: system
+    sidebar_order: 1
+    type: list_page
+    <<: *team
+    deprecated: false
+
+  /admin/model-backends:
+    name: admin-model-backends
+    testid: page-model-backends
+    breadcrumb: Model Backends
+    parent: /
+    product_map: null
+    i18n_key: nav.model_backends
+    sidebar_group: system
+    sidebar_order: 2
+    type: list_page
+    <<: *team
+    deprecated: false
+
+  /admin/node-categories:
+    name: admin-node-categories
+    testid: page-node-categories
+    breadcrumb: Node Categories
+    parent: /
+    product_map: null
+    i18n_key: nav.node_categories
+    sidebar_group: system
+    sidebar_order: 3
+    type: list_page
+    <<: *team
+    deprecated: false
+
+  /admin/feature-flags:
+    name: admin-feature-flags
+    testid: page-feature-flags
+    breadcrumb: Feature Flags
+    parent: /
+    product_map: null
+    i18n_key: nav.feature_flags
+    sidebar_group: system
+    sidebar_order: 4
+    type: list_page
+    <<: *team
+    deprecated: false
+
+  /admin/environments:
+    name: admin-environments
+    testid: page-environments
+    breadcrumb: Environments
+    parent: /
+    product_map: null
+    i18n_key: nav.environments
+    sidebar_group: system
+    sidebar_order: 5
+    type: list_page
+    <<: *team
+    deprecated: false
+
+  /admin/run-retention:
+    name: admin-run-retention
+    testid: page-run-retention
+    breadcrumb: Run Retention
+    parent: /
+    product_map: null
+    i18n_key: nav.run_retention
+    sidebar_group: system
+    sidebar_order: 6
+    type: form_page
+    <<: *team
+    deprecated: false
+
+  /admin/views:
+    name: admin-views
+    testid: page-saved-views
+    breadcrumb: Saved Views
+    parent: /
+    product_map: null
+    i18n_key: nav.saved_views
+    sidebar_group: system
+    sidebar_order: 7
+    type: list_page
+    <<: *team
+    deprecated: false
+
+  /admin/pipelines:
+    name: admin-pipelines
+    testid: page-admin-pipelines
+    breadcrumb: Admin Pipelines
+    parent: /
+    product_map: null
+    i18n_key: nav.admin_pipelines
+    sidebar_group: system
+    sidebar_order: 8
+    type: list_page
+    <<: *team
+    deprecated: false
+
+  /admin/errors:
+    name: admin-errors
+    testid: page-error-dashboard
+    breadcrumb: Error Dashboard
+    parent: /
+    product_map: null
+    i18n_key: nav.error_dashboard
+    sidebar_group: monitoring
+    sidebar_order: 1
+    type: list_page
+    <<: *team
+    deprecated: false
+
+  /admin/errors/:id:
+    name: admin-error-detail
+    testid: page-error-detail
+    breadcrumb: Error Detail
+    parent: /admin/errors
+    product_map: null
+    i18n_key: nav.error_detail
+    sidebar_group: monitoring
+    sidebar_order: 2
+    type: detail_page
+    pattern: /admin/errors/:id
+    dynamic_params:
+      - id
+    <<: *team
+    deprecated: false
+
+  /admin/notification-delivery:
+    name: admin-notification-delivery
+    testid: page-notification-delivery
+    breadcrumb: Notification Log
+    parent: /
+    product_map: null
+    i18n_key: nav.notification_log
+    sidebar_group: monitoring
+    sidebar_order: 3
+    type: list_page
+    <<: *team
+    deprecated: false
+
+  /admin/api-changelog:
+    name: api-changelog
+    testid: page-api-changelog
+    breadcrumb: API Changelog
+    parent: /
+    product_map: null
+    i18n_key: nav.api_changelog
+    sidebar_group: monitoring
+    sidebar_order: 4
+    type: list_page
+    <<: *team
+    deprecated: false
+
+  /admin/teams/comparison:
+    name: team-comparison
+    testid: page-team-comparison
+    breadcrumb: Team Comparison
+    parent: /
+    product_map: null
+    i18n_key: nav.team_comparison
+    sidebar_group: monitoring
+    sidebar_order: 5
+    type: page
+    <<: *team
+    deprecated: false
+
+  /admin/plugins:
+    name: admin-plugins
+    testid: page-plugins
+    breadcrumb: Plugins
+    parent: /
+    product_map: null
+    i18n_key: nav.plugins
+    sidebar_group: extensions
+    sidebar_order: 1
+    type: list_page
+    <<: *team
+    deprecated: false
+
+  /feedback/inbox:
+    name: feedback-inbox
+    testid: page-feedback-inbox
+    breadcrumb: Feedback Inbox
+    parent: /
+    product_map: null
+    i18n_key: nav.feedback_inbox
+    sidebar_group: extensions
+    sidebar_order: 2
+    type: list_page
+    <<: *community
+    deprecated: false
+
+  /admin/my-profile:
+    name: my-profile
+    testid: page-my-profile
+    breadcrumb: My Profile
+    parent: /
+    product_map: null
+    i18n_key: nav.my_profile
+    sidebar_group: null
+    sidebar_order: null
+    type: page
+    <<: *community
+    deprecated: false
+
+elements:
+  /:
+    - testid: dashboard-metrics-overview
+      type: section
+      label: Metrics Overview
+      dynamic_testid: false
+    - testid: dashboard-recent-runs
+      type: section
+      label: Recent Runs
+      dynamic_testid: false
+
+  /admin/remy:
+    - testid: remy-access-list
+      type: section
+      label: Access List
+      dynamic_testid: false
+    - testid: remy-access-save
+      type: button
+      label: Save Access List
+      dynamic_testid: false
+    - testid: remy-skills-add
+      type: button
+      label: Add Skill
+      dynamic_testid: false
+
+  /settings/remy:
+    - testid: remy-skills-list
+      type: section
+      label: My Skills
+      dynamic_testid: false
+    - testid: remy-skills-configure
+      type: button
+      label: Configure
+      dynamic_testid: false
+
+  /admin/users:
+    - testid: users-table
+      type: table
+      label: Users Table
+      dynamic_testid: false
+    - testid: users-add
+      type: button
+      label: Add User
+      dynamic_testid: false
+    - testid: users-search
+      type: input
+      label: Search Users
+      dynamic_testid: false
+
+  /admin/costs:
+    - testid: costs-overview-chart
+      type: section
+      label: Cost Overview Chart
+      dynamic_testid: false
+    - testid: costs-breakdown-table
+      type: table
+      label: Cost Breakdown
+      dynamic_testid: false
+
+  /admin/errors:
+    - testid: errors-table
+      type: table
+      label: Errors Table
+      dynamic_testid: false
+    - testid: errors-filter
+      type: input
+      label: Filter Errors
+      dynamic_testid: false
+
+  /settings/teams:
+    - testid: teams-table
+      type: table
+      label: Teams Table
+      dynamic_testid: false
+    - testid: teams-add
+      type: button
+      label: Add Team
+      dynamic_testid: false
+
+  /settings/sso:
+    - testid: sso-providers-list
+      type: section
+      label: SSO Providers
+      dynamic_testid: false
+    - testid: sso-add-provider
+      type: button
+      label: Add Provider
+      dynamic_testid: false
+
+  /settings/license:
+    - testid: license-info
+      type: section
+      label: License Information
+      dynamic_testid: false
+    - testid: license-activate
+      type: button
+      label: Activate License
+      dynamic_testid: false
+
+  /admin/connectors:
+    - testid: connectors-table
+      type: table
+      label: Connectors Table
+      dynamic_testid: false
+    - testid: connectors-add
+      type: button
+      label: Add Connector
+      dynamic_testid: false
+
+  /admin/feature-flags:
+    - testid: feature-flags-table
+      type: table
+      label: Feature Flags
+      dynamic_testid: false
+
+  /admin/audit:
+    - testid: audit-log-table
+      type: table
+      label: Audit Log Table
+      dynamic_testid: false
+    - testid: audit-log-filter
+      type: input
+      label: Filter Audit Log
+      dynamic_testid: false
+
+sidebar_groups:
+  core:
+    label: Core
+    order: 1
+    default_expanded: true
+    simple_mode: false
+  remy:
+    label: Remy
+    order: 2
+    default_expanded: true
+    simple_mode: true
+  settings:
+    label: Settings
+    order: 3
+    default_expanded: true
+    simple_mode: false
+  access-control:
+    label: Access Control
+    order: 4
+    default_expanded: true
+    simple_mode: false
+  cost-management:
+    label: Cost Management
+    order: 5
+    default_expanded: true
+    simple_mode: false
+  system:
+    label: System
+    order: 6
+    default_expanded: true
+    simple_mode: false
+  monitoring:
+    label: Monitoring
+    order: 7
+    default_expanded: true
+    simple_mode: false
+  extensions:
+    label: Extensions
+    order: 8
+    default_expanded: true
+    simple_mode: false
