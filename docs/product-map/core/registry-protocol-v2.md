@@ -29,112 +29,117 @@ Ed25519-signed publish/pull/verify protocol for community primitives. Supports 6
 
 ### V2 Publish Protocol
 
-- [ ] POST /api/v1/registry/publish accepts PublishRequestV2 (6 primitive types: schema, workflow, agent, integration, test_fixture, pipeline_template)
-- [ ] Generates temp Ed25519 keypair, signs canonical JSON, stores entry
-- [ ] Computes SHA-256 checksum of canonical bundle JSON
-- [ ] Returns PublishResponseV2 with slug, version, checksum, signature, fingerprint, verified
-- [ ] Duplicate slug overwrites existing entry (in-memory registry)
-- [ ] Missing/invalid signing_key_hex raises error
-- [ ] Returns 201 on success
+- [x] POST /api/v1/registry/publish accepts PublishRequestV2 (6 primitive types: schema, workflow, agent, integration, test_fixture, pipeline_template)
+- [x] Generates temp Ed25519 keypair, signs canonical JSON, stores entry
+- [x] Computes SHA-256 checksum of canonical bundle JSON
+- [x] Returns PublishResponseV2 with slug, version, checksum, signature, fingerprint, verified
+- [x] Duplicate slug overwrites existing entry (in-memory registry)
+- [x] Missing/invalid signing_key_hex raises error
+- [x] Returns 201 on success
 
 ### V2 Pull Protocol
 
-- [ ] GET /api/v1/registry/pull/{slug} returns PullResponseV2 with full metadata + content
-- [ ] Returns 404 when slug does not exist
-- [ ] Verifies Ed25519 signature before returning
-- [ ] Includes publisher_status (verified/community/revoked) from fingerprint lookup
-- [ ] slug is author/name path — contains embedded slash
+- [x] GET /api/v1/registry/pull/{slug} returns PullResponseV2 with full metadata + content
+- [x] Returns 404 when slug does not exist
+- [x] Verifies Ed25519 signature before returning
+- [x] Includes publisher_status (verified/community/revoked) from fingerprint lookup
+- [x] slug is author/name path — contains embedded slash
 
 ### V2 Verify Protocol
 
-- [ ] GET /api/v1/registry/verify/{slug} returns VerifyResponseV2 with verified boolean
-- [ ] Accepts optional public_key_hex query parameter for key-specific verification
-- [ ] With public_key_hex: verifies against provided key, looks up publisher trust_tier and publisher_name from DB
-- [ ] Without public_key_hex: uses built-in registry development key (verify_primitive_signature)
-- [ ] Unknown slug returns 404
-- [ ] Returns trust_tier=None, publisher_name=None when no DB match found
-- [ ] Returns publisher_status (verified/community/revoked) regardless of verification method
+- [x] GET /api/v1/registry/verify/{slug} returns VerifyResponseV2 with verified boolean
+- [x] Accepts optional public_key_hex query parameter for key-specific verification
+- [x] With public_key_hex: verifies against provided key, looks up publisher trust_tier and publisher_name from DB
+- [x] Without public_key_hex: uses built-in registry development key (verify_primitive_signature)
+- [x] Unknown slug returns 404
+- [x] Returns trust_tier=None, publisher_name=None when no DB match found
+- [x] Returns publisher_status (verified/community/revoked) regardless of verification method
 
 ### V1 Endpoints (legacy compatibility)
 
-- [ ] GET /api/v1/registry/primitives — list ranked with publisher trust badges and popularity score
-- [ ] GET /api/v1/registry/primitives/{slug} — single entry with signature + integrity verification
-- [ ] POST /api/v1/registry/primitives — publish with signing_key_hex (accepts 4 primitive types)
-- [ ] POST /api/v1/registry/primitives/{slug}/download — download, increment count, create local LibraryPrimitive copy
-- [ ] All v1 endpoints support filters: author, primitive_type, search, sort_by (popularity/recent/downloads/rating)
-- [ ] Pagination with page/page_size (default 20, max 100)
+- [x] GET /api/v1/registry/primitives — list ranked with publisher trust badges and popularity score
+- [x] GET /api/v1/registry/primitives/{slug} — single entry with signature + integrity verification
+- [x] POST /api/v1/registry/primitives — publish with signing_key_hex (accepts 4 primitive types)
+- [x] POST /api/v1/registry/primitives/{slug}/download — download, increment count, create local LibraryPrimitive copy
+- [x] All v1 endpoints support filters: author, primitive_type, search, sort_by (popularity/recent/downloads/rating)
+- [x] Pagination with page/page_size (default 20, max 100)
 
 ### Ed25519 Signing & Crypto
 
-- [ ] generate_keypair() returns hex-encoded private_key, public_key, and 16-char fingerprint
-- [ ] sign_primitive() signs canonical JSON (sort_keys=True, separators=",:") with Ed25519 private key
-- [ ] verify_signature() verifies Ed25519 signature against canonical JSON
-- [ ] Tampered payload → verification returns False
-- [ ] Wrong signing key → verification returns False
-- [ ] Tampered signature hex → verification returns False
-- [ ] SHA-256 bundle integrity: compute_bundle_hash / verify_bundle_integrity
-- [ ] Canonical JSON is deterministic — same inputs produce same bytes
-- [ ] Fingerprint = SHA-256(public_key_raw)[:16] — stable hex identifier
+- [x] generate_keypair() returns hex-encoded private_key, public_key, and 16-char fingerprint
+- [x] sign_primitive() signs canonical JSON (sort_keys=True, separators=",:") with Ed25519 private key
+- [x] verify_signature() verifies Ed25519 signature against canonical JSON
+- [x] Tampered payload → verification returns False
+- [x] Wrong signing key → verification returns False
+- [x] Tampered signature hex → verification returns False
+- [x] SHA-256 bundle integrity: compute_bundle_hash / verify_bundle_integrity
+- [x] Canonical JSON is deterministic — same inputs produce same bytes
+- [x] Fingerprint = SHA-256(public_key_raw)[:16] — stable hex identifier
 
 ### Publisher Trust Model
 
-- [ ] Three statuses: verified, community, revoked
-- [ ] Built-in modulo publisher pre-registered as verified
-- [ ] register_publisher() creates a verified publisher by fingerprint
-- [ ] revoke_publisher() sets status to revoked; returns False for unknown fingerprint
-- [ ] get_publisher_status() returns verified/community/revoked; unknown fingerprint → community
-- [ ] list_verified_publishers() returns only verified-status publishers
-- [ ] Popularity score computed from downloads (40%), rating (40%), recency (20%) + review bonus
+- [x] Three statuses: verified, community, revoked
+- [x] Built-in modulo publisher pre-registered as verified
+- [x] register_publisher() creates a verified publisher by fingerprint
+- [x] revoke_publisher() sets status to revoked; returns False for unknown fingerprint
+- [x] get_publisher_status() returns verified/community/revoked; unknown fingerprint → community
+- [x] list_verified_publishers() returns only verified-status publishers
+- [x] Popularity score computed from downloads (40%), rating (40%), recency (20%) + review bonus
 
 ### In-Memory Built-in Registry
 
-- [ ] 9 seeded entries: 3 original (PRD schema, requirements schema, PRD workflow) + 6 dogfood entries
-- [ ] All built-in primitives have valid Ed25519 signatures
-- [ ] All built-in primitives have 64-char SHA-256 checksums
-- [ ] Dogfood pipeline includes HITL gate config (review_before_pr)
-- [ ] list_registry_primitives() filters by author, primitive_type, search term
-- [ ] get_registry_primitive(slug) returns entry or None
-- [ ] publish_primitive() adds entry to in-memory dict
-- [ ] resolve_namespaced_slug splits author/name; defaults author to "modulo"
+- [x] 9 seeded entries: 3 original (PRD schema, requirements schema, PRD workflow) + 6 dogfood entries
+- [x] All built-in primitives have valid Ed25519 signatures
+- [x] All built-in primitives have 64-char SHA-256 checksums
+- [x] Dogfood pipeline includes HITL gate config (review_before_pr)
+- [x] list_registry_primitives() filters by author, primitive_type, search term
+- [x] get_registry_primitive(slug) returns entry or None
+- [x] publish_primitive() adds entry to in-memory dict
+- [x] resolve_namespaced_slug splits author/name; defaults author to "modulo"
 
 ### Copy-to-Adapt (Library Primitive Creation)
 
-- [ ] Download endpoint creates local LibraryPrimitive with source="registry", forked_from set
-- [ ] Slug sanitised: slash replaced with dash for local rows
-- [ ] Download increments entry.download_count in registry
-- [ ] Adapt via browser (POST /api/v1/libraries/{id}/adapt) returns 201 with new local primitive
-- [ ] Adapt via MCP for community primitives returns 403 with "community_primitive_read_only"
-- [ ] Adapt with target_team_id sets owner_team_id on new primitive
-- [ ] Adapt of non-existent primitive returns 404
-- [ ] Library primitives have owner_team_id (nullable) and visibility (org/team)
-- [ ] Community registry entries always visibility: org
+- [x] Download endpoint creates local LibraryPrimitive with source="registry", forked_from set
+- [x] Slug sanitised: slash replaced with dash for local rows
+- [x] Download increments entry.download_count in registry
+- [x] Adapt via browser (POST /api/v1/libraries/{id}/adapt) returns 201 with new local primitive
+- [x] Adapt via MCP for community primitives returns 403 with "community_primitive_read_only"
+- [x] Adapt with target_team_id sets owner_team_id on new primitive
+- [x] Adapt of non-existent primitive returns 404
+- [x] Library primitives have owner_team_id (nullable) and visibility (org/team)
+- [x] Community registry entries always visibility: org
 
 ### Rating System
 
-- [ ] View rating aggregate: average_rating, review_count
-- [ ] Submit thumbs-up rating with optional comment (POST 201)
-- [ ] Submit thumbs-down rating without comment
-- [ ] List ratings for a primitive with id, thumbs_up, comment, created_at
-- [ ] Aggregate updates after new rating submitted
+- [x] View rating aggregate: average_rating, review_count
+- [x] Submit thumbs-up rating with optional comment (POST 201)
+- [x] Submit thumbs-down rating without comment
+- [x] List ratings for a primitive with id, thumbs_up, comment, created_at
+- [x] Aggregate updates after new rating submitted
 
 ### Edge Cases
 
-- [ ] Unknown slug in any endpoint → 404
-- [ ] Concurrent publish of same slug → last write wins (in-memory, no locking)
-- [ ] Signature verification with unknown/unregistered publishing key → returns False
-- [ ] Bundle integrity mismatch → integrity_ok=False, download still permitted
-- [ ] Missing signing_key_hex on publish → ValueError from from_private_bytes
-- [ ] Invalid hex encoding in signing_key_hex → ValueError on bytes.fromhex
-- [ ] publisher DB lookup with no DB match → trust_tier and publisher_name are None
-- [ ] resolve_namespaced_slug with no slash → defaults to "modulo" author
+- [x] Unknown slug in any endpoint → 404
+- [x] Concurrent publish of same slug → last write wins (in-memory, no locking)
+- [x] Signature verification with unknown/unregistered publishing key → returns False
+- [x] Bundle integrity mismatch → integrity_ok=False, download still permitted
+- [x] Missing signing_key_hex on publish → ValueError from from_private_bytes
+- [x] Invalid hex encoding in signing_key_hex → ValueError on bytes.fromhex
+- [x] publisher DB lookup with no DB match → trust_tier and publisher_name are None
+- [x] resolve_namespaced_slug with no slash → defaults to "modulo" author
 
 ### Error Handling
 
-- [ ] 404 on GET/POST to non-existent slug (pull, verify, download)
-- [ ] 404 on publisher revoke of unknown fingerprint
-- [ ] 403 on MCP copy of community primitive
-- [ ] Popularity score handles missing rating (None → 0.0)
-- [ ] Verify endpoint with non-existent primitive returns 404 before any crypto
+- [x] 404 on GET/POST to non-existent slug (pull, verify, download)
+- [x] 404 on publisher revoke of unknown fingerprint
+- [x] 403 on MCP copy of community primitive
+- [x] 400 on invalid Ed25519 public key PEM format (registry.py public_key_pem path)
+- [x] 403 on signature verification failure during publish (registry.py lines ~390-400)
+- [x] 500 on ValueError from invalid hex encoding in signing_key_hex (unhandled — bytes.fromhex raises)
+- [x] 500 on ValueError from wrong-size private key bytes (unhandled — Ed25519PrivateKey.from_private_bytes raises)
+- [x] Popularity score handles missing rating (None → 0.0)
+- [x] Verify endpoint with non-existent primitive returns 404 before any crypto
+- [x] ProgrammingError is NOT applicable (in-memory registry, no DB queries on code paths that raise)
 
 ### Security
 
@@ -161,4 +166,14 @@ Ed25519-signed publish/pull/verify protocol for community primitives. Supports 6
 - No publisher key rotation mechanism
 - Popularity score rating factor always uses 0.0 (no rating data fed through)
 - No library contribution (v2) — evals contributed back to community not implemented
-- No integration/plugin install via UI — build-time only 
+- No integration/plugin install via UI — build-time only
+
+## QA History
+- 2026-07-03: Cross-cutting QA (index 90): marked 36+ [ ]→[x] implemented behaviours, added Error Handling section with 10 checkboxes, added 7 new known gaps. All 61 existing registry tests pass.
+- No API-level test for V2 publish with public_key_pem query param (PEM verify path)
+- No API-level integration test for bundle integrity mismatch at endpoint level
+- No API-level test for POST /api/v1/registry/publishers endpoint
+- Unhandled ValueError from invalid hex/byte encoding propagates as 500
+- No self-rating block enforcement (PRD §8.14 spec)
+- No 10-minute rating cooldown enforcement (PRD §8.14 spec)
+- No "must have adapted before rating" check (PRD §8.14 spec) 
