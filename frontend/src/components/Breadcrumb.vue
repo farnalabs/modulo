@@ -24,6 +24,8 @@
 import { computed } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { defineOptions } from 'vue'
+import manifest from '@/manifest.yaml'
+
 defineOptions({ name: 'AppBreadcrumb' })
 
 interface BreadcrumbSegment {
@@ -31,35 +33,60 @@ interface BreadcrumbSegment {
   label: string
 }
 
+interface ManifestEntry {
+  name: string
+  breadcrumb: string
+  parent: string | null
+  path: string
+}
+
 const route = useRoute()
 const router = useRouter()
+
+const rawRoutes = (manifest as { routes?: Record<string, Omit<ManifestEntry, 'path'>> })?.routes ?? {}
+const manifestByName = new Map<string, ManifestEntry>()
+for (const [path, entry] of Object.entries(rawRoutes)) {
+  if (entry.name) {
+    manifestByName.set(entry.name, { ...entry, path })
+  }
+}
 
 const segments = computed<BreadcrumbSegment[]>(() => {
   const meta = route.meta as Record<string, unknown> | undefined
   if (!meta?.breadcrumb) return []
 
-  const chain: { name: string; label: string }[] = []
-  chain.unshift({ name: route.name as string, label: meta.breadcrumb as string })
+  const chain: BreadcrumbSegment[] = []
+  let currentName = route.name as string | undefined
+  const visited = new Set<string>()
 
-  let parentName = meta.parent as string | undefined
-  while (parentName) {
-    try {
-      const parentRoute = router.resolve({ name: parentName })
-      const parentMeta = parentRoute.meta as Record<string, unknown> | undefined
+  while (currentName && !visited.has(currentName)) {
+    visited.add(currentName)
+    const isCurrent = currentName === route.name
+    const manifestEntry = manifestByName.get(currentName)
+    const resolved = router.resolve({ name: currentName })
+
+    if (manifestEntry) {
       chain.unshift({
-        name: parentName,
-        label: (parentMeta?.breadcrumb as string) || parentName,
+        path: isCurrent ? route.path : manifestEntry.path,
+        label: manifestEntry.breadcrumb || currentName,
       })
-      parentName = parentMeta?.parent as string | undefined
-    } catch {
-      break
+      if (manifestEntry.parent) {
+        const parentEntry = rawRoutes[manifestEntry.parent]
+        currentName = parentEntry?.name ?? undefined
+      } else {
+        currentName = undefined
+      }
+    } else {
+      const resolvedMeta = resolved.meta as Record<string, unknown> | undefined
+      chain.unshift({
+        path: isCurrent ? route.path : resolved.path,
+        label: (resolvedMeta?.breadcrumb as string) || currentName,
+      })
+      currentName = resolvedMeta?.parent as string | undefined
     }
   }
 
-  return chain.map((item, index) => ({
-    path: router.resolve({ name: item.name }).path,
-    label: item.label,
-  }))
+  return chain
 })
 </script>
 

@@ -1,11 +1,36 @@
-import { createRouter, createWebHistory, type RouteMeta } from 'vue-router'
+import { createRouter, createWebHistory } from 'vue-router'
 import { getAccessToken } from '../lib/api/client'
+import manifest from '@/manifest.yaml'
 
 declare module 'vue-router' {
   interface RouteMeta {
     requiresSystemAdmin?: boolean
     breadcrumb?: string
     parent?: string
+    testid?: string
+    requiredRoles?: string[]
+    requiredTier?: string
+    requiredPermissions?: string[]
+    featureFlag?: string
+  }
+}
+
+interface ManifestEntry {
+  name: string
+  breadcrumb: string
+  parent: string | null
+  testid: string
+  required_roles: string[] | null
+  required_tier: string
+  required_permissions: string[] | null
+  feature_flag: string | null
+}
+
+const manifestRoutes = (manifest as { routes?: Record<string, ManifestEntry> })?.routes ?? {}
+const manifestByName = new Map<string, ManifestEntry & { path: string }>()
+for (const [path, entry] of Object.entries(manifestRoutes)) {
+  if (entry.name) {
+    manifestByName.set(entry.name, { ...entry, path })
   }
 }
 
@@ -78,7 +103,6 @@ const router = createRouter({
       path: '/',
       name: 'dashboard',
       component: DashboardView,
-      meta: { breadcrumb: 'Dashboard' },
     },
     {
       path: '/dashboard',
@@ -88,7 +112,6 @@ const router = createRouter({
       path: '/library',
       name: 'library',
       component: LibraryView,
-      meta: { breadcrumb: 'Library', parent: 'dashboard' },
     },
     {
       path: '/library/:id/create-pipeline',
@@ -101,91 +124,76 @@ const router = createRouter({
       path: '/settings/error-forwarders',
       name: 'settings-error-forwarders',
       component: SettingsErrorForwardersView,
-      meta: { breadcrumb: 'Error Forwarders', parent: 'dashboard' },
     },
     {
       path: '/settings/observability',
       name: 'settings-observability',
       component: SettingsObservabilityView,
-      meta: { breadcrumb: 'Observability', parent: 'dashboard' },
     },
     {
       path: '/notifications',
       name: 'notifications',
       component: NotificationsPage,
-      meta: { breadcrumb: 'Notifications', parent: 'dashboard' },
     },
     {
       path: '/settings/teams',
       name: 'settings-teams',
       component: SettingsTeamsView,
-      meta: { breadcrumb: 'Teams', parent: 'dashboard' },
     },
     {
       path: '/settings/sso',
       name: 'settings-sso',
       component: SettingsSsoView,
-      meta: { breadcrumb: 'SSO', parent: 'dashboard' },
     },
     {
       path: '/settings/rate-limits',
       name: 'settings-rate-limits',
       component: SettingsRateLimitsView,
-      meta: { breadcrumb: 'Rate Limits', parent: 'dashboard' },
     },
     {
       path: '/settings/runtime-config',
       name: 'settings-runtime-config',
       component: SettingsRuntimeConfigView,
-      meta: { breadcrumb: 'Runtime Config', parent: 'dashboard' },
     },
     {
       path: '/settings/license',
       name: 'settings-license',
       component: SettingsLicenseView,
-      meta: { breadcrumb: 'License', parent: 'dashboard' },
     },
     {
       path: '/settings/mcp',
       name: 'settings-mcp',
       component: SettingsMcpView,
-      meta: { breadcrumb: 'MCP', parent: 'dashboard' },
     },
     {
       path: '/settings/triggers',
       name: 'settings-triggers',
       component: SettingsTriggersView,
-      meta: { breadcrumb: 'Triggers', parent: 'dashboard' },
     },
     {
       path: '/settings/hitl-review',
       name: 'settings-hitl-review',
       component: SettingsHitlReviewView,
-      meta: { breadcrumb: 'HITL Review', parent: 'dashboard' },
     },
     {
       path: '/settings/remy',
       name: 'settings-remy',
       component: UserRemySkillsView,
-      meta: { breadcrumb: 'Remy Skills', parent: 'dashboard' },
     },
     {
       path: '/schemas',
       name: 'schemas',
       component: SchemaListView,
-      meta: { breadcrumb: 'Schemas', parent: 'dashboard' },
     },
     {
       path: '/schemas/editor/:id?',
       name: 'schema-editor',
       component: SchemaEditorView,
-      meta: { breadcrumb: 'Schema Editor', parent: 'schemas' },
     },
     {
       path: '/schemas/infer',
       name: 'schema-infer',
       component: SchemaInferenceView,
-      meta: { breadcrumb: 'Schema Inference', parent: 'schemas' },
     },
     {
       path: '/onboarding',
@@ -197,151 +205,126 @@ const router = createRouter({
       path: '/feedback/inbox',
       name: 'feedback-inbox',
       component: FeedbackInboxView,
-      meta: { breadcrumb: 'Feedback Inbox', parent: 'dashboard' },
     },
     {
       path: '/evals/editor',
       name: 'eval-editor',
       component: EvalEditorView,
-      meta: { breadcrumb: 'Evals', parent: 'dashboard' },
     },
     {
       path: '/evals/proposals',
       name: 'eval-proposals-queue',
       component: EvalProposalsQueueView,
-      meta: { breadcrumb: 'Eval Proposals', parent: 'dashboard' },
     },
     {
       path: '/variants/compare',
       name: 'variant-compare',
       component: VariantCompareView,
-      meta: { breadcrumb: 'Variants', parent: 'dashboard' },
     },
     {
       path: '/variants/ab-test',
       name: 'ab-test-models',
       component: ABTestModelsView,
-      meta: { breadcrumb: 'AB Test Models', parent: 'dashboard' },
     },
     {
       path: '/runs/:id',
       name: 'run-detail',
       component: RunDetailView,
-      meta: { breadcrumb: 'Run Detail', parent: 'dashboard' },
     },
     {
       path: '/runs/diff',
       name: 'runs-diff',
       component: AgentOutputDiffView,
-      meta: { breadcrumb: 'Output Diff', parent: 'dashboard' },
     },
     {
       path: '/admin/my-profile',
       name: 'my-profile',
       component: MyProfileView,
-      meta: { breadcrumb: 'My Profile', parent: 'dashboard' },
     },
     {
       path: '/admin/users',
       name: 'admin-users',
       component: AdminUsersView,
-      meta: { breadcrumb: 'Users', parent: 'dashboard' },
     },
     {
       path: '/admin/costs/limits',
       name: 'admin-costs-limits',
       component: AdminSpendLimitsView,
-      meta: { breadcrumb: 'Spend Limits', parent: 'admin-costs' },
     },
     {
       path: '/admin/costs',
       name: 'admin-costs',
       component: AdminCostBreakdownView,
-      meta: { breadcrumb: 'Cost Overview', parent: 'dashboard' },
     },
     {
       path: '/admin/costs/controls',
       name: 'admin-costs-controls',
       component: AdminCostControlsView,
-      meta: { breadcrumb: 'Cost Controls', parent: 'admin-costs' },
     },
     {
       path: '/admin/audit',
       name: 'admin-audit',
       component: AdminAuditView,
-      meta: { breadcrumb: 'Audit Log', parent: 'dashboard' },
     },
     {
       path: '/admin/connectors',
       name: 'admin-connectors',
       component: AdminConnectorsView,
-      meta: { breadcrumb: 'Connectors', parent: 'dashboard' },
     },
     {
       path: '/admin/node-categories',
       name: 'admin-node-categories',
       component: AdminNodeCategoriesView,
-      meta: { breadcrumb: 'Node Categories', parent: 'dashboard' },
     },
     {
       path: '/admin/views',
       name: 'admin-views',
       component: AdminViewsView,
-      meta: { breadcrumb: 'Saved Views', parent: 'dashboard' },
     },
     {
       path: '/admin/model-backends',
       name: 'admin-model-backends',
       component: AdminModelBackendsView,
-      meta: { breadcrumb: 'Model Backends', parent: 'dashboard' },
     },
     {
       path: '/admin/feature-flags',
       name: 'admin-feature-flags',
       component: AdminFeatureFlagsView,
-      meta: { breadcrumb: 'Feature Flags', parent: 'dashboard' },
     },
     {
       path: '/admin/org',
       name: 'admin-org',
       component: AdminOrgSettingsView,
-      meta: { breadcrumb: 'Org Settings', parent: 'dashboard' },
     },
     {
       path: '/admin/run-retention',
       name: 'admin-run-retention',
       component: AdminRunRetentionView,
-      meta: { breadcrumb: 'Run Retention', parent: 'dashboard' },
     },
     {
       path: '/admin/plugins',
       name: 'admin-plugins',
       component: AdminPluginsView,
-      meta: { breadcrumb: 'Plugins', parent: 'dashboard' },
     },
     {
       path: '/admin/api-changelog',
       name: 'api-changelog',
       component: ApiChangelogView,
-      meta: { breadcrumb: 'API Changelog', parent: 'dashboard' },
     },
     {
       path: '/admin/teams/comparison',
       name: 'team-comparison',
       component: TeamComparisonView,
-      meta: { breadcrumb: 'Team Comparison', parent: 'dashboard' },
     },
     {
       path: '/admin/notification-delivery',
       name: 'admin-notification-delivery',
       component: AdminNotificationDeliveryLogView,
-      meta: { breadcrumb: 'Notification Log', parent: 'dashboard' },
     },
     {
       path: '/admin/environments',
       name: 'admin-environments',
       component: AdminEnvironmentProfilesView,
-      meta: { breadcrumb: 'Environments', parent: 'dashboard' },
     },
     {
       path: '/admin/system/orgs',
@@ -359,43 +342,36 @@ const router = createRouter({
       path: '/admin/errors',
       name: 'admin-errors',
       component: AdminErrorsView,
-      meta: { breadcrumb: 'Error Dashboard', parent: 'dashboard' },
     },
     {
       path: '/admin/errors/:id',
       name: 'admin-error-detail',
       component: AdminErrorDetailView,
-      meta: { breadcrumb: 'Error Detail', parent: 'admin-errors' },
     },
     {
       path: '/admin/remy',
       name: 'admin-remy',
       component: AdminRemyView,
-      meta: { breadcrumb: 'Remy Config', parent: 'dashboard' },
     },
     {
       path: '/stages',
       name: 'stages',
       component: StageBoardView,
-      meta: { breadcrumb: 'Stages Board', parent: 'dashboard' },
     },
     {
       path: '/pipelines/copy',
       name: 'pipeline-copy',
       component: CopyPipelineWizard,
-      meta: { breadcrumb: 'Copy Pipeline', parent: 'library' },
     },
     {
       path: '/pipelines',
       name: 'pipeline-list',
       component: PipelineListView,
-      meta: { breadcrumb: 'Pipelines', parent: 'library' },
     },
     {
       path: '/templates',
       name: 'pipeline-templates',
       component: PipelineTemplateGallery,
-      meta: { breadcrumb: 'Templates', parent: 'library' },
     },
     {
       path: '/pipelines/:id/editor',
@@ -418,6 +394,24 @@ const router = createRouter({
   scrollBehavior() {
     return { top: 0 }
   },
+})
+
+router.beforeEach((to) => {
+  const entry = manifestByName.get(to.name as string)
+  if (entry) {
+    to.meta.breadcrumb = entry.breadcrumb
+    to.meta.testid = entry.testid
+    to.meta.requiredRoles = entry.required_roles ?? undefined
+    to.meta.requiredTier = entry.required_tier
+    to.meta.requiredPermissions = entry.required_permissions ?? undefined
+    to.meta.featureFlag = entry.feature_flag ?? undefined
+    if (entry.parent) {
+      const parentEntry = manifestRoutes[entry.parent]
+      to.meta.parent = parentEntry?.name ?? entry.parent
+    } else {
+      to.meta.parent = undefined
+    }
+  }
 })
 
 router.onError((err) => {
