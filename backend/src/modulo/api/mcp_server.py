@@ -191,6 +191,8 @@ class McpAuthMiddleware(BaseHTTPMiddleware):
                 factory = _get_session_factory()
                 async with factory() as s:
                     async with s.begin():
+                        from sqlalchemy import text
+                        await s.execute(text("SET LOCAL row_security TO OFF"))
                         result = await s.execute(
                             select(OrgApiKey).where(
                                 OrgApiKey.lookup_prefix == prefix,
