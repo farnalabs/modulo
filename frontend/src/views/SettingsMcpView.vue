@@ -81,7 +81,7 @@
             <tbody class="divide-y divide-border">
               <tr v-for="key in apiKeys" :key="key.id" class="transition-colors hover:bg-muted/20">
                 <td class="py-2.5 font-medium">{{ key.name }}</td>
-                <td class="py-2.5 font-mono text-muted-foreground">{{ key.prefix }}...</td>
+                <td class="py-2.5 font-mono text-muted-foreground">{{ key.lookup_prefix }}</td>
                 <td class="py-2.5 capitalize">{{ key.role }}</td>
                 <td class="py-2.5">
                   <Badge :variant="key.is_active ? 'default' : 'secondary'">
@@ -275,8 +275,17 @@ import FeatureGate from '../components/FeatureGate.vue'
 
 const planStore = usePlanStore()
 
+interface ApiKeyItem {
+  id: string
+  name: string
+  role: string
+  lookup_prefix: string
+  is_active: boolean
+  last_used_at: string | null
+  created_at: string
+}
+
 type McpConfigResponse = components['schemas']['McpConfigResponse']
-type ApiKeyItem = components['schemas']['ApiKeyItem']
 type ApiKeyCreatedResponse = components['schemas']['ApiKeyCreatedResponse']
 
 const loading = ref(true)
@@ -366,7 +375,7 @@ async function loadAll() {
       loadError.value = `Failed to load API keys: ${formatApiError(keysResp.error)}`
       return
     }
-    apiKeys.value = (keysResp.data as { items: ApiKeyItem[] }).items
+    apiKeys.value = keysResp.data as ApiKeyItem[]
   } catch (e: unknown) {
       loadError.value = e && typeof e === 'object' && 'detail' in e
         ? `Failed to load data: ${(e as ProblemDetail).detail}`
