@@ -385,7 +385,7 @@ def test_discover_plugins_both_groups():
 
 
 def test_discover_plugins_duplicate_plugin_id():
-    """When two entry points share the same dist name, the second overwrites the first."""
+    """When two entry points share the same dist name, capabilities are merged."""
     registry = PluginRegistry()
     ep1 = _make_mock_entry_point("modulo.connectors", "c1", dist_name="pkg-x", load_result=_discovery_stub_builder)
     ep2 = _make_mock_entry_point("modulo.model_backends", "b1", dist_name="pkg-x", load_result=_build_stub_backend)
@@ -395,11 +395,10 @@ def test_discover_plugins_duplicate_plugin_id():
     ):
         registry.discover_plugins()
 
-    # Both capabilities merged on the same PLUGIN_ID
+    # Capabilities from both entry points are merged on the same PLUGIN_ID
     plugins = registry.list_plugins()
     assert "pkg-x" in plugins
-    # The plugin_id is the dist name, so ep2 overwrites ep1's manifest
-    assert plugins["pkg-x"].capabilities == {"model_backend"}
+    assert plugins["pkg-x"].capabilities == {"connector_type", "model_backend"}
 
 
 def test_discover_plugins_entry_point_no_dist():
