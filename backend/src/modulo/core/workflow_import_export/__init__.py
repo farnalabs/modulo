@@ -9,11 +9,14 @@ from __future__ import annotations
 
 import io
 import json
+import logging
+import re
 import uuid
 import zipfile
 from typing import Any
 
 from sqlalchemy import select
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.db.crud.agent import create_agent
@@ -27,8 +30,64 @@ from modulo.db.models.pipeline import Pipeline
 from modulo.db.models.pipeline_edge import PipelineEdge
 from modulo.db.models.schema import Schema, SchemaVersion
 
+logger = logging.getLogger(__name__)
+
 BUNDLE_FORMAT_VERSION = "1"
 MANIFEST_FILENAME = "bundle.json"
+DEFAULT_SCHEMA_VERSION = "1.0"
+DEFAULT_NODE_TIMEOUT = 300
+VALID_EDGE_TYPES: frozenset[str] = frozenset({"normal", "conditional", "error", "always", "success"})
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+
+async def _get_latest_published_version(
+    session: AsyncSession,
+    schema_id: uuid.UUID,
+) -> SchemaVersion | None:
+    sv_result = await session.execute(
+        select(SchemaVersion)
+        .where(
+            SchemaVersion.schema_id == schema_id,
+            SchemaVersion.published.is_(True),
+        )
+        .order_by(SchemaVersion.version_number.desc())
+        .limit(1)
+    )
+    return sv_result.scalar_one_or_none()
+
+
+async def _get_existing_names(
+    session: AsyncSession,
+    org_id: uuid.UUID,
+    model_cls: type,
+    *,
+    for_update: bool = False,
+) -> set[str]:
+    stmt = select(model_cls.name).where(model_cls.organisation_id == org_id)
+    if for_update:
+        stmt = stmt.with_for_update()
+    result = await session.execute(stmt)
+    return {row[0] for row in result}
+
+
+def _safe_uuid(value: Any, label: str = "field") -> uuid.UUID:
+    """Convert a value to UUID, raising ValueError with a descriptive message."""
+    try:
+        return uuid.UUID(value) if not isinstance(value, uuid.UUID) else value
+    except (ValueError, AttributeError) as exc:
+        raise ValueError(f"Invalid UUID for {label}: {value!r}") from exc
+
+
+def _sanitize_slug(name: str) -> str:
+    """Produce a URL-safe slug from a pipeline name."""
+    slug = name.lower().replace(" ", "-").replace("_", "-")
+    slug = re.sub(r"[^a-z0-9-]", "", slug)
+    slug = re.sub(r"-+", "-", slug)
+    return slug.strip("-") or "imported-pipeline"
+
 
 # ---------------------------------------------------------------------------
 # Export — pipeline_id → ZIP bytes
@@ -54,60 +113,55 @@ async def export_pipeline_bundle(
 
     if pipeline.graph_nodes_json:
         for node in pipeline.graph_nodes_json:
-            agent_id = node.get("agent_id")
-            if agent_id:
-                agent_ids.add(uuid.UUID(agent_id) if isinstance(agent_id, str) else agent_id)
+            agent_id_str = node.get("agent_id")
+            if agent_id_str:
+                try:
+                    agent_id = uuid.UUID(agent_id_str)
+                except (ValueError, AttributeError):
+                    logger.warning("Skipping node with invalid agent_id: %s", agent_id_str)
+                    continue
+                agent_ids.add(agent_id)
+
+            schema_id_str = node.get("output_schema_id")
+            if schema_id_str:
+                try:
+                    schema_ids.add(uuid.UUID(schema_id_str))
+                except (ValueError, AttributeError):
+                    logger.warning("Skipping node with invalid output_schema_id: %s", schema_id_str)
 
     agents_list: list[dict[str, Any]] = []
     if agent_ids:
         agent_result = await session.execute(select(Agent).where(Agent.id.in_(agent_ids)))
         agents = list(agent_result.scalars())
-        agents_list = [
-            {
-                "id": str(a.id),
-                "name": a.name,
-                "description": a.description,
-                "input_schema_id": str(a.input_schema_id),
-                "input_schema_version": a.input_schema_version,
-                "output_schema_id": str(a.output_schema_id),
-                "output_schema_version": a.output_schema_version,
-                "prompt_template": a.prompt_template,
-                "model_backend_id": str(a.model_backend_id),
-                "connector_type_refs": list(a.connector_type_refs or []),
-                "evals": list(a.evals or []) if a.evals else None,
-                "retry_policy": dict(a.retry_policy or {}),
-                "token_budget": a.token_budget,
-            }
-            for a in agents
-        ]
         for a in agents:
+            agents_list.append(
+                {
+                    "id": str(a.id),
+                    "name": a.name,
+                    "description": a.description,
+                    "input_schema_id": str(a.input_schema_id) if a.input_schema_id else None,
+                    "input_schema_version": a.input_schema_version or DEFAULT_SCHEMA_VERSION,
+                    "output_schema_id": str(a.output_schema_id) if a.output_schema_id else None,
+                    "output_schema_version": a.output_schema_version or DEFAULT_SCHEMA_VERSION,
+                    "prompt_template": a.prompt_template,
+                    "model_backend_id": str(a.model_backend_id) if a.model_backend_id else None,
+                    "connector_type_refs": list(a.connector_type_refs or []),
+                    "evals": list(a.evals or []),
+                    "retry_policy": dict(a.retry_policy or {}),
+                    "token_budget": a.token_budget,
+                }
+            )
             schema_ids.add(a.input_schema_id)
             schema_ids.add(a.output_schema_id)
-            model_backend_ids.add(a.model_backend_id)
-
-    # Collect manual node output schemas
-    if pipeline.graph_nodes_json:
-        for node in pipeline.graph_nodes_json:
-            schema_id = node.get("output_schema_id")
-            if schema_id:
-                schema_ids.add(uuid.UUID(schema_id) if isinstance(schema_id, str) else schema_id)
+            if a.model_backend_id:
+                model_backend_ids.add(a.model_backend_id)
 
     schemas_list: list[dict[str, Any]] = []
     if schema_ids:
         schema_result = await session.execute(select(Schema).where(Schema.id.in_(schema_ids)))
         schemas = list(schema_result.scalars())
         for s in schemas:
-            # Get latest published version
-            sv_result = await session.execute(
-                select(SchemaVersion)
-                .where(
-                    SchemaVersion.schema_id == s.id,
-                    SchemaVersion.published.is_(True),
-                )
-                .order_by(SchemaVersion.version_number.desc())
-                .limit(1)
-            )
-            latest_version = sv_result.scalar_one_or_none()
+            latest_version = await _get_latest_published_version(session, s.id)
             schemas_list.append(
                 {
                     "id": str(s.id),
@@ -151,7 +205,7 @@ async def export_pipeline_bundle(
         "pipeline": {
             "name": pipeline.name,
             "description": pipeline.description,
-            "graph_nodes_json": pipeline.graph_nodes_json if pipeline.graph_nodes_json else [],
+            "graph_nodes_json": pipeline.graph_nodes_json or [],
             "run_context_defaults": dict(pipeline.run_context_defaults or {}),
             "node_timeout_seconds": pipeline.node_timeout_seconds,
         },
@@ -164,6 +218,8 @@ async def export_pipeline_bundle(
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
         zf.writestr(MANIFEST_FILENAME, json.dumps(bundle, indent=2, default=str))
+
+    logger.info("Exported pipeline %s with %d agents, %d edges", pipeline_id, len(agents_list), len(edges_list))
     return buf.getvalue()
 
 
@@ -183,7 +239,13 @@ async def resolve_schema(
     """
     definition = export_schema.get("definition_json")
     abstract_name = export_schema.get("abstract_name")
-    name = export_schema["name"]
+    name = export_schema.get("name")
+    if not name:
+        return {
+            "schema_id": None,
+            "version": None,
+            "warning": "Schema entry missing 'name' field.",
+        }
 
     # First try abstract_name match
     if abstract_name:
@@ -194,42 +256,42 @@ async def resolve_schema(
         result = await session.execute(stmt)
         schema = result.scalar_one_or_none()
         if schema is not None:
-            sv_result = await session.execute(
-                select(SchemaVersion)
-                .where(
-                    SchemaVersion.schema_id == schema.id,
-                    SchemaVersion.published.is_(True),
-                )
-                .order_by(SchemaVersion.version_number.desc())
-                .limit(1)
-            )
-            sv = sv_result.scalar_one_or_none()
+            sv = await _get_latest_published_version(session, schema.id)
             return {
                 "schema_id": str(schema.id),
-                "version": sv.version if sv else "1.0",
+                "version": sv.version if sv else DEFAULT_SCHEMA_VERSION,
                 "warning": None,
             }
 
-    # Try matching by same definition structure
+    # Try matching by same definition structure — batch load all schema versions
     if definition:
-        all_schemas = (await session.execute(select(Schema).where(Schema.organisation_id == org_id))).scalars()
-        for s in all_schemas:
-            sv_result = await session.execute(
-                select(SchemaVersion)
-                .where(
-                    SchemaVersion.schema_id == s.id,
-                    SchemaVersion.published.is_(True),
+        all_schemas = (await session.execute(select(Schema).where(Schema.organisation_id == org_id))).scalars().all()
+        schema_ids = [s.id for s in all_schemas]
+        if schema_ids:
+            all_svs = (
+                await session.execute(
+                    select(SchemaVersion)
+                    .where(
+                        SchemaVersion.schema_id.in_(schema_ids),
+                        SchemaVersion.published.is_(True),
+                    )
+                    .order_by(SchemaVersion.schema_id, SchemaVersion.version_number.desc())
                 )
-                .order_by(SchemaVersion.version_number.desc())
-                .limit(1)
-            )
-            sv = sv_result.scalar_one_or_none()
-            if sv and sv.definition_json == definition:
-                return {
-                    "schema_id": str(s.id),
-                    "version": sv.version,
-                    "warning": None,
-                }
+            ).scalars().all()
+
+            published: dict[uuid.UUID, SchemaVersion] = {}
+            for sv in all_svs:
+                if sv.schema_id not in published:
+                    published[sv.schema_id] = sv
+
+            for s in all_schemas:
+                sv = published.get(s.id)
+                if sv and sv.definition_json == definition:
+                    return {
+                        "schema_id": str(s.id),
+                        "version": sv.version,
+                        "warning": None,
+                    }
 
     return {
         "schema_id": None,
@@ -270,9 +332,14 @@ async def resolve_model_backend(
     export_backend: dict[str, Any],
 ) -> dict[str, Any]:
     """Find a local model backend matching the exported one by name or provider+model_id."""
-    name = export_backend["name"]
-    provider = export_backend["provider"]
-    model_id = export_backend["model_id"]
+    name = export_backend.get("name")
+    provider = export_backend.get("provider")
+    model_id = export_backend.get("model_id")
+    if not name or not provider or not model_id:
+        return {
+            "model_backend_id": None,
+            "warning": "Model backend entry is missing required fields (name, provider, model_id).",
+        }
 
     # Try by name first
     stmt = select(ModelBackend).where(
@@ -331,16 +398,14 @@ async def get_existing_pipeline_names(
     session: AsyncSession,
     org_id: uuid.UUID,
 ) -> set[str]:
-    result = await session.execute(select(Pipeline.name).where(Pipeline.organisation_id == org_id))
-    return {row[0] for row in result}
+    return await _get_existing_names(session, org_id, Pipeline)
 
 
 async def get_existing_agent_names(
     session: AsyncSession,
     org_id: uuid.UUID,
 ) -> set[str]:
-    result = await session.execute(select(Agent.name).where(Agent.organisation_id == org_id))
-    return {row[0] for row in result}
+    return await _get_existing_names(session, org_id, Agent)
 
 
 # ---------------------------------------------------------------------------
@@ -350,12 +415,20 @@ async def get_existing_agent_names(
 
 def extract_bundle_json_from_zip(zip_bytes: bytes) -> dict[str, Any]:
     """Extract bundle.json from a .modulo.zip archive."""
-    with zipfile.ZipFile(io.BytesIO(zip_bytes)) as zf:
-        names = zf.namelist()
-        if MANIFEST_FILENAME not in names:
-            raise LookupError(f"{MANIFEST_FILENAME} not found in archive (found: {names})")
-        result: dict[str, Any] = json.loads(zf.read(MANIFEST_FILENAME))
-        return result
+    if len(zip_bytes) > 100 * 1024 * 1024:
+        raise ValueError(f"Bundle too large: {len(zip_bytes)} bytes (max 100 MB)")
+
+    try:
+        with zipfile.ZipFile(io.BytesIO(zip_bytes)) as zf:
+            names = zf.namelist()
+            if MANIFEST_FILENAME not in names:
+                raise LookupError(f"{MANIFEST_FILENAME} not found in archive (found: {names})")
+            result: dict[str, Any] = json.loads(zf.read(MANIFEST_FILENAME))
+            return result
+    except zipfile.BadZipFile as exc:
+        raise ValueError("Invalid bundle: not a valid ZIP archive") from exc
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"Invalid bundle: {MANIFEST_FILENAME} contains malformed JSON") from exc
 
 
 # ---------------------------------------------------------------------------
@@ -381,6 +454,16 @@ async def materialize_import(
 
     Returns a dict with created entity IDs and any warnings.
     """
+    # Validate bundle format version
+    fmt_version = bundle.get("format_version")
+    if fmt_version != BUNDLE_FORMAT_VERSION:
+        msg = (
+            f"Unsupported bundle format version '{fmt_version}'. "
+            f"Expected '{BUNDLE_FORMAT_VERSION}'. "
+            "This bundle may have been created by a different version of Modulo."
+        )
+        raise ValueError(msg)
+
     mb_overrides: dict[str, str] = model_backend_overrides or {}
     warnings = warnings or []
     schema_overrides: dict[str, str] = schema_id_overrides or {}
@@ -395,13 +478,24 @@ async def materialize_import(
     existing_agent_names = await get_existing_agent_names(session, org_id)
     existing_pipeline_names = await get_existing_pipeline_names(session, org_id)
 
-    pname = suggest_import_name(existing_pipeline_names, name) if name in existing_pipeline_names else name
+    pname = suggest_import_name(existing_pipeline_names, name)
+
+    logger.info(
+        "Materializing import: pipeline='%s' (%d agents, %d schemas, %d edges)",
+        pname, len(agents_data), len(schemas_data), len(edges_data),
+    )
 
     # --- Step 1: Create any schemas that don't exist locally ---
     schema_id_map: dict[str, str] = {}
     schema_version_map: dict[str, str] = {}
+    existing_schema_names: set[str] | None = None
+
     for sd in schemas_data:
         export_schema_id = sd.get("id", "")
+        if not export_schema_id:
+            warnings.append("Skipping schema with no 'id' field in bundle.")
+            continue
+
         if export_schema_id in schema_overrides:
             schema_id_map[export_schema_id] = schema_overrides[export_schema_id]
             if export_schema_id in sv_overrides:
@@ -418,6 +512,10 @@ async def materialize_import(
 
         definition = sd.get("definition_json")
         if not definition:
+            warnings.append(
+                f"Schema '{sd.get('name', 'unknown')}' has no definition JSON and will be skipped. "
+                "Agents referencing this schema may fail."
+            )
             continue
 
         sname: str = sd.get("name", "Imported Schema")
@@ -430,50 +528,49 @@ async def materialize_import(
         existing_result = await session.execute(existing_stmt)
         existing_schema = existing_result.scalar_one_or_none()
         if existing_schema is not None:
-            sv_result = await session.execute(
-                select(SchemaVersion)
-                .where(
-                    SchemaVersion.schema_id == existing_schema.id,
-                    SchemaVersion.published.is_(True),
-                )
-                .order_by(SchemaVersion.version_number.desc())
-                .limit(1)
-            )
-            existing_sv = sv_result.scalar_one_or_none()
+            existing_sv = await _get_latest_published_version(session, existing_schema.id)
             if existing_sv and existing_sv.definition_json != definition:
-                existing_schemas = list(
-                    (await session.execute(select(Schema).where(Schema.organisation_id == org_id))).scalars()
-                )
-                existing_names = {s.name for s in existing_schemas}
-                sname = suggest_import_name(
-                    existing_names,
-                    sname,
-                    suffix="(imported)",
-                )
+                if existing_schema_names is None:
+                    all_existing = (
+                        await session.execute(select(Schema).where(Schema.organisation_id == org_id))
+                    ).scalars().all()
+                    existing_schema_names = {s.name for s in all_existing}
+                sname = suggest_import_name(existing_schema_names, sname, suffix="(imported)")
+                existing_schema_names.add(sname)
                 warnings.append(
                     f"Schema '{existing_schema.name}' exists with different structure. Created as '{sname}' instead."
                 )
 
-        new_schema = await create_schema(
-            session,
-            org_id=org_id,
-            name=sname,
-            account_id=created_by,
-            description=sd.get("description"),
-            abstract_name=sd.get("abstract_name"),
-        )
+        try:
+            new_schema = await create_schema(
+                session,
+                org_id=org_id,
+                name=sname,
+                account_id=created_by,
+                description=sd.get("description"),
+                abstract_name=sd.get("abstract_name"),
+            )
+        except SQLAlchemyError as exc:
+            logger.error("Failed to create schema '%s': %s", sname, exc)
+            raise
+
         schema_id_map[export_schema_id] = str(new_schema.id)
 
-        new_sv = await create_schema_version(
-            session,
-            org_id=org_id,
-            schema_id=new_schema.id,
-            version=sd.get("latest_version", "1.0"),
-            version_number=1,
-            definition_json=definition,
-            account_id=created_by,
-            published=True,
-        )
+        try:
+            new_sv = await create_schema_version(
+                session,
+                org_id=org_id,
+                schema_id=new_schema.id,
+                version=sd.get("latest_version") or DEFAULT_SCHEMA_VERSION,
+                version_number=1,
+                definition_json=definition,
+                account_id=created_by,
+                published=True,
+            )
+        except SQLAlchemyError as exc:
+            logger.error("Failed to create schema version for '%s': %s", sname, exc)
+            raise
+
         schema_version_map[export_schema_id] = new_sv.version
 
     # --- Step 2: Create agents ---
@@ -485,74 +582,99 @@ async def materialize_import(
 
         input_schema_id_str = ad.get("input_schema_id", "")
         output_schema_id_str = ad.get("output_schema_id", "")
-        resolved_input_id = schema_id_map.get(input_schema_id_str, input_schema_id_str)
-        resolved_output_id = schema_id_map.get(output_schema_id_str, output_schema_id_str)
-        resolved_input_version = schema_version_map.get(input_schema_id_str, ad.get("input_schema_version", "1.0"))
-        resolved_output_version = schema_version_map.get(output_schema_id_str, ad.get("output_schema_version", "1.0"))
+        resolved_input_id = schema_id_map.get(input_schema_id_str) or input_schema_id_str
+        resolved_output_id = schema_id_map.get(output_schema_id_str) or output_schema_id_str
+        resolved_input_version = schema_version_map.get(input_schema_id_str) or ad.get("input_schema_version", DEFAULT_SCHEMA_VERSION)
+        resolved_output_version = schema_version_map.get(output_schema_id_str) or ad.get("output_schema_version", DEFAULT_SCHEMA_VERSION)
 
         export_mb_id = ad.get("model_backend_id", "")
-        resolved_mb_id = ad.get("_resolved_model_backend_id")
-        resolved_mb_id_str = resolved_mb_id if resolved_mb_id else mb_overrides.get(export_mb_id, export_mb_id)
+        resolved_mb_id = ad.get("_resolved_model_backend_id") or mb_overrides.get(export_mb_id) or export_mb_id
 
-        agent = await create_agent(
-            session,
-            org_id=org_id,
-            name=aname,
-            account_id=created_by,
-            input_schema_id=uuid.UUID(resolved_input_id),
-            input_schema_version=resolved_input_version,
-            output_schema_id=uuid.UUID(resolved_output_id),
-            output_schema_version=resolved_output_version,
-            prompt_template=ad.get("prompt_template", ""),
-            model_backend_id=uuid.UUID(resolved_mb_id_str),
-            description=ad.get("description"),
-            connector_type_refs=ad.get("connector_type_refs"),
-            evals=ad.get("evals"),
-            retry_policy=ad.get("retry_policy"),
-            token_budget=ad.get("token_budget"),
-        )
+        agent_args = {
+            "session": session,
+            "org_id": org_id,
+            "name": aname,
+            "account_id": created_by,
+            "prompt_template": ad.get("prompt_template", ""),
+            "description": ad.get("description"),
+            "connector_type_refs": ad.get("connector_type_refs"),
+            "evals": ad.get("evals"),
+            "retry_policy": ad.get("retry_policy"),
+            "token_budget": ad.get("token_budget"),
+        }
+
+        if resolved_input_id:
+            agent_args["input_schema_id"] = _safe_uuid(resolved_input_id, "agent.input_schema_id")
+            agent_args["input_schema_version"] = resolved_input_version
+        if resolved_output_id:
+            agent_args["output_schema_id"] = _safe_uuid(resolved_output_id, "agent.output_schema_id")
+            agent_args["output_schema_version"] = resolved_output_version
+        if resolved_mb_id:
+            agent_args["model_backend_id"] = _safe_uuid(resolved_mb_id, "agent.model_backend_id")
+
+        try:
+            agent = await create_agent(**agent_args)
+        except (ValueError, SQLAlchemyError) as exc:
+            logger.error("Failed to create agent '%s': %s", aname, exc)
+            raise
+
         agent_id_map[export_agent_id] = str(agent.id)
 
     # --- Step 3: Create pipeline ---
-    graph_nodes = list(pipeline_info.get("graph_nodes_json", []))
-    # Rewire agent_id references in graph nodes
+    raw_graph_nodes = pipeline_info.get("graph_nodes_json")
+    if isinstance(raw_graph_nodes, list):
+        graph_nodes = raw_graph_nodes
+    else:
+        graph_nodes = []
+        warnings.append("Pipeline 'graph_nodes_json' is not a list; nodes will be empty.")
+
+    # Rewire agent_id and connector binding references in graph nodes
     for node in graph_nodes:
         node_export_id = node.get("agent_id")
         if node_export_id and node_export_id in agent_id_map:
             node["agent_id"] = agent_id_map[node_export_id]
-        # Rewire connector bindings (user override wins over analysis)
         connector_binding = node.get("connector_binding")
         if connector_binding:
             existing_id = connector_binding.get("instance_id", "")
             if existing_id and existing_id in conn_overrides:
                 connector_binding["instance_id"] = conn_overrides[existing_id]
 
-    pipeline = await create_pipeline(
-        session,
-        org_id=org_id,
-        name=pname,
-        account_id=created_by,
-        description=pipeline_info.get("description"),
-        visibility="org",
-        owner_team_id=owner_team_id,
-        node_timeout_seconds=pipeline_info.get("node_timeout_seconds", 300),
-        run_context_defaults=pipeline_info.get("run_context_defaults"),
-    )
+    try:
+        pipeline = await create_pipeline(
+            session,
+            org_id=org_id,
+            name=pname,
+            account_id=created_by,
+            description=pipeline_info.get("description"),
+            visibility="org",
+            owner_team_id=owner_team_id,
+            node_timeout_seconds=pipeline_info.get("node_timeout_seconds", DEFAULT_NODE_TIMEOUT),
+            run_context_defaults=pipeline_info.get("run_context_defaults"),
+        )
+    except SQLAlchemyError as exc:
+        logger.error("Failed to create pipeline '%s': %s", pname, exc)
+        raise
 
-    # Set graph nodes
-    pipeline.graph_nodes_json = graph_nodes
+    pipeline.graph_nodes_json = list(graph_nodes)
     await session.flush()
 
     # --- Step 4: Create edges ---
     pipeline_edges_added: list[PipelineEdge] = []
     for ed in edges_data:
+        source_id = _safe_uuid(ed.get("source_node_id", ""), "edge.source_node_id")
+        target_id = _safe_uuid(ed.get("target_node_id", ""), "edge.target_node_id")
+        edge_id = _safe_uuid(ed["id"]) if ed.get("id") else uuid.uuid4()
+        edge_type = ed.get("edge_type", "normal")
+        if edge_type not in VALID_EDGE_TYPES:
+            warnings.append(f"Unknown edge type '{edge_type}', defaulting to 'normal'.")
+            edge_type = "normal"
         edge = PipelineEdge(
-            id=uuid.UUID(ed["id"]) if ed.get("id") else uuid.uuid4(),
+            id=edge_id,
             organisation_id=org_id,
             pipeline_id=pipeline.id,
-            source_node_id=uuid.UUID(ed["source_node_id"]),
-            target_node_id=uuid.UUID(ed["target_node_id"]),
-            edge_type=ed.get("edge_type", "normal"),
+            source_node_id=source_id,
+            target_node_id=target_id,
+            edge_type=edge_type,
             hitl_gate_config=ed.get("hitl_gate_config"),
         )
         session.add(edge)
@@ -560,32 +682,41 @@ async def materialize_import(
     await session.flush()
 
     # --- Step 5: Create library primitive for the workflow ---
-    prim = await create_library_primitive(
-        session,
-        org_id=org_id,
-        source="local",
-        primitive_type="workflow",
-        name=pname,
-        slug=pname.lower().replace(" ", "-").replace("_", "-"),
-        description=pipeline_info.get("description", ""),
-        author=created_by.hex[:8],
-        version="1.0",
-        tags=["imported"],
-        content_json={
-            "pipeline_id": str(pipeline.id),
-            "bundle": bundle,
-        },
-        source_url=None,
-        forked_from=None,
-        checksum=None,
-        ed25519_signature=None,
-        verified=None,
-        download_count=None,
-        average_rating=None,
-        review_count=None,
-        owner_team_id=owner_team_id,
-        visibility="org",
-        account_id=created_by,
+    try:
+        prim = await create_library_primitive(
+            session,
+            org_id=org_id,
+            source="local",
+            primitive_type="workflow",
+            name=pname,
+            slug=_sanitize_slug(pname),
+            description=pipeline_info.get("description", ""),
+            author=created_by.hex[:8],
+            version=DEFAULT_SCHEMA_VERSION,
+            tags=["imported"],
+            content_json={
+                "pipeline_id": str(pipeline.id),
+                "bundle": bundle,
+            },
+            source_url=None,
+            forked_from=None,
+            checksum=None,
+            ed25519_signature=None,
+            verified=None,
+            download_count=None,
+            average_rating=None,
+            review_count=None,
+            owner_team_id=owner_team_id,
+            visibility="org",
+            account_id=created_by,
+        )
+    except SQLAlchemyError as exc:
+        logger.error("Failed to create library primitive for pipeline '%s': %s", pname, exc)
+        raise
+
+    logger.info(
+        "Imported pipeline '%s' (id=%s) with %d agents, %d edges, %d schemas",
+        pname, pipeline.id, len(agents_data), len(edges_data), len(schemas_data),
     )
 
     return {
