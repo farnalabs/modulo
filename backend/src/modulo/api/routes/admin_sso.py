@@ -131,11 +131,12 @@ async def get_providers(
     _require_admin(current_user)
     try:
         providers = await list_providers(session)
-    except ProgrammingError:
+    except ProgrammingError as exc:
+        _log.warning("SSO providers table not available: %s", exc)
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
-        ) from None
+        ) from exc
     return [SsoProviderResponse.from_orm(p) for p in providers]  # type: ignore[pydantic-orm]
 
 
@@ -167,6 +168,12 @@ async def create_provider_endpoint(
         )
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+    except ProgrammingError as exc:
+        _log.warning("SSO providers table not available on create: %s", exc)
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="Feature is not available. Run database migrations to enable it.",
+        ) from exc
     return SsoProviderResponse.from_orm(provider)  # type: ignore[pydantic-orm]
 
 
@@ -183,7 +190,14 @@ async def update_provider_endpoint(
     if not updates:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No fields to update")
 
-    provider = await update_provider(session, provider_id, actor_user_id=current_user.account_id, **updates)
+    try:
+        provider = await update_provider(session, provider_id, actor_user_id=current_user.account_id, **updates)
+    except ProgrammingError as exc:
+        _log.warning("SSO providers table not available on update: %s", exc)
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="Feature is not available. Run database migrations to enable it.",
+        ) from exc
     if provider is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -200,12 +214,14 @@ async def delete_provider_endpoint(
     session: AsyncSession = Depends(get_db_session),
 ) -> None:
     _require_admin(current_user)
-    deleted = await delete_provider(session, provider_id, actor_user_id=current_user.account_id)
-    if not deleted:
+    try:
+        deleted = await delete_provider(session, provider_id, actor_user_id=current_user.account_id)
+    except ProgrammingError as exc:
+        _log.warning("SSO providers table not available on delete: %s", exc)
         raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="SSO provider not found",
-        )
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="Feature is not available. Run database migrations to enable it.",
+        ) from exc
 
 
 @router.post("/providers/{provider_id}/test", response_model=SsoProviderTestResult)
@@ -217,7 +233,14 @@ async def test_provider_connection(
     settings: Settings = Depends(get_settings),
 ) -> SsoProviderTestResult:
     _require_admin(current_user)
-    provider = await get_provider(session, provider_id)
+    try:
+        provider = await get_provider(session, provider_id)
+    except ProgrammingError as exc:
+        _log.warning("SSO providers table not available on test connection: %s", exc)
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="Feature is not available. Run database migrations to enable it.",
+        ) from exc
     if provider is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -230,6 +253,7 @@ async def test_provider_connection(
         else:
             return await _test_saml_connection(provider)
     except (httpx.HTTPError, ValueError, ET.ParseError, Exception) as exc:
+        _log.warning("SSO test connection failed: %s", exc)
         return SsoProviderTestResult(
             success=False,
             message=str(exc),
@@ -367,7 +391,14 @@ async def toggle_provider_endpoint(
     session: AsyncSession = Depends(get_db_session),
 ) -> SsoProviderResponse:
     _require_admin(current_user)
-    provider = await toggle_provider(session, provider_id, actor_user_id=current_user.account_id)
+    try:
+        provider = await toggle_provider(session, provider_id, actor_user_id=current_user.account_id)
+    except ProgrammingError as exc:
+        _log.warning("SSO providers table not available on toggle: %s", exc)
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="Feature is not available. Run database migrations to enable it.",
+        ) from exc
     if provider is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -400,7 +431,14 @@ async def set_group_mappings_endpoint(
 ) -> GroupMappingsResponse:
     _require_admin(current_user)
     mappings_dict = [m.model_dump() for m in body.mappings]
-    provider = await set_group_mappings(session, provider_id, mappings_dict)
+    try:
+        provider = await set_group_mappings(session, provider_id, mappings_dict)
+    except ProgrammingError as exc:
+        _log.warning("SSO providers table not available on set_group_mappings: %s", exc)
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="Feature is not available. Run database migrations to enable it.",
+        ) from exc
     if provider is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -417,7 +455,14 @@ async def get_group_mappings_endpoint(
     session: AsyncSession = Depends(get_db_session),
 ) -> GroupMappingsResponse:
     _require_admin(current_user)
-    provider = await get_provider(session, provider_id)
+    try:
+        provider = await get_provider(session, provider_id)
+    except ProgrammingError as exc:
+        _log.warning("SSO providers table not available on get_group_mappings: %s", exc)
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="Feature is not available. Run database migrations to enable it.",
+        ) from exc
     if provider is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
