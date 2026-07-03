@@ -8,6 +8,7 @@ from datetime import UTC, datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import func, select
+from sqlalchemy.exc import ProgrammingError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.api.dependencies import get_db_session
@@ -65,24 +66,30 @@ async def list_notification_rules(
     if org_id is None:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No organisation")
 
-    async with session.begin():
-        await set_rls_org(session, org_id)
+    try:
+        async with session.begin():
+            await set_rls_org(session, org_id)
 
-        result = await session.execute(
-            select(ErrorNotificationRule)
-            .where(ErrorNotificationRule.organisation_id == org_id)
-            .order_by(ErrorNotificationRule.created_at.desc())
-            .offset(offset)
-            .limit(limit)
-        )
-        rules = list(result.scalars().all())
-
-        count_result = await session.execute(
-            select(func.count(ErrorNotificationRule.id)).where(
-                ErrorNotificationRule.organisation_id == org_id
+            result = await session.execute(
+                select(ErrorNotificationRule)
+                .where(ErrorNotificationRule.organisation_id == org_id)
+                .order_by(ErrorNotificationRule.created_at.desc())
+                .offset(offset)
+                .limit(limit)
             )
+            rules = list(result.scalars().all())
+
+            count_result = await session.execute(
+                select(func.count(ErrorNotificationRule.id)).where(
+                    ErrorNotificationRule.organisation_id == org_id
+                )
+            )
+            total = count_result.scalar_one() or 0
+    except ProgrammingError:
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="Error tracking is not available. Run database migrations to enable it.",
         )
-        total = count_result.scalar_one() or 0
 
     return {
         "items": [_serialize_rule(r) for r in rules],
@@ -106,35 +113,41 @@ async def create_notification_rule(
 
     max_rules = _MAX_RULES_COMMUNITY if principal.org_role == "runner" else _MAX_RULES_PER_ORG
 
-    async with session.begin():
-        await set_rls_org(session, org_id)
+    try:
+        async with session.begin():
+            await set_rls_org(session, org_id)
 
-        count_result = await session.execute(
-            select(func.count(ErrorNotificationRule.id)).where(
-                ErrorNotificationRule.organisation_id == org_id
+            count_result = await session.execute(
+                select(func.count(ErrorNotificationRule.id)).where(
+                    ErrorNotificationRule.organisation_id == org_id
+                )
             )
-        )
-        current_count = count_result.scalar_one() or 0
+            current_count = count_result.scalar_one() or 0
 
-        if current_count >= max_rules:
-            raise HTTPException(
-                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-                detail=f"Maximum {max_rules} notification rules per organisation reached",
+            if current_count >= max_rules:
+                raise HTTPException(
+                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                    detail=f"Maximum {max_rules} notification rules per organisation reached",
+                )
+
+            rule = ErrorNotificationRule(
+                organisation_id=org_id,
+                name=body.name,
+                enabled=body.enabled,
+                condition_level=body.condition_level,
+                condition_min_count=body.condition_min_count,
+                condition_window_seconds=body.condition_window_seconds,
+                action_type=body.action_type,
+                webhook_url=body.webhook_url,
+                cooldown_seconds=body.cooldown_seconds,
             )
-
-        rule = ErrorNotificationRule(
-            organisation_id=org_id,
-            name=body.name,
-            enabled=body.enabled,
-            condition_level=body.condition_level,
-            condition_min_count=body.condition_min_count,
-            condition_window_seconds=body.condition_window_seconds,
-            action_type=body.action_type,
-            webhook_url=body.webhook_url,
-            cooldown_seconds=body.cooldown_seconds,
+            session.add(rule)
+            await session.flush()
+    except ProgrammingError:
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="Error tracking is not available. Run database migrations to enable it.",
         )
-        session.add(rule)
-        await session.flush()
 
     return _serialize_rule(rule)
 
@@ -152,39 +165,45 @@ async def update_notification_rule(
 
     _require_admin(principal)
 
-    async with session.begin():
-        await set_rls_org(session, org_id)
+    try:
+        async with session.begin():
+            await set_rls_org(session, org_id)
 
-        result = await session.execute(
-            select(ErrorNotificationRule).where(
-                ErrorNotificationRule.organisation_id == org_id,
-                ErrorNotificationRule.id == rule_id,
+            result = await session.execute(
+                select(ErrorNotificationRule).where(
+                    ErrorNotificationRule.organisation_id == org_id,
+                    ErrorNotificationRule.id == rule_id,
+                )
             )
+            rule = result.scalar_one_or_none()
+
+            if rule is None:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Notification rule not found")
+
+            if body.name is not None:
+                rule.name = body.name
+            if body.enabled is not None:
+                rule.enabled = body.enabled
+            if body.condition_level is not None:
+                rule.condition_level = body.condition_level
+            if body.condition_min_count is not None:
+                rule.condition_min_count = body.condition_min_count
+            if body.condition_window_seconds is not None:
+                rule.condition_window_seconds = body.condition_window_seconds
+            if body.action_type is not None:
+                rule.action_type = body.action_type
+            if body.webhook_url is not None:
+                rule.webhook_url = body.webhook_url
+            if body.cooldown_seconds is not None:
+                rule.cooldown_seconds = body.cooldown_seconds
+
+            rule.updated_at = datetime.now(UTC)
+            await session.flush()
+    except ProgrammingError:
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="Error tracking is not available. Run database migrations to enable it.",
         )
-        rule = result.scalar_one_or_none()
-
-        if rule is None:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Notification rule not found")
-
-        if body.name is not None:
-            rule.name = body.name
-        if body.enabled is not None:
-            rule.enabled = body.enabled
-        if body.condition_level is not None:
-            rule.condition_level = body.condition_level
-        if body.condition_min_count is not None:
-            rule.condition_min_count = body.condition_min_count
-        if body.condition_window_seconds is not None:
-            rule.condition_window_seconds = body.condition_window_seconds
-        if body.action_type is not None:
-            rule.action_type = body.action_type
-        if body.webhook_url is not None:
-            rule.webhook_url = body.webhook_url
-        if body.cooldown_seconds is not None:
-            rule.cooldown_seconds = body.cooldown_seconds
-
-        rule.updated_at = datetime.now(UTC)
-        await session.flush()
 
     return _serialize_rule(rule)
 
@@ -201,18 +220,24 @@ async def delete_notification_rule(
 
     _require_admin(principal)
 
-    async with session.begin():
-        await set_rls_org(session, org_id)
+    try:
+        async with session.begin():
+            await set_rls_org(session, org_id)
 
-        result = await session.execute(
-            select(ErrorNotificationRule).where(
-                ErrorNotificationRule.organisation_id == org_id,
-                ErrorNotificationRule.id == rule_id,
+            result = await session.execute(
+                select(ErrorNotificationRule).where(
+                    ErrorNotificationRule.organisation_id == org_id,
+                    ErrorNotificationRule.id == rule_id,
+                )
             )
+            rule = result.scalar_one_or_none()
+
+            if rule is None:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Notification rule not found")
+
+            await session.delete(rule)
+    except ProgrammingError:
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="Error tracking is not available. Run database migrations to enable it.",
         )
-        rule = result.scalar_one_or_none()
-
-        if rule is None:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Notification rule not found")
-
-        await session.delete(rule)
