@@ -61,9 +61,17 @@ Concretely:
 
 At that point, server-side Playwright remains an option, but the frontend-mediated architecture would still be the primary path — Playwright would only supplement capabilities the frontend cannot provide.
 
+## ADR 008 — Core Shared Manifest
+
+See ADR 008 for the companion decision: a shared `manifest.yaml` that serves as the single source of truth for page routes, `data-testid` selectors, sidebar groups, permissions, feature tiers, product map refs, and i18n keys. Both frontend (Vite build-time import) and backend (startup load) consume it, and a pre-commit validator checks integrity across all five metadata sources.
+
+The manifest solves the discoverability open question from §8.27.13: instead of relying solely on `get_page_interactables()` for runtime discovery, Remy can call `get_manifest(path?)` to learn page structure before navigating, enabling planned multi-step workflows without trial-and-error.
+
 ## Related Documents
 
 - PRD §8.27 — Remy UI Commands feature specification
+- PRD §8.28 — Core Shared Manifest feature specification
+- ADR 008 — Core Shared Manifest
 - ADR 001 — Agent Execution Environment as a V1 Primitive
 - `backend/src/modulo/api/routes/remy.py` — SSE stream handler (agentic loop entry point)
 - `backend/src/modulo/api/ui_tools.py` — UI tool definitions

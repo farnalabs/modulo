@@ -1,9 +1,10 @@
 # Modulo — Product Requirements Document
 
-**Version**: 0.29  
+**Version**: 0.30  
 **Date**: 2026-07-03  
 **Status**: Pre-development  
 **Changelog**:  
+- v0.30 — §8.28 Core Shared Manifest: single YAML source of truth for routes, elements, sidebar, permissions, tiers, product map refs, i18n keys. Binary consumption (frontend Vite import + backend startup load). `get_manifest(path?)` Remy tool. 7-rule pre-commit + CI validator. ADR 008.
 - v0.29 — §8.27 Remy UI Commands: frontend-mediated browser automation for Remy, 11 UI commands (navigate, click, fill, select, extract, extract_all, get_page_interactables, wait, go_back, get_url, press), permission system with 3 modes + destructive selector detection, agentic loop (multi-turn LLM within single SSE stream), shadcn/vue component support, visual feedback (highlighting, toast, overlay, turn separators), 3 new endpoints, ADR 007.
 - v0.28 — §8.26 Navigation Restructure: Breadcrumb component with route meta chain, sidebar hierarchical subgroups (SidebarSubgroup), new Remy group consolidating user skills + admin config, secondary nav tab bars (PageTabs), back-to-parent links on 5 detail views.
 - v0.27 — §8.25 Native Error Tracking: backend + frontend error capture, Postgres-backed storage, fingerprinting/dedup, admin dashboard, built-in alerting, Prometheus metrics, external forwarders to Sentry/DataDog/PagerDuty/Rollbar/OpsGenie/Grafana Loki; Community tier for core, Team tier for integrations.
@@ -2413,6 +2414,64 @@ Remy is already a Community-tier feature. The UI commands are an extension of Re
 - **Concurrent batches**: The agentic loop processes one batch of UI commands per LLM turn. If the LLM emits 10 tools, they execute sequentially with a single permission check batch. No concurrent batch support in v1.
 - **Multi-worker**: The in-process `asyncio.Event` registry works only with single-worker uvicorn. If horizontal scaling is needed, the registry swaps to Redis pub/sub via the existing `RedisBroker` pattern.
 - **Selector discoverability**: The `get_page_interactables()` command requires that elements have `data-testid` attributes. Views without `data-testid` on key interactable elements are invisible to Remy. Tracking issue: add `data-testid` to remaining views as they are encountered.
+
+### 8.28 Core Shared Manifest
+
+A single `frontend/src/manifest.yaml` file serves as the source of truth for page routes, interactive elements, sidebar groups, and their relationships to the product map, i18n, permissions, and feature tiers. Both frontend and backend consume it.
+
+See ADR 008 for the full architecture decision. See `docs/adr/core-manifest-proposal-v2.md` for the complete specification.
+
+#### 8.28.1 File Format
+
+The manifest defines three top-level sections:
+
+- **`routes`** — one entry per route with `name`, `testid`, `breadcrumb`, `parent`, `product_map`, `i18n_key`, `sidebar_group`, `sidebar_order`, `type` (page/list_page/form_page/detail_page), `required_tier`, `required_roles`, `required_permissions`, `pattern` and `dynamic_params` (for dynamic routes), `deprecated`, `page_sections` (for mixed-tier pages).
+- **`elements`** — key interactive elements per route with `testid`, `type` (button/select/textarea/table/etc.), `label`, `dynamic_testid` flag. Inclusion criteria: every `<button>` with a `@click` handler, every form element in create/edit views, every table/list with actions.
+- **`sidebar_groups`** — group definitions with `label`, `order`, `default_expanded`, `simple_mode`.
+
+#### 8.28.2 Consumption
+
+| Consumer | Mechanism |
+|---|---|
+| Frontend sidebar nav | `navigation.ts` imports YAML at build time, builds group+item data, applies render-time role/tier filtering, appends runtime items via `getDynamicItemsForGroup()` |
+| Frontend breadcrumbs | Global `beforeEach` guard enriches `route.meta` from manifest |
+| Frontend feature gating | `<FeatureGate>` props derived from manifest's `required_tier` and `feature_flag` |
+| Frontend route guards | `meta.required_roles` and `meta.required_permissions` populated from manifest |
+| Backend / Remy | `manifest.py` loads at startup. Remy calls `get_manifest(path?)` to discover page structure before navigating |
+| Diagnostics | `GET /api/v1/manifest` returns the full manifest |
+| Pre-commit + CI | `validate-manifest.ps1` checks 7 rules (route resolution, testid existence, product map refs, i18n key existence, orphaned elements, circular parents, dynamic route fields) |
+
+#### 8.28.3 Validation Rules
+
+Seven rules enforced by `validate-manifest.ps1`:
+
+| Rule | What it checks |
+|---|---|
+| 1 | Every `route.name` matches a Vue Router route name |
+| 2 | Every static `element.testid` exists in a Vue template (file search, including Vue bindings and template literals; `dynamic_testid: true` entries skipped) |
+| 3 | Every `product_map` references an existing file in `docs/product-map/` |
+| 4 | Every `i18n_key` exists in `frontend/src/locales/en-US.js` |
+| 5 | No orphaned element blocks — every element's parent route exists in `routes` |
+| 6 | No circular `parent` chains |
+| 7 | Dynamic routes (`type: detail_page`) have required `pattern` and `dynamic_params` fields |
+
+#### 8.28.4 Effect on Remy
+
+Remy gains a new tool: `get_manifest(path?)`. Calling it without arguments returns the full manifest (page structure, elements, sidebar hierarchy). Calling with a specific path returns only that route + its elements. The system prompt instructs: "Before navigating to an unfamiliar page, call `get_manifest()` to learn its structure."
+
+This replaces the trial-and-error pattern (navigate → `get_page_interactables()` → decide) with planned navigation (`get_manifest()` → plan → navigate → interact).
+
+#### 8.28.5 Feature Gating
+
+| Feature | Tier |
+|---|---|
+| `manifest.yaml` file (creation + validation) | Community |
+| `GET /api/v1/manifest` endpoint | Community |
+| `get_manifest` Remy tool | Community |
+| Sidebar nav migration to manifest | Community |
+| Breadcrumb migration to manifest | Community |
+
+The manifest is a developer tooling improvement and Remy capability. No tier gate.
 
 ---
 
