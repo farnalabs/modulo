@@ -1,9 +1,10 @@
 # Modulo — Product Requirements Document
 
-**Version**: 0.28  
-**Date**: 2026-07-02  
+**Version**: 0.29  
+**Date**: 2026-07-03  
 **Status**: Pre-development  
 **Changelog**:  
+- v0.29 — §8.27 Remy UI Commands: frontend-mediated browser automation for Remy, 11 UI commands (navigate, click, fill, select, extract, extract_all, get_page_interactables, wait, go_back, get_url, press), permission system with 3 modes + destructive selector detection, agentic loop (multi-turn LLM within single SSE stream), shadcn/vue component support, visual feedback (highlighting, toast, overlay, turn separators), 3 new endpoints, ADR 007.
 - v0.28 — §8.26 Navigation Restructure: Breadcrumb component with route meta chain, sidebar hierarchical subgroups (SidebarSubgroup), new Remy group consolidating user skills + admin config, secondary nav tab bars (PageTabs), back-to-parent links on 5 detail views.
 - v0.27 — §8.25 Native Error Tracking: backend + frontend error capture, Postgres-backed storage, fingerprinting/dedup, admin dashboard, built-in alerting, Prometheus metrics, external forwarders to Sentry/DataDog/PagerDuty/Rollbar/OpsGenie/Grafana Loki; Community tier for core, Team tier for integrations.
 - v0.26 — §8.23 Remy In-App AI Assistant: floating draggable/dockable/maximisable chat panel on every page, page awareness via `useRemyContext()`, Multi-window independent sessions with last-activity-winner, tool execution via ViewModel API + MCP server, Markdown skill loading from `remy_skills` table (org-level admin-managed + user-level self-service), context-window-aware conversation reconstruction with automatic pruning and summarization, `chat_sessions` + `chat_messages` + `remy_skills` data model, full CRUD API + SSE streaming endpoint, admin config page at `/admin/remy`, Team-tier feature gate with org-level access list.
@@ -2261,6 +2262,155 @@ The back link uses a left-arrow chevron icon and is rendered via a shared `BackL
 | Sidebar restructure (new groups, subgroups, Remy consolidation) | Community |
 
 Navigation is a UI concern, not a feature gate. All changes apply to every tier.
+
+### 8.27 Remy UI Commands (Remy Browser Automation)
+
+Remy can execute UI commands in the user's browser by routing LLM tool calls through the SSE stream to the frontend Vue app. This enables multi-page configuration workflows (navigate → fill → click → verify → go back) without server-side browser automation.
+
+#### 8.27.1 Architecture
+
+```
+LLM → tool_calls { navigate, click, fill, extract, ... }
+  → Backend SSE stream (agentic loop)
+  → event: ui_command_batch
+  → Frontend UiCommandExecutor (runs in user's browser)
+  → HTTP POST results back
+  → Backend feeds results as ToolMessages → next LLM turn
+```
+
+The existing SSE stream (`POST /sessions/{id}/stream`) runs multiple LLM turns within a single connection, interleaved with frontend execution pauses. The stream stays alive while the frontend executes commands, yielding `event: ping` every 15s to prevent proxy timeout.
+
+#### 8.27.2 Available Commands
+
+| Command | Description | Default Permission |
+|---|---|---|
+| `navigate(path)` | Navigate to a Modulo route | auto |
+| `click(selector)` | Click an element | auto* |
+| `fill(selector, value)` | Type into an input | auto* |
+| `select(selector, value)` | Pick a dropdown option | auto* |
+| `extract(selector)` | Read visible text from an element | auto |
+| `extract_all(selector)` | Read text from all matching elements | auto |
+| `get_page_interactables()` | Discover all interactive elements with `data-testid` selectors | auto |
+| `wait(ms)` / `wait(selector)` | Pause or wait for an element to appear | auto |
+| `go_back()` | Navigate back to previous page | auto |
+| `get_url()` | Return current URL and route name | auto |
+| `press(key)` | Press a keyboard key | requires approval |
+
+*In `safe` mode (default), write commands are auto-allowed unless the selector matches a destructive keyword pattern (`delete`, `remove`, `destroy`, etc.).
+
+#### 8.27.3 Permission System
+
+Three permission modes configurable in the admin Remy config page:
+
+| Mode | Behaviour |
+|---|---|
+| `safe` (default) | Read/nav tools auto-allowed. Write tools auto-allowed unless destructive selector detected — forces approval. |
+| `full_auto` | All tools auto-allowed. Destructive selectors still prompt for approval. |
+| `locked_down` | All write tools require approval. Read/nav tools auto-allowed. |
+
+**Session-level approvals**: Users can approve a tool "for session" — scoped to the current `(tool_name, page_path)` with a 30-minute TTL. Approving `click` on `/admin/pipelines` does not approve `click` on `/admin/users`. Navigate to a different page, and `click` requires re-approval.
+
+**Destructive selector detection**: Substring matching against `delete, remove, destroy, archive, suspend, ban, terminate, revoke, disable, wipe, clear`. Forces approval in any mode.
+
+#### 8.27.4 Selector Strategy
+
+Commands use a `data-testid`-first selector strategy. The `resolveElement()` function tries `[data-testid="..."]` before falling back to raw CSS `querySelector`. The `get_page_interactables()` command lets Remy discover available elements on any page, returning their `data-testid` values for use in subsequent commands.
+
+The codebase already uses `data-testid` extensively across admin views, pipeline editor, and settings pages.
+
+#### 8.27.5 Safety & Visual Feedback
+
+| Mechanism | Description |
+|---|---|
+| DOM stability wait | `waitForDomStable()` — MutationObserver scoped to `<main>`, waits 200ms of quiet after last mutation, detects loading spinners. Runs automatically after `navigate` and `go_back`. |
+| Element highlighting | Before `click`/`fill`/`select`/`press`, the target element gets a 500ms blue outline flash so the user sees what's about to be interacted with. |
+| Execution overlay | A semi-transparent banner at the top of the page reads "Remy is performing actions on this page" with a Stop button. |
+| Navigation toast | Before each `navigate`/`go_back`, a toast appears: "Navigating to Pipelines…" |
+| Stop/abort | User clicks Stop → remaining commands get `cancelled_by_user` → a brief summary is shown (no forced LLM explanation). |
+| Multi-tab guard | Commands check `document.visibilityState`. If the tab is hidden, execution pauses up to 60s waiting for the user to return. |
+| Extract filtering | `sanitizeExtract()` strips `<script>`, `<style>`, `<input type="hidden">`. Password values are masked. |
+| Approval card | Before a gated command executes, an inline card in the chat shows **what** Remy wants to do in plain language: "Click 'Save' button", "Type into Email: 'alice@example.com'". Three buttons: Allow Once, Allow for Session, Deny. |
+
+#### 8.27.6 Agentic Loop (LLM Multi-Turn)
+
+The SSE stream handler runs a `while True` loop:
+
+1. Stream tokens from LLM (may include tool calls)
+2. Reconstruct tool calls from accumulated chunks
+3. Separate UI tools from MCP tools
+4. Execute MCP tools server-side as before
+5. For UI tools:
+   a. Check permission (config override → mode preset → destructive detection)
+   b. If approval needed, yield `permission_request`, await user decision
+   c. Yield `ui_command_batch` events to frontend
+   d. Await execution results via `asyncio.Event` + `POST /sessions/{id}/ui-command-results`
+   e. Store results as `ToolMessage`s in the conversation
+6. Feed results into the next LLM call (loop continues)
+7. When LLM emits no tool calls, yield `done`
+
+This allows multi-step workflows in a single stream: "Let me check the current config… [extract] → I see X is not set. Let me update it. [navigate → click → fill → click → go_back] → Done!"
+
+#### 8.27.7 Component Support
+
+The `fill` and `select` commands detect and handle common shadcn/vue component types:
+
+| Component | Strategy |
+|---|---|
+| Native `<input>` / `<textarea>` | Set value via native setter + dispatch `input`/`change` events |
+| shadcn `<Select>` | Click trigger → wait for popover → click `[role="option"][data-value="X"]` |
+| shadcn `<Combobox>` | Click → type in `<CommandInput>` → select option |
+| shadcn `<Switch>` | Click the `[role="switch"]` button |
+| `contenteditable` | Set `textContent` + dispatch `input` event |
+
+#### 8.27.8 Non-Tool Models
+
+When the selected LLM provider does not support native tool calling (e.g., local OSS models via Ollama, TGI), UI commands described as text in the system prompt. The LLM can describe what it would do, but cannot emit structured tool calls. The system prompt instructs: "Your provider does not support tool calling. Describe the actions you recommend; the user can guide you. Use the MCP tools you do have for backend operations."
+
+#### 8.27.9 Admin Configuration
+
+A new "Tool Permissions" card on the Remy config page (`/admin/remy`) controls:
+
+- **Permission mode** dropdown: safe | full_auto | locked_down | custom
+- **Per-tool override table**: visible when mode is custom. Three options per tool: Auto-allow, Requires Approval, Disabled.
+- **Tool descriptions** in plain English, no CSS/jargon.
+
+#### 8.27.10 Frontend Components
+
+| Component/Files | Purpose |
+|---|---|
+| `useUiCommandExecutor.ts` | Executes all 11 command types in the browser |
+| `useRemyStream.ts` | Handles `permission_request`, `ui_command_batch` events |
+| `useRemyStore.ts` | Permission state, approval card, `isExecutingUi` lock |
+| `RemyChat.vue` | Approval card inline, execution indicator, turn separators |
+| `AdminRemyView.vue` | Tool permissions configuration card |
+| `RemyPanel.vue` | Reset permissions button |
+
+#### 8.27.11 Backend Endpoints
+
+| Method | Path | Purpose |
+|---|---|---|
+| POST | `/sessions/{id}/permission-response` | User approves/rejects/approves-for-session a permission request |
+| POST | `/sessions/{id}/ui-command-results` | Frontend submits execution results back to the agentic loop |
+| POST | `/sessions/{id}/reset-permissions` | Clears all session-level tool approvals |
+
+All endpoints require `Depends(get_current_user)` + `_validate_session_ownership()`.
+
+#### 8.27.12 Feature Gating
+
+| Feature | Tier |
+|---|---|
+| UI commands (all 11 tools) | Community |
+| Tool permissions admin config | Community |
+| Permission mode presets | Community |
+| Destructive selector detection | Community |
+
+Remy is already a Community-tier feature. The UI commands are an extension of Remy's capability, not a new feature gate.
+
+#### 8.27.13 Open Design Decisions
+
+- **Concurrent batches**: The agentic loop processes one batch of UI commands per LLM turn. If the LLM emits 10 tools, they execute sequentially with a single permission check batch. No concurrent batch support in v1.
+- **Multi-worker**: The in-process `asyncio.Event` registry works only with single-worker uvicorn. If horizontal scaling is needed, the registry swaps to Redis pub/sub via the existing `RedisBroker` pattern.
+- **Selector discoverability**: The `get_page_interactables()` command requires that elements have `data-testid` attributes. Views without `data-testid` on key interactable elements are invisible to Remy. Tracking issue: add `data-testid` to remaining views as they are encountered.
 
 ---
 
