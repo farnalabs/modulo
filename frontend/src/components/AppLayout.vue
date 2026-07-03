@@ -18,7 +18,7 @@
         @update:model-value="setViewMode"
       />
 
-      <SidebarNav :is-system-admin="isSystemAdmin" />
+      <SidebarNav :is-system-admin="isSystemAdmin" :user-role="userRole" />
 
       <SidebarFooter
         :user-email="userEmail"
@@ -104,6 +104,7 @@
 
       <SidebarNav
         :is-system-admin="isSystemAdmin"
+        :user-role="userRole"
         @navigate="mobileOpen = false"
       />
 
@@ -218,6 +219,8 @@ const userInitial = computed(() => {
 const isSystemAdmin = computed(
   () => jwtPayload.value?.is_system_admin === true,
 );
+
+const userRole = computed(() => jwtPayload.value?.org_role || null);
 
 onMounted(() => {
   planStore.fetchPlan().catch(() => {
