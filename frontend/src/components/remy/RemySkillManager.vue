@@ -160,7 +160,7 @@ async function fetchSkills() {
     if (err) {
       skillError.value = `Failed to load skills: ${err}`;
     } else if (data) {
-      skills.value = (data as any)?.items ?? (data as any) ?? [];
+      skills.value = (data as UserSkill[]) ?? [];
     }
   } catch (e: unknown) {
     skillError.value = e instanceof Error ? e.message : "Failed to load skills";
