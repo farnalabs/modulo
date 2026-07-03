@@ -6,7 +6,7 @@ import time as _time
 from datetime import UTC, date, datetime, timedelta
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status as http_status
 from sqlalchemy import Date, case, cast, func, select
 from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -29,6 +29,26 @@ from modulo.settings import get_settings
 _log = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/v1/dashboard", tags=["dashboard"])
+
+
+def _safe_int(value: object, default: int = 0) -> int:
+    """Convert *value* to int, returning *default* for None, NaN, or conversion error."""
+    if value is None:
+        return default
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _safe_float(value: object, default: float = 0.0) -> float:
+    """Convert *value* to float, returning *default* for None, NaN, or conversion error."""
+    if value is None:
+        return default
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return default
 
 _ACTIVE_RUN_STATUSES = frozenset({"pending", "running", "awaiting_human", "claimed", "waiting_for_lock"})
 _TRACKED_STATUSES = ("running", "awaiting_human", "failed", "idle")
@@ -104,7 +124,7 @@ async def dashboard_summary(
             active_pipelines_result = await session.execute(
                 select(func.count()).select_from(Pipeline).where(Pipeline.organisation_id == org_id)
             )
-            active_pipelines = int(active_pipelines_result.scalar_one())
+            active_pipelines = _safe_int(active_pipelines_result.scalar_one())
 
             status_count_query = (
                 select(
@@ -115,7 +135,7 @@ async def dashboard_summary(
                 .group_by(Run.status)
             )
             status_count_rows = (await session.execute(status_count_query)).all()
-            status_counts = {row.status: int(row.cnt) for row in status_count_rows}
+            status_counts = {row.status: _safe_int(row.cnt) for row in status_count_rows}
 
             for tracked_status in _TRACKED_STATUSES:
                 status_counts.setdefault(tracked_status, 0)
@@ -158,7 +178,7 @@ async def dashboard_summary(
             team_run_data: dict[str, dict[str, int]] = {}
             for tr_row in team_run_rows:
                 tid = str(tr_row.owner_team_id)
-                team_run_data.setdefault(tid, {})[tr_row.status] = int(tr_row.cnt)
+                team_run_data.setdefault(tid, {})[tr_row.status] = _safe_int(tr_row.cnt)
 
             team_pipeline_data: dict[str, int] = {}
             for tp_row in team_pipeline_rows:
@@ -171,7 +191,7 @@ async def dashboard_summary(
                 team_total = sum(run_data.get(s, 0) for s in _TRACKED_STATUSES)
                 team_statuses: dict[str, int] = {}
                 for tracked_status in _TRACKED_STATUSES:
-                    team_statuses[status] = run_data.get(status, 0)
+                    team_statuses[tracked_status] = run_data.get(tracked_status, 0)
                 team_active_in_tracked = sum(run_data.get(s, 0) for s in ("running", "awaiting_human"))
                 team_failed = run_data.get("failed", 0)
                 team_statuses["idle"] = team_total - team_active_in_tracked - team_failed
@@ -408,18 +428,18 @@ async def dashboard_summary(
         return result
     except ProgrammingError:
         raise HTTPException(
-            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            status_code=http_status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
         )
     except SQLAlchemyError:
         raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            status_code=http_status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="A database error occurred.",
         )
     except Exception:
         _log.exception("dashboard.summary_failed")
         raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            status_code=http_status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="An unexpected error occurred while loading the dashboard.",
         )
 
@@ -622,13 +642,19 @@ async def dashboard_trends(
         }
     except ProgrammingError:
         raise HTTPException(
-            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            status_code=http_status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
         )
     except SQLAlchemyError:
         raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            status_code=http_status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="A database error occurred.",
+        )
+    except Exception:
+        _log.exception("dashboard.trends_failed")
+        raise HTTPException(
+            status_code=http_status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="An unexpected error occurred while loading trends.",
         )
 
 
@@ -669,11 +695,17 @@ async def daily_run_counts(
         return {"daily_counts": daily, "days": days}
     except ProgrammingError:
         raise HTTPException(
-            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            status_code=http_status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
         )
     except SQLAlchemyError:
         raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            status_code=http_status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="A database error occurred.",
+        )
+    except Exception:
+        _log.exception("dashboard.daily_run_counts_failed")
+        raise HTTPException(
+            status_code=http_status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="An unexpected error occurred while loading daily run counts.",
         )
