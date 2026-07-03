@@ -71,60 +71,81 @@ class JiraConnector(ConnectorBase):
             timeout=30,
         )
 
+    async def _call_api(self, method: str, path: str, **kwargs: Any) -> httpx.Response:
+        """Make an HTTP request with wrapped exception handling."""
+        async with self._client() as client:
+            try:
+                r = await client.request(method, path, **kwargs)
+                r.raise_for_status()
+                return r
+            except httpx.HTTPStatusError as exc:
+                raise ValueError(
+                    f"Jira API HTTP {exc.response.status_code}: {exc.response.text[:200]}"
+                ) from exc
+            except (httpx.TimeoutException, httpx.ConnectError) as exc:
+                raise ValueError(f"Jira API connection error: {exc}") from exc
+
+    async def _parse_json(self, response: httpx.Response) -> dict[str, Any]:
+        """Safely parse JSON response, wrapping decode errors."""
+        try:
+            return response.json()
+        except Exception as exc:
+            raise ValueError(f"Jira API invalid response: {exc}") from exc
+
     async def health_check(self) -> HealthResult:
         """Verify connectivity by fetching the current user's profile."""
-        async with self._client() as client:
-            r = await client.get("/myself")
+        try:
+            async with self._client() as client:
+                r = await client.get("/myself")
 
-        if r.status_code != 200:
-            return HealthResult(ok=False, detail=f"HTTP {r.status_code}: {r.text[:200]}")
+            if r.status_code != 200:
+                return HealthResult(ok=False, detail=f"HTTP {r.status_code}: {r.text[:200]}")
 
-        user_info = r.json()
-        display_name = user_info.get("displayName", "")
+            user_info = await self._parse_json(r)
+            display_name = user_info.get("displayName", "")
 
-        return HealthResult(ok=True, detail=display_name)
+            return HealthResult(ok=True, detail=display_name)
+        except (httpx.HTTPStatusError, httpx.TimeoutException, httpx.ConnectError) as exc:
+            return HealthResult(ok=False, detail=f"Jira API error: {exc}")
+        except Exception as exc:
+            return HealthResult(ok=False, detail=str(exc)[:200])
 
     async def query(self, q: ConnectorQuery) -> ConnectorResult:
-        async with self._client() as client:
-            match q.resource:
-                case "issue":
-                    issue_key = q.filters.get("issue_key")
-                    if not issue_key:
-                        raise ValueError("Jira issue query requires 'issue_key' filter")
-                    r = await client.get(f"/issue/{issue_key}")
-                    r.raise_for_status()
-                    data: dict[str, Any] = r.json()
-                    return ConnectorResult(records=[data])
-                case "search":
-                    jql = q.filters.get("jql", "")
-                    max_results = q.filters.get("max_results", q.limit)
-                    r = await client.post(
-                        "/search",
-                        json={"jql": jql, "maxResults": max_results},
-                    )
-                    r.raise_for_status()
-                    body: dict[str, Any] = r.json()
-                    issues: list[dict[str, Any]] = body.get("issues", [])
-                    total = body.get("total", len(issues))
-                    return ConnectorResult(records=issues, total=total)
-                case _:
-                    raise ValueError(f"Unsupported Jira resource: {q.resource!r}")
+        match q.resource:
+            case "issue":
+                issue_key = q.filters.get("issue_key")
+                if not issue_key:
+                    raise ValueError("Jira issue query requires 'issue_key' filter")
+                r = await self._call_api("GET", f"/issue/{issue_key}")
+                data: dict[str, Any] = await self._parse_json(r)
+                return ConnectorResult(records=[data])
+            case "search":
+                jql = q.filters.get("jql", "")
+                max_results = q.filters.get("max_results", q.limit)
+                r = await self._call_api(
+                    "POST",
+                    "/search",
+                    json={"jql": jql, "maxResults": max_results},
+                )
+                body: dict[str, Any] = await self._parse_json(r)
+                issues: list[dict[str, Any]] = body.get("issues", [])
+                total = body.get("total", len(issues))
+                return ConnectorResult(records=issues, total=total)
+            case _:
+                raise ValueError(f"Unsupported Jira resource: {q.resource!r}")
 
     async def write(self, payload: ConnectorPayload) -> dict[str, Any]:
-        async with self._client() as client:
-            match payload.resource:
-                case "issue":
-                    r = await client.post("/issue", json=payload.data)
-                    r.raise_for_status()
-                    created: dict[str, Any] = r.json()
-                    return created
-                case "issue_update":
-                    if "issue_key" not in payload.data:
-                        raise ValueError("Jira issue update requires 'issue_key' in data")
-                    issue_key = payload.data["issue_key"]
-                    fields: dict[str, Any] = payload.data["fields"]
-                    r = await client.put(f"/issue/{issue_key}", json={"fields": fields})
-                    r.raise_for_status()
-                    return {"issue_key": issue_key, "updated": True}
-                case _:
-                    raise ValueError(f"Unsupported Jira write resource: {payload.resource!r}")
+        match payload.resource:
+            case "issue":
+                r = await self._call_api("POST", "/issue", json=payload.data)
+                created: dict[str, Any] = await self._parse_json(r)
+                return created
+            case "issue_update":
+                if "issue_key" not in payload.data:
+                    raise ValueError("Jira issue update requires 'issue_key' in data")
+                issue_key = payload.data["issue_key"]
+                fields: dict[str, Any] = payload.data["fields"]
+                r = await self._call_api("PUT", f"/issue/{issue_key}", json={"fields": fields})
+                return {"issue_key": issue_key, "updated": True}
+            case _:
+                raise ValueError(f"Unsupported Jira write resource: {payload.resource!r}")
