@@ -9,6 +9,7 @@ from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from sqlalchemy import select
+from sqlalchemy.exc import ProgrammingError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.api.dependencies import get_db_session
@@ -124,15 +125,21 @@ async def ingest_errors(
         ) from exc
 
     events_data = [e.model_dump(exclude={"breadcrumbs"}) for e in ingest_request.events]
-    async with session.begin():
-        await set_rls_org(session, principal.organisation_id)
-        org_id = principal.organisation_id
-        if org_id is None:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Authenticated principal has no organisation",
-            )
-        results = await _service.ingest_batch(session, org_id, events_data)
+    try:
+        async with session.begin():
+            await set_rls_org(session, principal.organisation_id)
+            org_id = principal.organisation_id
+            if org_id is None:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Authenticated principal has no organisation",
+                )
+            results = await _service.ingest_batch(session, org_id, events_data)
+    except ProgrammingError:
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="Error tracking is not available. Run database migrations to enable it.",
+        )
 
     return {"results": [ErrorGroupResult(**r) for r in results]}
 
@@ -198,45 +205,51 @@ async def list_error_groups(
     if org_id is None:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No organisation")
 
-    async with session.begin():
-        await set_rls_org(session, org_id)
-        groups = await get_error_groups(
-            session=session,
-            org_id=org_id,
-            status=status_filter,
-            level=level,
-            source=source,
-            environment=environment,
-            search=search,
-            limit=limit,
-            offset=offset,
-        )
-        total = await count_error_groups(
-            session=session,
-            org_id=org_id,
-            status=status_filter,
-            level=level,
-            source=source,
-            environment=environment,
-            search=search,
-        )
-
-        sample_ids = [g.sample_event_id for g in groups if g.sample_event_id is not None]
-        sample_events: dict[uuid.UUID, ErrorEvent] = {}
-        if sample_ids:
-            result = await session.execute(
-                select(ErrorEvent).where(
-                    ErrorEvent.organisation_id == org_id,
-                    ErrorEvent.id.in_(sample_ids),
-                )
+    try:
+        async with session.begin():
+            await set_rls_org(session, org_id)
+            groups = await get_error_groups(
+                session=session,
+                org_id=org_id,
+                status=status_filter,
+                level=level,
+                source=source,
+                environment=environment,
+                search=search,
+                limit=limit,
+                offset=offset,
             )
-            for event in result.scalars().all():
-                sample_events[event.id] = event
+            total = await count_error_groups(
+                session=session,
+                org_id=org_id,
+                status=status_filter,
+                level=level,
+                source=source,
+                environment=environment,
+                search=search,
+            )
 
-        items = []
-        for g in groups:
-            sample = sample_events.get(g.sample_event_id) if g.sample_event_id else None
-            items.append(_serialize_error_group_summary(g, sample))
+            sample_ids = [g.sample_event_id for g in groups if g.sample_event_id is not None]
+            sample_events: dict[uuid.UUID, ErrorEvent] = {}
+            if sample_ids:
+                result = await session.execute(
+                    select(ErrorEvent).where(
+                        ErrorEvent.organisation_id == org_id,
+                        ErrorEvent.id.in_(sample_ids),
+                    )
+                )
+                for event in result.scalars().all():
+                    sample_events[event.id] = event
+
+            items = []
+            for g in groups:
+                sample = sample_events.get(g.sample_event_id) if g.sample_event_id else None
+                items.append(_serialize_error_group_summary(g, sample))
+    except ProgrammingError:
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="Error tracking is not available. Run database migrations to enable it.",
+        )
 
     return {"items": items, "total": total, "limit": limit, "offset": offset}
 
@@ -251,12 +264,18 @@ async def get_error_group_detail(
     if org_id is None:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No organisation")
 
-    async with session.begin():
-        await set_rls_org(session, org_id)
-        group = await get_error_group(session=session, org_id=org_id, group_id=error_id)
-        if group is None:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Error group not found")
-        sample = await _fetch_sample_event(session, org_id, group)
+    try:
+        async with session.begin():
+            await set_rls_org(session, org_id)
+            group = await get_error_group(session=session, org_id=org_id, group_id=error_id)
+            if group is None:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Error group not found")
+            sample = await _fetch_sample_event(session, org_id, group)
+    except ProgrammingError:
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="Error tracking is not available. Run database migrations to enable it.",
+        )
 
     return {
         "id": str(group.id),
@@ -282,20 +301,26 @@ async def patch_error_group(
     if org_id is None:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No organisation")
 
-    async with session.begin():
-        await set_rls_org(session, org_id)
-        try:
-            group = await update_error_group(
-                session=session,
-                org_id=org_id,
-                group_id=error_id,
-                status=body.status,
-                assigned_to=uuid.UUID(body.assigned_to) if body.assigned_to else None,
-            )
-        except ValueError as exc:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    try:
+        async with session.begin():
+            await set_rls_org(session, org_id)
+            try:
+                group = await update_error_group(
+                    session=session,
+                    org_id=org_id,
+                    group_id=error_id,
+                    status=body.status,
+                    assigned_to=uuid.UUID(body.assigned_to) if body.assigned_to else None,
+                )
+            except ValueError as exc:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
 
-        sample = await _fetch_sample_event(session, org_id, group)
+            sample = await _fetch_sample_event(session, org_id, group)
+    except ProgrammingError:
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="Error tracking is not available. Run database migrations to enable it.",
+        )
 
     return {
         "id": str(group.id),
@@ -322,16 +347,22 @@ async def list_error_events(
     if org_id is None:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No organisation")
 
-    async with session.begin():
-        await set_rls_org(session, org_id)
-        group = await get_error_group(session=session, org_id=org_id, group_id=error_id)
-        if group is None:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Error group not found")
+    try:
+        async with session.begin():
+            await set_rls_org(session, org_id)
+            group = await get_error_group(session=session, org_id=org_id, group_id=error_id)
+            if group is None:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Error group not found")
 
-        events = await get_error_events_by_group(
-            session=session, org_id=org_id, group_id=error_id, limit=limit, offset=offset
+            events = await get_error_events_by_group(
+                session=session, org_id=org_id, group_id=error_id, limit=limit, offset=offset
+            )
+            total = await count_error_events_by_group(session=session, org_id=org_id, group_id=error_id)
+    except ProgrammingError:
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="Error tracking is not available. Run database migrations to enable it.",
         )
-        total = await count_error_events_by_group(session=session, org_id=org_id, group_id=error_id)
 
     items = [_serialize_error_event_detail(e) for e in events]
     return {"items": items, "total": total, "limit": limit, "offset": offset}
