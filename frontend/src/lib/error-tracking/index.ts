@@ -41,6 +41,8 @@ export function getErrorTracker(): ErrorTracker | null {
 export class ErrorTracker {
   private breadcrumbs: BreadcrumbCollector
   private unsubRouter: (() => void) | null = null
+  private _user: { id: string; email?: string; name?: string } | null = null
+  private _tags: Record<string, string> = {}
 
   constructor(config?: ErrorTrackerConfig) {
     _activeConfig = {
@@ -89,6 +91,14 @@ export class ErrorTracker {
     enqueueError(event)
   }
 
+  setUser(user: { id: string; email?: string; name?: string } | null): void {
+    this._user = user
+  }
+
+  setTags(tags: Record<string, string>): void {
+    this._tags = { ...tags }
+  }
+
   dispose(): void {
     if (this.unsubRouter) {
       this.unsubRouter()
@@ -109,10 +119,19 @@ function isDisabled(): boolean {
 function buildBaseEvent(): ErrorEventInput {
   const config = getConfig()
   const collector = getCollector()
+  const ctx = gatherContext()
+  if (_instance) {
+    if (_instance._user) {
+      ctx.user = _instance._user
+    }
+    if (Object.keys(_instance._tags).length > 0) {
+      ctx.tags = _instance._tags
+    }
+  }
   return {
     level: 'error',
     message: '',
-    context_json: gatherContext(),
+    context_json: ctx,
     source: config.appName,
     environment: config.environment,
     version: config.version || undefined,

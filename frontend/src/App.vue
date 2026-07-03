@@ -7,6 +7,7 @@
 import { ref, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { getAccessToken, setAccessToken, onAuthChange } from './lib/api/client'
+import { getErrorTracker } from './lib/error-tracking'
 import LoginView from './views/LoginView.vue'
 import AppLayout from './components/AppLayout.vue'
 
@@ -33,6 +34,19 @@ onMounted(async () => {
     if (!res.ok) return
     const data = await res.json()
     setAccessToken(data.access_token)
+    if (data.user) {
+      const tracker = getErrorTracker()
+      if (tracker) {
+        tracker.setUser({
+          id: data.user.id,
+          email: data.user.email,
+          name: data.user.name,
+        })
+      }
+    } else {
+      console.debug('[App.vue] Login response has no user field — skipping error tracker setUser')
+      // TODO: fetch /me after login to set user info on error tracker
+    }
     router.push('/')
   } catch {
     // Silent — fall back to login screen
