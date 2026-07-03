@@ -90,6 +90,12 @@ repos:
         language: system
         files: ^backend/src/
         pass_filenames: false
+      - id: generate-api-types
+        name: Generate API types from OpenAPI schema
+        entry: powershell -NoProfile -File frontend/scripts/generate-api-types.ps1
+        language: system
+        files: ^backend/src/
+        pass_filenames: false
       - id: eslint
         name: ESLint
         entry: bash -c 'cd frontend && npm run lint --if-present'
