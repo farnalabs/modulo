@@ -64,7 +64,7 @@ async def test_verify_scopes_extra_scopes(connector):
 @respx.mock
 async def test_verify_scopes_api_failure(connector):
     respx.get("https://api.github.com/user").mock(return_value=httpx.Response(401, text="Unauthorized"))
-    with pytest.raises(ValueError, match="Cannot verify scopes: HTTP 401"):
+    with pytest.raises(ValueError, match="Cannot verify scopes: GitHub API HTTP 401"):
         await connector.verify_scopes()
 
 

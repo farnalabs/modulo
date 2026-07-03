@@ -1,5 +1,6 @@
 """GitHubConnector — async GitHub API connector."""
 
+import json
 from typing import Any
 
 import httpx
@@ -65,17 +66,37 @@ class GitHubConnector(ConnectorBase):
     def _client(self) -> httpx.AsyncClient:
         return httpx.AsyncClient(base_url=_GITHUB_API, headers=self._headers(), timeout=30)
 
+    async def _call_api(self, method: str, path: str, **kwargs: Any) -> httpx.Response:
+        """Call GitHub API and wrap HTTP/network errors as ValueError."""
+        try:
+            async with self._client() as client:
+                r = await client.request(method, path, **kwargs)
+            r.raise_for_status()
+            return r
+        except httpx.HTTPStatusError as exc:
+            raise ValueError(f"GitHub API HTTP {exc.response.status_code}: {exc.response.text[:200]}") from exc
+        except httpx.TimeoutException:
+            raise ValueError("GitHub API timeout") from None
+        except httpx.ConnectError:
+            raise ValueError("GitHub API connection error") from None
+
+    async def _parse_json(self, response: httpx.Response) -> Any:
+        """Parse JSON response, wrapping decode errors as ValueError."""
+        try:
+            return response.json()
+        except json.JSONDecodeError as exc:
+            raise ValueError(f"GitHub API returned invalid JSON: {response.text[:200]}") from exc
+
     async def verify_scopes(self) -> set[str]:
         """Verify the token has required OAuth scopes via ``X-OAuth-Scopes`` header.
 
         Returns the set of missing scopes (empty if all present).
         Raises ``ValueError`` if the API call fails (non-200).
         """
-        async with self._client() as client:
-            r = await client.get("/user")
-
-        if r.status_code != 200:
-            raise ValueError(f"Cannot verify scopes: HTTP {r.status_code}")
+        try:
+            r = await self._call_api("GET", "/user")
+        except ValueError as exc:
+            raise ValueError(f"Cannot verify scopes: {exc}") from exc
 
         header_value = r.headers.get("X-OAuth-Scopes", "")
         token_scopes: set[str] = set()
@@ -89,13 +110,15 @@ class GitHubConnector(ConnectorBase):
 
         Required scopes: ``repo``, ``read:org``.
         """
-        async with self._client() as client:
-            r = await client.get("/user")
+        try:
+            r = await self._call_api("GET", "/user")
+        except ValueError as exc:
+            return HealthResult(ok=False, detail=str(exc)[:200])
 
-        if r.status_code != 200:
-            return HealthResult(ok=False, detail=f"HTTP {r.status_code}: {r.text[:200]}")
-
-        user_login = r.json().get("login", "")
+        try:
+            user_login = (await self._parse_json(r)).get("login", "")
+        except ValueError as exc:
+            return HealthResult(ok=False, detail=str(exc)[:200])
 
         header_value = r.headers.get("X-OAuth-Scopes", "")
         token_scopes: set[str] = set()
@@ -112,206 +135,182 @@ class GitHubConnector(ConnectorBase):
         return HealthResult(ok=True, detail=user_login)
 
     async def query(self, q: ConnectorQuery) -> ConnectorResult:
-        async with self._client() as client:
-            match q.resource:
-                case "repos":
-                    r = await client.get("/user/repos", params={"per_page": q.limit})
-                    r.raise_for_status()
-                    data: list[dict[str, Any]] = r.json()
-                    return ConnectorResult(records=data, total=len(data))
-                case "file":
-                    owner_repo = q.filters["repo"]
-                    path = q.filters["path"]
-                    ref = q.filters.get("ref", "main")
-                    r = await client.get(f"/repos/{owner_repo}/contents/{path}", params={"ref": ref})
-                    r.raise_for_status()
-                    return ConnectorResult(records=[r.json()])
-                case "pulls":
-                    owner_repo = q.filters["repo"]
-                    state = q.filters.get("state", "open")
-                    r = await client.get(
-                        f"/repos/{owner_repo}/pulls",
-                        params={"state": state, "per_page": q.limit},
-                    )
-                    r.raise_for_status()
-                    prs: list[dict[str, Any]] = r.json()
-                    return ConnectorResult(records=prs, total=len(prs))
-                case "issues":
-                    owner_repo = q.filters["repo"]
-                    params: dict[str, Any] = {"per_page": q.limit}
-                    for key in ("state", "labels", "sort", "direction", "milestone", "assignee", "since"):
-                        if key in q.filters:
-                            params[key] = q.filters[key]
-                    r = await client.get(f"/repos/{owner_repo}/issues", params=params)
-                    r.raise_for_status()
-                    issues: list[dict[str, Any]] = r.json()
-                    return ConnectorResult(records=issues, total=len(issues))
-                case "issue":
-                    owner_repo = q.filters["repo"]
-                    issue_number = q.filters["issue_number"]
-                    r = await client.get(f"/repos/{owner_repo}/issues/{issue_number}")
-                    r.raise_for_status()
-                    return ConnectorResult(records=[r.json()])
-                case "labels":
-                    owner_repo = q.filters["repo"]
-                    r = await client.get(f"/repos/{owner_repo}/labels", params={"per_page": q.limit})
-                    r.raise_for_status()
-                    labels: list[dict[str, Any]] = r.json()
-                    return ConnectorResult(records=labels, total=len(labels))
-                case "milestones":
-                    owner_repo = q.filters["repo"]
-                    params = {"per_page": q.limit}
-                    if "state" in q.filters:
-                        params["state"] = q.filters["state"]
-                    if "sort" in q.filters:
-                        params["sort"] = q.filters["sort"]
-                    if "direction" in q.filters:
-                        params["direction"] = q.filters["direction"]
-                    r = await client.get(f"/repos/{owner_repo}/milestones", params=params)
-                    r.raise_for_status()
-                    milestones: list[dict[str, Any]] = r.json()
-                    return ConnectorResult(records=milestones, total=len(milestones))
-                case "issue_comments":
-                    owner_repo = q.filters["repo"]
-                    issue_number = q.filters["issue_number"]
-                    r = await client.get(
-                        f"/repos/{owner_repo}/issues/{issue_number}/comments",
-                        params={"per_page": q.limit},
-                    )
-                    r.raise_for_status()
-                    comments: list[dict[str, Any]] = r.json()
-                    return ConnectorResult(records=comments, total=len(comments))
-                case "issue_events":
-                    owner_repo = q.filters["repo"]
-                    issue_number = q.filters["issue_number"]
-                    r = await client.get(
-                        f"/repos/{owner_repo}/issues/{issue_number}/events",
-                        params={"per_page": q.limit},
-                    )
-                    r.raise_for_status()
-                    events: list[dict[str, Any]] = r.json()
-                    return ConnectorResult(records=events, total=len(events))
-                case "assignees":
-                    owner_repo = q.filters["repo"]
-                    r = await client.get(f"/repos/{owner_repo}/assignees", params={"per_page": q.limit})
-                    r.raise_for_status()
-                    assignees: list[dict[str, Any]] = r.json()
-                    return ConnectorResult(records=assignees, total=len(assignees))
-                case "timeline":
-                    owner_repo = q.filters["repo"]
-                    issue_number = q.filters["issue_number"]
-                    r = await client.get(
-                        f"/repos/{owner_repo}/issues/{issue_number}/timeline",
-                        params={"per_page": q.limit},
-                    )
-                    r.raise_for_status()
-                    timeline: list[dict[str, Any]] = r.json()
-                    return ConnectorResult(records=timeline, total=len(timeline))
-                case _:
-                    raise ValueError(f"Unsupported GitHub resource: {q.resource!r}")
+        match q.resource:
+            case "repos":
+                r = await self._call_api("GET", "/user/repos", params={"per_page": q.limit})
+                data: list[dict[str, Any]] = await self._parse_json(r)
+                return ConnectorResult(records=data, total=len(data))
+            case "file":
+                owner_repo = q.filters["repo"]
+                path = q.filters["path"]
+                ref = q.filters.get("ref", "main")
+                r = await self._call_api("GET", f"/repos/{owner_repo}/contents/{path}", params={"ref": ref})
+                return ConnectorResult(records=[await self._parse_json(r)])
+            case "pulls":
+                owner_repo = q.filters["repo"]
+                state = q.filters.get("state", "open")
+                r = await self._call_api(
+                    "GET", f"/repos/{owner_repo}/pulls",
+                    params={"state": state, "per_page": q.limit},
+                )
+                prs: list[dict[str, Any]] = await self._parse_json(r)
+                return ConnectorResult(records=prs, total=len(prs))
+            case "issues":
+                owner_repo = q.filters["repo"]
+                params: dict[str, Any] = {"per_page": q.limit}
+                for key in ("state", "labels", "sort", "direction", "milestone", "assignee", "since"):
+                    if key in q.filters:
+                        params[key] = q.filters[key]
+                r = await self._call_api("GET", f"/repos/{owner_repo}/issues", params=params)
+                issues: list[dict[str, Any]] = await self._parse_json(r)
+                return ConnectorResult(records=issues, total=len(issues))
+            case "issue":
+                owner_repo = q.filters["repo"]
+                issue_number = q.filters["issue_number"]
+                r = await self._call_api("GET", f"/repos/{owner_repo}/issues/{issue_number}")
+                return ConnectorResult(records=[await self._parse_json(r)])
+            case "labels":
+                owner_repo = q.filters["repo"]
+                r = await self._call_api("GET", f"/repos/{owner_repo}/labels", params={"per_page": q.limit})
+                labels: list[dict[str, Any]] = await self._parse_json(r)
+                return ConnectorResult(records=labels, total=len(labels))
+            case "milestones":
+                owner_repo = q.filters["repo"]
+                params = {"per_page": q.limit}
+                if "state" in q.filters:
+                    params["state"] = q.filters["state"]
+                if "sort" in q.filters:
+                    params["sort"] = q.filters["sort"]
+                if "direction" in q.filters:
+                    params["direction"] = q.filters["direction"]
+                r = await self._call_api("GET", f"/repos/{owner_repo}/milestones", params=params)
+                milestones: list[dict[str, Any]] = await self._parse_json(r)
+                return ConnectorResult(records=milestones, total=len(milestones))
+            case "issue_comments":
+                owner_repo = q.filters["repo"]
+                issue_number = q.filters["issue_number"]
+                r = await self._call_api(
+                    "GET", f"/repos/{owner_repo}/issues/{issue_number}/comments",
+                    params={"per_page": q.limit},
+                )
+                comments: list[dict[str, Any]] = await self._parse_json(r)
+                return ConnectorResult(records=comments, total=len(comments))
+            case "issue_events":
+                owner_repo = q.filters["repo"]
+                issue_number = q.filters["issue_number"]
+                r = await self._call_api(
+                    "GET", f"/repos/{owner_repo}/issues/{issue_number}/events",
+                    params={"per_page": q.limit},
+                )
+                events: list[dict[str, Any]] = await self._parse_json(r)
+                return ConnectorResult(records=events, total=len(events))
+            case "assignees":
+                owner_repo = q.filters["repo"]
+                r = await self._call_api("GET", f"/repos/{owner_repo}/assignees", params={"per_page": q.limit})
+                assignees: list[dict[str, Any]] = await self._parse_json(r)
+                return ConnectorResult(records=assignees, total=len(assignees))
+            case "timeline":
+                owner_repo = q.filters["repo"]
+                issue_number = q.filters["issue_number"]
+                r = await self._call_api(
+                    "GET", f"/repos/{owner_repo}/issues/{issue_number}/timeline",
+                    params={"per_page": q.limit},
+                )
+                timeline: list[dict[str, Any]] = await self._parse_json(r)
+                return ConnectorResult(records=timeline, total=len(timeline))
+            case _:
+                raise ValueError(f"Unsupported GitHub resource: {q.resource!r}")
 
     async def write(self, payload: ConnectorPayload) -> dict[str, Any]:
-        async with self._client() as client:
-            match payload.resource:
-                case "file":
-                    owner_repo = payload.data["repo"]
-                    path = payload.data["path"]
-                    body: dict[str, Any] = {
-                        "message": payload.data.get("message", "Update via Modulo"),
-                        "content": payload.data["content"],
-                    }
-                    if "sha" in payload.data:
-                        body["sha"] = payload.data["sha"]
-                    r = await client.put(f"/repos/{owner_repo}/contents/{path}", json=body)
-                    r.raise_for_status()
-                    result: dict[str, Any] = r.json()
-                    return result
-                case "issue":
-                    owner_repo = payload.data["repo"]
-                    issue_body: dict[str, Any] = {
-                        "title": payload.data["title"],
-                    }
-                    if "body" in payload.data:
-                        issue_body["body"] = payload.data["body"]
-                    if "labels" in payload.data:
-                        issue_body["labels"] = payload.data["labels"]
-                    if "assignees" in payload.data:
-                        issue_body["assignees"] = payload.data["assignees"]
-                    if "milestone" in payload.data:
-                        issue_body["milestone"] = payload.data["milestone"]
-                    r = await client.post(f"/repos/{owner_repo}/issues", json=issue_body)
-                    r.raise_for_status()
-                    result = r.json()
-                    return result
-                case "issue_update":
-                    owner_repo = payload.data["repo"]
-                    issue_number = payload.data["issue_number"]
-                    update_body: dict[str, Any] = {}
-                    for key in ("state", "title", "body", "labels", "milestone"):
-                        if key in payload.data:
-                            update_body[key] = payload.data[key]
-                    r = await client.patch(f"/repos/{owner_repo}/issues/{issue_number}", json=update_body)
-                    r.raise_for_status()
-                    result = r.json()
-                    return result
-                case "issue_comment":
-                    owner_repo = payload.data["repo"]
-                    issue_number = payload.data["issue_number"]
-                    r = await client.post(
-                        f"/repos/{owner_repo}/issues/{issue_number}/comments",
-                        json={"body": payload.data["body"]},
-                    )
-                    r.raise_for_status()
-                    result = r.json()
-                    return result
-                case "issue_label":
-                    owner_repo = payload.data["repo"]
-                    issue_number = payload.data["issue_number"]
-                    r = await client.post(
-                        f"/repos/{owner_repo}/issues/{issue_number}/labels",
-                        json={"labels": payload.data["labels"]},
-                    )
-                    r.raise_for_status()
-                    result = r.json()
-                    return result
-                case "issue_reaction":
-                    owner_repo = payload.data["repo"]
-                    issue_number = payload.data["issue_number"]
-                    r = await client.post(
-                        f"/repos/{owner_repo}/issues/{issue_number}/reactions",
-                        json={"content": payload.data["content"]},
-                        headers={
-                            **self._headers(),
-                            "Accept": "application/vnd.github.squirrel-girl-preview+json",
-                        },
-                    )
-                    r.raise_for_status()
-                    result = r.json()
-                    return result
-                case "label":
-                    owner_repo = payload.data["repo"]
-                    label_body: dict[str, Any] = {
-                        "name": payload.data["name"],
-                        "color": payload.data["color"],
-                    }
-                    if "description" in payload.data:
-                        label_body["description"] = payload.data["description"]
-                    r = await client.post(f"/repos/{owner_repo}/labels", json=label_body)
-                    r.raise_for_status()
-                    result = r.json()
-                    return result
-                case "milestone":
-                    owner_repo = payload.data["repo"]
-                    milestone_body: dict[str, Any] = {
-                        "title": payload.data["title"],
-                    }
-                    if "description" in payload.data:
-                        milestone_body["description"] = payload.data["description"]
-                    if "due_on" in payload.data:
-                        milestone_body["due_on"] = payload.data["due_on"]
-                    r = await client.post(f"/repos/{owner_repo}/milestones", json=milestone_body)
-                    r.raise_for_status()
-                    result = r.json()
-                    return result
-                case _:
-                    raise ValueError(f"Unsupported GitHub write resource: {payload.resource!r}")
+        match payload.resource:
+            case "file":
+                owner_repo = payload.data["repo"]
+                path = payload.data["path"]
+                body: dict[str, Any] = {
+                    "message": payload.data.get("message", "Update via Modulo"),
+                    "content": payload.data["content"],
+                }
+                if "sha" in payload.data:
+                    body["sha"] = payload.data["sha"]
+                r = await self._call_api("PUT", f"/repos/{owner_repo}/contents/{path}", json=body)
+                result: dict[str, Any] = await self._parse_json(r)
+                return result
+            case "issue":
+                owner_repo = payload.data["repo"]
+                issue_body: dict[str, Any] = {
+                    "title": payload.data["title"],
+                }
+                if "body" in payload.data:
+                    issue_body["body"] = payload.data["body"]
+                if "labels" in payload.data:
+                    issue_body["labels"] = payload.data["labels"]
+                if "assignees" in payload.data:
+                    issue_body["assignees"] = payload.data["assignees"]
+                if "milestone" in payload.data:
+                    issue_body["milestone"] = payload.data["milestone"]
+                r = await self._call_api("POST", f"/repos/{owner_repo}/issues", json=issue_body)
+                result = await self._parse_json(r)
+                return result
+            case "issue_update":
+                owner_repo = payload.data["repo"]
+                issue_number = payload.data["issue_number"]
+                update_body: dict[str, Any] = {}
+                for key in ("state", "title", "body", "labels", "milestone"):
+                    if key in payload.data:
+                        update_body[key] = payload.data[key]
+                r = await self._call_api("PATCH", f"/repos/{owner_repo}/issues/{issue_number}", json=update_body)
+                result = await self._parse_json(r)
+                return result
+            case "issue_comment":
+                owner_repo = payload.data["repo"]
+                issue_number = payload.data["issue_number"]
+                r = await self._call_api(
+                    "POST", f"/repos/{owner_repo}/issues/{issue_number}/comments",
+                    json={"body": payload.data["body"]},
+                )
+                result = await self._parse_json(r)
+                return result
+            case "issue_label":
+                owner_repo = payload.data["repo"]
+                issue_number = payload.data["issue_number"]
+                r = await self._call_api(
+                    "POST", f"/repos/{owner_repo}/issues/{issue_number}/labels",
+                    json={"labels": payload.data["labels"]},
+                )
+                result = await self._parse_json(r)
+                return result
+            case "issue_reaction":
+                owner_repo = payload.data["repo"]
+                issue_number = payload.data["issue_number"]
+                r = await self._call_api(
+                    "POST", f"/repos/{owner_repo}/issues/{issue_number}/reactions",
+                    json={"content": payload.data["content"]},
+                    headers={"Accept": "application/vnd.github.squirrel-girl-preview+json"},
+                )
+                result = await self._parse_json(r)
+                return result
+            case "label":
+                owner_repo = payload.data["repo"]
+                label_body: dict[str, Any] = {
+                    "name": payload.data["name"],
+                    "color": payload.data["color"],
+                }
+                if "description" in payload.data:
+                    label_body["description"] = payload.data["description"]
+                r = await self._call_api("POST", f"/repos/{owner_repo}/labels", json=label_body)
+                result = await self._parse_json(r)
+                return result
+            case "milestone":
+                owner_repo = payload.data["repo"]
+                milestone_body: dict[str, Any] = {
+                    "title": payload.data["title"],
+                }
+                if "description" in payload.data:
+                    milestone_body["description"] = payload.data["description"]
+                if "due_on" in payload.data:
+                    milestone_body["due_on"] = payload.data["due_on"]
+                r = await self._call_api("POST", f"/repos/{owner_repo}/milestones", json=milestone_body)
+                result = await self._parse_json(r)
+                return result
+            case _:
+                raise ValueError(f"Unsupported GitHub write resource: {payload.resource!r}")
