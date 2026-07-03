@@ -108,20 +108,26 @@ Existing SDLC onboarding: teams can map their current process (even manual steps
 - [ ] All API errors surface user-visible text
 - [ ] Button disabled states prevent double-submit
 
-### Error States & Edge Cases
+### Error Handling
+- [x] GET /status catches ProgrammingError → returns 501 with "migrations" message
+- [x] GET /step/{step_id} catches ProgrammingError → returns 501 with "migrations" message
+- [x] Returns 401 when no valid auth token is present
+- [x] Returns 422 when marking completion for unknown step_id
+- [x] Returns 404 when GET step data for unknown step_id
+- [x] Duplicate step completion is idempotent
+- [x] Network errors surface user-visible error text throughout wizard
 
-- [ ] Returns 401 when no valid auth token is present
-- [ ] Returns 422 when marking completion for unknown step_id
-- [ ] Returns 404 when GET step data for unknown step_id
-- [ ] Duplicate step completion is idempotent
-- [ ] First run auto-detected by checking existing pipelines
-- [ ] All-steps-completed auto-clears first_run flag
-- [ ] Network errors surface user-visible error text throughout wizard
+### BDD Coverage
+- [x] `org_onboarding.feature`: 5 real scenarios with step definitions in `test_orgs.py`
+- [x] `sdlc_onboarding.feature`: 8 real scenarios with step definitions in `test_sdlc_onboarding.py`
+- [x] Onboarding BDD scenarios cover first-run status, step marking, step data, all-steps-completed flow
 
-## Known Gaps - **PRD 8.16 5-step path not fully integrated:** The onboarding wizard implements a simplified version. Steps 4 (library browse filtered by abstract_name) and step 5 (wire agents) are generic rather than specifically guided by inferred schema shape. No schema-inferred abstract_name is used to filter library recommendations.
-- **No integrated BDD scenarios:** `backend/tests/bdd/features/orgs/org_onboarding.feature` is a placeholder with no real scenarios. `backend/tests/bdd/steps/test_alpha_mcp.py` references `onboarding.feature` under `backend/tests/bdd/features/mcp/` which does not exist.
+## Known Gaps
+- **PRD 8.16 5-step path not fully integrated:** The onboarding wizard implements a simplified version. Steps 4 (library browse filtered by abstract_name) and step 5 (wire agents) are generic rather than specifically guided by inferred schema shape. No schema-inferred abstract_name is used to filter library recommendations.
+- **Backend step data simplified:** PRD 8.16 mentions Notion/Confluence as document-store connectors in addition to Jira/Linear/GitHub; `connect_tools` step data only lists GitHub, Jira, Linear.
 - **No persona feature file:** Alice persona scenarios (`@goal-alice-onboard-sdlc`, `@goal-alice-replace-step`) exist in the persona doc but have no corresponding Gherkin scenarios or step definitions.
-- **`depends-on` references feature IDs** (`feat-core-schema-inference-ui`, `feat-core-replace-step-agent`) — previously pointed to raw task IDs.
 - **Demo pipeline + first-run walkthrough (Phase 5, item 25):** `MODULO_DEMO_MODE` and pre-loaded `prd-to-requirements` demo not yet built per the delivery tracker.
 - **No E2E test** covering the full connect→infer→review→library→wire→run flow.
-- **Backend step data simplified:** PRD 8.16 mentions Notion/Confluence as document-store connectors in addition to Jira/Linear/GitHub; `connect_tools` step data only lists GitHub, Jira, Linear. 
+- **No frontend component smoke test** for OnboardingWizard.vue.
+- **`depends-on` references feature IDs** (`feat-core-schema-inference-ui`, `feat-core-replace-step-agent`) — previously pointed to raw task IDs.
+- **test_sdlc_onboarding.py is mocking-only:** BDD step definitions use MagicMock responses rather than real API calls, so scenarios validate UI logic but not true HTTP contract.
