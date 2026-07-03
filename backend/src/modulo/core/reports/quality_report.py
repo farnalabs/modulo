@@ -356,33 +356,11 @@ async def deliver_quality_report(
 
     Returns a list of delivery results with keys: url, status, status_code, error.
     """
+    from modulo.core.reports.scheduler import _deliver_to_urls
+
     slack_blocks_str = format_slack_message(report_data)
     payload = {"blocks": json.loads(slack_blocks_str)}
-    webhook_urls = recipient_config.get("webhook_urls", [])
-
-    results: list[dict[str, Any]] = []
-    async with httpx.AsyncClient(timeout=30.0) as client:
-        for url in webhook_urls:
-            try:
-                resp = await client.post(
-                    url,
-                    json=payload,
-                )
-                results.append(
-                    {
-                        "url": url,
-                        "status": "delivered" if resp.is_success else "failed",
-                        "status_code": resp.status_code,
-                        "error": None if resp.is_success else resp.text[:200],
-                    }
-                )
-            except httpx.RequestError as exc:
-                results.append(
-                    {
-                        "url": url,
-                        "status": "failed",
-                        "status_code": None,
-                        "error": str(exc),
-                    }
-                )
-    return results
+    return await _deliver_to_urls(
+        recipient_config.get("webhook_urls", []),
+        payload,
+    )
