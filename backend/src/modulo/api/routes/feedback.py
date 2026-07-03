@@ -19,6 +19,7 @@ from typing import Any
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel
 from sqlalchemy import select
+from sqlalchemy.exc import ProgrammingError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.api.dependencies import get_db_session
@@ -77,25 +78,31 @@ async def create_feedback(
     session: AsyncSession = Depends(get_db_session),
     principal: AuthenticatedPrincipal = Depends(get_current_user),
 ) -> dict[str, Any]:
-    async with session.begin():
-        await set_rls_org(session, principal.organisation_id)
-        run_result = await session.execute(
-            select(Run).where(Run.id == run_id, Run.organisation_id == principal.organisation_id)
-        )
-        run = run_result.scalar_one_or_none()
-        if run is None:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Run not found")
+    try:
+        async with session.begin():
+            await set_rls_org(session, principal.organisation_id)
+            run_result = await session.execute(
+                select(Run).where(Run.id == run_id, Run.organisation_id == principal.organisation_id)
+            )
+            run = run_result.scalar_one_or_none()
+            if run is None:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Run not found")
 
-        mgr = FeedbackManager(session, principal.organisation_id)
-        record = await mgr.create_feedback_record(
-            run_id=run_id,
-            gate_id=body.gate_id,
-            account_id=principal.account_id,
-            rejection_reason=body.rejection_reason,
-            rejected_output=body.rejected_output,
-            producing_node_id=body.producing_node_id,
-            producing_agent_id=body.producing_agent_id,
-            feedback_handler_type=body.feedback_handler_type,
+            mgr = FeedbackManager(session, principal.organisation_id)
+            record = await mgr.create_feedback_record(
+                run_id=run_id,
+                gate_id=body.gate_id,
+                account_id=principal.account_id,
+                rejection_reason=body.rejection_reason,
+                rejected_output=body.rejected_output,
+                producing_node_id=body.producing_node_id,
+                producing_agent_id=body.producing_agent_id,
+                feedback_handler_type=body.feedback_handler_type,
+            )
+    except ProgrammingError:
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="Feedback system is not available. Run database migrations to enable this feature.",
         )
 
     return {
@@ -120,14 +127,20 @@ async def list_feedback(
     session: AsyncSession = Depends(get_db_session),
     principal: AuthenticatedPrincipal = Depends(get_current_user),
 ) -> dict[str, Any]:
-    async with session.begin():
-        await set_rls_org(session, principal.organisation_id)
-        mgr = FeedbackManager(session, principal.organisation_id)
-        result = await mgr.get_feedback_records(
-            status=status_filter,
-            pipeline_id=pipeline_id,
-            page=page,
-            page_size=page_size,
+    try:
+        async with session.begin():
+            await set_rls_org(session, principal.organisation_id)
+            mgr = FeedbackManager(session, principal.organisation_id)
+            result = await mgr.get_feedback_records(
+                status=status_filter,
+                pipeline_id=pipeline_id,
+                page=page,
+                page_size=page_size,
+            )
+    except ProgrammingError:
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="Feedback system is not available. Run database migrations to enable this feature.",
         )
 
     return {
@@ -157,17 +170,23 @@ async def list_feedback_inbox(
     if date_to:
         date_to_dt = datetime.fromisoformat(date_to).replace(tzinfo=UTC)
 
-    async with session.begin():
-        await set_rls_org(session, principal.organisation_id)
-        mgr = FeedbackManager(session, principal.organisation_id)
-        result = await mgr.get_feedback_records_inbox(
-            handler_type=handler_type,
-            status=status_filter,
-            pipeline_id=pipeline_id,
-            date_from=date_from_dt,
-            date_to=date_to_dt,
-            page=page,
-            page_size=page_size,
+    try:
+        async with session.begin():
+            await set_rls_org(session, principal.organisation_id)
+            mgr = FeedbackManager(session, principal.organisation_id)
+            result = await mgr.get_feedback_records_inbox(
+                handler_type=handler_type,
+                status=status_filter,
+                pipeline_id=pipeline_id,
+                date_from=date_from_dt,
+                date_to=date_to_dt,
+                page=page,
+                page_size=page_size,
+            )
+    except ProgrammingError:
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="Feedback system is not available. Run database migrations to enable this feature.",
         )
 
     pipeline_map = result.get("pipeline_map", {})
@@ -187,10 +206,16 @@ async def list_eval_proposals(
     session: AsyncSession = Depends(get_db_session),
     principal: AuthenticatedPrincipal = Depends(get_current_user),
 ) -> dict[str, Any]:
-    async with session.begin():
-        await set_rls_org(session, principal.organisation_id)
-        mgr = FeedbackManager(session, principal.organisation_id)
-        result = await mgr.get_eval_proposals(page=page, page_size=page_size)
+    try:
+        async with session.begin():
+            await set_rls_org(session, principal.organisation_id)
+            mgr = FeedbackManager(session, principal.organisation_id)
+            result = await mgr.get_eval_proposals(page=page, page_size=page_size)
+    except ProgrammingError:
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="Feedback system is not available. Run database migrations to enable this feature.",
+        )
 
     items = result["items"]
     node_name_map: dict[str, str] = {}
@@ -223,10 +248,16 @@ async def get_feedback(
     session: AsyncSession = Depends(get_db_session),
     principal: AuthenticatedPrincipal = Depends(get_current_user),
 ) -> dict[str, Any]:
-    async with session.begin():
-        await set_rls_org(session, principal.organisation_id)
-        mgr = FeedbackManager(session, principal.organisation_id)
-        record = await mgr.get_feedback_record(record_id)
+    try:
+        async with session.begin():
+            await set_rls_org(session, principal.organisation_id)
+            mgr = FeedbackManager(session, principal.organisation_id)
+            record = await mgr.get_feedback_record(record_id)
+    except ProgrammingError:
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="Feedback system is not available. Run database migrations to enable this feature.",
+        )
 
     if record is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Feedback record not found")
@@ -248,10 +279,16 @@ async def update_feedback_status(
             detail=f"Invalid status. Must be one of: {', '.join(sorted(valid_statuses))}",
         )
 
-    async with session.begin():
-        await set_rls_org(session, principal.organisation_id)
-        mgr = FeedbackManager(session, principal.organisation_id)
-        record = await mgr.update_status(record_id, body.status)
+    try:
+        async with session.begin():
+            await set_rls_org(session, principal.organisation_id)
+            mgr = FeedbackManager(session, principal.organisation_id)
+            record = await mgr.update_status(record_id, body.status)
+    except ProgrammingError:
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="Feedback system is not available. Run database migrations to enable this feature.",
+        )
 
     if record is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Feedback record not found")
@@ -268,18 +305,30 @@ async def detect_eval_gap(
     session: AsyncSession = Depends(get_db_session),
     principal: AuthenticatedPrincipal = Depends(get_current_user),
 ) -> dict[str, Any]:
-    async with session.begin():
-        await set_rls_org(session, principal.organisation_id)
-        mgr = FeedbackManager(session, principal.organisation_id)
-        record = await mgr.get_feedback_record(record_id)
+    try:
+        async with session.begin():
+            await set_rls_org(session, principal.organisation_id)
+            mgr = FeedbackManager(session, principal.organisation_id)
+            record = await mgr.get_feedback_record(record_id)
+    except ProgrammingError:
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="Feedback system is not available. Run database migrations to enable this feature.",
+        )
 
     if record is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Feedback record not found")
 
-    async with session.begin():
-        await set_rls_org(session, principal.organisation_id)
-        mgr = FeedbackManager(session, principal.organisation_id)
-        is_gap = await mgr.detect_eval_gap(record, eval_suite=[])
+    try:
+        async with session.begin():
+            await set_rls_org(session, principal.organisation_id)
+            mgr = FeedbackManager(session, principal.organisation_id)
+            is_gap = await mgr.detect_eval_gap(record, eval_suite=[])
+    except ProgrammingError:
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="Feedback system is not available. Run database migrations to enable this feature.",
+        )
 
     return {
         "id": str(record.id),
@@ -293,10 +342,16 @@ async def get_inbox_item(
     session: AsyncSession = Depends(get_db_session),
     principal: AuthenticatedPrincipal = Depends(get_current_user),
 ) -> dict[str, Any]:
-    async with session.begin():
-        await set_rls_org(session, principal.organisation_id)
-        mgr = FeedbackManager(session, principal.organisation_id)
-        record = await mgr.get_feedback_record(record_id)
+    try:
+        async with session.begin():
+            await set_rls_org(session, principal.organisation_id)
+            mgr = FeedbackManager(session, principal.organisation_id)
+            record = await mgr.get_feedback_record(record_id)
+    except ProgrammingError:
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="Feedback system is not available. Run database migrations to enable this feature.",
+        )
 
     if record is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Feedback record not found")
@@ -330,46 +385,52 @@ async def review_feedback(
 
     correction_run_id: str | None = None
 
-    async with session.begin():
-        await set_rls_org(session, principal.organisation_id)
-        mgr = FeedbackManager(session, principal.organisation_id)
-        record = await mgr.get_feedback_record(record_id)
+    try:
+        async with session.begin():
+            await set_rls_org(session, principal.organisation_id)
+            mgr = FeedbackManager(session, principal.organisation_id)
+            record = await mgr.get_feedback_record(record_id)
 
-        if record is None:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Feedback record not found")
-
-        if body.action == "mark_reviewed":
-            record = await mgr.update_status(record_id, "resolved")
             if record is None:
-                raise HTTPException(
-                    status_code=status.HTTP_409_CONFLICT,
-                    detail="Cannot transition feedback to resolved",
-                )
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Feedback record not found")
 
-        elif body.action == "dismiss":
-            record = await mgr.update_status(record_id, "dismissed")
-            if record is None:
-                raise HTTPException(
-                    status_code=status.HTTP_409_CONFLICT,
-                    detail="Cannot dismiss feedback",
-                )
+            if body.action == "mark_reviewed":
+                record = await mgr.update_status(record_id, "resolved")
+                if record is None:
+                    raise HTTPException(
+                        status_code=status.HTTP_409_CONFLICT,
+                        detail="Cannot transition feedback to resolved",
+                    )
 
-        elif body.action == "create_correction_run":
-            if not record.run_id:
-                raise HTTPException(
-                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-                    detail="Feedback has no associated run — cannot create correction run",
-                )
+            elif body.action == "dismiss":
+                record = await mgr.update_status(record_id, "dismissed")
+                if record is None:
+                    raise HTTPException(
+                        status_code=status.HTTP_409_CONFLICT,
+                        detail="Cannot dismiss feedback",
+                    )
 
-            try:
-                new_run_id = await mgr.spawn_correction_run(record_id)
-            except ValueError as exc:
-                raise HTTPException(
-                    status_code=status.HTTP_404_NOT_FOUND,
-                    detail=str(exc),
-                ) from exc
+            elif body.action == "create_correction_run":
+                if not record.run_id:
+                    raise HTTPException(
+                        status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                        detail="Feedback has no associated run — cannot create correction run",
+                    )
 
-            correction_run_id = str(new_run_id)
+                try:
+                    new_run_id = await mgr.spawn_correction_run(record_id)
+                except ValueError as exc:
+                    raise HTTPException(
+                        status_code=status.HTTP_404_NOT_FOUND,
+                        detail=str(exc),
+                    ) from exc
+
+                correction_run_id = str(new_run_id)
+    except ProgrammingError:
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="Feedback system is not available. Run database migrations to enable this feature.",
+        )
 
     return {
         "id": str(record.id),
