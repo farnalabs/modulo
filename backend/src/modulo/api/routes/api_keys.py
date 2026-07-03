@@ -39,7 +39,7 @@ class ApiKeyCreatedResponse(BaseModel):
     id: uuid.UUID
     name: str
     role: str
-    full_key: str
+    key_value: str
     lookup_prefix: str
     created_at: datetime
     team_id: str | None = None
@@ -116,7 +116,7 @@ async def create_api_key_endpoint(
         id=key.id,
         name=key.name,
         role=key.role,
-        full_key=full_key,
+        key_value=full_key,
         lookup_prefix=f"mk_{key.lookup_prefix}****",
         created_at=key.created_at,
         team_id=str(key.team_id) if key.team_id else None,
