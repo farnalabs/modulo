@@ -12,6 +12,8 @@ from modulo.model_backends.base import HealthResult, ModelBackendBase, _openai_c
 class OpenAIBackend(ModelBackendBase):
     """Thin adapter over ChatOpenAI."""
 
+    supports_tools: bool = True
+
     def __init__(self, api_key: str, model_id: str, **default_params: Any) -> None:
         self._model = ChatOpenAI(model=model_id, api_key=api_key, **default_params)
         self._backend_id = f"openai/{model_id}"

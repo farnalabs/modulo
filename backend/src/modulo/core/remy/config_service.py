@@ -24,7 +24,7 @@ def _normalize_uuids(items: list[Any]) -> list[uuid.UUID]:
 
 
 class RemyConfig(BaseModel):
-    schema_version: int = 1
+    schema_version: int = 2
     system_prompt: str = ""
     additional_guidance: str = ""
     access_rules: dict[str, list[Any]] = Field(
@@ -35,9 +35,42 @@ class RemyConfig(BaseModel):
     default_context_window: int = 200000
     allowed_providers: list[str] = ["anthropic", "openai", "gemini", "deepseek", "groq"]
     allowed_models: list[str] = []  # empty = all models for allowed providers
+    tool_permissions: dict[str, str] = Field(default_factory=dict)
+    permission_mode: str = "safe"
 
 
 _CONFIG_KEY_PREFIX = "remy_config:"
+
+PERMISSION_MODE_PRESETS: dict[str, dict[str, str]] = {
+    "full_auto": {tool: "always_allowed" for tool in [
+        "navigate", "click", "fill", "select", "extract", "extract_all",
+        "get_page_interactables", "wait", "go_back", "get_url", "press",
+    ]},
+    "safe": {
+        "press": "requires_approval",
+    },
+    "locked_down": {
+        "navigate": "always_allowed",
+        "extract": "always_allowed",
+        "extract_all": "always_allowed",
+        "get_page_interactables": "always_allowed",
+        "wait": "always_allowed",
+        "get_url": "always_allowed",
+        "click": "requires_approval",
+        "fill": "requires_approval",
+        "select": "requires_approval",
+        "go_back": "requires_approval",
+        "press": "requires_approval",
+    },
+}
+
+
+def apply_permission_mode_preset(mode: str, current_overrides: dict[str, str] | None = None) -> dict[str, str]:
+    """Apply a permission mode preset, preserving any custom overrides."""
+    preset = dict(PERMISSION_MODE_PRESETS.get(mode, {}))
+    if current_overrides and mode == "custom":
+        preset.update(current_overrides)
+    return preset
 
 
 class RemyConfigService:

@@ -14,12 +14,20 @@ Endpoints:
 
     Streaming:
         POST   /api/v1/remy/sessions/{id}/stream     — SSE stream of LLM response
+
+    UI Commands:
+        POST   /api/v1/remy/sessions/{id}/permission-response
+        POST   /api/v1/remy/sessions/{id}/ui-command-results
+        POST   /api/v1/remy/sessions/{id}/reset-permissions
 """
 
+import asyncio
 import json
 import logging
+import time as _time
 import uuid
 from collections.abc import AsyncGenerator
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from cryptography.fernet import Fernet
@@ -33,8 +41,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from starlette.responses import StreamingResponse
 
 from modulo.api.dependencies import get_db_session
+from modulo.api.ui_tools import _UI_TOOLS, DESTRUCTIVE_PATTERNS, UI_TOOL_NAMES, WRITE_TOOLS
 from modulo.auth.dependencies import get_current_user
 from modulo.auth.jwt import AuthenticatedPrincipal
+from modulo.core.remy.config_service import RemyConfig, RemyConfigService
 from modulo.core.remy.skill_loader import SkillLoader
 from modulo.db.models.model_backend import ModelBackend
 from modulo.db.models.remy_message import ChatMessage
@@ -77,6 +87,16 @@ _SIMPLE_BACKENDS: dict[str, type[ModelBackendBase]] = {
     "togetherai": TogetherAIBackend,
 }
 
+# ── In-memory event registry (single-worker only) ────────────────────────
+# For multi-worker deployments, replace with Redis pub/sub.
+
+_pending_permissions: dict[str, tuple[asyncio.Event, str]] = {}
+_permission_decisions: dict[str, dict] = {}
+_pending_ui_results: dict[str, asyncio.Event] = {}
+_ui_command_results: dict[str, list[dict]] = {}
+_session_approvals: dict[str, dict[str, dict]] = {}
+_SESSION_APPROVAL_TTL = timedelta(minutes=30)
+
 # ── Pydantic schemas ─────────────────────────────────────────────────────
 
 
@@ -108,6 +128,23 @@ class StreamRequest(BaseModel):
         None, ge=1024, le=1_000_000,
         description="Override context window (defaults to session value)",
     )
+
+
+class PermissionResponse(BaseModel):
+    request_id: str
+    action: str  # "approve" | "reject" | "approve_for_session"
+
+
+class UiCommandResultItem(BaseModel):
+    id: str
+    name: str
+    success: bool
+    result: dict | None = None
+    error: str | None = None
+
+
+class UiCommandResultsBatch(BaseModel):
+    results: list[UiCommandResultItem]
     api_key: str = Field(default="", description="User's API key for the LLM provider (auto-resolved if empty)")
     mcp_api_key: str | None = Field(None, description="API key for MCP tool execution")
     system_prompt: str | None = Field(None, description="Optional system prompt override")
@@ -244,6 +281,107 @@ async def _reconstruct_messages(session: AsyncSession, session_id: uuid.UUID) ->
     )
     db_messages = result.scalars().all()
     return [_message_to_langchain(m) for m in db_messages]
+
+
+# ── UI command helpers ───────────────────────────────────────────────────
+
+
+async def _validate_session_ownership(
+    session_id: uuid.UUID,
+    principal: AuthenticatedPrincipal,
+    db: AsyncSession,
+) -> ChatSession:
+    chat_session = await db.get(ChatSession, session_id)
+    if chat_session is None or str(chat_session.user_id) != principal.account_id:
+        raise HTTPException(status_code=404, detail="Session not found")
+    return chat_session
+
+
+def _has_destructive_pattern(selector: str) -> bool:
+    lower = selector.lower()
+    return any(p in lower for p in DESTRUCTIVE_PATTERNS)
+
+
+def _resolve_tool_permission(config: RemyConfig, tool_name: str, args: dict[str, Any]) -> str:
+    """Returns 'always_allowed', 'requires_approval', or 'disabled'."""
+    # 1. Per-tool user override (highest priority)
+    overrides = config.tool_permissions or {}
+    if tool_name in overrides:
+        return overrides[tool_name]
+
+    # 2. Mode-based defaults
+    mode = config.permission_mode
+    if mode == "locked_down":
+        if tool_name in WRITE_TOOLS or tool_name == "press":
+            base = "requires_approval"
+        else:
+            base = "always_allowed"
+    elif mode == "full_auto":
+        base = "always_allowed"
+    else:
+        if tool_name == "press":
+            base = "requires_approval"
+        else:
+            base = "always_allowed"
+
+    # 3. Destructive pattern override (applies regardless of mode)
+    if base == "always_allowed" and tool_name in WRITE_TOOLS:
+        selector = args.get("selector", "")
+        if _has_destructive_pattern(selector):
+            return "requires_approval"
+
+    return base
+
+
+def _is_approved_for_session(session_id: str, tool_name: str, page_path: str) -> bool:
+    session_approvals = _session_approvals.get(session_id)
+    if not session_approvals:
+        return False
+    now = datetime.now(UTC)
+    stale_keys = [k for k, v in session_approvals.items() if now >= v["expires_at"]]
+    for k in stale_keys:
+        del session_approvals[k]
+    approval = session_approvals.get(tool_name)
+    return bool(approval and now < approval["expires_at"] and approval["page_path"] == page_path)
+
+
+def _set_session_approval(session_id: str, tool_name: str, page_path: str) -> None:
+    if session_id not in _session_approvals:
+        _session_approvals[session_id] = {}
+    _session_approvals[session_id][tool_name] = {
+        "page_path": page_path,
+        "expires_at": datetime.now(UTC) + _SESSION_APPROVAL_TTL,
+    }
+
+
+def _build_tool_definitions_for_text() -> str:
+    """Generate text description for non-tool models."""
+    lines = []
+    for name, schema in _UI_TOOLS.items():
+        params_desc = ", ".join(
+            f"{p}: {info.get('type', 'str')}"
+            for p, info in schema["parameters"].items()
+        )
+        lines.append(f"- `{name}({params_desc})`: {schema['description']}")
+    return "\n".join(lines)
+
+
+def _get_all_tool_definitions() -> list[dict[str, Any]]:
+    """Combine UI tool definitions for the LLM's tools parameter."""
+    tools: list[dict[str, Any]] = []
+    for name, schema in _UI_TOOLS.items():
+        tools.append({
+            "type": "function",
+            "function": {
+                "name": name,
+                "description": schema["description"],
+                "parameters": {
+                    "type": "object",
+                    "properties": schema["parameters"],
+                },
+            },
+        })
+    return tools
 
 
 # ── Session endpoints ────────────────────────────────────────────────────
@@ -511,13 +649,16 @@ async def stream_chat(
 
     mcp_base_url = settings.modulo_public_url.rstrip("/")
 
+    session_id_str = str(session_id)
+
     async def event_generator() -> AsyncGenerator[str, None]:
-        """SSE event generator for the streaming LLM response."""
+        """SSE event generator — agentic loop with multi-turn LLM + UI commands."""
         msg_id: str | None = None
+        last_ping_at = _time.monotonic()
+        parent_msg_id: uuid.UUID | None = None
         try:
-            # Use a single DB session for all operations inside the generator
             async with AsyncSession(session.bind) as db_session:
-                # 1. Construct system prompt from config + skills (with RLS)
+                # 1. Construct system prompt from config + skills
                 async with db_session.begin():
                     await set_rls_org(db_session, principal.organisation_id)
                     skill_loader = SkillLoader(db_session)
@@ -528,7 +669,7 @@ async def stream_chat(
                         system_prompt_override=body.system_prompt,
                     )
 
-                # 2. Save the user message to DB
+                # 2. Save user message to DB
                 async with db_session.begin():
                     await set_rls_org(db_session, principal.organisation_id)
                     user_msg = ChatMessage(
@@ -539,8 +680,9 @@ async def stream_chat(
                     )
                     db_session.add(user_msg)
                     await db_session.flush()
+                    parent_msg_id = user_msg.id
 
-                # 3. Reconstruct conversation from DB
+                # 3. Reconstruct conversation
                 async with db_session.begin():
                     await set_rls_org(db_session, principal.organisation_id)
                     langchain_messages = await _reconstruct_messages(db_session, session_id)
@@ -549,39 +691,33 @@ async def stream_chat(
                 if system_prompt:
                     langchain_messages.insert(0, SystemMessage(content=system_prompt))
 
-                # 5. Enforce context window — prune oldest messages if over budget
+                # 5. Context window pruning
                 context_window = (
                     body.context_window_tokens
                     if body.context_window_tokens is not None
                     else (chat_session.context_window_tokens or 200000)
                 )
                 budget = int(context_window * 0.8)
-                total_tokens = sum(
-                    max(1, len(m.content or "") // 4) for m in langchain_messages
-                )
+                total_tokens = sum(max(1, len(m.content or "") // 4) for m in langchain_messages)
                 pruned_count = 0
                 while total_tokens > budget and len(langchain_messages) > 2:
                     removed = langchain_messages.pop(1)
                     total_tokens -= max(1, len(removed.content or "") // 4)
                     pruned_count += 1
                 if pruned_count:
-                    logger.info(
-                        "Pruned %d messages from session %s to fit context window",
-                        pruned_count, session_id,
-                    )
+                    logger.info("Pruned %d messages from session %s", pruned_count, session_id)
 
-                # 6. Resolve API key (from request or DB backend)
+                # 6. Resolve API key
                 api_key = body.api_key
                 if not api_key:
                     resolved = await _resolve_api_key(
-                        body.provider,
-                        principal.organisation_id,
-                        db_session,
-                        settings.fernet_key,
+                        body.provider, principal.organisation_id, db_session, settings.fernet_key,
                     )
                     if resolved is None:
-                        msg = f"No active {body.provider} API key configured. "
-                        msg += "Add one in Settings > Model Backends or provide an api_key."
+                        msg = (
+                            f"No active {body.provider} API key configured. "
+                            "Add one in Settings > Model Backends or provide an api_key."
+                        )
                         yield f"event: error\ndata: {json.dumps({'detail': msg})}\n\n"
                         return
                     api_key = resolved
@@ -592,125 +728,226 @@ async def stream_chat(
                     yield f"event: error\ndata: {json.dumps({'detail': exc.detail})}\n\n"
                     return
 
-                # 7. Stream tokens from the LLM
-                full_content = ""
-                tool_call_buffers: dict[int, dict[str, Any]] = {}
+                # ── Agentic loop ────────────────────────────────────────
+                while True:
+                    full_content = ""
+                    tool_call_buffers: dict[int, dict[str, Any]] = {}
 
-                async for chunk in backend.stream(langchain_messages):
+                    tools_param = None
+                    if getattr(backend, 'supports_tools', False):
+                        tools_param = _get_all_tool_definitions()
+
+                    async for chunk in backend.stream(langchain_messages, tools=tools_param):
+                        if await request.is_disconnected():
+                            return
+                        if isinstance(chunk, AIMessageChunk):
+                            if chunk.content:
+                                full_content += chunk.content
+                                yield f"event: token\ndata: {json.dumps({'token': chunk.content})}\n\n"
+                            if chunk.tool_call_chunks:
+                                for tc in chunk.tool_call_chunks:
+                                    idx = tc.get("index", 0)
+                                    if idx not in tool_call_buffers:
+                                        tool_call_buffers[idx] = {
+                                            "id": tc.get("id", ""),
+                                            "name": tc.get("name", ""),
+                                            "args": tc.get("args", ""),
+                                        }
+                                    else:
+                                        tool_call_buffers[idx]["args"] += tc.get("args", "")
+
                     if await request.is_disconnected():
-                        break
-                    if isinstance(chunk, AIMessageChunk):
-                        if chunk.content:
-                            full_content += chunk.content
-                            yield f"event: token\ndata: {json.dumps({'token': chunk.content})}\n\n"
-
-                        if chunk.tool_call_chunks:
-                            for tc in chunk.tool_call_chunks:
-                                idx = tc.get("index", 0)
-                                if idx not in tool_call_buffers:
-                                    tool_call_buffers[idx] = {
-                                        "id": tc.get("id", ""),
-                                        "name": tc.get("name", ""),
-                                        "args": tc.get("args", ""),
-                                    }
-                                else:
-                                    tool_call_buffers[idx]["args"] += tc.get("args", "")
-
-                if await request.is_disconnected():
-                    return
-
-                # 8. Reconstruct tool calls from accumulated chunks
-                tool_calls = _reconstruct_tool_calls(tool_call_buffers)
-
-                # 9. Execute tool calls via MCP
-                tool_results: list[dict[str, Any]] = []
-                if tool_calls:
-                    if not body.mcp_api_key:
-                        yield (
-                            "event: error\ndata: "
-                            + json.dumps({
-                                "detail": "Tool execution requires an MCP API key",
-                            })
-                            + "\n\n"
-                        )
                         return
-                    for tc in tool_calls:
-                        try:
-                            result = await _call_mcp_tool(
-                                tool_name=tc["name"],
-                                arguments=tc["args"],
-                                mcp_api_key=body.mcp_api_key,
-                                base_url=mcp_base_url,
+
+                    tool_calls = _reconstruct_tool_calls(tool_call_buffers)
+
+                    if not tool_calls:
+                        # LLM done — save assistant message and exit loop
+                        async with db_session.begin():
+                            await set_rls_org(db_session, principal.organisation_id)
+                            assistant_msg = ChatMessage(
+                                organisation_id=principal.organisation_id,
+                                session_id=session_id,
+                                role="assistant",
+                                content=full_content if full_content else None,
+                                tool_calls_json=None,
+                                parent_id=parent_msg_id,
                             )
-                            tool_results.append({
-                                "tool_call_id": tc["id"],
-                                "tool_name": tc["name"],
-                                "success": True,
-                                "result": result,
-                            })
-                            tc_data = {
-                                "tool_call_id": tc["id"],
-                                "tool_name": tc["name"],
-                                "success": True,
-                                "result": result,
-                            }
-                            yield f"event: tool_call\ndata: {json.dumps(tc_data)}\n\n"
-                        except Exception as exc:
-                            logger.exception("MCP tool call failed: %r", tc["name"])
-                            err_msg = f"{type(exc).__name__}: {exc}"[:200]
-                            tool_results.append({
-                                "tool_call_id": tc["id"],
-                                "tool_name": tc["name"],
-                                "success": False,
-                                "error": err_msg,
-                            })
-                            tc_err = {
-                                "tool_call_id": tc["id"],
-                                "tool_name": tc["name"],
-                                "success": False,
-                                "error": err_msg,
-                            }
-                            yield f"event: tool_call\ndata: {json.dumps(tc_err)}\n\n"
+                            db_session.add(assistant_msg)
+                            await db_session.flush()
+                            msg_id = str(assistant_msg.id)
+                        break
 
-                # 10. Save assistant message to DB
-                async with db_session.begin():
-                    await set_rls_org(db_session, principal.organisation_id)
-                    assistant_msg = ChatMessage(
-                        organisation_id=principal.organisation_id,
-                        session_id=session_id,
-                        role="assistant",
-                        content=full_content if full_content else None,
-                        tool_calls_json={"tool_calls": tool_calls} if tool_calls else None,
-                        parent_id=user_msg.id,
+                    # Separate UI vs MCP tool calls
+                    ui_tool_calls = [tc for tc in tool_calls if tc["name"] in UI_TOOL_NAMES]
+                    mcp_tool_calls = [tc for tc in tool_calls if tc["name"] not in UI_TOOL_NAMES]
+
+                    tool_results: list[dict[str, Any]] = []
+
+                    # Execute MCP tools
+                    if mcp_tool_calls:
+                        if not body.mcp_api_key:
+                            yield (
+                                "event: error\ndata: "
+                                + json.dumps({"detail": "Tool execution requires an MCP API key"})
+                                + "\n\n"
+                            )
+                            return
+                        for tc in mcp_tool_calls:
+                            try:
+                                result = await _call_mcp_tool(
+                                    tool_name=tc["name"],
+                                    arguments=tc["args"],
+                                    mcp_api_key=body.mcp_api_key,
+                                    base_url=mcp_base_url,
+                                )
+                                tool_results.append({
+                                    "tool_call_id": tc["id"], "tool_name": tc["name"],
+                                    "success": True, "result": result,
+                                })
+                                yield f"event: tool_call\ndata: {json.dumps(tool_results[-1])}\n\n"
+                            except Exception as exc:
+                                logger.exception("MCP tool call failed: %r", tc["name"])
+                                err_msg = f"{type(exc).__name__}: {exc}"[:200]
+                                tool_results.append({
+                                    "tool_call_id": tc["id"], "tool_name": tc["name"],
+                                    "success": False, "error": err_msg,
+                                })
+                                yield f"event: tool_call\ndata: {json.dumps(tool_results[-1])}\n\n"
+
+                    # Handle UI tools
+                    if ui_tool_calls:
+                        config_service = RemyConfigService(db_session)
+                        config = await config_service.get_config(principal.organisation_id)
+
+                        approved_calls: list[dict[str, Any]] = []
+                        pending_permission_calls: list[dict[str, Any]] = []
+
+                        for tc in ui_tool_calls:
+                            perm = _resolve_tool_permission(config, tc["name"], tc["args"])
+                            if perm == "disabled":
+                                continue
+                            elif perm == "requires_approval":
+                                page_path = body.page_context or ""
+                                if not _is_approved_for_session(
+                                    session_id_str, tc["name"], page_path,
+                                ):
+                                    pending_permission_calls.append(tc)
+                                    continue
+                            approved_calls.append(tc)
+
+                        if pending_permission_calls:
+                            req_id = str(uuid.uuid4())
+                            yield f"event: permission_request\ndata: {json.dumps({
+                                'request_id': req_id,
+                                'tools': [{'name': tc['name'], 'args': tc['args']}
+                                          for tc in pending_permission_calls],
+                            })}\n\n"
+
+                            event = asyncio.Event()
+                            _pending_permissions[req_id] = (event, session_id_str)
+                            try:
+                                await asyncio.wait_for(event.wait(), timeout=60.0)
+                                decision = _permission_decisions.pop(req_id, {"action": "reject"})
+                                if decision["action"] in ("approve", "approve_for_session"):
+                                    approved_calls.extend(pending_permission_calls)
+                                    if decision["action"] == "approve_for_session":
+                                        for tc in pending_permission_calls:
+                                            _set_session_approval(
+                                                session_id_str, tc["name"], body.page_context or "",
+                                            )
+                            except TimeoutError:
+                                pass
+                            finally:
+                                _pending_permissions.pop(req_id, None)
+
+                        if approved_calls:
+                            event = asyncio.Event()
+                            _pending_ui_results[session_id_str] = event
+
+                            yield f"event: ui_command_batch\ndata: {json.dumps({
+                                'commands': approved_calls,
+                            })}\n\n"
+
+                            try:
+                                await asyncio.wait_for(event.wait(), timeout=120.0)
+                                results = _ui_command_results.pop(session_id_str, [])
+                            except TimeoutError:
+                                results = []
+                            finally:
+                                _pending_ui_results.pop(session_id_str, None)
+
+                            for r in results:
+                                tool_results.append({
+                                    "tool_call_id": r.get("id", ""),
+                                    "tool_name": r.get("name", ""),
+                                    "success": r.get("success", False),
+                                    "result": r.get("result"),
+                                    "error": r.get("error"),
+                                })
+                                yield f"event: tool_call\ndata: {json.dumps(tool_results[-1])}\n\n"
+
+                            if all(r.get("error") == "cancelled_by_user" for r in results):
+                                completed_count = sum(
+                                    1 for r in results if r.get("error") != "cancelled_by_user"
+                                )
+                                skipped_count = len(results) - completed_count
+                                yield f"event: abort_summary\ndata: {json.dumps({
+                                    'completed': completed_count, 'skipped': skipped_count,
+                                })}\n\n"
+                                break
+
+                    # Add to conversation for next LLM turn
+                    langchain_messages.append(
+                        AIMessage(content=full_content, tool_calls=tool_calls)
                     )
-                    db_session.add(assistant_msg)
-                    await db_session.flush()
-                    msg_id = str(assistant_msg.id)
-
                     for tr in tool_results:
-                        tool_msg = ChatMessage(
+                        langchain_messages.append(ToolMessage(
+                            content=json.dumps(tr.get("result", tr.get("error", ""))),
+                            tool_call_id=tr["tool_call_id"],
+                        ))
+
+                    # Save to DB
+                    async with db_session.begin():
+                        await set_rls_org(db_session, principal.organisation_id)
+                        assistant_msg = ChatMessage(
                             organisation_id=principal.organisation_id,
                             session_id=session_id,
-                            role="tool_result",
-                            content=json.dumps(tr.get("result", tr.get("error", ""))),
-                            tool_results_json=tr,
-                            parent_id=assistant_msg.id,
+                            role="assistant",
+                            content=full_content if full_content else None,
+                            tool_calls_json={"tool_calls": tool_calls} if tool_calls else None,
+                            parent_id=parent_msg_id,
                         )
-                        db_session.add(tool_msg)
+                        db_session.add(assistant_msg)
+                        await db_session.flush()
+                        msg_id = str(assistant_msg.id)
 
-            # 11. Send done event
+                        for tr in tool_results:
+                            tool_msg = ChatMessage(
+                                organisation_id=principal.organisation_id,
+                                session_id=session_id,
+                                role="tool_result",
+                                content=json.dumps(tr.get("result", tr.get("error", ""))),
+                                tool_results_json=tr,
+                                parent_id=assistant_msg.id,
+                            )
+                            db_session.add(tool_msg)
+
+                    # Ping keepalive if idle
+                    now = _time.monotonic()
+                    if now - last_ping_at >= 15:
+                        yield "event: ping\ndata: {}\n\n"
+                        last_ping_at = now
+
             yield f"event: done\ndata: {json.dumps({'message_id': msg_id})}\n\n"
 
         except HTTPException as exc:
             yield f"event: error\ndata: {json.dumps({'detail': exc.detail})}\n\n"
-            return
         except ProgrammingError:
             logger.exception("Remy streaming error — missing DB table or schema")
             yield (
                 "event: error\ndata: "
-                + json.dumps({
-                    "detail": "Feature is not available. Run database migrations to enable it.",
-                })
+                + json.dumps({"detail": "Feature is not available. Run database migrations to enable it."})
                 + "\n\n"
             )
         except Exception as exc:
@@ -726,3 +963,80 @@ async def stream_chat(
             "X-Accel-Buffering": "no",
         },
     )
+
+
+# ── UI Command endpoints ─────────────────────────────────────────────────
+
+
+@router.post("/sessions/{session_id}/permission-response")
+async def submit_permission_response(
+    session_id: uuid.UUID,
+    body: PermissionResponse,
+    session: AsyncSession = Depends(get_db_session),
+    principal: AuthenticatedPrincipal = Depends(get_current_user),
+) -> dict[str, str]:
+    try:
+        async with session.begin():
+            await set_rls_org(session, principal.organisation_id)
+            await _validate_session_ownership(session_id, principal, session)
+    except ProgrammingError:
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="Feature is not available. Run database migrations to enable it.",
+        ) from None
+
+    entry = _pending_permissions.get(body.request_id)
+    if entry is None:
+        raise HTTPException(status_code=404, detail="Permission request not found or expired")
+    event, req_session_id = entry
+    if req_session_id != str(session_id):
+        raise HTTPException(status_code=403, detail="Permission request does not belong to this session")
+    _permission_decisions[body.request_id] = {"action": body.action}
+    event.set()
+    return {"status": "ok"}
+
+
+@router.post("/sessions/{session_id}/ui-command-results")
+async def submit_ui_command_results(
+    session_id: uuid.UUID,
+    body: UiCommandResultsBatch,
+    session: AsyncSession = Depends(get_db_session),
+    principal: AuthenticatedPrincipal = Depends(get_current_user),
+) -> dict[str, str]:
+    try:
+        async with session.begin():
+            await set_rls_org(session, principal.organisation_id)
+            await _validate_session_ownership(session_id, principal, session)
+    except ProgrammingError:
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="Feature is not available. Run database migrations to enable it.",
+        ) from None
+
+    sid = str(session_id)
+    event = _pending_ui_results.get(sid)
+    if event is None:
+        raise HTTPException(status_code=404, detail="No pending UI command batch")
+    _ui_command_results[sid] = [r.model_dump() for r in body.results]
+    event.set()
+    return {"status": "ok"}
+
+
+@router.post("/sessions/{session_id}/reset-permissions")
+async def reset_session_permissions(
+    session_id: uuid.UUID,
+    session: AsyncSession = Depends(get_db_session),
+    principal: AuthenticatedPrincipal = Depends(get_current_user),
+) -> dict[str, str]:
+    try:
+        async with session.begin():
+            await set_rls_org(session, principal.organisation_id)
+            await _validate_session_ownership(session_id, principal, session)
+    except ProgrammingError:
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="Feature is not available. Run database migrations to enable it.",
+        ) from None
+
+    _session_approvals.pop(str(session_id), None)
+    return {"status": "ok"}

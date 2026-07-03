@@ -15,6 +15,8 @@ ANTHROPIC_BASE_URL = "https://api.anthropic.com"
 class AnthropicBackend(ModelBackendBase):
     """Thin adapter over ChatAnthropic."""
 
+    supports_tools: bool = True
+
     def __init__(self, api_key: str, model_id: str, **default_params: Any) -> None:
         self._model = ChatAnthropic(model=model_id, api_key=api_key, **default_params)
         self._backend_id = f"anthropic/{model_id}"
