@@ -12,12 +12,16 @@ Usage:
 
 import asyncio
 import hashlib
+import logging
 from abc import ABC, abstractmethod
 
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
-_POLL_INTERVAL = 0.05  # 50 ms between pg_try_advisory_lock attempts
+logger = logging.getLogger(__name__)
+
+_POLL_INTERVAL = 0.05
+_DEFAULT_LOCK_TIMEOUT = 300.0
 _TIMEOUT_ERR = "Could not acquire lock {key!r} within {timeout}s"
 
 
@@ -50,6 +54,10 @@ class PostgresLock(BaseLockService):
 
     Locks are scoped to the database session — they are automatically
     released when the session ends or the connection is closed.
+
+    The caller MUST wrap acquire/release inside an explicit transaction
+    (``async with session.begin():``) so that both calls use the same
+    database connection; advisory locks are connection-scoped.
     """
 
     async def acquire_lock(
@@ -59,9 +67,8 @@ class PostgresLock(BaseLockService):
         timeout: float | None = None,
     ) -> None:
         key1, key2 = _str_to_lock_keys(key)
-        deadline = None
-        if timeout is not None:
-            deadline = asyncio.get_event_loop().time() + timeout
+        actual_timeout = timeout if timeout is not None else _DEFAULT_LOCK_TIMEOUT
+        deadline = asyncio.get_running_loop().time() + actual_timeout
 
         while True:
             result = await session.execute(
@@ -71,21 +78,24 @@ class PostgresLock(BaseLockService):
             if result.scalar_one():
                 return
 
-            if deadline is not None and asyncio.get_event_loop().time() >= deadline:
-                raise LockAcquireError(_TIMEOUT_ERR.format(key=key, timeout=timeout))
+            if asyncio.get_running_loop().time() >= deadline:
+                raise LockAcquireError(_TIMEOUT_ERR.format(key=key, timeout=actual_timeout))
 
             await asyncio.sleep(_POLL_INTERVAL)
 
     async def release_lock(self, session: AsyncSession, key: str) -> None:
         key1, key2 = _str_to_lock_keys(key)
-        await session.execute(
+        result = await session.execute(
             text("SELECT pg_advisory_unlock(:key1, :key2)"),
             {"key1": key1, "key2": key2},
         )
+        if not result.scalar_one():
+            logger.warning(
+                "pg_advisory_unlock returned false for key=%r — lock was not held by this session",
+                key,
+            )
 
 
-# Shared state so all GenericLock instances share the same lock namespace,
-# even when RepositoryHub is constructed multiple times.
 _generic_locks: dict[str, asyncio.Lock] = {}
 _generic_owners: dict[str, int] = {}
 _generic_dict_lock = asyncio.Lock()
@@ -109,12 +119,12 @@ class GenericLock(BaseLockService):
         async with _generic_dict_lock:
             if key not in _generic_locks:
                 _generic_locks[key] = asyncio.Lock()
-        lock = _generic_locks[key]
+            lock = _generic_locks[key]
 
         if timeout is not None:
             try:
                 await asyncio.wait_for(lock.acquire(), timeout=timeout)
-            except TimeoutError as exc:
+            except asyncio.TimeoutError as exc:
                 raise LockAcquireError(_TIMEOUT_ERR.format(key=key, timeout=timeout)) from exc
         else:
             await lock.acquire()
@@ -127,14 +137,24 @@ class GenericLock(BaseLockService):
         owner = id(asyncio.current_task())
         async with _generic_dict_lock:
             actual = _generic_owners.get(key)
-            if actual is None or actual != owner:
+            if actual is None:
+                logger.warning(
+                    "release_lock called for key=%r but no owner was recorded — double-release?",
+                    key,
+                )
+                return
+            if actual != owner:
+                logger.warning(
+                    "release_lock called for key=%r by task %d but owner is task %d",
+                    key,
+                    owner,
+                    actual,
+                )
                 return
             del _generic_owners[key]
             lock = _generic_locks.get(key)
             if lock is not None:
                 lock.release()
-                if not lock.locked():
-                    del _generic_locks[key]
 
 
 def _str_to_lock_keys(key: str) -> tuple[int, int]:
@@ -154,4 +174,5 @@ def _build_lock_service(db_type: str) -> BaseLockService:
         case "postgres":
             return PostgresLock()
         case _:
+            logger.warning("Unknown db_type=%r — falling back to GenericLock", db_type)
             return GenericLock()
