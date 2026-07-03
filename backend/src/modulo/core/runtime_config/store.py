@@ -107,15 +107,24 @@ class RuntimeConfigStore:
 
         _validate_key_registries()
 
+    def _resolve(self, key: str) -> tuple[str | None, str]:
+        """Resolve effective value and provenance for a key.
+
+        Returns (value, provenance) with override > env > default priority.
+        """
+        override_val = self._overrides.get(key)
+        if override_val is not None:
+            return override_val, "override"
+        env_val = self._env_values.get(key)
+        if env_val is not None:
+            return env_val, "environment"
+        return self._defaults.get(key), "default"
+
     def get(self, key: str) -> str | None:
         """Return the effective value: override > env > default."""
         with self._lock:
-            if key in self._overrides:
-                return self._overrides[key]
-            env_val = self._env_values.get(key)
-            if env_val is not None:
-                return env_val
-            return self._defaults.get(key)
+            value, _ = self._resolve(key)
+            return value
 
     def set_override(self, key: str, value: str) -> None:
         """Set a runtime override that stays in memory until cleared or reloaded."""
@@ -150,16 +159,7 @@ class RuntimeConfigStore:
                 default_value: str | None = self._defaults.get(key)
                 env_value: str | None = self._env_values.get(key)
                 override_value: str | None = self._overrides.get(key)
-
-                if override_value is not None:
-                    current_value: str | None = override_value
-                    provenance = "override"
-                elif env_value is not None:
-                    current_value = env_value
-                    provenance = "environment"
-                else:
-                    current_value = default_value
-                    provenance = "default"
+                current_value, provenance = self._resolve(key)
 
                 items.append(ConfigEntry(
                     key=key,
