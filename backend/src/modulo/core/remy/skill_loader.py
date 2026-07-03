@@ -105,6 +105,7 @@ class SkillLoader:
             tools_text = build_tool_definitions_for_text()
             if tools_text:
                 parts.append(tools_text)
+                parts.append("- Before navigating, call get_manifest() to learn page structure and elements.")
 
         return "\n\n".join(parts)
 
