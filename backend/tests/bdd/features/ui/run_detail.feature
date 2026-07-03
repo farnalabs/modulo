@@ -26,3 +26,13 @@ Feature: Run Detail View
     Given I am on the run detail page for a running run
     When the backend emits a node_complete event
     Then the run detail page shows the updated node statuses
+
+  Scenario: Prompt reveal shows dialog with system and user messages
+    Given I am on the run detail page for a completed run
+    When I click the reveal prompt button for a node
+    Then I see the prompt reveal dialog with system and user messages
+
+  Scenario: Sensitive values are masked in the prompt reveal response
+    Given I am on the run detail page for a completed run
+    When I click the reveal prompt button for a node
+    Then sensitive values in the prompt text are masked with bullet characters
