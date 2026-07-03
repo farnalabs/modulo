@@ -635,7 +635,7 @@ def step_result_is_error(ctx):
 
 
 # ============================================================================
-# connectors/jira_connector.feature  â€”  5 scenarios
+# connectors/jira_connector.feature  â€"  7 scenarios
 # ============================================================================
 try:
     scenarios("../features/connectors/jira_connector.feature")
@@ -798,8 +798,48 @@ def step_jira_query_without_key(resource, ctx):
         ctx["query_error"] = str(exc)
 
 
+@given("a Jira connector that returns API errors")
+def step_jira_connector_api_errors(ctx):
+    from unittest.mock import AsyncMock
+    from modulo.connectors.base import HealthResult
+
+    mock_connector = AsyncMock()
+    mock_connector.connector_type = "jira"
+
+    async def mock_query(q):
+        raise ValueError("Jira API HTTP 404: Not Found")
+
+    async def mock_write(payload):
+        raise ValueError("Jira API HTTP 400: Bad Request")
+
+    async def mock_health_check():
+        return HealthResult(ok=False, detail="Jira API error: 401 Unauthorized")
+
+    mock_connector.query = mock_query
+    mock_connector.write = mock_write
+    mock_connector.health_check = mock_health_check
+    ctx["connector"] = mock_connector
+    ctx["query_error"] = None
+
+
+@when(parsers.parse('I write resource "{resource}" with empty data'))
+def step_jira_write_empty_data(resource, ctx):
+    from modulo.connectors.base import ConnectorPayload
+
+    payload = ConnectorPayload(resource=resource, data={})
+    import asyncio
+
+    try:
+        asyncio.new_event_loop().run_until_complete(ctx["connector"].write(payload))
+        ctx["write_result"] = "unexpected_success"
+        ctx["query_error"] = None
+    except Exception as exc:
+        ctx["write_result"] = None
+        ctx["query_error"] = str(exc)
+
+
 # ============================================================================
-# connectors/linear_connector.feature  â€”  5 scenarios
+# connectors/linear_connector.feature  â€"  5 scenarios
 # ============================================================================
 try:
     scenarios("../features/connectors/linear_connector.feature")

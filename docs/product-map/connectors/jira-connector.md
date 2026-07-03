@@ -30,8 +30,8 @@ Async Jira Cloud REST API v3 connector implementing `ConnectorBase`. Provides re
 - [x] `health_check()` calls `GET /myself` to validate credentials
 - [x] Return authenticated user displayName on success
 - [x] Return `HealthResult(ok=False)` with HTTP status on non-200
+- [x] Return `HealthResult(ok=False)` with detail containing status code — Jira Cloud 401 vs 403 distinction is visible in the detail string
 - [ ] Jira Data Center (self-hosted) API support — URL format differs
-- [ ] Handle Jira Cloud 401 vs 403 distinction in health check detail
 
 ### Issue Operations — CRUD via Jira REST API
 
@@ -70,7 +70,10 @@ Async Jira Cloud REST API v3 connector implementing `ConnectorBase`. Provides re
 - [x] Validate credentials by calling `GET /myself` — fail if status != 200
 - [x] Return authenticated user display name in `detail` on success
 - [x] Return HTTP status and response body on failure
-- [ ] Detect expired tokens vs invalid instance URL vs network errors
+- [x] Catch `httpx.HTTPStatusError` — returns `HealthResult(ok=False)` with status code and response text
+- [x] Catch `httpx.TimeoutException` and `httpx.ConnectError` — returns `HealthResult(ok=False)` with connection error detail
+- [x] Catch any generic `Exception` — returns `HealthResult(ok=False)` with truncated message
+- [ ] Detect expired tokens vs invalid instance URL vs network errors — partially covered: HTTP errors and network errors distinguished, but token expiry vs invalid URL both produce HTTP 401
 - [ ] Per-operation permission check before write operations
 
 ### Prompt Portability — issue-tracker terminology
@@ -78,6 +81,18 @@ Async Jira Cloud REST API v3 connector implementing `ConnectorBase`. Provides re
 - [ ] Connector type abstraction handles API operations
 - [ ] Agent prompt templates may use Jira-specific terminology ("issue", "story", "epic", "sprint")
 - [ ] Prompt portability is user's responsibility — documented limitation
+
+### Error Handling
+
+- [x] `health_check` catches `httpx.HTTPStatusError` — returns `HealthResult(ok=False)` with status code and response text
+- [x] `health_check` catches generic `Exception` — returns `HealthResult(ok=False)` with truncated message
+- [x] Query/write methods catch `httpx.HTTPStatusError` — raises `ValueError` with status code and response text
+- [x] Query/write methods catch `httpx.TimeoutException` and `httpx.ConnectError` — raises `ValueError` with connection error detail
+- [x] Query/write methods catch JSON decode errors — raises `ValueError` with parsing error detail
+- [x] `query("issue")` with missing `issue_key` — raises `ValueError` with descriptive message
+- [x] `write("issue_update")` with missing `issue_key` — raises `ValueError` with descriptive message
+- [x] `query()` with unsupported resource — raises `ValueError`
+- [x] `write()` with unsupported resource — raises `ValueError`
 
 ## Known Gaps
 
