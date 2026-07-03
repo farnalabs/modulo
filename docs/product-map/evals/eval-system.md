@@ -112,7 +112,7 @@ block or warn on failure.
 - [x] Multiple evals on same node → AND logic, first block fails remaining
 - [x] Mix of block and warn on same node → block takes precedence
 - [x] Eval gate runs AFTER node execution, BEFORE next node
-- [ ] Block failure recorded in AuditEvent — step def exists but needs end-to-end
+- [ ] Block failure recorded in AuditEvent — BDD step defs exist (eval_block.feature:56-62) but are stubs (set context flags, don't verify production code). Pipeline executor publishes `run_failed` via broker but does NOT call `append_audit_event`. Not wired to AuditEvent DB table.
 
 ### Conditional HITL
 
@@ -169,6 +169,27 @@ block or warn on failure.
 - [x] Empty output dict → field defaults to "", regex returns no match
 - [x] Suite with 0 evals → aggregate_score=1.0, passed=True
 
+### Error Handling
+
+- [x] Create eval definition: ProgrammingError → 501 Not Implemented
+- [x] List eval definitions: ProgrammingError → 501 Not Implemented
+- [x] Get eval definition: ProgrammingError → 501 Not Implemented
+- [x] Update eval definition: ProgrammingError → 501 Not Implemented
+- [x] Delete eval definition: ProgrammingError → 501 Not Implemented
+- [x] List run eval results: ProgrammingError → 501 Not Implemented
+- [x] Eval coverage: ProgrammingError → 501 Not Implemented
+- [x] Create eval from run: ProgrammingError → 501 Not Implemented
+- [x] Compare evals: ProgrammingError → 501 Not Implemented (NEWLY ADDED)
+- [x] Unauthenticated requests → 401/403
+- [x] Non-admin CRUD operations → 403 Forbidden
+- [x] Unknown eval ID → 404 Not Found
+- [x] Run not found (list_run_evals) → 404 Not Found
+- [x] Pipeline not found (coverage) → 404 Not Found
+- [x] Run not found (from-run) → 404 Not Found
+- [x] Run A not found (compare) → 404 Not Found
+- [x] Run B not found (compare) → 404 Not Found
+- [x] Invalid eval type in create → 422
+
 ## Known Gaps
 
 1. ReDoS protection: regex eval with user-influenced patterns can cause
@@ -179,10 +200,12 @@ block or warn on failure.
 3. No eval execution timeout per eval (per-node timeout exists but not
    per-eval).
 4. Eval results stored but no trend tracking — regression detection
-   (`regression.py`) exists but is not wired into CI or dashboards as a
-   trend-over-time feature.
-5. JMESPath condition syntax errors in conditional HITL gates are not
-   gracefully handled — error propagates as unhandled exception.
+   endpoint `GET /api/v1/admin/evals/regressions` exists (delivered in
+   feat-evals-eval-regression-alerts, index 98) but is not wired into
+   dashboards or CI as a trend-over-time visualisation.
+5. JMESPath condition syntax errors in conditional HITL gates — `== true`
+   comparison was fixed (index 116), but other syntax errors still
+   propagate as unhandled exceptions.
 6. Conditional HITL condition referencing a nonexistent eval_id not
    gracefully handled.
 7. JSON Schema `$ref` resolution could leak external resources — no
@@ -192,3 +215,12 @@ block or warn on failure.
 9. No end-to-end integration test for eval blocking in pipelines — gate
    enforcement tested at BDD level (step defs) but no full pipeline
    run → eval → eval_failed lifecycle test.
+
+## QA History
+
+### 2026-07-04 — Cross-cutting QA (index 118)
+- **Fixed**: Added ProgrammingError→501 catch to `compare_evals` endpoint (was missing, could crash on un-migrated DB)
+- **Added**: Error Handling section with 18 behaviour checkboxes covering all error paths
+- **Verified**: All 8 DB-accessing route handlers now have ProgrammingError→501 catches
+- **Updated**: Known gaps to reflect sub-feature QA work (eval-regression-alerts endpoint exists, JMESPath `== true` fixed)
+- **Status**: partial
