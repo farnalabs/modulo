@@ -303,6 +303,7 @@ mcp = FastMCP(
         "and review_hitl to handle human-in-the-loop gates."
     ),
     stateless_http=True,
+    streamable_http_path="/",
 )
 
 
