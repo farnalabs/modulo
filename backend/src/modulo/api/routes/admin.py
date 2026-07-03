@@ -1678,21 +1678,26 @@ async def okr_progress(
             detail="Only admin users can access OKR progress",
         )
 
-    async with session.begin():
-        await set_rls_org(session, current_user.organisation_id)
+    try:
+        async with session.begin():
+            await set_rls_org(session, current_user.organisation_id)
 
-        try:
             progress = await track_okr_progress(
                 session,
                 org_id=current_user.organisation_id,
                 suite_id=suite_id,
                 target_date=target_date,
             )
-        except ValueError as exc:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail=str(exc),
-            ) from exc
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=str(exc),
+        ) from exc
+    except ProgrammingError:
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="Feature is not available. Run database migrations to enable it.",
+        )
 
     return OkrProgressResponse(
         suite_id=progress.suite_id,

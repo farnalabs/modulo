@@ -13,6 +13,9 @@ code:
   - backend/src/modulo/api/routes/evals.py
 unit-tests:
   - backend/tests/unit/core/test_eval_suite.py
+  - backend/tests/unit/core/test_okr_progress.py
+  - backend/tests/unit/api/test_evals_programming_error.py
+  - backend/tests/unit/api/test_evals_okr_progress_programming_error.py
 depends-on: [feat-evals-eval-definitions]
 status: partial
 ---
@@ -54,7 +57,7 @@ Grouping eval definitions into suites with configurable pass thresholds, includi
 - [x] track_okr_progress() buckets pass rates: 7d, 14d, 30d, overall
 - [x] Trend direction detection (declining / stable / improving)
 - [x] Breach alert when current_pass_rate < pass_threshold
-- [x] Admin endpoint: GET /evals/okr-progress/{suite_id}
+- [x] Admin endpoint: GET /admin/evals/okr-progress/{suite_id}
 
 ### Edge Cases
 - [x] Suite mixing block and warn evals — block failures are still counted in aggregate
@@ -64,13 +67,28 @@ Grouping eval definitions into suites with configurable pass thresholds, includi
 - [ ] Reactor: suite_id on eval is just a string — no FK, no orphan protection
 
 ### BDD
-- [ ] eval_suite_crud.feature — placeholder only (scenarios not implemented)
+- [x] eval_suite_crud.feature — 8 real CRUD scenarios (create, list, get, update, delete) with auth checks
 - [ ] eval_run.feature — "Eval run below threshold fails" scenario tests suite threshold
+
+### Error Handling
+- [x] POST /evals returns 501 Not Implemented on ProgrammingError (missing DB table)
+- [x] GET /evals returns 501 Not Implemented on ProgrammingError
+- [x] GET /evals/{eval_id} returns 501 Not Implemented on ProgrammingError
+- [x] PUT /evals/{eval_id} returns 501 Not Implemented on ProgrammingError
+- [x] DELETE /evals/{eval_id} returns 501 Not Implemented on ProgrammingError
+- [x] GET /evals/coverage returns 501 Not Implemented on ProgrammingError
+- [x] GET /runs/{run_id}/evals returns 501 Not Implemented on ProgrammingError
+- [x] POST /evals/from-run returns 501 Not Implemented on ProgrammingError
+- [x] GET /admin/evals/okr-progress/{suite_id} returns 501 Not Implemented on ProgrammingError
+- [x] GET /admin/evals/okr-progress/{suite_id} returns 404 on non-existent suite
+- [x] All CRUD routes return 403 for non-admin users (existing)
+- [x] All CRUD routes return 404 for non-existent entities (existing)
 
 ## Known Gaps
 - No dedicated suite entity (suite_id is a free-form string, no FK, no metadata)
 - No suite creation/management UI
-- eval_suite_crud.feature is a placeholder
+- eval_suite_crud.feature scenarios not wired to live pipeline (mocking only)
 - No suite-level permission model (any admin can create/join any suite_id)
 - Suite_id not pipeline-scoped — cross-pipeline query semantics undefined
 - Deleting the last eval in a suite leaves suite_id orphaned with no cleanup
+- No website docs page for eval-packaging (needs creation in Website repo)
