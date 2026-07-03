@@ -8,6 +8,7 @@ from datetime import UTC, datetime
 from typing import Any
 
 from sqlalchemy import func, select
+from sqlalchemy.exc import ProgrammingError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.db.crud.base import PageResult, apply_updates
@@ -233,16 +234,23 @@ async def get_eval_results_with_defs(
     Returns (eval_results_list, eval_definitions_map) where definitions map
     is keyed by eval_id (as string).
     """
-    er_result = await session.execute(
-        select(EvalResult).where(
-            EvalResult.id.in_(eval_result_ids),
-            EvalResult.organisation_id == org_id,
+    try:
+        er_result = await session.execute(
+            select(EvalResult).where(
+                EvalResult.id.in_(eval_result_ids),
+                EvalResult.organisation_id == org_id,
+            )
         )
-    )
+    except ProgrammingError:
+        return [], {}
+
     eval_results: list[EvalResult] = list(er_result.scalars().all())
 
     eval_def_ids = list({er.eval_id for er in eval_results})
-    ed_result = await session.execute(select(EvalDefinition).where(EvalDefinition.id.in_(eval_def_ids)))
+    try:
+        ed_result = await session.execute(select(EvalDefinition).where(EvalDefinition.id.in_(eval_def_ids)))
+    except ProgrammingError:
+        return [], {}
     definitions: dict[str, Any] = {}
     for ed in ed_result.scalars().all():
         definitions[str(ed.id)] = {
