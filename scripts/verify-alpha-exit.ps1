@@ -117,6 +117,16 @@ if (-not (Test-Path -LiteralPath $backendDir)) {
     Log "  Running: pytest tests/bdd/ -x --tb=short -q"
     Log ""
 
+    Log "  Checking Docker availability..."
+    $dockerCheck = & docker info 2>&1 | Out-String
+    if ($LASTEXITCODE -ne 0) {
+        Log "    WARNING: Docker does not appear to be available. BDD tests require Postgres and Redis."
+        Log "    Continuing anyway — the pytest run will fail with a connection error if Docker is needed."
+        Log "    To run locally, start Postgres and Redis (see docs/dev-setup.md)."
+    } else {
+        Log "    Docker available."
+    }
+
     try {
         $result = RunPytest $backendDir @("tests/bdd/", "-x", "--tb=short", "-q")
         $output = $result.Output
