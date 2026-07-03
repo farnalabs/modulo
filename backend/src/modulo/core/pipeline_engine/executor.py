@@ -553,20 +553,7 @@ class PipelineExecutor:
                 async with session.begin():
                     await set_rls_org(session, org_id)
                     try:
-                        suite_results = await self._check_eval_suites(session, run_id, pipeline_id)
-                        for sr in suite_results:
-                            if not sr.passed:
-                                final_status = "failed"
-                                error_code = "eval_suite_blocked"
-                                _log.warning(
-                                    "eval.suite_blocked",
-                                    extra={
-                                        "run_id": str(run_id),
-                                        "suite_id": sr.suite_id,
-                                        "score": sr.aggregate_score,
-                                    },
-                                )
-                                break
+                        await self._check_eval_suites(session, run_id, pipeline_id)
                     except EvalSuiteBlockedError as exc:
                         final_status = "failed"
                         error_code = "eval_suite_blocked"

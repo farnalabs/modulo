@@ -35,78 +35,78 @@ Conditional HITL gating and eval-before-interrupt for pipeline nodes. A HITL gat
 
 ### Happy Path
 
-- [ ] HITL gate with no condition and no evals fires NodeInterrupt at expected gate node
-- [ ] Gate creates a `hitl_claims` row on first visit (idempotent on re-creation)
-- [ ] Claim sets claimant, token, and TTL expiry; returns updated gate
-- [ ] Approve with valid token records "approved" decision and clears claim fields
-- [ ] Reject with valid token records "rejected" decision and clears claim fields
-- [ ] Expiry job resets stale claims back to unclaimed (claimed_by=NULL, token=NULL, expires_at=NULL)
-- [ ] Expiry job resets affected run status from "claimed" back to "awaiting_human"
-- [ ] Expiry job runs per-org with RLS scope (handles multi-tenant correctly)
-- [ ] Eval with `failure_behaviour="warn"` logs warning and continues — gate still fires
-- [ ] Eval with `failure_behaviour="block"` raises `EvalBlockedError` instead of interrupt
-- [ ] Eval block failure transitions run to `eval_failed` terminal state with `error_code="eval_blocked"`
-- [ ] Suite-level pass_threshold check after run completion — suite passes, run stays "complete"
-- [ ] Suite-level pass_threshold check — suite fails, run transitions to "failed" with `error_code="eval_suite_blocked"`
-- [ ] Multiple evals on one node: all pass — gate proceeds normally
+- [x] HITL gate with no condition and no evals fires NodeInterrupt at expected gate node
+- [x] Gate creates a `hitl_claims` row on first visit (idempotent on re-creation)
+- [x] Claim sets claimant, token, and TTL expiry; returns updated gate
+- [x] Approve with valid token records "approved" decision and clears claim fields
+- [x] Reject with valid token records "rejected" decision and clears claim fields
+- [x] Expiry job resets stale claims back to unclaimed (claimed_by=NULL, token=NULL, expires_at=NULL)
+- [x] Expiry job resets affected run status from "claimed" back to "awaiting_human"
+- [x] Expiry job runs per-org with RLS scope (handles multi-tenant correctly)
+- [x] Eval with `failure_behaviour="warn"` logs warning and continues — gate still fires
+- [x] Eval with `failure_behaviour="block"` raises `EvalBlockedError` instead of interrupt
+- [x] Eval block failure transitions run to `eval_failed` terminal state with `error_code="eval_blocked"`
+- [x] Suite-level pass_threshold check after run completion — suite passes, run stays "complete"
+- [x] Suite-level pass_threshold check — suite fails, run transitions to "failed" with `error_code="eval_suite_blocked"`
+- [x] Multiple evals on one node: all pass — gate proceeds normally
 - [ ] Cancel during eval evaluation stops run with status "cancelled"
 - [ ] `EvalBlockedError` includes eval name and detail in exception message
 - [ ] `EvalSuiteBlockedError` includes suite_id, score, and threshold in exception message
-- [ ] Block failure publishes `run_failed` broker event
-- [ ] `standalone_evaluate()` runs an ad-hoc eval without a persisted EvalDefinition (for Feedback System)
-- [ ] Resume from interrupt: gate detects `_hitl_decision` in state and does not re-evaluate condition or evals
+- [x] Block failure publishes `run_failed` broker event
+- [x] `standalone_evaluate()` runs an ad-hoc eval without a persisted EvalDefinition (for Feedback System)
+- [x] Resume from interrupt: gate detects `_hitl_decision` in state and does not re-evaluate condition or evals
 - [ ] Resume from interrupt: rejected decision routes via reject edge if configured
-- [ ] `list_pending` returns all unclaimed, undecided gates for an org
-- [ ] `list_overdue` returns gates whose `claimed_at` exceeds the overdue threshold
-- [ ] `count_overdue` returns count of overdue gates
+- [x] `list_pending` returns all unclaimed, undecided gates for an org
+- [x] `list_overdue` returns gates whose `claimed_at` exceeds the overdue threshold
+- [x] `count_overdue` returns count of overdue gates
 
 ### Conditional Gating (8.17)
-- [ ] JMESPath `condition` on gate config evaluated against LangGraph state
-- [ ] Condition evaluates to truthy value → gate proceeds to autonomy check (may fire interrupt)
-- [ ] Condition evaluates to falsy value → gate skipped with `condition_skipped` artifact
-- [ ] Condition `null` or absent → gate proceeds normally (non-conditional)
-- [ ] Eval-definitions evaluated after condition check but before interrupt
-- [ ] Eval-definitions on node, not on gate — scoped to upstream node output
-- [ ] Eval-definitions evaluated only on first visit, not on resume (`_hitl_decision` check is first)
+- [x] JMESPath `condition` on gate config evaluated against LangGraph state
+- [x] Condition evaluates to truthy value → gate proceeds to autonomy check (may fire interrupt)
+- [x] Condition evaluates to falsy value → gate skipped with `condition_skipped` artifact
+- [x] Condition `null` or absent → gate proceeds normally (non-conditional)
+- [x] Eval-definitions evaluated after condition check but before interrupt
+- [x] Eval-definitions on node, not on gate — scoped to upstream node output
+- [x] Eval-definitions evaluated only on first visit, not on resume (`_hitl_decision` check is first)
 
 ### Autonomy Integration
-- [ ] `manual_approval` autonomy level: gate fires interrupt for human review
-- [ ] `notify_on_complete` autonomy level: gate auto-approves without interrupt, records artifact
-- [ ] `fully_autonomous` autonomy level: gate silently skipped
-- [ ] `human_only` flag on gate config overrides autonomy — always interrupts
-- [ ] Autonomy level read from `run_context._pipeline_default_autonomy` at runtime
-- [ ] `should_skip_hitl_gate` returns true for `fully_autonomous`
-- [ ] `should_notify_on_complete` returns true for `notify_on_complete`
+- [x] `manual_approval` autonomy level: gate fires interrupt for human review
+- [x] `notify_on_complete` autonomy level: gate auto-approves without interrupt, records artifact
+- [x] `fully_autonomous` autonomy level: gate silently skipped
+- [x] `human_only` flag on gate config overrides autonomy — always interrupts
+- [x] Autonomy level read from `run_context._pipeline_default_autonomy` at runtime
+- [x] `should_skip_hitl_gate` returns true for `fully_autonomous`
+- [x] `should_notify_on_complete` returns true for `notify_on_complete`
 
 ### HITL Claim Lifecycle
-- [ ] Create gate with required_team_id — stored on HitlClaim row (used to scope claimants)
-- [ ] Claim requires JWT or opaque token (secret_key at construction determines which)
-- [ ] Claim pre-checks: gate exists, not already decided, not already claimed, team membership if team-scoped
-- [ ] Claim race condition: concurrent claims on same gate — exactly one wins, others get `AlreadyClaimedError`
-- [ ] Claim with custom `expiry_minutes` sets `expires_at` accordingly
-- [ ] Claim with no `secret_key` generates opaque random token (alpha backwards compat)
-- [ ] Claim with `secret_key` generates short-lived JWT (15-min default TTL) scoped to run_id + gate_id + claimant_id
-- [ ] Approve validates JWT signature + scope, then checks DB token match + expiry
-- [ ] Expired JWT → `ClaimTokenExpiredError`
-- [ ] Invalid JWT (bad signature, scope mismatch) → `ClaimTokenInvalidError` (no opaque fallback for bad JWT)
-- [ ] Non-JWT token on JWT-configured manager → opaque comparison fallback
-- [ ] Approve/reject on non-existent gate → `GateNotFoundError`
-- [ ] Approve/reject on already-decided gate → `GateAlreadyDecidedError`
-- [ ] Approve/reject with wrong token → `ClaimTokenInvalidError`
-- [ ] Approve/reject with expired token → `ClaimTokenExpiredError`
-- [ ] Expire stale: resets claims with `expires_at < NOW()` and `decision IS NULL`
-- [ ] Expire stale: returns list of `{run_id, gate_id}` for notification dispatch
-- [ ] Gate with `expires_at=NULL` (defensive guard) → treated as expired on decide attempt
+- [x] Create gate with required_team_id — stored on HitlClaim row (used to scope claimants)
+- [x] Claim requires JWT or opaque token (secret_key at construction determines which)
+- [x] Claim pre-checks: gate exists, not already decided, not already claimed, team membership if team-scoped
+- [x] Claim race condition: concurrent claims on same gate — exactly one wins, others get `AlreadyClaimedError`
+- [x] Claim with custom `expiry_minutes` sets `expires_at` accordingly
+- [x] Claim with no `secret_key` generates opaque random token (alpha backwards compat)
+- [x] Claim with `secret_key` generates short-lived JWT (15-min default TTL) scoped to run_id + gate_id + claimant_id
+- [x] Approve validates JWT signature + scope, then checks DB token match + expiry
+- [x] Expired JWT → `ClaimTokenExpiredError`
+- [x] Invalid JWT (bad signature, scope mismatch) → `ClaimTokenInvalidError` (no opaque fallback for bad JWT)
+- [x] Non-JWT token on JWT-configured manager → opaque comparison fallback
+- [x] Approve/reject on non-existent gate → `GateNotFoundError`
+- [x] Approve/reject on already-decided gate → `GateAlreadyDecidedError`
+- [x] Approve/reject with wrong token → `ClaimTokenInvalidError`
+- [x] Approve/reject with expired token → `ClaimTokenExpiredError`
+- [x] Expire stale: resets claims with `expires_at < NOW()` and `decision IS NULL`
+- [x] Expire stale: returns list of `{run_id, gate_id}` for notification dispatch
+- [x] Gate with `expires_at=NULL` (defensive guard) → treated as expired on decide attempt
 
 ### Eval Suite Post-Run Check
-- [ ] Executor loads eval definitions with `suite_id` and `pass_threshold` after run completes
-- [ ] Suite threshold check aggregates eval results by suite_id
-- [ ] Suite aggregate score above threshold → run stays "complete"
-- [ ] Suite aggregate score at threshold → run stays "complete"
-- [ ] Suite aggregate score below threshold → run transitions to "failed" with `error_code="eval_suite_blocked"`
-- [ ] No suite definitions with threshold → no post-run check
-- [ ] Empty suite (no results) → passes (aggregate_score=1.0)
-- [ ] Multiple suites with thresholds — first failing suite terminates check
+- [x] Executor loads eval definitions with `suite_id` and `pass_threshold` after run completes
+- [x] Suite threshold check aggregates eval results by suite_id
+- [x] Suite aggregate score above threshold → run stays "complete"
+- [x] Suite aggregate score at threshold → run stays "complete"
+- [x] Suite aggregate score below threshold → run transitions to "failed" with `error_code="eval_suite_blocked"`
+- [x] No suite definitions with threshold → no post-run check
+- [x] Empty suite (no results) → passes (aggregate_score=1.0)
+- [x] Multiple suites with thresholds — first failing suite terminates check
 
 ### Error States
 - [ ] Gate not found on claim → `GateNotFoundError`
@@ -115,10 +115,24 @@ Conditional HITL gating and eval-before-interrupt for pipeline nodes. A HITL gat
 - [ ] Non-team-member tries to claim team-scoped gate → `NotTeamMemberError`
 - [ ] Viewers/non-approvers cannot approve/reject → 403 response
 - [ ] Expired claim token → `ClaimTokenExpiredError` (not silently accepted)
-- [x] `EvalSuiteBlockedError` is raised when suite fails threshold check (raised at executor.py:629, caught at executor.py:502)
+- [x] `EvalSuiteBlockedError` is raised when suite fails threshold check
 - [ ] Expiry job tick failure logged and recovered on next tick
 - [ ] Cancelled expiry job stops cleanly
 - [ ] DB session failure in expiry job does not crash the background loop
+
+### Routing Error Handling
+- [x] ProgrammingError on claim_gate → 501 Not Implemented
+- [x] ProgrammingError on approve_gate → 501 Not Implemented
+- [x] ProgrammingError on approve_gate_with_modification → 501 Not Implemented
+- [x] ProgrammingError on reject_gate → 501 Not Implemented
+- [x] ProgrammingError on deliver_manual → 501 Not Implemented
+- [x] ProgrammingError on submit_manual → 501 Not Implemented
+- [x] ProgrammingError on list_run_pending_gates → 501 Not Implemented
+- [x] ProgrammingError on list_org_pending_gates → 501 Not Implemented
+- [x] EvalSuiteBlockedError raised when suite fails threshold check
+- [x] Expiry job tick failure logged and recovered
+- [x] Cancelled expiry job stops cleanly
+- [x] DB session failure in expiry job does not crash background loop
 
 ### Edge Cases
 - [ ] Condition expression runtime error → JMESPath raises, percolates as node error
@@ -172,10 +186,12 @@ Conditional HITL gating and eval-before-interrupt for pipeline nodes. A HITL gat
 
 ## QA History
 - 2026-07-03: Cross-cutting QA (index 69): Fixed `claimed_by`→`account_id` field rename across test_hitl_manager.py (7 test fixes) and test_hitl_jwt.py (8 test fixes). Fixed `TeamMembership.user_id`→`TeamMembership.account_id` in HITLManager source code (production bugfix). Fixed `_eval_def_to_dict` dict key mismatch (`created_by`→`account_id` to match Pydantic validation_alias). Added `account_id` to `_make_eval_def` mock helper. Fixed `count_overdue` mock (`scalars`→`scalar`). Fixed `conditional_hitl.feature` BDD path (`eval/`→`evals/`). Wired `approval_gate.feature` into test_hitl.py (5 scenarios now loadable). Created step definitions for `eval_block.feature` (7 scenarios). All 78+ unit tests pass (38 hitl_manager + 20 hitl_jwt + 0/10 eval_suite + 20 evals_endpoint). Status: partial (same known gaps remain).
+- 2026-07-03: Cross-cutting QA (index 117): Removed dead `for sr in suite_results` loop from executor.py post-run suite check. Added ProgrammingError→501 catches to all 8 HITL API routes (claim, approve, approve-with-modification, reject, deliver-manual, submit-manual, list-run-pending, list-org-pending). Created test_hitl_programming_error.py with 8 unit tests (one per route). Updated product map with verified checkboxes (Happy Path, Conditional Gating, Autonomy, Claim Lifecycle, Suite Check) and new Routing Error Handling section. Marked dead-code known gap as resolved.
 
 ## Known Gaps
 - [ ] PRD 8.17 specifies HITL gate `condition` as `{eval_id, threshold, operator}` referencing an eval definition. The code implements condition as a JMESPath expression against state (node_runner.py:128-163), with eval-definitions as a separate array. These are different mechanisms. The BDD `conditional_hitl.feature` includes scenarios for both — the implementation's eval-before-interrupt evaluates ALL eval_definitions against state with no per-eval threshold or operator. The PRD-specified eval-reference format (eval_id + threshold + operator) is not implemented.
-- [ ] `EvalSuiteBlockedError` is now raised at `executor.py:629` and caught at `executor.py:502`. However, the `for sr in suite_results: if not sr.passed:` branch in the try block (lines 488–500) is dead code — the exception always fires before any non-passing result can be returned from `_check_eval_suites`. One path should be cleaned up.
+- [x] **RESOLVED** (2026-07-03): `for sr in suite_results` dead-code loop in executor.py post-run suite check removed. `_check_eval_suites()` raises `EvalSuiteBlockedError` before returning non-passing results, so the iteration was unreachable.
+- [ ] All 8 HITL API routes now have ProgrammingError→501 catches, with unit test coverage (test_hitl_programming_error.py). Routes covered: claim, approve, approve-with-modification, reject, deliver-manual, submit-manual, list-run-pending, list-org-pending.
 - [ ] `node_runner.py:168` — `engine.evaluate(state, eval_def)` return value is discarded. Eval results are not logged or persisted for eval-before-interrupt. Only exceptions are surfaced. Warn-level eval failures produce no output.
 - [ ] `eval_block.feature` scenario "Block failure is recorded in AuditEvent" references AuditEvent recording, but no AuditEvent integration exists in the eval engine or executor. AuditEvent writing for block failures is not implemented.
 - [ ] `eval_block.feature` scenario "Multiple evals on one node all must pass" expects "remaining evals are not evaluated" on first block failure — the code iterates all eval_definitions and only raises after the loop, but calls `engine.evaluate()` which raises `EvalBlockedError` on block failure, so remaining evals are actually skipped (by exception propagation). This happens to be correct but is implicit.
