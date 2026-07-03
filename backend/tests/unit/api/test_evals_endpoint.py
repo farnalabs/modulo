@@ -69,6 +69,7 @@ def _make_eval_def(**overrides) -> MagicMock:
     m.pass_threshold = overrides.get("pass_threshold", None)
     m.suite_id = overrides.get("suite_id", None)
     m.created_by = overrides.get("created_by", _USER_ID)
+    m.account_id = overrides.get("account_id", _USER_ID)
     return m
 
 

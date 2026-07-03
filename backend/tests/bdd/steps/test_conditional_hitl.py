@@ -14,7 +14,7 @@ from modulo.core.eval_engine import EvalBlockedError
 # Active features
 # ---------------------------------------------------------------------------
 try:
-    scenarios("../features/eval/conditional_hitl.feature")
+    scenarios("../../features/evals/conditional_hitl.feature")
 except (FileNotFoundError, OSError):
     pass
 
