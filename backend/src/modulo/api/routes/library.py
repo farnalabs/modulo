@@ -3,6 +3,7 @@
 import copy
 import json
 import logging
+import traceback
 import uuid
 from datetime import datetime
 from typing import Any
@@ -12,6 +13,8 @@ from pydantic import BaseModel, Field, model_validator
 from sqlalchemy import select
 from sqlalchemy.exc import DBAPIError, ProgrammingError
 from sqlalchemy.ext.asyncio import AsyncSession
+
+_log = logging.getLogger(__name__)
 
 from modulo.api.dependencies import get_db_session
 from modulo.auth.dependencies import get_current_user
@@ -1006,8 +1009,8 @@ async def create_pipeline_from_template_endpoint(
                 id=uuid.UUID(edge_id) if isinstance(edge_id, str) and edge_id else uuid.uuid4(),
                 organisation_id=principal.organisation_id,
                 pipeline_id=pipeline.id,
-                source_node_id=edge_data["source_node_id"],
-                target_node_id=edge_data["target_node_id"],
+                source_node_id=uuid.UUID(edge_data["source_node_id"]) if isinstance(edge_data["source_node_id"], str) else edge_data["source_node_id"],
+                target_node_id=uuid.UUID(edge_data["target_node_id"]) if isinstance(edge_data["target_node_id"], str) else edge_data["target_node_id"],
                 edge_type=edge_data["edge_type"],
                 hitl_gate_config=edge_data.get("hitl_gate_config"),
             )
@@ -1015,10 +1018,14 @@ async def create_pipeline_from_template_endpoint(
 
         await session.flush()
     except (ProgrammingError, DBAPIError):
+        _log.exception("create_pipeline_from_template — DB error")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
         ) from None
+    except Exception:
+        _log.exception("create_pipeline_from_template — unexpected error")
+        raise
 
     return PipelineFromTemplateResponse(
         id=pipeline.id,
