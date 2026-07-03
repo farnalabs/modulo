@@ -92,6 +92,18 @@ class TestAWSSecretsManagerBackend:
 
         backend._client.delete_secret.assert_called_once()
 
+    async def test_get_secret_binary_decoded(self, mock_boto3):
+        """SecretBinary is decoded as UTF-8 when SecretString is absent."""
+        backend = _make_backend()
+        backend._client.get_secret_value.return_value = {
+            "SecretBinary": b"binary-value-utf8"
+        }
+
+        value = await backend.get_secret("binary-key")
+
+        assert value == "binary-value-utf8"
+        backend._client.get_secret_value.assert_called_once_with(SecretId="binary-key")
+
     async def test_delete_secret_noop_when_missing(self, mock_boto3):
         backend = _make_backend()
         backend._client.delete_secret.side_effect = backend._client.exceptions.ResourceNotFoundException()

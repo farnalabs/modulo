@@ -2,8 +2,7 @@
 id: feat-core-secrets-backend
 prd: 7.13
 delivery-tasks: [task-nv10-secrets-backend]
-bdd:
-  - backend/tests/bdd/features/security/credential_store.feature
+bdd: [backend/tests/bdd/features/security/credential_store.feature]
 code:
   - backend/src/modulo/core/secrets_backend/__init__.py
   - backend/src/modulo/core/secrets_backend/fernet.py
@@ -14,7 +13,7 @@ code:
   - backend/tests/unit/secrets_backend/test_vault_backend.py
   - backend/tests/unit/secrets_backend/test_aws_backend.py
 depends-on: []
-unit-tests: []
+unit-tests: [backend/tests/unit/secrets_backend/test_factory.py, backend/tests/unit/secrets_backend/test_fernet_backend.py, backend/tests/unit/secrets_backend/test_vault_backend.py, backend/tests/unit/secrets_backend/test_aws_backend.py]
 status: partial
 ---
 
@@ -40,30 +39,37 @@ The `SecretsBackend` ABC defines a uniform interface (`get_secret`, `set_secret`
 
 ### Edge cases
 
-- [ ] `delete_secret` is a no-op when the key does not exist (all three backends)
+- [x] `delete_secret` is a no-op when the key does not exist (all three backends)
 - [ ] `set_secret` on a previously deleted key creates a fresh record (no tombstone conflict)
-- [ ] Fernet backend: org ID is cached after the first `_read_org_id_from_session` call and reused on subsequent operations
-- [ ] Factory: `fernet_key` is `None` for Vault/AWS backends (not required)
+- [x] Fernet backend: org ID is cached after the first `_read_org_id_from_session` call and reused on subsequent operations
+- [x] Factory: `fernet_key` is `None` for Vault/AWS backends (not required)
 - [ ] Factory: `backend_name` is case-insensitive and whitespace-trimmed
 - [ ] Vault backend: secret path is constructed as `{VAULT_PATH_PREFIX}/{key}`
 - [ ] AWS backend: `SecretBinary` decoded as UTF-8 fallback (not just `SecretString`)
-- [ ] Fernet backend: `set_session()` can replace the DB session after construction
+- [x] Fernet backend: `set_session()` can replace the DB session after construction
 
 ### Error states
 
-- [ ] `get_secret` with a non-existent key raises `KeyError` (all three backends)
-- [ ] `get_secret` on corrupted/undecryptable data raises `ValueError` (Fernet backend, `InvalidToken`)
-- [ ] Any operation on Fernet backend with missing org session returns error
+- [x] `get_secret` with a non-existent key raises `KeyError` (all three backends)
+- [x] `get_secret` on corrupted/undecryptable data raises `ValueError` (Fernet backend, `InvalidToken`)
+- [x] Any operation on Fernet backend with missing org session returns error
 - [ ] Vault backend: connection failure raises `VaultError` with detail
-- [ ] AWS backend: `get_secret` on non-existent key raises `KeyError`
-- [ ] AWS backend: `delete_secret` on non-existent key raises `KeyError`
-- [ ] Factory: invalid `backend_name` raises `ValueError` with available backends listed
+- [x] AWS backend: `get_secret` on non-existent key raises `KeyError`
+- [x] AWS backend: `delete_secret` on non-existent key is a no-op (same as all other backends)
+- [x] Factory: invalid `backend_name` raises `ValueError` with available backends listed
+
+### Credential-in-state rule (PRD §7.13)
+
+- [x] Decrypted credentials never enter LangGraph StateGraph state — enforced via lint rule banning credential field names from state dict assignments
+- [x] Decrypted credentials never appear in checkpoint blobs — `generate_secrets_filter()` strips sensitive keys before state is persisted
+- [x] Decrypted credentials never appear in OTel span attributes — `test_observability.py:test_trace_no_credentials` validates no credential fields in spans
+- [x] Connectors receive decrypted credential in-process only via transient context object, used for API call, not serialised
 
 ## Known Gaps
 
-- No BDD feature file exists for secrets backend behaviour
-- `delete_secret` behaviour on non-existent key differs across backends (no-op vs raises)
+- BDD feature file exists (credential_store.feature, 3 scenarios) but does not exercise the pluggable backend interface — only Fernet. Add Vault/AWS BDD scenarios.
 - No key rotation schedule or automatic re-encryption
+- PRD §7.13 credential-in-state rule (decrypted credentials must never enter LangGraph state, checkpoints, OTel spans) is not tracked in this product map entry.
 - No audit event emitted on secret read/write/delete
 - No secret expiry / TTL support
 - Fernet backend stores encrypted values in the same DB as application data — no HSM or external KMS
