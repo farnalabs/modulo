@@ -72,6 +72,12 @@ DEFAULT_VALUES: dict[str, str] = {
 }  # nosec B105 — empty-string placeholders, not hardcoded secrets
 
 
+def _validate_key_registries() -> None:
+    orphans = HOT_RELOADABLE_KEYS - set(KNOWN_KEYS)
+    if orphans:
+        _log.warning("HOT_RELOADABLE_KEYS contains keys not in KNOWN_KEYS: %s", orphans)
+
+
 @dataclass
 class ConfigEntry:
     key: str
@@ -98,6 +104,8 @@ class RuntimeConfigStore:
         for key in KNOWN_KEYS:
             self._defaults[key] = DEFAULT_VALUES.get(key)
             self._env_values[key] = os.environ.get(key)
+
+        _validate_key_registries()
 
     def get(self, key: str) -> str | None:
         """Return the effective value: override > env > default."""
