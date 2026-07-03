@@ -956,7 +956,7 @@ async def create_pipeline_from_template_endpoint(
     session: AsyncSession = Depends(get_db_session),
     principal: AuthenticatedPrincipal = Depends(get_current_user),
 ) -> PipelineFromTemplateResponse:
-    import sys; print(f"DBG_START: primitive_id={primitive_id}", flush=True, file=sys.stderr)
+    _log.warning("DBG_START called primitive_id=%s body=%s", primitive_id, body.model_dump() if hasattr(body, 'model_dump') else body)
     try:
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
