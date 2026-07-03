@@ -28,11 +28,13 @@ export interface SessionKeyResponse {
   key: string
 }
 
+import type { MonitorBackend } from '../../monitor/types'
+
 export interface ErrorTrackerConfig {
   appName?: string
   environment?: string
   version?: string
   flushIntervalMs?: number
   batchSize?: number
-  monitorBackends?: string[]
+  monitorBackends?: MonitorBackend[]
 }
