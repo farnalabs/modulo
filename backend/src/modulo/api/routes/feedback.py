@@ -224,12 +224,14 @@ async def list_eval_proposals(
         run_rows = await session.execute(
             select(Run.id, Run.snapshot_id).where(Run.id.in_(run_ids))
         )
-        snapshot_ids = [r.snapshot_id for r in run_rows.all() if r.snapshot_id]
+        rows = await run_rows.all()
+        snapshot_ids = [r.snapshot_id for r in rows if r.snapshot_id]
         if snapshot_ids:
             snap_rows = await session.execute(
                 select(PipelineSnapshot.id, PipelineSnapshot.graph_json).where(PipelineSnapshot.id.in_(snapshot_ids))
             )
-            for snap_id, graph_json in snap_rows.all():
+            snap_rows_result = await snap_rows.all()
+            for snap_id, graph_json in snap_rows_result:
                 if graph_json:
                     for node in graph_json.get("nodes", []):
                         node_name_map[str(node.get("id"))] = node.get("name") or node.get("label", "")
