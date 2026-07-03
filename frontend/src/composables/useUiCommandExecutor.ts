@@ -316,7 +316,7 @@ function highlightElement(el: Element, duration = 500) {
 
 function sanitizeExtract(el: Element): string {
   const clone = el.cloneNode(true) as Element
-  clone.querySelectorAll('script, style, noscript, template, [type="hidden"]').forEach(n => n.remove())
+  clone.querySelectorAll('script, style, noscript, template, input[type="hidden"]').forEach(n => n.remove())
   clone.querySelectorAll<HTMLInputElement>('input[type="password"]').forEach(n => {
     n.value = '••••••••'
   })

@@ -12,6 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.api.dependencies import get_db_session
 from modulo.api.middleware.rate_limiter import get_auth_rate_limiter
+from modulo.api.routes.remy import clear_all_session_approvals
 from modulo.auth.dependencies import get_current_user
 from modulo.auth.jwt import (
     AuthenticatedPrincipal,
@@ -240,6 +241,8 @@ async def logout(
             await blacklist_family(session, family_uuid)
         except ValueError:
             pass
+
+    clear_all_session_approvals()
 
     content = LogoutResponse(detail="Logged out").model_dump()
     response = JSONResponse(content=content)
