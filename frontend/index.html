@@ -13,6 +13,12 @@
   </head>
   <body>
     <div id="app"></div>
+    <script>
+      // Runtime monitor configuration — populated from MODULO_MONITOR_CONFIG env var
+      // at deploy time by backend or startup script. Format:
+      // {"monitor":{"monitorBackends":["builtin","sentry"],"sentry":{"dsn":"..."}}}
+      window.__MODULO_CONFIG__ = window.__MODULO_CONFIG__ || {};
+    </script>
     <script type="module" src="/src/main.ts"></script>
   </body>
 </html>
