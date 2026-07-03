@@ -28,3 +28,13 @@ Feature: Jira Connector
     Given a Jira connector with valid credentials
     When I query resource "issue" without issue_key
     Then the result is an error
+
+  Scenario: Query fails with HTTP error
+    Given a Jira connector that returns API errors
+    When I query resource "issue" with issue_key "NONEXISTENT"
+    Then the result is an error
+
+  Scenario: Write fails with invalid data
+    Given a Jira connector that returns API errors
+    When I write resource "issue" with empty data
+    Then the result is an error

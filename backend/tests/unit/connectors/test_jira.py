@@ -131,21 +131,21 @@ def test_missing_credentials_raises():
 @respx.mock
 async def test_query_issue_http_error(connector):
     respx.get(f"{_BASE}/issue/NONEXISTENT").mock(return_value=httpx.Response(404))
-    with pytest.raises(httpx.HTTPStatusError):
+    with pytest.raises(ValueError, match="Jira API HTTP 404"):
         await connector.query(ConnectorQuery(resource="issue", filters={"issue_key": "NONEXISTENT"}))
 
 
 @respx.mock
 async def test_query_search_http_error(connector):
     respx.post(f"{_BASE}/search").mock(return_value=httpx.Response(400, json={"errorMessages": ["Field 'xyz' does not exist"]}))
-    with pytest.raises(httpx.HTTPStatusError):
+    with pytest.raises(ValueError, match="Jira API HTTP 400"):
         await connector.query(ConnectorQuery(resource="search", filters={"jql": "invalid jql"}))
 
 
 @respx.mock
 async def test_write_create_issue_http_error(connector):
     respx.post(f"{_BASE}/issue").mock(return_value=httpx.Response(400, json={"errors": {"summary": "Operation blocked"}}))
-    with pytest.raises(httpx.HTTPStatusError):
+    with pytest.raises(ValueError, match="Jira API HTTP 400"):
         await connector.write(
             ConnectorPayload(
                 resource="issue",
