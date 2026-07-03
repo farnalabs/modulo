@@ -1,8 +1,10 @@
 # improve-architecture Tracker
 
-Current product-map entry index: 58
-Last updated: 2026-07-02T22:05:00Z
+Current product-map entry index: 89
+Last updated: 2026-07-03T23:55:00Z
 
+- 2026-07-03: feat-core-contribution-provenance → partial, cross-cutting QA (index 89): Merged feat-qa-contribution-provenance-87 to main at v0.1.21. Fixed frontmatter (bdd:[]→8 real files, unit-tests:[]→13 real files). Marked 21 behaviours [ ]→[x] (data model, registry protocol, copy-to-adapt, ratings, BDD scenarios). Added Error Handling section (14 checkboxes). Created website docs stub. Status: partial (10 known gaps remain).
+- 2026-07-03: feat-frontend-feedback-routing → partial, cross-cutting QA (index 88): Merged feat-qa-frontend-feedback-routing-87 to main at v0.1.20. Fixed CRITICAL frontend-backend contract mismatch (triggerCorrection sent wrong action), added annotation field + migration, updated product map. 57/57 tests pass. Status: partial.
 - 2026-07-02: feat-pipelines-run-trace-observability → partial, cross-cutting QA (index 58): Marked all 50+ implemented behaviours [ ]→[x] (OTel bridge lifecycle mapping, token usage, span naming, export configuration, run trace ID, per-node token consumption, cost display, execution trace UI, credential safety, BDD coverage). Added `set_run_context(org_id, pipeline_id)` to LangGraphOtelBridge. Wired set_run_context call into PipelineExecutor. Updated known gaps. 47/47 tests pass. Status: partial.
 - 2026-07-02: feat-core-audit-trail → partial, cross-cutting QA (index 48): added 8 missing dispatched event types to product map (pipeline.node.convert_to_agent, pipeline.node.revert_to_manual, sso_provider.created/deleted/toggled/updated, schema_inference_completed, team_deleted), added BDD placeholder steps gap, marked BDD wrong-event-types known gap as [RESOLVED], fixed 4 placeholder @then BDD steps with assertions against request.node metadata, added ProgrammingError catches (501 Not Implemented) to all 4 audit API routes. Status: partial.
 - 2026-07-02: feat-core-api-versioning → partial, cross-cutting QA (index 47): marked 4 behaviours [x], added 9 unit tests for DeprecationHeaderMiddleware, fixed middleware _registry initialization bug. 9/9 tests pass. Status: partial.
