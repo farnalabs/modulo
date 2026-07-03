@@ -1,9 +1,10 @@
 # Modulo — Product Requirements Document
 
-**Version**: 0.30  
+**Version**: 0.31  
 **Date**: 2026-07-03  
 **Status**: Pre-development  
 **Changelog**:  
+- v0.31 — §8.25.1 Frontend Monitor Backend Abstraction: plugable MonitorBackend interface (builtin/sentry/datadog-rum/grafana-faro), dual-layer config (build-time VITE_* + runtime MODULO_MONITOR_CONFIG), ErrorTracker refactor with MonitorBackendRegistry dispatch, CSP superset strategy, per-backend privacy data sheets, unauthenticated error ingest endpoint, i18n missing-key capture, 2 existing pipeline bugfixes. ADR 009.
 - v0.30 — §8.28 Core Shared Manifest: single YAML source of truth for routes, elements, sidebar, permissions, tiers, product map refs, i18n keys. Binary consumption (frontend Vite import + backend startup load). `get_manifest(path?)` Remy tool. 7-rule pre-commit + CI validator. ADR 008.
 - v0.29 — §8.27 Remy UI Commands: frontend-mediated browser automation for Remy, 11 UI commands (navigate, click, fill, select, extract, extract_all, get_page_interactables, wait, go_back, get_url, press), permission system with 3 modes + destructive selector detection, agentic loop (multi-turn LLM within single SSE stream), shadcn/vue component support, visual feedback (highlighting, toast, overlay, turn separators), 3 new endpoints, ADR 007.
 - v0.28 — §8.26 Navigation Restructure: Breadcrumb component with route meta chain, sidebar hierarchical subgroups (SidebarSubgroup), new Remy group consolidating user skills + admin config, secondary nav tab bars (PageTabs), back-to-parent links on 5 detail views.
@@ -2025,6 +2026,66 @@ Remy is a **Team-tier** feature (enterprise-gated via `remy` feature flag). The 
 ### 8.25 Error Tracking (Native)
 
 Modulo ships a **built-in error tracking system** that captures backend and frontend errors, deduplicates them, and surfaces them in an error dashboard — no external service required. External integrations (Sentry, DataDog, PagerDuty, Rollbar, OpsGenie, Grafana Loki) are available as Team-tier forwarders for users who want to pipe errors into their existing monitoring.
+
+#### 8.25.1 Frontend Monitor Backend Abstraction
+
+The frontend error capture pipeline (`createErrorTracker()`) is extended to support **plugable monitor backends** — a `MonitorBackend` interface that routes captured errors to multiple destinations in parallel. This allows self-hosters to choose which client-side SDK to use (or none) without code changes.
+
+**MonitorBackend interface** (shipped in `frontend/src/monitor/`):
+
+```typescript
+interface MonitorBackend {
+  readonly key: string
+  init(config: MonitorConfig): boolean | Promise<boolean>
+  captureError(event: ErrorEventInput): void
+  captureRawError?(error: Error, context?: Record<string, unknown>): void
+  captureMessage(message: string, level: 'error' | 'warning' | 'critical'): void
+  addBreadcrumb?(breadcrumb: Breadcrumb): void
+  setUser?(user: { id: string; email?: string; name?: string; role?: string } | null): void
+  setTags?(tags: Record<string, string>): void
+  dispose?(): void
+}
+```
+
+**Shipped backends** (all optional — activated by env var or runtime config):
+
+| Backend | What it does | SDK | Tier |
+|---|---|---|---|
+| `builtin` | Existing DB-backed pipeline via `POST /api/v1/errors/ingest` | None | Community |
+| `sentry` | Client-side Sentry SDK with session replays | `@sentry/vue` | Team |
+| `datadog-rum` | Datadog RUM + Logs SDK | `@datadog/browser-rum` | Team |
+| `grafana-faro` | Grafana Faro Web SDK | `@grafana/faro-web-sdk` | Team |
+
+**Configuration** — two-layer:
+
+1. **Build-time** via `VITE_MONITOR_BACKEND` env var (defaults to all four)
+2. **Runtime** via `MODULO_MONITOR_CONFIG` container env var (no rebuild to switch)
+
+Runtime config is injected into `index.html` as `window.__MODULO_CONFIG__` and takes precedence over build-time. A self-hoster can switch from `builtin` to `builtin,sentry` by setting:
+
+```yaml
+environment:
+  MODULO_MONITOR_CONFIG: '{"monitorBackends":["builtin","sentry"],"sentry":{"dsn":"https://xxx@o123.ingest.sentry.io/123"}}'
+```
+
+**ErrorTracker refactor:** Vue `errorHandler`/`warnHandler` and window-level `onerror`/`onunhandledrejection` become instance methods that dispatch through a `MonitorBackendRegistry`. Each registered backend receives every event in parallel. A backend that implements `captureRawError` gets the raw `Error` object (richer for source-map resolution); other backends get the serialized `ErrorEventInput`. No double-counting.
+
+**CSP:** Backend `SecurityHeadersMiddleware` sets a broad `connect-src` that includes all known monitoring domains (`*.ingest.sentry.io`, `*.datadoghq.com`, etc.). Self-hosters with custom collector URLs add `MODULO_MONITOR_DOMAINS` env var.
+
+**i18n missing-key capture:** Vue's `missing` handler logs `console.warn`, which the existing `warnHandler` (now routed through the registry) captures as a `captureMessage('warning')` event. Rate-limited per-key (1/60s) and globally (100/min per tracker instance) to prevent DB spam.
+
+**Unauthenticated errors:** The builtin backend detects missing auth (`getAccessToken() === null`) and routes to a new `POST /api/v1/errors/ingest/public` endpoint (rate-limited 1/60s per IP, 100/day, 10KB max body, 48-hour TTL).
+
+**Dependencies:** Third-party SDKs are `optionalDependencies` in `package.json`. The default Docker build installs all; `npm ci --omit=optional` excludes them.
+
+**Privacy:** Each shipped backend includes a JSDoc privacy data sheet (domains contacted, cookies set, data fields collected, config knobs, data residency). Backends without completed data sheets are rejected at review.
+
+**Existing bugfixes (shipped as part of this work):**
+1. `source` field in frontend error events changed from `config.appName` to hardcoded `'frontend'` (backend validates this field, previous value caused 422)
+2. `session_key` → `key` field name in session-key response interface (backend returns `{"key": ...}`, frontend was reading wrong field)
+3. Public ingest endpoint for unauthenticated errors
+
+**Tier gating:** The builtin backend is Community tier. Third-party SDK backends (Sentry, Datadog RUM, Grafana Faro) are Team tier — same as existing external forwarders. The MonitorBackend abstraction itself is Community.
 
 **Why native first**: Users deploying Modulo in air-gapped or VPC-isolated environments should not need a Sentry account to know when their platform crashes. The native system is simpler, self-contained, and always available. External integrations layer on top for users who already have an observability stack.
 
