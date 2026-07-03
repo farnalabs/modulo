@@ -1428,148 +1428,154 @@ async def eval_dashboard(
             detail="Only admin users can access the eval dashboard",
         )
 
-    async with session.begin():
-        await set_rls_org(session, current_user.organisation_id)
+    try:
+        async with session.begin():
+            await set_rls_org(session, current_user.organisation_id)
 
-        # ── Summary ─────────────────────────────────────────────────
-        summary_q = select(
-            func.count(EvalResult.id).label("total_results"),
-            func.sum(case((EvalResult.passed, 1), else_=0)).label("passed"),
-            func.sum(case((EvalResult.passed.is_(False), 1), else_=0)).label("failed"),
-        )
-        summary_row = (await session.execute(summary_q)).one()
-
-        defs_q = select(func.count(EvalDefinition.id)).select_from(EvalDefinition)
-        total_defs = (await session.execute(defs_q)).scalar() or 0
-
-        total_results = summary_row.total_results or 0
-        passed = summary_row.passed or 0
-        failed = summary_row.failed or 0
-        pass_rate = round(passed / total_results, 4) if total_results > 0 else 0.0
-
-        summary = EvalDashboardSummary(
-            total_results=total_results,
-            passed=passed,
-            failed=failed,
-            pass_rate=pass_rate,
-            total_definitions=total_defs,
-        )
-
-        # ── Trend (daily buckets) ───────────────────────────────────
-        trend_q = text("""
-            SELECT
-                date_trunc('day', evaluated_at) AS bucket,
-                COUNT(*) AS total,
-                SUM(CASE WHEN passed THEN 1 ELSE 0 END) AS passed,
-                SUM(CASE WHEN NOT passed THEN 1 ELSE 0 END) AS failed
-            FROM eval_results
-            WHERE organisation_id = :org_id
-            GROUP BY bucket
-            ORDER BY bucket
-        """)
-        trend_rows = (await session.execute(trend_q, {"org_id": current_user.organisation_id})).all()
-
-        trend = [
-            TrendBucket(
-                bucket=str(row.bucket),
-                total=row.total,
-                passed=row.passed,
-                failed=row.failed,
+            # ── Summary ─────────────────────────────────────────────────
+            summary_q = select(
+                func.count(EvalResult.id).label("total_results"),
+                func.sum(case((EvalResult.passed, 1), else_=0)).label("passed"),
+                func.sum(case((EvalResult.passed.is_(False), 1), else_=0)).label("failed"),
             )
-            for row in trend_rows
-        ]
+            summary_row = (await session.execute(summary_q)).one()
 
-        # ── By eval type ────────────────────────────────────────────
-        by_type_q = text("""
-            SELECT
-                ed.eval_type,
-                COUNT(er.id) AS total,
-                SUM(CASE WHEN er.passed THEN 1 ELSE 0 END) AS passed,
-                SUM(CASE WHEN NOT er.passed THEN 1 ELSE 0 END) AS failed
-            FROM eval_definitions ed
-            LEFT JOIN eval_results er ON er.eval_id = ed.id
-            WHERE ed.organisation_id = :org_id
-            GROUP BY ed.eval_type
-            ORDER BY ed.eval_type
-        """)
-        by_type_rows = (await session.execute(by_type_q, {"org_id": current_user.organisation_id})).all()
+            defs_q = select(func.count(EvalDefinition.id)).select_from(EvalDefinition)
+            total_defs = (await session.execute(defs_q)).scalar() or 0
 
-        by_type = [
-            TypeBreakdown(
-                eval_type=row.eval_type,
-                total=row.total,
-                passed=row.passed,
-                failed=row.failed,
+            total_results = summary_row.total_results or 0
+            passed = summary_row.passed or 0
+            failed = summary_row.failed or 0
+            pass_rate = round(passed / total_results, 4) if total_results > 0 else 0.0
+
+            summary = EvalDashboardSummary(
+                total_results=total_results,
+                passed=passed,
+                failed=failed,
+                pass_rate=pass_rate,
+                total_definitions=total_defs,
             )
-            for row in by_type_rows
-        ]
 
-        # ── Coverage gaps ───────────────────────────────────────────
-        pipelines = (
-            await session.execute(
-                select(Pipeline.id, Pipeline.name, Pipeline.graph_nodes_json).where(
-                    Pipeline.organisation_id == current_user.organisation_id
+            # ── Trend (daily buckets) ───────────────────────────────────
+            trend_q = text("""
+                SELECT
+                    date_trunc('day', evaluated_at) AS bucket,
+                    COUNT(*) AS total,
+                    SUM(CASE WHEN passed THEN 1 ELSE 0 END) AS passed,
+                    SUM(CASE WHEN NOT passed THEN 1 ELSE 0 END) AS failed
+                FROM eval_results
+                WHERE organisation_id = :org_id
+                GROUP BY bucket
+                ORDER BY bucket
+            """)
+            trend_rows = (await session.execute(trend_q, {"org_id": current_user.organisation_id})).all()
+
+            trend = [
+                TrendBucket(
+                    bucket=str(row.bucket),
+                    total=row.total,
+                    passed=row.passed,
+                    failed=row.failed,
                 )
-            )
-        ).all()
+                for row in trend_rows
+            ]
 
-        covered_pairs: set[tuple[uuid.UUID, str]] = set()
-        eval_defs = (
-            await session.execute(
-                select(EvalDefinition.pipeline_id, EvalDefinition.node_id).where(
-                    EvalDefinition.organisation_id == current_user.organisation_id
+            # ── By eval type ────────────────────────────────────────────
+            by_type_q = text("""
+                SELECT
+                    ed.eval_type,
+                    COUNT(er.id) AS total,
+                    SUM(CASE WHEN er.passed THEN 1 ELSE 0 END) AS passed,
+                    SUM(CASE WHEN NOT er.passed THEN 1 ELSE 0 END) AS failed
+                FROM eval_definitions ed
+                LEFT JOIN eval_results er ON er.eval_id = ed.id
+                WHERE ed.organisation_id = :org_id
+                GROUP BY ed.eval_type
+                ORDER BY ed.eval_type
+            """)
+            by_type_rows = (await session.execute(by_type_q, {"org_id": current_user.organisation_id})).all()
+
+            by_type = [
+                TypeBreakdown(
+                    eval_type=row.eval_type,
+                    total=row.total,
+                    passed=row.passed,
+                    failed=row.failed,
                 )
-            )
-        ).all()
-        for ed in eval_defs:
-            if ed.node_id is not None:
-                covered_pairs.add((ed.pipeline_id, str(ed.node_id)))
+                for row in by_type_rows
+            ]
 
-        coverage_gaps: list[CoverageGap] = []
-        for pl in pipelines:
-            for node in pl.graph_nodes_json or []:
-                node_id = node.get("id")
-                if node_id and (pl.id, str(node_id)) not in covered_pairs:
-                    coverage_gaps.append(
-                        CoverageGap(
-                            pipeline_id=str(pl.id),
-                            pipeline_name=pl.name,
-                            node_id=str(node_id),
-                        )
+            # ── Coverage gaps ───────────────────────────────────────────
+            pipelines = (
+                await session.execute(
+                    select(Pipeline.id, Pipeline.name, Pipeline.graph_nodes_json).where(
+                        Pipeline.organisation_id == current_user.organisation_id
                     )
+                )
+            ).all()
 
-        # ── Recent results ──────────────────────────────────────────
-        recent_q = text("""
-            SELECT
-                er.id,
-                er.eval_id,
-                ed.name AS eval_name,
-                ed.eval_type,
-                er.passed,
-                er.score,
-                er.detail,
-                er.evaluated_at
-            FROM eval_results er
-            JOIN eval_definitions ed ON ed.id = er.eval_id
-            WHERE er.organisation_id = :org_id
-            ORDER BY er.evaluated_at DESC
-            LIMIT 50
-        """)
-        recent_rows = (await session.execute(recent_q, {"org_id": current_user.organisation_id})).all()
+            covered_pairs: set[tuple[uuid.UUID, str]] = set()
+            eval_defs = (
+                await session.execute(
+                    select(EvalDefinition.pipeline_id, EvalDefinition.node_id).where(
+                        EvalDefinition.organisation_id == current_user.organisation_id
+                    )
+                )
+            ).all()
+            for ed in eval_defs:
+                if ed.node_id is not None:
+                    covered_pairs.add((ed.pipeline_id, str(ed.node_id)))
 
-        recent_results = [
-            RecentEvalResult(
-                id=str(row.id),
-                eval_id=str(row.eval_id),
-                eval_name=row.eval_name,
-                eval_type=row.eval_type,
-                passed=row.passed,
-                score=row.score,
-                detail=row.detail,
-                evaluated_at=str(row.evaluated_at),
-            )
-            for row in recent_rows
-        ]
+            coverage_gaps: list[CoverageGap] = []
+            for pl in pipelines:
+                for node in pl.graph_nodes_json or []:
+                    node_id = node.get("id")
+                    if node_id and (pl.id, str(node_id)) not in covered_pairs:
+                        coverage_gaps.append(
+                            CoverageGap(
+                                pipeline_id=str(pl.id),
+                                pipeline_name=pl.name,
+                                node_id=str(node_id),
+                            )
+                        )
+
+            # ── Recent results ──────────────────────────────────────────
+            recent_q = text("""
+                SELECT
+                    er.id,
+                    er.eval_id,
+                    ed.name AS eval_name,
+                    ed.eval_type,
+                    er.passed,
+                    er.score,
+                    er.detail,
+                    er.evaluated_at
+                FROM eval_results er
+                JOIN eval_definitions ed ON ed.id = er.eval_id
+                WHERE er.organisation_id = :org_id
+                ORDER BY er.evaluated_at DESC
+                LIMIT 50
+            """)
+            recent_rows = (await session.execute(recent_q, {"org_id": current_user.organisation_id})).all()
+
+            recent_results = [
+                RecentEvalResult(
+                    id=str(row.id),
+                    eval_id=str(row.eval_id),
+                    eval_name=row.eval_name,
+                    eval_type=row.eval_type,
+                    passed=row.passed,
+                    score=row.score,
+                    detail=row.detail,
+                    evaluated_at=str(row.evaluated_at),
+                )
+                for row in recent_rows
+            ]
+    except ProgrammingError:
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="Feature is not available. Run database migrations to enable it.",
+        )
 
     return EvalDashboardResponse(
         summary=summary,
@@ -1613,13 +1619,19 @@ async def eval_regressions(
             detail="Only admin users can access eval regressions",
         )
 
-    async with session.begin():
-        await set_rls_org(session, current_user.organisation_id)
-        alerts = await detect_regressions(
-            session,
-            org_id=current_user.organisation_id,
-            days=days,
-            threshold=threshold,
+    try:
+        async with session.begin():
+            await set_rls_org(session, current_user.organisation_id)
+            alerts = await detect_regressions(
+                session,
+                org_id=current_user.organisation_id,
+                days=days,
+                threshold=threshold,
+            )
+    except ProgrammingError:
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="Feature is not available. Run database migrations to enable it.",
         )
 
     return RegressionAlertsResponse(
