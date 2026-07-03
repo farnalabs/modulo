@@ -38,7 +38,7 @@ class TestAgentIsExecutable:
         agent = Agent(
             organisation_id=uuid.uuid4(),
             name="Default Executable",
-            created_by=uuid.uuid4(),
+            account_id=uuid.uuid4(),
             input_schema_id=uuid.uuid4(),
             input_schema_version="1.0",
             output_schema_id=uuid.uuid4(),
@@ -54,7 +54,7 @@ class TestAgentIsExecutable:
         agent = Agent(
             organisation_id=uuid.uuid4(),
             name="Executable Agent",
-            created_by=uuid.uuid4(),
+            account_id=uuid.uuid4(),
             is_executable=True,
             input_schema_id=uuid.uuid4(),
             input_schema_version="1.0",
@@ -71,7 +71,7 @@ class TestAgentIsExecutable:
         agent = Agent(
             organisation_id=uuid.uuid4(),
             name="Non-Executable Agent",
-            created_by=uuid.uuid4(),
+            account_id=uuid.uuid4(),
             is_executable=False,
             input_schema_id=uuid.uuid4(),
             input_schema_version="1.0",
@@ -88,7 +88,7 @@ class TestAgentIsExecutable:
         agent = Agent(
             organisation_id=uuid.uuid4(),
             name="Persist Check",
-            created_by=uuid.uuid4(),
+            account_id=uuid.uuid4(),
             is_executable=False,
             input_schema_id=uuid.uuid4(),
             input_schema_version="1.0",
@@ -109,7 +109,7 @@ class TestAgentIsExecutable:
         agent = Agent(
             organisation_id=uuid.uuid4(),
             name="Updatable Agent",
-            created_by=uuid.uuid4(),
+            account_id=uuid.uuid4(),
             is_executable=True,
             input_schema_id=uuid.uuid4(),
             input_schema_version="1.0",
