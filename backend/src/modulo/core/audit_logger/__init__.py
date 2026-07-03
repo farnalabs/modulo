@@ -183,7 +183,12 @@ async def verify_chain(
     events = list(result.scalars())
 
     if not events:
-        return {"valid": True, "total_events": 0, "checked_events": 0}
+        return {
+            "valid": True,
+            "total_events": 0,
+            "checked_events": 0,
+            "event_count": 0,
+        }
 
     expected_prev: str | None = None
     for idx, event in enumerate(events):
@@ -200,15 +205,18 @@ async def verify_chain(
             created_at=event.created_at.isoformat() if event.created_at else "",
         )
         if event.previous_hash != expected_prev:
+            detail = (
+                f"Chain break at event {idx}: expected previous_hash {expected_prev!r}, got {event.previous_hash!r}"
+            )
             return {
                 "valid": False,
                 "total_events": len(events),
                 "checked_events": idx + 1,
                 "first_gap_index": idx,
                 "first_tampered_id": str(event.id),
-                "detail": (
-                    f"Chain break at event {idx}: expected previous_hash {expected_prev!r}, got {event.previous_hash!r}"
-                ),
+                "detail": detail,
+                "event_count": len(events),
+                "error": detail,
             }
         expected_prev = canonical_hash
 
@@ -223,6 +231,7 @@ async def verify_chain(
         "first_gap_index": None,
         "first_tampered_id": None,
         "chain_head_match": chain_head_match,
+        "event_count": len(events),
     }
 
 
@@ -232,19 +241,43 @@ async def export_chain(
     *,
     page: int = 1,
     page_size: int = 100,
+    event_type: str | None = None,
+    actor_user_id: uuid.UUID | None = None,
+    resource_type: str | None = None,
+    from_date: str | None = None,
+    to_date: str | None = None,
 ) -> dict[str, Any]:
-    """Export audit events as paginated JSON lines."""
+    """Export audit events as paginated JSON lines with optional filters."""
+    query = select(AuditEvent).where(AuditEvent.organisation_id == org_id)
+
+    if event_type:
+        query = query.where(AuditEvent.event_type == event_type)
+    if actor_user_id:
+        query = query.where(AuditEvent.account_id == actor_user_id)
+    if resource_type:
+        query = query.where(AuditEvent.resource_type == resource_type)
+    if from_date:
+        query = query.where(AuditEvent.created_at >= from_date)
+    if to_date:
+        query = query.where(AuditEvent.created_at <= to_date)
+
     offset = (page - 1) * page_size
-    result = await session.execute(
-        select(AuditEvent)
-        .where(AuditEvent.organisation_id == org_id)
-        .order_by(AuditEvent.created_at.asc(), AuditEvent.id.asc())
-        .offset(offset)
-        .limit(page_size)
-    )
+    query = query.order_by(AuditEvent.created_at.asc(), AuditEvent.id.asc()).offset(offset).limit(page_size)
+    result = await session.execute(query)
     events = list(result.scalars())
 
-    total_result = await session.execute(select(func.count(AuditEvent.id)).where(AuditEvent.organisation_id == org_id))
+    count_query = select(func.count(AuditEvent.id)).where(AuditEvent.organisation_id == org_id)
+    if event_type:
+        count_query = count_query.where(AuditEvent.event_type == event_type)
+    if actor_user_id:
+        count_query = count_query.where(AuditEvent.account_id == actor_user_id)
+    if resource_type:
+        count_query = count_query.where(AuditEvent.resource_type == resource_type)
+    if from_date:
+        count_query = count_query.where(AuditEvent.created_at >= from_date)
+    if to_date:
+        count_query = count_query.where(AuditEvent.created_at <= to_date)
+    total_result = await session.execute(count_query)
     total = total_result.scalar() or 0
 
     items = []

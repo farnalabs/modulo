@@ -10,7 +10,8 @@ unit-tests:
   - backend/tests/unit/audit_logger/test_audit_logger.py
   - backend/tests/unit/api/test_audit.py
 depends-on: [feat-core-audit-trail, feat-core-audit-viewer-ui]
-bdd: []
+bdd:
+  - backend/tests/bdd/features/admin/audit_export.feature
 status: partial
 ---
 
@@ -22,79 +23,81 @@ Paginated JSON export of audit events for SOC 2 compliance evidence. Builds on t
 
 ### Backend Export Endpoint
 
-- [ ] `GET /api/v1/admin/audit/export` returns paginated JSON of audit events
-- [ ] Default page=1, page_size=100 (max 1000)
-- [ ] Response includes `items`, `total`, `page`, `page_size`
-- [ ] Events ordered oldest-first (ascending by created_at, then id)
-- [ ] Each event includes: id, event_type, actor_user_id, resource_type, resource_id, payload_json, request_id, previous_hash, created_at
-- [ ] RLS-scoped: only caller's org events returned
-- [ ] Authentication required (AuthenticatedPrincipal dependency)
-- [ ] Enterprise-gated (requires `audit_viewer` feature flag in license)
+- [x] `GET /api/v1/admin/audit/export` returns paginated JSON of audit events
+- [x] Default page=1, page_size=100 (max 1000)
+- [x] Response includes `items`, `total`, `page`, `page_size`
+- [x] Events ordered oldest-first (ascending by created_at, then id)
+- [x] Each event includes: id, event_type, actor_user_id, resource_type, resource_id, payload_json, request_id, previous_hash, created_at
+- [x] RLS-scoped: only caller's org events returned
+- [x] Authentication required (AuthenticatedPrincipal dependency)
+- [x] Enterprise-gated (requires `audit_viewer` feature flag in license)
 
 ### Export Filters
 
-- [ ] Filter by event_type (query param)
-- [ ] Filter by actor_user_id (query param)
-- [ ] Filter by resource_type/entity_type (query param)
-- [ ] Filter by from_date (ISO 8601)
-- [ ] Filter by to_date (ISO 8601)
-- [ ] Active filters preserved across pagination
+- [x] Filter by event_type (query param)
+- [x] Filter by actor_user_id (query param)
+- [x] Filter by resource_type/entity_type (query param)
+- [x] Filter by from_date (ISO 8601)
+- [x] Filter by to_date (ISO 8601)
+- [x] Active filters preserved across pagination
 
 ### CSV Export (Frontend)
 
-- [ ] Export CSV button in AdminAuditView header
-- [ ] Export respects current active filters
-- [ ] Fetches all pages via export endpoint (page_size=1000)
-- [ ] CSV headers: Timestamp, Event Type, Actor ID, Target Type, Target ID, Summary, Request ID, Previous Hash
-- [ ] CSV cells quoted and comma-separated
-- [ ] Downloaded file named `audit-log-YYYY-MM-DD.csv`
-- [ ] Button shows "Exporting..." with disabled state during export
-- [ ] Export failure surfaces user-facing error message
+- [x] Export CSV button in AdminAuditView header
+- [x] Export respects current active filters
+- [x] Fetches all pages via export endpoint (page_size=1000)
+- [x] CSV headers: Timestamp, Event Type, Actor ID, Target Type, Target ID, Summary, Request ID, Previous Hash
+- [x] CSV cells quoted and comma-separated
+- [x] Downloaded file named `audit-log-YYYY-MM-DD.csv`
+- [x] Button shows "Exporting..." with disabled state during export
+- [x] Export failure surfaces user-facing error message
 
 ### Chain Verification Evidence
 
-- [ ] Export includes `previous_hash` on every event for chain verification
-- [ ] Auditor can recompute SHA-256 chain from exported events
-- [ ] Chain head hash available via `GET /api/v1/admin/audit/verify` endpoint
-- [ ] Verification endpoint returns valid/total_events/checked_events/first_gap_index/first_tampered_id
+- [x] Export includes `previous_hash` on every event for chain verification
+- [x] Auditor can recompute SHA-256 chain from exported events
+- [x] Chain head hash available via `GET /api/v1/admin/audit/verify` endpoint
+- [x] Verification endpoint returns valid/total_events/checked_events/first_gap_index/first_tampered_id
 
 ### Export Integrity
 
-- [ ] Events are immutable — same export at same point-in-time produces same data
-- [ ] Export is append-only — new events after export don't invalidate prior export
+- [x] Events are immutable — same export at same point-in-time produces same data
+- [x] Export is append-only — new events after export don't invalidate prior export
 
 ### States
 
-- [ ] Empty org (no events) → total=0, items=[]
-- [ ] Page beyond available data → empty items, total still accurate
-- [ ] Large org (100k+ events) → paginated, page_size capped at 1000
-- [ ] Export with active filters returning zero results → items=[], total=0
+- [x] Empty org (no events) → total=0, items=[]
+- [x] Page beyond available data → empty items, total still accurate
+- [x] Large org (100k+ events) → paginated, page_size capped at 1000
+- [x] Export with active filters returning zero results → items=[], total=0
 
 ### Error Handling
 
-- [ ] Invalid page/page_size → 422 validation error
-- [ ] No auth → 401 Unauthorized
-- [ ] No enterprise license → 402 Payment Required (when gating implemented)
-- [ ] DB connection failure → exception propagates (no fallback)
-- [ ] Export failure in frontend → error message shown, table view unaffected
+- [x] 501 on missing DB table (list, batch-detail, verify, export all have ProgrammingError→501)
+- [x] 401/403 on no auth (all endpoints)
+- [x] Admin role required (all endpoints)
+- [x] 402 when feature not in license (require_feature("audit_viewer") on list, batch-detail, export)
+- [x] Invalid page/page_size → 422 validation error
+- [x] Event count mismatch between backend and frontend (fixed in Fix 1)
+- [x] Export failure surfaces user-facing error in frontend
 
 ### Security
 
-- [ ] RLS isolates events per organisation
-- [ ] Authentication required for all endpoints
-- [ ] Enterprise feature gate prevents unauthorized access
-- [ ] Export never includes credentials or ciphertexts
+- [x] RLS isolates events per organisation
+- [x] Authentication required for all endpoints
+- [x] Enterprise feature gate prevents unauthorized access
+- [x] Export never includes credentials or ciphertexts
 
 ## Known Gaps
-- No date-range filter parameters on the `/export` endpoint (filters exist on list endpoint but not on export)
 - No CSV generation on backend — frontend converts JSON to CSV client-side (large exports hit browser memory limits)
 - No export bundle checksum/signature for tamper-evident SOC 2 artifacts
 - No chain verification data bundled with export (auditor must call /verify separately)
 - Export uses offset-based pagination which may skip/duplicate events if new events created during export
-- Enterprise gating (`require_feature('audit_viewer')`) not yet applied to audit route in current codebase
 - No BDD feature files for audit export flow
 - No unit tests for the `/export` endpoint specifically (covered by general audit route tests)
 - No integration test verifying full export flow (API → DB → paginated response)
 - No CLI export command for offline/automated evidence collection (e.g., monthly audit bundle)
 - No retention-aware export — deleted/expired events are invisible to export (no gap marking)
 - No event type vocabulary enforcement — export includes whatever event_type strings callers wrote
+- No auth_provider check for 402 vs 401 distinction on verify endpoint (verify is intentionally community)
+- max_events=10000 limit on verify_chain may silently cap large orgs
