@@ -10,7 +10,6 @@ import uuid
 from datetime import UTC, date, datetime, timedelta
 from typing import Any
 
-import httpx
 from sqlalchemy import case, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -161,12 +160,15 @@ async def _query_eval_summary(
     start: date,
     end: date,
 ) -> dict[str, Any]:
+    start_dt = datetime(start.year, start.month, start.day, tzinfo=UTC)
+    end_dt = datetime(end.year, end.month, end.day, tzinfo=UTC) + timedelta(days=1)
     q = select(
         func.count().label("total_evals"),
         func.sum(case((EvalResult.passed == True, 1), else_=0)).label("passed_evals"),  # noqa: E712
     ).where(
         EvalResult.organisation_id == org_id,
-        func.date(EvalResult.evaluated_at).between(start, end),
+        EvalResult.evaluated_at >= start_dt,
+        EvalResult.evaluated_at < end_dt,
     )
     result = await session.execute(q)
     row = result.one()
@@ -185,18 +187,22 @@ async def _query_daily_eval_rates(
     start: date,
     end: date,
 ) -> list[tuple[date, int, int]]:
+    start_dt = datetime(start.year, start.month, start.day, tzinfo=UTC)
+    end_dt = datetime(end.year, end.month, end.day, tzinfo=UTC) + timedelta(days=1)
+    eval_date = func.date(EvalResult.evaluated_at)
     q = (
         select(
-            func.date(EvalResult.evaluated_at).label("eval_date"),
+            eval_date.label("eval_date"),
             func.count().label("total"),
             func.sum(case((EvalResult.passed == True, 1), else_=0)).label("passed"),  # noqa: E712
         )
         .where(
             EvalResult.organisation_id == org_id,
-            func.date(EvalResult.evaluated_at).between(start, end),
+            EvalResult.evaluated_at >= start_dt,
+            EvalResult.evaluated_at < end_dt,
         )
-        .group_by(func.date(EvalResult.evaluated_at))
-        .order_by(func.date(EvalResult.evaluated_at))
+        .group_by(eval_date)
+        .order_by(eval_date)
     )
     result = await session.execute(q)
     return [(row.eval_date, int(row.total), int(row.passed)) for row in result.all()]
@@ -213,25 +219,18 @@ _TREND_DOWN = "\u2193"
 _TREND_FLAT = "\u2192"
 
 
-def _trend_symbol(delta_pct: float | None, *, invert: bool = False) -> str:
+def _trend_symbol(delta_pct: float | None) -> str:
     if delta_pct is None:
         return _TREND_FLAT
     threshold = 5.0
-    large_up = delta_pct > threshold
-    small_up = 0 < delta_pct <= threshold
-    large_down = delta_pct < -threshold
-    small_down = -threshold <= delta_pct < 0
-    if invert:
-        large_up, large_down = large_down, large_up
-        small_up, small_down = small_down, small_up
-    if large_down:
-        return _TREND_DOWN
-    if large_up:
+    if delta_pct > threshold:
         return _TREND_UP
-    if small_down:
+    if delta_pct < -threshold:
         return _TREND_DOWN
-    if small_up:
+    if delta_pct > 0:
         return _TREND_UP
+    if delta_pct < 0:
+        return _TREND_DOWN
     return _TREND_FLAT
 
 
@@ -257,7 +256,7 @@ def _format_trend_section(wow: dict[str, Any], summary: dict[str, Any]) -> dict[
         f"(prev: {wow['previous_week_runs']}, \u0394 {_fmt_delta(wow['runs_delta_pct'])})"
     )
     eval_line = (
-        f"{_trend_symbol(wow['eval_pass_rate_delta_pct'], invert=True)} *Eval Pass Rate*: "
+        f"{_trend_symbol(wow['eval_pass_rate_delta_pct'])} *Eval Pass Rate*: "
         f"{rate_str} (prev: {prev_rate_str}, "
         f"\u0394 {_fmt_delta(wow['eval_pass_rate_delta_pct'])})"
     )
@@ -356,34 +355,11 @@ async def deliver_quality_report(
 
     Returns a list of delivery results with keys: url, status, status_code, error.
     """
+    from modulo.core.reports.scheduler import _deliver_to_urls
+
     slack_blocks_str = format_slack_message(report_data)
     payload = {"blocks": json.loads(slack_blocks_str)}
-    webhook_urls = recipient_config.get("webhook_urls", [])
-
-    results: list[dict[str, Any]] = []
-    async with httpx.AsyncClient(timeout=30.0) as client:
-        for url in webhook_urls:
-            try:
-                resp = await client.post(
-                    url,
-                    json=payload,
-                    headers={"Content-Type": "application/json"},
-                )
-                results.append(
-                    {
-                        "url": url,
-                        "status": "delivered" if resp.is_success else "failed",
-                        "status_code": resp.status_code,
-                        "error": None if resp.is_success else resp.text[:200],
-                    }
-                )
-            except httpx.RequestError as exc:
-                results.append(
-                    {
-                        "url": url,
-                        "status": "failed",
-                        "status_code": None,
-                        "error": str(exc),
-                    }
-                )
-    return results
+    return await _deliver_to_urls(
+        recipient_config.get("webhook_urls", []),
+        payload,
+    )
