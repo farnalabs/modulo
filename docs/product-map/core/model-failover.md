@@ -85,6 +85,14 @@ audit event. API creates/updates/reads `fallback_backend_ids` on the entity.
 - [x] 404 on get/update/delete of unknown backend
 - [x] 401/403 on unauthenticated list
 
+### Error Handling
+
+- [ ] List returns 501 when model_backends table does not exist (ProgrammingError)
+- [ ] Create returns 501 when model_backends table does not exist (ProgrammingError)
+- [ ] Get returns 501 when model_backends table does not exist (ProgrammingError)
+- [ ] Update returns 501 when model_backends table does not exist (ProgrammingError)
+- [ ] Delete returns 501 when model_backends table does not exist (ProgrammingError)
+
 ### Database
 
 - [x] Migration adds `fallback_backend_ids` JSON column to `model_backends`
@@ -93,7 +101,9 @@ audit event. API creates/updates/reads `fallback_backend_ids` on the entity.
 - [ ] Constraint or FK to validate fallback IDs reference existing ModelBackend rows
 - [ ] Deletion protection: deleting a backend referenced as a fallback elsewhere
 
-### BDD (Placeholder — no real scenarios)
+### BDD
+
+BDD step definitions exist in `steps/test_model_backends.py` — all 5 feature files (`backend_selection`, `backend_health_check`, `backend_crud`, `backend_error_handling`, `rate_limiting`) are wired with real given/when/then steps. However, steps simulate backend resolution at the mock level, not via actual API calls.
 
 - [ ] Scenario: healthy primary returns immediately
 - [ ] Scenario: unhealthy primary with healthy fallback
@@ -118,8 +128,14 @@ audit event. API creates/updates/reads `fallback_backend_ids` on the entity.
 - [x] Fernet encryption at rest
 - [x] Audit trail on failover events
 
-## Known Gaps - BDD feature files are placeholders only — no Gherkin scenarios
-- No validation that fallback IDs reference existing backends (at DB or API level)
+## Known Gaps
+- No ProgrammingError/501 catch on any of the 5 API routes (violates established pattern)
+- Unhandled ValueError from `_build_backend()` in create route — invalid provider causes 500, not 422
+- No duplicate name check — backend_crud.feature expects 409 but code allows duplicates
+- No fallback ID validation — API accepts any UUID, doesn't verify they reference existing backends
 - No deletion protection for backends referenced as fallbacks
-- `get_with_rotation()` raises `BackendUnavailableError` for unregistered IDs (confusable with unhealthy state)
+- No audit events on CRUD operations (create/update/delete)
+- 6 DB columns not exposed via API: owner_team_id, status, cost_tracking, currency, last_health_check_at, last_health_check_error
+- `get_with_rotation()` lacks audit logger parameter — scan-all-fallbacks path emits no audit events
+- `_make_backend()` test helper sets `created_by` instead of `account_id` — causes mock attribute mismatch
 - No concurrent-access guards on `_healthy` dict (documented not thread-safe) 
