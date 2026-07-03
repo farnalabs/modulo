@@ -64,6 +64,7 @@ const AdminErrorsView = () => import('../views/AdminErrorsView.vue')
 const AdminErrorDetailView = () => import('../views/AdminErrorDetailView.vue')
 const UserRemySkillsView = () => import('../views/UserRemySkillsView.vue')
 const SettingsErrorForwardersView = () => import('../views/SettingsErrorForwardersView.vue')
+const PipelineListView = () => import('../views/PipelineListView.vue')
 
 const router = createRouter({
   history: createWebHistory(),
@@ -386,7 +387,9 @@ const router = createRouter({
     },
     {
       path: '/pipelines',
-      redirect: '/library',
+      name: 'pipeline-list',
+      component: PipelineListView,
+      meta: { breadcrumb: 'Pipelines', parent: 'library' },
     },
     {
       path: '/templates',
