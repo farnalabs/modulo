@@ -478,29 +478,35 @@ async def replace_pipeline_graph_endpoint(
         if node.connector_binding is not None
     ]
 
-    async with session.begin():
-        await set_rls_org(session, principal.organisation_id)
-        await set_rls_user_context(session, principal.account_id, principal.org_role)
-        schema_pins, model_backend_pins = await _resolve_graph_references(
-            session,
-            body.nodes,
-            principal.organisation_id,
-        )
-        graph = await replace_pipeline_graph(
-            session,
-            pipeline_id=pipeline_id,
-            org_id=principal.organisation_id,
-            nodes=node_data,
-            edges=edge_data,
-        )
-        if graph is not None:
-            validation = await GraphValidator().validate_definition(
-                validator_graph,
+    try:
+        async with session.begin():
+            await set_rls_org(session, principal.organisation_id)
+            await set_rls_user_context(session, principal.account_id, principal.org_role)
+            schema_pins, model_backend_pins = await _resolve_graph_references(
                 session,
-                connector_bindings=connector_bindings,
-                schema_pins=schema_pins,
-                model_backend_pins=model_backend_pins,
+                body.nodes,
+                principal.organisation_id,
             )
+            graph = await replace_pipeline_graph(
+                session,
+                pipeline_id=pipeline_id,
+                org_id=principal.organisation_id,
+                nodes=node_data,
+                edges=edge_data,
+            )
+            if graph is not None:
+                validation = await GraphValidator().validate_definition(
+                    validator_graph,
+                    session,
+                    connector_bindings=connector_bindings,
+                    schema_pins=schema_pins,
+                    model_backend_pins=model_backend_pins,
+                )
+    except ProgrammingError:
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="Feature is not available. Run database migrations to enable it.",
+        )
     if graph is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Pipeline not found")
     nodes, edges = graph

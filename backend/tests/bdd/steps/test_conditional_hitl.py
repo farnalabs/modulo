@@ -1,8 +1,10 @@
 """Step definitions for Conditional HITL Gating feature."""
 
+import asyncio
 import json
 import uuid
 from typing import Any
+from unittest.mock import MagicMock, patch
 
 import pytest
 from langgraph.errors import NodeInterrupt
@@ -92,7 +94,7 @@ def run_waiting_at_gate(gate_id: str, ctx):
         "description": "Gate reached due to condition",
         "human_only": False,
     }
-    ctx["run_state"] = {
+    ctx["state"] = {
         "artifacts": [],
         "_hitl_gates": [ctx["gate_config"]],
     }
@@ -174,8 +176,17 @@ def eval_scores(eval_name: str, score: float, ctx):
     ctx["state"]["score"] = score_val
 
 
+@when("a human rejects the gate")
+def human_rejects_gate(ctx):
+    if "state" not in ctx:
+        ctx["state"] = {"artifacts": [], "_hitl_gates": []}
+    ctx["state"]["_hitl_decision"] = {"action": "rejected"}
+
+
 @when("a human approves the gate")
 def human_approves_gate(ctx):
+    if "state" not in ctx:
+        ctx["state"] = {"artifacts": [], "_hitl_gates": []}
     ctx["state"]["_hitl_decision"] = {"action": "approved"}
 
 
@@ -260,6 +271,7 @@ def gate_proceeds_to_eval_checks(ctx):
 
 @then("EvalBlockedError is raised")
 def eval_blocked_error_raised(ctx):
+    _evaluate_conditional_gate(ctx)
     assert ctx.get("_eval_blocked_error") is True or ctx.get("_interrupt_raised") is False
 
 
@@ -275,6 +287,7 @@ def no_hitl_interrupt_raised(ctx):
 
 @then("the gate does not re-evaluate the condition")
 def gate_does_not_reevaluate(ctx):
+    _evaluate_conditional_gate(ctx)
     result = ctx.get("_gate_result")
     assert result is not None
     assert result["artifacts"][0]["status"] == "interrupted"
@@ -290,7 +303,7 @@ def execution_continues_to_next(ctx):
     pass
 
 
-@then('the gate condition on "{eval_name}" evaluates to true')
+@then(parsers.parse('the gate condition on "{eval_name}" evaluates to true'))
 def gate_condition_on_eval_true(eval_name: str, ctx):
     _evaluate_conditional_gate(ctx)
     assert ctx.get("_interrupt_raised") is True
@@ -301,8 +314,24 @@ def run_routes_to_target(target: str, ctx):
     pass  # Routing handled by graph_cache kickback router
 
 
+@then(parsers.parse('the run routes to "{target}"'))
+def run_routes_to(target: str, ctx):
+    from modulo.core.pipeline_engine.graph_cache import _make_gate_kickback_router
+
+    gate_config = ctx.get("gate_config", {})
+    reject_target = gate_config.get("reject_target", "?")
+    normal_target = "next-node"
+    router = _make_gate_kickback_router(normal_target, reject_target)
+    decision = ctx.get("state", {}).get("_hitl_decision", {})
+    result = router({"_hitl_decision": decision})
+    assert result == target, (
+        f"Expected route to {target!r}, got {result!r}"
+    )
+
+
 @then('the gate artifact shows action "rejected"')
 def gate_artifact_shows_rejected(ctx):
+    _evaluate_conditional_gate(ctx)
     result = ctx.get("_gate_result")
     assert result is not None
     assert result["artifacts"][0]["result"] == "rejected"
@@ -314,7 +343,12 @@ def gate_artifact_shows_rejected(ctx):
 
 
 def _evaluate_conditional_gate(ctx: dict[str, Any]) -> None:
-    """Build a make_hitl_gate_fn from context and invoke it."""
+    """Build a make_hitl_gate_fn from context and invoke it.
+
+    The node function is async (make_hitl_gate_fn returns ``async def _hitl_gate``),
+    so we wrap it in ``asyncio.run()`` to execute synchronously in tests.
+    """
+    from modulo.core.eval_engine import EvalDefinition, EvalEngine, EvalResult
     from modulo.core.pipeline_engine.node_runner import make_hitl_gate_fn
 
     gate_config = ctx.get("gate_config", {}).copy()
@@ -323,11 +357,114 @@ def _evaluate_conditional_gate(ctx: dict[str, Any]) -> None:
     # Build eval definitions if present.
     eval_defs = _build_eval_defs(ctx)
 
-    # If state has _hitl_decision, skips condition/evals (resume path).
+    # If a mock llm_judge result is provided, patch EvalEngine.evaluate
+    # to return it instead of calling a real LLM.
+    mock_result = ctx.get("llm_judge_result")
+    if mock_result is not None:
+        _patch_eval_engine(ctx, mock_result, state, gate_config, eval_defs)
+        return
+
+    # If individual mock scores are set on eval_defs, patch engine for those.
+    if ctx.get("eval_defs") and any("_mock_score" in ed for ed in ctx["eval_defs"]):
+        _patch_mock_scores(ctx, state, gate_config, eval_defs)
+        return
+
+    _run_gate_fn(ctx, gate_config, state, eval_defs)
+
+
+def _patch_mock_scores(
+    ctx: dict[str, Any],
+    state: dict[str, Any],
+    gate_config: dict[str, Any],
+    eval_defs: list[Any] | None,
+) -> None:
+    """Patch EvalEngine.evaluate to use _mock_score per eval definition."""
+    from modulo.core.eval_engine import EvalBlockedError, EvalEngine, EvalResult
+
+    score_map: dict[str, float] = {}
+    for ed in ctx.get("eval_defs", []):
+        ms = ed.get("_mock_score")
+        if ms is not None:
+            score_map[ed["name"]] = float(ms)
+
+    def _mock_evaluate(self, output, eval_def, *, run_id=None, llm_judge_callable=None):
+        mock_score = score_map.get(eval_def.name)
+        if mock_score is not None:
+            _passed = mock_score >= 0.5
+        else:
+            _passed = True
+            mock_score = 1.0
+        return EvalResult(
+            id=uuid.uuid4(),
+            run_id=uuid.uuid4(),
+            node_id="n1",
+            eval_id=eval_def.id,
+            passed=_passed,
+            score=mock_score,
+            detail="mocked",
+        )
+
+    _patcher = patch.object(EvalEngine, "evaluate", _mock_evaluate)
+    _patcher.start()
+    try:
+        _run_gate_fn(ctx, gate_config, state, eval_defs)
+    finally:
+        _patcher.stop()
+
+
+def _patch_eval_engine(
+    ctx: dict[str, Any],
+    mock_result: dict[str, Any],
+    state: dict[str, Any],
+    gate_config: dict[str, Any],
+    eval_defs: list[Any] | None,
+) -> None:
+    """Patch EvalEngine.evaluate to return mock result, respecting failure_behaviour."""
+    from modulo.core.eval_engine import EvalBlockedError, EvalEngine, EvalResult
+
+    _passed = mock_result.get("passed", False)
+    _score = mock_result.get("score")
+    _detail = mock_result.get("detail", "")
+
+    def _mock_evaluate(self, output, eval_def, *, run_id=None, llm_judge_callable=None):
+        result = EvalResult(
+            id=uuid.uuid4(),
+            run_id=uuid.uuid4(),
+            node_id="n1",
+            eval_id=eval_def.id,
+            passed=_passed,
+            score=_score,
+            detail=_detail,
+        )
+        # Simulate real EvalEngine behavior: block on failure.
+        if not result.passed and eval_def.failure_behaviour == "block":
+            raise EvalBlockedError(eval_def.name, result.detail)
+        return result
+
+    _patcher = patch.object(EvalEngine, "evaluate", _mock_evaluate)
+    _patcher.start()
+    try:
+        _run_gate_fn(ctx, gate_config, state, eval_defs)
+    finally:
+        _patcher.stop()
+
+
+def _run_gate_fn(
+    ctx: dict[str, Any],
+    gate_config: dict[str, Any],
+    state: dict[str, Any],
+    eval_defs: list[Any] | None,
+) -> None:
+    """Execute the gate node function synchronously and capture results."""
+    from modulo.core.pipeline_engine.node_runner import make_hitl_gate_fn
+
     node_fn = make_hitl_gate_fn(gate_config, eval_definitions=eval_defs)
 
+    async def _run() -> Any:
+        return await node_fn(state)
+
     try:
-        result = node_fn(state)
+        result = asyncio.run(_run())
         ctx["_gate_result"] = result
         ctx["_interrupt_raised"] = False
     except NodeInterrupt:
