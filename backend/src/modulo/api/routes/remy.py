@@ -36,7 +36,7 @@ from httpx import AsyncClient
 from langchain_core.messages import AIMessage, AIMessageChunk, BaseMessage, HumanMessage, SystemMessage, ToolMessage
 from pydantic import BaseModel, Field
 from sqlalchemy import func, select
-from sqlalchemy.exc import ProgrammingError
+from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 from starlette.responses import StreamingResponse
 
@@ -424,6 +424,12 @@ async def list_sessions(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
         ) from None
+    except SQLAlchemyError:
+        logger.exception("remy.database_error")
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="Database error. Please try again later.",
+        ) from None
 
 
 @router.post("/sessions", status_code=status.HTTP_201_CREATED)
@@ -460,6 +466,12 @@ async def create_session(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
         ) from None
+    except SQLAlchemyError:
+        logger.exception("remy.database_error")
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="Database error. Please try again later.",
+        ) from None
 
 
 @router.get("/sessions/{session_id}", status_code=status.HTTP_200_OK)
@@ -484,6 +496,12 @@ async def get_session(
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
+        ) from None
+    except SQLAlchemyError:
+        logger.exception("remy.database_error")
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="Database error. Please try again later.",
         ) from None
 
 
@@ -510,6 +528,12 @@ async def rename_session(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
         ) from None
+    except SQLAlchemyError:
+        logger.exception("remy.database_error")
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="Database error. Please try again later.",
+        ) from None
 
 
 @router.delete("/sessions/{session_id}", status_code=status.HTTP_200_OK)
@@ -532,6 +556,12 @@ async def delete_session(
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
+        ) from None
+    except SQLAlchemyError:
+        logger.exception("remy.database_error")
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="Database error. Please try again later.",
         ) from None
 
 
@@ -578,6 +608,12 @@ async def list_messages(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
         ) from None
+    except SQLAlchemyError:
+        logger.exception("remy.database_error")
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="Database error. Please try again later.",
+        ) from None
 
 
 @router.post("/sessions/{session_id}/messages", status_code=status.HTTP_201_CREATED)
@@ -613,6 +649,12 @@ async def append_message(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
         ) from None
+    except SQLAlchemyError:
+        logger.exception("remy.database_error")
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="Database error. Please try again later.",
+        ) from None
 
 
 # ── Streaming endpoint ───────────────────────────────────────────────────
@@ -638,6 +680,12 @@ async def stream_chat(
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
+        ) from None
+    except SQLAlchemyError:
+        logger.exception("remy.database_error")
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="Database error. Please try again later.",
         ) from None
 
     mcp_base_url = settings.modulo_public_url.rstrip("/")
@@ -982,6 +1030,13 @@ async def stream_chat(
                 + json.dumps({"detail": "Feature is not available. Run database migrations to enable it."})
                 + "\n\n"
             )
+        except SQLAlchemyError:
+            logger.exception("remy.database_error")
+            yield (
+                "event: error\ndata: "
+                + json.dumps({"detail": "Database error. Please try again later."})
+                + "\n\n"
+            )
         except Exception as exc:
             logger.exception("Remy streaming error")
             yield f"event: error\ndata: {json.dumps({'detail': str(exc)})}\n\n"
@@ -1016,6 +1071,12 @@ async def submit_permission_response(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
         ) from None
+    except SQLAlchemyError:
+        logger.exception("remy.database_error")
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="Database error. Please try again later.",
+        ) from None
 
     entry = _pending_permissions.get(body.request_id)
     if entry is None:
@@ -1044,6 +1105,12 @@ async def submit_ui_command_results(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
         ) from None
+    except SQLAlchemyError:
+        logger.exception("remy.database_error")
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="Database error. Please try again later.",
+        ) from None
 
     sid = str(session_id)
     event = _pending_ui_results.get(sid)
@@ -1068,6 +1135,12 @@ async def reset_session_permissions(
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
+        ) from None
+    except SQLAlchemyError:
+        logger.exception("remy.database_error")
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="Database error. Please try again later.",
         ) from None
 
     _session_approvals.pop(str(session_id), None)
