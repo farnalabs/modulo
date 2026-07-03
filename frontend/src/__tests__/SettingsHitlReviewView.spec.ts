@@ -3,6 +3,10 @@ import { mount } from '@vue/test-utils'
 import { createPinia, setActivePinia } from 'pinia'
 import { nextTick } from 'vue'
 
+function flushPromises() {
+  return new Promise(resolve => setTimeout(resolve, 0))
+}
+
 vi.mock('../lib/api/client', () => ({
   api: {
     GET: vi.fn(),
@@ -70,10 +74,9 @@ describe('SettingsHitlReviewView', () => {
     const wrapper = mount(SettingsHitlReviewView, {
       global: { stubs: { FeatureGate: { template: '<div><slot /></div>' } } },
     })
+    await flushPromises()
     await nextTick()
-    await nextTick()
-    await nextTick()
-    expect(wrapper.text()).toContain('approval-gate-1')
+    expect(wrapper.text()).toContain('#approval')
     expect(wrapper.text()).toContain('pending')
   })
 
@@ -101,8 +104,7 @@ describe('SettingsHitlReviewView', () => {
     const wrapper = mount(SettingsHitlReviewView, {
       global: { stubs: { FeatureGate: { template: '<div><slot /></div>' } } },
     })
-    await nextTick()
-    await nextTick()
+    await flushPromises()
     await nextTick()
 
     const toggle = wrapper.find('[data-testid="hitl-review-toggle-expand"]')

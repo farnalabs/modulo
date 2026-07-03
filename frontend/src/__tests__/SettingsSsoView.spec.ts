@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { mount } from '@vue/test-utils'
+import { createPinia, setActivePinia } from 'pinia'
 import { nextTick } from 'vue'
 
 vi.mock('../lib/api/client', () => ({
@@ -16,13 +17,15 @@ import SettingsSsoView from '../views/SettingsSsoView.vue'
 
 describe('SettingsSsoView', () => {
   beforeEach(() => {
+    setActivePinia(createPinia())
     vi.clearAllMocks()
   })
 
   it('renders without crashing', async () => {
     const wrapper = mount(SettingsSsoView, {
       global: {
-        stubs: { SsoProviderForm: true },
+        plugins: [createPinia()],
+        stubs: { SsoProviderForm: true, FeatureGate: { template: '<div><slot /></div>' } },
       },
     })
     await nextTick()

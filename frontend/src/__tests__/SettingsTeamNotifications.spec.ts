@@ -59,9 +59,16 @@ describe('TeamNotificationEndpoints', () => {
     vi.clearAllMocks()
   })
 
+  const stubs = {
+    Tooltip: { template: '<div><slot /></div>' },
+    TooltipTrigger: { template: '<div><slot /></div>' },
+    TooltipContent: { template: '<div><slot /></div>' },
+  }
+
   it('renders without crashing and shows team endpoints', async () => {
     const wrapper = mount(TeamNotificationEndpoints, {
       props: { teamId: 'team-alpha' },
+      global: { stubs },
     })
     await flush()
     expect(wrapper.exists()).toBe(true)
@@ -72,6 +79,7 @@ describe('TeamNotificationEndpoints', () => {
   it('filters endpoints for the given team', async () => {
     const wrapper = mount(TeamNotificationEndpoints, {
       props: { teamId: 'team-alpha' },
+      global: { stubs },
     })
     await flush()
     expect(wrapper.text()).toContain('run_failed')
@@ -82,6 +90,7 @@ describe('TeamNotificationEndpoints', () => {
   it('shows empty state when no endpoints for team', async () => {
     const wrapper = mount(TeamNotificationEndpoints, {
       props: { teamId: 'team-empty' },
+      global: { stubs },
     })
     await flush()
     expect(wrapper.text()).toContain('No webhook endpoints configured')
@@ -90,6 +99,7 @@ describe('TeamNotificationEndpoints', () => {
   it('shows add form when Add webhook is clicked', async () => {
     const wrapper = mount(TeamNotificationEndpoints, {
       props: { teamId: 'team-alpha' },
+      global: { stubs },
     })
     await flush()
     const addBtn = wrapper.find('[data-testid="team-notif-add-button"]')
@@ -102,6 +112,7 @@ describe('TeamNotificationEndpoints', () => {
   it('creates a new endpoint', async () => {
     const wrapper = mount(TeamNotificationEndpoints, {
       props: { teamId: 'team-alpha' },
+      global: { stubs },
     })
     await flush()
     await wrapper.find('[data-testid="team-notif-add-button"]').trigger('click')
@@ -122,6 +133,7 @@ describe('TeamNotificationEndpoints', () => {
   it('deletes an endpoint with confirmation', async () => {
     const wrapper = mount(TeamNotificationEndpoints, {
       props: { teamId: 'team-alpha' },
+      global: { stubs },
     })
     await flush()
     const deleteBtns = wrapper.findAll('[data-testid="team-notif-delete"]')
@@ -144,6 +156,7 @@ describe('TeamNotificationEndpoints', () => {
     })
     const wrapper = mount(TeamNotificationEndpoints, {
       props: { teamId: 'team-alpha' },
+      global: { stubs },
     })
     await flush()
     const testBtns = wrapper.findAll('[data-testid="team-notif-test"]')

@@ -18,8 +18,11 @@ import ViewToggle from '../../components/ViewToggle.vue'
 import { usePlanStore } from '../../stores/planStore'
 
 describe('ViewToggle', () => {
+  let pinia: ReturnType<typeof createPinia>
+
   beforeEach(() => {
-    setActivePinia(createPinia())
+    pinia = createPinia()
+    setActivePinia(pinia)
     vi.clearAllMocks()
   })
 
@@ -30,7 +33,7 @@ describe('ViewToggle', () => {
     const store = usePlanStore()
     store.$patch({ features: { saved_views: true } })
 
-    const wrapper = mount(ViewToggle)
+    const wrapper = mount(ViewToggle, { global: { plugins: [pinia] } })
     await nextTick()
     await nextTick()
 
@@ -47,7 +50,7 @@ describe('ViewToggle', () => {
     const store = usePlanStore()
     store.$patch({ features: { saved_views: true } })
 
-    const wrapper = mount(ViewToggle)
+    const wrapper = mount(ViewToggle, { global: { plugins: [pinia] } })
     await nextTick()
     await nextTick()
 
@@ -68,7 +71,7 @@ describe('ViewToggle', () => {
     const store = usePlanStore()
     store.$patch({ features: { saved_views: true } })
 
-    const wrapper = mount(ViewToggle)
+    const wrapper = mount(ViewToggle, { global: { plugins: [pinia] } })
     await nextTick()
     await nextTick()
 
@@ -86,7 +89,7 @@ describe('ViewToggle', () => {
     expect(badge.text()).toContain('Active')
   })
 
-  it('shows lock icon when feature is disabled via FeatureGate', async () => {
+  it('shows disabled overlay when feature is disabled via FeatureGate', async () => {
     const store = usePlanStore()
     store.$patch({ features: { saved_views: false } })
 
@@ -94,8 +97,9 @@ describe('ViewToggle', () => {
     await nextTick()
     await nextTick()
 
-    const lock = wrapper.find('[data-testid="feature-gate-lock"]')
-    expect(lock.exists()).toBe(true)
+    const gate = wrapper.find('[data-testid="view-toggle-gate"]')
+    expect(gate.exists()).toBe(true)
+    expect(gate.find('[data-testid="feature-gate-disabled"]').exists()).toBe(true)
   })
 
   it('does not fetch views from API when feature is disabled', async () => {
@@ -105,7 +109,7 @@ describe('ViewToggle', () => {
     const store = usePlanStore()
     store.$patch({ features: { saved_views: false } })
 
-    mount(ViewToggle)
+    mount(ViewToggle, { global: { plugins: [pinia] } })
     await nextTick()
     await nextTick()
 
@@ -119,7 +123,7 @@ describe('ViewToggle', () => {
     const store = usePlanStore()
     store.$patch({ features: { saved_views: true } })
 
-    const wrapper = mount(ViewToggle)
+    const wrapper = mount(ViewToggle, { global: { plugins: [pinia] } })
     await nextTick()
     await nextTick()
 

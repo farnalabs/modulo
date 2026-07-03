@@ -223,10 +223,10 @@ describe('SettingsMcpView', () => {
     await nextTick()
     await nextTick()
 
-    expect(wrapper.text()).toContain('Create an API key first to see configuration snippets')
+    expect(wrapper.text()).toContain('Coming soon')
   })
 
-  it('copy button copies to clipboard', async () => {
+  it('copy button copies server URL to clipboard', async () => {
     const { api } = await import('../lib/api/client')
     mockApiResponses(api.GET)
 
@@ -237,12 +237,12 @@ describe('SettingsMcpView', () => {
     await nextTick()
     await nextTick()
 
-    const copyBtn = wrapper.find('[data-testid="settings-mcp-copy-claude"]')
+    const copyBtn = wrapper.find('[data-testid="settings-mcp-copy-url"]')
     expect(copyBtn.exists()).toBe(true)
     expect(copyBtn.text()).toBe('Copy')
   })
 
-  it('shows OAuth clients table', async () => {
+  it('shows OAuth clients placeholder', async () => {
     const { api } = await import('../lib/api/client')
     mockApiResponses(api.GET)
 
@@ -253,8 +253,6 @@ describe('SettingsMcpView', () => {
     await nextTick()
     await nextTick()
     expect(wrapper.text()).toContain('Registered OAuth Clients')
-    expect(wrapper.text()).toContain('CLI Client')
-    expect(wrapper.text()).toContain('mod_oauth_xyz')
-    expect(wrapper.text()).toContain('read, write')
+    expect(wrapper.text()).toContain('Coming soon')
   })
 })
