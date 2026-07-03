@@ -40,6 +40,13 @@ async def create_run(
 ) -> Run:
     run_id = uuid.uuid4()
     thread_id = f"{org_id}:{run_id}"
+    max_rn = await session.execute(
+        select(func.coalesce(func.max(Run.run_number), 0)).where(
+            Run.organisation_id == org_id
+        )
+    )
+    next_run_number = max_rn.scalar() + 1
+
     run = Run(
         id=run_id,
         organisation_id=org_id,
@@ -52,6 +59,7 @@ async def create_run(
         owner_team_id=owner_team_id,
         langgraph_thread_id=thread_id,
         parent_run_id=parent_run_id,
+        run_number=next_run_number,
     )
     session.add(run)
     await session.flush()

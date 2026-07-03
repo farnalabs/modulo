@@ -302,6 +302,13 @@ async def create_session(
     try:
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
+            max_sn = await session.execute(
+                select(func.coalesce(func.max(ChatSession.session_number), 0)).where(
+                    ChatSession.user_id == principal.account_id
+                )
+            )
+            next_session_number = max_sn.scalar() + 1
+
             chat_session = ChatSession(
                 organisation_id=principal.organisation_id,
                 user_id=principal.account_id,
@@ -309,6 +316,7 @@ async def create_session(
                 provider=body.provider,
                 model=body.model,
                 context_window_tokens=body.context_window_tokens,
+                session_number=next_session_number,
             )
             session.add(chat_session)
             await session.flush()

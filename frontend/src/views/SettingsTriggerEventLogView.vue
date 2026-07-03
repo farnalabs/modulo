@@ -113,7 +113,7 @@
               </td>
               <td class="px-4 py-3 text-sm">
                 <span v-if="event.run_id" class="font-mono text-xs text-muted-foreground/70">
-                  {{ truncateId(event.run_id) }}
+                  {{ shortId(event.run_id) }}
                 </span>
                 <span v-else class="text-muted-foreground/50">&mdash;</span>
               </td>
@@ -121,7 +121,7 @@
                 {{ event.error_detail || '—' }}
               </td>
               <td class="px-4 py-3 font-mono text-xs text-muted-foreground/70">
-                {{ truncateId(event.trigger_id) }}
+                {{ shortId(event.trigger_id) }}
               </td>
             </tr>
           </tbody>
@@ -172,10 +172,6 @@ const prevCursor = ref<string | null>(null)
 
 const filterTriggerType = ref('')
 const filterResult = ref('')
-
-function truncateId(id: string): string {
-  return shortId(id)
-}
 
 function formatTimestamp(ts: string | null): string {
   if (!ts) return '—'
