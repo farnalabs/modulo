@@ -125,15 +125,23 @@ Discovered from 1 completed delivery tasks.
 - [x] Correction run linking works with real DB FK constraints
 - [x] Records created with different handler types persist correctly
 
+## QA History
+
+### 2026-07-03 — Cross-cutting QA (index 87)
+- **Fixed**: Stale "No feedback inbox UI implemented" gap — the view exists.
+- **Fixed**: `feedback_system.feature` BDD has 7 real scenarios (was thought to be 5).
+- **Noted**: `run_post_correction_eval` exists but is not wired into the run completion lifecycle (still a gap).
+- **Added**: Cross-module contract verified — frontend entry `feat-frontend-feedback-routing` correctly depends on this entry. No interface drift detected.
+
 ## Known Gaps
 
-- BDD feature file (backend/tests/bdd/features/eval/feedback_system.feature) has 5 real scenarios (not a placeholder) — covers create, status transitions, invalid transitions, eval gap detection, and correction run spawning
+- BDD feature file (backend/tests/bdd/features/eval/feedback_system.feature) has 7 real scenarios (not a placeholder) — covers create, status transitions, invalid transitions, eval gap detection, and correction run spawning. Step defs in test_eval.py and test_hitl.py provide real implementations using FeedbackManager.
 - detect_eval_gap now returns True when all evals pass against rejected output (gap detected). The API endpoint still hardcodes eval_suite=[] — real pipeline eval suite population not connected yet.
 - No correction run checkpoint pre-seeding logic implemented (spawn_correction_run creates a new run but doesn't inherit LangGraph checkpoint state)
 - AI correction agent not implemented as a library primitive
-- No feedback inbox UI implemented yet
+- Feedback inbox UI exists (FeedbackInboxView.vue) but review API calls had action/status field mismatch (fixed in QA index 87)
 - No eval proposals editor/curation UI
-- Correction run does not route back through eval suite automatically (no run_post_correction_eval integration in run completion lifecycle)
+- Correction run does not route back through eval suite automatically (no run_post_correction_eval integration in run completion lifecycle; the method exists but is not called by the run completion lifecycle)
 - Pipeline-level default_feedback_handler not implemented (default_human hardcoded)
 - No reject_routing_conflict validation in pipeline editor
 - Eval failure does NOT escalate to "escalated" status (record stays in "correcting" — partial gap per PRD §8.20)
