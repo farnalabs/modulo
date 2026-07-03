@@ -80,7 +80,7 @@ Datadog, PagerDuty, Rollbar, OpsGenie, Loki) sources.
 - [x] HMAC-signed body via `X-Modulo-Error-Token` header
 - [x] Validates level, source, message via Pydantic validators
 - [x] Strips breadcrumbs from events before persisting
-- [ ] Rate-limiting on ingest endpoint (documented but not enforced via middleware)
+- [x] Rate-limiting on ingest endpoint (10 req/min, enforced via RateLimitMiddleware)
 
 ### Frontend SDK (JavaScript/TypeScript)
 
@@ -182,12 +182,37 @@ Datadog, PagerDuty, Rollbar, OpsGenie, Loki) sources.
 
 ### BDD Coverage
 
-- [ ] `backend/tests/bdd/features/error_tracking/error_ingestion.feature` — TODO
-  placeholder
-- [ ] `backend/tests/bdd/features/error_tracking/error_dashboard.feature` — TODO
-  placeholder
-- [ ] `backend/tests/bdd/features/error_tracking/error_notifications.feature` — TODO
-  placeholder
+- [x] `backend/tests/bdd/features/error_tracking/error_ingestion.feature` — 5 real
+  scenarios (backend error capture, API ingest, dedup, invalid input, batch)
+- [x] `backend/tests/bdd/features/error_tracking/error_dashboard.feature` — 5 real
+  scenarios (list, filter, detail, resolve, 404)
+- [x] `backend/tests/bdd/features/error_tracking/error_notifications.feature` — 4 real
+  scenarios (alert fires, cooldown, create rule, max rules)
+- [x] `backend/tests/bdd/features/error_tracking/error_external_integrations.feature` — 6 real
+  scenarios (list, configure Sentry, test connection, community gating,
+  enable/disable toggle, unknown type 404)
+- [ ] BDD step definitions are mock-based — no DB-level or integration-level coverage
+
+### Error Handling
+
+- [x] Missing `X-Modulo-Error-Token` header returns 401 with specific message
+- [x] Invalid HMAC signature returns 401
+- [x] Invalid JSON body returns 422
+- [x] Pydantic validation errors return 422 with readable message
+- [x] Non-existent org on principal returns 400 with specific message
+- [x] Missing error group returns 404 with "Error group not found"
+- [x] `update_error_group` ValueError propagates as 404
+- [x] Missing notification rule returns 404 with "Notification rule not found"
+- [x] Max rules exceeded returns 422 with limit in message
+- [x] Non-admin on notification rules returns 403 with "Admin role required"
+- [x] Non-admin on forwarder management returns 403 with "Admin role required"
+- [x] Unknown forwarder type returns 404 with specific message
+- [x] Forwarder connection test failure returns structured `{ok: false, message}` (not crash)
+- [x] Missing DB table on any error-tracking route returns 501 with migration hint
+- [x] Ingest route wraps entire DB transaction in ProgrammingError→501
+- [x] Dashboard list/detail/update/events routes wrap DB in ProgrammingError→501
+- [x] Notification rule CRUD routes wrap DB in ProgrammingError→501
+- [x] Forwarder config CRUD + test routes wrap DB in ProgrammingError→501
 
 ### Known Gaps
 
@@ -211,3 +236,34 @@ Datadog, PagerDuty, Rollbar, OpsGenie, Loki) sources.
   middleware implements it
 - **Append-only trigger conflicts with CASCADE delete:** On org deletion, cascade
   FK conflicts with append-only trigger on `error_events`
+
+## QA History
+
+### Cross-cutting QA (2026-07-03) — feat-qa-error-tracking-90
+
+**Behaviour corrections:**
+- Rate-limiting on ingest: was marked unchecked but rule exists in RateLimitMiddleware
+  at `rate_limiter.py:72` — marked as [x]
+- BDD coverage: was marked as "TODO placeholder" for all 3 files but all have real
+  scenarios (15 total across 4 feature files) — marked as [x] with descriptions
+
+**Code fixes applied:**
+- Added `ProgrammingError` catch → 501 to all error-tracking API routes (errors.py,
+  error_notification_rules.py, error_forwarder_config.py) — 15 route handlers
+  protected against missing DB tables
+- Forwarder test endpoint's second DB block (saving test result) was also missing
+  `ProgrammingError` protection — now caught
+
+**Known Gaps remaining (not fixed):**
+
+| Gap | Reason |
+|---|---|
+| Email dispatch placeholder | Needs email provider integration — out of scope for this QA pass |
+| `condition_window_seconds` unused | Would change alert engine logic — needs deliberate design |
+| `modulo_error_groups_active` gauge never updated | Needs a scheduled job or hook after group mutations |
+| `resolved_at` never set | Would require CRUD change + migration — out of scope |
+| Breadcrumbs not persisted | Backend strips them — requires model change + migration |
+| No notification rules UI | Needs frontend views — new feature scope |
+| No forwarder configuration UI | Needs frontend views — new feature scope |
+| In-memory cooldown/session state | Requires Redis — documented, no code change needed |
+| Append-only trigger / CASCADE conflict | Requires DB schema change — out of scope |

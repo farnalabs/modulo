@@ -8,6 +8,7 @@ from datetime import UTC, datetime
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import select
+from sqlalchemy.exc import ProgrammingError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.api.dependencies import get_db_session
@@ -75,15 +76,21 @@ async def list_forwarders(
     if org_id is None:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No organisation")
 
-    async with session.begin():
-        await set_rls_org(session, org_id)
+    try:
+        async with session.begin():
+            await set_rls_org(session, org_id)
 
-        result = await session.execute(
-            select(ErrorForwarderConfig).where(
-                ErrorForwarderConfig.organisation_id == org_id
+            result = await session.execute(
+                select(ErrorForwarderConfig).where(
+                    ErrorForwarderConfig.organisation_id == org_id
+                )
             )
+            existing = {r.forwarder_type: r for r in result.scalars().all()}
+    except ProgrammingError:
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="Error tracking is not available. Run database migrations to enable it.",
         )
-        existing = {r.forwarder_type: r for r in result.scalars().all()}
 
     items: list[ForwarderListItem] = []
     for ftype in _FORWARDER_TYPES:
@@ -119,32 +126,38 @@ async def configure_forwarder(
 
     _require_admin(principal)
 
-    async with session.begin():
-        await set_rls_org(session, org_id)
+    try:
+        async with session.begin():
+            await set_rls_org(session, org_id)
 
-        result = await session.execute(
-            select(ErrorForwarderConfig).where(
-                ErrorForwarderConfig.organisation_id == org_id,
-                ErrorForwarderConfig.forwarder_type == forwarder_type,
+            result = await session.execute(
+                select(ErrorForwarderConfig).where(
+                    ErrorForwarderConfig.organisation_id == org_id,
+                    ErrorForwarderConfig.forwarder_type == forwarder_type,
+                )
             )
+            cfg = result.scalar_one_or_none()
+
+            if cfg is None:
+                cfg = ErrorForwarderConfig(
+                    organisation_id=org_id,
+                    forwarder_type=forwarder_type,
+                    enabled=False,
+                )
+                session.add(cfg)
+
+            if body.enabled is not None:
+                cfg.enabled = body.enabled
+            if body.config_json is not None:
+                cfg.config_json = body.config_json
+
+            cfg.updated_at = datetime.now(UTC)
+            await session.flush()
+    except ProgrammingError:
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="Error tracking is not available. Run database migrations to enable it.",
         )
-        cfg = result.scalar_one_or_none()
-
-        if cfg is None:
-            cfg = ErrorForwarderConfig(
-                organisation_id=org_id,
-                forwarder_type=forwarder_type,
-                enabled=False,
-            )
-            session.add(cfg)
-
-        if body.enabled is not None:
-            cfg.enabled = body.enabled
-        if body.config_json is not None:
-            cfg.config_json = body.config_json
-
-        cfg.updated_at = datetime.now(UTC)
-        await session.flush()
 
     return ForwarderConfigResponse.from_orm_model(cfg)
 
@@ -174,17 +187,23 @@ async def test_forwarder(
     if _is_configured(forwarder_type, config):
         pass
     else:
-        async with session.begin():
-            await set_rls_org(session, org_id)
-            result = await session.execute(
-                select(ErrorForwarderConfig).where(
-                    ErrorForwarderConfig.organisation_id == org_id,
-                    ErrorForwarderConfig.forwarder_type == forwarder_type,
+        try:
+            async with session.begin():
+                await set_rls_org(session, org_id)
+                result = await session.execute(
+                    select(ErrorForwarderConfig).where(
+                        ErrorForwarderConfig.organisation_id == org_id,
+                        ErrorForwarderConfig.forwarder_type == forwarder_type,
+                    )
                 )
+                db_cfg = result.scalar_one_or_none()
+                if db_cfg and db_cfg.config_json:
+                    config = {**db_cfg.config_json, **config}
+        except ProgrammingError:
+            raise HTTPException(
+                status_code=status.HTTP_501_NOT_IMPLEMENTED,
+                detail="Error tracking is not available. Run database migrations to enable it.",
             )
-            db_cfg = result.scalar_one_or_none()
-            if db_cfg and db_cfg.config_json:
-                config = {**db_cfg.config_json, **config}
 
     test_group = ErrorGroup(
         organisation_id=org_id,
@@ -207,19 +226,25 @@ async def test_forwarder(
         _log.exception("forwarder.test_connection_failed", extra={"type": forwarder_type})
         ok = False
 
-    async with session.begin():
-        await set_rls_org(session, org_id)
-        result = await session.execute(
-            select(ErrorForwarderConfig).where(
-                ErrorForwarderConfig.organisation_id == org_id,
-                ErrorForwarderConfig.forwarder_type == forwarder_type,
+    try:
+        async with session.begin():
+            await set_rls_org(session, org_id)
+            result = await session.execute(
+                select(ErrorForwarderConfig).where(
+                    ErrorForwarderConfig.organisation_id == org_id,
+                    ErrorForwarderConfig.forwarder_type == forwarder_type,
+                )
             )
+            db_cfg = result.scalar_one_or_none()
+            if db_cfg:
+                db_cfg.last_test_at = datetime.now(UTC)
+                db_cfg.last_test_ok = ok
+                await session.flush()
+    except ProgrammingError:
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="Error tracking is not available. Run database migrations to enable it.",
         )
-        db_cfg = result.scalar_one_or_none()
-        if db_cfg:
-            db_cfg.last_test_at = datetime.now(UTC)
-            db_cfg.last_test_ok = ok
-            await session.flush()
 
     name = _FORWARDER_DISPLAY_NAMES.get(forwarder_type, forwarder_type)
     if ok:
