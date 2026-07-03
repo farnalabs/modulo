@@ -365,7 +365,7 @@ async function saveAnnotation(recordId: string) {
   try {
     const { data, error: err } = await api.POST('/api/v1/feedback/inbox/{record_id}/review', {
       params: { path: { record_id: recordId } },
-      body: { annotation: annotations.value[recordId] || null },
+      body: { action: 'mark_reviewed', annotation: annotations.value[recordId] || null },
     })
     if (err) {
       annotationMessage.value[recordId] = { type: 'error', text: `Save failed: ${err}` }
@@ -388,7 +388,7 @@ async function resolveRecord(recordId: string) {
   try {
     const { data, error: err } = await api.POST('/api/v1/feedback/inbox/{record_id}/review', {
       params: { path: { record_id: recordId } },
-      body: { status: 'resolved', annotation: annotations.value[recordId] || null },
+      body: { action: 'mark_reviewed', annotation: annotations.value[recordId] || null },
     })
     if (err) {
       annotationMessage.value[recordId] = { type: 'error', text: `Resolve failed: ${err}` }
@@ -413,7 +413,7 @@ async function triggerCorrection(recordId: string) {
   try {
     const { data, error: err } = await api.POST('/api/v1/feedback/inbox/{record_id}/review', {
       params: { path: { record_id: recordId } },
-      body: { status: 'correcting', annotation: annotations.value[recordId] || null },
+      body: { action: 'create_correction_run', annotation: annotations.value[recordId] || null },
     })
     if (err) {
       annotationMessage.value[recordId] = { type: 'error', text: `Trigger failed: ${err}` }
