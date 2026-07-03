@@ -39,6 +39,7 @@ _PROVIDER_LABELS: dict[str, str] = {
     "azure_openai": "Azure OpenAI",
     "bedrock": "Amazon Bedrock",
     "ollama": "Ollama",
+    "opencode": "OpenCode",
     "cohere": "Cohere",
     "mistral": "Mistral",
     "replicate": "Replicate",
