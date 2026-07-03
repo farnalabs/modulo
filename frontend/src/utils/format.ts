@@ -1,6 +1,6 @@
-export function shortId(id: string): string {
-  if (!id) return ''
-  return '#' + id.split('-')[0]
+export function shortId(id: string | null | undefined): string {
+  if (!id) return '\u2014'
+  return '#' + id.slice(0, 8)
 }
 
 export function formatRun(run: { pipeline_name?: string | null; run_number?: number | null; run_id?: string } | null | undefined): string {
