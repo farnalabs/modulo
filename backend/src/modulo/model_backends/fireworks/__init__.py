@@ -14,6 +14,8 @@ FIREWORKS_BASE_URL = "https://api.fireworks.ai/inference/v1"
 class FireworksBackend(ModelBackendBase):
     """Thin adapter over ChatOpenAI targeting FireworksAI's OpenAI-compatible API."""
 
+    supports_tools: bool = True
+
     def __init__(
         self,
         api_key: str,

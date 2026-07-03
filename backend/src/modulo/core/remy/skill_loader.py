@@ -9,6 +9,7 @@ from sqlalchemy import select
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from modulo.api.ui_tools import build_tool_definitions_for_text
 from modulo.core.remy.config_service import RemyConfigService
 from modulo.db.models.remy_skill import RemySkill
 
@@ -72,6 +73,7 @@ class SkillLoader:
         user_id: uuid.UUID,
         page_context: str | None = None,
         system_prompt_override: str | None = None,
+        include_ui_tools_text: bool = False,
     ) -> str:
         config_service = self._config_service or RemyConfigService(self._session)
         try:
@@ -98,6 +100,11 @@ class SkillLoader:
 
         user_skills = await self.get_user_skills(user_id)
         self._append_skills_block(parts, user_skills, _SECTION_USER_SKILLS)
+
+        if include_ui_tools_text:
+            tools_text = build_tool_definitions_for_text()
+            if tools_text:
+                parts.append(tools_text)
 
         return "\n\n".join(parts)
 
