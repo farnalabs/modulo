@@ -51,6 +51,13 @@ The root `AGENTS.md` has the full non-negotiable rule under **Agent Isolation: A
 
 ---
 
+## Definition of Done
+
+### Manifest updated
+- [ ] **Manifest updated** — if the delivery adds or modifies a page route, the corresponding entry in `frontend/src/manifest.yaml` was created or updated
+
+---
+
 ## Task Tracker
 
 The authoritative task list lives at `../Dev-Harness/delivery/delivery-plan.json`. Do not edit it directly — use the task script:

@@ -24,6 +24,22 @@ routes:
     <<: *community
     deprecated: false
 
+  /library/:id/create-pipeline:
+    name: library-pipeline-wizard
+    testid: page-pipeline-wizard
+    breadcrumb: Create Pipeline
+    parent: /library
+    product_map: null
+    i18n_key: nav.create_pipeline
+    sidebar_group: null
+    sidebar_order: null
+    type: form_page
+    pattern: /library/:id/create-pipeline
+    dynamic_params:
+      - id
+    <<: *community
+    deprecated: false
+
   /notifications:
     name: notifications
     testid: page-notifications
@@ -115,6 +131,22 @@ routes:
     <<: *community
     deprecated: false
 
+  /pipelines/:id/editor:
+    name: pipeline-editor
+    testid: page-pipeline-editor
+    breadcrumb: Pipeline Editor
+    parent: /pipelines
+    product_map: null
+    i18n_key: nav.pipeline_editor
+    sidebar_group: null
+    sidebar_order: null
+    type: form_page
+    pattern: /pipelines/:id/editor
+    dynamic_params:
+      - id
+    <<: *community
+    deprecated: false
+
   /runs/:id:
     name: run-detail
     testid: page-run-detail
@@ -126,6 +158,22 @@ routes:
     sidebar_order: 9
     type: detail_page
     pattern: /runs/:id
+    dynamic_params:
+      - id
+    <<: *community
+    deprecated: false
+
+  /composites/:id/editor:
+    name: composite-editor
+    testid: page-composite-editor
+    breadcrumb: Composite Editor
+    parent: /pipelines
+    product_map: null
+    i18n_key: nav.composite_editor
+    sidebar_group: null
+    sidebar_order: null
+    type: form_page
+    pattern: /composites/:id/editor
     dynamic_params:
       - id
     <<: *community
