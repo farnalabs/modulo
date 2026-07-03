@@ -16,6 +16,7 @@ from typing import Any
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request, status
 from sqlalchemy import select
+from sqlalchemy.exc import ProgrammingError
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
 
 from modulo.api.dependencies import _get_engine, get_db_session
@@ -123,6 +124,11 @@ async def receive_webhook(
             status_code=status.HTTP_429_TOO_MANY_REQUESTS,
             detail=f"Concurrent run limit of {exc.limit} reached",
         ) from exc
+    except ProgrammingError:
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="Feature is not available. Run database migrations to enable it.",
+        ) from None
 
     run_id = run.id
     executor = PipelineExecutor(engine)
@@ -184,6 +190,11 @@ async def replay_webhook(
             status_code=status.HTTP_429_TOO_MANY_REQUESTS,
             detail=f"Concurrent run limit of {exc.limit} reached",
         ) from exc
+    except ProgrammingError:
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="Feature is not available. Run database migrations to enable it.",
+        ) from None
 
     run_id = run.id
     executor = PipelineExecutor(engine)
@@ -211,6 +222,11 @@ async def cleanup_expired(
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
             result["payloads_deleted"] = await _trigger_engine.cleanup_expired_payloads(session)
+    except ProgrammingError:
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="Feature is not available. Run database migrations to enable it.",
+        ) from None
     except Exception:
         _log.exception("Cleanup job failed")
         raise HTTPException(
