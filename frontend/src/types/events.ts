@@ -4,6 +4,7 @@ export interface EventBusEvent {
   action: 'created' | 'updated' | 'deleted'
   version: number
   org_id: string
+  timestamp: string
 }
 
 export type ResourceType =

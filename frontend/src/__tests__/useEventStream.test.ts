@@ -150,7 +150,7 @@ describe('dispatchToStore', () => {
     const handler = vi.fn()
     registerHandler('run', handler)
 
-    const event: EventBusEvent = { type: 'run', id: 'r-1', action: 'created', version: 1, org_id: 'org-1' }
+    const event: EventBusEvent = { type: 'run', id: 'r-1', action: 'created', version: 1, org_id: 'org-1', timestamp: '2024-01-01T00:00:00Z' }
     dispatchToStore(event)
     expect(handler).toHaveBeenCalledWith(event)
   })
@@ -174,7 +174,7 @@ describe('createSyncAdapter', () => {
     const dirtyIds = new Set<string>(['dirty-1'])
     const handleSyncEvent = createSyncAdapter({ dirtyIds, fetch, remove })
 
-    const event: EventBusEvent = { type: 'run', id: 'dirty-1', action: 'updated', version: 1, org_id: 'org-1' }
+    const event: EventBusEvent = { type: 'run', id: 'dirty-1', action: 'updated', version: 1, org_id: 'org-1', timestamp: '2024-01-01T00:00:01Z' }
     handleSyncEvent(event)
     expect(fetch).not.toHaveBeenCalled()
     expect(remove).not.toHaveBeenCalled()
@@ -187,7 +187,7 @@ describe('createSyncAdapter', () => {
     const dirtyIds = new Set<string>([])
     const handleSyncEvent = createSyncAdapter({ dirtyIds, fetch, remove })
 
-    const event: EventBusEvent = { type: 'run', id: 'clean-1', action: 'updated', version: 1, org_id: 'org-1' }
+    const event: EventBusEvent = { type: 'run', id: 'clean-1', action: 'updated', version: 1, org_id: 'org-1', timestamp: '2024-01-01T00:00:02Z' }
     handleSyncEvent(event)
     expect(fetch).toHaveBeenCalledWith('clean-1')
   })
@@ -199,7 +199,7 @@ describe('createSyncAdapter', () => {
     const dirtyIds = new Set<string>([])
     const handleSyncEvent = createSyncAdapter({ dirtyIds, fetch, remove })
 
-    const event: EventBusEvent = { type: 'run', id: 'del-1', action: 'deleted', version: 1, org_id: 'org-1' }
+    const event: EventBusEvent = { type: 'run', id: 'del-1', action: 'deleted', version: 1, org_id: 'org-1', timestamp: '2024-01-01T00:00:03Z' }
     handleSyncEvent(event)
     expect(remove).toHaveBeenCalledWith('del-1')
     expect(fetch).not.toHaveBeenCalled()
