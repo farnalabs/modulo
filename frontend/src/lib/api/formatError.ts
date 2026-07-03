@@ -47,6 +47,8 @@ export function toProblemDetail(err: unknown): ProblemDetail {
   }
 }
 
+const MAX_ERROR_LENGTH = 500
+
 export function formatApiError(err: unknown): string {
   if (isProblemDetail(err)) return err.detail
   if (typeof err === 'string') return err
@@ -59,7 +61,8 @@ export function formatApiError(err: unknown): string {
     if (typeof obj.error === 'string') return obj.error
     if (typeof obj.title === 'string') return obj.title
     try {
-      return JSON.stringify(obj)
+      const str = JSON.stringify(obj)
+      return str.length > MAX_ERROR_LENGTH ? str.slice(0, MAX_ERROR_LENGTH) + '...' : str
     } catch {
       return String(err)
     }

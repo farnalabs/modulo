@@ -11,6 +11,7 @@ interface PendingItem {
 }
 
 const PENDING: PendingItem[] = []
+const RETRY_TIMERS: ReturnType<typeof setTimeout>[] = []
 let flushTimer: ReturnType<typeof setTimeout> | null = null
 const RATE_LIMIT_WINDOW_MS = 60_000
 const RATE_LIMIT_MAX = 10
@@ -28,6 +29,8 @@ export function disposeTransport(): void {
     clearTimeout(flushTimer)
     flushTimer = null
   }
+  for (const t of RETRY_TIMERS) clearTimeout(t)
+  RETRY_TIMERS.length = 0
   if (_unsubAuth) {
     _unsubAuth()
     _unsubAuth = null
@@ -65,7 +68,7 @@ async function fetchSessionKey(): Promise<string | null> {
     })
     if (!res.ok) return null
     const data: SessionKeyResponse = await res.json()
-    return data.key
+    return data.session_key
   } catch {
     return null
   }
@@ -169,7 +172,9 @@ function reQueueWithBackoff(items: PendingItem[]): void {
     if (item.retries < 3) {
       item.retries++
       const delay = BACKOFF_DELAYS[Math.min(item.retries - 1, BACKOFF_DELAYS.length - 1)]
-      setTimeout(() => {
+      const timer = setTimeout(() => {
+        const idx = RETRY_TIMERS.indexOf(timer)
+        if (idx !== -1) RETRY_TIMERS.splice(idx, 1)
         PENDING.push(item)
         if (!flushTimer) {
           flushTimer = setTimeout(() => {
@@ -178,8 +183,8 @@ function reQueueWithBackoff(items: PendingItem[]): void {
           }, delay)
         }
       }, delay)
+      RETRY_TIMERS.push(timer)
     }
-    // Dropped after max retries
   }
 }
 

@@ -1,22 +1,21 @@
 import createClient from 'openapi-fetch'
 import type { paths } from './schema'
-import { formatApiError, toProblemDetail, type ProblemDetail } from './formatError'
+import { toProblemDetail } from './formatError'
 
 const TOKEN_KEY = 'modulo_access_token'
 
 let _authListeners: Array<(token: string | null) => void> = []
-let _cachedToken: string | null = null
 
 function notifyListeners(): void {
-  _cachedToken = localStorage.getItem(TOKEN_KEY)
+  const token = localStorage.getItem(TOKEN_KEY)
   for (const fn of _authListeners) {
-    fn(_cachedToken)
+    fn(token)
   }
 }
 
 export function onAuthChange(fn: (token: string | null) => void): () => void {
   _authListeners.push(fn)
-  fn(_cachedToken ?? localStorage.getItem(TOKEN_KEY))
+  fn(localStorage.getItem(TOKEN_KEY))
   return () => {
     _authListeners = _authListeners.filter((f) => f !== fn)
   }
@@ -33,9 +32,7 @@ export function clearAccessToken(): void {
 }
 
 export function getAccessToken(): string | null {
-  if (_cachedToken !== null) return _cachedToken
-  _cachedToken = localStorage.getItem(TOKEN_KEY)
-  return _cachedToken
+  return localStorage.getItem(TOKEN_KEY)
 }
 
 function getAuthHeaders(): Record<string, string> {
