@@ -20,6 +20,8 @@ export const usePlanStore = defineStore("plan", () => {
   const isTeam = computed(() => currentTier.value === "team");
 
   function featureEnabled(name: string): boolean {
+    // If no feature data loaded, don't gate — assume available
+    if (Object.keys(features.value).length === 0) return true;
     return features.value[name] ?? false;
   }
 

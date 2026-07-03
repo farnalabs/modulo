@@ -16,7 +16,8 @@ function loadPosition(): { x: number; y: number } {
     const raw = localStorage.getItem(POSITION_KEY)
     if (raw) return JSON.parse(raw)
   } catch { /* ignore */ }
-  return { x: window.innerWidth - 460, y: 80 }
+  const defaultX = Math.max(8, window.innerWidth - 460)
+  return { x: defaultX, y: 80 }
 }
 
 function loadSize(): { width: number; height: number } {
@@ -24,7 +25,9 @@ function loadSize(): { width: number; height: number } {
     const raw = localStorage.getItem(SIZE_KEY)
     if (raw) return JSON.parse(raw)
   } catch { /* ignore */ }
-  return { width: 440, height: 600 }
+  const defaultWidth = Math.min(440, window.innerWidth - 16)
+  const defaultHeight = Math.min(600, window.innerHeight - 120)
+  return { width: defaultWidth, height: defaultHeight }
 }
 
 function extractErrorMessage(err: unknown): string {
