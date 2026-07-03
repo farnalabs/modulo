@@ -10,6 +10,7 @@ unit-tests:
   - backend/tests/unit/api/test_schema_infer_endpoint.py
   - backend/tests/unit/core/test_schema_migration.py
   - backend/tests/unit/core/test_schema_validation.py
+  - backend/tests/unit/api/test_schema_infer_programming_error.py
 code:
   - backend/src/modulo/core/connector_hub/__init__.py
   - backend/src/modulo/core/schema_registry/inference.py
@@ -43,7 +44,7 @@ LLM-assisted schema draft generation from connected tool data (issue trackers, g
 - [ ] The draft schema is marked `status: draft` — not usable in pipelines until reviewed and published
 - [x] The operator can edit the draft schema before publishing (same schema editor as manual creation)
 - [x] The operator can reject the draft schema entirely (deletes the draft version)
-- [ ] The inference run is recorded in the audit log with the tool source and model used
+- [x] The inference run is recorded in the audit log with the tool source and model used
 
 ### Connector Type Awareness — type-specific field extraction
 
@@ -55,13 +56,28 @@ LLM-assisted schema draft generation from connected tool data (issue trackers, g
 
 ### Edge Cases and Error States
 
-- [ ] Connected tool has no data (empty project, new workspace) — inference returns a minimal placeholder draft
+- [x] Connected tool has no data (empty project, new workspace) — inference returns a minimal placeholder draft
 - [x] Connected tool returns insufficient permissions — inference is blocked with a named error (ACL enforcement in `ConnectorHub.sample()`)
 - [ ] Connected tool times out — inference fails gracefully with a timeout error
 - [x] Inference LLM call fails — original error surfaced via 502, no partial draft created
 - [ ] Inferred schema contains unsupported field types (e.g. `anyOf`, `$ref`) — schema is edited before publishing
 - [ ] Draft schema naming — auto-generated name from tool type + project name, editable by operator
 - [ ] Concurrency: only one active inference per (org, connector_instance) — subsequent requests queued
+- [x] Empty sample data returns a minimal `{"type": "object", "properties": {}}` schema (valid fallback)
+
+### Error Handling
+
+- [x] Connector instance not found → 404 (tested)
+- [x] Unsupported connector type → 400 (tested in BDD)
+- [x] No model backends configured → 400 (tested)
+- [x] Empty resource name → 422 (tested)
+- [x] Unauthenticated request → 401/403 (tested)
+- [x] Sampling failure → 502 with original error message (tested)
+- [x] Inference LLM failure → 502 with descriptive error (tested)
+- [x] ProgrammingError (missing DB table) → 501 Not Implemented (coded, untested)
+- [ ] Schema generation: no model backends → 400 (tested)
+- [ ] Schema generation: ProgrammingError → 501 Not Implemented (coded, untested)
+- [ ] Schema generation: GenerationError → 502 (tested)
 
 ### Security and Data Isolation
 
@@ -84,5 +100,16 @@ LLM-assisted schema draft generation from connected tool data (issue trackers, g
 - [ ] **Rare-field exclusion**: PRD says fields appearing in <10% of samples should be flagged and excluded from draft — not implemented
 - [ ] **No abstract_name inference**: PRD says inferred `abstract_name` suggestion per resource type — not implemented; only static string "Inferred from {name}"
 - [ ] **SandboxedEnvironment for LLM prompt**: PRD requires `SandboxedEnvironment` with structural separators for prompt safety — not used
-- [ ] **No connector-type validation**: Endpoint does not validate that the connector instance belongs to a supported type (issue-tracker, git-host, document-store)
-- [ ] **No audit event dispatch**: schema inference runs are not recorded in the audit log
+- [ ] **CRITICAL: Sample data not sanitised before LLM prompt**: raw fields are interpolated with only markdown code-fence separation; PRD requires SandboxedEnvironment with structural separators
+- [ ] **No timeout on connector sampling step (fixed: 30s timeout added)**
+- [ ] **Default sample limit is 10 (PRD says 200); code caps at 50 in prompt builder, 100 via API max**
+- [ ] **No rare-field exclusion based on <10% frequency (PRD §8.16)**
+- [ ] **No abstract_name inference**: always returns 'Inferred from {name}'
+- [ ] **No concurrency guard**: multiple concurrent inference requests per connector are not serialised
+- [ ] **No enterprise feature flag on inference endpoint**
+- [ ] **Connector-type-aware field extraction not implemented**: all connector types use the same generic prompt
+- [ ] **No dedicated BDD feature file for connector-type-aware inference (only generic schema_inference.feature exists)**
+
+## QA History
+
+- 2026-07-03: Cross-cutting QA (index 111). Fixed stale checkboxes (audit event [ ]→[x], connector-type validation confirmed). Added Error Handling section (11 behaviour checkboxes covering all error paths). Added 30s timeout on connector sampling step. Added ProgrammingError→501 unit tests (infer + generate endpoints). Updated Known Gaps: removed 2 stale gaps (connector-type validation, audit event dispatch), added 9 new gaps. Created website docs stub. Status: partial (17 known gaps remain).

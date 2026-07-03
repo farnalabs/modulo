@@ -1,5 +1,6 @@
 """Schema and SchemaVersion CRUD REST API."""
 
+import asyncio
 import json
 import logging
 import uuid
@@ -510,12 +511,18 @@ async def infer_schema_endpoint(
     async with ConnectorHub(secrets_backend=secrets_backend) as ch:
         await ch.initialise([ci])
         try:
-            records = await ch.sample(
-                connector_id=body.connector_instance_id,
-                resource=body.sample_query.resource,
-                filters=body.sample_query.filters,
-                limit=body.sample_query.limit,
-            )
+            async with asyncio.timeout(30.0):
+                records = await ch.sample(
+                    connector_id=body.connector_instance_id,
+                    resource=body.sample_query.resource,
+                    filters=body.sample_query.filters,
+                    limit=body.sample_query.limit,
+                )
+        except TimeoutError:
+            raise HTTPException(
+                status_code=status.HTTP_504_GATEWAY_TIMEOUT,
+                detail="Connector sampling timed out after 30s",
+            ) from None
         except Exception as exc:
             raise HTTPException(
                 status_code=status.HTTP_502_BAD_GATEWAY,
