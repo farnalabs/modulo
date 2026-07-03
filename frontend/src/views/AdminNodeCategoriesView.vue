@@ -1,17 +1,5 @@
 ﻿<template>
-<<<<<<< HEAD
-  <FeatureGate feature-name="plugin_management" required-tier="team">
-    <template #locked="{ tooltip }">
-      <div class="mx-auto max-w-4xl space-y-8 p-6">
-        <div class="mb-4 flex items-center gap-2 rounded-lg border border-warning/30 bg-warning/5 p-4 text-sm text-warning">
-          <LockIcon :locked="true" :tooltip="tooltip" />
-          <span>{{ $t('views.AdminNodeCategoriesView.not_available_on_current_plan') }}</span>
-        </div>
-      </div>
-    </template>
-=======
   <FeatureGate feature-name="plugin_management" required-tier="team" show-disabled>
->>>>>>> feat/gating-show-disabled
 
     <div class="mx-auto max-w-4xl space-y-8 p-6">
     <header class="flex items-center justify-between">

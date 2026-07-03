@@ -30,7 +30,7 @@ export function useViews(viewType: string) {
       const { data, error: apiError } = await (api as any).GET('/api/v1/views', {
         params: { query: { view_type: viewType } },
       })
-      if (apiError) throw new Error(String(apiError))
+      if (apiError) throw new Error(typeof apiError === 'string' ? apiError : (apiError as any).message ?? String(apiError))
       views.value = (data as any)?.items ?? []
     } catch (e: unknown) {
       error.value = e instanceof Error ? e.message : String(e)

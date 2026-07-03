@@ -503,7 +503,7 @@ import '@vue-flow/core/dist/style.css'
 import '@vue-flow/core/dist/theme-default.css'
 import { useApi } from '../composables/useApi'
 import BackLink from '../components/BackLink.vue'
-import { shortId } from '../../utils/format'
+import { shortId } from '../utils/format'
 
 const { get, post, patch } = useApi()
 const route = useRoute()

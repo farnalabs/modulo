@@ -94,7 +94,7 @@ describe('SettingsObservabilityView', () => {
     await nextTick()
     await nextTick()
 
-    expect(wrapper.text()).toContain('not available on your current plan')
+    expect(wrapper.text()).toContain('Available on higher plan tier')
   })
 
   it('shows settings form when observability is enabled', async () => {
