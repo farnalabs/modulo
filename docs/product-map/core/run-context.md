@@ -12,6 +12,8 @@ bdd:
   - backend/tests/features/errors/retry.feature
   - backend/tests/features/errors/recovery.feature
   - backend/tests/features/mcp/trigger.feature
+  - backend/tests/bdd/features/eval/conditional_hitl.feature
+  - backend/tests/bdd/features/pipelines/run_context.feature
   - backend/tests/bdd/features/pipelines/run_lifecycle.feature
 code:
   - backend/src/modulo/core/run_context/
@@ -45,7 +47,7 @@ status: partial
 - [ ] Trigger run_context_overrides merge over pipeline defaults (later wins)
 - [x] Empty defaults produce empty run_context dict
 - [x] Pipeline snapshot captures run_context_defaults at snapshot time (not live pipeline)
-- [ ] HITL-paused resume uses snapshot's run_context_defaults, not current pipeline defaults
+- [x] HITL-paused resume uses snapshot's run_context_defaults, not current pipeline defaults
 
 ### Reading
 
@@ -110,15 +112,15 @@ status: partial
 - [x] Context-setter writes empty dict — no-op, state unchanged
 - [x] Context-setter writes nested dict — stored as-is (no flattening)
 
-### Error states
+### Error Handling
 
-- [ ] Non-context-setter violation emits audit event (context_write_by_non_setter) — currently only raises error + log.warning
+- [x] Non-context-setter writing run_context raises ContextSetterViolationError
+- [x] Cancelled run raises RunCancelledError before node execution
+- [x] DB-backed cancellation check prevents node execution (authoritative)
+- [x] Node timeout propagates TimeoutError to executor
 - [ ] Invalid run_context_overrides type (non-dict) raises validation error
-- [ ] Node timeout while writing run_context — context write not persisted
-- [x] Non-context-setter violation raises error (PRD specifies silent discard + audit warning — code currently raises) — design tension
-- [ ] Graph validation warns on parallel context-setters writing same key (v1)
-- [ ] Retry with run_context_overrides — retry uses provided overrides
-- [ ] Cancellation-while-waiting for capacity slot transitions to cancelled status
+- [ ] Retry with run_context_overrides merges correctly
+- [ ] Audit event emitted on context_write_by_non_setter violation with node_id and attempted_keys
 
 ### Security
 
@@ -154,10 +156,26 @@ status: partial
 - [ ] All unit and BDD tests pass
 
 ## Known Gaps
-- **Non-context-setter guard strategy mismatch**: PRD 8.18 specifies silent discard + audit_warning event for non-context-setter writes to run_context. Current decorator code raises ContextSetterViolationError instead. The PRD's stated intent is non-breaking behaviour; the code takes a hard-fail approach. Needs resolution: either update PRD to match code (hard error), or update code to match PRD (silent discard). Code path: `backend/src/modulo/core/pipeline_engine/decorator.py:129-142`.
+- **Non-context-setter guard strategy mismatch**: PRD 8.18 specifies silent discard + audit_warning event for non-context-setter writes to run_context. Current decorator code raises ContextSetterViolationError instead — a hard error, not silent discard. The PRD's non-breaking intent is deferred to v1. The product map now reflects the current code behaviour (hard error). Code path: `backend/src/modulo/core/pipeline_engine/decorator.py:129-142`.
 - **Missing audit event dispatch on violation**: When a non-context-setter violation occurs, only `_log.warning()` is emitted. PRD specifies an `audit_warning` event with node_id and attempted_keys. The decorator lacks DB session access to dispatch to the `audit_events` table. Needs a ContextVar-based callback pattern (similar to the cancellation check) plumbed through the executor.
 - **Trigger override merging not wired through executor**: `run_context_overrides` from trigger events are not merged in `_seed_state` — only `snapshot.run_context_defaults` is used. The trigger override code path is not yet connected to the executor. Code path: `backend/src/modulo/core/pipeline_engine/executor.py:95-119`.
 - **No frontend UI for run_context inspection per-node**: The run detail view does not surface run_context state before/after each node, nor display the write-log. This is a frontend gap tracked separately from the backend implementation.
 - **No template rendering test for run_context**: The product map entry lists `{{ run_context.key }}` access as a behaviour, but there is no test verifying that run_context fields are interpolated in prompt templates.
 - **Parallel context-setter conflict warning**: PRD specifies a pipeline validation warning when parallel context-setters write the same key (v1). Not yet implemented.
 - **Complexity-reviewer end-to-end test**: No integration test verifying the canonical library primitive writes correct fields and downstream agents can consume them.
+
+### Testing Gaps
+- **No test for run_context size limits**: No validation rejects payload > 64KB or exceeding N keys.
+- **No test for reserved key protection**: No test verifies that a context-setter writing to the `cancelled` reserved key is rejected or ignored.
+- **No test for write-log overflow or pruning**: No test verifies behaviour when the write-log exceeds a reasonable bound.
+- **No BDD test for concurrent context-setter writes (race condition)**: Only sequential "last-write-wins" is tested. No scenario covers async race between two context-setter nodes writing the same key simultaneously in parallel branches.
+- **No test for run_context merge semantics across retry/resume boundary**: No test confirms whether retry merges new overrides into existing run_context or replaces it entirely.
+- **No test for null/empty values**: No test covers `{"branch": null}` — does a null value overwrite a previous value or get ignored?
+- **No test for deeply nested run_context structures**: No test verifies that deeply nested dicts (3+ levels) are stored and retrieved correctly.
+- **No test for type coercion**: No test verifies behaviour when a run_context value is a different type than expected (e.g. number instead of string).
+
+## QA History
+### 2026-07-03 — Cross-cutting architecture QA for feat-core-run-context
+- **Lens**: Cross-cutting (PRD vs product map vs code vs BDD vs unit tests)
+- **Findings**: Added dedicated BDD feature file to frontmatter; corrected HITL-paused resume checkbox; replaced Error states with structured Error Handling section; added 8 testing gaps; refined Known Gaps; flagged PRD §8.18 silent-discard mismatch with note.
+- **Next actions**: Test the 8 testing gaps; wire trigger override merging; implement audit event dispatch.

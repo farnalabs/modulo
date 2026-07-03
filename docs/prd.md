@@ -1414,6 +1414,8 @@ LangGraph state = {
 #### Reading and writing
 - **All agents can read** from `run_context` — it is available in the prompt template and in agent configuration resolution at run time
 - **Context-setter agents** (a new agent role, opt-in via `role: context_setter` in agent config) may write to `run_context`. Normal agents are read-only. Enforcement runs as a **pre-node guard** in the `@cancellable_node` decorator: after a non-context-setter node executes, any writes it made to the `run_context` slice of LangGraph state are silently discarded and an `audit_warning` event is emitted (`context_write_by_non_setter`, node_id, attempted keys). The run does not fail — the write is ignored. This makes the guard non-breaking while remaining auditable.
+
+> **Implementation note (2026-07):** The current code raises `ContextSetterViolationError` (a hard error) instead of silently discarding writes. The PRD's non-breaking silent-discard approach is deferred to v1. See `backend/src/modulo/core/pipeline_engine/decorator.py:129-142`.
 - Writes follow a **write-log with last-write-wins** resolution: every write to a `run_context` key is appended to an ordered log, and the resolved value is always the most recent write. The full write history is visible in run inspection. When two context-setters both write the same key in v1 parallel branches, the write that completes last wins; this is deterministic but order-dependent, so parallel context-setter writes to the same key are flagged as a pipeline validation warning
 
 #### Canonical use case: complexity-reviewer
