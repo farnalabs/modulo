@@ -11,6 +11,7 @@ from typing import Any
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, Field
 from sqlalchemy import select
+from sqlalchemy.exc import ProgrammingError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.api.dependencies import get_db_session
@@ -208,69 +209,75 @@ async def viewmodel_current(
     if view_as_team is not None and current_user.org_role != "admin":
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Only admins can use view_as_team")
 
-    async with session.begin():
-        await set_rls_org(session, current_user.organisation_id)
-        await set_rls_user_context(session, current_user.account_id, current_user.org_role or "")
+    try:
+        async with session.begin():
+            await set_rls_org(session, current_user.organisation_id)
+            await set_rls_user_context(session, current_user.account_id, current_user.org_role or "")
 
-        if view_as_team is not None:
-            if current_user.organisation_id is None:
-                raise HTTPException(
-                    status_code=status.HTTP_400_BAD_REQUEST,
-                    detail="Cannot use view_as_team without an organisation",
+            if view_as_team is not None:
+                if current_user.organisation_id is None:
+                    raise HTTPException(
+                        status_code=status.HTTP_400_BAD_REQUEST,
+                        detail="Cannot use view_as_team without an organisation",
+                    )
+                team_result = await session.execute(
+                    select(Team).where(
+                        Team.id == view_as_team,
+                        Team.organisation_id == current_user.organisation_id,
+                    )
                 )
-            team_result = await session.execute(
-                select(Team).where(
-                    Team.id == view_as_team,
-                    Team.organisation_id == current_user.organisation_id,
-                )
-            )
-            team = await team_result.scalar_one_or_none()
-            if team is None:
-                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Team not found")
+                team = await team_result.scalar_one_or_none()
+                if team is None:
+                    raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Team not found")
 
-        org = None
-        if current_user.organisation_id is not None:
-            org = await get_organisation(session, current_user.organisation_id)
-            if org is None:
+            org = None
+            if current_user.organisation_id is not None:
+                org = await get_organisation(session, current_user.organisation_id)
+                if org is None:
+                    raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Organisation not found")
+            elif not current_user.is_system_admin:
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Organisation not found")
-        elif not current_user.is_system_admin:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Organisation not found")
 
-        account = await get_account_by_id(session, current_user.account_id)
-        if account is None:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Account not found")
+            account = await get_account_by_id(session, current_user.account_id)
+            if account is None:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Account not found")
 
-        memberships = await list_team_memberships_for_account(session, current_user.account_id)
+            memberships = await list_team_memberships_for_account(session, current_user.account_id)
 
-        if current_user.organisation_id is not None:
-            pipelines_page = await list_pipelines(session, page=1, page_size=20)
-            runs_page = await list_runs(session, page=1, page_size=10)
+            if current_user.organisation_id is not None:
+                pipelines_page = await list_pipelines(session, page=1, page_size=20)
+                runs_page = await list_runs(session, page=1, page_size=10)
 
-            pending_hitl_result = await session.execute(
-                select(HitlClaim).where(
-                    HitlClaim.organisation_id == current_user.organisation_id,
-                    HitlClaim.decision.is_(None),
+                pending_hitl_result = await session.execute(
+                    select(HitlClaim).where(
+                        HitlClaim.organisation_id == current_user.organisation_id,
+                        HitlClaim.decision.is_(None),
+                    )
                 )
-            )
-            scalar_result = pending_hitl_result.scalars()
-            pending_hitl = scalar_result.all()
+                scalar_result = pending_hitl_result.scalars()
+                pending_hitl = scalar_result.all()
 
-            all_views_result = await list_views(session, page=1, page_size=100)
-            all_views = [_enrich_view(v, current_user.account_id) for v in all_views_result.items]
+                all_views_result = await list_views(session, page=1, page_size=100)
+                all_views = [_enrich_view(v, current_user.account_id) for v in all_views_result.items]
 
-            current_view = None
-            if current_view_id is not None:
-                view = await get_view(session, current_view_id)
-                if view is not None:
-                    current_view = _enrich_view(view, current_user.account_id)
-        else:
-            pipelines_page = None
-            runs_page = None
-            pending_hitl = []
-            all_views = []
-            current_view = None
+                current_view = None
+                if current_view_id is not None:
+                    view = await get_view(session, current_view_id)
+                    if view is not None:
+                        current_view = _enrich_view(view, current_user.account_id)
+            else:
+                pipelines_page = None
+                runs_page = None
+                pending_hitl = []
+                all_views = []
+                current_view = None
 
-        plan_ctx = await resolve_plan_context(settings, session, org=org)
+            plan_ctx = await resolve_plan_context(settings, session, org=org)
+    except ProgrammingError:
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="Feature is not available. Run database migrations to enable it.",
+        )
     enabled_features = plan_ctx.list_enabled_features()
     feature_flags = [
         FeatureFlagInfo(
@@ -323,10 +330,16 @@ async def viewmodel_list_views(
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=100, ge=1, le=200),
 ) -> ViewModelViewsResponse:
-    async with session.begin():
-        await set_rls_org(session, current_user.organisation_id)
-        await set_rls_user_context(session, current_user.account_id, current_user.org_role)
-        result = await list_views(session, page=page, page_size=page_size)
+    try:
+        async with session.begin():
+            await set_rls_org(session, current_user.organisation_id)
+            await set_rls_user_context(session, current_user.account_id, current_user.org_role)
+            result = await list_views(session, page=page, page_size=page_size)
+    except ProgrammingError:
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="Feature is not available. Run database migrations to enable it.",
+        )
 
     items = [_enrich_view(v, current_user.account_id) for v in result.items]
     return ViewModelViewsResponse(
