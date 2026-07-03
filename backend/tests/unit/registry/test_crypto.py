@@ -207,6 +207,18 @@ class TestPEMCryptoV2:
         mangled = base64.b64encode(b"\x00" * 64).decode()
         assert verify(pub_pem, data, mangled) is False
 
+    def test_verify_rejects_invalid_base64_signature(self):
+        from modulo.registry.crypto import generate_keypair, verify
+
+        _, pub_pem = generate_keypair()
+        assert verify(pub_pem, b"data", "!!!not-base64!!!") is False
+
+    def test_verify_rejects_garbage_signature_string(self):
+        from modulo.registry.crypto import generate_keypair, verify
+
+        _, pub_pem = generate_keypair()
+        assert verify(pub_pem, b"data", "\x00\x01\x02\xff") is False
+
     def test_sign_and_verify_json_payload(self):
         import json
 
@@ -275,3 +287,43 @@ class TestTrustAnchor:
         _, pub_pem = generate_keypair()
         ta_sig = base64.b64encode(b"\x00" * 64).decode()
         assert verify_trust_anchor(pub_pem, ta_sig) is False
+
+    def test_verify_trust_anchor_rejects_invalid_base64(self):
+        from modulo.registry.crypto import (
+            generate_keypair,
+            verify_trust_anchor,
+        )
+
+        _, pub_pem = generate_keypair()
+        assert verify_trust_anchor(pub_pem, "!!!not-base64!!!") is False
+
+    def test_verify_trust_anchor_rejects_garbage_sig(self):
+        from modulo.registry.crypto import (
+            generate_keypair,
+            verify_trust_anchor,
+        )
+
+        _, pub_pem = generate_keypair()
+        assert verify_trust_anchor(pub_pem, "\x00\x01\x02\xff") is False
+
+
+class TestModuleExports:
+    def test_public_exports(self):
+        import modulo.registry.crypto
+
+        expected = {
+            "generate_keypair",
+            "get_trust_anchor_public_key_pem",
+            "sign",
+            "sign_with_trust_anchor",
+            "verify",
+            "verify_trust_anchor",
+        }
+        actual = set(modulo.registry.crypto.__all__)
+        assert actual == expected
+
+    def test_private_functions_not_in_exports(self):
+        import modulo.registry.crypto
+
+        privates = {"_load_private_key", "_load_public_key", "_get_trust_anchor"}
+        assert not privates & set(modulo.registry.crypto.__all__)
