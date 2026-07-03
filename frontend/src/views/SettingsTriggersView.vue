@@ -368,6 +368,8 @@ import ErrorAlert from '../components/shared/ErrorAlert.vue'
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '../components/ui/dialog'
 import { usePlanStore } from '../stores/planStore'
 import FeatureGate from '../components/FeatureGate.vue'
+import LockIcon from '../components/LockIcon.vue'
+import { shortId } from '../utils/format'
 
 const planStore = usePlanStore()
 
@@ -461,7 +463,7 @@ function formatTimestamp(ts: string | null): string {
 
 function pipelineName(id: string): string {
   const p = pipelines.value.find(p => p.id === id)
-  return p ? p.name : id.slice(0, 8) + '...'
+  return p ? p.name : shortId(id)
 }
 
 function resetForm() {

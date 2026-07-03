@@ -170,6 +170,7 @@ import { api } from '../lib/api/client'
 import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
 import { formatError } from '../lib/utils'
+import { shortId } from '../utils/format'
 import {
   Tooltip,
   TooltipTrigger,
@@ -239,7 +240,7 @@ function buildPipelineEvals(
   if (!perPipeline) return []
   return Object.entries(perPipeline).map(([pipelineId, evalData]) => ({
     pipelineId,
-    pipelineName: pipelineNames.get(pipelineId) ?? pipelineId.slice(0, 8),
+    pipelineName: pipelineNames.get(pipelineId) ?? shortId(pipelineId),
     totalEvals: evalData.total_evals,
     passedEvals: evalData.passed_evals,
     passRate: evalData.pass_rate,

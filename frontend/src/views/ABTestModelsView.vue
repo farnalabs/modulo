@@ -75,7 +75,7 @@
           </div>
 
           <div v-if="!selectedGroupId && availableSnapshotId" class="text-xs text-muted-foreground">
-            Using snapshot: <code class="rounded bg-muted px-1.5 py-0.5 font-mono">{{ availableSnapshotId.slice(0, 8) }}…</code>
+            Using snapshot: <code class="rounded bg-muted px-1.5 py-0.5 font-mono">{{ shortId(availableSnapshotId) }}…</code>
             <span v-if="availableSnapshotTag" class="ml-1">({{ availableSnapshotTag }})</span>
           </div>
 
@@ -291,6 +291,7 @@ import type { components } from '../lib/api/client'
 import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
 import PageTabs from "../components/PageTabs.vue"
+import { shortId } from '../utils/format'
 
 type PipelineItem = components['schemas']['PipelineItem']
 type VariantGroup = components['schemas']['VariantGroupResponse']

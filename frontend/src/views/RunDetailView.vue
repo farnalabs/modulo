@@ -106,7 +106,7 @@
                   @click="copyText(node.traceId!)"
                   @keydown.enter="copyText(node.traceId!)"
                   @keydown.space.prevent="copyText(node.traceId!)"
-                >{{ node.traceId.slice(0, 8) }}…</button>
+                >{{ shortId(node.traceId) }}…</button>
                 <span v-else class="text-muted-foreground">—</span>
               </td>
               <td class="py-3">

@@ -25,6 +25,7 @@ from modulo.api.dependencies import get_db_session
 from modulo.auth.dependencies import get_current_user
 from modulo.auth.jwt import AuthenticatedPrincipal
 from modulo.core.feedback_manager import FeedbackManager
+from modulo.db.models.pipeline_snapshot import PipelineSnapshot
 from modulo.db.models.run import Run
 from modulo.db.rls import set_rls_org
 
@@ -48,7 +49,7 @@ class ReviewFeedbackRequest(BaseModel):
     action: str = "mark_reviewed"  # mark_reviewed | dismiss | create_correction_run
 
 
-def _serialise_record(r: Any, pipeline_name: str | None = None) -> dict[str, Any]:
+def _serialise_record(r: Any, pipeline_name: str | None = None, producing_node_name: str | None = None) -> dict[str, Any]:
     return {
         "id": str(r.id),
         "run_id": str(r.run_id) if r.run_id else None,
@@ -57,6 +58,7 @@ def _serialise_record(r: Any, pipeline_name: str | None = None) -> dict[str, Any
         "rejection_reason": r.rejection_reason,
         "rejected_output": getattr(r, "rejected_output", {}),
         "producing_node_id": r.producing_node_id,
+        "producing_node_name": producing_node_name,
         "producing_agent_id": str(r.producing_agent_id) if r.producing_agent_id else None,
         "feedback_status": r.feedback_status,
         "feedback_handler_type": r.feedback_handler_type,
@@ -190,8 +192,25 @@ async def list_eval_proposals(
         mgr = FeedbackManager(session, principal.organisation_id)
         result = await mgr.get_eval_proposals(page=page, page_size=page_size)
 
+    items = result["items"]
+    node_name_map: dict[str, str] = {}
+    run_ids = [r.run_id for r in items if r.run_id]
+    if run_ids:
+        run_rows = await session.execute(
+            select(Run.id, Run.snapshot_id).where(Run.id.in_(run_ids))
+        )
+        snapshot_ids = [r.snapshot_id for r in run_rows.all() if r.snapshot_id]
+        if snapshot_ids:
+            snap_rows = await session.execute(
+                select(PipelineSnapshot.id, PipelineSnapshot.graph_json).where(PipelineSnapshot.id.in_(snapshot_ids))
+            )
+            for snap_id, graph_json in snap_rows.all():
+                if graph_json:
+                    for node in graph_json.get("nodes", []):
+                        node_name_map[str(node.get("id"))] = node.get("name") or node.get("label", "")
+
     return {
-        "items": [_serialise_record(r) for r in result["items"]],
+        "items": [_serialise_record(r, producing_node_name=node_name_map.get(r.producing_node_id)) for r in items],
         "total": result["total"],
         "page": result["page"],
         "page_size": result["page_size"],
