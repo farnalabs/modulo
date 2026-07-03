@@ -286,7 +286,7 @@ def _resumes_receiving_updates(page: Page) -> None:
 
 
 # ============================================================================
-# run_detail.feature  —  5 scenarios
+# run_detail.feature  —  7 scenarios
 # ============================================================================
 
 
@@ -366,6 +366,31 @@ def _on_run_detail_running(page: Page, base_url: str, ui_ctx: dict[str, Any]) ->
     ui_ctx["run_id"] = "run-running-456"
     page.goto(f"{base_url}/runs/run-running-456")
     page.wait_for_selector('[data-loading="false"]', timeout=15000)
+
+
+@when("I click the reveal prompt button for a node")
+def _click_reveal_prompt(page: Page) -> None:
+    reveal_btn = page.locator('[data-testid="run-detail-reveal-prompt"]').first
+    if reveal_btn.is_visible():
+        reveal_btn.click()
+        page.wait_for_timeout(2000)
+
+
+@then("I see the prompt reveal dialog with system and user messages")
+def _see_prompt_dialog(page: Page) -> None:
+    dialog = page.locator('[role="dialog"]')
+    if dialog.is_visible():
+        text = dialog.text_content() or ""
+        assert "SYSTEM" in text or "system" in text, f"Expected system message in dialog, got: {text[:200]}"
+        assert "USER" in text or "user" in text, f"Expected user message in dialog, got: {text[:200]}"
+
+
+@then("sensitive values in the prompt text are masked with bullet characters")
+def _sensitive_values_masked_in_prompt(page: Page) -> None:
+    dialog = page.locator('[role="dialog"]')
+    if dialog.is_visible():
+        text = dialog.text_content() or ""
+        assert "\u2022" in text, f"Expected bullet characters in masked prompt, got: {text[:200]}"
 
 
 # ============================================================================

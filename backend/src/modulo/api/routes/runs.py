@@ -10,6 +10,7 @@ from typing import Any, Literal
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, status
 from pydantic import BaseModel, Field
 from sqlalchemy import select, text
+from sqlalchemy.exc import ProgrammingError
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
 from modulo.api.dependencies import (
@@ -878,82 +879,88 @@ async def reveal_node_prompt(
     assistant), and an estimated token count. Sensitive credential-like
     values are masked.
     """
-    async with session.begin():
-        await set_rls_org(session, principal.organisation_id)
-        run = await get_run(session, run_id)
+    try:
+        async with session.begin():
+            await set_rls_org(session, principal.organisation_id)
+            run = await get_run(session, run_id)
 
-    if run is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Run not found")
+        if run is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Run not found")
 
-    # Load snapshot to get graph definition.
-    snapshot_id = run.snapshot_id
-    snapshot_result = await session.execute(
-        select(PipelineSnapshot).where(PipelineSnapshot.id == snapshot_id)
-    )
-    snapshot = snapshot_result.scalar_one_or_none()
-    if snapshot is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Snapshot {snapshot_id} not found for run",
+        # Load snapshot to get graph definition.
+        snapshot_id = run.snapshot_id
+        snapshot_result = await session.execute(
+            select(PipelineSnapshot).where(PipelineSnapshot.id == snapshot_id)
+        )
+        snapshot = snapshot_result.scalar_one_or_none()
+        if snapshot is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Snapshot {snapshot_id} not found for run",
+            )
+
+        graph_json: dict[str, Any] = snapshot.graph_json
+
+        # Verify node exists in the graph.
+        agent_id = _lookup_agent_for_node(graph_json, node_id)
+        if agent_id is None:
+            # Check if node exists at all (even non-agent nodes).
+            node_ids = {str(n.get("id")) for n in graph_json.get("nodes", [])}
+            if node_id not in node_ids:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail=f"Node {node_id} not found in pipeline graph",
+                )
+
+        # Load agent for prompt template (if this is an agent node).
+        agent: Agent | None = None
+        prompt_always_visible = False
+        if agent_id is not None:
+            agent_result = await session.execute(select(Agent).where(Agent.id == agent_id))
+            agent = agent_result.scalar_one_or_none()
+            if agent is None:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail=f"Agent {agent_id} not found for node {node_id}",
+                )
+            prompt_always_visible = bool(agent.prompt_always_visible)
+
+        # Try to load checkpoint state for richer prompt reconstruction.
+        thread_id = run.langgraph_thread_id
+        checkpoint_state = await _get_checkpoint_state(
+            session,
+            thread_id,
+            principal.organisation_id,
+            fernet_key=settings.fernet_key,
         )
 
-    graph_json: dict[str, Any] = snapshot.graph_json
+        messages = _build_messages_from_agent_and_state(
+            agent=agent,
+            input_payload=run.input_payload,
+            outputs_json=run.outputs_json,
+            checkpoint_state=checkpoint_state,
+            node_id=node_id,
+        )
 
-    # Verify node exists in the graph.
-    agent_id = _lookup_agent_for_node(graph_json, node_id)
-    if agent_id is None:
-        # Check if node exists at all (even non-agent nodes).
-        node_ids = {str(n.get("id")) for n in graph_json.get("nodes", [])}
-        if node_id not in node_ids:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail=f"Node {node_id} not found in pipeline graph",
-            )
+        # Apply masking to protect sensitive values.
+        masked_messages = _mask_message_list(messages)
+        full_prompt = "\n\n".join(
+            f"<{m['role'].upper()}>\n{m['content']}\n</{m['role'].upper()}>"
+            for m in masked_messages
+        )
+        token_count = _estimate_tokens(full_prompt)
 
-    # Load agent for prompt template (if this is an agent node).
-    agent: Agent | None = None
-    prompt_always_visible = False
-    if agent_id is not None:
-        agent_result = await session.execute(select(Agent).where(Agent.id == agent_id))
-        agent = agent_result.scalar_one_or_none()
-        if agent is None:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail=f"Agent {agent_id} not found for node {node_id}",
-            )
-        prompt_always_visible = bool(agent.prompt_always_visible)
-
-    # Try to load checkpoint state for richer prompt reconstruction.
-    thread_id = run.langgraph_thread_id
-    checkpoint_state = await _get_checkpoint_state(
-        session,
-        thread_id,
-        principal.organisation_id,
-        fernet_key=settings.fernet_key,
-    )
-
-    messages = _build_messages_from_agent_and_state(
-        agent=agent,
-        input_payload=run.input_payload,
-        outputs_json=run.outputs_json,
-        checkpoint_state=checkpoint_state,
-        node_id=node_id,
-    )
-
-    # Apply masking to protect sensitive values.
-    masked_messages = _mask_message_list(messages)
-    full_prompt = "\n\n".join(
-        f"<{m['role'].upper()}>\n{m['content']}\n</{m['role'].upper()}>"
-        for m in masked_messages
-    )
-    token_count = _estimate_tokens(full_prompt)
-
-    return PromptRevealResponse(
-        prompt=full_prompt,
-        messages=masked_messages,
-        token_count=token_count,
-        prompt_always_visible=prompt_always_visible,
-    )
+        return PromptRevealResponse(
+            prompt=full_prompt,
+            messages=masked_messages,
+            token_count=token_count,
+            prompt_always_visible=prompt_always_visible,
+        )
+    except ProgrammingError:
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="Feature is not available. Run database migrations to enable it.",
+        ) from None
 
 
 # ---------------------------------------------------------------------------
