@@ -16,6 +16,7 @@ from typing import Any
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field
 from sqlalchemy import select
+from sqlalchemy.exc import ProgrammingError
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
 
 from modulo.api.dependencies import _get_engine, get_db_session
@@ -115,24 +116,30 @@ async def claim_gate(
 ) -> ClaimResponse:
     """Atomically claim a HITL gate. Returns a claim_token for approve/reject."""
     mgr = HITLManager()
-    async with session.begin():
-        await set_rls_org(session, principal.organisation_id)
-        try:
-            gate = await mgr.claim(
-                session,
-                run_id=run_id,
-                gate_id=gate_id,
-                org_id=principal.organisation_id,
-                claimant_id=principal.account_id,
-                expiry_minutes=body.expiry_minutes,
-            )
-        except GateNotFoundError as exc:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
-        except AlreadyClaimedError as exc:
-            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+    try:
+        async with session.begin():
+            await set_rls_org(session, principal.organisation_id)
+            try:
+                gate = await mgr.claim(
+                    session,
+                    run_id=run_id,
+                    gate_id=gate_id,
+                    org_id=principal.organisation_id,
+                    claimant_id=principal.account_id,
+                    expiry_minutes=body.expiry_minutes,
+                )
+            except GateNotFoundError as exc:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+            except AlreadyClaimedError as exc:
+                raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
 
-        # Update run status to "claimed".
-        await update_run_status(session, run_id, "claimed")
+            # Update run status to "claimed".
+            await update_run_status(session, run_id, "claimed")
+    except ProgrammingError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="Feature is not available. Run database migrations to enable it.",
+        ) from exc
 
     if gate.claim_token is None or gate.expires_at is None:
         raise HTTPException(
@@ -166,25 +173,31 @@ async def approve_gate(
 ) -> dict[str, str]:
     """Approve an interrupted HITL gate and resume the run."""
     mgr = HITLManager()
-    async with session.begin():
-        await set_rls_org(session, principal.organisation_id)
-        try:
-            await mgr.approve(
-                session,
-                run_id=run_id,
-                gate_id=gate_id,
-                org_id=principal.organisation_id,
-                claim_token=body.claim_token,
-                actor_id=principal.account_id,
-            )
-        except GateNotFoundError as exc:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
-        except GateAlreadyDecidedError as exc:
-            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
-        except ClaimTokenInvalidError as exc:
-            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
-        except ClaimTokenExpiredError as exc:
-            raise HTTPException(status_code=status.HTTP_410_GONE, detail=str(exc)) from exc
+    try:
+        async with session.begin():
+            await set_rls_org(session, principal.organisation_id)
+            try:
+                await mgr.approve(
+                    session,
+                    run_id=run_id,
+                    gate_id=gate_id,
+                    org_id=principal.organisation_id,
+                    claim_token=body.claim_token,
+                    actor_id=principal.account_id,
+                )
+            except GateNotFoundError as exc:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+            except GateAlreadyDecidedError as exc:
+                raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+            except ClaimTokenInvalidError as exc:
+                raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
+            except ClaimTokenExpiredError as exc:
+                raise HTTPException(status_code=status.HTTP_410_GONE, detail=str(exc)) from exc
+    except ProgrammingError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="Feature is not available. Run database migrations to enable it.",
+        ) from exc
 
     resume_data: dict[str, Any] = {"action": "approved"}
     if body.notes:
@@ -224,26 +237,32 @@ async def approve_gate_with_modification(
     documenting the change.
     """
     mgr = HITLManager()
-    async with session.begin():
-        await set_rls_org(session, principal.organisation_id)
-        try:
-            await mgr.approve_with_modification(
-                session,
-                run_id=run_id,
-                gate_id=gate_id,
-                org_id=principal.organisation_id,
-                claim_token=body.claim_token,
-                modified_output=body.modified_output,
-                actor_id=principal.account_id,
-            )
-        except GateNotFoundError as exc:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
-        except GateAlreadyDecidedError as exc:
-            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
-        except ClaimTokenInvalidError as exc:
-            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
-        except ClaimTokenExpiredError as exc:
-            raise HTTPException(status_code=status.HTTP_410_GONE, detail=str(exc)) from exc
+    try:
+        async with session.begin():
+            await set_rls_org(session, principal.organisation_id)
+            try:
+                await mgr.approve_with_modification(
+                    session,
+                    run_id=run_id,
+                    gate_id=gate_id,
+                    org_id=principal.organisation_id,
+                    claim_token=body.claim_token,
+                    modified_output=body.modified_output,
+                    actor_id=principal.account_id,
+                )
+            except GateNotFoundError as exc:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+            except GateAlreadyDecidedError as exc:
+                raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+            except ClaimTokenInvalidError as exc:
+                raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
+            except ClaimTokenExpiredError as exc:
+                raise HTTPException(status_code=status.HTTP_410_GONE, detail=str(exc)) from exc
+    except ProgrammingError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="Feature is not available. Run database migrations to enable it.",
+        ) from exc
 
     resume_data: dict[str, Any] = {
         "action": "approved",
@@ -281,24 +300,30 @@ async def reject_gate(
 ) -> dict[str, str]:
     """Reject an interrupted HITL gate and route to reject_target or fail."""
     mgr = HITLManager()
-    async with session.begin():
-        await set_rls_org(session, principal.organisation_id)
-        try:
-            await mgr.reject(
-                session,
-                run_id=run_id,
-                gate_id=gate_id,
-                org_id=principal.organisation_id,
-                claim_token=body.claim_token,
-            )
-        except GateNotFoundError as exc:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
-        except GateAlreadyDecidedError as exc:
-            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
-        except ClaimTokenInvalidError as exc:
-            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
-        except ClaimTokenExpiredError as exc:
-            raise HTTPException(status_code=status.HTTP_410_GONE, detail=str(exc)) from exc
+    try:
+        async with session.begin():
+            await set_rls_org(session, principal.organisation_id)
+            try:
+                await mgr.reject(
+                    session,
+                    run_id=run_id,
+                    gate_id=gate_id,
+                    org_id=principal.organisation_id,
+                    claim_token=body.claim_token,
+                )
+            except GateNotFoundError as exc:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+            except GateAlreadyDecidedError as exc:
+                raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+            except ClaimTokenInvalidError as exc:
+                raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
+            except ClaimTokenExpiredError as exc:
+                raise HTTPException(status_code=status.HTTP_410_GONE, detail=str(exc)) from exc
+    except ProgrammingError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="Feature is not available. Run database migrations to enable it.",
+        ) from exc
 
     # Resume the graph with rejection data so the gate router picks the
     # reject_target branch.
@@ -343,26 +368,32 @@ async def deliver_manual_output(
         )
 
     mgr = HITLManager()
-    async with session.begin():
-        await set_rls_org(session, principal.organisation_id)
-        try:
-            await mgr.deliver_manual(
-                session,
-                run_id=run_id,
-                gate_id=gate_id,
-                org_id=principal.organisation_id,
-                claim_token=body.claim_token,
-                output=body.output,
-                actor_id=principal.account_id,
-            )
-        except GateNotFoundError as exc:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
-        except GateAlreadyDecidedError as exc:
-            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
-        except ClaimTokenInvalidError as exc:
-            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
-        except ClaimTokenExpiredError as exc:
-            raise HTTPException(status_code=status.HTTP_410_GONE, detail=str(exc)) from exc
+    try:
+        async with session.begin():
+            await set_rls_org(session, principal.organisation_id)
+            try:
+                await mgr.deliver_manual(
+                    session,
+                    run_id=run_id,
+                    gate_id=gate_id,
+                    org_id=principal.organisation_id,
+                    claim_token=body.claim_token,
+                    output=body.output,
+                    actor_id=principal.account_id,
+                )
+            except GateNotFoundError as exc:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+            except GateAlreadyDecidedError as exc:
+                raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+            except ClaimTokenInvalidError as exc:
+                raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
+            except ClaimTokenExpiredError as exc:
+                raise HTTPException(status_code=status.HTTP_410_GONE, detail=str(exc)) from exc
+    except ProgrammingError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="Feature is not available. Run database migrations to enable it.",
+        ) from exc
 
     resume_data: dict[str, Any] = {"action": "deliver_manual", "output": body.output}
     executor = PipelineExecutor(engine)
@@ -394,23 +425,29 @@ async def submit_manual_output(
 ) -> dict[str, str]:
     """Submit output for a manual-input node and resume the run."""
     mgr = HITLManager()
-    async with session.begin():
-        await set_rls_org(session, principal.organisation_id)
-        try:
-            await mgr.approve(
-                session,
-                run_id=run_id,
-                gate_id=gate_id,
-                org_id=principal.organisation_id,
-                claim_token=body.claim_token,
-                actor_id=principal.account_id,
-            )
-        except GateNotFoundError as exc:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
-        except GateAlreadyDecidedError as exc:
-            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
-        except (ClaimTokenInvalidError, ClaimTokenExpiredError) as exc:
-            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
+    try:
+        async with session.begin():
+            await set_rls_org(session, principal.organisation_id)
+            try:
+                await mgr.approve(
+                    session,
+                    run_id=run_id,
+                    gate_id=gate_id,
+                    org_id=principal.organisation_id,
+                    claim_token=body.claim_token,
+                    actor_id=principal.account_id,
+                )
+            except GateNotFoundError as exc:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+            except GateAlreadyDecidedError as exc:
+                raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+            except (ClaimTokenInvalidError, ClaimTokenExpiredError) as exc:
+                raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
+    except ProgrammingError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="Feature is not available. Run database migrations to enable it.",
+        ) from exc
 
     resume_data: dict[str, Any] = {"action": "manual_output", "output": body.output}
     executor = PipelineExecutor(engine)
@@ -438,25 +475,31 @@ async def list_run_pending_gates(
     principal: AuthenticatedPrincipal = Depends(get_current_user),
 ) -> PendingGatesResponse:
     """List all pending (undecided) HITL gates for a specific run."""
-    async with session.begin():
-        await set_rls_org(session, principal.organisation_id)
-        run = await get_run(session, run_id)
-        if run is None:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Run not found")
+    try:
+        async with session.begin():
+            await set_rls_org(session, principal.organisation_id)
+            run = await get_run(session, run_id)
+            if run is None:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Run not found")
 
-        result = await session.execute(
-            select(HitlClaim).where(
-                HitlClaim.run_id == run_id,
-                HitlClaim.organisation_id == principal.organisation_id,
-                HitlClaim.decision.is_(None),
+            result = await session.execute(
+                select(HitlClaim).where(
+                    HitlClaim.run_id == run_id,
+                    HitlClaim.organisation_id == principal.organisation_id,
+                    HitlClaim.decision.is_(None),
+                )
             )
-        )
-        gates = list(result.scalars())
+            gates = list(result.scalars())
 
-    pipeline_name: str | None = None
-    if gates:
-        pipeline = await session.get(Pipeline, gates[0].pipeline_id)
-        pipeline_name = pipeline.name if pipeline else None
+        pipeline_name: str | None = None
+        if gates:
+            pipeline = await session.get(Pipeline, gates[0].pipeline_id)
+            pipeline_name = pipeline.name if pipeline else None
+    except ProgrammingError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="Feature is not available. Run database migrations to enable it.",
+        ) from exc
 
     return PendingGatesResponse(
         gates=[_gate_to_response(g, pipeline_name=pipeline_name) for g in gates]
@@ -473,18 +516,24 @@ async def list_org_pending_gates(
 ) -> PendingGatesResponse:
     """List all pending HITL gates across the organisation."""
     mgr = HITLManager()
-    async with session.begin():
-        await set_rls_org(session, principal.organisation_id)
-        gates = await mgr.list_pending(session, principal.organisation_id)
+    try:
+        async with session.begin():
+            await set_rls_org(session, principal.organisation_id)
+            gates = await mgr.list_pending(session, principal.organisation_id)
 
-    pipeline_ids = list({g.pipeline_id for g in gates})
-    pipeline_map: dict[uuid.UUID, str] = {}
-    if pipeline_ids:
-        pipeline_rows = await session.execute(
-            select(Pipeline.id, Pipeline.name).where(Pipeline.id.in_(pipeline_ids))
-        )
-        for pid, pname in pipeline_rows.all():
-            pipeline_map[pid] = pname
+        pipeline_ids = list({g.pipeline_id for g in gates})
+        pipeline_map: dict[uuid.UUID, str] = {}
+        if pipeline_ids:
+            pipeline_rows = await session.execute(
+                select(Pipeline.id, Pipeline.name).where(Pipeline.id.in_(pipeline_ids))
+            )
+            for pid, pname in pipeline_rows.all():
+                pipeline_map[pid] = pname
+    except ProgrammingError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="Feature is not available. Run database migrations to enable it.",
+        ) from exc
 
     return PendingGatesResponse(
         gates=[_gate_to_response(g, pipeline_name=pipeline_map.get(g.pipeline_id)) for g in gates]
