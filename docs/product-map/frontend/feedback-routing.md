@@ -99,11 +99,55 @@ status: partial
 - [x] Unit tests for all API endpoints (test_feedback_endpoint.py)
 - [x] Unit tests for FeedbackManager business logic (test_feedback_manager.py)
 - [x] Integration tests for full feedback flow with real database
-- [ ] BDD: HITL rejection creates FeedbackRecord
-- [ ] BDD: Feedback routed per handler type (human / ai_correction / ai_correction_with_human_review)
-- [ ] BDD: Correction run spawned and executes
-- [ ] BDD: Eval gap detection triggers proposed eval generation
-- [ ] BDD: Feedback inbox review actions complete the lifecycle
+- [x] BDD: HITL rejection creates FeedbackRecord (feedback_system.feature + test_eval.py step defs)
+- [x] BDD: Feedback routed per handler type (feedback_handler.feature + test_hitl.py step defs)
+- [x] BDD: Correction run spawned and executes (feedback_system.feature scenario 7)
+- [x] BDD: Eval gap detection triggers proposed eval generation (feedback_system.feature scenario 6)
+- [x] BDD: Feedback inbox review actions complete the lifecycle (feedback_handler.feature scenario 5)
+
+## Error Handling
+
+### DB-backed routes (501 Not Implemented)
+- [x] All 9 API route handlers in `feedback.py` catch `ProgrammingError` → 501 with descriptive message
+- [x] Pattern matches AGENTS.md Lessons Learned ("every DB-backed route must catch ProgrammingError")
+
+### 404 Not Found
+- [x] `create_feedback`: run not found → 404
+- [x] `get_feedback`: record not found → 404
+- [x] `update_feedback_status`: record not found → 404
+- [x] `detect_eval_gap`: record not found → 404 (via `get_feedback_record`)
+- [x] `get_inbox_item`: record not found → 404
+- [x] `review_feedback`: record not found → 404
+
+### 422 Validation
+- [x] `update_feedback_status`: invalid status string → 422
+- [x] `review_feedback`: invalid action → 422
+- [x] `review_feedback`: `create_correction_run` on record with no run_id → 422
+
+### 409 Conflict
+- [x] `review_feedback`: `mark_reviewed` on terminal status → 409
+- [x] `review_feedback`: `dismiss` on terminal status → 409
+
+### ValueError propagation (FeedbackManager → 404)
+- [x] `spawn_correction_run`: record not found → ValueError → 404
+- [x] `spawn_correction_run`: original run not found → ValueError → 404
+- [ ] `update_status`: invalid transition → ValueError → not caught in review handler (propagates as 500)
+- [ ] `update_status`: concurrent modification → ValueError → not caught in review handler (propagates as 500)
+
+### Missing error handling
+- [ ] `run_post_correction_eval` ValueErrors (record not found, wrong status, no linked run) not caught at API level
+- [ ] Date parsing in `list_feedback_inbox`: invalid `date_from`/`date_to` format raises uncaught `ValueError` → 500
+
+## QA History
+
+### 2026-07-03 — Cross-cutting QA (index 87)
+- **Fixed**: Frontend `resolveRecord()` and `triggerCorrection()` sent `{ status: ... }` instead of `{ action: ... }` to review endpoint. Pydantic v2 silently dropped extra fields, defaulting `action` to `"mark_reviewed"` — causing "Trigger Correction Run" to mark as reviewed instead. Corrected all three frontend review API calls to use proper `action` field.
+- **Fixed**: Backend `ReviewFeedbackRequest` model lacked `annotation` field. Added the field and persistence logic in the review handler.
+- **Fixed**: `FeedbackRecord` model lacked `annotation` column. Added column + Alembic migration `0059_feedback_annotation`.
+- **Fixed**: Stale Known Gaps — BDD features now correctly marked as real scenarios (not placeholders).
+- **Added**: Error Handling section with audited error paths.
+- **Added**: Annotation serialisation in `_serialise_record()`.
+- **Not fixed (requires separate task)**: `reject_routing_conflict` validation, AI correction agent primitive, eval proposals UI, checkpoint seeding, eval suite population for `detect_eval_gap`.
 
 ## Known Gaps
 
@@ -117,5 +161,13 @@ status: partial
   both `feedback_handler` and `reject_target` on the same gate not yet implemented
 - **No eval proposals UI**: Eval proposals queue with draft eval editor
   (PRD 8.20 ¶1495) not yet built
-- **BDD features placeholder only**: Both `feedback_system.feature` and
-  `feedback_handler.feature` contain only placeholder scenarios
+- **detect_eval_gap hardcodes eval_suite=[]**: The API endpoint at
+  `POST /feedback/{id}/detect-gap` passes `eval_suite=[]` instead of reading
+  the pipeline's eval suite, so gap detection always returns `False` when no
+  eval suite is explicitly provided.
+- **`dismissed` not fully wired as terminal status**: The status machine
+  allows `pending→dismissed` and `escalated→dismissed`, but the UI does not
+  display a dismiss action button.
+- **Eval failure during correction does NOT escalate**: Per PRD §8.20, eval
+  failure should set status to `escalated`, but the current implementation
+  keeps the record in `correcting`.
