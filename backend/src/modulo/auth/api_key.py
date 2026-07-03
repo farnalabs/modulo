@@ -77,7 +77,7 @@ async def create_api_key(
     org_id: uuid.UUID,
     name: str,
     role: str,
-    created_by: uuid.UUID,
+    account_id: uuid.UUID,
     team_id: uuid.UUID | None = None,
     expires_at: datetime | None = None,
 ) -> tuple[OrgApiKey, str]:
@@ -89,7 +89,7 @@ async def create_api_key(
         lookup_prefix=prefix,
         hashed_secret=hashed,
         role=role,
-        account_id=created_by,
+        account_id=account_id,
         team_id=team_id,
         expires_at=expires_at,
     )

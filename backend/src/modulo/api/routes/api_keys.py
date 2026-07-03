@@ -6,6 +6,7 @@ from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field
+from sqlalchemy.exc import ProgrammingError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.api.dependencies import get_db_session
@@ -93,18 +94,24 @@ async def create_api_key_endpoint(
     expires_at: datetime | None = None
     if body.expires_at:
         expires_at = datetime.fromisoformat(body.expires_at)
-    async with session.begin():
-        await set_rls_org(session, principal.organisation_id)
-        await set_rls_user_context(session, principal.account_id, principal.org_role)
-        key, full_key = await create_api_key(
-            session,
-            org_id=principal.organisation_id,
-            name=body.name,
-            role=body.role,
-            account_id=principal.account_id,
-            team_id=team_id,
-            expires_at=expires_at,
-        )
+    try:
+        async with session.begin():
+            await set_rls_org(session, principal.organisation_id)
+            await set_rls_user_context(session, principal.account_id, principal.org_role)
+            key, full_key = await create_api_key(
+                session,
+                org_id=principal.organisation_id,
+                name=body.name,
+                role=body.role,
+                account_id=principal.account_id,
+                team_id=team_id,
+                expires_at=expires_at,
+            )
+    except ProgrammingError:
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="API keys are not available. Run database migrations to enable this feature.",
+        ) from None
     return ApiKeyCreatedResponse(
         id=key.id,
         name=key.name,
