@@ -42,6 +42,37 @@
           </div>
         </div>
 
+        <!-- Sub-pipeline visualization for composites -->
+        <div
+          v-if="subGraphNodes.length > 0"
+          class="card p-6 mb-6"
+        >
+          <h3 class="text-base font-medium text-foreground mb-4">Pipeline Visualisation</h3>
+          <p class="text-sm text-muted-foreground mb-4">
+            This composite runs the following sub-pipeline internally:
+          </p>
+          <div class="h-72 rounded-lg border bg-card overflow-hidden">
+            <VueFlow
+              :nodes="subGraphNodes"
+              :edges="subGraphEdges"
+              :node-types="subNodeTypes"
+              :default-edge-options="{ type: 'smoothstep', animated: false, style: { stroke: '#888' } }"
+              fit-view-on-init
+              :nodes-draggable="false"
+              :nodes-connectable="false"
+              :elements-selectable="false"
+            >
+              <Background :gap="20" :size="1" />
+              <template #node-agent="nodeProps">
+                <div class="rounded-lg border-2 border-indigo-500/60 bg-indigo-500/10 px-4 py-3 shadow-sm">
+                  <div class="text-xs font-medium text-indigo-400">AGENT</div>
+                  <div class="text-sm font-semibold text-foreground">{{ nodeProps.data.label }}</div>
+                </div>
+              </template>
+            </VueFlow>
+          </div>
+        </div>
+
         <div class="card p-6 mb-6">
           <h3 class="text-base font-medium text-foreground mb-4">{{ $t('views.LibraryPipelineWizard.pipeline_configuration') }}</h3>
 
@@ -145,7 +176,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted } from 'vue'
+import { ref, computed, onMounted } from 'vue'
 import { useRoute } from 'vue-router'
 import { useApi } from '../composables/useApi'
 import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
@@ -153,6 +184,10 @@ import ErrorAlert from '../components/shared/ErrorAlert.vue'
 import OwnershipPicker from '../components/OwnershipPicker.vue'
 import type { OwnershipValue } from '../components/OwnershipPicker.vue'
 import BackLink from '../components/BackLink.vue'
+import { VueFlow } from '@vue-flow/core'
+import { Background } from '@vue-flow/background'
+import '@vue-flow/core/dist/style.css'
+import '@vue-flow/core/dist/theme-default.css'
 
 interface LibraryPrimitive {
   id: string
@@ -172,6 +207,10 @@ interface LibraryPrimitive {
     }>
     graph_nodes?: Array<Record<string, unknown>>
     edges?: Array<Record<string, unknown>>
+    sub_pipeline_graph_json?: {
+      nodes: Array<{ id: string; node_type?: string; label?: string }>
+      edges: Array<{ source: string; target: string; edge_type?: string }>
+    }
   }
 }
 
@@ -202,6 +241,74 @@ const createError = ref<string | null>(null)
 const result = ref<CreatePipelineResponse | null>(null)
 
 const templateAgents = ref<Array<{ name: string; description?: string; connector_type_refs?: Array<{ connector_type: string }> }>>([])
+
+function layoutNodes(
+  nodes: Array<{ id: string; node_type?: string; label?: string }>,
+  edges: Array<{ source: string; target: string; edge_type?: string }>,
+) {
+  const w = 200
+  const h = 100
+  const xPad = 40
+  const yPad = 60
+  const inDegree: Record<string, number> = {}
+  for (const n of nodes) inDegree[n.id] = 0
+  for (const e of edges) inDegree[e.target] = (inDegree[e.target] || 0) + 1
+
+  const layers: string[][] = []
+  let remaining = new Set(nodes.map(n => n.id))
+  while (remaining.size > 0) {
+    const layer = [...remaining].filter(id => inDegree[id] === 0 || [...remaining].every(other => {
+      if (other === id) return true
+      return !edges.some(e => e.source === other && e.target === id)
+    }))
+    if (layer.length === 0) {
+      layers.push([...remaining])
+      break
+    }
+    layers.push(layer)
+    for (const id of layer) remaining.delete(id)
+    for (const id of remaining) {
+      inDegree[id] = edges.filter(e => e.target === id && !remaining.has(e.source)).length
+    }
+  }
+
+  const nodeMap = new Map(nodes.map(n => [n.id, n]))
+  return layers.flatMap((layer, li) =>
+    layer.map((id, ni) => {
+      const n = nodeMap.get(id)
+      const total = layer.length
+      const startX = (total - 1) * (w + xPad) / -2
+      return {
+        id,
+        type: n?.node_type || 'agent',
+        position: { x: startX + ni * (w + xPad), y: li * (h + yPad) },
+        data: { label: n?.label || id },
+      }
+    }),
+  )
+}
+
+const subGraphNodes = computed(() => {
+  const sub = primitive.value?.content_json?.sub_pipeline_graph_json
+  if (!sub) return []
+  return layoutNodes(sub.nodes, sub.edges)
+})
+
+const subGraphEdges = computed(() => {
+  const sub = primitive.value?.content_json?.sub_pipeline_graph_json
+  if (!sub) return []
+  const usedIds = new Set(subGraphNodes.value.map((n: { id: string }) => n.id))
+  return sub.edges
+    .filter(e => usedIds.has(e.source) && usedIds.has(e.target))
+    .map(e => ({
+      id: `${e.source}-${e.target}`,
+      source: e.source,
+      target: e.target,
+      type: 'smoothstep',
+    }))
+})
+
+const subNodeTypes = { agent: 'agent' }
 
 onMounted(async () => {
   try {

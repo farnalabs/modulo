@@ -119,7 +119,7 @@
     <main class="flex-1 overflow-auto bg-background pt-14 md:pt-0">
       <Breadcrumb class="px-6 pt-4" />
       <router-view v-slot="{ Component, route }">
-        <transition name="page" mode="out-in">
+        <transition name="page">
           <component :is="Component" :key="route.fullPath" />
         </transition>
       </router-view>
