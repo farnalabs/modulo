@@ -78,11 +78,44 @@ LLM-driven prompt improvement from eval failures, with full version history, rol
 
 ### Pipeline Integration
 
-- [ ] Variant groups compare `prompt_version_hash` between base and variant snapshots
-- [ ] Prompt version pinning is independent of pipeline snapshot versioning — prompts can be rolled back without a new snapshot
-- [ ] Model backend `model_id` is also pinned in the snapshot (`model_backend_pins_json`) — consistent with prompt pinning
+- [x] Variant groups compare `prompt_version_hash` between base and variant snapshots
+- [x] Prompt version pinning is independent of pipeline snapshot versioning — prompts can be rolled back without a new snapshot
+- [x] Model backend `model_id` is also pinned in the snapshot (`model_backend_pins_json`) — consistent with prompt pinning
+
+### Error Handling
+
+- [x] All 5 agent CRUD routes (list, create, get, update, delete) catch ProgrammingError → 501
+- [x] All 6 prompt routes (optimize, apply, list versions, get version, rollback, diff) catch ProgrammingError → 501
+- [x] Missing DB table on ModelBackend query in optimize endpoint returns 501
+- [x] Missing DB table on get_eval_results_with_defs returns 501
+- [x] 422 on empty eval_result_ids in optimize endpoint
+- [x] 404 on non-existent agent for all prompt endpoints
+- [x] 404 on non-existent version for get/rollback/diff endpoints
+- [x] 404 on no eval results found for optimize endpoint
+- [x] 404 on non-existent model backend for optimize endpoint
+- [x] 500 on credential decryption failure for optimize endpoint
+- [x] LLM call failures (network, timeout) propagate to caller for optimize endpoint
+- [x] Malformed LLM response or missing required keys raises error in optimize endpoint
+
+### Edge Cases
+
+- [x] Version label in optimize response is computed from history length, not validated against `version` path param — non-existent version like "v99" accepted as source
+- [x] Apply with duplicate version label creates entry with same label as existing
+- [x] Rollback to current version creates a new history entry with same template (append-only)
+- [x] Diff of same version (version_a == version_b) returns all lines as "unchanged"
+- [x] Empty version history returns empty list for list endpoint
+- [x] Empty template string accepted as valid prompt for version creation
 
 ## Known Gaps
-- No variant group prompt hash comparison tests (cross-feature, depends on variant-group integration)
+- No unit test for get_prompt_diffs hash comparison logic (existing test is mock-based, not testing real diff computation)
 - No performance or regression tests for large version histories (100+ entries)
-- No unauthorized access scenarios for prompt history (non-member org, viewer role) 
+- No unauthorized access scenarios for prompt history (non-member org, viewer role)
+
+## QA History
+
+### 2026-07-03 — Cross-cutting QA (improve-architecture index 106)
+- Marked 3 stale Pipeline Integration checkboxes [ ]→[x] (prompt version hash comparison, independent pinning, model_backend_pins_json)
+- Added Error Handling section (12 behaviour checkboxes)
+- Added Edge Cases section (6 checkboxes)
+- Refined Known Gaps (gap #1: corrected to "mock-based test, not real diff computation")
+- Status: partial (3 known gaps remain) 
