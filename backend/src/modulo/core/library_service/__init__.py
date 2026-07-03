@@ -973,11 +973,16 @@ async def get_primitive(
     """Return a primitive visible to org_id, or None.
 
     Checks the org-scoped DB first, then falls back to in-memory modulo primitives.
+    Supports being called within an existing transaction or starting its own.
     """
     try:
-        async with session.begin():
+        if session.in_transaction():
             await set_rls_org(session, org_id)
             item = await get_library_primitive(session, primitive_id)
+        else:
+            async with session.begin():
+                await set_rls_org(session, org_id)
+                item = await get_library_primitive(session, primitive_id)
     except ProgrammingError:
         return None
     if item is not None:
@@ -994,9 +999,10 @@ async def get_primitive_by_slug(
     """Return a primitive visible to org_id by type and slug, or None.
 
     Checks the org-scoped DB first, then falls back to in-memory modulo primitives.
+    Supports being called within an existing transaction or starting its own.
     """
     try:
-        async with session.begin():
+        if session.in_transaction():
             await set_rls_org(session, org_id)
             stmt = select(LibraryPrimitive).where(
                 LibraryPrimitive.primitive_type == primitive_type,
@@ -1004,6 +1010,15 @@ async def get_primitive_by_slug(
             )
             result = await session.execute(stmt)
             item = result.scalar_one_or_none()
+        else:
+            async with session.begin():
+                await set_rls_org(session, org_id)
+                stmt = select(LibraryPrimitive).where(
+                    LibraryPrimitive.primitive_type == primitive_type,
+                    LibraryPrimitive.slug == slug,
+                )
+                result = await session.execute(stmt)
+                item = result.scalar_one_or_none()
     except ProgrammingError:
         return None
     if item is not None:
