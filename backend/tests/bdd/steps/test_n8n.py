@@ -12,7 +12,7 @@ from modulo.connectors.n8n import N8NConnector
 
 try:
     scenarios("../features/connectors/n8n.feature")
-except Exception:
+except (FileNotFoundError, OSError):
     pass
 
 TOKEN = "n8n_test_token"

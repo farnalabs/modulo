@@ -11,9 +11,7 @@ scenarios("../features/library/copy_to_adapt.feature")
 scenarios("../features/library/ratings.feature")
 
 PRIMITIVE_10 = uuid.UUID("00000000-0000-0000-0000-000000000010")
-PRIMITIVE_20 = uuid.UUID("00000000-0000-0000-0000-000000000020")
 FAKE_TEAM_ID = uuid.UUID("00000000-0000-0000-0000-0000000000aa")
-MISSING_ID = uuid.UUID("00000000-0000-0000-0000-000000099999")
 
 
 # ---------------------------------------------------------------------------

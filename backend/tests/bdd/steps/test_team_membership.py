@@ -16,9 +16,6 @@ try:
 except (FileNotFoundError, OSError):
     pass
 
-ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
-
-
 @pytest.fixture
 def ctx():
     return {

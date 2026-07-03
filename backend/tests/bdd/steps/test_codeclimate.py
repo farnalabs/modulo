@@ -8,7 +8,7 @@ from modulo.connectors.codeclimate import CodeClimateConnector
 
 try:
     scenarios("../features/connectors/codeclimate.feature")
-except Exception:
+except (FileNotFoundError, OSError):
     pass
 
 # ---------------------------------------------------------------------------

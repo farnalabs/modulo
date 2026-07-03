@@ -8,7 +8,7 @@ from modulo.connectors.trivy import TrivyConnector
 
 try:
     scenarios("../features/connectors/trivy.feature")
-except Exception:
+except (FileNotFoundError, OSError):
     pass
 
 _last_health_result = None
