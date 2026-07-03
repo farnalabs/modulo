@@ -181,10 +181,36 @@ class McpAuthMiddleware(BaseHTTPMiddleware):
         # Try API key first (backwards compatible).
         if token.startswith("mk_"):
             try:
-                async with _session(_PLACEHOLDER_ORG_ID) as s:
-                    key = await validate_api_key(s, token, org_id=None)
+                # Validate the key without RLS first (the key's org is unknown).
+                from modulo.auth.api_key import _MK_PREFIX, _PREFIX_LEN
+                prefix = token[len(_MK_PREFIX):][:_PREFIX_LEN]
+                from sqlalchemy import select
+
+                from modulo.db.models.api_key import OrgApiKey
+                from modulo.settings import get_settings
+                settings = get_settings()
+
+                factory = _get_session_factory()
+                async with factory() as s:
+                    result = await s.execute(
+                        select(OrgApiKey).where(
+                            OrgApiKey.lookup_prefix == prefix,
+                            OrgApiKey.revoked_at.is_(None),
+                        )
+                    )
+                    key_record = result.scalar_one_or_none()
+                    if key_record is None:
+                        raise ApiKeyInvalidError()
+                    import hmac
+
+                    from modulo.auth.api_key import _hash_key
+                    if not hmac.compare_digest(key_record.hashed_secret, _hash_key(token)):
+                        raise ApiKeyInvalidError()
+
+                # Now re-validate within the correct RLS context.
+                async with _session(key_record.organisation_id) as s:
+                    key = await validate_api_key(s, token, org_id=key_record.organisation_id)
                 org_id = key.organisation_id
-                _ctx_org_id.set(org_id)
                 _ctx_role.set(key.role)
                 _ctx_key_id.set(key.id)
                 _ctx_user_id.set(key.account_id)
