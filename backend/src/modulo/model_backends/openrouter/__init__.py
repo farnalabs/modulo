@@ -6,7 +6,7 @@ from typing import Any
 from langchain_core.messages import BaseMessage
 from langchain_openai import ChatOpenAI
 
-from modulo.model_backends.base import ModelBackendBase
+from modulo.model_backends.base import HealthResult, ModelBackendBase, _openai_compatible_health_check
 
 
 class OpenRouterBackend(ModelBackendBase):
@@ -20,6 +20,7 @@ class OpenRouterBackend(ModelBackendBase):
             **default_params,
         )
         self._backend_id = f"openrouter/{model_id}"
+        self._api_key = api_key
 
     @property
     def backend_id(self) -> str:
@@ -27,6 +28,12 @@ class OpenRouterBackend(ModelBackendBase):
 
     def __repr__(self) -> str:
         return f"OpenRouterBackend(model_id={self._backend_id!r})"
+
+    async def health_check(self) -> HealthResult:
+        return await _openai_compatible_health_check(
+            base_url="https://openrouter.ai/api/v1",
+            api_key=self._api_key,
+        )
 
     async def invoke(self, messages: list[BaseMessage], **kwargs: Any) -> BaseMessage:
         return await self._model.ainvoke(messages, **kwargs)

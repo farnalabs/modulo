@@ -11,7 +11,6 @@ from modulo.connectors.base import (
     ConnectorQuery,
     ConnectorResult,
     ConnectorType,
-    HealthResult,
 )
 from modulo.core.plugin_registry import (
     PluginHealth,
@@ -19,7 +18,7 @@ from modulo.core.plugin_registry import (
     PluginRegistry,
     get_plugin_registry,
 )
-from modulo.model_backends.base import ModelBackendBase
+from modulo.model_backends.base import HealthResult, ModelBackendBase
 
 # ---------------------------------------------------------------------------
 # Stub plugin implementations for testing
@@ -57,6 +56,9 @@ class _StubPluginBackend(ModelBackendBase):
     @property
     def backend_id(self) -> str:
         return f"stub/{self._model_id}"
+
+    async def health_check(self) -> HealthResult:
+        return HealthResult(ok=True)
 
     async def invoke(self, messages: list, **kwargs: Any) -> Any:
         from langchain_core.messages import AIMessage

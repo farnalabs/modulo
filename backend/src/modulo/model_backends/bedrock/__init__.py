@@ -4,9 +4,9 @@ from collections.abc import AsyncIterator
 from typing import Any
 
 from langchain_aws import ChatBedrock
-from langchain_core.messages import BaseMessage
+from langchain_core.messages import BaseMessage, HumanMessage
 
-from modulo.model_backends.base import ModelBackendBase
+from modulo.model_backends.base import HealthResult, ModelBackendBase
 
 
 class BedrockBackend(ModelBackendBase):
@@ -28,6 +28,7 @@ class BedrockBackend(ModelBackendBase):
             **default_params,
         )
         self._backend_id = f"bedrock/{model_id}"
+        self._model_id = model_id
 
     @property
     def backend_id(self) -> str:
@@ -35,6 +36,13 @@ class BedrockBackend(ModelBackendBase):
 
     def __repr__(self) -> str:
         return f"BedrockBackend(model_id={self._backend_id!r})"
+
+    async def health_check(self) -> HealthResult:
+        try:
+            await self._model.ainvoke([HumanMessage(content="ping")], max_tokens=1)
+            return HealthResult(ok=True)
+        except Exception as exc:
+            return HealthResult(ok=False, detail=str(exc)[:500])
 
     async def invoke(self, messages: list[BaseMessage], **kwargs: Any) -> BaseMessage:
         return await self._model.ainvoke(messages, **kwargs)
