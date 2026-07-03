@@ -27,6 +27,7 @@ from modulo.auth.dependencies import get_current_user
 from modulo.auth.jwt import AuthenticatedPrincipal
 from modulo.core.feedback_manager import FeedbackManager
 from modulo.db.models.pipeline_snapshot import PipelineSnapshot
+from modulo.db.models.eval_definition import EvalDefinition
 from modulo.db.models.run import Run
 from modulo.db.rls import set_rls_org
 
@@ -327,7 +328,21 @@ async def detect_eval_gap(
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
             mgr = FeedbackManager(session, principal.organisation_id)
-            is_gap = await mgr.detect_eval_gap(record, eval_suite=[])
+
+            eval_suite: list[EvalDefinition] = []
+            if record.run_id:
+                run = (
+                    await session.execute(select(Run).where(Run.id == record.run_id))
+                ).scalar_one_or_none()
+                if run is not None:
+                    eval_defs = (
+                        await session.execute(
+                            select(EvalDefinition).where(EvalDefinition.pipeline_id == run.pipeline_id)
+                        )
+                    ).scalars().all()
+                    eval_suite = list(eval_defs)
+
+            is_gap = await mgr.detect_eval_gap(record, eval_suite=eval_suite)
     except ProgrammingError:
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
