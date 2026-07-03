@@ -48,6 +48,7 @@ class UpdateStatusRequest(BaseModel):
 
 class ReviewFeedbackRequest(BaseModel):
     action: str = "mark_reviewed"  # mark_reviewed | dismiss | create_correction_run
+    annotation: str | None = None
 
 
 def _serialise_record(r: Any, pipeline_name: str | None = None, producing_node_name: str | None = None) -> dict[str, Any]:
@@ -66,6 +67,7 @@ def _serialise_record(r: Any, pipeline_name: str | None = None, producing_node_n
         "correction_run_id": str(r.correction_run_id) if r.correction_run_id else None,
         "eval_gap": r.eval_gap,
         "needs_human_review": getattr(r, "needs_human_review", False),
+        "annotation": getattr(r, "annotation", None),
         "pipeline_name": pipeline_name,
         "created_at": r.created_at.isoformat() if r.created_at else None,
     }
@@ -428,6 +430,17 @@ async def review_feedback(
                     ) from exc
 
                 correction_run_id = str(new_run_id)
+
+            if body.annotation is not None:
+                from sqlalchemy import update as sa_update
+                from modulo.db.models.feedback_record import FeedbackRecord
+
+                await session.execute(
+                    sa_update(FeedbackRecord)
+                    .where(FeedbackRecord.id == record_id)
+                    .values(annotation=body.annotation)
+                )
+
     except ProgrammingError:
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
