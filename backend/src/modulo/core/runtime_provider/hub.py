@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+import logging
 from typing import Any
 
 from modulo.core.runtime_provider import RuntimeProvider
+
+_log = logging.getLogger(__name__)
 
 
 class RuntimeProviderHub:
@@ -25,6 +28,9 @@ class RuntimeProviderHub:
 
     def unregister(self, name: str) -> None:
         """Remove a registered provider by name."""
+        if name not in self._providers:
+            _log.warning("RuntimeProvider '%s' is not registered", name)
+            return
         self._providers.pop(name, None)
 
     def get(self, name: str) -> RuntimeProvider | None:
@@ -44,8 +50,7 @@ class RuntimeProviderHub:
         Resolution strategy:
         1. If the profile declares a ``provider_hint``, look it up by name.
         2. Otherwise iterate registered providers and return the first
-           whose ``supports()`` returns True (if the provider implements
-           the supports protocol).
+           whose ``supports()`` returns True.
         3. Fall back to the first registered provider.
         4. Return None if nothing is registered.
         """
@@ -54,13 +59,12 @@ class RuntimeProviderHub:
             return self._providers[hint]
 
         for provider in self._providers.values():
-            supports = getattr(provider, "supports", None)
-            if supports is not None and callable(supports):
-                try:
-                    if supports(profile):
-                        return provider
-                except Exception:  # noqa: S112  # nosec
-                    continue
+            try:
+                if provider.supports(profile):
+                    return provider
+            except Exception:
+                _log.warning("supports() raised for provider %s", provider, exc_info=True)
+                continue
 
         # Fallback: return first registered provider
         for provider in self._providers.values():
