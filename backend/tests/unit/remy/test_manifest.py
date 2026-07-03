@@ -162,3 +162,46 @@ class TestManifestEndpoint:
             data = yaml.safe_load(f)
         assert data is not None
         assert data.get("schema_version") == 1
+
+
+class TestGetManifestPathFiltering:
+    def _reset_manifest(self):
+        from modulo.core.manifest import _MANIFEST
+        import modulo.core.manifest as m
+
+        m._MANIFEST = None
+
+    def test_returns_full_manifest_when_no_path(self):
+        self._reset_manifest()
+        from modulo.core.manifest import get_manifest
+
+        manifest = get_manifest()
+        assert "routes" in manifest
+        assert "elements" in manifest
+        assert "sidebar_groups" in manifest
+        assert len(manifest["routes"]) > 0
+
+    def test_returns_route_and_elements_for_known_path(self):
+        self._reset_manifest()
+        from modulo.core.manifest import get_manifest
+
+        manifest = get_manifest()
+        path = "/"
+        route = manifest.get("routes", {}).get(path)
+        elements = manifest.get("elements", {}).get(path, [])
+        assert route is not None
+        assert route.get("name") == "dashboard"
+        assert route.get("testid") == "page-dashboard"
+        assert isinstance(elements, list)
+        assert len(elements) > 0
+
+    def test_returns_none_for_unknown_path(self):
+        self._reset_manifest()
+        from modulo.core.manifest import get_manifest
+
+        manifest = get_manifest()
+        path = "/nonexistent/route"
+        route = manifest.get("routes", {}).get(path)
+        elements = manifest.get("elements", {}).get(path, [])
+        assert route is None
+        assert elements == []

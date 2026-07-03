@@ -94,6 +94,19 @@ _UI_TOOLS: dict[str, dict] = {
         "description": "Get current page URL and route name.",
         "parameters": {},
     },
+    "get_manifest": {
+        "description": (
+            "Get structured app manifest with all pages, routes, data-testid selectors,"
+            " and interactive elements. Call before navigating to plan your route."
+            " Optional path param filters to one route + elements."
+        ),
+        "parameters": {
+            "path": {
+                "type": "string",
+                "description": "Optional route path (e.g. /admin/pipelines). Returns route + elements.",
+            },
+        },
+    },
     "press": {
         "description": "Press a keyboard key.",
         "parameters": {
@@ -141,8 +154,11 @@ def build_tool_definitions_for_text() -> str:
         lines.append(f"- **{name}**({params_str}): {schema['description']}")
     lines.extend([
         "",
+        "**Tip:** Before navigating, call get_manifest() to learn page structure and interactable elements.",
+        "",
         "Example workflow:",
-        "1. navigate(path: /admin/pipelines) — go to the Pipelines admin page",
+        "1. get_manifest() — learn the page structure",
+        "2. navigate(path: /admin/pipelines) — go to the Pipelines admin page",
         "2. wait(ms: 500) — let the page stabilise",
         "3. extract(selector: [data-testid=pipeline-table]) — read current pipelines",
         "4. click(selector: [data-testid=create-btn]) — click Create button",
