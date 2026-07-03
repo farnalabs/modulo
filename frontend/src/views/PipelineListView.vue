@@ -90,12 +90,19 @@
             </span>
           </div>
 
-          <div class="mt-4 pt-3 border-t border-border">
+          <div class="mt-4 pt-3 border-t border-border flex gap-2">
             <button
-              class="w-full px-3 py-2 bg-primary text-primary-foreground text-sm font-medium rounded-lg border border-primary/30 hover:border-primary/60 hover:brightness-110 transition-all"
+              class="flex-1 px-3 py-2 bg-primary text-primary-foreground text-sm font-medium rounded-lg border border-primary/30 hover:border-primary/60 hover:brightness-110 transition-all"
               data-testid="pipeline-list-open-editor"
             >
               Open in Editor
+            </button>
+            <button
+              class="flex-1 px-3 py-2 bg-primary text-primary-foreground text-sm font-medium rounded-lg border border-primary/30 hover:border-primary/60 hover:brightness-110 transition-all"
+              @click.stop="openRunDialog(p)"
+              data-testid="pipeline-list-run"
+            >
+              Run
             </button>
           </div>
         </div>
@@ -123,6 +130,104 @@
         </button>
       </div>
     </main>
+      <!-- Run dialog modal -->
+      <div
+        v-if="showRunDialog"
+        class="fixed inset-0 z-50 flex items-center justify-center bg-black/50"
+        @click.self="closeRunDialog"
+      >
+        <div class="bg-card border border-border rounded-xl shadow-xl w-full max-w-lg mx-4 p-6 space-y-4">
+          <div class="flex items-center justify-between">
+            <h2 class="text-lg font-semibold text-foreground">Run Pipeline</h2>
+            <button
+              class="text-muted-foreground hover:text-foreground transition-colors"
+              @click="closeRunDialog"
+              data-testid="pipeline-list-run-dialog-close"
+            >
+              <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+            </button>
+          </div>
+
+          <p class="text-sm text-muted-foreground">
+            Run <span class="font-medium text-foreground">{{ selectedPipeline?.name }}</span>
+          </p>
+
+          <div class="space-y-2">
+            <label class="block text-sm font-medium text-foreground">Prompt</label>
+            <textarea
+              v-model="prompt"
+              placeholder="Enter your prompt..."
+              rows="4"
+              class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm resize-none focus:outline-none focus:ring-2 focus:ring-primary"
+              data-testid="pipeline-list-run-prompt"
+            />
+          </div>
+
+          <div>
+            <button
+              class="text-sm text-muted-foreground hover:text-foreground transition-colors flex items-center gap-1"
+              @click="showAdvanced = !showAdvanced"
+              data-testid="pipeline-list-run-advanced-toggle"
+            >
+              <svg
+                xmlns="http://www.w3.org/2000/svg"
+                width="14"
+                height="14"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="2"
+                :class="{ 'rotate-180': showAdvanced }"
+                class="transition-transform"
+              ><polyline points="6 9 12 15 18 9"/></svg>
+              Advanced
+            </button>
+          </div>
+
+          <div v-if="showAdvanced" class="space-y-2">
+            <label class="block text-sm font-medium text-foreground">Input Payload (JSON)</label>
+            <textarea
+              v-model="advancedPayload"
+              placeholder='{"prompt": "...", "temperature": 0.7}'
+              rows="4"
+              class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm font-mono resize-none focus:outline-none focus:ring-2 focus:ring-primary"
+              data-testid="pipeline-list-run-advanced-payload"
+            />
+          </div>
+
+          <div v-if="runError" class="rounded-lg bg-destructive/10 border border-destructive/30 p-3 text-sm text-destructive" data-testid="pipeline-list-run-error">
+            {{ runError }}
+          </div>
+
+          <div class="flex justify-end gap-2 pt-2">
+            <button
+              class="px-4 py-2 border border-input bg-background text-foreground text-sm font-medium rounded-lg hover:bg-accent transition-colors"
+              @click="closeRunDialog"
+              data-testid="pipeline-list-run-cancel"
+            >
+              Cancel
+            </button>
+            <button
+              :disabled="running || !prompt.trim()"
+              class="px-4 py-2 bg-primary text-primary-foreground text-sm font-medium rounded-lg border border-primary/30 hover:brightness-110 transition-all disabled:opacity-50 flex items-center gap-2"
+              @click="triggerRun"
+              data-testid="pipeline-list-run-submit"
+            >
+              <svg
+                v-if="running"
+                class="animate-spin h-4 w-4"
+                xmlns="http://www.w3.org/2000/svg"
+                fill="none"
+                viewBox="0 0 24 24"
+              >
+                <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4" />
+                <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+              </svg>
+              {{ running ? 'Running...' : 'Run Pipeline' }}
+            </button>
+          </div>
+        </div>
+      </div>
   </div>
 </template>
 
@@ -150,9 +255,16 @@ interface PipelineListResponse {
 }
 
 const router = useRouter()
-const { get } = useApi()
+const { get, post } = useApi()
 
 const allPipelines = ref<PipelineItem[]>([])
+const showRunDialog = ref(false)
+const selectedPipeline = ref<PipelineItem | null>(null)
+const prompt = ref('')
+const showAdvanced = ref(false)
+const advancedPayload = ref('')
+const running = ref(false)
+const runError = ref<string | null>(null)
 const loading = ref(true)
 const error = ref<string | null>(null)
 const search = ref('')
@@ -204,6 +316,52 @@ function formatDate(dateStr: string): string {
 
 function openPipeline(p: PipelineItem) {
   router.push({ name: 'pipeline-editor', params: { id: p.id } })
+}
+
+function openRunDialog(p: PipelineItem) {
+  selectedPipeline.value = p
+  prompt.value = ''
+  showAdvanced.value = false
+  advancedPayload.value = ''
+  runError.value = null
+  showRunDialog.value = true
+}
+
+function closeRunDialog() {
+  showRunDialog.value = false
+  selectedPipeline.value = null
+  prompt.value = ''
+  runError.value = null
+}
+
+async function triggerRun() {
+  if (!selectedPipeline.value || !prompt.value.trim()) return
+  running.value = true
+  runError.value = null
+  try {
+    let inputPayload: Record<string, unknown>
+    if (showAdvanced.value && advancedPayload.value.trim()) {
+      try {
+        inputPayload = JSON.parse(advancedPayload.value)
+      } catch {
+        runError.value = 'Invalid JSON in advanced payload'
+        running.value = false
+        return
+      }
+    } else {
+      inputPayload = { prompt: prompt.value }
+    }
+    const result = await post<{ id: string }>('/api/v1/runs', {
+      pipeline_id: selectedPipeline.value.id,
+      input_payload: inputPayload,
+    })
+    showRunDialog.value = false
+    router.push({ name: 'run-detail', params: { id: result.id } })
+  } catch (e) {
+    runError.value = e instanceof Error ? e.message : 'Failed to start run'
+  } finally {
+    running.value = false
+  }
 }
 
 onMounted(loadPipelines)

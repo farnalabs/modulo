@@ -98,6 +98,22 @@
         </div>
       </div>
 
+      <!-- Run a Pipeline shortcut -->
+      <router-link
+        to="/pipelines"
+        class="card p-4 flex items-center gap-3 hover:brightness-110 transition-all cursor-pointer"
+        data-testid="dashboard-run-pipeline"
+      >
+        <div class="flex h-9 w-9 items-center justify-center rounded-lg bg-primary/10 text-primary">
+          <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="5 3 19 12 5 21 5 3"/></svg>
+        </div>
+        <div>
+          <p class="text-sm font-medium text-foreground">Run a Pipeline</p>
+          <p class="text-xs text-muted-foreground">Select a pipeline and run it with a prompt</p>
+        </div>
+        <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="ml-auto text-muted-foreground"><polyline points="9 18 15 12 9 6"/></svg>
+      </router-link>
+
       <!-- Team breakdown (Team only) -->
       <div v-if="isTeam && summary.teams && summary.teams.length > 0" class="card p-4">
         <div class="flex items-center justify-between mb-4">
