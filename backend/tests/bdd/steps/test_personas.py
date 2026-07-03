@@ -1,7 +1,4 @@
 """Step definitions for persona feature files (Priya Platform Engineer, Marcus CISO).
-
-Covers only @covered scenarios ÔÇö @awaiting-implementation scenarios are
-intentionally left without step definitions.
 """
 
 import hashlib
