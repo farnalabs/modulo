@@ -13,7 +13,7 @@ code:
   - backend/src/modulo/db/crud/pipeline.py
   - frontend/src/views/PipelineEditorView.vue
 depends-on: [feat-core-pipeline-execution]
-unit-tests: []
+unit-tests: [backend/tests/unit/test_pipeline_node_conversion.py]
 status: partial
 ---
 
@@ -93,6 +93,9 @@ Replacing a manual placeholder node with an AI agent node (and reverting from ag
 - [x] Manual node raises ValueError when required schema fields are missing in human output
 - [x] Concurrent graph replacement uses row-level locking (SELECT FOR UPDATE)
 - [x] convert-to-agent catches ProgrammingError and returns 501 Not Implemented
+- [ ] convert-to-agent _save_graph returns None → 404 (race condition pipeline deleted between get and save)
+- [x] revert-to-manual catches ProgrammingError and returns 501 Not Implemented
+- [ ] revert-to-manual _save_graph returns None → 404 (race condition pipeline deleted between get and save)
 - [x] convert-to-agent dispatches pipeline.node.convert_to_agent audit event
 
 ### Alice Persona Scenarios
@@ -108,6 +111,7 @@ Replacing a manual placeholder node with an AI agent node (and reverting from ag
 ### QA History
 
 - 2026-07-01: Added ProgrammingError catch to convert-to-agent (501 Not Implemented), added audit event dispatch (pipeline.node.convert_to_agent), fixed append_audit_event parameter names in both convert and revert endpoints (org_id/actor_user_id/payload_json). Created BDD step definitions for @goal-alice-replace-step (convert-to-agent) and all 4 node_types.feature scenarios. Created 17 unit tests covering all convert-to-agent and revert-to-manual error paths (pipeline not found, node not found, wrong type, agent/connector/model backend/snapshot not found, connector mismatch, snapshot constraints, ProgrammingError). 17/17 unit tests pass.
+- 2026-07-03: Cross-cutting QA (index 93). Fixed frontmatter unit-tests ref (was empty, now points to test_pipeline_node_conversion.py). Added missing error state checkboxes: revert-to-manual ProgrammingError → 501, both endpoints _save_graph returns None → 404 (race condition). Confirmed 17 unit tests exist on disk. All 3 known gaps remain open.
 
 ## Known Gaps
 - Agent picker does not implement the PRD-specified library/org tab split or schema compatibility warning badge
