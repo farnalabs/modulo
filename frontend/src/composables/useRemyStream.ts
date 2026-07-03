@@ -1,6 +1,7 @@
 import { ref, onUnmounted } from 'vue'
 import { useRemyStore } from './useRemyStore'
 import { getAccessToken } from '@/lib/api/client'
+import { executeCommandBatch } from './useUiCommandExecutor'
 
 const MAX_BUFFER_SIZE = 1024 * 1024
 
@@ -107,11 +108,39 @@ export function useRemyStream() {
                 store.appendToken(parsed.token)
               } else if (currentEvent === 'error') {
                 store.error = parsed.detail ?? parsed.message ?? 'Stream error'
-                store.isStreaming = false
+                streaming = false
               } else if (currentEvent === 'done') {
-                store.isStreaming = false
+                streaming = false
               } else if (currentEvent === 'tool_call') {
                 store.appendToolCall(parsed as ToolCallEvent)
+              } else if (currentEvent === 'permission_request') {
+                store.setPendingPermission(parsed)
+              } else if (currentEvent === 'ui_command_batch') {
+                const commands = parsed.commands ?? parsed
+                store.isExecutingUi = true
+                const results = await executeCommandBatch(commands)
+                store.isExecutingUi = false
+                try {
+                  await fetch(`/api/v1/remy/sessions/${sessionId}/ui-command-results`, {
+                    method: 'POST',
+                    headers: {
+                      'Content-Type': 'application/json',
+                      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+                    },
+                    body: JSON.stringify({ results }),
+                  })
+                } catch {
+                  store.error = 'Failed to submit UI command results'
+                  streaming = false
+                }
+                store.isStreaming = true
+              } else if (currentEvent === 'turn_separator') {
+                store.appendTurnSeparator(parsed.label ?? '---')
+              } else if (currentEvent === 'abort_summary') {
+                store.appendSystemMessage(parsed.summary ?? 'Action cancelled by user.')
+                streaming = false
+              } else if (currentEvent === 'ping') {
+                // Keepalive — ignore
               }
             } catch {
               if (currentEvent === 'token' && data.trim()) {

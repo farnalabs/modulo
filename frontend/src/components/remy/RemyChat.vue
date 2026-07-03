@@ -7,63 +7,75 @@
       <div
         v-for="msg in store.messages"
         :key="msg.id"
-        class="remy-msg"
-        :class="msg.role"
       >
-        <div class="remy-msg-avatar">
-          <div v-if="msg.role === 'user'" class="avatar-user">
-            {{ userInitial }}
-          </div>
-          <div v-else class="avatar-assistant">
-            <svg
-              xmlns="http://www.w3.org/2000/svg"
-              width="14"
-              height="14"
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="currentColor"
-              stroke-width="2"
-            >
-              <path
-                d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2z"
-              />
-              <path d="M8 14s1.5 2 4 2 4-2 4-2" />
-              <line x1="9" y1="9" x2="9.01" y2="9" />
-              <line x1="15" y1="9" x2="15.01" y2="9" />
-            </svg>
-          </div>
+        <div
+          v-if="msg.role === 'summary'"
+          class="remy-turn-separator"
+        >
+          <div class="remy-turn-line" />
+          <span class="remy-turn-label">{{ msg.content }}</span>
+          <div class="remy-turn-line" />
         </div>
-        <div class="remy-msg-content">
-          <div
-            v-if="msg.role === 'assistant'"
-            class="remy-markdown"
-            v-html="renderMarkdown(msg.content ?? '')"
-          />
-          <div v-else class="remy-plaintext">{{ msg.content }}</div>
-          <div
-            v-if="msg.role === 'assistant' && msg.content"
-            class="remy-msg-actions"
-          >
-            <button
-              class="remy-copy-btn"
-              @click="copyMessage(msg.content ?? '')"
-              title="Copy"
-            >
+        <div
+          v-else
+          class="remy-msg"
+          :class="msg.role"
+        >
+          <div class="remy-msg-avatar">
+            <div v-if="msg.role === 'user'" class="avatar-user">
+              {{ userInitial }}
+            </div>
+            <div v-else class="avatar-assistant">
               <svg
                 xmlns="http://www.w3.org/2000/svg"
-                width="12"
-                height="12"
+                width="14"
+                height="14"
                 viewBox="0 0 24 24"
                 fill="none"
                 stroke="currentColor"
                 stroke-width="2"
               >
-                <rect x="9" y="9" width="13" height="13" rx="2" />
                 <path
-                  d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"
+                  d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2z"
                 />
+                <path d="M8 14s1.5 2 4 2 4-2 4-2" />
+                <line x1="9" y1="9" x2="9.01" y2="9" />
+                <line x1="15" y1="9" x2="15.01" y2="9" />
               </svg>
-            </button>
+            </div>
+          </div>
+          <div class="remy-msg-content">
+            <div
+              v-if="msg.role === 'assistant'"
+              class="remy-markdown"
+              v-html="renderMarkdown(msg.content ?? '')"
+            />
+            <div v-else class="remy-plaintext">{{ msg.content }}</div>
+            <div
+              v-if="msg.role === 'assistant' && msg.content"
+              class="remy-msg-actions"
+            >
+              <button
+                class="remy-copy-btn"
+                @click="copyMessage(msg.content ?? '')"
+                title="Copy"
+              >
+                <svg
+                  xmlns="http://www.w3.org/2000/svg"
+                  width="12"
+                  height="12"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="2"
+                >
+                  <rect x="9" y="9" width="13" height="13" rx="2" />
+                  <path
+                    d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"
+                  />
+                </svg>
+              </button>
+            </div>
           </div>
         </div>
       </div>
@@ -96,6 +108,34 @@
           </div>
         </div>
       </div>
+
+      <div v-if="store.pendingPermission" class="remy-permission-card">
+        <div class="remy-permission-header">
+          <ShieldAlertIcon class="h-4 w-4" />
+          <span>Remy wants to perform actions on your behalf</span>
+        </div>
+        <div class="remy-permission-tools">
+          <div
+            v-for="tool in store.pendingPermission.tools"
+            :key="tool.name"
+            class="remy-permission-tool"
+          >
+            <span class="font-mono text-xs">{{ tool.name }}</span>
+            <span class="text-xs text-muted-foreground">{{ describeArgs(tool) }}</span>
+          </div>
+        </div>
+        <div class="remy-permission-actions">
+          <Button variant="outline" size="sm" @click="store.approvePermission(store.pendingPermission.request_id, 'reject')">Deny</Button>
+          <Button variant="secondary" size="sm" @click="store.approvePermission(store.pendingPermission.request_id, 'approve')">Allow Once</Button>
+          <Button size="sm" @click="store.approvePermission(store.pendingPermission.request_id, 'approve_for_session')">Allow for Session</Button>
+        </div>
+      </div>
+
+      <div v-if="store.isExecutingUi" class="remy-executing-indicator">
+        <LoaderIcon class="h-3 w-3 animate-spin" />
+        <span>Remy is performing actions in the browser...</span>
+        <Button variant="destructive" size="sm" @click="abortUiCommands">Stop</Button>
+      </div>
     </div>
 
     <div class="remy-input-area border-t p-3">
@@ -105,10 +145,10 @@
           class="remy-input flex-1"
           :placeholder="$t('components.remy.RemyChat.ask_remy')"
           @keydown.enter.prevent="handleSend"
-          :disabled="store.isStreaming"
+          :disabled="store.isStreaming || store.isExecutingUi"
         />
         <Button
-          :disabled="!inputText.trim() || store.isStreaming"
+          :disabled="!inputText.trim() || store.isStreaming || store.isExecutingUi"
           @click="handleSend"
         >
           <svg
@@ -133,8 +173,10 @@
 import { ref, watch, nextTick, computed } from "vue";
 import { useRemyStore } from "@/composables/useRemyStore";
 import { useRemyStream } from "@/composables/useRemyStream";
+import { abortUiCommands } from "@/composables/useUiCommandExecutor";
 import Button from "@/components/ui/button/Button.vue";
 import { getAccessToken } from "@/lib/api/client";
+import { ShieldAlertIcon, LoaderIcon } from "@lucide/vue";
 
 const store = useRemyStore();
 const { connectStream } = useRemyStream();
@@ -158,6 +200,40 @@ const userInitial = computed(() => {
   return email.charAt(0).toUpperCase();
 });
 
+function friendlySelector(sel: string): string {
+  const m = sel.match(/\[data-testid="([^"]+)"\]/)
+  return m ? m[1].replace(/-/g, ' ') : sel
+}
+
+function describeArgs(tool: { name: string; args: Record<string, unknown> }): string {
+  switch (tool.name) {
+    case 'navigate':
+      return `Navigate to ${tool.args.path}`
+    case 'click':
+      return `Click '${friendlySelector(tool.args.selector as string)}'`
+    case 'fill':
+      return `Type into ${friendlySelector(tool.args.selector as string)}: '${tool.args.value}'`
+    case 'select':
+      return `Select '${tool.args.value}' from ${friendlySelector(tool.args.selector as string)}`
+    case 'extract':
+      return `Read text from ${friendlySelector(tool.args.selector as string)}`
+    case 'extract_all':
+      return `Read text from all '${tool.args.selector}' elements`
+    case 'get_page_interactables':
+      return 'Discover all clickable elements on the page'
+    case 'wait':
+      return tool.args.selector ? `Wait for '${tool.args.selector}' to appear` : `Wait ${tool.args.ms ?? ''}ms`
+    case 'go_back':
+      return 'Go back to previous page'
+    case 'get_url':
+      return 'Get current page URL'
+    case 'press':
+      return `Press '${tool.args.key}' key`
+    default:
+      return ''
+  }
+}
+
 function scrollToBottom() {
   nextTick(() => {
     if (scrollRef.value) {
@@ -166,7 +242,7 @@ function scrollToBottom() {
   });
 }
 
-watch(() => [store.messages.length, store.isStreaming], scrollToBottom);
+watch(() => [store.messages.length, store.isStreaming, store.isExecutingUi], scrollToBottom);
 
 async function handleSend() {
   const text = inputText.value.trim();
@@ -323,5 +399,40 @@ function renderMarkdown(text: string): string {
 }
 .remy-input:disabled {
   opacity: 0.5;
+}
+.remy-turn-separator {
+  @apply flex items-center gap-3 px-2 py-2;
+}
+.remy-turn-line {
+  @apply flex-1 h-px;
+  background-color: hsl(var(--border));
+}
+.remy-turn-label {
+  @apply text-xs font-medium shrink-0;
+  color: hsl(var(--muted-foreground));
+}
+.remy-permission-card {
+  @apply rounded-lg border p-3 space-y-3 text-sm;
+  background-color: hsl(var(--card));
+  border-color: hsl(var(--border));
+}
+.remy-permission-header {
+  @apply flex items-center gap-2 font-medium;
+  color: hsl(var(--warning));
+}
+.remy-permission-tools {
+  @apply space-y-1;
+}
+.remy-permission-tool {
+  @apply flex items-center gap-2 rounded-md px-2 py-1;
+  background-color: hsl(var(--muted));
+}
+.remy-permission-actions {
+  @apply flex items-center gap-2;
+}
+.remy-executing-indicator {
+  @apply flex items-center gap-2 rounded-lg border px-3 py-2 text-sm;
+  background-color: hsl(var(--muted));
+  border-color: hsl(var(--border));
 }
 </style>

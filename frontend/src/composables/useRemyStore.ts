@@ -1,7 +1,12 @@
 import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
-import { api } from '@/lib/api/client'
+import { api, getAccessToken } from '@/lib/api/client'
 import type { ChatSession, ChatMessage, PageContext } from '@/types/remy'
+
+export interface PermissionRequest {
+  request_id: string
+  tools: Array<{ name: string; args: Record<string, unknown> }>
+}
 
 const POSITION_KEY = 'remy_panel_position'
 const SIZE_KEY = 'remy_panel_size'
@@ -34,6 +39,8 @@ export const useRemyStore = defineStore('remy', () => {
   const loading = ref(false)
   const error = ref<string | null>(null)
   const sessionsLoading = ref(false)
+  const pendingPermission = ref<PermissionRequest | null>(null)
+  const isExecutingUi = ref(false)
 
   const activeSession = computed(() =>
     sessions.value.find(s => s.id === activeSessionId.value) ?? null,
@@ -168,6 +175,68 @@ export const useRemyStore = defineStore('remy', () => {
     }
   }
 
+  function setPendingPermission(req: PermissionRequest | null) {
+    pendingPermission.value = req
+  }
+
+  async function approvePermission(requestId: string, action: 'approve' | 'reject' | 'approve_for_session') {
+    const token = getAccessToken()
+    try {
+      await fetch(`/api/v1/remy/sessions/${activeSessionId.value}/permission-response`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        },
+        body: JSON.stringify({ request_id: requestId, action }),
+      })
+    } catch {
+      // Best effort — the stream will surface errors
+    }
+    pendingPermission.value = null
+  }
+
+  async function resetSessionPermissions() {
+    if (!activeSessionId.value) return
+    const token = getAccessToken()
+    try {
+      await fetch(`/api/v1/remy/sessions/${activeSessionId.value}/reset-permissions`, {
+        method: 'POST',
+        headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+      })
+    } catch {
+      // Best effort
+    }
+  }
+
+  function appendSystemMessage(content: string) {
+    messages.value.push({
+      id: `sys-${Date.now()}`,
+      session_id: activeSessionId.value ?? '',
+      role: 'summary',
+      content,
+      tool_calls_json: null,
+      tool_results_json: null,
+      token_count: null,
+      parent_id: null,
+      created_at: new Date().toISOString(),
+    })
+  }
+
+  function appendTurnSeparator(label: string) {
+    messages.value.push({
+      id: `sep-${Date.now()}`,
+      session_id: activeSessionId.value ?? '',
+      role: 'summary',
+      content: label,
+      tool_calls_json: null,
+      tool_results_json: null,
+      token_count: null,
+      parent_id: null,
+      created_at: new Date().toISOString(),
+    })
+  }
+
   function appendToken(text: string) {
     const lastMsg = messages.value[messages.value.length - 1]
     if (lastMsg && lastMsg.role === 'assistant') {
@@ -216,6 +285,8 @@ export const useRemyStore = defineStore('remy', () => {
     loading,
     error,
     sessionsLoading,
+    pendingPermission,
+    isExecutingUi,
     activeSession,
     sortedSessions,
     fetchSessions,
@@ -230,6 +301,11 @@ export const useRemyStore = defineStore('remy', () => {
     appendToken,
     appendToolCall,
     removeLastUserMessage,
+    setPendingPermission,
+    approvePermission,
+    resetSessionPermissions,
+    appendSystemMessage,
+    appendTurnSeparator,
     persistPosition,
     persistSize,
   }
