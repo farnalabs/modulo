@@ -75,7 +75,9 @@ export default {
       "manage_model_backends": "Manage model backends →",
       "google_gemini": "Google Gemini",
       "save_default_model_provider_and_allowed_model_configuration": "Save default model, provider, and allowed model configuration.",
-      "configure_a_google_ai_api_key_to_enable_gemini_models_gemini": "Configure a Google AI API key to enable Gemini models (Gemini 2.5 Pro, Gemini 2.0 Flash)."
+      "configure_a_google_ai_api_key_to_enable_gemini_models_gemini": "Configure a Google AI API key to enable Gemini models (Gemini 2.5 Pro, Gemini 2.0 Flash).",
+      "custom_backends": "Custom / Self-Hosted Backends",
+      "custom_backends_description": "Advanced or self-hosted LLM providers. Configure API keys and endpoints in Model Backends."
     },
     "PipelineListView": {
       "no_pipelines_match_your_search": "No pipelines match your search",
