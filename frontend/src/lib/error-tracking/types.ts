@@ -25,7 +25,7 @@ export interface ErrorGroupResult {
 }
 
 export interface SessionKeyResponse {
-  session_key: string
+  key: string
 }
 
 export interface ErrorTrackerConfig {
