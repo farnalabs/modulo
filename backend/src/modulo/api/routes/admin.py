@@ -152,7 +152,7 @@ async def global_search(
                 rows = (
                     await session.execute(
                         text("""
-                            SELECT r.id, r.id::text AS display_id, p.name AS pipeline_name,
+                            SELECT r.id, r.run_number, r.id::text AS display_id, p.name AS pipeline_name,
                                 CASE WHEN r.id::text ILIKE :prefix THEN 2
                                      WHEN p.name ILIKE :like THEN 1 ELSE 0 END AS relevance
                             FROM runs r
@@ -184,13 +184,14 @@ async def global_search(
                 ).scalar() or 0
 
                 for row in rows:
+                    display_id = f"#{row.run_number}" if row.run_number is not None else str(row.id)
                     all_items.append(
                         (
                             row.relevance,
                             SearchResultItem(
                                 type="run",
                                 id=str(row.id),
-                                title=row.display_id,
+                                title=display_id,
                                 subtitle=row.pipeline_name,
                                 url=f"/runs/{row.id}",
                             ),

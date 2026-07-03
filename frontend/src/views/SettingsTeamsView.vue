@@ -316,6 +316,8 @@ import ErrorAlert from '../components/shared/ErrorAlert.vue'
 import TeamNotificationEndpoints from '../components/TeamNotificationEndpoints.vue'
 import { usePlanStore } from '../stores/planStore'
 import FeatureGate from '../components/FeatureGate.vue'
+import LockIcon from '../components/LockIcon.vue'
+import { shortId } from '../utils/format'
 
 const planStore = usePlanStore()
 
@@ -358,7 +360,7 @@ const addingMember = ref(false)
 const userMap = ref<Record<string, AdminUserListItem>>({})
 
 function userDisplayName(userId: string): string {
-  return userMap.value[userId]?.display_name ?? userId.slice(0, 8)
+  return userMap.value[userId]?.display_name ?? shortId(userId)
 }
 
 function userEmail(userId: string): string {

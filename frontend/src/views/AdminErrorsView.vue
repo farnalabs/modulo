@@ -143,7 +143,7 @@
                 </span>
               </td>
               <td class="px-4 py-3 text-xs text-muted-foreground">
-                {{ group.assigned_to ? group.assigned_to.slice(0, 8) + '...' : '—' }}
+                {{ group.assigned_to ? shortId(group.assigned_to) : '—' }}
               </td>
             </tr>
           </tbody>
@@ -185,6 +185,7 @@ import { fetchErrorGroups, type ErrorGroupSummary, type FetchErrorGroupsParams }
 import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
 import PageTabs from "../components/PageTabs.vue"
+import { shortId } from '../utils/format'
 import {
   Tooltip,
   TooltipTrigger,

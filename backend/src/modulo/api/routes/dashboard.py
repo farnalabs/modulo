@@ -341,6 +341,7 @@ async def dashboard_summary(
             recent_runs_query = (
                 select(
                     Run.id,
+                    Run.run_number,
                     Pipeline.name.label("pipeline_name"),
                     Run.status,
                     Run.created_at,
@@ -355,6 +356,7 @@ async def dashboard_summary(
             recent_runs = [
                 {
                     "id": str(row.id),
+                    "run_number": row.run_number,
                     "pipeline_name": row.pipeline_name,
                     "status": row.status,
                     "created_at": row.created_at.isoformat(),
