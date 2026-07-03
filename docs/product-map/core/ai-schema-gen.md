@@ -76,9 +76,24 @@ Schema Inference (8.16) samples records from a connected tool and uses an LLM to
 - [ ] Sandboxed LLM prompt (`SandboxedEnvironment`) for untrusted record data
 - [ ] Sampled data not stored after inference completes (data lifecycle statement)
 - [ ] SDLC onboarding path: connect, infer, review, publish, browse library, wire agents #### BDD coverage
-- [ ] Gherkin scenarios in `schema_inference.feature` — file is a TODO placeholder, no scenarios
+- [x] Gherkin scenarios in `schema_inference.feature` — 6 scenarios covering infer, 404, 400, validation, migration plan, and unsupported connector types #### Error Handling — DB ProgrammingError → 501
+- [x] `list_schemas_endpoint` (line 142) — caught, returns 501
+- [x] `create_schema_endpoint` (line 173) — caught, returns 501
+- [x] `get_schema_endpoint` (line 192) — caught, returns 501
+- [x] `update_schema_endpoint` (line 215) — caught, returns 501
+- [x] `deprecate_schema_endpoint` (line 237) — caught, returns 501
+- [x] `delete_schema_endpoint` (line 265) — caught, returns 501
+- [x] `list_schema_versions_endpoint` (line 295) — caught, returns 501
+- [x] `create_version_endpoint` (line 336) — caught, returns 501
+- [x] `get_schema_version_endpoint` (line 356) — caught, returns 501
+- [x] `list_schema_fields_endpoint` (line 385 → now fixed) — caught, returns 501
+- [ ] `POST /api/v1/schemas/validate` — no DB access, no catch needed
+- [ ] `POST /api/v1/schemas/import` — no DB access yet, no catch needed
+- [ ] `POST /api/v1/schemas/migrate/plan` — no DB access, no catch needed
+- [x] `POST /api/v1/schemas/infer` (line 494) — caught, returns 501
+- [x] `POST /api/v1/schemas/generate` (line 597) — caught, returns 501
 
-## Known Gaps - **BDD placeholder:** `backend/tests/bdd/features/connectors/schema_inference.feature` has zero scenarios
+## Known Gaps
 - **Sample cap mismatch:** Code hardcodes 50 max samples; PRD specifies default 200
 - **No enum/rare-field logic:** Inference prompt doesn't instruct for enum detection or rare-field flagging (8.16)
 - **No `abstract_name` inference:** Required for community library compatibility browsing (8.16 step 4)
