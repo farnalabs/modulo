@@ -187,17 +187,16 @@ class McpAuthMiddleware(BaseHTTPMiddleware):
                 from sqlalchemy import select
 
                 from modulo.db.models.api_key import OrgApiKey
-                from modulo.settings import get_settings
-                settings = get_settings()
 
                 factory = _get_session_factory()
                 async with factory() as s:
-                    result = await s.execute(
-                        select(OrgApiKey).where(
-                            OrgApiKey.lookup_prefix == prefix,
-                            OrgApiKey.revoked_at.is_(None),
+                    async with s.begin():
+                        result = await s.execute(
+                            select(OrgApiKey).where(
+                                OrgApiKey.lookup_prefix == prefix,
+                                OrgApiKey.revoked_at.is_(None),
+                            )
                         )
-                    )
                     key_record = result.scalar_one_or_none()
                     if key_record is None:
                         raise ApiKeyInvalidError()
