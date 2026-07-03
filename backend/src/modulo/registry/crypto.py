@@ -20,10 +20,10 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import (
 
 __all__ = [
     "generate_keypair",
-    "sign",
-    "verify",
     "get_trust_anchor_public_key_pem",
+    "sign",
     "sign_with_trust_anchor",
+    "verify",
     "verify_trust_anchor",
 ]
 
@@ -92,7 +92,6 @@ def verify(public_key_pem: str, data: bytes, signature: str) -> bool:
     except (InvalidSignature, TypeError, ValueError, binascii.Error):
         return False
 
-
 # ---------------------------------------------------------------------------
 # Trust anchor — root of trust for the registry
 # ---------------------------------------------------------------------------
@@ -155,5 +154,5 @@ def verify_trust_anchor(
         sig_bytes = base64.b64decode(signature)
         anchor_pub.verify(sig_bytes, public_key_pem.encode())
         return True
-    except (InvalidSignature, TypeError, ValueError):
+    except (InvalidSignature, TypeError, ValueError, binascii.Error):
         return False
