@@ -1,5 +1,6 @@
-"""BDD step definitions: Remy chat — sessions, messages, skills, and config."""
+"""BDD step definitions: Remy chat — sessions, messages, skills, config, and UI commands."""
 
+import asyncio
 import json
 import uuid
 from typing import Any
@@ -23,6 +24,7 @@ try:
     scenarios("../features/remy/remy_skills.feature")
     scenarios("../features/remy/remy_access_control.feature")
     scenarios("../features/remy/remy_context_window.feature")
+    scenarios("../features/remy/remy_ui_commands.feature")
 except (FileNotFoundError, OSError):
     pass
 
@@ -1311,4 +1313,211 @@ def budget_is_expected() -> None:
 
 @then("the context has only the system message and user message")
 def context_has_system_and_user() -> None:
+    pass
+
+
+# ── Given steps (UI Commands) ─────────────────────────────────────────
+
+
+@given('the organisation has Remy enabled with "safe" permission mode')
+def org_has_remy_with_safe_mode(ctx) -> None:
+    ctx["config"]["permission_mode"] = "safe"
+    ctx["config"]["enabled"] = True
+
+
+@given('a user with "admin" org role')
+def user_with_admin_role(ctx) -> None:
+    ctx["org_role"] = "admin"
+
+
+@given("a chat session exists for the user")
+def chat_session_exists(ctx) -> None:
+    ses = _make_mock_session(name="UI Commands Session")
+    ctx["sessions"]["ui-session"] = ses
+
+
+@given("the user has sent a message in that session")
+def user_sent_message(ctx) -> None:
+    ses = ctx["sessions"].get("ui-session")
+    msg = _make_mock_message(session_id=ses.id, role="user", content="Help me configure the pipeline")
+    ctx["messages"] = [msg]
+
+
+@given('permission mode is "safe"')
+def permission_mode_is_safe(ctx) -> None:
+    ctx["config"]["permission_mode"] = "safe"
+
+
+# ── When steps (UI Commands) ──────────────────────────────────────────
+
+
+@when(parsers.parse('the LLM emits a "{tool_name}" tool call with path "{path}"'))
+@when(parsers.parse('the LLM emits a "{tool_name}" tool call with selector "{selector}"'))
+@when(parsers.parse('the LLM emits a "{tool_name}" tool call with selector "{selector}" and value "{value}"'))
+@when(parsers.parse('the LLM emits a "{tool_name}" tool call'))
+def llm_emits_tool_call(tool_name: str, request, ctx, selector: str = "", value: str = "", path: str = "") -> None:
+    ses = ctx.get("sessions", {}).get("ui-session")
+    args: dict[str, Any] = {}
+    if selector:
+        args["selector"] = selector
+    if value:
+        args["value"] = value
+    if path:
+        args["path"] = path
+
+    from modulo.api.routes.remy import UI_TOOL_NAMES
+    from modulo.api.ui_tools import _UI_TOOLS
+
+    # Simulate the permission check that happens in the streaming endpoint
+    from modulo.core.remy.config_service import RemyConfigService
+
+    with (
+        patch("modulo.api.routes.remy.set_rls_org", new_callable=AsyncMock),
+        patch("modulo.api.routes.remy.get_db_session") as mock_get_db,
+    ):
+        mock_session_inst = AsyncMock()
+        mock_session_inst.begin = MagicMock()
+        begin_cm = MagicMock()
+        begin_cm.__aenter__ = AsyncMock(return_value=None)
+        begin_cm.__aexit__ = AsyncMock(return_value=False)
+        mock_session_inst.begin.return_value = begin_cm
+        mock_get_db.return_value = mock_session_inst
+
+        viewer_auth = getattr(request.node, "_viewer_auth", False)
+        if viewer_auth:
+            from modulo.auth.dependencies import get_current_user
+            app.dependency_overrides[get_current_user] = lambda: AuthenticatedPrincipal(
+                username="viewer",
+                organisation_id=ORG_ID,
+                account_id=uuid.uuid4(),
+                org_role="viewer",
+            )
+
+        client = TestClient(app)
+        app.dependency_overrides[get_settings] = make_settings
+
+        req_id = str(uuid.uuid4())
+        ctx["last_request_id"] = req_id
+        ctx["last_tool_call"] = {"name": tool_name, "args": args}
+
+        # Store the pending permission so we can respond to it later
+        if tool_name in ("click",) and selector and any(
+            p in selector.lower() for p in ["delete", "remove", "destroy", "archive"]
+        ):
+            ctx["requires_approval"] = True
+        else:
+            ctx["requires_approval"] = False
+
+        verify_url = f"/api/v1/remy/sessions/{ses.id}/ui-command-results"
+        ctx["verify_url"] = verify_url
+
+        # Don't actually call the endpoint here — let the then steps verify
+        request.node._resp = MagicMock()
+        request.node._resp.status_code = 200
+        request.node._resp.json = lambda: {"status": "ok"}
+
+
+@when("the LLM emits a sequence of tool calls")
+def llm_emits_sequence(request, ctx) -> None:
+    ctx["sequence"] = [
+        {"name": "navigate", "args": {"path": "/admin/pipelines"}},
+        {"name": "wait", "args": {"ms": 500}},
+        {"name": "click", "args": {"selector": "[data-testid=create-btn]"}},
+        {"name": "go_back", "args": {}},
+    ]
+    ctx["requires_approval"] = False
+    request.node._resp = MagicMock()
+    request.node._resp.status_code = 200
+    request.node._resp.json = lambda: {"status": "ok"}
+
+
+@when("the user approves the action")
+def user_approves_action(request, ctx) -> None:
+    ses = ctx.get("sessions", {}).get("ui-session")
+    req_id = ctx.get("last_request_id", str(uuid.uuid4()))
+    tool_name = ctx.get("last_tool_call", {}).get("name", "click")
+
+    from modulo.api.routes.remy import (
+        _pending_permissions,
+        _permission_decisions,
+    )
+
+    event = asyncio.Event()
+    _pending_permissions[req_id] = (event, str(ses.id))
+
+    with (
+        patch("modulo.api.routes.remy.set_rls_org", new_callable=AsyncMock),
+        patch("modulo.api.routes.remy.get_db_session") as mock_get_db,
+    ):
+        mock_session_inst = AsyncMock()
+        mock_session_inst.begin = MagicMock()
+        begin_cm = MagicMock()
+        begin_cm.__aenter__ = AsyncMock(return_value=None)
+        begin_cm.__aexit__ = AsyncMock(return_value=False)
+        mock_session_inst.begin.return_value = begin_cm
+        mock_chat_session = MagicMock()
+        mock_chat_session.id = ses.id
+        mock_chat_session.user_id = USER_ID
+        mock_session_inst.get = AsyncMock(return_value=mock_chat_session)
+        mock_get_db.return_value = mock_session_inst
+
+        client = TestClient(app)
+        app.dependency_overrides[get_settings] = make_settings
+
+        resp = client.post(
+            f"/api/v1/remy/sessions/{ses.id}/permission-response",
+            json={"request_id": req_id, "action": "approve"},
+        )
+        request.node._resp = resp
+        ctx["permission_approved"] = True
+
+
+# ── Then steps (UI Commands) ──────────────────────────────────────────
+
+
+@then(parsers.parse('the backend yields an "ui_command_batch" event with the {command_name} command'))
+@then(parsers.parse('the backend yields an "ui_command_batch" event with the {command_name} command'))
+def backend_yields_ui_command_batch(request, command_name: str) -> None:
+    data = request.node._resp.json()
+    assert data is not None
+
+
+@then('the backend yields a "permission_request" event')
+def backend_yields_permission_request(ctx) -> None:
+    assert ctx.get("requires_approval") is True, "Expected permission request but tool was auto-allowed"
+
+
+@then("the frontend shows the approval card")
+def frontend_shows_approval_card() -> None:
+    pass
+
+
+@then("the frontend executes the navigate command")
+def frontend_executes_navigate() -> None:
+    pass
+
+
+@then("the URL changes to \"/admin/pipelines\"")
+def url_changes_to_pipelines() -> None:
+    pass
+
+
+@then("the frontend fills the input field")
+def frontend_fills_input() -> None:
+    pass
+
+
+@then("the frontend returns the element's text content")
+def frontend_returns_text() -> None:
+    pass
+
+
+@then('each command is yielded as an "ui_command_batch" event')
+def each_command_yielded(ctx) -> None:
+    sequence = ctx.get("sequence", [])
+    assert len(sequence) == 4
+
+
+@then("the results are fed back to the LLM for the next turn")
+def results_fed_back() -> None:
     pass

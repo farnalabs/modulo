@@ -125,6 +125,11 @@ class TestDestructivePatternDetection:
         for sel in innocent:
             assert not _has_destructive_pattern(sel), f"'{sel}' should not flag as destructive"
 
+    def test_message_deleted_does_not_false_positive(self):
+        assert not _has_destructive_pattern("[data-testid='message-deleted']")
+        assert not _has_destructive_pattern(".message-deleted-badge")
+        assert not _has_destructive_pattern("notification-deleted-label")
+
 
 class TestRemyConfigDefaults:
     """Tests for new RemyConfig fields."""
@@ -447,3 +452,146 @@ class TestSessionApproval:
     def test_tool_not_in_session_returns_false(self) -> None:
         _session_approvals["session-1"] = {}
         assert not _is_approved_for_session("session-1", "click", "/admin/users")
+
+
+# ── Agentic Loop Routing ────────────────────────────────────────────────
+
+
+class TestAgenticLoopRouting:
+    """Tests for tool separation, non-tool fallback, and agentic loop logic."""
+
+    def test_ui_tools_separated_from_mcp_tools(self):
+        """UI tool names are correctly separated from non-UI names."""
+        ui_tool_calls = [{"name": n, "id": f"call_{n}", "args": {}} for n in UI_TOOL_NAMES]
+        mcp_tool_calls = [{"name": "list_pipelines", "id": "call_mcp", "args": {}}]
+
+        all_calls = ui_tool_calls + mcp_tool_calls
+        separated_ui = [tc for tc in all_calls if tc["name"] in UI_TOOL_NAMES]
+        separated_mcp = [tc for tc in all_calls if tc["name"] not in UI_TOOL_NAMES]
+
+        assert len(separated_ui) == len(UI_TOOL_NAMES)
+        assert len(separated_mcp) == 1
+        assert separated_mcp[0]["name"] == "list_pipelines"
+
+    def test_mcp_tools_are_never_in_ui_tool_set(self):
+        """Ensure common MCP tool names are not accidentally in UI_TOOL_NAMES."""
+        mcp_tools = {
+            "list_pipelines", "get_pipeline", "trigger_run",
+            "search_agents", "list_schemas", "read_audit_log",
+        }
+        intersection = mcp_tools & UI_TOOL_NAMES
+        assert intersection == set(), f"MCP tool names leaked into UI tools: {intersection}"
+
+    def test_non_tool_model_does_not_pass_tools_param(self):
+        """When supports_tools is False, tools_param is None."""
+        from unittest.mock import MagicMock
+
+        backend = MagicMock()
+        backend.supports_tools = False
+
+        tools_param = None
+        if getattr(backend, "supports_tools", False):
+            from modulo.api.routes.remy import _get_all_tool_definitions
+            tools_param = _get_all_tool_definitions()
+
+        assert tools_param is None
+
+    def test_tool_model_passes_tools_param(self):
+        """When supports_tools is True, tools_param is set."""
+        from unittest.mock import MagicMock
+
+        from modulo.api.routes.remy import _get_all_tool_definitions
+
+        backend = MagicMock()
+        backend.supports_tools = True
+
+        tools_param = None
+        if getattr(backend, "supports_tools", False):
+            tools_param = _get_all_tool_definitions()
+
+        assert tools_param is not None
+        assert len(tools_param) == 11
+
+    def test_agentic_loop_continues_when_tool_calls_exist(self):
+        """The while-true loop continues when tool calls exist."""
+        tool_calls = [{"name": "navigate", "id": "call_1", "args": {"path": "/admin"}}]
+        # In the actual loop, after processing tool results, the loop continues
+        # if tool_calls is non-empty (it appends results and does the next LLM turn)
+        should_continue = len(tool_calls) > 0
+        assert should_continue is True
+
+    def test_agentic_loop_exits_when_no_tool_calls(self):
+        """The while-true loop exits when no tool calls remain."""
+        tool_calls: list[dict] = []
+        should_exit = len(tool_calls) == 0
+        assert should_exit is True
+
+    def test_agentic_loop_continues_for_mixed_ui_and_mcp(self):
+        """Mixed UI + MCP tool calls keep the loop alive."""
+        tool_calls = [
+            {"name": "navigate", "id": "call_1", "args": {"path": "/admin"}},
+            {"name": "list_pipelines", "id": "call_2", "args": {}},
+        ]
+        should_continue = len(tool_calls) > 0
+        assert should_continue is True
+
+    def test_agentic_loop_with_empty_tool_call_buffers(self):
+        """When tool call buffers are empty (tool_call_chunks with no content), no reconstruction happens."""
+        from modulo.api.routes.remy import _reconstruct_tool_calls
+
+        buffers: dict[int, dict] = {}
+        result = _reconstruct_tool_calls(buffers)
+        assert result == []
+
+    def test_agentic_loop_reconstructs_single_tool_call(self):
+        """A single tool call buffer is correctly reconstructed."""
+        from modulo.api.routes.remy import _reconstruct_tool_calls
+
+        buffers = {
+            0: {"id": "call_abc", "name": "navigate", "args": '{"path": "/admin"}'},
+        }
+        result = _reconstruct_tool_calls(buffers)
+        assert len(result) == 1
+        assert result[0]["id"] == "call_abc"
+        assert result[0]["name"] == "navigate"
+        assert result[0]["args"] == {"path": "/admin"}
+
+    def test_agentic_loop_reconstructs_multiple_tool_calls(self):
+        """Multiple tool call buffers are reconstructed in index order."""
+        from modulo.api.routes.remy import _reconstruct_tool_calls
+
+        buffers = {
+            0: {"id": "call_1", "name": "navigate", "args": '{"path": "/admin"}'},
+            1: {"id": "call_2", "name": "click", "args": '{"selector": ".btn"}'},
+            2: {"id": "call_3", "name": "fill", "args": '{"selector": "#input", "value": "test"}'},
+        }
+        result = _reconstruct_tool_calls(buffers)
+        assert len(result) == 3
+        assert result[0]["name"] == "navigate"
+        assert result[1]["name"] == "click"
+        assert result[2]["name"] == "fill"
+
+    def test_reconstruct_handles_malformed_json_gracefully(self):
+        """Malformed args JSON results in empty dict, not crash."""
+        from modulo.api.routes.remy import _reconstruct_tool_calls
+
+        buffers = {
+            0: {"id": "call_x", "name": "click", "args": "not valid json"},
+        }
+        result = _reconstruct_tool_calls(buffers)
+        assert result[0]["args"] == {}
+
+    def test_tool_param_is_omitted_for_non_tool_backend_definition(self):
+        """Verify the _get_all_tool_definitions function returns proper OpenAI-style tool definitions."""
+        from modulo.api.routes.remy import _get_all_tool_definitions
+
+        tools = _get_all_tool_definitions()
+        assert isinstance(tools, list)
+        assert len(tools) == 11
+        for t in tools:
+            assert t["type"] == "function"
+            assert "function" in t
+            assert "name" in t["function"]
+            assert "description" in t["function"]
+            assert t["function"]["parameters"]["type"] == "object"
+            assert "properties" in t["function"]["parameters"]

@@ -292,7 +292,7 @@ async def _validate_session_ownership(
     db: AsyncSession,
 ) -> ChatSession:
     chat_session = await db.get(ChatSession, session_id)
-    if chat_session is None or str(chat_session.user_id) != principal.account_id:
+    if chat_session is None or chat_session.user_id != principal.account_id:
         raise HTTPException(status_code=404, detail="Session not found")
     return chat_session
 
