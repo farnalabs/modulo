@@ -17,35 +17,32 @@ export interface FetchErrorGroupsParams {
   offset?: number
 }
 
+function throwOnError<T>(result: { data?: T; error?: unknown }): T {
+  if (result.error) throw new Error(typeof result.error === 'string' ? result.error : JSON.stringify(result.error))
+  return result.data as T
+}
+
 export async function fetchErrorGroups(params: FetchErrorGroupsParams = {}): Promise<ErrorListResponse> {
-  const { data, error } = await api.GET('/api/v1/errors', {
+  return throwOnError(await api.GET('/api/v1/errors', {
     params: { query: params as any },
-  })
-  if (error) throw new Error(typeof error === 'string' ? error : JSON.stringify(error))
-  return data!
+  }))
 }
 
 export async function fetchErrorGroup(id: string): Promise<ErrorGroupDetail> {
-  const { data, error } = await api.GET('/api/v1/errors/{error_id}', {
+  return throwOnError(await api.GET('/api/v1/errors/{error_id}', {
     params: { path: { error_id: id } },
-  })
-  if (error) throw new Error(typeof error === 'string' ? error : JSON.stringify(error))
-  return data!
+  }))
 }
 
 export async function updateErrorGroup(id: string, body: { status?: string; assigned_to?: string }): Promise<ErrorGroupDetail> {
-  const { data, error } = await api.PATCH('/api/v1/errors/{error_id}', {
+  return throwOnError(await api.PATCH('/api/v1/errors/{error_id}', {
     params: { path: { error_id: id } },
     body: body as any,
-  })
-  if (error) throw new Error(typeof error === 'string' ? error : JSON.stringify(error))
-  return data!
+  }))
 }
 
 export async function fetchErrorGroupEvents(id: string, params: { limit?: number; offset?: number } = {}): Promise<ErrorEventListResponse> {
-  const { data, error } = await api.GET('/api/v1/errors/{error_id}/events', {
+  return throwOnError(await api.GET('/api/v1/errors/{error_id}/events', {
     params: { path: { error_id: id }, query: params as any },
-  })
-  if (error) throw new Error(typeof error === 'string' ? error : JSON.stringify(error))
-  return data!
+  }))
 }
