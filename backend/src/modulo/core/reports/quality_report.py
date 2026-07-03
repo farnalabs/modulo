@@ -10,7 +10,6 @@ import uuid
 from datetime import UTC, date, datetime, timedelta
 from typing import Any
 
-import httpx
 from sqlalchemy import case, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 

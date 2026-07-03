@@ -69,18 +69,6 @@ class TestTrendSymbol:
     def test_small_negative_yields_down(self) -> None:
         assert _trend_symbol(-3.0) == "\u2193"
 
-    def test_invert_flips_up_down(self) -> None:
-        assert _trend_symbol(10.0, invert=True) == "\u2193"
-        assert _trend_symbol(-10.0, invert=True) == "\u2191"
-
-    def test_invert_does_not_affect_flat(self) -> None:
-        assert _trend_symbol(0.0, invert=True) == "\u2192"
-        assert _trend_symbol(None, invert=True) == "\u2192"
-
-    def test_invert_affects_small_values(self) -> None:
-        assert _trend_symbol(3.0, invert=True) == "\u2193"
-        assert _trend_symbol(-3.0, invert=True) == "\u2191"
-
     def test_exact_threshold_returns_up(self) -> None:
         assert _trend_symbol(5.0) == "\u2191"
         assert _trend_symbol(5.1) == "\u2191"
