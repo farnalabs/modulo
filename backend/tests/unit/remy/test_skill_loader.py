@@ -324,6 +324,53 @@ class TestSkillLoaderBuildSystemPrompt:
             prompt = await loader.build_system_prompt(org_id, user_id)
             assert prompt == ""
 
+    async def test_with_include_ui_tools_text_false_excludes_tools(
+        self, loader: SkillLoader, mock_session: AsyncMock, org_id: uuid.UUID, user_id: uuid.UUID,
+    ) -> None:
+        with (
+            patch("modulo.core.remy.config_service.RemyConfigService") as mock_cfg_svc,
+        ):
+            mock_config = MagicMock()
+            mock_config.system_prompt = "You are helpful."
+            mock_config.additional_guidance = ""
+            mock_instance = AsyncMock()
+            mock_instance.get_config = AsyncMock(return_value=mock_config)
+            mock_cfg_svc.return_value = mock_instance
+
+            scalars_mock = MagicMock()
+            scalars_mock.all = MagicMock(return_value=[])
+            mock_result = MagicMock()
+            mock_result.scalars = MagicMock(return_value=scalars_mock)
+            mock_session.execute = AsyncMock(return_value=mock_result)
+
+            prompt = await loader.build_system_prompt(org_id, user_id, include_ui_tools_text=False)
+            assert "Browser Tools Available (Text Mode)" not in prompt
+            assert "**navigate**" not in prompt
+
+    async def test_with_include_ui_tools_text_true_includes_tools(
+        self, loader: SkillLoader, mock_session: AsyncMock, org_id: uuid.UUID, user_id: uuid.UUID,
+    ) -> None:
+        with (
+            patch("modulo.core.remy.config_service.RemyConfigService") as mock_cfg_svc,
+        ):
+            mock_config = MagicMock()
+            mock_config.system_prompt = "You are helpful."
+            mock_config.additional_guidance = ""
+            mock_instance = AsyncMock()
+            mock_instance.get_config = AsyncMock(return_value=mock_config)
+            mock_cfg_svc.return_value = mock_instance
+
+            scalars_mock = MagicMock()
+            scalars_mock.all = MagicMock(return_value=[])
+            mock_result = MagicMock()
+            mock_result.scalars = MagicMock(return_value=scalars_mock)
+            mock_session.execute = AsyncMock(return_value=mock_result)
+
+            prompt = await loader.build_system_prompt(org_id, user_id, include_ui_tools_text=True)
+            assert "Browser Tools Available (Text Mode)" in prompt
+            assert "**navigate**(path:" in prompt
+            assert "**click**(selector:" in prompt
+
 
 class TestSkillLoaderToEntry:
     """Tests for SkillLoader._to_entry private method."""

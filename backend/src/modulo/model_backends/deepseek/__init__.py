@@ -12,6 +12,8 @@ from modulo.model_backends.base import HealthResult, ModelBackendBase, _openai_c
 class DeepSeekBackend(ModelBackendBase):
     """Thin adapter over ChatOpenAI targeting DeepSeek's OpenAI-compatible API."""
 
+    supports_tools: bool = True
+
     def __init__(self, api_key: str, model_id: str, **default_params: Any) -> None:
         self._model = ChatOpenAI(
             model=model_id,

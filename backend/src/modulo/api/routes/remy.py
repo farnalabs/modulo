@@ -354,18 +354,6 @@ def _set_session_approval(session_id: str, tool_name: str, page_path: str) -> No
     }
 
 
-def _build_tool_definitions_for_text() -> str:
-    """Generate text description for non-tool models."""
-    lines = []
-    for name, schema in _UI_TOOLS.items():
-        params_desc = ", ".join(
-            f"{p}: {info.get('type', 'str')}"
-            for p, info in schema["parameters"].items()
-        )
-        lines.append(f"- `{name}({params_desc})`: {schema['description']}")
-    return "\n".join(lines)
-
-
 def _get_all_tool_definitions() -> list[dict[str, Any]]:
     """Combine UI tool definitions for the LLM's tools parameter."""
     tools: list[dict[str, Any]] = []
@@ -658,7 +646,32 @@ async def stream_chat(
         parent_msg_id: uuid.UUID | None = None
         try:
             async with AsyncSession(session.bind) as db_session:
-                # 1. Construct system prompt from config + skills
+                # 1. Resolve API key
+                api_key = body.api_key
+                if not api_key:
+                    async with db_session.begin():
+                        await set_rls_org(db_session, principal.organisation_id)
+                        resolved = await _resolve_api_key(
+                            body.provider, principal.organisation_id, db_session, settings.fernet_key,
+                        )
+                    if resolved is None:
+                        msg = (
+                            f"No active {body.provider} API key configured. "
+                            "Add one in Settings > Model Backends or provide an api_key."
+                        )
+                        yield f"event: error\ndata: {json.dumps({'detail': msg})}\n\n"
+                        return
+                    api_key = resolved
+
+                # 2. Create backend (needed before system prompt for supports_tools)
+                try:
+                    backend = _build_backend(body.provider, body.model, api_key)
+                except HTTPException as exc:
+                    yield f"event: error\ndata: {json.dumps({'detail': exc.detail})}\n\n"
+                    return
+
+                # 3. Construct system prompt from config + skills
+                supports_tools = getattr(backend, 'supports_tools', False)
                 async with db_session.begin():
                     await set_rls_org(db_session, principal.organisation_id)
                     skill_loader = SkillLoader(db_session)
@@ -667,9 +680,10 @@ async def stream_chat(
                         user_id=principal.account_id,
                         page_context=body.page_context,
                         system_prompt_override=body.system_prompt,
+                        include_ui_tools_text=not supports_tools,
                     )
 
-                # 2. Save user message to DB
+                # 4. Save user message to DB
                 async with db_session.begin():
                     await set_rls_org(db_session, principal.organisation_id)
                     user_msg = ChatMessage(
@@ -682,16 +696,16 @@ async def stream_chat(
                     await db_session.flush()
                     parent_msg_id = user_msg.id
 
-                # 3. Reconstruct conversation
+                # 5. Reconstruct conversation
                 async with db_session.begin():
                     await set_rls_org(db_session, principal.organisation_id)
                     langchain_messages = await _reconstruct_messages(db_session, session_id)
 
-                # 4. Prepend system prompt
+                # 6. Prepend system prompt
                 if system_prompt:
                     langchain_messages.insert(0, SystemMessage(content=system_prompt))
 
-                # 5. Context window pruning
+                # 7. Context window pruning
                 context_window = (
                     body.context_window_tokens
                     if body.context_window_tokens is not None
@@ -706,27 +720,6 @@ async def stream_chat(
                     pruned_count += 1
                 if pruned_count:
                     logger.info("Pruned %d messages from session %s", pruned_count, session_id)
-
-                # 6. Resolve API key
-                api_key = body.api_key
-                if not api_key:
-                    resolved = await _resolve_api_key(
-                        body.provider, principal.organisation_id, db_session, settings.fernet_key,
-                    )
-                    if resolved is None:
-                        msg = (
-                            f"No active {body.provider} API key configured. "
-                            "Add one in Settings > Model Backends or provide an api_key."
-                        )
-                        yield f"event: error\ndata: {json.dumps({'detail': msg})}\n\n"
-                        return
-                    api_key = resolved
-
-                try:
-                    backend = _build_backend(body.provider, body.model, api_key)
-                except HTTPException as exc:
-                    yield f"event: error\ndata: {json.dumps({'detail': exc.detail})}\n\n"
-                    return
 
                 # ── Agentic loop ────────────────────────────────────────
                 while True:

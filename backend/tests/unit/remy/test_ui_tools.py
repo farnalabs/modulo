@@ -7,6 +7,7 @@ from modulo.api.ui_tools import (
     READ_TOOLS,
     UI_TOOL_NAMES,
     WRITE_TOOLS,
+    build_tool_definitions_for_text,
 )
 from modulo.core.remy.config_service import (
     PERMISSION_MODE_PRESETS,
@@ -322,32 +323,42 @@ class TestGetAllToolDefinitions:
 
 
 class TestBuildToolDefinitionsForText:
-    """Tests for _build_tool_definitions_for_text."""
+    """Tests for build_tool_definitions_for_text."""
 
-    def _build_text(self):
-        """Duplicate of the helper for testing."""
-        from modulo.api.ui_tools import _UI_TOOLS
-
-        lines = []
-        for name, schema in _UI_TOOLS.items():
-            params_desc = ", ".join(
-                f"{p}: {info.get('type', 'str')}"
-                for p, info in schema["parameters"].items()
-            )
-            lines.append(f"- `{name}({params_desc})`: {schema['description']}")
-        return "\n".join(lines)
-
-    def test_returns_string(self):
-        result = self._build_text()
+    def test_returns_non_empty_string(self):
+        result = build_tool_definitions_for_text()
         assert isinstance(result, str)
         assert len(result) > 0
 
-    def test_includes_all_tools(self):
-        result = self._build_text()
+    def test_includes_header(self):
+        result = build_tool_definitions_for_text()
+        assert "## Browser Tools Available (Text Mode)" in result
+
+    def test_includes_all_11_tools(self):
+        result = build_tool_definitions_for_text()
         for name in UI_TOOL_NAMES:
             assert name in result
 
     def test_includes_descriptions(self):
-        result = self._build_text()
+        result = build_tool_definitions_for_text()
         for name, schema in _UI_TOOLS.items():
             assert schema["description"] in result
+
+    def test_includes_navigate_with_path_param(self):
+        result = build_tool_definitions_for_text()
+        assert "**navigate**(path: string)" in result
+
+    def test_includes_click_with_selector_param(self):
+        result = build_tool_definitions_for_text()
+        assert "**click**(selector: string)" in result
+
+    def test_includes_example_workflow(self):
+        result = build_tool_definitions_for_text()
+        assert "Example workflow:" in result
+        assert "navigate(path: /admin/pipelines)" in result
+        assert "click(selector: [data-testid=create-btn])" in result
+        assert "go_back() — return to previous page" in result
+
+    def test_shows_default_for_wait_ms(self):
+        result = build_tool_definitions_for_text()
+        assert "ms: number (default: 500)" in result

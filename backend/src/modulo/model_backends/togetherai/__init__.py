@@ -14,6 +14,8 @@ TOGETHERAI_BASE_URL = "https://api.together.xyz/v1"
 class TogetherAIBackend(ModelBackendBase):
     """Thin adapter over ChatOpenAI targeting TogetherAI's OpenAI-compatible API."""
 
+    supports_tools: bool = True
+
     def __init__(
         self,
         api_key: str,
