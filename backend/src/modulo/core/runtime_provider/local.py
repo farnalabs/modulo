@@ -30,6 +30,8 @@ from modulo.core.runtime_provider import ExecResult, RuntimeProvider, WorkspaceS
 
 _log = logging.getLogger(__name__)
 
+_DEFAULT_CMD_TIMEOUT = 300
+
 
 class LocalRuntimeProvider(RuntimeProvider):
     """Run agent commands as subprocesses on the host, with a concurrency cap.
@@ -60,19 +62,25 @@ class LocalRuntimeProvider(RuntimeProvider):
         """Create a temp directory on the host as the workspace root.
 
         If ``spec.labels`` contains ``repo_url``, clone the repo into the
-        workspace directory.
+        workspace directory. If the clone fails, the temp directory is
+        cleaned up before propagating the error.
         """
         workspace_dir = tempfile.mkdtemp(prefix=f"modulo-workspace-{spec.environment_profile_id}-")
         ref = str(uuid.uuid4())
         self._workspaces[ref] = workspace_dir
 
-        repo_url = spec.labels.get("repo_url", "")
-        if repo_url:
-            await self._run_command(
-                ["git", "clone", repo_url, "."],
-                cwd=workspace_dir,
-                timeout=spec.timeout_seconds,
-            )
+        try:
+            repo_url = spec.labels.get("repo_url", "")
+            if repo_url:
+                await self._run_command(
+                    ["git", "clone", repo_url, "."],
+                    cwd=workspace_dir,
+                    timeout=spec.timeout_seconds,
+                )
+        except Exception:
+            self._workspaces.pop(ref, None)
+            await asyncio.to_thread(shutil.rmtree, workspace_dir, ignore_errors=True)
+            raise
 
         return ref
 
@@ -81,7 +89,7 @@ class LocalRuntimeProvider(RuntimeProvider):
         provider_ref: str,
         command: list[str],
         *,
-        timeout: int | None = None,  # noqa: ASYNC109 — part of ABC interface
+        timeout: int | None = None,  # noqa: ASYNC109
     ) -> ExecResult:
         cwd = self._workspaces.get(provider_ref)
         if cwd is None:
@@ -99,29 +107,39 @@ class LocalRuntimeProvider(RuntimeProvider):
             _log.exception("Failed to remove workspace %s", provider_ref)
 
     async def get_workspace_status(self, provider_ref: str) -> str:
-        if provider_ref in self._workspaces:
-            return "running"
-        return "terminated"
+        return "running" if provider_ref in self._workspaces else "terminated"
 
     async def _run_command(
         self,
         command: list[str],
         cwd: str,
-        timeout: int | None = None,  # noqa: ASYNC109 — ABC-compatible signature
+        timeout: int | None = None,  # noqa: ASYNC109
     ) -> ExecResult:
         """Run a command, respecting the concurrency semaphore."""
-        start = time.monotonic()
+        effective_timeout = timeout if timeout is not None else _DEFAULT_CMD_TIMEOUT
+
         async with self._semaphore:
-            proc = await asyncio.create_subprocess_exec(
-                *command,
-                cwd=cwd,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-            )
+            start = time.monotonic()
+            try:
+                proc = await asyncio.create_subprocess_exec(
+                    *command,
+                    cwd=cwd,
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE,
+                )
+            except (FileNotFoundError, PermissionError) as exc:
+                duration = int((time.monotonic() - start) * 1000)
+                return ExecResult(
+                    exit_code=-1,
+                    stdout="",
+                    stderr=f"Failed to start process: {exc}",
+                    duration_ms=duration,
+                )
+
             try:
                 stdout, stderr = await asyncio.wait_for(
                     proc.communicate(),
-                    timeout=timeout or 300,
+                    timeout=effective_timeout,
                 )
             except TimeoutError:
                 proc.kill()
@@ -134,13 +152,13 @@ class LocalRuntimeProvider(RuntimeProvider):
                     duration_ms=duration,
                 )
 
-        duration = int((time.monotonic() - start) * 1000)
-        return ExecResult(
-            exit_code=proc.returncode or 0,
-            stdout=stdout.decode("utf-8", errors="replace"),
-            stderr=stderr.decode("utf-8", errors="replace"),
-            duration_ms=duration,
-        )
+            duration = int((time.monotonic() - start) * 1000)
+            return ExecResult(
+                exit_code=proc.returncode if proc.returncode is not None else -1,
+                stdout=stdout.decode("utf-8", errors="replace") if stdout else "",
+                stderr=stderr.decode("utf-8", errors="replace") if stderr else "",
+                duration_ms=duration,
+            )
 
 
 def create_local_provider_from_env() -> LocalRuntimeProvider:

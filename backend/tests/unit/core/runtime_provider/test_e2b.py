@@ -27,6 +27,7 @@ def mock_sandbox() -> MagicMock:
     sbx = MagicMock()
     sbx.sandbox_id = "sbx-e2b-test-001"
     sbx.commands = MagicMock()
+    sbx.commands.run = AsyncMock()
     return sbx
 
 
@@ -148,13 +149,16 @@ async def test_create_workspace_clones_repo(
     mock_sandbox_cls: MagicMock,
     mock_sandbox: MagicMock,
 ) -> None:
+    mock_sandbox.commands.run.return_value = MagicMock(exit_code=0, stdout="", stderr="")
+
     provider = E2BRuntimeProvider(api_key="sk-test")
     spec = WorkspaceSpec(
         environment_profile_id=uuid.uuid4(),
         organisation_id=uuid.uuid4(),
         labels={"repo_url": "https://github.com/user/repo.git"},
     )
-    await provider.create_workspace(spec)
+    ref = await provider.create_workspace(spec)
+    assert ref == "sbx-e2b-test-001"
 
     mock_sandbox.commands.run.assert_called_once()
     call_arg = mock_sandbox.commands.run.call_args[0][0]
@@ -167,6 +171,8 @@ async def test_create_workspace_checks_out_ref(
     mock_sandbox_cls: MagicMock,
     mock_sandbox: MagicMock,
 ) -> None:
+    mock_sandbox.commands.run.return_value = MagicMock(exit_code=0, stdout="", stderr="")
+
     provider = E2BRuntimeProvider(api_key="sk-test")
     spec = WorkspaceSpec(
         environment_profile_id=uuid.uuid4(),
@@ -176,7 +182,8 @@ async def test_create_workspace_checks_out_ref(
             "repo_ref": "develop",
         },
     )
-    await provider.create_workspace(spec)
+    ref = await provider.create_workspace(spec)
+    assert ref == "sbx-e2b-test-001"
 
     mock_sandbox.commands.run.assert_called_once()
     call_arg = mock_sandbox.commands.run.call_args[0][0]
@@ -279,7 +286,7 @@ async def test_exec_command_handles_proc_without_attributes(
     ref = await provider.create_workspace(workspace_spec)
     result = await provider.exec_command(ref, ["echo", "hi"])
 
-    assert result.exit_code == 0
+    assert result.exit_code == -1
     assert result.stdout == ""
     assert result.stderr == ""
 
@@ -429,7 +436,7 @@ async def test_get_workspace_status_fallback(
     provider = E2BRuntimeProvider(api_key="sk-test")
     ref = await provider.create_workspace(workspace_spec)
     status = await provider.get_workspace_status(ref)
-    assert status == "running"
+    assert status == "unknown"
 
 
 @pytest.mark.asyncio
@@ -450,7 +457,7 @@ async def test_get_workspace_status_is_running_raises(
     provider = E2BRuntimeProvider(api_key="sk-test")
     ref = await provider.create_workspace(workspace_spec)
     status = await provider.get_workspace_status(ref)
-    assert status == "running"
+    assert status == "unknown"
 
 
 @pytest.mark.asyncio
@@ -464,7 +471,7 @@ async def test_get_workspace_status_sandbox_without_is_running(
     provider = E2BRuntimeProvider(api_key="sk-test")
     ref = await provider.create_workspace(workspace_spec)
     status = await provider.get_workspace_status(ref)
-    assert status == "running"
+    assert status == "unknown"
 
 
 # ---------------------------------------------------------------------------
@@ -489,7 +496,7 @@ async def test_create_workspace_sandbox_constructor_raises() -> None:
 
 
 @pytest.mark.asyncio
-async def test_create_workspace_clone_failure_does_not_raise(
+async def test_create_workspace_clone_failure_propagates(
     mock_sandbox_cls: MagicMock,
     mock_sandbox: MagicMock,
 ) -> None:
@@ -504,8 +511,8 @@ async def test_create_workspace_clone_failure_does_not_raise(
         organisation_id=uuid.uuid4(),
         labels={"repo_url": "https://github.com/user/repo.git"},
     )
-    ref = await provider.create_workspace(spec)
-    assert ref == "sbx-e2b-test-001"
+    with pytest.raises(RuntimeError, match="Repo clone failed"):
+        await provider.create_workspace(spec)
 
 
 @pytest.mark.asyncio
