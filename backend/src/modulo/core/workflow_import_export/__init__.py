@@ -16,6 +16,7 @@ import zipfile
 from typing import Any
 
 from sqlalchemy import select
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.db.crud.agent import create_agent
@@ -35,6 +36,7 @@ BUNDLE_FORMAT_VERSION = "1"
 MANIFEST_FILENAME = "bundle.json"
 DEFAULT_SCHEMA_VERSION = "1.0"
 DEFAULT_NODE_TIMEOUT = 300
+VALID_EDGE_TYPES: frozenset[str] = frozenset({"normal", "conditional", "error", "always", "success"})
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -61,10 +63,13 @@ async def _get_existing_names(
     session: AsyncSession,
     org_id: uuid.UUID,
     model_cls: type,
+    *,
+    for_update: bool = False,
 ) -> set[str]:
-    result = await session.execute(
-        select(model_cls.name).where(model_cls.organisation_id == org_id)
-    )
+    stmt = select(model_cls.name).where(model_cls.organisation_id == org_id)
+    if for_update:
+        stmt = stmt.with_for_update()
+    result = await session.execute(stmt)
     return {row[0] for row in result}
 
 
@@ -536,26 +541,36 @@ async def materialize_import(
                     f"Schema '{existing_schema.name}' exists with different structure. Created as '{sname}' instead."
                 )
 
-        new_schema = await create_schema(
-            session,
-            org_id=org_id,
-            name=sname,
-            account_id=created_by,
-            description=sd.get("description"),
-            abstract_name=sd.get("abstract_name"),
-        )
+        try:
+            new_schema = await create_schema(
+                session,
+                org_id=org_id,
+                name=sname,
+                account_id=created_by,
+                description=sd.get("description"),
+                abstract_name=sd.get("abstract_name"),
+            )
+        except SQLAlchemyError as exc:
+            logger.error("Failed to create schema '%s': %s", sname, exc)
+            raise
+
         schema_id_map[export_schema_id] = str(new_schema.id)
 
-        new_sv = await create_schema_version(
-            session,
-            org_id=org_id,
-            schema_id=new_schema.id,
-            version=sd.get("latest_version") or DEFAULT_SCHEMA_VERSION,
-            version_number=1,
-            definition_json=definition,
-            account_id=created_by,
-            published=True,
-        )
+        try:
+            new_sv = await create_schema_version(
+                session,
+                org_id=org_id,
+                schema_id=new_schema.id,
+                version=sd.get("latest_version") or DEFAULT_SCHEMA_VERSION,
+                version_number=1,
+                definition_json=definition,
+                account_id=created_by,
+                published=True,
+            )
+        except SQLAlchemyError as exc:
+            logger.error("Failed to create schema version for '%s': %s", sname, exc)
+            raise
+
         schema_version_map[export_schema_id] = new_sv.version
 
     # --- Step 2: Create agents ---
@@ -599,7 +614,7 @@ async def materialize_import(
 
         try:
             agent = await create_agent(**agent_args)
-        except ValueError as exc:
+        except (ValueError, SQLAlchemyError) as exc:
             logger.error("Failed to create agent '%s': %s", aname, exc)
             raise
 
@@ -624,17 +639,21 @@ async def materialize_import(
             if existing_id and existing_id in conn_overrides:
                 connector_binding["instance_id"] = conn_overrides[existing_id]
 
-    pipeline = await create_pipeline(
-        session,
-        org_id=org_id,
-        name=pname,
-        account_id=created_by,
-        description=pipeline_info.get("description"),
-        visibility="org",
-        owner_team_id=owner_team_id,
-        node_timeout_seconds=pipeline_info.get("node_timeout_seconds", DEFAULT_NODE_TIMEOUT),
-        run_context_defaults=pipeline_info.get("run_context_defaults"),
-    )
+    try:
+        pipeline = await create_pipeline(
+            session,
+            org_id=org_id,
+            name=pname,
+            account_id=created_by,
+            description=pipeline_info.get("description"),
+            visibility="org",
+            owner_team_id=owner_team_id,
+            node_timeout_seconds=pipeline_info.get("node_timeout_seconds", DEFAULT_NODE_TIMEOUT),
+            run_context_defaults=pipeline_info.get("run_context_defaults"),
+        )
+    except SQLAlchemyError as exc:
+        logger.error("Failed to create pipeline '%s': %s", pname, exc)
+        raise
 
     pipeline.graph_nodes_json = list(graph_nodes)
     await session.flush()
@@ -645,13 +664,17 @@ async def materialize_import(
         source_id = _safe_uuid(ed.get("source_node_id", ""), "edge.source_node_id")
         target_id = _safe_uuid(ed.get("target_node_id", ""), "edge.target_node_id")
         edge_id = _safe_uuid(ed["id"]) if ed.get("id") else uuid.uuid4()
+        edge_type = ed.get("edge_type", "normal")
+        if edge_type not in VALID_EDGE_TYPES:
+            warnings.append(f"Unknown edge type '{edge_type}', defaulting to 'normal'.")
+            edge_type = "normal"
         edge = PipelineEdge(
             id=edge_id,
             organisation_id=org_id,
             pipeline_id=pipeline.id,
             source_node_id=source_id,
             target_node_id=target_id,
-            edge_type=ed.get("edge_type", "normal"),
+            edge_type=edge_type,
             hitl_gate_config=ed.get("hitl_gate_config"),
         )
         session.add(edge)
@@ -659,33 +682,37 @@ async def materialize_import(
     await session.flush()
 
     # --- Step 5: Create library primitive for the workflow ---
-    prim = await create_library_primitive(
-        session,
-        org_id=org_id,
-        source="local",
-        primitive_type="workflow",
-        name=pname,
-        slug=_sanitize_slug(pname),
-        description=pipeline_info.get("description", ""),
-        author=created_by.hex[:8],
-        version="1.0",
-        tags=["imported"],
-        content_json={
-            "pipeline_id": str(pipeline.id),
-            "bundle": bundle,
-        },
-        source_url=None,
-        forked_from=None,
-        checksum=None,
-        ed25519_signature=None,
-        verified=None,
-        download_count=None,
-        average_rating=None,
-        review_count=None,
-        owner_team_id=owner_team_id,
-        visibility="org",
-        account_id=created_by,
-    )
+    try:
+        prim = await create_library_primitive(
+            session,
+            org_id=org_id,
+            source="local",
+            primitive_type="workflow",
+            name=pname,
+            slug=_sanitize_slug(pname),
+            description=pipeline_info.get("description", ""),
+            author=created_by.hex[:8],
+            version=DEFAULT_SCHEMA_VERSION,
+            tags=["imported"],
+            content_json={
+                "pipeline_id": str(pipeline.id),
+                "bundle": bundle,
+            },
+            source_url=None,
+            forked_from=None,
+            checksum=None,
+            ed25519_signature=None,
+            verified=None,
+            download_count=None,
+            average_rating=None,
+            review_count=None,
+            owner_team_id=owner_team_id,
+            visibility="org",
+            account_id=created_by,
+        )
+    except SQLAlchemyError as exc:
+        logger.error("Failed to create library primitive for pipeline '%s': %s", pname, exc)
+        raise
 
     logger.info(
         "Imported pipeline '%s' (id=%s) with %d agents, %d edges, %d schemas",
