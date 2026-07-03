@@ -26,24 +26,14 @@ async def _build_registry(settings: Settings, session: AsyncSession) -> FeatureF
     from modulo.core.license import get_license
 
     lic = get_license()
-<<<<<<< HEAD
-    if lic is not None:
-        async with session.begin():
-            return await FeatureFlagRegistry.from_db(
-                session, current_tier=lic.tier, has_license_key=True
-            )
-
-    has_key = bool(settings.modulo_license_key)
-=======
     has_key = bool(settings.modulo_license_key) or lic is not None
     if lic is not None:
         tier = lic.tier
     else:
         tier = "team" if settings.modulo_license_key else "community"
->>>>>>> feat/gating-show-disabled
     async with session.begin():
         return await FeatureFlagRegistry.from_db(
-            session, current_tier="team" if has_key else "community", has_license_key=has_key
+            session, current_tier=tier, has_license_key=has_key
         )
 
 
