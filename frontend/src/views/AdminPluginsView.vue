@@ -1,5 +1,5 @@
 ﻿<template>
-  <FeatureGate feature-name="plugin-management">
+  <FeatureGate feature-name="plugin_management" show-disabled>
     <div class="mx-auto max-w-5xl space-y-8 p-6">
       <header class="flex items-center justify-between">
         <div>

@@ -1,13 +1,5 @@
 ﻿<template>
-  <FeatureGate feature-name="sso" required-tier="team">
-    <template #locked="{ tooltip }">
-      <div class="mx-auto max-w-4xl space-y-8 p-6">
-        <div class="mb-4 flex items-center gap-2 rounded-lg border border-warning/30 bg-warning/5 p-4 text-sm text-warning">
-          <LockIcon :locked="true" :tooltip="tooltip" />
-          <span>{{ $t('views.SettingsSsoView.sso_provider_management_is_not_available_on_your_current_pla') }}</span>
-        </div>
-      </div>
-    </template>
+  <FeatureGate feature-name="sso" required-tier="team" show-disabled>
 
     <div class="mx-auto max-w-4xl space-y-8 p-6">
       <header class="flex items-center justify-between">
@@ -190,7 +182,6 @@ import SsoProviderForm from '../components/SsoProviderForm.vue'
 import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
 import FeatureGate from '../components/FeatureGate.vue'
-import LockIcon from '../components/LockIcon.vue'
 import { formatError } from '../lib/utils'
 
 type SsoProviderResponse = components['schemas']['SsoProviderResponse']
