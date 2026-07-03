@@ -107,6 +107,17 @@ jobs:
         run: |
           & tools\graph-validate.ps1 -CI
 
+  manifest-validate:
+    name: Manifest validation
+    runs-on: self-hosted
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v7
+      - name: Validate manifest.yaml
+        shell: powershell
+        run: |
+          & tools\validate-manifest.ps1 -CI
+
   gitleaks:
     name: Secret scan
     runs-on: self-hosted
