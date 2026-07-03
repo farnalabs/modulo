@@ -266,7 +266,7 @@
             </div>
 
             <div class="space-y-6">
-              <FeatureGate feature-name="schema-version-history" required-tier="team">
+              <FeatureGate feature-name="schema_version_history" required-tier="team">
                 <template #default>
                   <section class="rounded-lg border bg-card p-6 shadow-sm">
                     <h2 class="mb-4 text-lg font-semibold">Version History</h2>

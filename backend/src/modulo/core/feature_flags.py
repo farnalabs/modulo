@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+import logging
 import uuid
 from dataclasses import dataclass
 from typing import Any, ClassVar, Protocol
 
 from modulo.core.license import LicenseData
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -70,10 +73,14 @@ _KNOWN_FLAGS: list[FeatureFlag] = [
         description="Helm chart for production Kubernetes deployment",
         tier="community",
     ),
-    # ── Community tier ─────────────────────────────────────────────────
     FeatureFlag(
         name="remy",
         description="Remy in-app AI assistant",
+        tier="community",
+    ),
+    FeatureFlag(
+        name="model_backend_management",
+        description="Manage LLM backend connections and credentials",
         tier="community",
     ),
     # ── Team tier ──────────────────────────────────────────────────────
@@ -95,6 +102,11 @@ _KNOWN_FLAGS: list[FeatureFlag] = [
     FeatureFlag(
         name="admin_spend_limits",
         description="Per-organisation daily spend limits and budgets",
+        tier="team",
+    ),
+    FeatureFlag(
+        name="admin_cost_controls",
+        description="Budget overview, team budgets, alert thresholds, and billing settings",
         tier="team",
     ),
     FeatureFlag(
@@ -155,6 +167,26 @@ _KNOWN_FLAGS: list[FeatureFlag] = [
     FeatureFlag(
         name="plugin_management",
         description="Manage plugins, connectors, and node categories",
+        tier="team",
+    ),
+    FeatureFlag(
+        name="admin_cost_breakdown",
+        description="Monthly cost breakdown and anomaly detection across teams",
+        tier="team",
+    ),
+    FeatureFlag(
+        name="admin_run_retention",
+        description="Configure run retention policies and manual purge",
+        tier="team",
+    ),
+    FeatureFlag(
+        name="error_forwarders",
+        description="External error tracking and alerting integrations",
+        tier="team",
+    ),
+    FeatureFlag(
+        name="schema_version_history",
+        description="Version history and diff for schema definitions",
         tier="team",
     ),
 ]
@@ -279,12 +311,15 @@ async def resolve_plan_context(settings: Any, session: Any, org: Any | None = No
         org_settings = getattr(org, "settings_json", None)
         org_license_key = org_settings.get("license_key") if isinstance(org_settings, dict) else None
         if org_license_key:
-            validation = parse_and_verify(org_license_key)
-            if validation.valid and validation.license_data is not None:
-                return await DbPlanContext.from_db(
-                    session, validation.license_data.tier, has_license_key=True,
-                    license_features=set(validation.license_data.features),
-                )
+            try:
+                validation = parse_and_verify(org_license_key)
+                if validation.valid and validation.license_data is not None:
+                    return await DbPlanContext.from_db(
+                        session, validation.license_data.tier, has_license_key=True,
+                        license_features=set(validation.license_data.features),
+                    )
+            except Exception:
+                logger.warning("Failed to parse org-level license key", exc_info=True)
 
     # 2. System-level in-memory license
     lic = get_license()
@@ -297,12 +332,15 @@ async def resolve_plan_context(settings: Any, session: Any, org: Any | None = No
     # 3. System-level env-var license
     raw_key: str = getattr(settings, "modulo_license_key", "") or ""
     if raw_key:
-        validation = parse_and_verify(raw_key)
-        if validation.valid and validation.license_data is not None:
-            return await DbPlanContext.from_db(
-                session, validation.license_data.tier, has_license_key=True,
-                license_features=set(validation.license_data.features),
-            )
+        try:
+            validation = parse_and_verify(raw_key)
+            if validation.valid and validation.license_data is not None:
+                return await DbPlanContext.from_db(
+                    session, validation.license_data.tier, has_license_key=True,
+                    license_features=set(validation.license_data.features),
+                )
+        except Exception:
+            logger.warning("Failed to parse env-var license key", exc_info=True)
 
     # 4. Community fallback
     return await DbPlanContext.from_db(session, "community")

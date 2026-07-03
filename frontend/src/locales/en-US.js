@@ -241,7 +241,8 @@ export default {
       "no_error_groups_found": "No error groups found"
     },
     "AdminNodeCategoriesView": {
-      "failed_to_load_categories": "Failed to load categories:"
+      "failed_to_load_categories": "Failed to load categories:",
+      "not_available_on_current_plan": "Node Categories are not available on your current plan."
     },
     "PipelineEditorView": {
       "pipeline_editor": "Pipeline Editor",
@@ -797,7 +798,8 @@ export default {
     },
     "FeatureGate": {
       "team_feature": "Team Feature",
-      "available_on_higher_plan_tier": "Available on higher plan tier"
+      "available_on_higher_plan_tier": "Available on higher plan tier",
+      "view_plans": "View Plans"
     },
     "DashboardNotificationsPanel": {
       "failed_to_dismiss_notification": "Failed to dismiss notification"
