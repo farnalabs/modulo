@@ -87,13 +87,13 @@ async def dashboard_summary(
     principal: AuthenticatedPrincipal = Depends(get_current_user),
 ) -> dict[str, Any]:
     """Org-level dashboard summary with counts, team breakdown, eval pass rate, and 7-day trend."""
-    org_id_str = str(principal.organisation_id)
-
-    cached = await _get_cached_dashboard(org_id_str)
-    if cached is not None:
-        return cached
-
     try:
+        org_id_str = str(principal.organisation_id)
+
+        cached = await _get_cached_dashboard(org_id_str)
+        if cached is not None:
+            return cached
+
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
 
