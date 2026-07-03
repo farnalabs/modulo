@@ -4,25 +4,45 @@ import App from './App.vue'
 import router from './router'
 import i18n from './i18n'
 import { useLocaleStore } from './stores/localeStore'
-import { createErrorTracker } from './lib/error-tracking'
+import { createErrorTracker, getErrorTracker } from './lib/error-tracking'
+import { loadMonitorConfig, loadBackends } from './monitor'
+import { onAuthChange } from './lib/api/client'
 import './style.css'
 
-const app = createApp(App)
-const pinia = createPinia()
-app.use(pinia)
-app.use(i18n)
+async function main() {
+  const app = createApp(App)
+  const pinia = createPinia()
+  app.use(pinia)
+  app.use(i18n)
 
-const errorTracker = createErrorTracker({
-  appName: 'modulo',
-  environment: import.meta.env.MODE === 'development' ? 'development' : 'production',
-  version: import.meta.env.VITE_APP_VERSION ?? '',
-})
+  // Configure monitor backends from env vars + runtime config
+  const monitorConfig = loadMonitorConfig()
+  const backends = await loadBackends(monitorConfig)
 
-app.use(router)
-app.use(errorTracker.vuePlugin)
-errorTracker.connectRouter(router)
+  const errorTracker = createErrorTracker({
+    appName: 'modulo',
+    environment: import.meta.env.MODE === 'development' ? 'development' : 'production',
+    version: import.meta.env.VITE_APP_VERSION ?? '',
+    monitorBackends: backends,
+  })
 
-const localeStore = useLocaleStore()
-localeStore.initLocale()
+  app.use(router)
+  app.use(errorTracker.vuePlugin)
+  errorTracker.connectRouter(router)
 
-app.mount('#app')
+  // Wire auth state to monitor backends
+  onAuthChange((token: string | null) => {
+    if (!token) {
+      errorTracker.setUser(null)
+      errorTracker.setTags({})
+    }
+    // User info is set when available via /me endpoint
+  })
+
+  const localeStore = useLocaleStore()
+  localeStore.initLocale()
+
+  app.mount('#app')
+}
+
+main()

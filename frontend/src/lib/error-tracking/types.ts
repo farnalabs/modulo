@@ -34,4 +34,5 @@ export interface ErrorTrackerConfig {
   version?: string
   flushIntervalMs?: number
   batchSize?: number
+  monitorBackends?: string[]
 }
