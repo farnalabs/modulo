@@ -12,12 +12,21 @@ export interface ParameterPort {
   multiline?: boolean
 }
 
+export interface SchemaField {
+  name: string
+  type: string
+  description?: string | null
+  required: boolean
+}
+
 export interface CompositeDefinition {
   id: string
   name: string
   description?: string
   version: string
   ports: ParameterPort[]
+  input_schema_id?: string | null
+  output_schema_id?: string | null
   created_at: string
   updated_at: string
 }

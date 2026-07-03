@@ -365,6 +365,67 @@ async def get_schema_version_endpoint(
 
 
 # ---------------------------------------------------------------------------
+# Schema Fields
+# ---------------------------------------------------------------------------
+
+
+class SchemaFieldResponse(BaseModel):
+    """A single field extracted from a JSON Schema property."""
+
+    name: str
+    type: str
+    description: str | None = None
+    required: bool = False
+
+
+class SchemaFieldListResponse(BaseModel):
+    fields: list[SchemaFieldResponse]
+
+
+@router.get("/{schema_id}/fields", response_model=SchemaFieldListResponse)
+async def list_schema_fields_endpoint(
+    schema_id: uuid.UUID,
+    session: AsyncSession = Depends(get_db_session),
+    principal: AuthenticatedPrincipal = Depends(get_current_user),
+) -> SchemaFieldListResponse:
+    """Return the field list for the latest version of a schema.
+
+    Extracts ``properties`` from the JSON Schema ``definition_json``
+    and returns each property as a ``SchemaFieldResponse`` with
+    name, type, description, and required status.
+    """
+    async with session.begin():
+        await set_rls_org(session, principal.organisation_id)
+        schema = await get_schema(session, schema_id)
+        if schema is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Schema not found")
+        sv = await _get_latest_version(session, schema_id)
+        if sv is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Schema has no versions")
+
+    definition = sv.definition_json
+    properties: dict[str, Any] = definition.get("properties", {})
+    required_fields: list[str] = definition.get("required", [])
+
+    fields: list[SchemaFieldResponse] = []
+    for field_name, field_schema in properties.items():
+        if not isinstance(field_schema, dict):
+            continue
+        field_type = field_schema.get("type", "string")
+        field_desc = field_schema.get("description")
+        fields.append(
+            SchemaFieldResponse(
+                name=field_name,
+                type=field_type,
+                description=field_desc,
+                required=field_name in required_fields,
+            )
+        )
+
+    return SchemaFieldListResponse(fields=fields)
+
+
+# ---------------------------------------------------------------------------
 # Schema Inference
 # ---------------------------------------------------------------------------
 
