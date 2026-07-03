@@ -31,7 +31,7 @@ export const useLocaleStore = defineStore('locale', () => {
     try {
       await api.PUT('/api/v1/me/settings', {
         locale: code,
-      })
+      } as any)
     } catch {
       // Best-effort — don't block UI for backend sync failure
     }
@@ -39,20 +39,17 @@ export const useLocaleStore = defineStore('locale', () => {
 
   async function initLocale(): Promise<void> {
     if (initialized.value) return
-    initialized.value = true
 
     let detected: SupportedLocale = 'en-US'
 
-    // 1. Try backend preferences
-    if (getAccessToken() && !window.location.pathname.startsWith('/login')) {
-      try {
-        const res = await api.GET('/api/v1/me/settings')
-        if (res.data) {
-          const data = res.data as Record<string, unknown>
-          const backendLocale = data?.locale as string | undefined
-          if (backendLocale && isSupportedLocale(backendLocale)) {
-            detected = backendLocale
-          }
+    // 1. Try backend preferences (returns flat account.preferences dict)
+    try {
+      const res = await api.GET('/api/v1/me/settings')
+      if (res.data) {
+        const prefs = res.data as Record<string, unknown>
+        const backendLocale = prefs?.locale as string | undefined
+        if (backendLocale && isSupportedLocale(backendLocale)) {
+          detected = backendLocale
         }
       } catch {
         // Fall through
@@ -83,6 +80,7 @@ export const useLocaleStore = defineStore('locale', () => {
       detected = 'en-US'
     }
     await setLocale(detected)
+    initialized.value = true
   }
 
   return {

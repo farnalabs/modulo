@@ -374,7 +374,7 @@
                     <button
                       class="rounded p-1 text-muted-foreground hover:bg-accent"
                       :aria-label="$t('views.AdminRemyView.edit_skill')"
-                      :title="$t('views.AdminRemyView.edit_skill_1')"
+                      :title="$t('views.AdminRemyView.edit_skill')"
                       @click="skillDialogRef?.openEdit(skill)"
                     >
                       <svg class="h-4 w-4" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -558,7 +558,6 @@ async function saveGuidance() {
   configSaving.value = true
   guidanceSaving.value = true
   guidanceError.value = null
-<<<<<<< HEAD
   try {
     const { error: err } = await (api as any).PUT('/api/v1/admin/remy/config', {
       body: { additional_guidance: guidance.value },
@@ -610,11 +609,6 @@ async function loadTeams() {
     const msg = formatApiError(e)
     console.warn('Failed to load teams:', msg)
   }
-=======
-  const err = await putConfig({ additional_guidance: guidance.value })
-  if (err) guidanceError.value = `Failed to save guidance: ${err}`
-  guidanceSaving.value = false
->>>>>>> qa-remy-14
 }
 
 // Skills
@@ -649,12 +643,8 @@ async function loadSkills() {
     if (err) {
       skillError.value = `Failed to load skills: ${formatApiError(err)}`
     } else if (data) {
-<<<<<<< HEAD
       const items = (data as { items?: SkillItem[] }).items
       skills.value = Array.isArray(items) ? items : []
-=======
-      skills.value = (data as SkillItem[]) ?? []
->>>>>>> qa-remy-14
     }
   } catch (e: unknown) {
     skillError.value = `Failed to load skills: ${formatApiError(e)}`
