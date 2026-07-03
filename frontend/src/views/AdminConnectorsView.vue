@@ -1,4 +1,5 @@
 ﻿<template>
+<<<<<<< HEAD
   <FeatureGate feature-name="plugin_management" required-tier="team">
     <template #locked="{ tooltip }">
       <div class="mx-auto max-w-4xl space-y-8 p-6">
@@ -8,6 +9,9 @@
         </div>
       </div>
     </template>
+=======
+  <FeatureGate feature-name="plugin_management" required-tier="team" show-disabled>
+>>>>>>> feat/gating-show-disabled
 
     <div class="mx-auto max-w-4xl space-y-8 p-6">
     <header class="flex items-center justify-between">
@@ -264,7 +268,6 @@ import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
 import { usePlanStore } from '../stores/planStore'
 import FeatureGate from '../components/FeatureGate.vue'
-import LockIcon from '../components/LockIcon.vue'
 
 const planStore = usePlanStore()
 

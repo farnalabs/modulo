@@ -1,13 +1,5 @@
 ﻿<template>
-  <FeatureGate feature-name="mcp_server" required-tier="team">
-    <template #locked="{ tooltip }">
-      <div data-theme="agent" class="mx-auto max-w-4xl space-y-8 p-6">
-        <div class="mb-4 flex items-center gap-2 rounded-lg border border-warning/30 bg-warning/5 p-4 text-sm text-warning">
-          <LockIcon :locked="true" :tooltip="tooltip" />
-          <span>{{ $t('views.SettingsMcpView.mcp_server_is_not_available_on_your_current_plan') }}</span>
-        </div>
-      </div>
-    </template>
+  <FeatureGate feature-name="mcp_server" required-tier="team" show-disabled>
 
     <div data-theme="agent" class="mx-auto max-w-4xl space-y-8 p-6">
     <header>
@@ -280,7 +272,6 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '../co
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '../components/ui/dialog'
 import { usePlanStore } from '../stores/planStore'
 import FeatureGate from '../components/FeatureGate.vue'
-import LockIcon from '../components/LockIcon.vue'
 
 const planStore = usePlanStore()
 

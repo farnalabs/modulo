@@ -1,13 +1,5 @@
 ﻿<template>
-  <FeatureGate feature-name="eval_system" required-tier="team">
-    <template #locked="{ tooltip }">
-      <div class="mx-auto max-w-5xl space-y-8 p-6">
-        <div class="mb-4 flex items-center gap-2 rounded-lg border border-warning/30 bg-warning/5 p-4 text-sm text-warning">
-          <LockIcon :locked="true" :tooltip="tooltip" />
-          <span>{{ $t('views.EvalEditorView.eval_system_is_not_available_on_your_current_plan') }}</span>
-        </div>
-      </div>
-    </template>
+  <FeatureGate feature-name="eval_system" required-tier="team" show-disabled>
 
     <PageTabs :tabs="[
       { label: 'Evals', to: '/evals/editor' },
@@ -114,7 +106,6 @@ import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
 import { usePlanStore } from '../stores/planStore'
 import FeatureGate from '../components/FeatureGate.vue'
-import LockIcon from '../components/LockIcon.vue'
 import PageTabs from "../components/PageTabs.vue"
 
 const planStore = usePlanStore()
