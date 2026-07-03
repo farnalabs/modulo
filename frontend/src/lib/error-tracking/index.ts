@@ -143,6 +143,7 @@ function createVuePlugin() {
     install(app: App): void {
       app.config.errorHandler = (err: unknown, _instance: unknown, info: string): void => {
         if (isDisabled()) return
+        console.error(`[vue] ${info}:`, err)
         const error = err instanceof Error ? err : new Error(String(err))
         const event = buildErrorEvent(error, { vueInfo: info })
         if (event) enqueueError(event)

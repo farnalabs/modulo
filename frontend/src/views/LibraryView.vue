@@ -104,7 +104,7 @@
 
           <div class="flex items-center gap-2">
             <button
-              v-if="prim.primitive_type === 'pipeline_template'"
+              v-if="prim.primitive_type === 'pipeline_template' || prim.primitive_type === 'composite'"
               class="flex-1 px-3 py-2 bg-primary text-primary-foreground text-sm font-medium rounded-lg border border-primary/30 hover:border-primary/60 hover:brightness-110 transition-all"
               @click="createPipeline(prim)"
               data-testid="library-create-pipeline"
