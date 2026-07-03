@@ -113,12 +113,22 @@ class LinearConnector(ConnectorBase):
 
     async def _graphql(self, query: str, variables: dict[str, Any] | None = None) -> dict[str, Any]:
         async with self._client() as client:
-            r = await client.post(
-                "/graphql",
-                json={"query": query, "variables": variables or {}},
-            )
-            r.raise_for_status()
-            body: dict[str, Any] = r.json()
+            try:
+                r = await client.post(
+                    "/graphql",
+                    json={"query": query, "variables": variables or {}},
+                )
+                r.raise_for_status()
+            except httpx.HTTPStatusError as exc:
+                raise ValueError(
+                    f"Linear API HTTP {exc.response.status_code}: {exc.response.text[:200]}"
+                ) from exc
+            except (httpx.TimeoutException, httpx.ConnectError) as exc:
+                raise ValueError(f"Linear API connection error: {exc}") from exc
+            try:
+                body: dict[str, Any] = r.json()
+            except Exception as exc:
+                raise ValueError(f"Linear API invalid response: {exc}") from exc
             if "errors" in body:
                 raise ValueError(f"Linear API error: {body['errors']}")
             data: dict[str, Any] = body.get("data") or {}
