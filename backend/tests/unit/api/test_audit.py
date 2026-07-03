@@ -8,11 +8,26 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from fastapi.testclient import TestClient
 
-from modulo.api.dependencies import _get_engine, get_db_session
+from modulo.api.dependencies import _get_engine, get_db_session, get_plan_context
 from modulo.api.main import app
 from modulo.auth.dependencies import get_current_user
 from modulo.auth.jwt import AuthenticatedPrincipal
+from modulo.core.feature_flags import PlanContext
 from modulo.settings import Settings, get_settings
+
+
+class _MockPlanContext:
+    def feature_enabled(self, name: str) -> bool:
+        return True
+
+    def list_enabled_features(self) -> list:
+        return []
+
+    def tier(self) -> str:
+        return "enterprise"
+
+    def has_license_key(self) -> bool:
+        return True
 
 _VALID_32 = "a" * 32
 _ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
@@ -55,6 +70,7 @@ def client() -> Generator[TestClient, None, None]:
         account_id=_USER_ID,
         org_role="admin",
     )
+    app.dependency_overrides[get_plan_context] = lambda: _MockPlanContext()
     yield TestClient(app)
     app.dependency_overrides.clear()
 
@@ -263,3 +279,123 @@ class TestBatchDetail:
     def test_unauthorized_returns_4xx(self, unauth_client: TestClient) -> None:
         resp = unauth_client.post(self.URL, json={"event_ids": []})
         assert resp.status_code in (401, 403)
+
+
+class TestExportChain:
+    URL = "/api/v1/admin/audit/export"
+
+    def test_export_returns_paginated_events(self, client: TestClient) -> None:
+        with (
+            patch(
+                "modulo.api.routes.audit.export_chain",
+                return_value={
+                    "items": [{"id": str(uuid.uuid4()), "event_type": "pipeline.run"}],
+                    "total": 1,
+                    "page": 1,
+                    "page_size": 100,
+                },
+            ),
+            patch("modulo.api.routes.audit.set_rls_org"),
+        ):
+            resp = client.get(self.URL)
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["total"] == 1
+        assert len(data["items"]) == 1
+        assert data["page"] == 1
+        assert data["page_size"] == 100
+
+    def test_export_with_filters(self, client: TestClient) -> None:
+        with (
+            patch("modulo.api.routes.audit.export_chain") as mock_export,
+            patch("modulo.api.routes.audit.set_rls_org"),
+        ):
+            mock_export.return_value = {
+                "items": [],
+                "total": 0,
+                "page": 1,
+                "page_size": 100,
+            }
+            resp = client.get(f"{self.URL}?event_type=pipeline.run&user_id={_USER_ID}&entity_type=pipeline&from_date=2025-01-01&to_date=2025-12-31")
+        assert resp.status_code == 200
+        _, kwargs = mock_export.call_args
+        assert kwargs.get("event_type") == "pipeline.run"
+        assert kwargs.get("actor_user_id") == _USER_ID
+        assert kwargs.get("resource_type") == "pipeline"
+        assert kwargs.get("from_date") == "2025-01-01"
+        assert kwargs.get("to_date") == "2025-12-31"
+
+    def test_export_page_beyond_data(self, client: TestClient) -> None:
+        with (
+            patch(
+                "modulo.api.routes.audit.export_chain",
+                return_value={
+                    "items": [],
+                    "total": 0,
+                    "page": 999,
+                    "page_size": 100,
+                },
+            ),
+            patch("modulo.api.routes.audit.set_rls_org"),
+        ):
+            resp = client.get(f"{self.URL}?page=999")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["items"] == []
+        assert data["total"] == 0
+
+    def test_export_unauthorized(self, unauth_client: TestClient) -> None:
+        resp = unauth_client.get(self.URL)
+        assert resp.status_code in (401, 403)
+
+
+class TestVerifyChain:
+    URL = "/api/v1/admin/audit/verify"
+
+    def test_verify_returns_valid(self, client: TestClient) -> None:
+        with (
+            patch(
+                "modulo.api.routes.audit.verify_chain",
+                return_value={
+                    "valid": True,
+                    "total_events": 5,
+                    "checked_events": 5,
+                    "event_count": 5,
+                    "first_gap_index": None,
+                    "first_tampered_id": None,
+                    "chain_head_match": True,
+                },
+            ),
+            patch("modulo.api.routes.audit.set_rls_org"),
+        ):
+            resp = client.get(self.URL)
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["valid"] is True
+        assert data["total_events"] == 5
+
+    def test_verify_unauthorized(self, unauth_client: TestClient) -> None:
+        resp = unauth_client.get(self.URL)
+        assert resp.status_code in (401, 403)
+
+    def test_verify_event_count_field(self, client: TestClient) -> None:
+        with (
+            patch(
+                "modulo.api.routes.audit.verify_chain",
+                return_value={
+                    "valid": True,
+                    "total_events": 3,
+                    "checked_events": 3,
+                    "event_count": 3,
+                    "first_gap_index": None,
+                    "first_tampered_id": None,
+                    "chain_head_match": True,
+                },
+            ),
+            patch("modulo.api.routes.audit.set_rls_org"),
+        ):
+            resp = client.get(self.URL)
+        assert resp.status_code == 200
+        data = resp.json()
+        assert "event_count" in data
+        assert data["event_count"] == 3

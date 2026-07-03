@@ -130,15 +130,33 @@ async def verify_chain_endpoint(
 async def export_chain_endpoint(
     page: int = Query(1, ge=1),
     page_size: int = Query(100, ge=1, le=1000),
+    event_type: str | None = Query(None, max_length=64, description="Filter by event type"),
+    actor_user_id: str | None = Query(None, max_length=64, alias="user_id", description="Filter by actor user ID"),
+    resource_type: str | None = Query(
+        None, max_length=64, alias="entity_type", description="Filter by resource type"
+    ),
+    from_date: str | None = Query(None, max_length=32, description="Filter by start date (ISO 8601)"),
+    to_date: str | None = Query(None, max_length=32, description="Filter by end date (ISO 8601)"),
     session: AsyncSession = Depends(get_db_session),
     principal: AuthenticatedPrincipal = Depends(get_current_user),
 ) -> dict[str, object]:
-    """Export audit events as paginated JSON."""
+    """Export audit events as paginated JSON with optional filters."""
+    actor_uid = _UUID(actor_user_id) if actor_user_id else None
     try:
         async with session.begin():
             _require_admin(principal)
             await set_rls_org(session, principal.organisation_id)
-            result = await export_chain(session, principal.organisation_id, page=page, page_size=page_size)
+            result = await export_chain(
+                session,
+                principal.organisation_id,
+                page=page,
+                page_size=page_size,
+                event_type=event_type,
+                actor_user_id=actor_uid,
+                resource_type=resource_type,
+                from_date=from_date,
+                to_date=to_date,
+            )
     except ProgrammingError:
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
