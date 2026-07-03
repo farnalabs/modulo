@@ -1,6 +1,6 @@
 import uuid
 
-from sqlalchemy import ForeignKey, Integer, String, Uuid
+from sqlalchemy import ForeignKey, Integer, String, UniqueConstraint, Uuid
 from sqlalchemy.orm import Mapped, mapped_column
 
 from modulo.db.models.base import OrgScoped
@@ -8,6 +8,9 @@ from modulo.db.models.base import OrgScoped
 
 class ChatSession(OrgScoped):
     __tablename__ = "chat_sessions"
+    __table_args__ = (
+        UniqueConstraint("user_id", "session_number", name="uq_chat_sessions_user_session_number"),
+    )
 
     user_id: Mapped[uuid.UUID] = mapped_column(
         Uuid(),
