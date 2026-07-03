@@ -71,14 +71,20 @@ async def get_costs(
 ) -> CostReportResponse:
     _require_admin(current_user)
 
-    async with session.begin():
-        await set_rls_org(session, current_user.organisation_id)
-        rows = await get_cost_report(
-            session,
-            org_id=current_user.organisation_id,
-            group_by=group_by,
-            period=period,
-        )
+    try:
+        async with session.begin():
+            await set_rls_org(session, current_user.organisation_id)
+            rows = await get_cost_report(
+                session,
+                org_id=current_user.organisation_id,
+                group_by=group_by,
+                period=period,
+            )
+    except ProgrammingError:
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="Feature is not available. Run database migrations to enable it.",
+        ) from None
 
     return CostReportResponse(
         period=period,
@@ -132,13 +138,19 @@ async def set_org_spend_limit(
 ) -> dict[str, Any]:
     _require_admin(current_user)
 
-    async with session.begin():
-        await set_rls_org(session, current_user.organisation_id)
-        org = await get_organisation(session, current_user.organisation_id)
-        if org is None:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Organisation not found")
-        org.daily_spend_limit = Decimal(str(body.daily_spend_limit)) if body.daily_spend_limit is not None else None
-        await session.flush()
+    try:
+        async with session.begin():
+            await set_rls_org(session, current_user.organisation_id)
+            org = await get_organisation(session, current_user.organisation_id)
+            if org is None:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Organisation not found")
+            org.daily_spend_limit = Decimal(str(body.daily_spend_limit)) if body.daily_spend_limit is not None else None
+            await session.flush()
+    except ProgrammingError:
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="Feature is not available. Run database migrations to enable it.",
+        ) from None
 
     return {
         "organisation_id": str(org.id),
@@ -156,13 +168,19 @@ async def set_team_spend_limit(
 ) -> dict[str, Any]:
     _require_admin(current_user)
 
-    async with session.begin():
-        await set_rls_org(session, current_user.organisation_id)
-        team = await get_team(session, team_id)
-        if team is None:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Team not found")
-        team.daily_spend_limit = Decimal(str(body.daily_spend_limit)) if body.daily_spend_limit is not None else None
-        await session.flush()
+    try:
+        async with session.begin():
+            await set_rls_org(session, current_user.organisation_id)
+            team = await get_team(session, team_id)
+            if team is None:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Team not found")
+            team.daily_spend_limit = Decimal(str(body.daily_spend_limit)) if body.daily_spend_limit is not None else None
+            await session.flush()
+    except ProgrammingError:
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="Feature is not available. Run database migrations to enable it.",
+        ) from None
 
     return {
         "team_id": team_id,
@@ -193,10 +211,16 @@ async def get_cost_controls(
     session: AsyncSession = Depends(get_db_session),
 ) -> CostControlsResponse:
     _require_admin(current_user)
-    async with session.begin():
-        await set_rls_org(session, current_user.organisation_id)
-        teams_result = await list_teams(session, org_id=current_user.organisation_id, page=1, page_size=1000)
-        org = await get_organisation(session, current_user.organisation_id)
+    try:
+        async with session.begin():
+            await set_rls_org(session, current_user.organisation_id)
+            teams_result = await list_teams(session, org_id=current_user.organisation_id, page=1, page_size=1000)
+            org = await get_organisation(session, current_user.organisation_id)
+    except ProgrammingError:
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="Feature is not available. Run database migrations to enable it.",
+        ) from None
 
 
     return CostControlsResponse(
@@ -219,18 +243,24 @@ async def update_cost_controls(
     session: AsyncSession = Depends(get_db_session),
 ) -> CostControlsResponse:
     _require_admin(current_user)
-    async with session.begin():
-        await set_rls_org(session, current_user.organisation_id)
-        if body.budget is not None:
-            org = await get_organisation(session, current_user.organisation_id)
-            if org is None:
-                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Organisation not found")
-            from decimal import Decimal
-            org.daily_spend_limit = Decimal(str(body.budget))
-            await session.flush()
+    try:
+        async with session.begin():
+            await set_rls_org(session, current_user.organisation_id)
+            if body.budget is not None:
+                org = await get_organisation(session, current_user.organisation_id)
+                if org is None:
+                    raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Organisation not found")
+                from decimal import Decimal
+                org.daily_spend_limit = Decimal(str(body.budget))
+                await session.flush()
 
-        teams_result = await list_teams(session, org_id=current_user.organisation_id, page=1, page_size=1000)
-        org = await get_organisation(session, current_user.organisation_id)
+            teams_result = await list_teams(session, org_id=current_user.organisation_id, page=1, page_size=1000)
+            org = await get_organisation(session, current_user.organisation_id)
+    except ProgrammingError:
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="Feature is not available. Run database migrations to enable it.",
+        ) from None
 
     return CostControlsResponse(
         teams=[
@@ -266,14 +296,20 @@ async def export_costs(
         "90d": "year",
     }
 
-    async with session.begin():
-        await set_rls_org(session, current_user.organisation_id)
-        rows = await get_cost_report(
-            session,
-            org_id=current_user.organisation_id,
-            group_by=group_by if group_by != "model" else "team",
-            period=period_map.get(period, "month"),
-        )
+    try:
+        async with session.begin():
+            await set_rls_org(session, current_user.organisation_id)
+            rows = await get_cost_report(
+                session,
+                org_id=current_user.organisation_id,
+                group_by=group_by if group_by != "model" else "team",
+                period=period_map.get(period, "month"),
+            )
+    except ProgrammingError:
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="Feature is not available. Run database migrations to enable it.",
+        ) from None
 
     output = io.StringIO()
     writer = csv.writer(output)
@@ -318,18 +354,24 @@ async def create_report(
 ) -> ReportResponse:
     _require_admin(current_user)
 
-    async with session.begin():
-        await set_rls_org(session, current_user.organisation_id)
-        report = await create_scheduled_report(
-            session,
-            organisation_id=current_user.organisation_id,
-            period=body.period,
-            group_by=body.group_by,
-            format=body.format,
-            recipients=body.recipients,
-            schedule_type=body.schedule_type,
-            account_id=current_user.account_id,
-        )
+    try:
+        async with session.begin():
+            await set_rls_org(session, current_user.organisation_id)
+            report = await create_scheduled_report(
+                session,
+                organisation_id=current_user.organisation_id,
+                period=body.period,
+                group_by=body.group_by,
+                format=body.format,
+                recipients=body.recipients,
+                schedule_type=body.schedule_type,
+                account_id=current_user.account_id,
+            )
+    except ProgrammingError:
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="Feature is not available. Run database migrations to enable it.",
+        ) from None
 
     return ReportResponse(
         id=str(report.id),
@@ -349,12 +391,18 @@ async def list_reports(
 ) -> list[ReportResponse]:
     _require_admin(current_user)
 
-    async with session.begin():
-        await set_rls_org(session, current_user.organisation_id)
-        reports = await list_scheduled_reports(
-            session,
-            organisation_id=current_user.organisation_id,
-        )
+    try:
+        async with session.begin():
+            await set_rls_org(session, current_user.organisation_id)
+            reports = await list_scheduled_reports(
+                session,
+                organisation_id=current_user.organisation_id,
+            )
+    except ProgrammingError:
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="Feature is not available. Run database migrations to enable it.",
+        ) from None
 
     return [
         ReportResponse(
@@ -378,13 +426,19 @@ async def delete_report(
 ) -> None:
     _require_admin(current_user)
 
-    async with session.begin():
-        await set_rls_org(session, current_user.organisation_id)
-        deleted = await delete_scheduled_report(
-            session,
-            report_id=report_id,
-            organisation_id=current_user.organisation_id,
-        )
+    try:
+        async with session.begin():
+            await set_rls_org(session, current_user.organisation_id)
+            deleted = await delete_scheduled_report(
+                session,
+                report_id=report_id,
+                organisation_id=current_user.organisation_id,
+            )
+    except ProgrammingError:
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="Feature is not available. Run database migrations to enable it.",
+        ) from None
 
     if not deleted:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Report not found")
@@ -410,84 +464,90 @@ async def get_anomalies(
 ) -> list[AnomalyResponse]:
     _require_admin(current_user)
 
-    async with session.begin():
-        await set_rls_org(session, current_user.organisation_id)
+    try:
+        async with session.begin():
+            await set_rls_org(session, current_user.organisation_id)
 
-        # Detect anomalies: daily org spend > 2x rolling 7-day avg
-        today = datetime.now(UTC).date()
-        lookback = today - timedelta(days=30)
+            # Detect anomalies: daily org spend > 2x rolling 7-day avg
+            today = datetime.now(UTC).date()
+            lookback = today - timedelta(days=30)
 
-        counts_q = (
-            select(
-                OrgDailyRunCount.run_date,
-                func.sum(OrgDailyRunCount.total_spend_usd).label("daily_spend"),
-            )
-            .where(
-                OrgDailyRunCount.organisation_id == current_user.organisation_id,
-                OrgDailyRunCount.run_date >= lookback,
-                OrgDailyRunCount.team_id.is_(None),
-            )
-            .group_by(OrgDailyRunCount.run_date)
-            .order_by(OrgDailyRunCount.run_date)
-        )
-
-        counts_result = await session.execute(counts_q)
-        daily_spends: list[tuple[object, object]] = [(r.run_date, r.daily_spend) for r in counts_result.all()]
-
-        anomalies: list[dict[str, Any]] = []
-        for i, (run_date, spend) in enumerate(daily_spends):
-            if i < 7:
-                continue
-            window = [s for _, s in daily_spends[max(0, i - 7) : i] if s is not None]
-            if not window:
-                continue
-            avg = sum(float(str(w)) for w in window) / len(window)
-            if avg == 0:
-                continue
-            spend_val = float(str(spend)) if spend else 0.0
-            ratio = spend_val / avg
-            if ratio > 2.0:
-                anomalies.append(
-                    {
-                        "id": "",
-                        "anomaly_date": str(run_date),
-                        "pipeline_id": None,
-                        "amount": spend_val,
-                        "baseline": avg,
-                        "percent_above": round((ratio - 1.0) * 100, 2),
-                        "dismissed": False,
-                    }
+            counts_q = (
+                select(
+                    OrgDailyRunCount.run_date,
+                    func.sum(OrgDailyRunCount.total_spend_usd).label("daily_spend"),
                 )
+                .where(
+                    OrgDailyRunCount.organisation_id == current_user.organisation_id,
+                    OrgDailyRunCount.run_date >= lookback,
+                    OrgDailyRunCount.team_id.is_(None),
+                )
+                .group_by(OrgDailyRunCount.run_date)
+                .order_by(OrgDailyRunCount.run_date)
+            )
 
-        # Also return any previously stored anomalies
-        stored = await list_anomalies(session, organisation_id=current_user.organisation_id, dismissed=False)
-        stored_dict: dict[str, Any] = {}
-        for a in stored:
-            key = str(a.anomaly_date)
-            if key not in stored_dict:
-                stored_dict[key] = {
-                    "id": str(a.id),
-                    "anomaly_date": str(a.anomaly_date),
-                    "pipeline_id": str(a.pipeline_id) if a.pipeline_id else None,
-                    "amount": float(a.amount),
-                    "baseline": float(a.baseline),
-                    "percent_above": float(a.percent_above),
-                    "dismissed": a.dismissed,
-                }
+            counts_result = await session.execute(counts_q)
+            daily_spends: list[tuple[object, object]] = [(r.run_date, r.daily_spend) for r in counts_result.all()]
 
-        # Merge: use stored dismissed status, and include stored anomalies
-        seen_dates: set[str] = set()
-        for a in anomalies:  # type: ignore[assignment]
-            key = a["anomaly_date"]  # type: ignore[index]
-            seen_dates.add(key)
-            if key in stored_dict:
-                a["dismissed"] = stored_dict[key]["dismissed"]  # type: ignore[index]
+            anomalies: list[dict[str, Any]] = []
+            for i, (run_date, spend) in enumerate(daily_spends):
+                if i < 7:
+                    continue
+                window = [s for _, s in daily_spends[max(0, i - 7) : i] if s is not None]
+                if not window:
+                    continue
+                avg = sum(float(str(w)) for w in window) / len(window)
+                if avg == 0:
+                    continue
+                spend_val = float(str(spend)) if spend else 0.0
+                ratio = spend_val / avg
+                if ratio > 2.0:
+                    anomalies.append(
+                        {
+                            "id": "",
+                            "anomaly_date": str(run_date),
+                            "pipeline_id": None,
+                            "amount": spend_val,
+                            "baseline": avg,
+                            "percent_above": round((ratio - 1.0) * 100, 2),
+                            "dismissed": False,
+                        }
+                    )
 
-        for key, sa in stored_dict.items():
-            if key not in seen_dates:
-                anomalies.append(sa)
+            # Also return any previously stored anomalies
+            stored = await list_anomalies(session, organisation_id=current_user.organisation_id, dismissed=False)
+            stored_dict: dict[str, Any] = {}
+            for a in stored:
+                key = str(a.anomaly_date)
+                if key not in stored_dict:
+                    stored_dict[key] = {
+                        "id": str(a.id),
+                        "anomaly_date": str(a.anomaly_date),
+                        "pipeline_id": str(a.pipeline_id) if a.pipeline_id else None,
+                        "amount": float(a.amount),
+                        "baseline": float(a.baseline),
+                        "percent_above": float(a.percent_above),
+                        "dismissed": a.dismissed,
+                    }
 
-        return [AnomalyResponse(**a) for a in anomalies]
+            # Merge: use stored dismissed status, and include stored anomalies
+            seen_dates: set[str] = set()
+            for a in anomalies:  # type: ignore[assignment]
+                key = a["anomaly_date"]  # type: ignore[index]
+                seen_dates.add(key)
+                if key in stored_dict:
+                    a["dismissed"] = stored_dict[key]["dismissed"]  # type: ignore[index]
+
+            for key, sa in stored_dict.items():
+                if key not in seen_dates:
+                    anomalies.append(sa)
+
+            return [AnomalyResponse(**a) for a in anomalies]
+    except ProgrammingError:
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="Feature is not available. Run database migrations to enable it.",
+        ) from None
 
 
 @router.get("/anomalies/dismiss/{anomaly_id}", status_code=204)
@@ -498,13 +558,19 @@ async def dismiss_anomaly_endpoint(
 ) -> None:
     _require_admin(current_user)
 
-    async with session.begin():
-        await set_rls_org(session, current_user.organisation_id)
-        dismissed = await dismiss_anomaly(
-            session,
-            anomaly_id=anomaly_id,
-            organisation_id=current_user.organisation_id,
-        )
+    try:
+        async with session.begin():
+            await set_rls_org(session, current_user.organisation_id)
+            dismissed = await dismiss_anomaly(
+                session,
+                anomaly_id=anomaly_id,
+                organisation_id=current_user.organisation_id,
+            )
+    except ProgrammingError:
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="Feature is not available. Run database migrations to enable it.",
+        ) from None
 
     if not dismissed:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Anomaly not found")
