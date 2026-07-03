@@ -2,9 +2,11 @@ import type { App, ComponentPublicInstance } from 'vue'
 import type { ErrorTrackerConfig, ErrorEventInput } from './types'
 import { BreadcrumbCollector, getCollector } from './breadcrumbs'
 import { gatherContext } from './context'
-import { enqueueError, initTransport, disposeTransport } from './transport'
+import { initTransport, disposeTransport } from './transport'
 import { onAuthChange } from '../api/client'
 import type { Router } from 'vue-router'
+import { MonitorBackendRegistry } from '../../monitor/registry'
+import type { UserInfo } from '../../monitor/types'
 
 interface ActiveConfig {
   appName: string
@@ -39,10 +41,13 @@ export function getErrorTracker(): ErrorTracker | null {
 }
 
 export class ErrorTracker {
+  private backends: MonitorBackendRegistry
   private breadcrumbs: BreadcrumbCollector
   private unsubRouter: (() => void) | null = null
   private _user: { id: string; email?: string; name?: string } | null = null
   private _tags: Record<string, string> = {}
+  private _boundErrorHandler: ((event: ErrorEvent) => void) | null = null
+  private _boundRejectionHandler: ((event: PromiseRejectionEvent) => void) | null = null
 
   constructor(config?: ErrorTrackerConfig) {
     _activeConfig = {
@@ -53,12 +58,19 @@ export class ErrorTracker {
       batchSize: config?.batchSize ?? 10,
     }
 
+    this.backends = new MonitorBackendRegistry()
+    if (config?.monitorBackends) {
+      for (const backend of config.monitorBackends) {
+        this.backends.add(backend)
+      }
+    }
+
     this.breadcrumbs = new BreadcrumbCollector(50)
 
     if (!isDisabled()) {
       this.breadcrumbs.startAutoCapture()
       initTransport(onAuthChange)
-      installWindowHandlers()
+      this.installWindowHandlers()
     }
   }
 
@@ -76,19 +88,28 @@ export class ErrorTracker {
   }
 
   get vuePlugin() {
-    return createVuePlugin()
+    return { install: (app: App) => this.installVuePlugin(app) }
   }
 
   captureError(error: Error, context?: Record<string, unknown>): void {
     if (isDisabled()) return
     const event = buildErrorEvent(error, context)
-    if (event) enqueueError(event)
+    if (event) {
+      this.backends.captureError(event, error, context)
+    }
   }
 
   captureMessage(message: string, level: 'error' | 'warning' | 'critical' = 'error'): void {
     if (isDisabled()) return
-    const event = buildMessageEvent(message, level)
-    enqueueError(event)
+    this.backends.captureMessage(message, level)
+  }
+
+  setUser(user: UserInfo | null): void {
+    this.backends.setUser(user)
+  }
+
+  setTags(tags: Record<string, string>): void {
+    this.backends.setTags(tags)
   }
 
   setUser(user: { id: string; email?: string; name?: string } | null): void {
@@ -104,11 +125,66 @@ export class ErrorTracker {
       this.unsubRouter()
       this.unsubRouter = null
     }
+    this.removeWindowHandlers()
     this.breadcrumbs.stopAutoCapture()
-    removeWindowHandlers()
+    this.backends.disposeAll()
     disposeTransport()
     _activeConfig = null
     _instance = null
+  }
+
+  installVuePlugin(app: App): void {
+    app.config.errorHandler = (err: unknown, _instance: unknown, info: string): void => {
+      if (isDisabled()) return
+      console.error(`[vue] ${info}:`, err)
+      const error = err instanceof Error ? err : new Error(String(err))
+      this.captureError(error, { vueInfo: info })
+    }
+
+    const origWarnHandler = app.config.warnHandler
+    app.config.warnHandler = (msg: string, instance: ComponentPublicInstance | null, trace: string): void => {
+      if (isDisabled()) return
+      this.captureMessage(msg, 'warning')
+      if (origWarnHandler) {
+        origWarnHandler(msg, instance, trace)
+      }
+    }
+  }
+
+  private installWindowHandlers(): void {
+    this._boundErrorHandler = (event: ErrorEvent) => this._onError(event)
+    this._boundRejectionHandler = (event: PromiseRejectionEvent) => this._onRejection(event)
+    window.addEventListener('error', this._boundErrorHandler)
+    window.addEventListener('unhandledrejection', this._boundRejectionHandler)
+  }
+
+  private removeWindowHandlers(): void {
+    if (this._boundErrorHandler) {
+      window.removeEventListener('error', this._boundErrorHandler)
+      this._boundErrorHandler = null
+    }
+    if (this._boundRejectionHandler) {
+      window.removeEventListener('unhandledrejection', this._boundRejectionHandler)
+      this._boundRejectionHandler = null
+    }
+  }
+
+  private _onError(event: ErrorEvent): void {
+    if (isDisabled()) return
+    const error = event.error ?? new Error(event.message ?? 'Unknown error')
+    const err = error instanceof Error ? error : new Error(String(error))
+    this.captureError(err, {
+      source: event.filename,
+      line: event.lineno,
+      col: event.colno,
+    })
+  }
+
+  private _onRejection(event: PromiseRejectionEvent): void {
+    if (isDisabled()) return
+    const reason = event.reason
+    const err = reason instanceof Error ? reason : new Error(String(reason))
+    this.captureError(err, { type: 'unhandled_promise_rejection' })
   }
 }
 
@@ -148,73 +224,4 @@ function buildErrorEvent(error: Error, extraContext?: Record<string, unknown>): 
     base.context_json = { ...base.context_json, ...extraContext }
   }
   return base
-}
-
-function buildMessageEvent(message: string, level: ErrorEventInput['level']): ErrorEventInput {
-  const base = buildBaseEvent()
-  base.level = level
-  base.message = message
-  return base
-}
-
-function createVuePlugin() {
-  return {
-    install(app: App): void {
-      app.config.errorHandler = (err: unknown, _instance: unknown, info: string): void => {
-        if (isDisabled()) return
-        console.error(`[vue] ${info}:`, err)
-        const error = err instanceof Error ? err : new Error(String(err))
-        const event = buildErrorEvent(error, { vueInfo: info })
-        if (event) enqueueError(event)
-      }
-
-      const origWarnHandler = app.config.warnHandler
-
-      app.config.warnHandler = (msg: string, instance: ComponentPublicInstance | null, trace: string): void => {
-        if (isDisabled()) return
-        const event = buildMessageEvent(msg, 'warning')
-        enqueueError(event)
-        if (origWarnHandler) {
-          origWarnHandler(msg, instance, trace)
-        }
-      }
-    },
-  }
-}
-
-let _installed = false
-
-const _errorHandler = (event: ErrorEvent): void => {
-  if (isDisabled() || !_instance) return
-  const error = event.error ?? new Error(event.message ?? 'Unknown error')
-  const err = error instanceof Error ? error : new Error(String(error))
-  const extraCtx: Record<string, unknown> = {
-    source: event.filename,
-    line: event.lineno,
-    col: event.colno,
-  }
-  const errorEvent = buildErrorEvent(err, extraCtx)
-  if (errorEvent) enqueueError(errorEvent)
-}
-
-const _rejectionHandler = (event: PromiseRejectionEvent): void => {
-  if (isDisabled() || !_instance) return
-  const reason = event.reason
-  const err = reason instanceof Error ? reason : new Error(String(reason))
-  const errorEvent = buildErrorEvent(err, { type: 'unhandled_promise_rejection' })
-  if (errorEvent) enqueueError(errorEvent)
-}
-
-function installWindowHandlers(): void {
-  if (_installed) return
-  _installed = true
-  window.addEventListener('error', _errorHandler)
-  window.addEventListener('unhandledrejection', _rejectionHandler)
-}
-
-function removeWindowHandlers(): void {
-  if (!_installed) return
-  window.removeEventListener('error', _errorHandler)
-  window.removeEventListener('unhandledrejection', _rejectionHandler)
-  _installed = false
 }

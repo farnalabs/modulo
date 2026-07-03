@@ -1,4 +1,12 @@
+import type { MonitorConfig, MonitorBackend } from './types'
+import { loadMonitorConfig } from './config'
+import { TransportBackend } from './backends'
+
 export { MonitorBackendRegistry } from './registry'
-export { loadMonitorConfig } from './config'
-export { loadBackends } from './backends'
-export type { MonitorBackend, MonitorConfig, UserInfo, ErrorEventInput, Breadcrumb } from './types'
+export type { MonitorBackend, MonitorConfig, MonitorEvent, UserInfo } from './types'
+export { loadMonitorConfig }
+
+export async function loadBackends(config: MonitorConfig): Promise<MonitorBackend[]> {
+  if (!config.enabled) return []
+  return [new TransportBackend()]
+}
