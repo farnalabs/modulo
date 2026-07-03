@@ -172,7 +172,7 @@ connector object for a single pipeline run. Every connector operation is wrapped
 - [x] Write resource `"message"` — posts message via `chat.postMessage`
 - [x] Slack API error responses (`ok: false`) raise `ValueError("Slack API error: ...")`
 - [x] `health_check()` runs `api.test` — returns `ok=True` on `ok: true`, `ok=False` with error detail otherwise
-- [ ] BDD scenarios missing — `slack_connector.feature` is a placeholder
+- [x] BDD scenarios exist — `slack_connector.feature` has 14 scenarios with real step definitions
 
 ### CI Runner Connectors
 

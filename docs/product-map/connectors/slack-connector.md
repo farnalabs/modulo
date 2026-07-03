@@ -110,3 +110,6 @@ Async Slack Web API connector implementing `ConnectorBase`. Provides read/write 
 - [ ] **No scope verification**: health check does not verify token has required scopes
 - [ ] **No specific exception types**: rate-limit, auth, and API errors all raise generic `ValueError` or `httpx.HTTPStatusError` — not domain-specific exception types
 
+## QA History
+- 2026-07-03: Cross-cutting QA: verified "GraphQL Operations" and "Issue Operations" sections already removed from main (previously undocumented fix). Corrected stale connector-hub BDD placeholder claim (was [ ], now [x] — 14 real scenarios exist). Added this QA History section.
+
