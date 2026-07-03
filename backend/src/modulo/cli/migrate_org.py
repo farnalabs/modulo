@@ -114,7 +114,7 @@ def _serialise(val: Any) -> Any:
     if isinstance(val, bytes):
         return val.hex()
     if isinstance(val, Decimal):
-        return float(val)
+        return str(val)
     if isinstance(val, set):
         return list(val)
     return val
@@ -162,7 +162,13 @@ async def _export_entity(
     offset = 0
 
     while True:
-        stmt: Any = select(model_cls).where(model_cls.organisation_id == org_id).offset(offset).limit(PAGE_SIZE)
+        stmt: Any = (
+            select(model_cls)
+            .where(model_cls.organisation_id == org_id)
+            .order_by(model_cls.id)
+            .offset(offset)
+            .limit(PAGE_SIZE)
+        )
         batch = (await session.execute(stmt)).scalars().all()
         if not batch:
             break
@@ -177,6 +183,7 @@ async def _export_organisation(session: Any, org_id: uuid.UUID) -> dict[str, Any
     org = await session.get(Organisation, org_id)
     if org is None:
         msg = f"Organisation {org_id} not found"
+        print(msg)
         raise SystemExit(msg)
     return _serialise_row(org)
 
@@ -205,17 +212,28 @@ async def _do_export(org_id: uuid.UUID, output: Path) -> dict[str, Any]:
 
 
 def _write_bundle(bundle: dict[str, Any], path: Path) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("w", encoding="utf-8") as f:
-        json.dump(bundle, f, ensure_ascii=False, indent=2, default=_serialise)
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with path.open("w", encoding="utf-8") as f:
+            json.dump(bundle, f, ensure_ascii=False, indent=2, default=_serialise)
+    except OSError as exc:
+        msg = f"Failed to write export to {path}: {exc}"
+        raise SystemExit(msg) from exc
 
 
 # ── Import ────────────────────────────────────────────────────────────────────
 
 
 def _load_bundle(path: Path) -> dict[str, Any]:
-    with path.open("r", encoding="utf-8") as f:
-        bundle: dict[str, Any] = json.load(f)
+    if not path.exists():
+        msg = f"Import file not found: {path}"
+        raise SystemExit(msg)
+    try:
+        with path.open("r", encoding="utf-8") as f:
+            bundle: dict[str, Any] = json.load(f)
+    except (OSError, json.JSONDecodeError) as exc:
+        msg = f"Failed to read import file {path}: {exc}"
+        raise SystemExit(msg) from exc
     if not _verify_hash(bundle):
         msg = "Import aborted: file hash verification failed"
         raise SystemExit(msg)
@@ -274,10 +292,11 @@ async def _do_import(
                             continue
 
                         if strategy == "rename" and name_val and name_field:
+                            max_attempts = 10000
                             base = f"{name_val}_imported"
                             new_name = base
                             counter = 2
-                            while True:
+                            while counter <= max_attempts:
                                 chk_stmt: Any = select(model_cls).where(
                                     model_cls.organisation_id == org_id,
                                     getattr(model_cls, name_field) == new_name,
@@ -287,6 +306,8 @@ async def _do_import(
                                     break
                                 new_name = f"{base}_{counter}"
                                 counter += 1
+                            else:
+                                raise SystemExit(f"Could not find available name for '{name_val}' after {max_attempts} attempts")
                             row[name_field] = new_name
                             existing = None
 
@@ -315,6 +336,7 @@ async def _do_import(
                 except Exception as exc:
                     rid = row.get("id", "?")
                     tqdm.write(f"  ERROR importing {table_name} row {rid}: {exc}")
+                    await session.rollback()
                     counts["errors"] += 1
 
         await session.commit()
@@ -351,8 +373,16 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _parse_uuid(raw: str, label: str = "UUID") -> uuid.UUID:
+    try:
+        return uuid.UUID(raw)
+    except (ValueError, AttributeError) as exc:
+        msg = f"Invalid {label}: {raw!r}"
+        raise SystemExit(msg) from exc
+
+
 def cmd_export(args: argparse.Namespace) -> None:
-    org_id = uuid.UUID(args.org_id)
+    org_id = _parse_uuid(args.org_id, "organisation ID")
     output: Path = args.output
     bundle = asyncio.run(_do_export(org_id, output))
     _write_bundle(bundle, output)
@@ -363,7 +393,7 @@ def cmd_export(args: argparse.Namespace) -> None:
 
 
 def cmd_import(args: argparse.Namespace) -> None:
-    org_id = uuid.UUID(args.org_id)
+    org_id = _parse_uuid(args.org_id, "organisation ID")
     input_path: Path = args.input
     strategy: ConflictStrategy = args.conflict
 
