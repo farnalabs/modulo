@@ -38,14 +38,14 @@ Async Linear GraphQL API connector implementing `ConnectorBase`. BDD coverage: 8
 - [x] Define shared issue field selection fragment (`_ISSUE_FIELDS`) for consistent responses
 - [x] All GraphQL operations use the same endpoint `https://api.linear.app/graphql`
 - [ ] Support GraphQL query complexity limits and cost-based rate limiting
-- [ ] Support request cancellation via `asyncio` timeout (httpx client has timeout=30s configured)
+- [x] Support request cancellation via `asyncio` timeout (httpx client has timeout=30s configured)
 
 ### Issue Operations — read, update, and search
 
 - [x] Get single issue by ID via `query("issue")` with `issue_id` filter
 - [x] Return issue fields: id, title, description, state, priority, assignee, labels, createdAt, updatedAt
 - [x] Search issues via `query("search")` with text `query` and optional `limit`
-- [x] Default search limit to 50
+- [x] Default search limit to 100
 - [x] Create issue via `write("issue")` with `team_id`, `title`, optional `description`, `priority`, `assignee_id`, `label_ids`
 - [x] Update issue fields via `write("issue_update")` with `issue_id` and fields
 - [x] Raise `ValueError` for unsupported resources in `query()` and `write()`
@@ -78,6 +78,21 @@ Async Linear GraphQL API connector implementing `ConnectorBase`. BDD coverage: 8
 - [ ] Detect expired API keys vs network errors vs insufficient permissions
 - [ ] Per-operation permission check before mutation calls
 
+### Error Handling
+
+- [x] `health_check` catches `httpx.HTTPStatusError` — returns `HealthResult(ok=False)` with status code and response text
+- [x] `health_check` catches generic `Exception` — returns `HealthResult(ok=False)` with truncated message
+- [x] `_graphql` catches `httpx.HTTPStatusError` — raises `ValueError` with status code and response text
+- [x] `_graphql` catches `httpx.TimeoutException` and `httpx.ConnectError` — raises `ValueError` with connection error detail
+- [x] `_graphql` catches JSON decode errors — raises `ValueError` with parsing error detail
+- [x] `_graphql` detects GraphQL `"errors"` key in response — raises `ValueError` with error details
+- [x] `query("issue")` with missing `id` filter — raises `ValueError` with descriptive message
+- [x] `write("issue_update")` with missing `id` — raises `ValueError` with descriptive message
+- [x] `write("issue")` with `success: false` — raises `ValueError` with issue title
+- [x] `write("issue_update")` with `success: false` — raises `ValueError` with issue id
+- [x] `query()` with unsupported resource — raises `ValueError`
+- [x] `write()` with unsupported resource — raises `ValueError`
+
 ### Prompt Portability — GraphQL query maintenance
 
 - [ ] GraphQL queries are hard-coded in source — no query discovery
@@ -95,5 +110,6 @@ Async Linear GraphQL API connector implementing `ConnectorBase`. BDD coverage: 8
 - [ ] **No rate-limit handling**: no GraphQL query cost measurement, no 429 handling
 
 ## QA History
+- 2026-07-03: Cross-cutting QA (index 110): Fixed HTTP/JSON error handling in `_graphql` (wraps HTTPStatusError, TimeoutException, ConnectError, JSONDecodeError as ValueError). Added 5 resilience unit tests (test_linear_resilience.py). Fixed stale checkbox: timeout confirmed configured (30s). Fixed search default limit (50→100). Added Error Handling section (12 behaviour checkboxes). Status: partial (known gaps unchanged).
 - 2026-07-01: Cross-cutting QA: fixed frontmatter (added unit-tests), removed outdated known gaps #7 (BDD placeholder → 5 real scenarios) and #8 (unit tests exist), added 3 BDD error-path scenarios + step definitions, added 4 unit tests (missing id, update failure, GraphQL error), fixed search to respect `q.limit` via `first:$limit`, consolidated gaps from 9→7
 
