@@ -51,9 +51,9 @@ export const useLocaleStore = defineStore('locale', () => {
         if (backendLocale && isSupportedLocale(backendLocale)) {
           detected = backendLocale
         }
-      } catch {
-        // Fall through
       }
+    } catch {
+      // Fall through
     }
 
     // 2. Try localStorage
