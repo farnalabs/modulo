@@ -411,6 +411,12 @@ async def dashboard_summary(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
         )
+    except Exception:
+        _log.exception("dashboard.summary_failed")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="An unexpected error occurred while loading the dashboard.",
+        )
 
 
 @router.get("/trends")
