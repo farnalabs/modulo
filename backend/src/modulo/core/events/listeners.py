@@ -72,13 +72,20 @@ def _make_listener(action: str) -> Callable[[Any, Any, Any], None]:
             return
 
         try:
-            org_id = str(target.organisation_id)
+            org_id_raw = target.organisation_id
         except AttributeError:
             _log.warning(
                 "event_listener.no_org_id",
                 extra={"resource_type": resource_type, "action": action_name},
             )
             return
+        if org_id_raw is None:
+            _log.warning(
+                "event_listener.null_org_id",
+                extra={"resource_type": resource_type, "action": action_name},
+            )
+            return
+        org_id = str(org_id_raw)
 
         try:
             loop = asyncio.get_running_loop()
@@ -90,13 +97,20 @@ def _make_listener(action: str) -> Callable[[Any, Any, Any], None]:
             return
 
         try:
-            resource_id = str(target.id)
+            resource_id_raw = target.id
         except AttributeError:
             _log.warning(
                 "event_listener.no_id",
                 extra={"resource_type": resource_type, "action": action_name},
             )
             return
+        if resource_id_raw is None:
+            _log.warning(
+                "event_listener.null_id",
+                extra={"resource_type": resource_type, "action": action_name},
+            )
+            return
+        resource_id = str(resource_id_raw)
 
         version = _version_counters[org_id] + 1
         _version_counters[org_id] = version
@@ -114,6 +128,9 @@ def _make_listener(action: str) -> Callable[[Any, Any, Any], None]:
 
         def _on_task_done(t: asyncio.Task[Any]) -> None:
             _background_tasks.discard(t)
+            if t.cancelled():
+                _log.warning("event_listener.task_cancelled")
+                return
             exc = t.exception()
             if exc is not None:
                 _log.warning("event_listener.publish_failed", exc_info=exc)
