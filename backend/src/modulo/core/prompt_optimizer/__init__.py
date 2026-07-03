@@ -2,10 +2,21 @@
 
 import json
 import logging
+import re
 from dataclasses import dataclass
 from typing import Any, Protocol
 
 from langchain_core.messages import BaseMessage, HumanMessage, SystemMessage
+
+__all__ = [
+    "SYSTEM_PROMPT",
+    "LLMCallable",
+    "OptimizationResult",
+    "PromptOptimizer",
+    "_build_failure_context",
+    "_ensure_dict",
+    "_parse_llm_response",
+]
 
 _log = logging.getLogger(__name__)
 
@@ -47,6 +58,17 @@ class LLMCallable(Protocol):
     async def __call__(self, messages: list[BaseMessage]) -> str: ...
 
 
+def _ensure_dict(value: Any) -> dict[str, Any]:
+    if isinstance(value, dict):
+        return value
+    if isinstance(value, str):
+        try:
+            return json.loads(value)
+        except json.JSONDecodeError:
+            return {}
+    return {}
+
+
 def _build_failure_context(
     current_prompt: str,
     eval_results: list[dict[str, Any]],
@@ -54,6 +76,8 @@ def _build_failure_context(
 ) -> str:
     failures = []
     for er in eval_results:
+        if not isinstance(er, dict):
+            continue
         eval_id = str(er.get("eval_id", ""))
         edef = eval_definitions.get(eval_id, {})
         failures.append(
@@ -63,7 +87,7 @@ def _build_failure_context(
                 "passed": er.get("passed", False),
                 "score": er.get("score"),
                 "detail": er.get("detail", ""),
-                "eval_config": edef.get("config_json", {}),
+                "eval_config": _ensure_dict(edef.get("config_json", {})),
             }
         )
 
@@ -76,20 +100,24 @@ def _build_failure_context(
 </failing_evals>"""
 
 
+_CODE_FENCE_RE = re.compile(r"```(?:json)?\s*\n(.*?)```", re.DOTALL)
+
+
 def _parse_llm_response(raw: str) -> OptimizationResult:
     cleaned = raw.strip()
-    start = cleaned.find("```")
-    if start != -1:
-        after_fence = cleaned[start + 3 :]
-        lang_end = after_fence.find("\n")
-        if lang_end != -1:
-            after_fence = after_fence[lang_end + 1 :]
-        end = after_fence.find("```")
-        if end != -1:
-            after_fence = after_fence[:end]
-        cleaned = after_fence.strip()
+    if not cleaned:
+        raise json.JSONDecodeError("Empty LLM response", raw, 0)
 
-    parsed = json.loads(cleaned)
+    try:
+        parsed = json.loads(cleaned)
+    except json.JSONDecodeError:
+        match = _CODE_FENCE_RE.search(cleaned)
+        if match:
+            cleaned = match.group(1).strip()
+            parsed = json.loads(cleaned)
+        else:
+            raise
+
     return OptimizationResult(
         suggested_prompt=parsed["suggested_prompt"],
         rationale=parsed["rationale"],
