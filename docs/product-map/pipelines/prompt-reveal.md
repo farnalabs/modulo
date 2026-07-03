@@ -6,6 +6,7 @@ bdd:
   - backend/tests/bdd/features/ui/run_detail.feature
 unit-tests:
   - backend/tests/unit/api/test_prompt_reveal.py
+  - backend/tests/unit/api/test_prompt_reveal_programming_error.py
 code:
   - backend/src/modulo/api/routes/runs.py
   - backend/src/modulo/db/models/agent.py
@@ -58,10 +59,22 @@ sensitive data.
 - [x] Agent not found returns 404
 - [x] Non-agent node returns prompt without system message
 
+### Backend — Error Handling
+- [x] Missing DB table (ProgrammingError) returns 501 Not Implemented
+- [x] Run not found returns 404
+- [x] Snapshot not found returns 404
+- [x] Node not found returns 404
+- [x] Agent not found returns 404
+- [x] Auth required (401/403)
+
 ### Backend — prompt_always_visible
 - [x] Agent model has prompt_always_visible field (defaults to false)
 - [x] Response includes prompt_always_visible flag
 - [x] Server always masks credential values regardless of flag
+
+### Backend — prompt_always_visible (Agent Config)
+- [ ] Agent editor UI includes prompt_always_visible toggle
+- [x] Agent API CRUD supports prompt_always_visible field
 
 ### Frontend — Run Detail View
 - [x] "Prompt" column in execution trace table
@@ -70,15 +83,29 @@ sensitive data.
 - [x] Revealed prompt displayed in a dialog with token count
 - [x] Copy prompt button in dialog
 - [x] Per-node reveal isolation (revealing one node does not reveal others)
-- [ ] 30-second TTL on revealed prompt DOM value
-
-### Backend — prompt_always_visible (Agent Config)
-- [ ] Agent editor UI includes prompt_always_visible toggle
-- [ ] Agent API CRUD supports prompt_always_visible field
+- [x] 30-second TTL on revealed prompt DOM value
+- [x] Auto-reveal dialog when prompt_always_visible is true (after API call)
 
 ## Known Gaps
-- No 30-second TTL on the revealed prompt DOM value
-  (PRD §8.9 — Redis-backed token mechanism not implemented for prompt reveal)
 - No Agent editor UI toggle for prompt_always_visible
-- Agent CRUD API may not expose prompt_always_visible field for create/update
-- Frontend does not auto-reveal when prompt_always_visible is true (requires API call first)
+- No website docs page for prompt-reveal API
+- 30-second TTL on revealed prompt DOM value is client-side only
+  (PRD §8.9 calls for Redis-backed token mechanism — only the DOM timer exists)
+
+## QA History
+
+### 2026-07-03 — Cross-cutting QA (feat-pipelines-prompt-reveal-104)
+- **Finding 1 (CRITICAL)**: `reveal_node_prompt` endpoint didn't catch `ProgrammingError`
+  — Fixed: wrapped function body in try/except ProgrammingError returning 501.
+- **Finding 2 (MAJOR)**: Agent API schemas didn't expose `prompt_always_visible`
+  — Fixed: added to AgentCreate, AgentUpdate, AgentResponse, and create_agent endpoint call.
+- **Finding 3 (MAJOR)**: No BDD scenarios for prompt reveal
+  — Added 2 scenarios to `run_detail.feature` with Playwright step definitions in test_ui.py.
+- **Finding 4 (MAJOR)**: Missing unit test for `ProgrammingError`→501 on prompt reveal
+  — Fixed: created `test_prompt_reveal_programming_error.py`.
+- **Finding 5 (MAJOR)**: Missing error path tests (agent/snapshot 404)
+  — Fixed: added `test_reveal_snapshot_not_found_returns_404` and `test_reveal_agent_not_found_returns_404` to test_prompt_reveal.py.
+- **Finding 6 (MAJOR)**: Frontend doesn't auto-reveal when `prompt_always_visible` is true
+  — Fixed: added `showPrompt(nodeName)` call in `revealPrompt()` after successful API response when flag is true.
+- **Finding 8 (MINOR)**: No website docs stub for prompt-reveal
+  — Fixed: created stub at Website/modulo-website/src/docs/pipelines/prompt-reveal.md.
