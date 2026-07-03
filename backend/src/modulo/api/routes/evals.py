@@ -495,49 +495,61 @@ async def compare_evals(
     principal: AuthenticatedPrincipal = Depends(get_current_user),
 ) -> dict[str, Any]:
     """Compare eval results between two runs side by side."""
-    async with session.begin():
-        await set_rls_org(session, principal.organisation_id)
-        await set_rls_user_context(session, principal.account_id, principal.org_role)
+    try:
+        async with session.begin():
+            await set_rls_org(session, principal.organisation_id)
+            await set_rls_user_context(session, principal.account_id, principal.org_role)
 
-        run_a = (
-            await session.execute(
-                select(Run).where(
-                    Run.id == body.run_id_a,
-                    Run.organisation_id == principal.organisation_id,
+            run_a = (
+                await session.execute(
+                    select(Run).where(
+                        Run.id == body.run_id_a,
+                        Run.organisation_id == principal.organisation_id,
+                    )
                 )
-            )
-        ).scalar_one_or_none()
-        if run_a is None:
-            raise HTTPException(status_code=404, detail="Run A not found")
+            ).scalar_one_or_none()
+            if run_a is None:
+                raise HTTPException(status_code=404, detail="Run A not found")
 
-        run_b = (
-            await session.execute(
-                select(Run).where(
-                    Run.id == body.run_id_b,
-                    Run.organisation_id == principal.organisation_id,
+            run_b = (
+                await session.execute(
+                    select(Run).where(
+                        Run.id == body.run_id_b,
+                        Run.organisation_id == principal.organisation_id,
+                    )
                 )
+            ).scalar_one_or_none()
+            if run_b is None:
+                raise HTTPException(status_code=404, detail="Run B not found")
+
+            results_a = (
+                (await session.execute(select(EvalResult).where(EvalResult.run_id == body.run_id_a))).scalars().all()
             )
-        ).scalar_one_or_none()
-        if run_b is None:
-            raise HTTPException(status_code=404, detail="Run B not found")
 
-        results_a = (
-            (await session.execute(select(EvalResult).where(EvalResult.run_id == body.run_id_a))).scalars().all()
-        )
-
-        results_b = (
-            (await session.execute(select(EvalResult).where(EvalResult.run_id == body.run_id_b))).scalars().all()
+            results_b = (
+                (await session.execute(select(EvalResult).where(EvalResult.run_id == body.run_id_b))).scalars().all()
+            )
+    except ProgrammingError:
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="Feature is not available. Run database migrations to enable it.",
         )
 
     eval_ids = {r.eval_id for r in results_a} | {r.eval_id for r in results_b}
     eval_defs = {}
     if eval_ids:
-        async with session.begin():
-            defs_rows = (
-                (await session.execute(select(EvalDefinition).where(EvalDefinition.id.in_(eval_ids)))).scalars().all()
+        try:
+            async with session.begin():
+                defs_rows = (
+                    (await session.execute(select(EvalDefinition).where(EvalDefinition.id.in_(eval_ids)))).scalars().all()
+                )
+                for d in defs_rows:
+                    eval_defs[d.id] = d
+        except ProgrammingError:
+            raise HTTPException(
+                status_code=status.HTTP_501_NOT_IMPLEMENTED,
+                detail="Feature is not available. Run database migrations to enable it.",
             )
-            for d in defs_rows:
-                eval_defs[d.id] = d
 
     results_by_eval_a: dict[uuid.UUID, Any] = {}
     for r in results_a:
