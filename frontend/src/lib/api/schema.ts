@@ -1700,6 +1700,8 @@ export interface components {
       run_id: string
       status: string
       pipeline_id: string
+      run_number: number | null
+      pipeline_name: string | null
       langgraph_thread_id: string
       error_detail: string | null
       error_code: string | null
@@ -1710,6 +1712,7 @@ export interface components {
     }
     RunIOResponse: {
       run_id: string
+      run_number: number | null
       status: string
       input_payload: Record<string, unknown> | null
       outputs_json: Record<string, unknown> | null
