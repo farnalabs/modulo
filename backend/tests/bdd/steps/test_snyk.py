@@ -8,7 +8,7 @@ from modulo.connectors.snyk import SnykConnector
 
 try:
     scenarios("../features/connectors/snyk.feature")
-except Exception:
+except (FileNotFoundError, OSError):
     pass
 
 # ---------------------------------------------------------------------------

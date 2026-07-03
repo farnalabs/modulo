@@ -12,7 +12,7 @@ from modulo.connectors.onepassword import OnePasswordConnector
 
 try:
     scenarios("../features/connectors/onepassword.feature")
-except Exception:
+except (FileNotFoundError, OSError):
     pass
 
 TOKEN = "op_test_token"

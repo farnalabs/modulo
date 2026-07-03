@@ -8,7 +8,7 @@ from modulo.connectors.sonarqube import SonarQubeConnector
 
 try:
     scenarios("../features/connectors/sonarqube.feature")
-except Exception:
+except (FileNotFoundError, OSError):
     pass
 
 # ---------------------------------------------------------------------------
