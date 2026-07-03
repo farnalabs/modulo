@@ -226,7 +226,7 @@
                   {{ event.resource_type }}
                 </span>
                 <span v-if="event.resource_id" class="ml-1 font-mono text-xs text-muted-foreground/70">
-                  / {{ truncateId(event.resource_id) }}
+                  / {{ shortId(event.resource_id) }}
                 </span>
                 <span v-else class="text-muted-foreground/50">&mdash;</span>
               </td>
@@ -362,10 +362,6 @@ const exporting = ref(false)
 const exportingJsonl = ref(false)
 const verifying = ref(false)
 const chainResult = ref<{ valid: boolean; event_count?: number; error?: string } | null>(null)
-
-function truncateId(id: string): string {
-  return shortId(id)
-}
 
 function formatActor(actorId: string | null): string {
   if (!actorId) return '—'

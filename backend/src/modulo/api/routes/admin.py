@@ -184,7 +184,7 @@ async def global_search(
                 ).scalar() or 0
 
                 for row in rows:
-                    display_id = f"#{row.run_number}" if row.run_number is not None else str(row.id)
+                    display_id = f"#{row.run_number}" if row.run_number is not None else f"#{str(row.id)[:8]}"
                     all_items.append(
                         (
                             row.relevance,
