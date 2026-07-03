@@ -94,6 +94,10 @@ class Settings(BaseSettings):
     modulo_csrf_enabled: bool = Field(True)
     modulo_csrf_exempt_paths: str = Field("/api/v1/health,/api/v1/triggers,/api/v1/auth")
 
+    # Comma-separated list of additional origins to allow in connect-src CSP.
+    # Used for custom Grafana Faro collectors, self-hosted Sentry instances, etc.
+    modulo_monitor_domains: str = Field("")
+
     # Plugin discovery — when enabled, scans installed packages for entry points
     # registered in the ``modulo.connectors`` and ``modulo.model_backends`` groups.
     # Set to "false" to disable plugin discovery at startup.

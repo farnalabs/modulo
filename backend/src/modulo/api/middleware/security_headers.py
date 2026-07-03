@@ -20,7 +20,16 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
 
     def __init__(self, app: FastAPI) -> None:
         super().__init__(app)
-        self._csp = "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'"
+        settings = get_settings()
+        csp_connect = "'self' ws: wss: *.ingest.sentry.io *.datadoghq.com *.dd.dg *.rum.browserevents.com"
+        if settings.modulo_monitor_domains:
+            csp_connect += " " + settings.modulo_monitor_domains
+        self._csp = (
+            f"default-src 'self'; connect-src {csp_connect}; "
+            "script-src 'self' 'unsafe-inline'; "
+            "style-src 'self' 'unsafe-inline'; "
+            "frame-ancestors 'none'"
+        )
         self._hsts = "max-age=31536000; includeSubDomains"
         self._xfo = "DENY"
         self._cto = "nosniff"
