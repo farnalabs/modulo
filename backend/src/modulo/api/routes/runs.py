@@ -62,6 +62,8 @@ class RunResponse(BaseModel):
     run_id: uuid.UUID
     status: str
     pipeline_id: uuid.UUID
+    run_number: int | None = None
+    pipeline_name: str | None = None
     langgraph_thread_id: str
     error_detail: str | None = None
     error_code: str | None = None
@@ -81,10 +83,16 @@ def _build_run_response(run: Any) -> RunResponse:
     if run.langgraph_thread_id:
         trace_id = str(uuid.uuid5(_NAMESPACE_TRACE, run.langgraph_thread_id))
 
+    pipeline_name: str | None = None
+    if run.pipeline is not None:
+        pipeline_name = run.pipeline.name
+
     return RunResponse(
         run_id=run.id,
         status=run.status,
         pipeline_id=run.pipeline_id,
+        run_number=run.run_number,
+        pipeline_name=pipeline_name,
         langgraph_thread_id=run.langgraph_thread_id,
         error_detail=run.error_detail,
         error_code=run.error_code,
@@ -308,6 +316,7 @@ async def _run_in_background(
 
 class RunIOResponse(BaseModel):
     run_id: uuid.UUID
+    run_number: int | None = None
     status: str
     input_payload: dict[str, Any] | None = None
     outputs_json: dict[str, Any] | None = None

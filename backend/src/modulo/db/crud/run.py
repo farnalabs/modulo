@@ -83,6 +83,7 @@ async def get_run_io(
         return None
     return {
         "run_id": run_id,
+        "run_number": run.run_number,
         "status": run.status,
         "input_payload": run.input_payload,
         "outputs_json": run.outputs_json,

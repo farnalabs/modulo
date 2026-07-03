@@ -42,7 +42,7 @@
             class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50"
           >
             <option value="">All pipeline outputs</option>
-            <option v-for="n in nodes" :key="n.id" :value="n.id">{{ n.label || n.node_type || n.id.slice(0, 8) }}</option>
+            <option v-for="n in nodes" :key="n.id" :value="n.id">{{ n.label || n.node_type || shortId(n.id) }}</option>
           </select>
           <div v-if="nodesLoading" class="mt-1 text-xs text-muted-foreground">Loading nodes...</div>
         </div>
@@ -201,7 +201,7 @@
                       threshold: {{ ev.pass_threshold.toFixed(2) }}
                     </span>
                     <span v-if="ev.node_id" class="text-xs text-muted-foreground">
-                      node: {{ ev.node_id.slice(0, 8) }}
+                      node: {{ shortId(ev.node_id) }}
                     </span>
                   </div>
                 </div>
@@ -262,6 +262,7 @@ import { ref, reactive, computed, onMounted } from 'vue'
 import { useApi } from '../composables/useApi'
 import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
+import { shortId } from '../../utils/format'
 import { usePlanStore } from '../stores/planStore'
 import FeatureGate from '../components/FeatureGate.vue'
 import PageTabs from "../components/PageTabs.vue"

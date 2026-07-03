@@ -41,7 +41,7 @@
           </div>
           <div>
             <span class="text-xs font-medium text-muted-foreground">Org ID</span>
-            <p class="mt-0.5 font-mono text-xs text-muted-foreground">{{ orgInfo.id }}</p>
+            <p class="mt-0.5 font-mono text-xs text-muted-foreground">{{ orgInfo.slug || shortId(orgInfo.id) }}</p>
           </div>
         </div>
       </div>
@@ -177,6 +177,8 @@ import {
 } from '../components/ui/dialog'
 import { usePlanStore } from '../stores/planStore'
 import FeatureGate from '../components/FeatureGate.vue'
+import LockIcon from '../components/LockIcon.vue'
+import { shortId } from '../utils/format'
 
 const planStore = usePlanStore()
 const router = useRouter()

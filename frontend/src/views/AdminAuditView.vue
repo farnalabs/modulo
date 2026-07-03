@@ -264,7 +264,7 @@
                       <h4 class="mb-1 text-xs font-semibold uppercase text-muted-foreground">Previous Hash</h4>
                       <Tooltip :delay-duration="300">
                         <TooltipTrigger as-child>
-                          <code class="block truncate rounded bg-background px-2 py-1 text-xs font-mono">{{ expandedEvent.previous_hash }}</code>
+                          <code class="block truncate rounded bg-background px-2 py-1 text-xs font-mono">{{ shortId(expandedEvent.previous_hash) }}</code>
                         </TooltipTrigger>
                         <TooltipContent side="top" class="max-w-xs">
                           <p class="font-mono text-xs break-all">{{ expandedEvent.previous_hash }}</p>
@@ -275,17 +275,17 @@
                       <h4 class="mb-1 text-xs font-semibold uppercase text-muted-foreground">Event ID</h4>
                       <Tooltip :delay-duration="300">
                         <TooltipTrigger as-child>
-                          <code class="block truncate rounded bg-background px-2 py-1 text-xs font-mono">{{ expandedEvent.id }}</code>
+                          <code class="block truncate rounded bg-background px-2 py-1 text-xs font-mono">{{ shortId(expandedEvent.id) }}</code>
                         </TooltipTrigger>
                         <TooltipContent side="top" class="max-w-xs">
-                          <p class="font-mono text-xs break-all">{{ expandedEvent.id }}</p>
+                          <p class="font-mono text-xs break-all">{{ shortId(expandedEvent.id) }}</p>
                         </TooltipContent>
                       </Tooltip>
                     </div>
                   </div>
                   <div v-if="expandedEvent?.request_id">
                     <h4 class="mb-1 text-xs font-semibold uppercase text-muted-foreground">Request ID</h4>
-                    <code class="rounded bg-background px-2 py-1 text-xs font-mono">{{ expandedEvent.request_id }}</code>
+                    <code class="rounded bg-background px-2 py-1 text-xs font-mono">{{ shortId(expandedEvent.request_id) }}</code>
                   </div>
                 </div>
               </td>
@@ -329,6 +329,8 @@ import ErrorAlert from '../components/shared/ErrorAlert.vue'
 import { formatError } from '../lib/utils'
 import { usePlanStore } from '../stores/planStore'
 import FeatureGate from '../components/FeatureGate.vue'
+import LockIcon from '../components/LockIcon.vue'
+import { shortId } from '../utils/format'
 import {
   Tooltip,
   TooltipTrigger,
@@ -362,12 +364,12 @@ const verifying = ref(false)
 const chainResult = ref<{ valid: boolean; event_count?: number; error?: string } | null>(null)
 
 function truncateId(id: string): string {
-  return id.length > 8 ? id.slice(0, 8) + '...' : id
+  return shortId(id)
 }
 
 function formatActor(actorId: string | null): string {
   if (!actorId) return '—'
-  return 'usr_' + actorId.slice(0, 8)
+  return 'usr_' + shortId(actorId).replace('#', '')
 }
 
 function formatTimestamp(ts: string | null): string {

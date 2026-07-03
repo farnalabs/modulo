@@ -32,6 +32,7 @@ from modulo.core.hitl_manager import (
 from modulo.core.pipeline_engine.executor import PipelineExecutor
 from modulo.db.crud.run import get_run, update_run_status
 from modulo.db.models.hitl_claim import HitlClaim
+from modulo.db.models.pipeline import Pipeline
 from modulo.db.rls import set_rls_org
 
 router = APIRouter(prefix="/api/v1", tags=["hitl"])
@@ -83,6 +84,7 @@ class GateResponse(BaseModel):
     run_id: uuid.UUID
     gate_id: str
     pipeline_id: uuid.UUID
+    pipeline_name: str | None = None
     claimed_by: uuid.UUID | None = None
     claimed_at: str | None = None
     expires_at: str | None = None
@@ -451,7 +453,14 @@ async def list_run_pending_gates(
         )
         gates = list(result.scalars())
 
-    return PendingGatesResponse(gates=[_gate_to_response(g) for g in gates])
+    pipeline_name: str | None = None
+    if gates:
+        pipeline = await session.get(Pipeline, gates[0].pipeline_id)
+        pipeline_name = pipeline.name if pipeline else None
+
+    return PendingGatesResponse(
+        gates=[_gate_to_response(g, pipeline_name=pipeline_name) for g in gates]
+    )
 
 
 @router.get(
@@ -468,7 +477,18 @@ async def list_org_pending_gates(
         await set_rls_org(session, principal.organisation_id)
         gates = await mgr.list_pending(session, principal.organisation_id)
 
-    return PendingGatesResponse(gates=[_gate_to_response(g) for g in gates])
+    pipeline_ids = list({g.pipeline_id for g in gates})
+    pipeline_map: dict[uuid.UUID, str] = {}
+    if pipeline_ids:
+        pipeline_rows = await session.execute(
+            select(Pipeline.id, Pipeline.name).where(Pipeline.id.in_(pipeline_ids))
+        )
+        for pid, pname in pipeline_rows.all():
+            pipeline_map[pid] = pname
+
+    return PendingGatesResponse(
+        gates=[_gate_to_response(g, pipeline_name=pipeline_map.get(g.pipeline_id)) for g in gates]
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -476,11 +496,12 @@ async def list_org_pending_gates(
 # ---------------------------------------------------------------------------
 
 
-def _gate_to_response(g: HitlClaim) -> GateResponse:
+def _gate_to_response(g: HitlClaim, pipeline_name: str | None = None) -> GateResponse:
     return GateResponse(
         run_id=g.run_id,
         gate_id=g.gate_id,
         pipeline_id=g.pipeline_id,
+        pipeline_name=pipeline_name,
         claimed_by=g.account_id,
         claimed_at=g.claimed_at.isoformat() if g.claimed_at else None,
         expires_at=g.expires_at.isoformat() if g.expires_at else None,

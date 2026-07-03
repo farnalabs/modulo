@@ -54,7 +54,7 @@
       >
         <div class="flex items-start justify-between gap-2">
           <span class="text-sm font-medium truncate flex-1">
-            {{ session.name || `Session ${session.id.slice(0, 8)}` }}
+            {{ session.name || `Session ${session.session_number ? '#' + session.session_number : shortId(session.id)}` }}
           </span>
           <button
             class="remy-session-delete shrink-0"
@@ -92,6 +92,7 @@
 </template>
 
 <script setup lang="ts">
+import { shortId } from "@/utils/format";
 import { useRemyStore } from "@/composables/useRemyStore";
 import Button from "@/components/ui/button/Button.vue";
 

@@ -148,6 +148,7 @@ import '@vue-flow/core/dist/style.css'
 import '@vue-flow/core/dist/theme-default.css'
 import BackLink from '../../components/BackLink.vue'
 import { useApi } from '../../composables/useApi'
+import { shortId } from '../../../utils/format'
 import PortDefinitionPanel from '../../components/pipeline/composite/PortDefinitionPanel.vue'
 import PublishCompositeFlow from '../../components/pipeline/composite/PublishCompositeFlow.vue'
 import type { ParameterPort } from '../../types/pipeline'
@@ -183,7 +184,7 @@ function convertBackendNode(n: any): any {
     id: n.id,
     type: nodeType,
     position: n.position || { x: 0, y: 0 },
-    data: { label: n.label || n.id.slice(0, 8) },
+    data: { label: n.label || 'Node ' + shortId(n.id) },
   }
 }
 
