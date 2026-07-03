@@ -26,25 +26,35 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import (
     Ed25519PublicKey,
 )
 
+__all__ = [
+    "PUBLISHER_TRUST_COMMUNITY",
+    "PUBLISHER_TRUST_REVOKED",
+    "PUBLISHER_TRUST_VERIFIED",
+    "Publisher",
+    "RegistryEntry",
+    "compute_bundle_hash",
+    "compute_popularity_score",
+    "fingerprint",
+    "generate_signing_key",
+    "get_publisher",
+    "get_publisher_status",
+    "get_registry_primitive",
+    "list_registry_primitives",
+    "list_registry_primitives_ranked",
+    "list_verified_publishers",
+    "publish_primitive",
+    "register_publisher",
+    "resolve_namespaced_slug",
+    "revoke_publisher",
+    "sign_manifest",
+    "verify_bundle_integrity",
+    "verify_manifest",
+    "verify_primitive_signature",
+]
+
 # ---------------------------------------------------------------------------
 # Data types
 # ---------------------------------------------------------------------------
-
-
-@dataclass
-class RegistryManifest:
-    """Ed25519-signed metadata for a registry primitive."""
-
-    author: str
-    name: str
-    version: str
-    primitive_type: str
-    description: str
-    tags: list[str]
-    checksum_sha256: str
-    signature_hex: str
-    signing_key_fingerprint: str
-    published_at: str
 
 
 @dataclass
@@ -75,7 +85,7 @@ def _sha256_digest(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
 
 
-def _canonical_json(obj: Any) -> bytes:
+def _canonical_json(obj: Any) -> bytes:  # noqa: ANN401
     """Deterministic JSON serialisation for signing."""
     return json.dumps(obj, separators=(",", ":"), sort_keys=True).encode()
 
@@ -114,9 +124,10 @@ def verify_manifest(
     canonical = _canonical_json(payload)
     try:
         public_key.verify(bytes.fromhex(signature_hex), canonical)
-        return True
     except InvalidSignature:
         return False
+    else:
+        return True
 
 
 # ---------------------------------------------------------------------------
@@ -139,26 +150,9 @@ def verify_bundle_integrity(bundle: dict[str, Any], expected_sha256: str) -> boo
 # ---------------------------------------------------------------------------
 
 _EPOCH = datetime(2024, 1, 1, tzinfo=UTC)
-_MODULO_PUBKEY, _MODULO_PUBKEY_OBJ = None, None  # lazy init
 
 
-def _modulo_public_key() -> Ed25519PublicKey:
-    """Return the hardcoded Modulo registry public key.
-
-    In production this would be fetched from a well-known URL.
-    """
-    global _MODULO_PUBKEY, _MODULO_PUBKEY_OBJ
-    if _MODULO_PUBKEY_OBJ is not None:
-        return _MODULO_PUBKEY_OBJ
-
-    # A deterministic development key shared with the client.
-    private = Ed25519PrivateKey.generate()
-    _MODULO_PUBKEY_OBJ = private.public_key()
-    _MODULO_PUBKEY = fingerprint(_MODULO_PUBKEY_OBJ)
-    return _MODULO_PUBKEY_OBJ
-
-
-def _build_entry(
+def _build_entry(  # noqa: PLR0913
     author: str,
     name: str,
     primitive_type: str,
@@ -166,12 +160,14 @@ def _build_entry(
     tags: list[str],
     content_json: dict[str, Any],
     private_key: Ed25519PrivateKey,
+    *,
+    version: str = "1.0",
 ) -> RegistryEntry:
     public = private_key.public_key()
     payload = {
         "author": author,
         "name": name,
-        "version": "1.0",
+        "version": version,
         "primitive_type": primitive_type,
         "description": description,
         "tags": tags,
@@ -185,7 +181,7 @@ def _build_entry(
         author=author,
         name=name,
         slug=slug,
-        version="1.0",
+        version=version,
         primitive_type=primitive_type,
         description=description,
         tags=list(tags),
@@ -216,7 +212,7 @@ _BUILTIN_REGISTRY: dict[str, RegistryEntry] = {
                     {"name": "title", "type": "string", "required": True},
                     {"name": "problem_statement", "type": "string", "required": True},
                     {"name": "goals", "type": "array", "items": "string", "required": False},
-                ]
+                ],
             },
             private_key=_registry_private,
         ),
@@ -235,7 +231,7 @@ _BUILTIN_REGISTRY: dict[str, RegistryEntry] = {
                         "items": "string",
                         "required": False,
                     },
-                ]
+                ],
             },
             private_key=_registry_private,
         ),
@@ -271,7 +267,7 @@ _BUILTIN_REGISTRY: dict[str, RegistryEntry] = {
                     {"name": "body", "type": "string", "required": True},
                     {"name": "labels", "type": "array", "items": "string", "required": False},
                     {"name": "repo", "type": "string", "required": True},
-                ]
+                ],
             },
             private_key=_registry_private,
         ),
@@ -293,7 +289,7 @@ _BUILTIN_REGISTRY: dict[str, RegistryEntry] = {
                         "required": False,
                     },
                     {"name": "implementation_notes", "type": "string", "required": False},
-                ]
+                ],
             },
             private_key=_registry_private,
         ),
@@ -317,7 +313,7 @@ _BUILTIN_REGISTRY: dict[str, RegistryEntry] = {
                         },
                         "required": True,
                     },
-                ]
+                ],
             },
             private_key=_registry_private,
         ),
@@ -333,7 +329,7 @@ _BUILTIN_REGISTRY: dict[str, RegistryEntry] = {
                     {"name": "failed", "type": "boolean", "required": True},
                     {"name": "output", "type": "string", "required": True},
                     {"name": "duration_ms", "type": "integer", "required": False},
-                ]
+                ],
             },
             private_key=_registry_private,
         ),
@@ -348,7 +344,7 @@ _BUILTIN_REGISTRY: dict[str, RegistryEntry] = {
                     {"name": "pr_url", "type": "string", "required": True},
                     {"name": "pr_number", "type": "integer", "required": True},
                     {"name": "success", "type": "boolean", "required": True},
-                ]
+                ],
             },
             private_key=_registry_private,
         ),
@@ -419,7 +415,7 @@ def get_registry_primitive(slug: str) -> RegistryEntry | None:
     return _BUILTIN_REGISTRY.get(slug)
 
 
-async def publish_primitive(
+async def publish_primitive(  # noqa: PLR0913
     author: str,
     name: str,
     primitive_type: str,
@@ -427,6 +423,8 @@ async def publish_primitive(
     tags: list[str],
     content_json: dict[str, Any],
     signing_key_hex: str,
+    *,
+    version: str = "1.0",
 ) -> RegistryEntry:
     """Publish a new primitive to the registry (in-memory for alpha).
 
@@ -443,6 +441,7 @@ async def publish_primitive(
         tags=tags,
         content_json=content_json,
         private_key=private_key,
+        version=version,
     )
     _BUILTIN_REGISTRY[entry.slug] = entry
     return entry
@@ -580,6 +579,7 @@ def compute_popularity_score(
     """Compute a simple popularity score for ranking.
 
     Factors: downloads (40%), rating (40%), recency (20%).
+    Plus a review-count bonus (up to +0.05).
     """
     now = datetime.now(UTC)
     days_since_publish = max((now - published_at).days, 1)
@@ -635,7 +635,7 @@ def list_registry_primitives_ranked(
                 "publisher_status": status,
                 "publisher_name": publisher.name if publisher else e.author,
                 "popularity_score": round(score, 4),
-            }
+            },
         )
 
     if sort_by == "popularity":
