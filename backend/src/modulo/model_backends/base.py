@@ -37,6 +37,8 @@ async def _openai_compatible_health_check(
 class ModelBackendBase(ABC):
     """Abstract base for all model backends (real + stub)."""
 
+    supports_tools: bool = False
+
     @abstractmethod
     async def invoke(
         self,
@@ -49,6 +51,7 @@ class ModelBackendBase(ABC):
     def stream(
         self,
         messages: list[BaseMessage],
+        tools: list[dict] | None = None,
         **kwargs: Any,
     ) -> AsyncIterator[BaseMessage]:
         """Return an async iterator that yields token chunks."""

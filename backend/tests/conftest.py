@@ -3,10 +3,14 @@ from pathlib import Path
 
 import pytest
 
-codebase_dir = Path(__file__).resolve().parents[2]
+conftest_path = Path(__file__).resolve()
+codebase_dir = conftest_path.parents[2]
+backend_src_dir = conftest_path.parents[1] / "src"
 scripts_dir = codebase_dir / "scripts"
 if scripts_dir.is_dir():
     sys.path.insert(0, str(codebase_dir))
+    if backend_src_dir.is_dir() and str(backend_src_dir) not in sys.path:
+        sys.path.insert(0, str(backend_src_dir))
 
 
 @pytest.fixture
