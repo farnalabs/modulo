@@ -1,6 +1,6 @@
 ﻿<template>
   <nav :aria-label="$t('components.SidebarNav.main_navigation')" class="flex-1 space-y-6">
-    <template v-for="group in filteredGroups" :key="group.id">
+    <template v-for="group in visibleSidebarGroups" :key="group.id">
       <SidebarGroup
         :id="group.id"
         :label="group.label"
@@ -26,11 +26,13 @@
 import { computed } from "vue";
 import SidebarLink from "./SidebarLink.vue";
 import SidebarGroup from "./SidebarGroup.vue";
-import { navGroups } from "../config/navigation";
+import { navGroups, canSeeItem } from "../config/navigation";
 import { useSidebar } from "../composables/useSidebar";
+import { usePlanStore } from "../stores/planStore";
 
 const props = defineProps<{
   isSystemAdmin: boolean;
+  userRole?: string | null;
 }>();
 
 defineEmits<{
@@ -38,12 +40,28 @@ defineEmits<{
 }>();
 
 const { viewMode, toggleGroup, isGroupCollapsed } = useSidebar();
+const planStore = usePlanStore();
 
-const filteredGroups = computed(() =>
-  navGroups.filter(
-    (g) =>
-      (g.simpleMode || viewMode.value === "advanced") &&
-      (!g.systemAdminOnly || props.isSystemAdmin),
-  ),
+const tierInfoLoaded = computed(() => Object.keys(planStore.tierRanks).length > 0);
+
+const visibleSidebarGroups = computed(() =>
+  navGroups
+    .filter(
+      (g) =>
+        (g.simpleMode || viewMode.value === "advanced") &&
+        (!g.systemAdminOnly || props.isSystemAdmin),
+    )
+    .map((group) => ({
+      ...group,
+      items: group.items.filter((item) => {
+        if (!item.requiredRoles && !item.requiredTier) return true
+        if (item.requiredTier && !tierInfoLoaded.value) return true
+        return canSeeItem(
+          item,
+          { role: props.userRole || "" },
+          { isAtMinimumTier: (tier: string) => planStore.isAtMinimumTier(tier) },
+        )
+      }),
+    })),
 );
 </script>

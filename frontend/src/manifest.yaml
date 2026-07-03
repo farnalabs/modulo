@@ -23,6 +23,7 @@ routes:
     type: page
     <<: *community
     deprecated: false
+    exact: true
 
   /notifications:
     name: notifications
@@ -195,6 +196,7 @@ routes:
     type: list_page
     <<: *community
     deprecated: false
+    exact: true
 
   /schemas/editor/:id:
     name: schema-editor
@@ -445,6 +447,7 @@ routes:
     type: page
     <<: *team
     deprecated: false
+    exact: true
 
   /admin/costs/limits:
     name: admin-costs-limits
@@ -813,39 +816,47 @@ sidebar_groups:
     label: Core
     order: 1
     default_expanded: true
-    simple_mode: false
+    simple_mode: true
+    labelKey: components.SidebarNav.group_core
   remy:
     label: Remy
     order: 2
     default_expanded: true
     simple_mode: true
+    labelKey: components.SidebarNav.group_remy
   settings:
     label: Settings
     order: 3
     default_expanded: true
-    simple_mode: false
+    simple_mode: true
+    labelKey: components.SidebarNav.group_settings
   access-control:
     label: Access Control
     order: 4
     default_expanded: true
     simple_mode: false
+    labelKey: components.SidebarNav.group_access_control
   cost-management:
     label: Cost Management
     order: 5
     default_expanded: true
     simple_mode: false
+    labelKey: components.SidebarNav.group_cost_management
   system:
     label: System
     order: 6
     default_expanded: true
     simple_mode: false
+    labelKey: components.SidebarNav.group_system
   monitoring:
     label: Monitoring
     order: 7
     default_expanded: true
     simple_mode: false
+    labelKey: components.SidebarNav.group_monitoring
   extensions:
     label: Extensions
     order: 8
     default_expanded: true
     simple_mode: false
+    labelKey: components.SidebarNav.group_extensions
