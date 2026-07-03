@@ -1,13 +1,11 @@
 name: Staging Auto-Deploy
 
 on:
-  push:
-    branches: [main]
-    paths:
-      - backend/**
-      - frontend/**
-      - deploy/**
-      - fly.staging.toml
+  workflow_dispatch:
+    inputs:
+      reason:
+        description: 'Reason for staging deploy'
+        required: true
 
 permissions:
   contents: read
