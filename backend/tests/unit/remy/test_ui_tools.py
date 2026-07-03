@@ -1,5 +1,13 @@
 """Unit tests for Remy UI tools — tool definitions, permission resolution, session approvals."""
 
+from datetime import UTC, datetime, timedelta
+
+from modulo.api.routes.remy import (
+    _has_destructive_pattern,
+    _is_approved_for_session,
+    _resolve_tool_permission,
+    _session_approvals,
+)
 from modulo.api.ui_tools import (
     _UI_TOOLS,
     DESTRUCTIVE_PATTERNS,
@@ -80,28 +88,42 @@ class TestToolConstants:
 class TestDestructivePatternDetection:
     """Tests for _has_destructive_pattern."""
 
-    def _detect(self, selector: str) -> bool:
-        lower = selector.lower()
-        return any(p in lower for p in DESTRUCTIVE_PATTERNS)
-
     def test_destructive_selectors(self):
-        assert self._detect("[data-testid='delete-btn']")
-        assert self._detect(".remove-item")
-        assert self._detect("destroy-all")
-        assert self._detect("archive-project")
-        assert self._detect("suspend-user")
-        assert self._detect("ban-account")
+        assert _has_destructive_pattern("[data-testid='delete-btn']")
+        assert _has_destructive_pattern(".remove-item")
+        assert _has_destructive_pattern("destroy-all")
+        assert _has_destructive_pattern("archive-project")
+        assert _has_destructive_pattern("suspend-user")
+        assert _has_destructive_pattern("ban-account")
 
     def test_safe_selectors(self):
-        assert not self._detect("[data-testid='save-btn']")
-        assert not self._detect(".create-new")
-        assert not self._detect("input[name='email']")
-        assert not self._detect(".search-box")
+        assert not _has_destructive_pattern("[data-testid='save-btn']")
+        assert not _has_destructive_pattern(".create-new")
+        assert not _has_destructive_pattern("input[name='email']")
+        assert not _has_destructive_pattern(".search-box")
 
     def test_case_insensitive(self):
-        assert self._detect("DELETE-button")
-        assert self._detect("RemoveItem")
-        assert self._detect("ARCHIVE")
+        assert _has_destructive_pattern("DELETE-button")
+        assert _has_destructive_pattern("RemoveItem")
+        assert _has_destructive_pattern("ARCHIVE")
+
+    def test_all_destructive_keywords_are_caught(self):
+        for pattern in DESTRUCTIVE_PATTERNS:
+            assert _has_destructive_pattern(f"[data-testid='{pattern}-btn']"), f"Pattern '{pattern}' was not caught"
+
+    def test_innocent_words_are_not_caught(self):
+        innocent = [
+            "[data-testid='save-btn']",
+            ".create-new",
+            "input[name='email']",
+            ".search-box",
+            ".edit-profile",
+            "[data-testid='add-user']",
+            ".view-details",
+            ".export-csv",
+        ]
+        for sel in innocent:
+            assert not _has_destructive_pattern(sel), f"'{sel}' should not flag as destructive"
 
 
 class TestRemyConfigDefaults:
@@ -179,106 +201,118 @@ class TestPermissionModePresets:
 class TestPermissionResolution:
     """Tests for _resolve_tool_permission logic via RemyConfig."""
 
-    def _resolve(self, config: RemyConfig, tool_name: str, args: dict | None = None) -> str:
-        """Duplicate of the helper from remy.py for testing."""
-        from modulo.api.ui_tools import WRITE_TOOLS
-
-        overrides = config.tool_permissions or {}
-        if tool_name in overrides:
-            return overrides[tool_name]
-
-        mode = config.permission_mode
-        if mode == "locked_down":
-            if tool_name in WRITE_TOOLS or tool_name == "press":
-                base = "requires_approval"
-            else:
-                base = "always_allowed"
-        elif mode == "full_auto":
-            base = "always_allowed"
-        else:
-            if tool_name == "press":
-                base = "requires_approval"
-            else:
-                base = "always_allowed"
-
-        if base == "always_allowed" and tool_name in WRITE_TOOLS:
-            selector = (args or {}).get("selector", "")
-            lower = selector.lower()
-            destructive = any(p in lower for p in DESTRUCTIVE_PATTERNS)
-            if destructive:
-                return "requires_approval"
-
-        return base
-
     def test_safe_mode_allows_read_tools(self):
         config = RemyConfig()
         for tool in READ_TOOLS:
-            assert self._resolve(config, tool) == "always_allowed"
+            assert _resolve_tool_permission(config, tool, {}) == "always_allowed"
 
     def test_safe_mode_allows_nav_tools(self):
         config = RemyConfig()
         for tool in NAV_TOOLS:
-            assert self._resolve(config, tool) == "always_allowed"
+            assert _resolve_tool_permission(config, tool, {}) == "always_allowed"
 
     def test_safe_mode_allows_write_tools_with_safe_selector(self):
         config = RemyConfig()
-        assert self._resolve(config, "click", {"selector": ".save-btn"}) == "always_allowed"
-        assert self._resolve(config, "fill", {"selector": "input[name=email]"}) == "always_allowed"
+        assert _resolve_tool_permission(config, "click", {"selector": ".save-btn"}) == "always_allowed"
+        assert _resolve_tool_permission(config, "fill", {"selector": "input[name=email]"}) == "always_allowed"
 
     def test_safe_mode_blocks_write_tools_with_destructive_selector(self):
         config = RemyConfig()
-        assert self._resolve(config, "click", {"selector": ".delete-btn"}) == "requires_approval"
-        assert self._resolve(config, "fill", {"selector": "#remove-field"}) == "requires_approval"
+        assert _resolve_tool_permission(config, "click", {"selector": ".delete-btn"}) == "requires_approval"
+        assert _resolve_tool_permission(config, "fill", {"selector": "#remove-field"}) == "requires_approval"
 
     def test_safe_mode_press_requires_approval(self):
         config = RemyConfig()
-        assert self._resolve(config, "press", {"key": "Enter"}) == "requires_approval"
+        assert _resolve_tool_permission(config, "press", {"key": "Enter"}) == "requires_approval"
 
     def test_full_auto_allows_safe_selectors(self):
         config = RemyConfig(permission_mode="full_auto")
-        assert self._resolve(config, "click", {"selector": ".save-btn"}) == "always_allowed"
-        assert self._resolve(config, "press", {"key": "Enter"}) == "always_allowed"
+        assert _resolve_tool_permission(config, "click", {"selector": ".save-btn"}) == "always_allowed"
+        assert _resolve_tool_permission(config, "press", {"key": "Enter"}) == "always_allowed"
 
     def test_full_auto_still_checks_destructive_selectors(self):
         config = RemyConfig(permission_mode="full_auto")
-        assert self._resolve(config, "click", {"selector": "delete-btn"}) == "requires_approval"
+        assert _resolve_tool_permission(config, "click", {"selector": "delete-btn"}) == "requires_approval"
 
     def test_locked_down_blocks_write_tools(self):
         config = RemyConfig(permission_mode="locked_down")
         for tool in WRITE_TOOLS:
-            assert self._resolve(config, tool, {"selector": ".save-btn"}) == "requires_approval"
+            assert _resolve_tool_permission(config, tool, {"selector": ".save-btn"}) == "requires_approval"
 
     def test_locked_down_blocks_press(self):
         config = RemyConfig(permission_mode="locked_down")
-        assert self._resolve(config, "press", {"key": "Enter"}) == "requires_approval"
+        assert _resolve_tool_permission(config, "press", {"key": "Enter"}) == "requires_approval"
 
     def test_locked_down_allows_read_tools(self):
         config = RemyConfig(permission_mode="locked_down")
         for tool in READ_TOOLS:
-            assert self._resolve(config, tool) == "always_allowed"
+            assert _resolve_tool_permission(config, tool, {}) == "always_allowed"
 
     def test_locked_down_allows_nav_tools(self):
         config = RemyConfig(permission_mode="locked_down")
         for tool in NAV_TOOLS:
-            assert self._resolve(config, tool) == "always_allowed"
+            assert _resolve_tool_permission(config, tool, {}) == "always_allowed"
+
+    def test_locked_down_write_tools_remain_requires_approval_with_destructive(self):
+        config = RemyConfig(permission_mode="locked_down")
+        for tool in WRITE_TOOLS:
+            result = _resolve_tool_permission(config, tool, {"selector": ".delete-btn"})
+            assert result == "requires_approval", f"{tool} should be requires_approval"
 
     def test_per_tool_override(self):
         config = RemyConfig(tool_permissions={"click": "disabled"})
-        assert self._resolve(config, "click", {"selector": ".save-btn"}) == "disabled"
+        assert _resolve_tool_permission(config, "click", {"selector": ".save-btn"}) == "disabled"
 
     def test_per_tool_override_takes_precedence(self):
         config = RemyConfig(
             tool_permissions={"press": "disabled"},
             permission_mode="safe",
         )
-        assert self._resolve(config, "press", {"key": "Escape"}) == "disabled"
+        assert _resolve_tool_permission(config, "press", {"key": "Escape"}) == "disabled"
 
     def test_per_tool_override_can_override_locked_down(self):
         config = RemyConfig(
             tool_permissions={"click": "always_allowed"},
             permission_mode="locked_down",
         )
-        assert self._resolve(config, "click", {"selector": ".save-btn"}) == "always_allowed"
+        assert _resolve_tool_permission(config, "click", {"selector": ".save-btn"}) == "always_allowed"
+
+    def test_destructive_selectors_require_approval_in_all_modes(self):
+        for mode in ("safe", "full_auto", "locked_down"):
+            config = RemyConfig(permission_mode=mode)
+            for tool in WRITE_TOOLS:
+                result = _resolve_tool_permission(config, tool, {"selector": ".delete-btn"})
+                assert result == "requires_approval", f"{tool} in {mode} should be requires_approval"
+
+    def test_comprehensive_safe_mode_all_11_tools(self):
+        config = RemyConfig()
+        for tool in READ_TOOLS:
+            assert _resolve_tool_permission(config, tool, {}) == "always_allowed"
+        for tool in NAV_TOOLS:
+            assert _resolve_tool_permission(config, tool, {}) == "always_allowed"
+        for tool in {"click", "fill", "select"}:
+            assert _resolve_tool_permission(config, tool, {"selector": ".save-btn"}) == "always_allowed"
+        assert _resolve_tool_permission(config, "press", {"key": "Enter"}) == "requires_approval"
+        assert _resolve_tool_permission(config, "wait", {"ms": 500}) == "always_allowed"
+
+    def test_comprehensive_full_auto_mode_all_11_tools(self):
+        config = RemyConfig(permission_mode="full_auto")
+        for tool in UI_TOOL_NAMES:
+            if tool in WRITE_TOOLS:
+                assert _resolve_tool_permission(config, tool, {"selector": ".save-btn"}) == "always_allowed"
+            else:
+                assert _resolve_tool_permission(config, tool, {}) == "always_allowed"
+
+    def test_comprehensive_locked_down_mode_all_11_tools(self):
+        config = RemyConfig(permission_mode="locked_down")
+        for tool in READ_TOOLS:
+            assert _resolve_tool_permission(config, tool, {}) == "always_allowed"
+        for tool in NAV_TOOLS:
+            assert _resolve_tool_permission(config, tool, {}) == "always_allowed"
+        assert _resolve_tool_permission(config, "wait", {"ms": 500}) == "always_allowed"
+        assert _resolve_tool_permission(config, "get_url", {}) == "always_allowed"
+        for tool in WRITE_TOOLS:
+            assert _resolve_tool_permission(config, tool, {"selector": ".save-btn"}) == "requires_approval"
 
 
 class TestGetAllToolDefinitions:
@@ -362,3 +396,54 @@ class TestBuildToolDefinitionsForText:
     def test_shows_default_for_wait_ms(self):
         result = build_tool_definitions_for_text()
         assert "ms: number (default: 500)" in result
+
+
+class TestSessionApproval:
+    """Tests for _is_approved_for_session — TTL, page_path matching, expiry cleanup."""
+
+    def setup_method(self) -> None:
+        _session_approvals.clear()
+
+    def test_approved_same_page_not_expired(self) -> None:
+        _session_approvals["session-1"] = {
+            "click": {
+                "page_path": "/admin/users",
+                "expires_at": datetime.now(UTC) + timedelta(minutes=30),
+            },
+        }
+        assert _is_approved_for_session("session-1", "click", "/admin/users")
+
+    def test_different_page_not_approved(self) -> None:
+        _session_approvals["session-1"] = {
+            "click": {
+                "page_path": "/admin/users",
+                "expires_at": datetime.now(UTC) + timedelta(minutes=30),
+            },
+        }
+        assert not _is_approved_for_session("session-1", "click", "/admin/settings")
+
+    def test_expired_approval_returns_false(self) -> None:
+        _session_approvals["session-1"] = {
+            "click": {
+                "page_path": "/admin/users",
+                "expires_at": datetime.now(UTC) - timedelta(minutes=1),
+            },
+        }
+        assert not _is_approved_for_session("session-1", "click", "/admin/users")
+
+    def test_expired_approval_is_cleaned_up(self) -> None:
+        _session_approvals["session-1"] = {
+            "click": {
+                "page_path": "/admin/users",
+                "expires_at": datetime.now(UTC) - timedelta(minutes=1),
+            },
+        }
+        _is_approved_for_session("session-1", "click", "/admin/users")
+        assert "click" not in _session_approvals["session-1"]
+
+    def test_no_session_returns_false(self) -> None:
+        assert not _is_approved_for_session("nonexistent", "click", "/admin/users")
+
+    def test_tool_not_in_session_returns_false(self) -> None:
+        _session_approvals["session-1"] = {}
+        assert not _is_approved_for_session("session-1", "click", "/admin/users")

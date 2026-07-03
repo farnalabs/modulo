@@ -354,6 +354,11 @@ def _set_session_approval(session_id: str, tool_name: str, page_path: str) -> No
     }
 
 
+def clear_all_session_approvals() -> None:
+    """Clear all in-memory session approvals (called on logout)."""
+    _session_approvals.clear()
+
+
 def _get_all_tool_definitions() -> list[dict[str, Any]]:
     """Combine UI tool definitions for the LLM's tools parameter."""
     tools: list[dict[str, Any]] = []

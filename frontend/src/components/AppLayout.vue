@@ -125,6 +125,14 @@
       </router-view>
     </main>
 
+    <!-- Remy execution overlay -->
+    <div v-if="remyStore.isExecutingUi" class="remy-execution-overlay">
+      <div class="remy-execution-banner">
+        <span>Remy is performing actions on this page</span>
+        <button class="remy-stop-btn" @click="abortUiCommands">Stop</button>
+      </div>
+    </div>
+
     <RemyPanel />
   </div>
   </TooltipProvider>
@@ -143,10 +151,13 @@ import SidebarNav from "./SidebarNav.vue";
 import ViewModeToggle from "./ViewModeToggle.vue";
 import { TooltipProvider } from "./ui/tooltip";
 import { useSidebar } from "../composables/useSidebar";
+import { useRemyStore } from "../composables/useRemyStore";
+import { abortUiCommands } from "../composables/useUiCommandExecutor";
 
 const { viewMode, setViewMode } = useSidebar();
 
 const planStore = usePlanStore();
+const remyStore = useRemyStore();
 
 const mobileOpen = ref(false);
 const mobileSidebarRef = ref<HTMLElement | null>(null);
@@ -214,3 +225,34 @@ onMounted(() => {
   });
 });
 </script>
+
+<style scoped>
+.remy-execution-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 40;
+  pointer-events: none;
+}
+.remy-execution-banner {
+  position: fixed;
+  top: 0; left: 0; right: 0;
+  z-index: 41;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 16px;
+  background: hsl(var(--warning) / 0.95);
+  color: hsl(var(--warning-foreground));
+  font-size: 13px;
+  pointer-events: auto;
+}
+.remy-stop-btn {
+  background: hsl(var(--destructive));
+  color: hsl(var(--destructive-foreground));
+  border: none;
+  border-radius: 6px;
+  padding: 4px 12px;
+  font-size: 12px;
+  cursor: pointer;
+}
+</style>
