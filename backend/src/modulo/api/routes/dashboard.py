@@ -117,8 +117,8 @@ async def dashboard_summary(
             status_count_rows = (await session.execute(status_count_query)).all()
             status_counts = {row.status: int(row.cnt) for row in status_count_rows}
 
-            for status in _TRACKED_STATUSES:
-                status_counts.setdefault(status, 0)
+            for tracked_status in _TRACKED_STATUSES:
+                status_counts.setdefault(tracked_status, 0)
 
             total_tracked = sum(status_counts.get(s, 0) for s in _TRACKED_STATUSES)
             active_in_tracked = sum(status_counts.get(s, 0) for s in ("running", "awaiting_human"))
@@ -170,7 +170,7 @@ async def dashboard_summary(
                 run_data = team_run_data.get(tid, {})
                 team_total = sum(run_data.get(s, 0) for s in _TRACKED_STATUSES)
                 team_statuses: dict[str, int] = {}
-                for status in _TRACKED_STATUSES:
+                for tracked_status in _TRACKED_STATUSES:
                     team_statuses[status] = run_data.get(status, 0)
                 team_active_in_tracked = sum(run_data.get(s, 0) for s in ("running", "awaiting_human"))
                 team_failed = run_data.get("failed", 0)
@@ -196,8 +196,8 @@ async def dashboard_summary(
                 .where(EvalResult.organisation_id == org_id)
             )
             eval_totals_row = (await session.execute(eval_totals_query)).one()
-            eval_total = int(eval_totals_row.total)
-            eval_passed = int(eval_totals_row.passed)
+            eval_total = int(eval_totals_row.total) if eval_totals_row.total is not None else 0
+            eval_passed = int(eval_totals_row.passed) if eval_totals_row.passed is not None else 0
 
             # --- Superset query: per-team-pipeline eval breakdown; derive per-team and per-pipeline client-side ---
             per_team_pipeline_query = (
