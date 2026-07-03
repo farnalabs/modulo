@@ -813,6 +813,40 @@ async def stream_chat(
                                 })
                                 yield f"event: tool_call\ndata: {json.dumps(tool_results[-1])}\n\n"
 
+                    # Handle get_manifest calls server-side
+                    manifest_calls = [tc for tc in ui_tool_calls if tc["name"] == "get_manifest"]
+                    ui_tool_calls = [tc for tc in ui_tool_calls if tc["name"] != "get_manifest"]
+
+                    for tc in manifest_calls:
+                        from modulo.core.manifest import get_manifest
+                        manifest = get_manifest()
+                        path = tc["args"].get("path")
+                        if path:
+                            route = manifest.get("routes", {}).get(path)
+                            elements = manifest.get("elements", {}).get(path, [])
+                            result = {"route": route, "elements": elements}
+                        else:
+                            result = {
+                                "routes": {
+                                    k: {
+                                        "name": v.get("name"),
+                                        "testid": v.get("testid"),
+                                        "type": v.get("type"),
+                                        "sidebar_group": v.get("sidebar_group"),
+                                    }
+                                    for k, v in manifest.get("routes", {}).items()
+                                },
+                                "elements": manifest.get("elements", {}),
+                                "sidebar_groups": manifest.get("sidebar_groups", {}),
+                            }
+                        tool_results.append({
+                            "tool_call_id": tc["id"],
+                            "tool_name": "get_manifest",
+                            "success": True,
+                            "result": result,
+                        })
+                        yield f"event: tool_call\ndata: {json.dumps(tool_results[-1])}\n\n"
+
                     # Handle UI tools
                     if ui_tool_calls:
                         config_service = RemyConfigService(db_session)
