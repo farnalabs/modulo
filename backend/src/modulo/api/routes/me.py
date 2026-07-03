@@ -73,15 +73,13 @@ async def update_user_settings(
     current_user: AuthenticatedPrincipal = Depends(get_current_user),
     session: AsyncSession = Depends(get_db_session),
 ) -> dict[str, Any]:
-    if body.locale is not None and body.locale not in SUPPORTED_LOCALES:
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail=f"Unsupported locale: {body.locale}",
-        )
-    prefs = body.model_dump(exclude_none=True)
+    prefs = {}
+    if body.theme is not None:
+        prefs["theme"] = body.theme
+    if body.locale is not None:
+        prefs["locale"] = body.locale
     try:
-        async with session.begin():
-            return await update_account_preferences(session, current_user.account_id, prefs)
+        return await update_account_preferences(session, current_user.account_id, prefs)
     except ProgrammingError:
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,

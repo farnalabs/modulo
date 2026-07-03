@@ -11,7 +11,7 @@ import uuid
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, Field
-from sqlalchemy.exc import SQLAlchemyError
+from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.api.dependencies import get_db_session
@@ -118,10 +118,15 @@ async def get_dashboard(
                 org_id=principal.organisation_id,
                 user_id=principal.account_id,
             )
-    except SQLAlchemyError:
+    except ProgrammingError:
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
+        ) from None
+    except SQLAlchemyError:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="A database error occurred.",
         ) from None
     return DashboardNotificationResponse(
         notifications=[_notification_to_response(n) for n in notifications],
@@ -143,10 +148,15 @@ async def get_unread(
                 org_id=principal.organisation_id,
                 user_id=principal.account_id,
             )
-    except SQLAlchemyError:
+    except ProgrammingError:
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
+        ) from None
+    except SQLAlchemyError:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="A database error occurred.",
         ) from None
     return {"count": count}
 
@@ -187,10 +197,15 @@ async def list_notifications(
                 category=category,
                 status_filter=status,
             )
-    except SQLAlchemyError:
+    except ProgrammingError:
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
+        ) from None
+    except SQLAlchemyError:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="A database error occurred.",
         ) from None
     return PaginatedNotificationsResponse(
         items=[_notification_to_response(n) for n in notifications],
@@ -217,10 +232,15 @@ async def get_notification_detail(
             )
             if n is None:
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Notification not found")
-    except SQLAlchemyError:
+    except ProgrammingError:
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
+        ) from None
+    except SQLAlchemyError:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="A database error occurred.",
         ) from None
     return _notification_to_response(n)
 
@@ -244,10 +264,15 @@ async def review_later_endpoint(
                 )
             except ValueError as exc:
                 raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
-    except SQLAlchemyError:
+    except ProgrammingError:
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
+        ) from None
+    except SQLAlchemyError:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="A database error occurred.",
         ) from None
 
     try:
@@ -287,10 +312,15 @@ async def dismiss_endpoint(
                 )
             except ValueError as exc:
                 raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
-    except SQLAlchemyError:
+    except ProgrammingError:
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
+        ) from None
+    except SQLAlchemyError:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="A database error occurred.",
         ) from None
 
     try:

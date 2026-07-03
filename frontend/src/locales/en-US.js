@@ -35,8 +35,7 @@ export default {
       "allowed_models": "Allowed Models",
       "default_provider": "Default Provider",
       "save_current_access_list_configuration": "Save current access list configuration.",
-      "search_teams_placeholder": "Search teams...",
-      "search_users_placeholder": "Search users by name or email...",
+      "skill_description": "Skill description",
       "set_the_default_model_and_allowed_providers_for_remy": "Set the default model and allowed providers for Remy",
       "teams": "Teams",
       "failed_to_load_provider_status": "Failed to load provider status:",
@@ -215,6 +214,7 @@ export default {
       "no_feedback_yet": "No feedback yet",
       "all_feedback_records_have_been_resolved_or_no_evaluations_ha": "All feedback records have been resolved or no evaluations have run yet.",
       "review_and_resolve_pending_feedback_from_pipeline_evaluation": "Review and resolve pending feedback from pipeline evaluations",
+      "record_rejection_reason": "Rejection reason",
       "correction_run_triggered": "Correction run triggered.",
       "feedback_inbox": "Feedback Inbox",
       "annotation_saved": "Annotation saved.",
@@ -235,16 +235,13 @@ export default {
       "error_dashboard": "Error Dashboard",
       "all_sources": "All sources",
       "search_error_messages": "Search error messages...",
+      "eg_production": "e.g. production",
+      "no_message": "(no message)",
       "all_statuses": "All statuses",
       "no_error_groups_found": "No error groups found"
     },
     "AdminNodeCategoriesView": {
-      "m21_15v4a2_2_0_0_12_2h5a2_2_0_0_122v4": "M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4",
-      "failed_to_load_categories": "Failed to load categories:",
-      "m12_7v4": "M12 7v4",
-      "m3_5v14c0_166_4_3_9_3s9134_93v5": "M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5",
-      "m351_9a9_9_0_0_1_1485336l23_10m1_14l464_436a9_9_0_0_0_2049_1": "M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15",
-      "m21_12c0_1664_39_3s913493": "M21 12c0 1.66-4 3-9 3s-9-1.34-9-3"
+      "failed_to_load_categories": "Failed to load categories:"
     },
     "PipelineEditorView": {
       "pipeline_editor": "Pipeline Editor",
@@ -255,15 +252,15 @@ export default {
       "failed_to_load_plugins": "Failed to load plugins:",
       "disable_plugin": "Disable plugin",
       "expand_plugin_details_1": "Expand plugin details",
-      "expand_plugin_details": "'Expand plugin details'",
+      "expand_plugin_details": "Expand plugin details",
       "last_checked": "Last Checked",
       "expand_details": "Expand details",
       "no_plugins_installed": "No plugins installed",
       "health_detail": "Health Detail",
       "plugin_id": "Plugin ID",
       "enable_plugin": "Enable plugin",
-      "activestatespluginpluginid_false_disable_plugin_enable_plugi": "activeStates[plugin.PLUGIN_ID] !== false ? 'Disable plugin' : 'Enable plugin'",
-      "expandedpluginpluginid_collapse_details_expand_details": "expanded[plugin.PLUGIN_ID] ? 'Collapse details' : 'Expand details'",
+      "toggle_plugin": "Toggle plugin",
+      "toggle_details": "Toggle details",
       "collapse_details": "Collapse details"
     },
     "DashboardView": {
@@ -385,6 +382,7 @@ export default {
       "retrying_all": "Retrying All…",
       "run_failed": "Run Failed",
       "hitl_awaiting": "HITL Awaiting",
+      "endpoint_url": "Endpoint URL",
       "hitl_overdue": "HITL Overdue",
       "notification_delivery_log": "Notification Delivery Log",
       "retry_all_failed": "Retry All Failed",
@@ -393,6 +391,7 @@ export default {
       "retry_succeeded": "Retry succeeded",
       "cannot_retry_missing_endpoint_id": "Cannot retry: missing endpoint ID",
       "retrying": "Retrying…",
+      "last_error": "Last error",
       "http_response_code": "HTTP Response Code:",
       "error_details": "Error Details",
       "claim_expired": "Claim Expired",
@@ -413,8 +412,9 @@ export default {
       "view_pipeline": "View pipeline",
       "failed_to_create_pipeline": "Failed to create pipeline",
       "create_pipeline_from_template": "Create Pipeline from Template",
-      "primitivedescription_pipeline_created_from_library_template": "primitive?.description ?? 'Pipeline created from library template'",
+      "primitivedescription_pipeline_created_from_library_template": "Pipeline created from library template",
       "pipeline_created": "Pipeline created!",
+      "primitivename_pipeline_from_template": "Pipeline (from template)",
       "choose_who_this_pipeline_belongs_to_orgwide_pipelines_are_vi": "Choose who this pipeline belongs to. Org-wide pipelines are visible to everyone in the organisation; team pipelines are visible only to team members.",
       "pipeline_created_from_library_template": "Pipeline created from library template"
     },
@@ -567,7 +567,7 @@ export default {
       "toggle_failed": "Toggle failed:"
     },
     "AdminViewsView": {
-      "filterssummaryvfilters": "filtersSummary(v.filters)",
+      "filter_results": "Filter results",
       "delete_view_1": "Delete view",
       "created_at": "Created At",
       "duplicate_view_1": "Duplicate view",
@@ -614,6 +614,7 @@ export default {
       "manual_run_on_demand": "Manual (run on demand)",
       "use_template": "Use Template",
       "failed_to_load_templates": "Failed to load templates",
+      "selectedtemplatename_pipeline": "Pipeline",
       "check_back_later_for_new_templates": "Check back later for new templates.",
       "try_a_different_search_term_or_clear_the_filter": "Try a different search term or clear the filter.",
       "search_templates": "Search templates...",
@@ -633,6 +634,7 @@ export default {
       "failed_to_load_trigger_events": "Failed to load trigger events:",
       "agent_signal": "Agent Signal",
       "timestamp_expired": "Timestamp Expired",
+      "error_detail": "Error detail",
       "trigger_id": "Trigger ID",
       "validation_failed": "Validation Failed",
       "flood_rejected": "Flood Rejected",
@@ -664,7 +666,7 @@ export default {
           "output_field_name": "output field name"
         },
         "ParameterPortForm": {
-          "portdefault_as_string": "(port.default as string) ?? ''"
+          "portdefault_as_string": "Default value"
         },
         "PublishCompositeFlow": {
           "a_reusable_composite_that_performs_code_review_across_multip": "A reusable composite that performs code review across multiple agents",
@@ -707,24 +709,17 @@ export default {
       "mobileopen_close_navigation_open_navigation": "mobileOpen ? 'Close navigation' : 'Open navigation'"
     },
     "SidebarFooter": {
+      "plan_expires_on": "Plan expires on",
       "expires": "Expires:"
     },
     "shared": {
-      "EmptyState": {
-        "m21_15a2_2_0_0_12_2h7l4_4v5a2_2_0_0_1_22h14a2_2_0_0_1_2_2z": "M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"
-      }
     },
     "OwnershipPicker": {
-      "m12_2a153_153_0_0_1_4_10_153_153_0_0_14_10_153_153_0_0_1410_": "M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z",
-      "m16_21v2a4_4_0_0_044h6a4_4_0_0_04_4v2": "M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2",
-      "m22_21v2a4_4_0_0_03387": "M22 21v-2a4 4 0 0 0-3-3.87",
       "everyone_in_the_org": "Everyone in the org",
-      "m16_313a4_4_0_0_1_0_775": "M16 3.13a4 4 0 0 1 0 7.75",
       "select_ownership": "Select ownership...",
       "unknown_team": "Unknown team",
       "failed_to_load_teams": "Failed to load teams",
-      "orgwide": "Org-wide",
-      "m2_12h20": "M2 12h20"
+      "orgwide": "Org-wide"
     },
     "SvgIcon": {
       "building2": "Building2"
@@ -794,7 +789,9 @@ export default {
       "failed_to_load_endpoints": "Failed to load endpoints:",
       "delete_failed": "Delete failed:"
     },
-    "NotificationBell": {},
+    "NotificationBell": {
+      "notifications": "Notifications"
+    },
     "PageTabs": {
       "section_navigation": "Section navigation"
     },

@@ -8,7 +8,7 @@ from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import Date, case, cast, func, select
-from sqlalchemy.exc import SQLAlchemyError
+from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.api.dependencies import get_db_session
@@ -58,7 +58,7 @@ async def _get_cached_dashboard(org_id: str) -> dict[str, Any] | None:
                 await redis.aclose()
     entry = _in_memory_cache.get(org_id)
     if entry is not None and (_time.monotonic() - entry[0]) < _DASHBOARD_CACHE_TTL:
-        return entry[1]
+        return json.loads(json.dumps(entry[1], default=str))
     return None
 
 
@@ -406,16 +406,15 @@ async def dashboard_summary(
 
         await _set_cached_dashboard(org_id_str, result)
         return result
-    except SQLAlchemyError:
+    except ProgrammingError:
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
         )
-    except Exception:
-        _log.exception("dashboard.summary_failed")
+    except SQLAlchemyError:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="An unexpected error occurred while loading the dashboard.",
+            detail="A database error occurred.",
         )
 
 
@@ -615,10 +614,15 @@ async def dashboard_trends(
             "correlation": correlation,
             "feedback_volume": feedback_volume,
         }
-    except SQLAlchemyError:
+    except ProgrammingError:
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
+        )
+    except SQLAlchemyError:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="A database error occurred.",
         )
 
 
@@ -629,30 +633,41 @@ async def daily_run_counts(
     principal: AuthenticatedPrincipal = Depends(get_current_user),
 ) -> dict[str, Any]:
     """Return daily run counts for the last N days, grouped by status."""
-    async with session.begin():
-        await set_rls_org(session, principal.organisation_id)
+    try:
+        async with session.begin():
+            await set_rls_org(session, principal.organisation_id)
 
-        cutoff = datetime.now(UTC) - timedelta(days=days)
+            cutoff = datetime.now(UTC) - timedelta(days=days)
 
-        result = await session.execute(
-            select(
-                cast(Run.created_at, Date).label("day"),
-                Run.status,
-                func.count().label("cnt"),
+            result = await session.execute(
+                select(
+                    cast(Run.created_at, Date).label("day"),
+                    Run.status,
+                    func.count().label("cnt"),
+                )
+                .where(
+                    Run.organisation_id == principal.organisation_id,
+                    Run.created_at >= cutoff,
+                )
+                .group_by(cast(Run.created_at, Date), Run.status)
+                .order_by(cast(Run.created_at, Date))
             )
-            .where(
-                Run.organisation_id == principal.organisation_id,
-                Run.created_at >= cutoff,
-            )
-            .group_by(cast(Run.created_at, Date), Run.status)
-            .order_by(cast(Run.created_at, Date))
+
+        daily: dict[str, dict[str, int]] = {}
+        for dr_row in result:
+            day = dr_row.day.isoformat()
+            if day not in daily:
+                daily[day] = {}
+            daily[day][dr_row.status] = dr_row.cnt
+
+        return {"daily_counts": daily, "days": days}
+    except ProgrammingError:
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="Feature is not available. Run database migrations to enable it.",
         )
-
-    daily: dict[str, dict[str, int]] = {}
-    for dr_row in result:
-        day = dr_row.day.isoformat()
-        if day not in daily:
-            daily[day] = {}
-        daily[day][dr_row.status] = dr_row.cnt
-
-    return {"daily_counts": daily, "days": days}
+    except SQLAlchemyError:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="A database error occurred.",
+        )
