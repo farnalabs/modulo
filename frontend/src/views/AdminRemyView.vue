@@ -335,6 +335,52 @@
         </div>
       </div>
 
+      <!-- Tool Permissions -->
+      <div class="card p-4">
+        <h2 class="mb-3 text-lg font-semibold">Tool Permissions</h2>
+        <p class="mb-4 text-sm text-muted-foreground">Control which UI actions Remy can perform and whether approval is required.</p>
+
+        <div class="mb-6">
+          <label class="mb-1 block text-sm font-medium">Permission Mode</label>
+          <select v-model="toolPermMode" class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm" @change="applyModePreset">
+            <option value="safe">Safe — read ops auto-allowed, destructive actions require approval (recommended)</option>
+            <option value="full_auto">Full Auto — all actions auto-allowed (with destructive override)</option>
+            <option value="locked_down">Locked Down — all write actions require approval</option>
+            <option value="custom">Custom — manual per-tool configuration</option>
+          </select>
+        </div>
+
+        <div class="overflow-hidden rounded-lg border">
+          <table class="w-full text-left text-sm">
+            <thead class="bg-muted/50">
+              <tr>
+                <th class="px-4 py-3 font-medium">Tool</th>
+                <th class="px-4 py-3 font-medium">Description</th>
+                <th class="px-4 py-3 font-medium">Permission</th>
+              </tr>
+            </thead>
+            <tbody class="divide-y">
+              <tr v-for="(info, toolName) in uiTools" :key="toolName">
+                <td class="px-4 py-3 font-mono text-xs">{{ toolName }}</td>
+                <td class="px-4 py-3 text-muted-foreground text-xs">{{ info.description }}</td>
+                <td class="px-4 py-3">
+                  <select v-model="toolPerms[toolName]" :disabled="toolPermMode !== 'custom'" class="rounded border border-input bg-background px-2 py-1 text-xs">
+                    <option value="always_allowed">Auto-allow</option>
+                    <option value="requires_approval">Requires approval</option>
+                    <option value="disabled">Disabled</option>
+                  </select>
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+
+        <div v-if="toolPermError" class="mt-2 text-sm text-destructive">{{ toolPermError }}</div>
+        <button :disabled="toolPermSaving" class="mt-4 rounded-lg bg-primary px-4 py-2 text-sm font-semibold text-primary-foreground hover:brightness-110 disabled:opacity-50 transition-all" @click="saveToolPerms">
+          {{ toolPermSaving ? 'Saving...' : 'Save Tool Permissions' }}
+        </button>
+      </div>
+
       <!-- Skills Manager -->
       <div class="card p-4">
         <div class="flex items-center justify-between mb-4">
@@ -588,6 +634,66 @@ async function saveSystemPrompt() {
   configSaving.value = false
 }
 
+// Tool Permissions
+const toolPermMode = ref('safe')
+const toolPerms = ref<Record<string, string>>({})
+const toolPermSaving = ref(false)
+const toolPermError = ref<string | null>(null)
+
+const uiTools: Record<string, { description: string }> = {
+  navigate: { description: 'Navigate to a page' },
+  click: { description: 'Click a button or link' },
+  fill: { description: 'Type into a form field' },
+  select: { description: 'Choose a dropdown option' },
+  extract: { description: 'Read text from the page' },
+  extract_all: { description: 'Read text from all matching elements' },
+  get_page_interactables: { description: 'Discover clickable elements on the page' },
+  wait: { description: 'Pause or wait for an element' },
+  go_back: { description: 'Go back to previous page' },
+  get_url: { description: 'Get current page URL' },
+  press: { description: 'Press a keyboard key (Enter, Escape)' },
+}
+
+function getDefaultPerms(): Record<string, string> {
+  return {
+    navigate: 'always_allowed', click: 'always_allowed', fill: 'always_allowed',
+    select: 'always_allowed', extract: 'always_allowed', extract_all: 'always_allowed',
+    get_page_interactables: 'always_allowed', wait: 'always_allowed',
+    go_back: 'always_allowed', get_url: 'always_allowed', press: 'requires_approval',
+  }
+}
+
+function applyModePreset() {
+  if (toolPermMode.value === 'custom') return
+  const defaults = getDefaultPerms()
+  if (toolPermMode.value === 'locked_down') {
+    Object.keys(defaults).forEach(k => {
+      if (['navigate', 'extract', 'extract_all', 'get_page_interactables', 'wait', 'get_url'].includes(k)) {
+        defaults[k] = 'always_allowed'
+      } else {
+        defaults[k] = 'requires_approval'
+      }
+    })
+  }
+  toolPerms.value = { ...defaults }
+}
+
+async function saveToolPerms() {
+  toolPermSaving.value = true
+  toolPermError.value = null
+  const err = await putConfig({
+    permission_mode: toolPermMode.value,
+    tool_permissions: toolPerms.value,
+  })
+  if (err) toolPermError.value = `Failed to save: ${err}`
+  toolPermSaving.value = false
+}
+
+function loadPermsFromConfig(cfg: any) {
+  toolPermMode.value = cfg.permission_mode || 'safe'
+  toolPerms.value = cfg.tool_permissions || getDefaultPerms()
+}
+
 // Guidance
 const guidance = ref('')
 const guidanceSaving = ref(false)
@@ -716,6 +822,7 @@ async function loadConfig() {
       modelConfig.allowedModels = (cfg.allowed_models || []).join(', ')
       systemPrompt.value = cfg.system_prompt || ''
       guidance.value = cfg.additional_guidance || ''
+      loadPermsFromConfig(cfg)
     }
   } catch (e: unknown) {
     const msg = formatApiError(e)
