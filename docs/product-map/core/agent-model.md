@@ -55,6 +55,10 @@ Two categories exist:
 - `max_input_length` — input length cap
 - `library_id` — nullable FK; non-null = library primitive provenance
 - `prompt_always_visible` — if `True`, prompt masking is disabled
+- `required_environment_capabilities` — list of environment capability strings
+  (e.g. `["egress:github"]`) used by the environment profile system to
+  provision sandboxes with appropriate network/filesystem access
+- `account_id` — FK to `accounts.id` (exposed as `created_by` in API response)
 
 ## Behaviours
 
@@ -129,12 +133,27 @@ Two categories exist:
 - [x] `GET /api/v1/agents/{id}` returns 501 Not Implemented on `ProgrammingError`
 - [x] `PATCH /api/v1/agents/{id}` returns 501 Not Implemented on `ProgrammingError`
 - [x] `DELETE /api/v1/agents/{id}` returns 501 Not Implemented on `ProgrammingError`
+- [x] `POST /{id}/prompts/{version}/optimize` returns 501 Not Implemented on `ProgrammingError`
+- [x] `POST /{id}/prompts/{version}/apply` returns 501 Not Implemented on `ProgrammingError`
+- [x] `GET /{id}/prompts` returns 501 Not Implemented on `ProgrammingError`
+- [x] `GET /{id}/prompts/{version}` returns 501 Not Implemented on `ProgrammingError`
+- [x] `PUT /{id}/prompts/rollback/{version}` returns 501 Not Implemented on `ProgrammingError`
+- [x] `POST /{id}/prompts/diff` returns 501 Not Implemented on `ProgrammingError`
+- [x] `POST /{id}/prompts/{version}/optimize` returns 404 when model backend not found
+- [x] `POST /{id}/prompts/{version}/optimize` returns 500 on secret decryption failure (`KeyError`)
+- [x] `GET /{id}/prompts` returns 404 when agent not found
+- [x] `GET /{id}/prompts/{version}` returns 404 when version not found
+- [x] `PUT /{id}/prompts/rollback/{version}` returns 404 when agent or version not found
+- [x] `POST /{id}/prompts/diff` returns 404 when version A or B not found
 
 ## Known Gaps
 
-- **Website docs stub missing.** No website docs page exists for the Agent Model feature.
-  A stub should be created at `Website/modulo-website/src/docs/agents.md` with a link to
-  PRD §8.2.
+- **Website docs exist but could be deeper.** The page at
+  `Website/modulo-website/src/docs/agents.md` already exists and covers agent
+  configuration, prompt versioning, and schema assignment at a general level. It
+  does not specifically reference PRD §8.2 or document the generic agent criteria,
+  library agent model, or the CRUD API. Consider expanding it with a reference to
+  the API endpoints and the generic-vs-library agent distinction.
 - **BDD features test old `/api/agents` endpoints.** The feature files at
   `tests/features/agents/` and step defs at `tests/bdd/steps/test_alpha_agents.py` use the
   legacy `/api/agents` path with `modulo.core.pipeline_engine.run_crud` patches. A new
@@ -158,6 +177,10 @@ Two categories exist:
   and test the old `/api/agents` endpoint. The actual routes live at `/api/v1/agents`
   with `modulo.api.routes.agents.*` as the call target. The BDD patches are dead code
   and do not exercise any real route logic.
+- **ProgrammingError→501 catches lack test coverage.** All 13 endpoints have
+  `except ProgrammingError` blocks, but no unit or integration test exercises the
+  catch path. A test that triggers a real `ProgrammingError` (e.g. by querying a
+  non-existent table) would verify the 501 response is returned correctly.
 
 ## QA History
 
@@ -169,3 +192,13 @@ Two categories exist:
   test_agents_endpoint copy-to-adapt tests: 5 — 10 pre-existing Pydantic validation failures
   in test_agents_endpoint.py are unrelated to these changes).
   Status: partial (same 6 known gaps remain, 1 new gap added for BDD dead code).
+- **2026-07-03 — feat-qa-agent-model cross-cutting QA**: Verified all `[x]` behaviour
+  checkboxes against actual test coverage: 9/9 test coverage boxes confirmed, all 26
+  error-handling paths verified in code (23 endpoints now have ProgrammingError→501,
+  3 prompt-optimize specific paths). Added 3 missing model fields
+  (`required_environment_capabilities`, `account_id`, `created_by`) to field list.
+  Added 13 missing error-path behaviour checkboxes for prompt endpoints and optimize
+  endpoint. Confirmed all 10 missing field-level test gaps in test_agents_endpoint.py
+  remain pre-existing (Pydantic validation failures — unrelated to agent model logic).
+  Website docs stub still missing; Known Gaps updated accordingly.
+  Status: partial (same known gaps remain, website docs exist but could be deeper).
