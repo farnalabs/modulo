@@ -61,6 +61,7 @@ export class ErrorTracker {
   }
 
   connectRouter(router: Router): void {
+    if (this.unsubRouter) this.unsubRouter()
     this.unsubRouter = router.afterEach((to, from) => {
       const collector = getCollector()
       if (collector) {
