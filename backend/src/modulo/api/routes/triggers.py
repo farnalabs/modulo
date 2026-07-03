@@ -9,12 +9,14 @@ URLs:
 """
 
 import datetime
+import logging
 import uuid
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, Field
 from sqlalchemy import select
+from sqlalchemy.exc import ProgrammingError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.api.dependencies import get_db_session
@@ -26,6 +28,8 @@ from modulo.core.trigger_engine import TriggerEngine
 from modulo.db.models.trigger import Trigger
 from modulo.db.models.trigger_event import TriggerEvent
 from modulo.db.rls import set_rls_org
+
+_log = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/v1", tags=["triggers"])
 
@@ -40,19 +44,25 @@ async def list_triggers(
     principal: AuthenticatedPrincipal = Depends(get_current_user),
 ) -> dict[str, Any]:
     """List all triggers, optionally filtered by pipeline or type."""
-    async with session.begin():
-        await set_rls_org(session, principal.organisation_id)
-        q = select(Trigger).where(Trigger.organisation_id == principal.organisation_id)
+    try:
+        async with session.begin():
+            await set_rls_org(session, principal.organisation_id)
+            q = select(Trigger).where(Trigger.organisation_id == principal.organisation_id)
 
-        if pipeline_id is not None:
-            q = q.where(Trigger.pipeline_id == pipeline_id)
-        if trigger_type is not None:
-            q = q.where(Trigger.trigger_type == trigger_type)
+            if pipeline_id is not None:
+                q = q.where(Trigger.pipeline_id == pipeline_id)
+            if trigger_type is not None:
+                q = q.where(Trigger.trigger_type == trigger_type)
 
-        total = len((await session.execute(q)).scalars().all())
-        offset = (page - 1) * page_size
-        q = q.order_by(Trigger.created_at.desc()).offset(offset).limit(page_size)
-        rows = (await session.execute(q)).scalars().all()
+            total = len((await session.execute(q)).scalars().all())
+            offset = (page - 1) * page_size
+            q = q.order_by(Trigger.created_at.desc()).offset(offset).limit(page_size)
+            rows = (await session.execute(q)).scalars().all()
+    except ProgrammingError:
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="Feature is not available. Run database migrations to enable it.",
+        ) from None
 
     return {
         "items": [
@@ -99,57 +109,63 @@ async def update_cron_config(
     Validates the cron expression before saving. Computes ``next_fire_at``
     when the expression or timezone changes.
     """
-    async with session.begin():
-        await set_rls_org(session, principal.organisation_id)
-        result = await session.execute(
-            select(Trigger).where(
-                Trigger.id == trigger_id,
-                Trigger.organisation_id == principal.organisation_id,
-            )
-        )
-        trigger = result.scalar_one_or_none()
-        if trigger is None:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Trigger not found")
-
-        if trigger.trigger_type != "cron":
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Only cron triggers can have cron configuration",
-            )
-
-        if body.active is not None:
-            trigger.active = body.active
-
-        if body.cron_expression is not None:
-            err = validate_cron_expression(
-                body.cron_expression,
-                body.cron_timezone or trigger.cron_timezone or "UTC",
-            )
-            if err:
-                raise HTTPException(
-                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-                    detail=f"Invalid cron expression: {err}",
+    try:
+        async with session.begin():
+            await set_rls_org(session, principal.organisation_id)
+            result = await session.execute(
+                select(Trigger).where(
+                    Trigger.id == trigger_id,
+                    Trigger.organisation_id == principal.organisation_id,
                 )
-            trigger.cron_expression = body.cron_expression
+            )
+            trigger = result.scalar_one_or_none()
+            if trigger is None:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Trigger not found")
 
-        if body.cron_timezone is not None:
-            trigger.cron_timezone = body.cron_timezone
+            if trigger.trigger_type != "cron":
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Only cron triggers can have cron configuration",
+                )
 
-        # Recompute next_fire_at if relevant
-        if body.cron_expression is not None or body.cron_timezone is not None:
-            if trigger.cron_expression:
-                tz = trigger.cron_timezone or "UTC"
-                err = validate_cron_expression(trigger.cron_expression, tz)
-                if err is None:
-                    trigger.next_fire_at = compute_next_fire(trigger.cron_expression)
+            if body.active is not None:
+                trigger.active = body.active
 
-        if body.snapshot_id is not None:
-            trigger.config_json = {**(trigger.config_json or {}), "snapshot_id": body.snapshot_id}
+            if body.cron_expression is not None:
+                err = validate_cron_expression(
+                    body.cron_expression,
+                    body.cron_timezone or trigger.cron_timezone or "UTC",
+                )
+                if err:
+                    raise HTTPException(
+                        status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                        detail=f"Invalid cron expression: {err}",
+                    )
+                trigger.cron_expression = body.cron_expression
 
-        if body.input_template is not None:
-            trigger.config_json = {**(trigger.config_json or {}), "input_template": body.input_template}
+            if body.cron_timezone is not None:
+                trigger.cron_timezone = body.cron_timezone
 
-        await session.flush()
+            # Recompute next_fire_at if relevant
+            if body.cron_expression is not None or body.cron_timezone is not None:
+                if trigger.cron_expression:
+                    tz = trigger.cron_timezone or "UTC"
+                    err = validate_cron_expression(trigger.cron_expression, tz)
+                    if err is None:
+                        trigger.next_fire_at = compute_next_fire(trigger.cron_expression)
+
+            if body.snapshot_id is not None:
+                trigger.config_json = {**(trigger.config_json or {}), "snapshot_id": body.snapshot_id}
+
+            if body.input_template is not None:
+                trigger.config_json = {**(trigger.config_json or {}), "input_template": body.input_template}
+
+            await session.flush()
+    except ProgrammingError:
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="Feature is not available. Run database migrations to enable it.",
+        ) from None
 
     return {
         "id": str(trigger.id),
@@ -169,31 +185,37 @@ async def preview_cron_schedule(
     principal: AuthenticatedPrincipal = Depends(get_current_user),
 ) -> dict[str, Any]:
     """Preview the next *count* fire times for a cron trigger."""
-    async with session.begin():
-        await set_rls_org(session, principal.organisation_id)
-        result = await session.execute(
-            select(Trigger).where(
-                Trigger.id == trigger_id,
-                Trigger.organisation_id == principal.organisation_id,
+    try:
+        async with session.begin():
+            await set_rls_org(session, principal.organisation_id)
+            result = await session.execute(
+                select(Trigger).where(
+                    Trigger.id == trigger_id,
+                    Trigger.organisation_id == principal.organisation_id,
+                )
             )
-        )
-        trigger = result.scalar_one_or_none()
-        if trigger is None:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Trigger not found")
+            trigger = result.scalar_one_or_none()
+            if trigger is None:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Trigger not found")
 
-        if not trigger.cron_expression:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Trigger has no cron expression configured",
-            )
+            if not trigger.cron_expression:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Trigger has no cron expression configured",
+                )
 
-        from croniter import croniter
+            from croniter import croniter
 
-        cron = croniter(trigger.cron_expression, datetime.datetime.now(datetime.UTC))
-        times: list[str] = []
-        for _ in range(count):
-            next_dt = cron.get_next(datetime.datetime)
-            times.append(next_dt.isoformat())
+            cron = croniter(trigger.cron_expression, datetime.datetime.now(datetime.UTC))
+            times: list[str] = []
+            for _ in range(count):
+                next_dt = cron.get_next(datetime.datetime)
+                times.append(next_dt.isoformat())
+    except ProgrammingError:
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="Feature is not available. Run database migrations to enable it.",
+        ) from None
 
     return {
         "trigger_id": str(trigger_id),
@@ -231,55 +253,63 @@ async def update_polling_config(
     Validates that the trigger is of type ``polling`` before applying changes.
     Recomputes ``next_fire_at`` when the interval or config changes.
     """
-    async with session.begin():
-        await set_rls_org(session, principal.organisation_id)
-        result = await session.execute(
-            select(Trigger).where(
-                Trigger.id == trigger_id,
-                Trigger.organisation_id == principal.organisation_id,
+    try:
+        async with session.begin():
+            await set_rls_org(session, principal.organisation_id)
+            result = await session.execute(
+                select(Trigger).where(
+                    Trigger.id == trigger_id,
+                    Trigger.organisation_id == principal.organisation_id,
+                )
             )
-        )
-        trigger = result.scalar_one_or_none()
-        if trigger is None:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Trigger not found")
+            trigger = result.scalar_one_or_none()
+            if trigger is None:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Trigger not found")
 
-        if trigger.trigger_type != "polling":
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Only polling triggers can have polling configuration",
-            )
+            if trigger.trigger_type != "polling":
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Only polling triggers can have polling configuration",
+                )
 
-        if body.active is not None:
-            trigger.active = body.active
+            if body.active is not None:
+                trigger.active = body.active
 
-        config = dict(trigger.config_json or {})
+            config = dict(trigger.config_json or {})
 
-        if body.connector_instance_id is not None:
-            config["connector_instance_id"] = body.connector_instance_id
-        if body.poll_query is not None:
-            config["poll_query"] = body.poll_query
-        if body.condition_expression is not None:
-            config["condition_expression"] = body.condition_expression
-        if body.poll_interval_seconds is not None:
-            config["poll_interval_seconds"] = body.poll_interval_seconds
-        if body.snapshot_id is not None:
-            config["snapshot_id"] = body.snapshot_id
+            if body.connector_instance_id is not None:
+                config["connector_instance_id"] = body.connector_instance_id
+            if body.poll_query is not None:
+                config["poll_query"] = body.poll_query
+            if body.condition_expression is not None:
+                config["condition_expression"] = body.condition_expression
+            if body.poll_interval_seconds is not None:
+                config["poll_interval_seconds"] = body.poll_interval_seconds
+            if body.snapshot_id is not None:
+                config["snapshot_id"] = body.snapshot_id
 
-        trigger.config_json = config
+            trigger.config_json = config
 
-        # Recompute next_fire_at when interval or config changes
-        if any(
-            x is not None
-            for x in [
-                body.poll_interval_seconds,
-                body.connector_instance_id,
-                body.poll_query,
-            ]
-        ):
-            trigger_engine = TriggerEngine()
-            await trigger_engine.schedule_polling_trigger(session, trigger=trigger, org_id=principal.organisation_id)
+            # Recompute next_fire_at when interval or config changes
+            if any(
+                x is not None
+                for x in [
+                    body.poll_interval_seconds,
+                    body.connector_instance_id,
+                    body.poll_query,
+                ]
+            ):
+                trigger_engine = TriggerEngine()
+                await trigger_engine.schedule_polling_trigger(
+                    session, trigger=trigger, org_id=principal.organisation_id
+                )
 
-        await session.flush()
+            await session.flush()
+    except ProgrammingError:
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="Feature is not available. Run database migrations to enable it.",
+        ) from None
 
     return {
         "id": str(trigger.id),
@@ -309,23 +339,29 @@ async def test_polling_condition(
     Runs the connector query and JMESPath evaluation, returning the result
     status and matching records. Does not create a Run or TriggerEvent.
     """
-    async with session.begin():
-        await set_rls_org(session, principal.organisation_id)
-        result = await session.execute(
-            select(Trigger).where(
-                Trigger.id == trigger_id,
-                Trigger.organisation_id == principal.organisation_id,
+    try:
+        async with session.begin():
+            await set_rls_org(session, principal.organisation_id)
+            result = await session.execute(
+                select(Trigger).where(
+                    Trigger.id == trigger_id,
+                    Trigger.organisation_id == principal.organisation_id,
+                )
             )
-        )
-        trigger = result.scalar_one_or_none()
-        if trigger is None:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Trigger not found")
+            trigger = result.scalar_one_or_none()
+            if trigger is None:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Trigger not found")
 
-        if trigger.trigger_type != "polling":
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Only polling triggers can be tested",
-            )
+            if trigger.trigger_type != "polling":
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Only polling triggers can be tested",
+                )
+    except ProgrammingError:
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="Feature is not available. Run database migrations to enable it.",
+        ) from None
 
     # Evaluate outside the transaction (connector ops are I/O, not DB)
     trigger_engine = TriggerEngine()
@@ -363,29 +399,35 @@ async def create_trigger(
     principal: AuthenticatedPrincipal = Depends(get_current_user),
 ) -> dict[str, Any]:
     """Create a new trigger for a pipeline."""
-    async with session.begin():
-        await set_rls_org(session, principal.organisation_id)
-        trigger = Trigger(
-            organisation_id=principal.organisation_id,
-            pipeline_id=pipeline_id,
-            trigger_type=body.trigger_type,
-            active=body.active,
-            max_concurrent_runs=body.max_concurrent_runs,
-            config_json=body.config_json,
-            cron_expression=body.cron_expression,
-            cron_timezone=body.cron_timezone,
-            account_id=principal.account_id,
-        )
-        if body.cron_expression:
-            err = validate_cron_expression(body.cron_expression, body.cron_timezone or "UTC")
-            if err:
-                raise HTTPException(
-                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-                    detail=f"Invalid cron expression: {err}",
-                )
-            trigger.next_fire_at = compute_next_fire(body.cron_expression)
-        session.add(trigger)
-        await session.flush()
+    try:
+        async with session.begin():
+            await set_rls_org(session, principal.organisation_id)
+            trigger = Trigger(
+                organisation_id=principal.organisation_id,
+                pipeline_id=pipeline_id,
+                trigger_type=body.trigger_type,
+                active=body.active,
+                max_concurrent_runs=body.max_concurrent_runs,
+                config_json=body.config_json,
+                cron_expression=body.cron_expression,
+                cron_timezone=body.cron_timezone,
+                account_id=principal.account_id,
+            )
+            if body.cron_expression:
+                err = validate_cron_expression(body.cron_expression, body.cron_timezone or "UTC")
+                if err:
+                    raise HTTPException(
+                        status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                        detail=f"Invalid cron expression: {err}",
+                    )
+                trigger.next_fire_at = compute_next_fire(body.cron_expression)
+            session.add(trigger)
+            await session.flush()
+    except ProgrammingError:
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="Feature is not available. Run database migrations to enable it.",
+        ) from None
 
     return {
         "id": str(trigger.id),
@@ -418,48 +460,54 @@ async def update_trigger(
     principal: AuthenticatedPrincipal = Depends(get_current_user),
 ) -> dict[str, Any]:
     """Update a trigger's general configuration."""
-    async with session.begin():
-        await set_rls_org(session, principal.organisation_id)
-        result = await session.execute(
-            select(Trigger).where(
-                Trigger.id == trigger_id,
-                Trigger.organisation_id == principal.organisation_id,
+    try:
+        async with session.begin():
+            await set_rls_org(session, principal.organisation_id)
+            result = await session.execute(
+                select(Trigger).where(
+                    Trigger.id == trigger_id,
+                    Trigger.organisation_id == principal.organisation_id,
+                )
             )
-        )
-        trigger = result.scalar_one_or_none()
-        if trigger is None:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Trigger not found")
+            trigger = result.scalar_one_or_none()
+            if trigger is None:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Trigger not found")
 
-        if body.active is not None:
-            trigger.active = body.active
-        if body.max_concurrent_runs is not None:
-            trigger.max_concurrent_runs = body.max_concurrent_runs
-        if body.config_json is not None:
-            trigger.config_json = body.config_json
-        if body.cron_expression is not None:
-            if trigger.trigger_type not in ("cron",):
-                raise HTTPException(
-                    status_code=status.HTTP_400_BAD_REQUEST,
-                    detail="Only cron triggers can have cron expressions",
-                )
-            tz = body.cron_timezone or trigger.cron_timezone or "UTC"
-            err = validate_cron_expression(body.cron_expression, tz)
-            if err:
-                raise HTTPException(
-                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-                    detail=f"Invalid cron expression: {err}",
-                )
-            trigger.cron_expression = body.cron_expression
-        if body.cron_timezone is not None:
-            trigger.cron_timezone = body.cron_timezone
-        if body.cron_expression is not None or body.cron_timezone is not None:
-            if trigger.cron_expression:
-                tz = trigger.cron_timezone or "UTC"
-                err = validate_cron_expression(trigger.cron_expression, tz)
-                if err is None:
-                    trigger.next_fire_at = compute_next_fire(trigger.cron_expression)
+            if body.active is not None:
+                trigger.active = body.active
+            if body.max_concurrent_runs is not None:
+                trigger.max_concurrent_runs = body.max_concurrent_runs
+            if body.config_json is not None:
+                trigger.config_json = body.config_json
+            if body.cron_expression is not None:
+                if trigger.trigger_type not in ("cron",):
+                    raise HTTPException(
+                        status_code=status.HTTP_400_BAD_REQUEST,
+                        detail="Only cron triggers can have cron expressions",
+                    )
+                tz = body.cron_timezone or trigger.cron_timezone or "UTC"
+                err = validate_cron_expression(body.cron_expression, tz)
+                if err:
+                    raise HTTPException(
+                        status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                        detail=f"Invalid cron expression: {err}",
+                    )
+                trigger.cron_expression = body.cron_expression
+            if body.cron_timezone is not None:
+                trigger.cron_timezone = body.cron_timezone
+            if body.cron_expression is not None or body.cron_timezone is not None:
+                if trigger.cron_expression:
+                    tz = trigger.cron_timezone or "UTC"
+                    err = validate_cron_expression(trigger.cron_expression, tz)
+                    if err is None:
+                        trigger.next_fire_at = compute_next_fire(trigger.cron_expression)
 
-        await session.flush()
+            await session.flush()
+    except ProgrammingError:
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="Feature is not available. Run database migrations to enable it.",
+        ) from None
 
     return {
         "id": str(trigger.id),
@@ -482,18 +530,24 @@ async def delete_trigger(
     principal: AuthenticatedPrincipal = Depends(get_current_user),
 ) -> None:
     """Delete a trigger and its associated events (cascade)."""
-    async with session.begin():
-        await set_rls_org(session, principal.organisation_id)
-        result = await session.execute(
-            select(Trigger).where(
-                Trigger.id == trigger_id,
-                Trigger.organisation_id == principal.organisation_id,
+    try:
+        async with session.begin():
+            await set_rls_org(session, principal.organisation_id)
+            result = await session.execute(
+                select(Trigger).where(
+                    Trigger.id == trigger_id,
+                    Trigger.organisation_id == principal.organisation_id,
+                )
             )
-        )
-        trigger = result.scalar_one_or_none()
-        if trigger is None:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Trigger not found")
-        await session.delete(trigger)
+            trigger = result.scalar_one_or_none()
+            if trigger is None:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Trigger not found")
+            await session.delete(trigger)
+    except ProgrammingError:
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="Feature is not available. Run database migrations to enable it.",
+        ) from None
 
 
 @router.post("/triggers/{trigger_id}/toggle", status_code=status.HTTP_200_OK)
@@ -503,20 +557,26 @@ async def toggle_trigger(
     principal: AuthenticatedPrincipal = Depends(get_current_user),
 ) -> dict[str, Any]:
     """Toggle a trigger's active state."""
-    async with session.begin():
-        await set_rls_org(session, principal.organisation_id)
-        result = await session.execute(
-            select(Trigger).where(
-                Trigger.id == trigger_id,
-                Trigger.organisation_id == principal.organisation_id,
+    try:
+        async with session.begin():
+            await set_rls_org(session, principal.organisation_id)
+            result = await session.execute(
+                select(Trigger).where(
+                    Trigger.id == trigger_id,
+                    Trigger.organisation_id == principal.organisation_id,
+                )
             )
-        )
-        trigger = result.scalar_one_or_none()
-        if trigger is None:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Trigger not found")
+            trigger = result.scalar_one_or_none()
+            if trigger is None:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Trigger not found")
 
-        trigger.active = not trigger.active
-        await session.flush()
+            trigger.active = not trigger.active
+            await session.flush()
+    except ProgrammingError:
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="Feature is not available. Run database migrations to enable it.",
+        ) from None
 
     return {"id": str(trigger.id), "active": trigger.active}
 
@@ -537,61 +597,67 @@ async def test_trigger(
     For manual triggers this also creates a Run. For all trigger types
     a TriggerEvent is recorded.
     """
-    async with session.begin():
-        await set_rls_org(session, principal.organisation_id)
-        result = await session.execute(
-            select(Trigger).where(
-                Trigger.id == trigger_id,
-                Trigger.organisation_id == principal.organisation_id,
-            )
-        )
-        trigger = result.scalar_one_or_none()
-        if trigger is None:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Trigger not found")
-
-        import hashlib
-        import json
-
-        raw_body = json.dumps(body.payload, sort_keys=True).encode()
-        payload_hash = hashlib.sha256(raw_body).hexdigest()
-
-        event = TriggerEvent(
-            organisation_id=principal.organisation_id,
-            trigger_id=trigger.id,
-            trigger_type=trigger.trigger_type,
-            raw_payload_hash=payload_hash,
-            validation_result="test",
-            error_detail=None,
-        )
-        session.add(event)
-
-        run_id: str | None = None
-        if trigger.trigger_type == "manual":
-            from modulo.db.crud.pipeline_snapshot import create_snapshot_from_live_graph
-            from modulo.db.crud.run import create_run
-
-            snapshot = await create_snapshot_from_live_graph(
-                session, pipeline_id=trigger.pipeline_id, account_id=principal.account_id
-            )
-            if snapshot is None:
-                raise HTTPException(
-                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                    detail="Failed to create pipeline snapshot for test trigger",
+    try:
+        async with session.begin():
+            await set_rls_org(session, principal.organisation_id)
+            result = await session.execute(
+                select(Trigger).where(
+                    Trigger.id == trigger_id,
+                    Trigger.organisation_id == principal.organisation_id,
                 )
-            run = await create_run(
-                session,
-                org_id=principal.organisation_id,
-                pipeline_id=trigger.pipeline_id,
-                snapshot_id=snapshot.id,
-                trigger_type="manual",
-                input_payload=body.payload,
-                account_id=principal.account_id,
-                trigger_id=trigger.id,
             )
-            run_id = str(run.id)
-            event.run_id = run.id
+            trigger = result.scalar_one_or_none()
+            if trigger is None:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Trigger not found")
 
-        await session.flush()
+            import hashlib
+            import json
+
+            raw_body = json.dumps(body.payload, sort_keys=True).encode()
+            payload_hash = hashlib.sha256(raw_body).hexdigest()
+
+            event = TriggerEvent(
+                organisation_id=principal.organisation_id,
+                trigger_id=trigger.id,
+                trigger_type=trigger.trigger_type,
+                raw_payload_hash=payload_hash,
+                validation_result="test",
+                error_detail=None,
+            )
+            session.add(event)
+
+            run_id: str | None = None
+            if trigger.trigger_type == "manual":
+                from modulo.db.crud.pipeline_snapshot import create_snapshot_from_live_graph
+                from modulo.db.crud.run import create_run
+
+                snapshot = await create_snapshot_from_live_graph(
+                    session, pipeline_id=trigger.pipeline_id, account_id=principal.account_id
+                )
+                if snapshot is None:
+                    raise HTTPException(
+                        status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                        detail="Failed to create pipeline snapshot for test trigger",
+                    )
+                run = await create_run(
+                    session,
+                    org_id=principal.organisation_id,
+                    pipeline_id=trigger.pipeline_id,
+                    snapshot_id=snapshot.id,
+                    trigger_type="manual",
+                    input_payload=body.payload,
+                    account_id=principal.account_id,
+                    trigger_id=trigger.id,
+                )
+                run_id = str(run.id)
+                event.run_id = run.id
+
+            await session.flush()
+    except ProgrammingError:
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="Feature is not available. Run database migrations to enable it.",
+        ) from None
 
     return {
         "event_id": str(event.id),
@@ -614,39 +680,45 @@ async def list_trigger_events(
     Supports filtering by status (validation_result). Returns a ``next_cursor``
     value that can be passed as ``cursor`` on the next request.
     """
-    async with session.begin():
-        await set_rls_org(session, principal.organisation_id)
-        trigger_result = await session.execute(
-            select(Trigger).where(
-                Trigger.id == trigger_id,
-                Trigger.organisation_id == principal.organisation_id,
-            )
-        )
-        trigger = trigger_result.scalar_one_or_none()
-        if trigger is None:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Trigger not found")
-
-        q = select(TriggerEvent).where(
-            TriggerEvent.trigger_id == trigger_id,
-            TriggerEvent.organisation_id == principal.organisation_id,
-        )
-        if event_status is not None:
-            q = q.where(TriggerEvent.validation_result == event_status)
-
-        if cursor:
-            try:
-                cursor_created_at_str, cursor_id = cursor.split("_", 1)
-                cursor_dt = datetime.datetime.fromisoformat(cursor_created_at_str)
-                cursor_uuid = uuid.UUID(cursor_id)
-                q = q.where(
-                    (TriggerEvent.created_at < cursor_dt)
-                    | ((TriggerEvent.created_at == cursor_dt) & (TriggerEvent.id < cursor_uuid))
+    try:
+        async with session.begin():
+            await set_rls_org(session, principal.organisation_id)
+            trigger_result = await session.execute(
+                select(Trigger).where(
+                    Trigger.id == trigger_id,
+                    Trigger.organisation_id == principal.organisation_id,
                 )
-            except (ValueError, AttributeError):
-                pass
+            )
+            trigger = trigger_result.scalar_one_or_none()
+            if trigger is None:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Trigger not found")
 
-        q = q.order_by(TriggerEvent.created_at.desc(), TriggerEvent.id.desc()).limit(limit + 1)
-        rows = (await session.execute(q)).scalars().all()
+            q = select(TriggerEvent).where(
+                TriggerEvent.trigger_id == trigger_id,
+                TriggerEvent.organisation_id == principal.organisation_id,
+            )
+            if event_status is not None:
+                q = q.where(TriggerEvent.validation_result == event_status)
+
+            if cursor:
+                try:
+                    cursor_created_at_str, cursor_id = cursor.split("_", 1)
+                    cursor_dt = datetime.datetime.fromisoformat(cursor_created_at_str)
+                    cursor_uuid = uuid.UUID(cursor_id)
+                    q = q.where(
+                        (TriggerEvent.created_at < cursor_dt)
+                        | ((TriggerEvent.created_at == cursor_dt) & (TriggerEvent.id < cursor_uuid))
+                    )
+                except (ValueError, AttributeError):
+                    _log.warning("Malformed cursor ignored: %s", cursor)
+
+            q = q.order_by(TriggerEvent.created_at.desc(), TriggerEvent.id.desc()).limit(limit + 1)
+            rows = (await session.execute(q)).scalars().all()
+    except ProgrammingError:
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="Feature is not available. Run database migrations to enable it.",
+        ) from None
 
     has_more = len(rows) > limit
     if has_more:
@@ -692,16 +764,22 @@ async def list_pipeline_triggers(
     principal: AuthenticatedPrincipal = Depends(get_current_user),
 ) -> dict[str, Any]:
     """List triggers for a specific pipeline."""
-    async with session.begin():
-        await set_rls_org(session, principal.organisation_id)
-        q = select(Trigger).where(
-            Trigger.pipeline_id == pipeline_id,
-            Trigger.organisation_id == principal.organisation_id,
-        )
-        if trigger_type is not None:
-            q = q.where(Trigger.trigger_type == trigger_type)
-        q = q.order_by(Trigger.created_at.desc())
-        rows = (await session.execute(q)).scalars().all()
+    try:
+        async with session.begin():
+            await set_rls_org(session, principal.organisation_id)
+            q = select(Trigger).where(
+                Trigger.pipeline_id == pipeline_id,
+                Trigger.organisation_id == principal.organisation_id,
+            )
+            if trigger_type is not None:
+                q = q.where(Trigger.trigger_type == trigger_type)
+            q = q.order_by(Trigger.created_at.desc())
+            rows = (await session.execute(q)).scalars().all()
+    except ProgrammingError:
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="Feature is not available. Run database migrations to enable it.",
+        ) from None
 
     return {
         "items": [

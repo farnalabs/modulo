@@ -6,6 +6,7 @@ from datetime import datetime
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel
 from sqlalchemy import func, select
+from sqlalchemy.exc import ProgrammingError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.api.dependencies import get_db_session
@@ -53,31 +54,37 @@ async def list_trigger_events(
     principal: AuthenticatedPrincipal = Depends(get_current_user),
 ) -> TriggerEventListResponse:
     _require_admin(principal)
-    async with session.begin():
-        await set_rls_org(session, principal.organisation_id)
+    try:
+        async with session.begin():
+            await set_rls_org(session, principal.organisation_id)
 
-        q = select(TriggerEvent).where(
-            TriggerEvent.organisation_id == principal.organisation_id,
-        )
-        if trigger_type:
-            q = q.where(TriggerEvent.trigger_type == trigger_type)
-        if validation_result:
-            q = q.where(TriggerEvent.validation_result == validation_result)
+            q = select(TriggerEvent).where(
+                TriggerEvent.organisation_id == principal.organisation_id,
+            )
+            if trigger_type:
+                q = q.where(TriggerEvent.trigger_type == trigger_type)
+            if validation_result:
+                q = q.where(TriggerEvent.validation_result == validation_result)
 
-        if cursor:
-            try:
-                cursor_ts_str, cursor_id = cursor.split("_", 1)
-                cursor_dt = datetime.fromisoformat(cursor_ts_str)
-                cursor_uuid = uuid.UUID(cursor_id)
-                q = q.where(
-                    (TriggerEvent.created_at < cursor_dt)
-                    | ((TriggerEvent.created_at == cursor_dt) & (TriggerEvent.id < cursor_uuid))
-                )
-            except (ValueError, AttributeError):
-                pass
+            if cursor:
+                try:
+                    cursor_ts_str, cursor_id = cursor.split("_", 1)
+                    cursor_dt = datetime.fromisoformat(cursor_ts_str)
+                    cursor_uuid = uuid.UUID(cursor_id)
+                    q = q.where(
+                        (TriggerEvent.created_at < cursor_dt)
+                        | ((TriggerEvent.created_at == cursor_dt) & (TriggerEvent.id < cursor_uuid))
+                    )
+                except (ValueError, AttributeError):
+                    pass
 
-        q = q.order_by(TriggerEvent.created_at.desc(), TriggerEvent.id.desc()).limit(limit + 1)
-        rows = (await session.execute(q)).scalars().all()
+            q = q.order_by(TriggerEvent.created_at.desc(), TriggerEvent.id.desc()).limit(limit + 1)
+            rows = (await session.execute(q)).scalars().all()
+    except ProgrammingError:
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="Feature is not available. Run database migrations to enable it.",
+        ) from None
 
     has_more = len(rows) > limit
     if has_more:
@@ -106,12 +113,18 @@ async def list_trigger_events(
         first = rows[0]
         prev_cursor = f"{first.created_at.isoformat()}_{first.id}"
 
-    count_result = await session.execute(
-        select(func.count(TriggerEvent.id)).where(
-            TriggerEvent.organisation_id == principal.organisation_id,
+    try:
+        count_result = await session.execute(
+            select(func.count(TriggerEvent.id)).where(
+                TriggerEvent.organisation_id == principal.organisation_id,
+            )
         )
-    )
-    total = count_result.scalar() or 0
+        total = count_result.scalar() or 0
+    except ProgrammingError:
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="Feature is not available. Run database migrations to enable it.",
+        ) from None
 
     return TriggerEventListResponse(
         items=items,
