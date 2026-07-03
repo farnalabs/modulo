@@ -13,15 +13,15 @@ vi.mock('../../components/ui/button/Button.vue', () => ({
 }))
 
 const mockSourceFields: SchemaField[] = [
-  { name: 'title', type: 'string', required: true },
-  { name: 'body', type: 'string', required: true },
-  { name: 'score', type: 'number', required: false },
+  { name: 'title', type: 'string', description: null, required: true },
+  { name: 'body', type: 'string', description: null, required: true },
+  { name: 'score', type: 'number', description: null, required: false },
 ]
 
 const mockTargetFields: SchemaField[] = [
-  { name: 'title', type: 'string', required: true },
-  { name: 'content', type: 'string', required: true },
-  { name: 'rating', type: 'number', required: false },
+  { name: 'title', type: 'string', description: null, required: true },
+  { name: 'content', type: 'string', description: null, required: true },
+  { name: 'rating', type: 'number', description: null, required: false },
 ]
 
 describe('FieldMappingPair', () => {
@@ -39,8 +39,8 @@ describe('FieldMappingPair', () => {
 
   it('shows passthrough badge when schemas are identical', () => {
     const identical: SchemaField[] = [
-      { name: 'title', type: 'string', required: true },
-      { name: 'body', type: 'string', required: false },
+      { name: 'title', type: 'string', description: null, required: true },
+      { name: 'body', type: 'string', description: null, required: false },
     ]
     const wrapper = mount(FieldMappingPair, {
       props: {

@@ -70,9 +70,12 @@ describe('ParameterPortForm', () => {
       id: 'p1',
       name: 'prompt',
       label: 'Prompt',
+      description: null,
       type: 'string',
       required: true,
       default: 'Hello',
+      options: null,
+      multiline: null,
     }
     const wrapper = mount(ParameterPortForm, {
       props: { port, modelValue: '' },
@@ -88,9 +91,12 @@ describe('ParameterPortForm', () => {
       id: 'p2',
       name: 'temperature',
       label: 'Temperature',
+      description: null,
       type: 'number',
       required: false,
       default: 0.7,
+      options: null,
+      multiline: null,
     }
     const wrapper = mount(ParameterPortForm, {
       props: { port, modelValue: 0.7 },
@@ -105,8 +111,12 @@ describe('ParameterPortForm', () => {
       id: 'p3',
       name: 'enabled',
       label: 'Enabled',
+      description: null,
       type: 'boolean',
       required: true,
+      default: null,
+      options: null,
+      multiline: null,
     }
     const wrapper = mount(ParameterPortForm, {
       props: { port, modelValue: false },
@@ -121,12 +131,15 @@ describe('ParameterPortForm', () => {
       id: 'p4',
       name: 'model',
       label: 'Model',
+      description: null,
       type: 'select',
       required: true,
+      default: null,
       options: [
         { label: 'GPT-4', value: 'gpt-4' },
         { label: 'Claude 3', value: 'claude-3' },
       ],
+      multiline: null,
     }
     const wrapper = mount(ParameterPortForm, {
       props: { port, modelValue: '' },
@@ -141,8 +154,12 @@ describe('ParameterPortForm', () => {
       id: 'p5',
       name: 'backend',
       label: 'Backend',
+      description: null,
       type: 'model_backend_ref',
       required: false,
+      default: null,
+      options: null,
+      multiline: null,
     }
     const wrapper = mount(ParameterPortForm, {
       props: { port, modelValue: null },
@@ -157,8 +174,12 @@ describe('ParameterPortForm', () => {
       id: 'p6',
       name: 'input_schema',
       label: 'Input Schema',
+      description: null,
       type: 'schema_ref',
       required: false,
+      default: null,
+      options: null,
+      multiline: null,
     }
     const wrapper = mount(ParameterPortForm, {
       props: { port, modelValue: null },
