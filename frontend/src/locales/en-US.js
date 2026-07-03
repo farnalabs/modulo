@@ -722,6 +722,10 @@ export default {
       "select_ownership": "Select ownership...",
       "unknown_team": "Unknown team",
       "failed_to_load_teams": "Failed to load teams",
+      "loading_teams": "Loading teams...",
+      "teams_header": "Teams",
+      "member": "member",
+      "members": "members",
       "orgwide": "Org-wide"
     },
     "SvgIcon": {
