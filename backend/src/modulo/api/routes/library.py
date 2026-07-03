@@ -13,8 +13,6 @@ from sqlalchemy import select
 from sqlalchemy.exc import DBAPIError, ProgrammingError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-_log = logging.getLogger(__name__)
-
 from modulo.api.dependencies import get_db_session
 from modulo.auth.dependencies import get_current_user
 from modulo.auth.jwt import AuthenticatedPrincipal
@@ -884,16 +882,9 @@ def _build_pipeline_from_template(
     Returns (name, description, graph_nodes, edges, agent_count, edge_count).
     """
     content = primitive.content_json
-    # Composites store their sub-pipeline graph in sub_pipeline_graph_json.
-    sub_graph = content.get("sub_pipeline_graph_json")
-    if sub_graph:
-        graph_nodes = sub_graph.get("nodes", [])
-        edges = sub_graph.get("edges", [])
-        agents = []
-    else:
-        agents = content.get("agents", [])
-        graph_nodes = content.get("graph_nodes", [])
-        edges = content.get("edges", [])
+    agents = content.get("agents", [])
+    graph_nodes = content.get("graph_nodes", [])
+    edges = content.get("edges", [])
 
     name = name_override or getattr(primitive, "name", "Pipeline from Template")
     description = description_override or getattr(primitive, "description", None)
@@ -977,10 +968,10 @@ async def create_pipeline_from_template_endpoint(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Primitive {primitive_id} not found",
         )
-    if primitive.primitive_type not in ("pipeline_template", "composite"):
+    if primitive.primitive_type != "pipeline_template":
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Primitive type must be 'pipeline_template' or 'composite', got '{primitive.primitive_type}'",
+            detail=f"Primitive type must be 'pipeline_template', got '{primitive.primitive_type}'",
         )
 
     name, description, graph_nodes, edges, agent_count, edge_count = _build_pipeline_from_template(
@@ -994,42 +985,40 @@ async def create_pipeline_from_template_endpoint(
             await set_rls_org(session, principal.organisation_id)
             await set_rls_user_context(session, principal.account_id, principal.org_role)
             pipeline = await create_pipeline(
-                session,
-                org_id=principal.organisation_id,
-                name=name,
-                account_id=principal.account_id,
-                description=description,
-                run_context_defaults={
-                    "library_source_id": str(primitive_id),
-                    "library_template_name": primitive.name,
-                },
+            session,
+            org_id=principal.organisation_id,
+            name=name,
+            account_id=principal.account_id,
+            description=description,
+            run_context_defaults={
+                "library_source_id": str(primitive_id),
+                "library_template_name": primitive.name,
+            },
+        )
+
+        # Set graph nodes on the pipeline
+        pipeline.graph_nodes_json = graph_nodes
+
+        # Create PipelineEdge records
+        for edge_data in edges:
+            edge_id = edge_data.get("id", "")
+            edge = PipelineEdge(
+                id=uuid.UUID(edge_id) if isinstance(edge_id, str) and edge_id else uuid.uuid4(),
+                organisation_id=principal.organisation_id,
+                pipeline_id=pipeline.id,
+                source_node_id=edge_data["source_node_id"],
+                target_node_id=edge_data["target_node_id"],
+                edge_type=edge_data["edge_type"],
+                hitl_gate_config=edge_data.get("hitl_gate_config"),
             )
+            session.add(edge)
 
-            pipeline.graph_nodes_json = graph_nodes
-
-            for edge_data in edges:
-                edge_id = edge_data.get("id", "")
-                edge = PipelineEdge(
-                    id=uuid.UUID(edge_id) if isinstance(edge_id, str) and edge_id else uuid.uuid4(),
-                    organisation_id=principal.organisation_id,
-                    pipeline_id=pipeline.id,
-                    source_node_id=uuid.UUID(edge_data["source_node_id"]) if isinstance(edge_data["source_node_id"], str) else edge_data["source_node_id"],
-                    target_node_id=uuid.UUID(edge_data["target_node_id"]) if isinstance(edge_data["target_node_id"], str) else edge_data["target_node_id"],
-                    edge_type=edge_data["edge_type"],
-                    hitl_gate_config=edge_data.get("hitl_gate_config"),
-                )
-                session.add(edge)
-
-            await session.flush()
+        await session.flush()
     except (ProgrammingError, DBAPIError):
-        _log.exception("create_pipeline_from_template — DB error")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
         ) from None
-    except Exception:
-        _log.exception("create_pipeline_from_template — unexpected error")
-        raise
 
     return PipelineFromTemplateResponse(
         id=pipeline.id,
