@@ -9,6 +9,7 @@ Usage:
 import asyncio
 import hashlib
 import json
+import logging
 import os
 import uuid
 from datetime import UTC, datetime
@@ -18,6 +19,8 @@ from typing import Any, Literal
 import click
 from sqlalchemy import select
 from tqdm import tqdm  # type: ignore[import-untyped]
+
+_log = logging.getLogger(__name__)
 
 from modulo.auth.jwt import decode_principal
 from modulo.db.crud.account import get_account_by_id
@@ -66,9 +69,11 @@ def _resolve_admin_auth(token: str | None) -> str | None:
         try:
             settings = get_settings()
             principal = decode_principal(raw, settings.secret_key)
-            if principal.org_role != "admin":
+            if principal.org_role not in ("admin", "owner"):
                 raise click.ClickException("Token is not an admin-level JWT")
             return str(principal.user_id)
+        except click.ClickException:
+            raise
         except Exception as exc:
             raise click.ClickException(f"Invalid admin JWT: {exc}") from exc
     return "__admin_secret__"
@@ -125,6 +130,8 @@ async def _collect_org_data(
         raise click.ClickException(f"Organisation {org_id} not found")
     bundle["organisation"] = _serialise_row(org)
 
+    if pipelines_only and users_only:
+        _log.warning("Both --pipelines-only and --users-only set. Using --pipelines-only.")
     tables_to_fetch = list(_MODEL_MAP.items())
     if pipelines_only:
         tables_to_fetch = [(n, m) for n, m in tables_to_fetch if n == "pipelines"]
@@ -142,10 +149,15 @@ async def _collect_org_data(
     return bundle
 
 
+def _sort_key_id(row: dict[str, Any]) -> str:
+    val = row.get("id")
+    return str(val) if val is not None else ""
+
+
 def _compute_export_hash(bundle: dict[str, Any]) -> str:
     hasher = hashlib.sha256()
     for table in _EXPORT_TABLES:
-        for row in sorted(bundle.get(table, []), key=lambda r: r.get("id", "")):
+        for row in sorted(bundle.get(table, []), key=_sort_key_id):
             hasher.update(_hash_record(row).encode())
     return hasher.hexdigest()
 
@@ -192,7 +204,13 @@ async def _read_jsonl(path: Path) -> tuple[dict[str, Any], list[dict[str, Any]]]
     with path.open("r", encoding="utf-8") as f:
         first = True
         for line in f:
-            obj = json.loads(line)
+            stripped = line.strip()
+            if not stripped:
+                continue
+            try:
+                obj = json.loads(stripped)
+            except json.JSONDecodeError as exc:
+                raise click.ClickException(f"Invalid JSONL line: {exc}") from exc
             if first and "__meta__" in obj:
                 meta = obj["__meta__"]
                 first = False
@@ -223,6 +241,8 @@ async def _import_org_data(
     counts: dict[str, int] = {"created": 0, "skipped": 0, "overwritten": 0, "errors": 0}
     groups = _group_records(records)
 
+    if pipelines_only and users_only:
+        _log.warning("Both --pipelines-only and --users-only set. Using --pipelines-only.")
     tables_to_import = list(groups.items())
     if pipelines_only:
         tables_to_import = [(n, r) for n, r in tables_to_import if n == "pipelines"]
@@ -236,6 +256,10 @@ async def _import_org_data(
 
         for rec in tqdm(recs, desc=f"  {table_name}", unit="row", leave=False):
             row_data = dict(rec.get("data", {}))
+            if not row_data and not rec.get("data"):
+                _log.warning("Record missing 'data' key, skipping: %s", rec.get("id", "?"))
+                counts["errors"] += 1
+                continue
             row_data.pop("organisation_id", None)
             row_id = row_data.get("id")
 
@@ -260,13 +284,7 @@ async def _import_org_data(
                             continue
                         if strategy == "merge":
                             current = getattr(existing, col)
-                            if (
-                                current is not None
-                                and current != ""
-                                and current != 0
-                                and current != []
-                                and current != {}
-                            ):
+                            if current is not None:
                                 continue
                         setattr(existing, col, val)
                     counts["overwritten"] += 1
@@ -279,10 +297,17 @@ async def _import_org_data(
                     session.add(model_cls(**row_data))
                     counts["created"] += 1
 
-            except Exception:
+            except Exception as exc:
+                _log.warning("Error importing %s row %s: %s", table_name, row_id or "?", exc)
+                await session.rollback()
                 counts["errors"] += 1
 
-        await session.flush()
+        try:
+            await session.flush()
+        except Exception as exc:
+            _log.error("Flush failed after importing table %s: %s", table_name, exc)
+            await session.rollback()
+            raise
 
     return counts
 
@@ -294,19 +319,16 @@ async def _verify_export(meta: dict[str, Any], records: list[dict[str, Any]]) ->
     expected_hash = meta.get("export_hash", "")
     groups = _group_records(records)
 
+    combined = hashlib.sha256()
     for table in _EXPORT_TABLES:
         table_records = groups.get(table, [])
         table_hasher = hashlib.sha256()
-        for rec in sorted(table_records, key=lambda r: r.get("id", "")):
+        for rec in sorted(table_records, key=_sort_key_id):
             row_hash = rec.get("__hash__", "")
             table_hasher.update(row_hash.encode())
+            combined.update(row_hash.encode())
         computed = table_hasher.hexdigest()
         click.echo(f"  {table:22s}  {computed[:16]}...")
-
-    combined = hashlib.sha256()
-    for table in _EXPORT_TABLES:
-        for rec in sorted(groups.get(table, []), key=lambda r: r.get("id", "")):
-            combined.update(rec.get("__hash__", "").encode())
     computed_export_hash = combined.hexdigest()
 
     if computed_export_hash == expected_hash:
@@ -353,9 +375,16 @@ def cli(ctx: click.Context, token: str | None) -> None:
 @click.option("--pipelines-only", is_flag=True, default=False, help="Export only pipelines")
 @click.option("--users-only", is_flag=True, default=False, help="Export only users")
 @click.pass_context
+def _parse_uuid(raw: str, label: str = "UUID") -> uuid.UUID:
+    try:
+        return uuid.UUID(raw)
+    except (ValueError, AttributeError) as exc:
+        raise click.ClickException(f"Invalid {label}: {raw!r}") from exc
+
+
 def export_org(ctx: click.Context, org_id: str, output: Path, pipelines_only: bool, users_only: bool) -> None:
     """Export all organisation data as a JSONL bundle."""
-    asyncio.run(_async_export_org(ctx, uuid.UUID(org_id), output, pipelines_only, users_only))
+    asyncio.run(_async_export_org(ctx, _parse_uuid(org_id, "organisation ID"), output, pipelines_only, users_only))
 
 
 async def _async_export_org(
@@ -402,7 +431,7 @@ def import_org(
     users_only: bool,
 ) -> None:
     """Import organisation data from a JSONL bundle with conflict resolution."""
-    asyncio.run(_async_import_org(ctx, uuid.UUID(org_id), input_path, on_conflict, pipelines_only, users_only))
+    asyncio.run(_async_import_org(ctx, _parse_uuid(org_id, "organisation ID"), input_path, on_conflict, pipelines_only, users_only))
 
 
 async def _async_import_org(
@@ -448,14 +477,19 @@ async def _async_import_org(
 @click.pass_context
 def verify_export(ctx: click.Context, org_id: str, input_path: Path) -> None:
     """Verify export integrity by re-computing hashes."""
-    asyncio.run(_async_verify_export(ctx, uuid.UUID(org_id), input_path))
+    asyncio.run(_async_verify_export(ctx, _parse_uuid(org_id, "organisation ID"), input_path))
 
 
 async def _async_verify_export(ctx: click.Context, org_id: uuid.UUID, input_path: Path) -> None:
-    meta, records = await _read_jsonl(input_path)
+    try:
+        meta, records = await _read_jsonl(input_path)
+    except click.ClickException:
+        raise
+    except Exception as exc:
+        raise click.ClickException(f"Failed to read export file: {exc}") from exc
     ok = await _verify_export(meta, records)
     if not ok:
-        raise click.ClickException("Verification failed")
+        raise click.ClickException("Verification failed — data integrity issue detected")
 
 
 if __name__ == "__main__":
