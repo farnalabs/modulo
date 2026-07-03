@@ -2,10 +2,20 @@
 
 import json
 import logging
+import re
 from dataclasses import dataclass
 from typing import Any, Protocol
 
 from langchain_core.messages import BaseMessage, HumanMessage, SystemMessage
+
+__all__ = [
+    "SYSTEM_PROMPT",
+    "LLMCallable",
+    "OptimizationResult",
+    "PromptOptimizer",
+    "_build_failure_context",
+    "_parse_llm_response",
+]
 
 _log = logging.getLogger(__name__)
 
@@ -54,6 +64,8 @@ def _build_failure_context(
 ) -> str:
     failures = []
     for er in eval_results:
+        if not isinstance(er, dict):
+            continue
         eval_id = str(er.get("eval_id", ""))
         edef = eval_definitions.get(eval_id, {})
         failures.append(
@@ -76,20 +88,24 @@ def _build_failure_context(
 </failing_evals>"""
 
 
+_CODE_FENCE_RE = re.compile(r"```(?:json)?\s*\n(.*?)\n```", re.DOTALL)
+
+
 def _parse_llm_response(raw: str) -> OptimizationResult:
     cleaned = raw.strip()
-    start = cleaned.find("```")
-    if start != -1:
-        after_fence = cleaned[start + 3 :]
-        lang_end = after_fence.find("\n")
-        if lang_end != -1:
-            after_fence = after_fence[lang_end + 1 :]
-        end = after_fence.find("```")
-        if end != -1:
-            after_fence = after_fence[:end]
-        cleaned = after_fence.strip()
+    if not cleaned:
+        raise json.JSONDecodeError("Empty LLM response", raw, 0)
 
-    parsed = json.loads(cleaned)
+    try:
+        parsed = json.loads(cleaned)
+    except json.JSONDecodeError:
+        match = _CODE_FENCE_RE.search(cleaned)
+        if match:
+            cleaned = match.group(1).strip()
+            parsed = json.loads(cleaned)
+        else:
+            raise
+
     return OptimizationResult(
         suggested_prompt=parsed["suggested_prompt"],
         rationale=parsed["rationale"],
