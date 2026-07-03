@@ -1,4 +1,4 @@
-import type { MonitorBackend, ErrorEventInput, Breadcrumb, UserInfo } from './types'
+import type { MonitorBackend, ErrorEventInput, UserInfo } from './types'
 
 export class MonitorBackendRegistry {
   private backends: MonitorBackend[] = []
@@ -7,6 +7,7 @@ export class MonitorBackendRegistry {
   private globalMessageWindowStart: number = 0
   private static readonly MESSAGE_KEY_COOLDOWN_MS = 60_000
   private static readonly GLOBAL_MESSAGE_MAX_PER_MIN = 100
+  private static readonly RATE_LIMIT_MAP_MAX_SIZE = 1000
 
   add(backend: MonitorBackend): void {
     this.backends.push(backend)
@@ -16,11 +17,17 @@ export class MonitorBackendRegistry {
     return this.backends
   }
 
+  private callBackendMethod(backend: MonitorBackend, method: string, args: unknown[]): void {
+    const fn = (backend as unknown as Record<string, unknown>)[method]
+    if (typeof fn === 'function') {
+      (fn as Function).apply(backend, args)
+    }
+  }
+
   dispatch(method: string, ...args: unknown[]): void {
     for (const backend of this.backends) {
       try {
-        const fn = (backend as any)[method]
-        if (typeof fn === 'function') fn.apply(backend, args)
+        this.callBackendMethod(backend, method, args)
       } catch (e) {
         console.warn(`[monitor] ${backend.key}.${method} failed:`, e)
       }
@@ -29,10 +36,9 @@ export class MonitorBackendRegistry {
 
   dispatchToImplementors(method: string, excludeWith?: string, ...args: unknown[]): void {
     for (const backend of this.backends) {
-      if (excludeWith && typeof (backend as any)[excludeWith] === 'function') continue
+      if (excludeWith && typeof (backend as unknown as Record<string, unknown>)[excludeWith] === 'function') continue
       try {
-        const fn = (backend as any)[method]
-        if (typeof fn === 'function') fn.apply(backend, args)
+        this.callBackendMethod(backend, method, args)
       } catch (e) {
         console.warn(`[monitor] ${backend.key}.${method} failed:`, e)
       }
@@ -44,6 +50,14 @@ export class MonitorBackendRegistry {
       this.dispatchToImplementors('captureRawError', undefined, rawError, rawContext)
     }
     this.dispatchToImplementors('captureError', 'captureRawError', event)
+  }
+
+  private pruneStaleRateLimitEntries(): void {
+    if (this.messageRateLimit.size <= MonitorBackendRegistry.RATE_LIMIT_MAP_MAX_SIZE) return
+    const cutoff = Date.now() - MonitorBackendRegistry.MESSAGE_KEY_COOLDOWN_MS
+    for (const [key, ts] of this.messageRateLimit) {
+      if (ts < cutoff) this.messageRateLimit.delete(key)
+    }
   }
 
   captureMessage(message: string, level: 'error' | 'warning' | 'critical' = 'warning'): void {
@@ -58,6 +72,7 @@ export class MonitorBackendRegistry {
     if (this.globalMessageCount >= MonitorBackendRegistry.GLOBAL_MESSAGE_MAX_PER_MIN) return
 
     this.messageRateLimit.set(message, now)
+    this.pruneStaleRateLimitEntries()
     this.globalMessageCount++
     this.dispatch('captureMessage', message, level)
   }

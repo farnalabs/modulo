@@ -11,29 +11,37 @@ declare global {
   }
 }
 
-export function loadMonitorConfig(): MonitorConfig {
-  const runtimeConfig = window.__MODULO_CONFIG__?.monitor ?? {}
+function envVar(key: string): string | undefined {
+  if (typeof import.meta === 'undefined') return undefined
+  return (import.meta.env as Record<string, string | undefined>)[key]
+}
 
-  const buildTimeBackends = (
-    (typeof import.meta !== 'undefined' && import.meta.env?.VITE_MONITOR_BACKEND) || 'builtin'
-  ).split(',').map((s: string) => s.trim())
+function runtimeValue<T>(config: Record<string, unknown>, key: string): T | undefined {
+  return config[key] as T | undefined
+}
+
+export function loadMonitorConfig(): MonitorConfig {
+  const runtimeConfig = (window.__MODULO_CONFIG__?.monitor ?? {}) as Record<string, unknown>
+
+  const buildTimeBackends = (envVar('VITE_MONITOR_BACKEND') || 'builtin')
+    .split(',').map((s: string) => s.trim())
 
   const activeBackends = (runtimeConfig.monitorBackends as string[]) ?? buildTimeBackends
 
   return {
     builtin: activeBackends.includes('builtin') ? { enabled: true } : undefined,
     sentry: activeBackends.includes('sentry') ? {
-      dsn: ((runtimeConfig.sentry as any)?.dsn as string) ?? (typeof import.meta !== 'undefined' ? (import.meta.env?.VITE_SENTRY_DSN as string) : ''),
-      environment: typeof import.meta !== 'undefined' ? (import.meta.env?.MODE as string) : 'production',
+      dsn: runtimeValue<{ dsn?: string }>(runtimeConfig, 'sentry')?.dsn ?? envVar('VITE_SENTRY_DSN') ?? '',
+      environment: envVar('MODE') ?? 'production',
     } : undefined,
     'datadog-rum': activeBackends.includes('datadog-rum') ? {
-      clientToken: ((runtimeConfig['datadog-rum'] as any)?.clientToken as string) ?? (typeof import.meta !== 'undefined' ? (import.meta.env?.VITE_DATADOG_RUM_CLIENT_TOKEN as string) : ''),
-      site: ((runtimeConfig['datadog-rum'] as any)?.site as string) ?? 'datadoghq.com',
-      service: ((runtimeConfig['datadog-rum'] as any)?.service as string) ?? 'modulo',
-      env: typeof import.meta !== 'undefined' ? (import.meta.env?.MODE as string) : 'production',
+      clientToken: runtimeValue<{ clientToken?: string }>(runtimeConfig, 'datadog-rum')?.clientToken ?? envVar('VITE_DATADOG_RUM_CLIENT_TOKEN') ?? '',
+      site: runtimeValue<{ site?: string }>(runtimeConfig, 'datadog-rum')?.site ?? 'datadoghq.com',
+      service: runtimeValue<{ service?: string }>(runtimeConfig, 'datadog-rum')?.service ?? 'modulo',
+      env: envVar('MODE') ?? 'production',
     } : undefined,
     'grafana-faro': activeBackends.includes('grafana-faro') ? {
-      url: ((runtimeConfig['grafana-faro'] as any)?.url as string) ?? (typeof import.meta !== 'undefined' ? (import.meta.env?.VITE_GRAFANA_FARO_URL as string) : ''),
+      url: runtimeValue<{ url?: string }>(runtimeConfig, 'grafana-faro')?.url ?? envVar('VITE_GRAFANA_FARO_URL') ?? '',
     } : undefined,
   }
 }
