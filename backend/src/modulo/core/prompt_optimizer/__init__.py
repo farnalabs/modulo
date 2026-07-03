@@ -14,6 +14,7 @@ __all__ = [
     "OptimizationResult",
     "PromptOptimizer",
     "_build_failure_context",
+    "_ensure_dict",
     "_parse_llm_response",
 ]
 
@@ -57,6 +58,17 @@ class LLMCallable(Protocol):
     async def __call__(self, messages: list[BaseMessage]) -> str: ...
 
 
+def _ensure_dict(value: Any) -> dict[str, Any]:
+    if isinstance(value, dict):
+        return value
+    if isinstance(value, str):
+        try:
+            return json.loads(value)
+        except json.JSONDecodeError:
+            return {}
+    return {}
+
+
 def _build_failure_context(
     current_prompt: str,
     eval_results: list[dict[str, Any]],
@@ -75,7 +87,7 @@ def _build_failure_context(
                 "passed": er.get("passed", False),
                 "score": er.get("score"),
                 "detail": er.get("detail", ""),
-                "eval_config": edef.get("config_json", {}),
+                "eval_config": _ensure_dict(edef.get("config_json", {})),
             }
         )
 
@@ -88,7 +100,7 @@ def _build_failure_context(
 </failing_evals>"""
 
 
-_CODE_FENCE_RE = re.compile(r"```(?:json)?\s*\n(.*?)\n```", re.DOTALL)
+_CODE_FENCE_RE = re.compile(r"```(?:json)?\s*\n(.*?)```", re.DOTALL)
 
 
 def _parse_llm_response(raw: str) -> OptimizationResult:
