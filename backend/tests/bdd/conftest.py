@@ -212,62 +212,49 @@ def _bdd_check_response_status(status: int, request) -> None:
     assert resp.status_code == status, f"Expected status {status}, got {resp.status_code}"
 
 
-@pytest.fixture
-def alt_org_client(mock_session: AsyncMock) -> Generator[TestClient, None, None]:
+def _make_test_client(mock_session: AsyncMock, **principal_kwargs: Any) -> Generator[TestClient, None, None]:
     async def override_session() -> AsyncGenerator[AsyncMock, None]:
         yield mock_session
 
     app.dependency_overrides[get_settings] = make_settings
     app.dependency_overrides[get_db_session] = override_session
     app.dependency_overrides[_get_engine] = lambda: MagicMock()
-    app.dependency_overrides[get_current_user] = lambda: AuthenticatedPrincipal(
+    app.dependency_overrides[get_current_user] = lambda: AuthenticatedPrincipal(**principal_kwargs)
+
+    yield TestClient(app)
+
+    app.dependency_overrides.clear()
+
+
+@pytest.fixture
+def alt_org_client(mock_session: AsyncMock) -> Generator[TestClient, None, None]:
+    yield from _make_test_client(
+        mock_session,
         username="otheruser",
         organisation_id=ALT_ORG_ID,
         account_id=uuid.uuid4(),
         org_role="admin",
     )
 
-    yield TestClient(app)
-
-    app.dependency_overrides.clear()
-
 
 @pytest.fixture
 def viewer_client(mock_session: AsyncMock) -> Generator[TestClient, None, None]:
-    async def override_session() -> AsyncGenerator[AsyncMock, None]:
-        yield mock_session
-
-    app.dependency_overrides[get_settings] = make_settings
-    app.dependency_overrides[get_db_session] = override_session
-    app.dependency_overrides[_get_engine] = lambda: MagicMock()
-    app.dependency_overrides[get_current_user] = lambda: AuthenticatedPrincipal(
+    yield from _make_test_client(
+        mock_session,
         username="viewer",
         organisation_id=ORG_ID,
         account_id=uuid.uuid4(),
         org_role="viewer",
     )
 
-    yield TestClient(app)
-
-    app.dependency_overrides.clear()
-
 
 @pytest.fixture
 def system_admin_client(mock_session: AsyncMock) -> Generator[TestClient, None, None]:
-    async def override_session() -> AsyncGenerator[AsyncMock, None]:
-        yield mock_session
-
-    app.dependency_overrides[get_settings] = make_settings
-    app.dependency_overrides[get_db_session] = override_session
-    app.dependency_overrides[_get_engine] = lambda: MagicMock()
-    app.dependency_overrides[get_current_user] = lambda: AuthenticatedPrincipal(
+    yield from _make_test_client(
+        mock_session,
         username="sysadmin",
         organisation_id=ORG_ID,
         account_id=USER_ID,
         org_role="admin",
         is_system_admin=True,
     )
-
-    yield TestClient(app)
-
-    app.dependency_overrides.clear()
