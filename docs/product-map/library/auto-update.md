@@ -13,6 +13,7 @@ bdd:
 depends-on: [feat-core-contribution-update]
 status: covered
 ---
+
 # Community Library Auto-Update Control
 
 Users can disable auto-update on adapted community library primitives to pin a specific version. When auto-update is off, `notify_importers_of_update` skips the fork copy, so `update_available_version_id` stays null.
