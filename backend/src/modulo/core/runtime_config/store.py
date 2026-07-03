@@ -2,8 +2,12 @@
 
 from __future__ import annotations
 
+import logging
 import os
 from dataclasses import dataclass
+from threading import Lock
+
+_log = logging.getLogger(__name__)
 
 HOT_RELOADABLE_KEYS: frozenset[str] = frozenset({
     "MODULO_MAX_LOCAL_CONCURRENCY",
@@ -88,7 +92,8 @@ class RuntimeConfigStore:
     def __init__(self) -> None:
         self._defaults: dict[str, str | None] = {}
         self._env_values: dict[str, str | None] = {}
-        self._overrides: dict[str, str] = {}
+        self._overrides: dict[str, str | None] = {}
+        self._lock = Lock()
 
         for key in KNOWN_KEYS:
             self._defaults[key] = DEFAULT_VALUES.get(key)
@@ -96,66 +101,79 @@ class RuntimeConfigStore:
 
     def get(self, key: str) -> str | None:
         """Return the effective value: override > env > default."""
-        if key in self._overrides:
-            return self._overrides[key]
-        env_val = self._env_values.get(key)
-        if env_val is not None:
-            return env_val
-        return self._defaults.get(key)
+        with self._lock:
+            if key in self._overrides:
+                return self._overrides[key]
+            env_val = self._env_values.get(key)
+            if env_val is not None:
+                return env_val
+            return self._defaults.get(key)
 
     def set_override(self, key: str, value: str) -> None:
         """Set a runtime override that stays in memory until cleared or reloaded."""
-        self._overrides[key] = value
+        with self._lock:
+            self._overrides[key] = value
+        _log.info("Runtime config override set: %s", key)
 
     def clear_override(self, key: str) -> None:
         """Remove a runtime override for a single key."""
-        self._overrides.pop(key, None)
+        with self._lock:
+            self._overrides.pop(key, None)
+        _log.info("Runtime config override cleared: %s", key)
 
     def clear_all_overrides(self) -> None:
         """Remove all runtime overrides."""
-        self._overrides.clear()
+        with self._lock:
+            self._overrides.clear()
+        _log.info("Runtime config all overrides cleared")
 
     def reload(self) -> None:
         """Re-read os.environ to detect drift for all known keys."""
-        for key in KNOWN_KEYS:
-            self._env_values[key] = os.environ.get(key)
+        with self._lock:
+            for key in KNOWN_KEYS:
+                self._env_values[key] = os.environ.get(key)
+        _log.info("Runtime config reloaded from environment")
 
     def get_all(self) -> list[ConfigEntry]:
         """Return all known config entries with current values and provenance."""
-        items: list[ConfigEntry] = []
-        for key in KNOWN_KEYS:
-            default_value: str | None = self._defaults.get(key)
-            env_value: str | None = self._env_values.get(key)
-            override_value: str | None = self._overrides.get(key)
+        with self._lock:
+            items: list[ConfigEntry] = []
+            for key in KNOWN_KEYS:
+                default_value: str | None = self._defaults.get(key)
+                env_value: str | None = self._env_values.get(key)
+                override_value: str | None = self._overrides.get(key)
 
-            if override_value is not None:
-                current_value: str | None = override_value
-                provenance = "override"
-            elif env_value is not None:
-                current_value = env_value
-                provenance = "environment"
-            else:
-                current_value = default_value
-                provenance = "default"
+                if override_value is not None:
+                    current_value: str | None = override_value
+                    provenance = "override"
+                elif env_value is not None:
+                    current_value = env_value
+                    provenance = "environment"
+                else:
+                    current_value = default_value
+                    provenance = "default"
 
-            items.append(ConfigEntry(
-                key=key,
-                current_value=current_value,
-                default_value=default_value,
-                env_value=env_value,
-                override_value=override_value,
-                provenance=provenance,
-                hot_reloadable=key in HOT_RELOADABLE_KEYS,
-            ))
+                items.append(ConfigEntry(
+                    key=key,
+                    current_value=current_value,
+                    default_value=default_value,
+                    env_value=env_value,
+                    override_value=override_value,
+                    provenance=provenance,
+                    hot_reloadable=key in HOT_RELOADABLE_KEYS,
+                ))
         return items
 
 
 _store: RuntimeConfigStore | None = None
+_store_lock: Lock = Lock()
 
 
 def get_runtime_config_store() -> RuntimeConfigStore:
     """Return the process-global RuntimeConfigStore singleton."""
     global _store
     if _store is None:
-        _store = RuntimeConfigStore()
+        with _store_lock:
+            if _store is None:
+                _store = RuntimeConfigStore()
     return _store
