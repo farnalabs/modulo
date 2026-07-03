@@ -27,6 +27,16 @@ function loadSize(): { width: number; height: number } {
   return { width: 440, height: 600 }
 }
 
+function extractErrorMessage(err: unknown): string {
+  if (typeof err === 'string') return err
+  if (err && typeof err === 'object') {
+    const obj = err as Record<string, unknown>
+    if (typeof obj.detail === 'string') return obj.detail
+    if (typeof obj.message === 'string') return obj.message
+  }
+  return String(err)
+}
+
 export const useRemyStore = defineStore('remy', () => {
   const sessions = ref<ChatSession[]>([])
   const activeSessionId = ref<string | null>(null)
@@ -66,12 +76,12 @@ export const useRemyStore = defineStore('remy', () => {
     try {
       const { data, error: err } = await (api as any).GET('/api/v1/remy/sessions')
       if (err) {
-        error.value = String(err)
+        error.value = extractErrorMessage(err)
       } else {
         sessions.value = (data as any) ?? []
       }
     } catch (e: unknown) {
-      error.value = e instanceof Error ? e.message : String(e)
+      error.value = e instanceof Error ? e.message : extractErrorMessage(e)
     } finally {
       sessionsLoading.value = false
     }
@@ -83,14 +93,14 @@ export const useRemyStore = defineStore('remy', () => {
       const { data, error: err } = await (api as any).POST('/api/v1/remy/sessions', {
         body: { name: null, provider: 'anthropic', model: 'claude-sonnet-4-20250514', context_window_tokens: 200000 },
       })
-      if (err) throw new Error(String(err))
+      if (err) throw new Error(extractErrorMessage(err))
       const session = data as ChatSession
       sessions.value.unshift(session)
       activeSessionId.value = session.id
       messages.value = []
       return session
     } catch (e: unknown) {
-      error.value = e instanceof Error ? e.message : String(e)
+      error.value = e instanceof Error ? e.message : extractErrorMessage(e)
       return null
     }
   }
@@ -105,12 +115,12 @@ export const useRemyStore = defineStore('remy', () => {
         params: { path: { id } },
       })
       if (err) {
-        error.value = String(err)
+        error.value = extractErrorMessage(err)
       } else {
         messages.value = (data as any) ?? []
       }
     } catch (e: unknown) {
-      error.value = e instanceof Error ? e.message : String(e)
+      error.value = e instanceof Error ? e.message : extractErrorMessage(e)
     } finally {
       loading.value = false
     }
@@ -122,14 +132,14 @@ export const useRemyStore = defineStore('remy', () => {
       const { error: err } = await (api as any).DELETE('/api/v1/remy/sessions/{id}', {
         params: { path: { id } },
       })
-      if (err) throw new Error(String(err))
+      if (err) throw new Error(extractErrorMessage(err))
       sessions.value = sessions.value.filter(s => s.id !== id)
       if (activeSessionId.value === id) {
         activeSessionId.value = null
         messages.value = []
       }
     } catch (e: unknown) {
-      error.value = e instanceof Error ? e.message : String(e)
+      error.value = e instanceof Error ? e.message : extractErrorMessage(e)
     }
   }
 
