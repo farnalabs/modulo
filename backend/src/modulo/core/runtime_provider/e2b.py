@@ -1,14 +1,8 @@
-"""E2B RuntimeProvider — sandboxed execution environments via E2B.
-
-Usage:
-    provider = E2BRuntimeProvider(api_key="...")
-    ref = await provider.create_workspace(spec)
-    result = await provider.exec_command(ref, ["python3", "--version"])
-    await provider.destroy_workspace(ref)
-"""
+"""E2B RuntimeProvider — sandboxed execution environments via E2B."""
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 import shlex
@@ -17,6 +11,11 @@ from typing import Any
 from modulo.core.runtime_provider import ExecResult, RuntimeProvider, WorkspaceSpec
 
 _log = logging.getLogger(__name__)
+
+_DEFAULT_TEMPLATE_ID = "base"
+_DEFAULT_CMD_TIMEOUT = 60
+_REPO_CLONE_TIMEOUT = 120
+_MAX_PROVISION_TIMEOUT = 120
 
 
 class E2BRuntimeProvider(RuntimeProvider):
@@ -37,8 +36,6 @@ class E2BRuntimeProvider(RuntimeProvider):
         self._api_key = api_key or os.environ.get("MODULO_E2B_API_KEY")
         if not self._api_key:
             raise ValueError("E2B API key is required. Pass api_key= or set MODULO_E2B_API_KEY.")
-        if not os.environ.get("E2B_API_KEY"):
-            os.environ["E2B_API_KEY"] = self._api_key
         self._sandboxes: dict[str, Any] = {}
 
     # ------------------------------------------------------------------
@@ -66,9 +63,17 @@ class E2BRuntimeProvider(RuntimeProvider):
         """
         from e2b import AsyncSandbox  # type: ignore[import-untyped]
 
-        template_id = spec.image_ref.strip() if spec.image_ref else "base"
+        template_id = spec.image_ref.strip() if spec.image_ref else _DEFAULT_TEMPLATE_ID
+        timeout = spec.timeout_seconds or _MAX_PROVISION_TIMEOUT
 
-        sandbox = await AsyncSandbox.create(template=template_id)
+        try:
+            sandbox = await asyncio.wait_for(
+                AsyncSandbox.create(template=template_id),
+                timeout=timeout,
+            )
+        except Exception:
+            _log.exception("Failed to create E2B sandbox with template %s", template_id)
+            raise
 
         self._sandboxes[sandbox.sandbox_id] = sandbox
 
@@ -76,9 +81,7 @@ class E2BRuntimeProvider(RuntimeProvider):
         if repo_url:
             await self._clone_repo(sandbox, repo_url, spec.labels)
 
-        result = sandbox.sandbox_id
-        assert isinstance(result, str)
-        return result
+        return str(sandbox.sandbox_id)
 
     async def exec_command(
         self,
@@ -93,14 +96,23 @@ class E2BRuntimeProvider(RuntimeProvider):
         """
         sandbox = self._get_sandbox(provider_ref)
         cmd_str = " ".join(shlex.quote(c) for c in command)
+        effective_timeout = timeout if timeout is not None else _DEFAULT_CMD_TIMEOUT
 
-        proc = await sandbox.commands.run(cmd_str, timeout=timeout or 60)
-
-        return ExecResult(
-            exit_code=getattr(proc, "exit_code", 0) or 0,
-            stdout=getattr(proc, "stdout", "") or "",
-            stderr=getattr(proc, "stderr", "") or "",
-        )
+        try:
+            proc = await sandbox.commands.run(cmd_str, timeout=effective_timeout)
+            return ExecResult(
+                exit_code=getattr(proc, "exit_code", -1),
+                stdout=getattr(proc, "stdout", "") or "",
+                stderr=getattr(proc, "stderr", "") or "",
+            )
+        except Exception:
+            _log.exception("exec_command failed in sandbox %s", provider_ref)
+            return ExecResult(
+                exit_code=-1,
+                stdout="",
+                stderr="Command execution failed",
+                duration_ms=None,
+            )
 
     async def destroy_workspace(self, provider_ref: str) -> None:
         """Kill the sandbox and release all resources.
@@ -122,8 +134,8 @@ class E2BRuntimeProvider(RuntimeProvider):
             running = await sandbox.is_running()
             return "running" if running else "stopped"
         except Exception:
-            _log.debug("Failed to get status for sandbox %s", provider_ref)
-        return "running"
+            _log.exception("Failed to get status for sandbox %s", provider_ref)
+            return "unknown"
 
     # ------------------------------------------------------------------
     # Internal helpers
@@ -136,14 +148,19 @@ class E2BRuntimeProvider(RuntimeProvider):
         return sandbox
 
     async def _clone_repo(self, sandbox: Any, repo_url: str, labels: dict[str, str]) -> None:
-        """Clone a git repository inside the sandbox."""
-        repo_ref = labels.get("repo_ref", "main")
+        """Clone a git repository inside the sandbox.
+
+        Raises RuntimeError if the clone or checkout fails.
+        """
+        repo_ref = labels.get("repo_ref", "")
         cmds = [f"git clone {shlex.quote(repo_url)} /home/user/repo"]
-        if repo_ref != "main":
+        if repo_ref:
             cmds.append(f"cd /home/user/repo && git checkout {shlex.quote(repo_ref)}")
         combined = " && ".join(cmds)
-        result = await sandbox.commands.run(combined)
-        exit_code = getattr(result, "exit_code", None)
-        if exit_code is not None and exit_code != 0:
+        result = await sandbox.commands.run(combined, timeout=_REPO_CLONE_TIMEOUT)
+        exit_code = getattr(result, "exit_code", 1)
+        if exit_code != 0:
             stderr = getattr(result, "stderr", "") or ""
-            _log.warning("Repo clone exited %d for %s: %s", exit_code, repo_url, stderr)
+            raise RuntimeError(
+                f"Repo clone failed (exit {exit_code}) for {repo_url}: {stderr}"
+            )

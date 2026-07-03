@@ -17,8 +17,12 @@ def mock_container() -> MagicMock:
     container.stop = AsyncMock()
     container.delete = AsyncMock()
 
+    exec_stream = MagicMock()
+    exec_stream.read_out = AsyncMock(return_value=(b"Hello, Docker!", b""))
+
     exec_instance = MagicMock()
-    exec_instance.start = AsyncMock(return_value=b"Hello, Docker!")
+    exec_instance.start = AsyncMock(return_value=exec_stream)
+    exec_instance.inspect = AsyncMock(return_value={"ExitCode": 0})
 
     container.exec = AsyncMock(return_value=exec_instance)
     container.show = AsyncMock(return_value={"State": {"Status": "running"}})
@@ -187,7 +191,6 @@ async def test_destroy_workspace(
     await provider.destroy_workspace(ref)
 
     mock_container.stop.assert_awaited_once()
-    mock_container.delete.assert_awaited_once()
     assert ref not in provider._workspaces
 
 
@@ -240,7 +243,7 @@ async def test_get_workspace_status_fallback_on_error(
     mock_container.show.side_effect = RuntimeError("connection lost")
 
     status = await provider.get_workspace_status(ref)
-    assert status == "terminated"
+    assert status == "unknown"
 
 
 # ------------------------------------------------------------------

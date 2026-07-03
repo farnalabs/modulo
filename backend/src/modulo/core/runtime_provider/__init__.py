@@ -6,10 +6,14 @@ sandboxed processes) and executing commands within them.
 
 from __future__ import annotations
 
+import logging
+import os
 import uuid
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any, Protocol
+from typing import TYPE_CHECKING, Any
+
+_log = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
     from modulo.core.runtime_provider.hub import RuntimeProviderHub
@@ -70,11 +74,16 @@ class RuntimeProvider(ABC):
         """Return the current status string for the workspace."""
         ...
 
+    def supports(self, profile: Any) -> bool:
+        """Return True if this provider can handle the given profile.
 
-class RuntimeProviderFactory(Protocol):
-    """Callable that produces a RuntimeProvider given a profile."""
+        Base implementation returns ``False`` so providers that don't
+        implement this method are skipped during auto-resolution.
+        """
+        return False
 
-    def __call__(self, profile: Any) -> RuntimeProvider: ...
+    async def close(self) -> None:  # noqa: B027
+        """Release provider-level resources (connections, clients, etc.)."""
 
 
 def create_default_hub(max_local_concurrency: int = 2) -> RuntimeProviderHub:
@@ -92,18 +101,22 @@ def create_default_hub(max_local_concurrency: int = 2) -> RuntimeProviderHub:
     local = LocalRuntimeProvider(max_concurrency=max_local_concurrency)
     hub.register("local", local)
 
-    import os
-
     if os.environ.get("MODULO_E2B_API_KEY"):
-        from modulo.core.runtime_provider.e2b import E2BRuntimeProvider
+        try:
+            from modulo.core.runtime_provider.e2b import E2BRuntimeProvider
 
-        e2b = E2BRuntimeProvider()
-        hub.register("e2b", e2b)
+            e2b = E2BRuntimeProvider()
+            hub.register("e2b", e2b)
+        except ImportError:
+            _log.warning("E2B dependency not installed; skipping E2B provider")
 
     if os.environ.get("MODULO_DOCKER_HOST") or os.environ.get("DOCKER_HOST"):
-        from modulo.core.runtime_provider.docker import DockerRuntimeProvider
+        try:
+            from modulo.core.runtime_provider.docker import DockerRuntimeProvider
 
-        docker = DockerRuntimeProvider()
-        hub.register("docker", docker)
+            docker = DockerRuntimeProvider()
+            hub.register("docker", docker)
+        except ImportError:
+            _log.warning("Docker dependency not installed; skipping Docker provider")
 
     return hub
