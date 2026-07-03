@@ -17,6 +17,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from modulo.db.crud.base import PageResult
 from modulo.db.rls import set_rls_org
 
+_MAX_PAGE_SIZE = 1000
+
 
 def extract_orm_entity(stmt: Select[Any]) -> type | None:
     """Walk the statement's column descriptions to find the ORM entity.
@@ -78,6 +80,8 @@ class BaseRepository(ABC):
             raise ValueError("page must be >= 1")
         if page_size < 1:
             raise ValueError("page_size must be >= 1")
+        if page_size > _MAX_PAGE_SIZE:
+            raise ValueError(f"page_size must be <= {_MAX_PAGE_SIZE}")
         offset = (page - 1) * page_size
 
         count_stmt = sa_select(func.count()).select_from(stmt.order_by(None).subquery())

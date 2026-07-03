@@ -4,7 +4,6 @@ import uuid
 from typing import Any
 
 from sqlalchemy import Select
-from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.db.repositories.base import BaseRepository
 
