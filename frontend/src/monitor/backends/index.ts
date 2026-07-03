@@ -1,1 +1,1 @@
-export { TransportBackend } from './transport'
+export { SentryMonitorBackend } from './sentry'

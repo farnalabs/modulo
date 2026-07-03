@@ -1,28 +1,39 @@
+export interface MonitorConfig {
+  monitorBackends: string[]
+  sentry?: { dsn: string; environment?: string; replaysSessionSampleRate?: number }
+  datadogRum?: { clientToken: string }
+  grafanaFaro?: { url: string }
+}
+
+export interface Breadcrumb {
+  type: string
+  data?: Record<string, unknown>
+  timestamp?: number
+}
+
 export interface UserInfo {
   id: string
   email?: string
-  username?: string
+  name?: string
 }
 
-export interface MonitorConfig {
-  enabled?: boolean
-  environment?: string
-}
-
-export interface MonitorEvent {
-  level: string
-  message: string
-  stacktrace?: string
-  context_json?: Record<string, unknown>
-  source?: string
-  environment?: string
-  version?: string
+export interface ErrorEventInput {
+  error: Error
+  message?: string
+  context?: Record<string, unknown>
+  level?: 'error' | 'warning' | 'critical'
+  user?: UserInfo
+  tags?: Record<string, string>
+  breadcrumbs?: Breadcrumb[]
 }
 
 export interface MonitorBackend {
-  captureError(event: MonitorEvent, error: Error, context?: Record<string, unknown>): void
-  captureMessage(message: string, level: string): void
+  readonly key: string
+  init(config: MonitorConfig): Promise<boolean>
+  captureRawError(error: Error, context?: Record<string, unknown>): void
+  captureMessage(message: string, level: 'error' | 'warning' | 'critical'): void
   setUser(user: UserInfo | null): void
   setTags(tags: Record<string, string>): void
+  addBreadcrumb(breadcrumb: Breadcrumb): void
   dispose(): void
 }
