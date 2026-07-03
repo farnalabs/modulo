@@ -7,6 +7,7 @@ import logging
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
+from sqlalchemy.exc import ProgrammingError
 from sqlalchemy.ext.asyncio import AsyncSession
 from starlette.responses import Response
 
@@ -22,10 +23,20 @@ router = APIRouter(prefix="/api/v1/admin/feature-flags", tags=["admin-feature-fl
 
 
 async def _build_registry(settings: Settings, session: AsyncSession) -> FeatureFlagRegistry:
+    from modulo.core.license import get_license
+
+    lic = get_license()
+    if lic is not None:
+        async with session.begin():
+            return await FeatureFlagRegistry.from_db(
+                session, current_tier=lic.tier, has_license_key=True
+            )
+
     has_key = bool(settings.modulo_license_key)
-    tier = "team" if has_key else "community"
     async with session.begin():
-        return await FeatureFlagRegistry.from_db(session, current_tier=tier, has_license_key=has_key)
+        return await FeatureFlagRegistry.from_db(
+            session, current_tier="team" if has_key else "community", has_license_key=has_key
+        )
 
 
 @router.get("")
@@ -36,12 +47,10 @@ async def list_feature_flags(
 ) -> Response:
     try:
         registry = await _build_registry(settings, session)
-        has_key = bool(settings.modulo_license_key)
-        tier = "team" if has_key else "community"
         return {
             "license": {
-                "tier": tier,
-                "has_license_key": has_key,
+                "tier": registry.current_tier,
+                "has_license_key": registry.has_license_key,
                 "is_valid": True,
             },
             "flags": [
@@ -64,6 +73,19 @@ async def list_feature_flags(
                 for f in registry.tier_gap_flags()
             ],
         }
+    except HTTPException:
+        raise
+    except ProgrammingError:
+        logger.exception("feature_flags.list_failed")
+        return JSONResponse(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            content={
+                "error": {
+                    "code": "NOT_IMPLEMENTED",
+                    "message": "Feature flags are not available. Run database migrations to enable this feature.",
+                }
+            },
+        )
     except Exception:
         logger.exception("feature_flags.list_failed")
         return JSONResponse(
@@ -101,6 +123,17 @@ async def get_feature_flag(
         }
     except HTTPException:
         raise
+    except ProgrammingError:
+        logger.exception("feature_flags.get_failed", extra={"flag_name": flag_name})
+        return JSONResponse(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            content={
+                "error": {
+                    "code": "NOT_IMPLEMENTED",
+                    "message": "Feature flags are not available. Run database migrations to enable this feature.",
+                }
+            },
+        )
     except Exception:
         logger.exception("feature_flags.get_failed", extra={"flag_name": flag_name})
         return JSONResponse(
@@ -145,6 +178,17 @@ async def toggle_feature_flag(
         }
     except HTTPException:
         raise
+    except ProgrammingError:
+        logger.exception("feature_flags.toggle_failed", extra={"flag_name": flag_name})
+        return JSONResponse(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            content={
+                "error": {
+                    "code": "NOT_IMPLEMENTED",
+                    "message": "Feature flags are not available. Run database migrations to enable this feature.",
+                }
+            },
+        )
     except Exception:
         logger.exception("feature_flags.toggle_failed", extra={"flag_name": flag_name})
         return JSONResponse(
