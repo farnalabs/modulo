@@ -1,5 +1,5 @@
 ﻿<template>
-  <FeatureGate feature-name="mcp_server" required-tier="team" show-disabled>
+  <FeatureGate feature-name="mcp_server" show-disabled>
 
     <div data-theme="agent" class="mx-auto max-w-4xl space-y-8 p-6">
     <header>
