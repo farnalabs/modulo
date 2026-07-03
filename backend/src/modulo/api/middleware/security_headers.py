@@ -21,7 +21,10 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
     def __init__(self, app: FastAPI) -> None:
         super().__init__(app)
         settings = get_settings()
-        csp_connect = "'self' ws: wss: *.ingest.sentry.io *.datadoghq.com *.dd.dg *.rum.browserevents.com"
+        self._debug = settings.debug
+        csp_connect = "'self' *.ingest.sentry.io *.datadoghq.com *.dd.dg *.rum.browserevents.com"
+        if self._debug:
+            csp_connect += " ws: wss:"
         if settings.modulo_monitor_domains:
             csp_connect += " " + settings.modulo_monitor_domains
         self._csp = (
@@ -43,10 +46,8 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
     ) -> Response:
         response: Response = await call_next(request)
 
-        settings = get_settings()
-
         response.headers["Content-Security-Policy"] = self._csp
-        if not settings.debug:
+        if not self._debug:
             response.headers["Strict-Transport-Security"] = self._hsts
         response.headers["X-Frame-Options"] = self._xfo
         response.headers["X-Content-Type-Options"] = self._cto

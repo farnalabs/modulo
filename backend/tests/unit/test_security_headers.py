@@ -15,16 +15,32 @@ from modulo.settings import Settings
 
 
 class TestSecurityHeadersMiddleware:
-    def test_default_csp_contains_expected_sources(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_default_csp_contains_expected_sources_debug(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("DATABASE_URL", "postgresql+asyncpg://modulo:modulo@localhost:5432/modulo")
         monkeypatch.setenv("SECRET_KEY", "a" * 32)
         monkeypatch.setenv("FERNET_KEY", "a" * 32)
+        monkeypatch.setenv("DEBUG", "true")
         settings = Settings()
         with patch("modulo.api.middleware.security_headers.get_settings", return_value=settings):
             app = FastAPI()
             middleware = SecurityHeadersMiddleware(app)
             assert "*.ingest.sentry.io" in middleware._csp
             assert "ws:" in middleware._csp
+            assert "wss:" in middleware._csp
+            assert "connect-src" in middleware._csp
+
+    def test_ws_wss_absent_in_production(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("DATABASE_URL", "postgresql+asyncpg://modulo:modulo@localhost:5432/modulo")
+        monkeypatch.setenv("SECRET_KEY", "a" * 32)
+        monkeypatch.setenv("FERNET_KEY", "a" * 32)
+        monkeypatch.setenv("DEBUG", "false")
+        settings = Settings()
+        with patch("modulo.api.middleware.security_headers.get_settings", return_value=settings):
+            app = FastAPI()
+            middleware = SecurityHeadersMiddleware(app)
+            assert "*.ingest.sentry.io" in middleware._csp
+            assert "ws:" not in middleware._csp
+            assert "wss:" not in middleware._csp
             assert "connect-src" in middleware._csp
 
     def test_custom_domains_included_in_csp(self, monkeypatch: pytest.MonkeyPatch) -> None:
