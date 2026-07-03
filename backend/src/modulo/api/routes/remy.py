@@ -120,6 +120,7 @@ def _serialise_session(s: ChatSession, message_count: int = 0) -> dict[str, Any]
         "id": str(s.id),
         "user_id": str(s.user_id),
         "name": s.name,
+        "session_number": s.session_number,
         "provider": s.provider,
         "model": s.model,
         "context_window_tokens": s.context_window_tokens,
