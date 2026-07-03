@@ -8,6 +8,7 @@ from datetime import UTC, datetime, timedelta
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, Field
 from sqlalchemy import case, delete, func, select, text
+from sqlalchemy.exc import ProgrammingError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.api.dependencies import get_db_session, require_feature
@@ -1768,15 +1769,21 @@ async def admin_list_publishers(
             detail="Only admin users can list publishers",
         )
 
-    async with session.begin():
-        await set_rls_org(session, current_user.organisation_id)
-        result = await list_publishers(
-            session,
-            org_id=current_user.organisation_id,
-            page=page,
-            page_size=page_size,
-            trust_tier=trust_tier,
-            search=search,
+    try:
+        async with session.begin():
+            await set_rls_org(session, current_user.organisation_id)
+            result = await list_publishers(
+                session,
+                org_id=current_user.organisation_id,
+                page=page,
+                page_size=page_size,
+                trust_tier=trust_tier,
+                search=search,
+            )
+    except ProgrammingError:
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="Feature is not available. Run database migrations to enable it.",
         )
 
     return PublisherListResponse(
@@ -1812,38 +1819,44 @@ async def admin_create_publisher(
             detail="Only admin users can create publishers",
         )
 
-    async with session.begin():
-        await set_rls_org(session, current_user.organisation_id)
+    try:
+        async with session.begin():
+            await set_rls_org(session, current_user.organisation_id)
 
-        existing = await get_publisher_by_name(session, current_user.organisation_id, body.name)
-        if existing is not None:
-            raise HTTPException(
-                status_code=status.HTTP_409_CONFLICT,
-                detail="A publisher with this name already exists",
-            )
+            existing = await get_publisher_by_name(session, current_user.organisation_id, body.name)
+            if existing is not None:
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail="A publisher with this name already exists",
+                )
 
-        existing_key = await get_publisher_by_key(session, current_user.organisation_id, body.public_key_hex)
-        if existing_key is not None:
-            raise HTTPException(
-                status_code=status.HTTP_409_CONFLICT,
-                detail="A publisher with this public key already exists",
-            )
+            existing_key = await get_publisher_by_key(session, current_user.organisation_id, body.public_key_hex)
+            if existing_key is not None:
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail="A publisher with this public key already exists",
+                )
 
-        try:
-            publisher = await create_publisher(
-                session,
-                org_id=current_user.organisation_id,
-                name=body.name,
-                contact_email=body.contact_email,
-                public_key_hex=body.public_key_hex,
-                trust_tier=body.trust_tier,
-                website_url=body.website_url,
-            )
-        except ValueError as exc:
-            raise HTTPException(
-                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-                detail=str(exc),
-            ) from exc
+            try:
+                publisher = await create_publisher(
+                    session,
+                    org_id=current_user.organisation_id,
+                    name=body.name,
+                    contact_email=body.contact_email,
+                    public_key_hex=body.public_key_hex,
+                    trust_tier=body.trust_tier,
+                    website_url=body.website_url,
+                )
+            except ValueError as exc:
+                raise HTTPException(
+                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                    detail=str(exc),
+                ) from exc
+    except ProgrammingError:
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="Feature is not available. Run database migrations to enable it.",
+        )
 
     return PublisherResponse(
         id=str(publisher.id),
@@ -1873,44 +1886,50 @@ async def admin_update_publisher(
 
     updates: dict[str, object] = {k: v for k, v in body.model_dump().items() if v is not None}
 
-    async with session.begin():
-        await set_rls_org(session, current_user.organisation_id)
+    try:
+        async with session.begin():
+            await set_rls_org(session, current_user.organisation_id)
 
-        if "name" in updates:
-            name_val = updates["name"]
-            if not isinstance(name_val, str):
+            if "name" in updates:
+                name_val = updates["name"]
+                if not isinstance(name_val, str):
+                    raise HTTPException(
+                        status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                        detail="publisher_name_invalid: Name must be a string",
+                    )
+                existing = await get_publisher_by_name(session, current_user.organisation_id, name_val)
+                if existing is not None and existing.id != publisher_id:
+                    raise HTTPException(
+                        status_code=status.HTTP_409_CONFLICT,
+                        detail="A publisher with this name already exists",
+                    )
+
+            if "public_key_hex" in updates:
+                key_val = updates["public_key_hex"]
+                if not isinstance(key_val, str):
+                    raise HTTPException(
+                        status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                        detail="publisher_key_invalid: Public key must be a string",
+                    )
+                existing_key = await get_publisher_by_key(session, current_user.organisation_id, key_val)
+                if existing_key is not None and existing_key.id != publisher_id:
+                    raise HTTPException(
+                        status_code=status.HTTP_409_CONFLICT,
+                        detail="A publisher with this public key already exists",
+                    )
+
+            try:
+                publisher = await crud_update_publisher(session, publisher_id, updates)
+            except ValueError as exc:
                 raise HTTPException(
                     status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-                    detail="publisher_name_invalid: Name must be a string",
-                )
-            existing = await get_publisher_by_name(session, current_user.organisation_id, name_val)
-            if existing is not None and existing.id != publisher_id:
-                raise HTTPException(
-                    status_code=status.HTTP_409_CONFLICT,
-                    detail="A publisher with this name already exists",
-                )
-
-        if "public_key_hex" in updates:
-            key_val = updates["public_key_hex"]
-            if not isinstance(key_val, str):
-                raise HTTPException(
-                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-                    detail="publisher_key_invalid: Public key must be a string",
-                )
-            existing_key = await get_publisher_by_key(session, current_user.organisation_id, key_val)
-            if existing_key is not None and existing_key.id != publisher_id:
-                raise HTTPException(
-                    status_code=status.HTTP_409_CONFLICT,
-                    detail="A publisher with this public key already exists",
-                )
-
-        try:
-            publisher = await crud_update_publisher(session, publisher_id, updates)
-        except ValueError as exc:
-            raise HTTPException(
-                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-                detail=str(exc),
-            ) from exc
+                    detail=str(exc),
+                ) from exc
+    except ProgrammingError:
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="Feature is not available. Run database migrations to enable it.",
+        )
 
     if publisher is None:
         raise HTTPException(
@@ -1943,9 +1962,15 @@ async def admin_delete_publisher(
             detail="Only admin users can delete publishers",
         )
 
-    async with session.begin():
-        await set_rls_org(session, current_user.organisation_id)
-        deleted = await crud_delete_publisher(session, publisher_id)
+    try:
+        async with session.begin():
+            await set_rls_org(session, current_user.organisation_id)
+            deleted = await crud_delete_publisher(session, publisher_id)
+    except ProgrammingError:
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="Feature is not available. Run database migrations to enable it.",
+        )
 
     if not deleted:
         raise HTTPException(
