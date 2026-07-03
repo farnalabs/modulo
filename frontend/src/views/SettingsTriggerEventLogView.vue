@@ -159,6 +159,7 @@ import { api } from '../lib/api/client'
 import type { components } from '../lib/api/client'
 import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
+import { shortId } from '../utils/format'
 
 type TriggerEventItem = components['schemas']['TriggerEventItem']
 
@@ -173,7 +174,7 @@ const filterTriggerType = ref('')
 const filterResult = ref('')
 
 function truncateId(id: string): string {
-  return id.length > 8 ? id.slice(0, 8) + '...' : id
+  return shortId(id)
 }
 
 function formatTimestamp(ts: string | null): string {

@@ -135,12 +135,12 @@
             </span>
 
             <div class="min-w-0 flex-[2]">
-              <p class="truncate text-sm font-medium">{{ pipelineName(gate.pipeline_id) || gate.pipeline_id }}</p>
+              <p class="truncate text-sm font-medium">{{ pipelineName(gate.pipeline_id) || shortId(gate.pipeline_id) }}</p>
             </div>
 
             <div class="min-w-0 flex-[2]">
               <p class="truncate text-sm text-muted-foreground">
-                <span class="font-mono text-xs">{{ gate.gate_id }}</span>
+                <span class="font-mono text-xs">{{ shortId(gate.gate_id) }}</span>
               </p>
             </div>
 
@@ -167,15 +167,15 @@
                   <div class="space-y-1 text-sm">
                     <div class="flex justify-between">
                       <span class="text-muted-foreground">Run ID</span>
-                      <span class="font-mono text-xs">{{ gate.run_id }}</span>
+                      <span class="font-mono text-xs">{{ shortId(gate.run_id) }}</span>
                     </div>
                     <div class="flex justify-between">
                       <span class="text-muted-foreground">Node</span>
-                      <span class="font-mono text-xs">{{ gate.gate_id }}</span>
+                      <span class="font-mono text-xs">{{ shortId(gate.gate_id) }}</span>
                     </div>
                     <div class="flex justify-between">
                       <span class="text-muted-foreground">Pipeline</span>
-                      <span>{{ pipelineName(gate.pipeline_id) || gate.pipeline_id }}</span>
+                      <span>{{ pipelineName(gate.pipeline_id) || shortId(gate.pipeline_id) }}</span>
                     </div>
                     <div class="flex justify-between">
                       <span class="text-muted-foreground">Created</span>
@@ -290,6 +290,8 @@ import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
 import { usePlanStore } from '../stores/planStore'
 import FeatureGate from '../components/FeatureGate.vue'
+import LockIcon from '../components/LockIcon.vue'
+import { shortId } from '../utils/format'
 
 const planStore = usePlanStore()
 

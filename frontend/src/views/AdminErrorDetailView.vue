@@ -152,7 +152,7 @@
           </div>
           <div>
             <span class="text-xs font-medium text-muted-foreground">{{ $t('views.AdminErrorDetailView.event_id') }}</span>
-            <p class="mt-0.5 font-mono text-xs">{{ sampleEvent.id.slice(0, 12) }}...</p>
+            <p class="mt-0.5 font-mono text-xs">{{ shortId(sampleEvent.id) }}</p>
           </div>
         </div>
       </div>
@@ -217,6 +217,7 @@ import { api } from '../lib/api/client'
 import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
 import BackLink from '../components/BackLink.vue'
+import { shortId } from '../utils/format'
 
 const route = useRoute()
 const router = useRouter()

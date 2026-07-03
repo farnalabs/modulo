@@ -213,6 +213,7 @@
 
 <script setup lang="ts">
 import { ref, computed, watch, onMounted } from "vue";
+import { shortId } from "@/utils/format";
 import { useRemyStore } from "@/composables/useRemyStore";
 import { useRemyContext } from "@/composables/useRemyContext";
 import Button from "@/components/ui/button/Button.vue";

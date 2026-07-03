@@ -43,7 +43,7 @@
                   {{ p.feedback_status }}
                 </span>
                 <span v-if="p.run_id" class="text-xs text-muted-foreground">
-                  Run: {{ p.run_id.slice(0, 8) }}
+                  Run: {{ shortId(p.run_id) }}
                 </span>
               </div>
 
@@ -54,10 +54,10 @@
 
               <div class="grid grid-cols-2 gap-4 text-xs text-muted-foreground">
                 <div>
-                  <span class="font-medium text-foreground">Gate:</span> {{ p.gate_id }}
+                  <span class="font-medium text-foreground">Gate:</span> {{ shortId(p.gate_id) }}
                 </div>
                 <div>
-                  <span class="font-medium text-foreground">Node:</span> {{ p.producing_node_id }}
+                  <span class="font-medium text-foreground">Node:</span> {{ p.producing_node_name || shortId(p.producing_node_id) }}
                 </div>
                 <div v-if="p.created_at">
                   <span class="font-medium text-foreground">Detected:</span> {{ formatDate(p.created_at) }}
@@ -101,6 +101,7 @@
 <script setup lang="ts">
 import { ref, onMounted } from 'vue'
 import { api } from '../lib/api/client'
+import { shortId } from '../utils/format'
 import { useApi } from '../composables/useApi'
 import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
@@ -118,6 +119,7 @@ interface EvalProposalItem {
   rejection_reason: string
   rejected_output: Record<string, unknown>
   producing_node_id: string
+  producing_node_name: string | null
   producing_agent_id: string | null
   feedback_status: string
   feedback_handler_type: string

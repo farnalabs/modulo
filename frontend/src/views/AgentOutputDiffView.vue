@@ -29,7 +29,7 @@
               v-model="runIdA"
               data-testid="diff-run-id-a"
               type="text"
-              placeholder="00000000-0000-0000-0000-000000000000"
+                placeholder="Paste a run ID (or select from dropdown)"
               class="w-48 rounded-lg border border-input bg-background px-3 py-2 font-mono text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
             />
           </div>
@@ -62,7 +62,7 @@
               v-model="runIdB"
               data-testid="diff-run-id-b"
               type="text"
-              placeholder="00000000-0000-0000-0000-000000000000"
+              placeholder="Paste a run ID (or select from dropdown)"
               class="w-48 rounded-lg border border-input bg-background px-3 py-2 font-mono text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
             />
           </div>
