@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import json
 import logging
+import time as _time
 import uuid
+from datetime import UTC, datetime
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
@@ -46,6 +48,13 @@ router = APIRouter(prefix="/api/v1/errors", tags=["errors"])
 # Module-level singletons (lazy-initialised)
 _service = ErrorIngestionService()
 _key_store: SessionKeyStore | None = None
+
+# Public ingest rate limiter and daily cap (in-memory, no Redis)
+_public_rate_limit: dict[str, list[float]] = {}  # IP -> list of request timestamps
+_public_daily_event_count: dict[str, dict[str, int]] = {}  # IP -> {YYYY-MM-DD: count}
+
+# Orphan org ID for unauthenticated public ingest events
+ORPHAN_ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000000")
 
 
 def _get_key_store(settings: Settings | None = None) -> SessionKeyStore:
@@ -140,6 +149,99 @@ async def ingest_errors(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Error tracking is not available. Run database migrations to enable it.",
         )
+
+    return {"results": [ErrorGroupResult(**r) for r in results]}
+
+
+@router.post("/ingest/public", response_model=ErrorIngestResponse, status_code=status.HTTP_201_CREATED)
+async def ingest_errors_public(
+    request: Request,
+    session: AsyncSession = Depends(get_db_session),
+) -> dict[str, Any]:
+    """Unauthenticated error ingest endpoint for frontend events.
+
+    * No HMAC signing required.
+    * Only accepts events with ``source == 'frontend'`` and ``level != 'critical'``.
+    * Rate-limited to 1 request per 60 seconds per IP.
+    * Daily cap of 100 events per IP.
+    * Max request body size 10,000 bytes.
+    * Events are stored as orphaned records (no organisation scoping).
+    * A future cleanup job will prune events older than 48 hours (TTL).
+    """
+    client_ip = request.client.host if request.client else "unknown"
+
+    # Body size check
+    raw_body = await request.body()
+    if len(raw_body) > 10000:
+        raise HTTPException(
+            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+            detail="Request body exceeds 10,000 bytes",
+        )
+
+    # Rate limit: 1 request per 60 seconds per IP
+    now = _time.time()
+    timestamps = _public_rate_limit.setdefault(client_ip, [])
+    timestamps[:] = [t for t in timestamps if now - t < 60]
+    if len(timestamps) >= 1:
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail="Rate limit exceeded. Max 1 request per 60 seconds.",
+        )
+    timestamps.append(now)
+
+    # Parse body
+    try:
+        data: dict[str, Any] = json.loads(raw_body)
+    except json.JSONDecodeError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Invalid JSON body",
+        ) from exc
+
+    try:
+        ingest_request = ErrorIngestRequest(**data)
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=str(exc),
+        ) from exc
+
+    # Filter events: only frontend source, reject critical level
+    valid_events = []
+    for event in ingest_request.events:
+        if event.source != "frontend":
+            continue
+        if event.level == "critical":
+            continue
+        valid_events.append(event)
+
+    if not valid_events:
+        return {"results": []}
+
+    # Daily cap: 100 events per IP
+    today = datetime.now(UTC).strftime("%Y-%m-%d")
+    ip_counts = _public_daily_event_count.setdefault(client_ip, {})
+    today_count = ip_counts.get(today, 0)
+    if today_count + len(valid_events) > 100:
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail="Daily cap exceeded. Max 100 events per IP per day.",
+        )
+
+    events_data = [e.model_dump(exclude={"breadcrumbs"}) for e in valid_events]
+    try:
+        async with session.begin():
+            results = await _service.ingest_batch(session, ORPHAN_ORG_ID, events_data)
+    except ProgrammingError:
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="Error tracking is not available. Run database migrations to enable it.",
+        )
+
+    # Update daily cap count after successful ingest
+    ip_counts[today] = today_count + len(valid_events)
+
+    _log.info("public_error_ingest ip=%s count=%d", client_ip, len(valid_events))
 
     return {"results": [ErrorGroupResult(**r) for r in results]}
 

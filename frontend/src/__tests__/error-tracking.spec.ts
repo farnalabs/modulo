@@ -12,7 +12,7 @@ function mockSessionKey(key = 'test-session-key') {
     if (url.includes('/api/v1/errors/session-key')) {
       return Promise.resolve({
         ok: true,
-        json: () => Promise.resolve({ session_key: key }),
+        json: () => Promise.resolve({ key: key }),
       })
     }
     if (url.includes('/api/v1/errors/ingest')) {

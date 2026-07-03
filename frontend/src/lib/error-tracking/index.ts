@@ -132,7 +132,7 @@ function buildBaseEvent(): ErrorEventInput {
     level: 'error',
     message: '',
     context_json: ctx,
-    source: config.appName,
+    source: 'frontend',
     environment: config.environment,
     version: config.version || undefined,
     breadcrumbs: collector?.getBreadcrumbs(),
