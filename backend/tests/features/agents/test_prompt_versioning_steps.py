@@ -1,21 +1,23 @@
 """BDD step definitions: Prompt Versioning — /api/v1/agents/{id}/prompts endpoints."""
 
 import uuid
+from typing import Any
 from unittest.mock import MagicMock, patch
 
+import pytest
 from pytest_bdd import given, parsers, scenarios, then, when
 
 scenarios("prompt_versioning.feature")
 
-_AGENT: MagicMock | None = None
-_AGENT_NAME: str = "reviewer"
-_ORG_NAME: str = "acme"
-_AGENT_ID: uuid.UUID | None = None
+
+@pytest.fixture
+def ctx() -> dict[str, Any]:
+    return {}
 
 
 def _make_agent(name: str = "reviewer", prompt: str = "Version 1") -> MagicMock:
     a = MagicMock()
-    a.id = _AGENT_ID or uuid.uuid4()
+    a.id = uuid.uuid4()
     a.organisation_id = uuid.uuid4()
     a.name = name
     a.description = "Review agent"
@@ -65,64 +67,78 @@ def _update_agent_prompt(agent: MagicMock, new_prompt: str) -> MagicMock:
 
 
 @given(parsers.parse('org "{org}" has agent "{name}" with prompt "{prompt}"'))
-def _org_has_agent(client, org: str, name: str, prompt: str) -> None:
-    global _AGENT, _AGENT_NAME, _ORG_NAME, _AGENT_ID
-    _ORG_NAME = org
-    _AGENT_NAME = name
-    _AGENT = _make_agent(name=name, prompt=prompt)
-    _AGENT_ID = _AGENT.id
+def _org_has_agent(client, ctx, org: str, name: str, prompt: str) -> None:
+    agent = _make_agent(name=name, prompt=prompt)
+    ctx["agent"] = agent
+    ctx["org_name"] = org
+    ctx["agent_name"] = name
+    ctx["agent_id"] = agent.id
 
 
 @given("the pipeline is published with snapshot")
-def _pipeline_published_with_snapshot(client) -> None:
-    global _AGENT
-    pass
+def _pipeline_published_with_snapshot(ctx) -> None:
+    agent = ctx.get("agent")
+    if agent:
+        ctx["snapshot_prompt"] = agent.prompt_template
 
 
 @when(parsers.parse("I update the agent prompt to {prompt}"))
-def _update_prompt(client, request, prompt: str) -> None:
-    global _AGENT
+def _update_prompt(client, request, ctx, prompt: str) -> None:
     prompt_val = prompt.strip('"')
-    updated = _update_agent_prompt(_AGENT, prompt_val)
+    agent = ctx.get("agent")
+    if agent is None:
+        agent = _make_agent(prompt=prompt_val)
+        ctx["agent"] = agent
+        ctx["agent_id"] = agent.id
+    updated = _update_agent_prompt(agent, prompt_val)
     with (
         patch("modulo.api.routes.agents.update_agent", return_value=updated),
         patch("modulo.api.routes.agents.set_rls_org"),
     ):
-        resp = client.patch(f"/api/v1/agents/{_AGENT_ID}", json={"prompt_template": prompt_val})
+        resp = client.patch(f"/api/v1/agents/{ctx['agent_id']}", json={"prompt_template": prompt_val})
     request.node._resp = resp
 
 
 @when("I trigger a run using the pinned snapshot")
-def _trigger_run_pinned(client, request) -> None:
-    pass
+def _trigger_run_pinned(ctx) -> None:
+    snapshot_prompt = ctx.get("snapshot_prompt") or ""
+    ctx["run_prompt"] = snapshot_prompt
+    ctx["run_type"] = "pinned"
 
 
 @when("I trigger a new run")
-def _trigger_new_run(client, request) -> None:
-    pass
+def _trigger_new_run(ctx) -> None:
+    agent = ctx.get("agent")
+    current_prompt = agent.prompt_template if agent else ""
+    ctx["run_prompt"] = current_prompt
+    ctx["run_type"] = "latest"
 
 
 @when(parsers.parse("I GET /api/agents/reviewer/versions"))
-def _get_prompt_versions(client, request) -> None:
+def _get_prompt_versions(client, request, ctx) -> None:
+    agent = ctx.get("agent")
     with (
-        patch("modulo.api.routes.agents.get_agent", return_value=_AGENT),
+        patch("modulo.api.routes.agents.get_agent", return_value=agent),
         patch("modulo.api.routes.agents.set_rls_org"),
     ):
-        resp = client.get(f"/api/v1/agents/{_AGENT_ID}/prompts")
+        resp = client.get(f"/api/v1/agents/{ctx['agent_id']}/prompts")
     request.node._resp = resp
 
 
 @then(parsers.parse("the agent has prompt version {version:d}"))
-def _agent_has_prompt_version(client, request, version: int) -> None:
-    assert len(_AGENT.prompt_version_history) == version
+def _agent_has_prompt_version(ctx, version: int) -> None:
+    agent = ctx.get("agent")
+    assert agent is not None, "No agent in context"
+    assert len(agent.prompt_version_history) == version
 
 
 @then(parsers.parse('the run uses prompt "{prompt}"'))
-def _run_uses_prompt(client, request, prompt: str) -> None:
-    pass
+def _run_uses_prompt(ctx, prompt: str) -> None:
+    actual = ctx.get("run_prompt", "")
+    assert actual == prompt, f"Expected run to use prompt {prompt!r}, got {actual!r}"
 
 
 @then("the response contains 2 prompt versions")
-def _response_contains_two_versions(client, request) -> None:
+def _response_contains_two_versions(client, request, ctx) -> None:
     data = request.node._resp.json()
     assert len(data) == 2
