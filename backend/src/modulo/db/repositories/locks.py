@@ -127,13 +127,11 @@ class GenericLock(BaseLockService):
                 _generic_locks[key] = asyncio.Lock()
             lock = _generic_locks[key]
 
-        if timeout is not None:
-            try:
-                await asyncio.wait_for(lock.acquire(), timeout=timeout)
-            except asyncio.TimeoutError as exc:
-                raise LockAcquireError(_TIMEOUT_ERR.format(key=key, timeout=timeout)) from exc
-        else:
-            await lock.acquire()
+        actual_timeout = timeout if timeout is not None else _DEFAULT_LOCK_TIMEOUT
+        try:
+            await asyncio.wait_for(lock.acquire(), timeout=actual_timeout)
+        except asyncio.TimeoutError as exc:
+            raise LockAcquireError(_TIMEOUT_ERR.format(key=key, timeout=actual_timeout)) from exc
 
         owner = id(asyncio.current_task())
         async with _generic_dict_lock:
