@@ -7,6 +7,8 @@ from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.messages import AIMessage, BaseMessage
 from langchain_core.outputs import ChatGeneration, ChatResult
 
+from modulo.model_backends.base import HealthResult
+
 
 class UnexpectedInputError(LookupError):
     """Raised when a stub invocation has no fixture for its normalized input."""
@@ -79,6 +81,9 @@ class StubModelBackend(BaseChatModel):
     ) -> ChatResult:
         del stop, run_manager, kwargs
         return self._result_for(messages)
+
+    async def health_check(self) -> HealthResult:
+        return HealthResult(ok=True, detail="Stub backend always healthy")
 
     def _result_for(self, messages: Sequence[BaseMessage]) -> ChatResult:
         normalized_input = normalize_input(messages)

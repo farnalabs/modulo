@@ -6,7 +6,7 @@ from typing import Any
 from langchain_core.messages import BaseMessage
 from langchain_openai import ChatOpenAI
 
-from modulo.model_backends.base import ModelBackendBase
+from modulo.model_backends.base import HealthResult, ModelBackendBase, _openai_compatible_health_check
 
 DEFAULT_LM_STUDIO_BASE_URL = "http://localhost:1234/v1"
 
@@ -34,6 +34,7 @@ class LmStudioBackend(ModelBackendBase):
         )
         self._backend_id = f"lm_studio/{model_id}"
         self._base_url = base_url
+        self._api_key = api_key or ""
 
     @property
     def base_url(self) -> str:
@@ -45,6 +46,12 @@ class LmStudioBackend(ModelBackendBase):
 
     def __repr__(self) -> str:
         return f"LmStudioBackend(model_id={self._backend_id!r}, base_url={self._base_url!r})"
+
+    async def health_check(self) -> HealthResult:
+        return await _openai_compatible_health_check(
+            base_url=self._base_url,
+            api_key=self._api_key,
+        )
 
     async def invoke(self, messages: list[BaseMessage], **kwargs: Any) -> BaseMessage:
         return await self._model.ainvoke(messages, **kwargs)

@@ -191,13 +191,17 @@ class ModelBackendHub:
         raise BackendUnavailableError(backend_id)
 
     async def health_check(self, backend_id: uuid.UUID) -> HealthResult:
-        """Check backend health; delegates to the backend's own health check."""
+        """Check backend health via the backend's own lightweight health check."""
         if backend_id not in self._backends:
             return HealthResult(ok=False, detail="Backend not registered")
         backend = self._backends[backend_id]
-        result = await backend.health_check()
-        self._healthy[backend_id] = result.ok
-        return result
+        try:
+            result = await backend.health_check()
+            self._healthy[backend_id] = result.ok
+            return result
+        except Exception as exc:
+            self._healthy[backend_id] = False
+            return HealthResult(ok=False, detail=str(exc)[:500])
 
     def mark_unhealthy(self, backend_id: uuid.UUID) -> None:
         """Explicitly mark a backend as unhealthy (e.g. after a node-level error)."""
@@ -254,6 +258,8 @@ def _build_backend(
             )
         case "openai":
             return OpenAIBackend(api_key=creds["api_key"], model_id=model_id, **default_params)
+        case "openrouter":
+            return OpenRouterBackend(api_key=creds["api_key"], model_id=model_id, **default_params)
         case "lm_studio":
             base_url = creds.get("base_url", "http://localhost:1234/v1")
             return LmStudioBackend(
