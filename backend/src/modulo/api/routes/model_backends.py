@@ -25,6 +25,7 @@ from modulo.db.crud.model_backend import (
 )
 from modulo.db.rls import set_rls_org, set_rls_user_context
 from modulo.settings import Settings, get_settings
+from sqlalchemy.exc import ProgrammingError
 
 router = APIRouter(prefix="/api/v1/model-backends", tags=["model-backends"])
 
@@ -108,10 +109,16 @@ async def list_model_backends_endpoint(
     session: AsyncSession = Depends(get_db_session),
     principal: AuthenticatedPrincipal = Depends(get_current_user),
 ) -> ModelBackendListResponse:
-    async with session.begin():
-        await set_rls_org(session, principal.organisation_id)
-        await set_rls_user_context(session, principal.account_id, principal.org_role)
-        result = await list_model_backends(session, page=page, page_size=page_size)
+    try:
+        async with session.begin():
+            await set_rls_org(session, principal.organisation_id)
+            await set_rls_user_context(session, principal.account_id, principal.org_role)
+            result = await list_model_backends(session, page=page, page_size=page_size)
+    except ProgrammingError:
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="Model backends are not available. Run database migrations to enable this feature.",
+        ) from None
     return ModelBackendListResponse(
         items=[_to_response(mb) for mb in result.items],
         total=result.total,
@@ -128,13 +135,14 @@ async def create_model_backend_endpoint(
     settings: Settings = Depends(get_settings),
 ) -> ModelBackendResponse:
     ciphertext = _encrypt(body.api_key, settings.fernet_key)
-    async with session.begin():
-        await set_rls_org(session, principal.organisation_id)
-        await set_rls_user_context(session, principal.account_id, principal.org_role)
-        fallback_ids: list[str] | None = None
-        if body.fallback_backend_ids:
-            fallback_ids = [str(fid) for fid in body.fallback_backend_ids]
-        mb = await create_model_backend(
+    try:
+        async with session.begin():
+            await set_rls_org(session, principal.organisation_id)
+            await set_rls_user_context(session, principal.account_id, principal.org_role)
+            fallback_ids: list[str] | None = None
+            if body.fallback_backend_ids:
+                fallback_ids = [str(fid) for fid in body.fallback_backend_ids]
+            mb = await create_model_backend(
             session,
             org_id=principal.organisation_id,
             name=body.name,
@@ -147,6 +155,11 @@ async def create_model_backend_endpoint(
             visibility=body.visibility,
             fallback_backend_ids=fallback_ids,
         )
+    except ProgrammingError:
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="Model backends are not available. Run database migrations to enable this feature.",
+        ) from None
     return _to_response(mb)
 
 
@@ -156,10 +169,16 @@ async def get_model_backend_endpoint(
     session: AsyncSession = Depends(get_db_session),
     principal: AuthenticatedPrincipal = Depends(get_current_user),
 ) -> ModelBackendResponse:
-    async with session.begin():
-        await set_rls_org(session, principal.organisation_id)
-        await set_rls_user_context(session, principal.account_id, principal.org_role)
-        mb = await get_model_backend(session, backend_id)
+    try:
+        async with session.begin():
+            await set_rls_org(session, principal.organisation_id)
+            await set_rls_user_context(session, principal.account_id, principal.org_role)
+            mb = await get_model_backend(session, backend_id)
+    except ProgrammingError:
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="Model backends are not available. Run database migrations to enable this feature.",
+        ) from None
     if mb is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Model backend not found")
     return _to_response(mb)
@@ -177,10 +196,16 @@ async def update_model_backend_endpoint(
     if "api_key" in updates:
         _ct = _encrypt(updates.pop("api_key"), settings.fernet_key)
         updates["credentials_ciphertext"] = _ct  # nosemgrep: credential-not-in-state
-    async with session.begin():
-        await set_rls_org(session, principal.organisation_id)
-        await set_rls_user_context(session, principal.account_id, principal.org_role)
-        mb = await update_model_backend(session, backend_id, updates)
+    try:
+        async with session.begin():
+            await set_rls_org(session, principal.organisation_id)
+            await set_rls_user_context(session, principal.account_id, principal.org_role)
+            mb = await update_model_backend(session, backend_id, updates)
+    except ProgrammingError:
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="Model backends are not available. Run database migrations to enable this feature.",
+        ) from None
     if mb is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Model backend not found")
     return _to_response(mb)
@@ -192,9 +217,15 @@ async def delete_model_backend_endpoint(
     session: AsyncSession = Depends(get_db_session),
     principal: AuthenticatedPrincipal = Depends(get_current_user),
 ) -> None:
-    async with session.begin():
-        await set_rls_org(session, principal.organisation_id)
-        await set_rls_user_context(session, principal.account_id, principal.org_role)
-        deleted = await delete_model_backend(session, backend_id)
+    try:
+        async with session.begin():
+            await set_rls_org(session, principal.organisation_id)
+            await set_rls_user_context(session, principal.account_id, principal.org_role)
+            deleted = await delete_model_backend(session, backend_id)
+    except ProgrammingError:
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="Model backends are not available. Run database migrations to enable this feature.",
+        ) from None
     if not deleted:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Model backend not found")
