@@ -56,6 +56,7 @@ from modulo.core.library_service import (
     copy_to_adapt as library_copy_to_adapt,
 )
 from modulo.core.mcp.scope_validator import MCPAuthorizationError, check_tool_scope
+from modulo.db.crud.model_backend import create_model_backend as db_create_model_backend
 from modulo.db.crud.pipeline import get_pipeline, list_pipelines
 from modulo.db.crud.run import get_run
 from modulo.db.models.hitl_claim import HitlClaim
@@ -893,6 +894,73 @@ async def get_trigger_events(
     except Exception:
         _log.exception("get_trigger_events failed")
         return _tool_error("Failed to get trigger events")
+
+
+@mcp.tool(
+    description="Create a new model backend (API key + provider configuration). "
+    "Use this to register a new LLM provider so the org can use it in pipelines and Remy chat. "
+    "Common providers include: openai, anthropic, gemini, deepseek, groq, opencode. "
+    "The API key is encrypted at rest and never exposed in responses.",
+)
+async def create_model_backend(
+    name: str,
+    display_name: str,
+    provider: str,
+    model_id: str,
+    api_key: str,
+    default_params: str | None = None,
+    visibility: str = "org",
+) -> dict[str, Any]:
+    try:
+        if not await validate_current_auth():
+            return _tool_error("Token revoked or expired — re-authenticate")
+        check_tool_scope(_ctx_role.get(None), "create_model_backend")
+
+        from cryptography.fernet import Fernet
+
+        org_id = _ctx_org_id.get(_PLACEHOLDER_ORG_ID)
+        account_id = _ctx_user_id.get(uuid.UUID(int=0))
+        settings = get_settings()
+
+        ciphertext = Fernet(settings.fernet_key.encode()).encrypt(api_key.encode())
+
+        params: dict[str, Any] = {}
+        if default_params:
+            try:
+                params = json.loads(default_params)
+            except json.JSONDecodeError:
+                return {"error": "invalid_params", "detail": "default_params must be valid JSON"}
+
+        async with _session(org_id) as s:
+            mb = await db_create_model_backend(
+                s,
+                org_id=org_id,
+                name=name,
+                display_name=display_name,
+                provider=provider,
+                model_id=model_id,
+                credentials_ciphertext=ciphertext,
+                account_id=account_id,
+                default_params=params,
+                visibility=visibility,
+                fallback_backend_ids=None,
+            )
+
+        return {
+            "id": str(mb.id),
+            "name": mb.name,
+            "display_name": mb.display_name,
+            "provider": mb.provider,
+            "model_id": mb.model_id,
+            "has_credentials": True,
+            "visibility": mb.visibility,
+            "created_at": mb.created_at.isoformat() if mb.created_at else None,
+        }
+    except MCPAuthorizationError as exc:
+        return {"error": "insufficient_scope", "detail": str(exc)}
+    except Exception:
+        _log.exception("create_model_backend failed")
+        return _tool_error("Failed to create model backend")
 
 
 # ---------------------------------------------------------------------------
