@@ -11,7 +11,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from modulo.api.middleware.sensitive_mask import is_sensitive_env_key, mask_sensitive_value
 from modulo.auth.dependencies import get_current_user
 from modulo.auth.jwt import AuthenticatedPrincipal
-from modulo.core.runtime_config.store import KNOWN_KEYS, get_runtime_config_store
+from modulo.core.runtime_config.store import KNOWN_KEYS, RuntimeConfigStore, get_runtime_config_store
 
 router = APIRouter(prefix="/api/v1/admin/runtime-config", tags=["admin-runtime-config"])
 
@@ -35,13 +35,12 @@ def _mask_sensitive_items(items: list[dict[str, Any]]) -> None:
 def _calc_has_drift(items: list[dict[str, Any]]) -> bool:
     return any(
         item["override_value"] is None
-        and item["env_value"] is not None
         and os.environ.get(item["key"]) != item["env_value"]
         for item in items
     )
 
 
-def _build_response(store: Any) -> dict[str, Any]:
+def _build_response(store: RuntimeConfigStore) -> dict[str, Any]:
     items = [asdict(item) for item in store.get_all()]
     has_drift = _calc_has_drift(items)
     _mask_sensitive_items(items)
@@ -89,6 +88,11 @@ async def set_runtime_config_overrides(
             detail="'clear' must be a list",
         )
     for key in clear_keys:
+        if key not in KNOWN_KEYS:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Unknown config key in clear: {key}",
+            )
         store.clear_override(key)
 
     return _build_response(store)
