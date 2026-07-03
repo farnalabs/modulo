@@ -299,6 +299,7 @@ async def _import_org_data(
 
             except Exception as exc:
                 _log.warning("Error importing %s row %s: %s", table_name, row_id or "?", exc)
+                await session.rollback()
                 counts["errors"] += 1
 
         try:
