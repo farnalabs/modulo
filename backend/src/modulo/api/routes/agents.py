@@ -54,6 +54,7 @@ class AgentCreate(BaseModel):
     token_budget: int | None = Field(default=None, ge=0)
     max_input_length: int | None = Field(default=None, ge=0)
     library_id: uuid.UUID | None = None
+    prompt_always_visible: bool = False
 
 
 class AgentUpdate(BaseModel):
@@ -67,6 +68,7 @@ class AgentUpdate(BaseModel):
     retry_policy: dict[str, Any] | None = None
     token_budget: int | None = Field(default=None, ge=0)
     max_input_length: int | None = Field(default=None, ge=0)
+    prompt_always_visible: bool | None = None
 
 
 class AgentResponse(BaseModel):
@@ -88,6 +90,7 @@ class AgentResponse(BaseModel):
     token_budget: int | None
     max_input_length: int | None
     library_id: uuid.UUID | None
+    prompt_always_visible: bool
     created_by: uuid.UUID = Field(validation_alias="account_id")
     created_at: datetime
     updated_at: datetime
@@ -278,6 +281,7 @@ async def create_agent_endpoint(
                 token_budget=body.token_budget,
                 max_input_length=body.max_input_length,
                 library_id=body.library_id,
+                prompt_always_visible=body.prompt_always_visible,
             )
     except ProgrammingError:
         raise HTTPException(

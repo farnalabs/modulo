@@ -352,6 +352,9 @@ async function revealPrompt(nodeName: string) {
       promptAlwaysVisible: d.prompt_always_visible,
     }
     revealedPrompts.value = { ...revealedPrompts.value, [nodeName]: revealed }
+    if (d.prompt_always_visible) {
+      showPrompt(nodeName)
+    }
   } finally {
     const s = new Set(promptLoading.value)
     s.delete(nodeName)
