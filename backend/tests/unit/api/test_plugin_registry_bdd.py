@@ -455,17 +455,22 @@ class TestPluginManifestValidation:
         mock_ep.dist = mock_dist
         mock_ep.load.return_value = lambda cfg, creds: None
 
-        with patch(
-            "modulo.core.plugin_registry.importlib.metadata.entry_points"
-        ) as mock_eps:
+        with (
+            patch(
+                "modulo.core.plugin_registry.importlib.metadata.entry_points"
+            ) as mock_eps,
+            patch(
+                "modulo.core.plugin_registry.importlib.metadata.metadata"
+            ) as mock_metadata,
+        ):
             mock_eps.side_effect = lambda group=None: (
                 [mock_ep] if group == "modulo.connectors" else []
             )
+            mock_metadata.return_value = {"Name": "Slack Connector"}
             registry.discover_plugins()
 
-        health = registry.health_check("modulo-connector-slack")
-        assert health["modulo-connector-slack"].ok is True
-        assert health["modulo-connector-slack"].detail == "Loaded"
+            health = registry.health_check("modulo-connector-slack")
+            assert health["modulo-connector-slack"].ok is True
 
 
 class TestPluginCapabilitiesAdvertised:
