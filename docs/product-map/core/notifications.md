@@ -7,7 +7,12 @@ bdd:
   - backend/tests/features/notifications/failure_webhook.feature
   - backend/tests/features/notifications/signing.feature
   - backend/tests/features/hitl/overdue_warning.feature
-unit-tests: []
+unit-tests:
+  - backend/tests/unit/notifier/test_notifier.py
+  - backend/tests/unit/api/test_notifications_endpoint.py
+  - backend/tests/unit/notifier/test_notification_endpoints_api.py
+  - backend/tests/unit/api/test_delivery_log.py
+  - backend/tests/unit/hitl_manager/test_overdue_warning.py
 code:
   - backend/src/modulo/core/notifier/__init__.py
   - backend/src/modulo/api/routes/admin_notifications.py
@@ -135,12 +140,15 @@ Outbound webhook notifications for pipeline lifecycle events, with HMAC signing,
 - `X-Modulo-Timestamp` header referenced in signing.feature but not emitted by notifier code — replay protection gap
 - Celery-based dispatcher isolation (PRD v1) — dispatcher still runs in FastAPI process
 - Multi-worker advisory lock for expiry job not yet implemented
-- `signing.feature` references header `X-Modulo-Signature-256` but code emits `X-Modulo-Signature` — BDD mismatch
-- `signing.feature` Scenario "Signature uses different secrets per org" describes per-org secrets; code uses per-endpoint secrets — BDD must describe endpoint-level secrets
-- `failure_webhook.feature` Scenario "Endpoint auto-disabled after repeated failures" says 5 consecutive failures; code uses MAX_DEAD_LETTERS=10 — BDD mismatch
 - `hitl_awaiting` failed deliveries do not trigger in-app alerts to org admins — no alert mechanism exists
 - Team notification endpoint configuration (team_id field) not exposed in admin API create/update routes — NotificationEndpoint model has team_id column but API does not surface it
 - `hitl_overdue` event type constant exists in AVAILABLE_EVENTS but no background job dispatches it
 - 429 Retry-After header not honored — all retries use fixed delay schedule
 - `Notifier.dispatch_event` lacks top-level try/except — unexpected errors propagate to caller
-- 9 of 11 admin notification routes lack `sqlalchemy.exc.ProgrammingError` catch (501 Not Implemented fallback) — only `/deliveries` (list_all_deliveries) has it
+- `signing.feature` referenced header `X-Modulo-Signature-256` but code emits `X-Modulo-Signature` — fixed in QA (index 69)
+- `signing.feature` described per-org secrets; code uses per-endpoint secrets — fixed in QA (index 69)
+- `failure_webhook.feature` said 5 consecutive failures; code uses MAX_DEAD_LETTERS=10 — fixed in QA (index 69)
+- All 10 admin notification routes and all 5 non-admin notification routes now have `sqlalchemy.exc.ProgrammingError` catch (501 Not Implemented fallback) — added in QA (index 69)
+
+## QA History (index 69)
+- 2026-07-03: Cross-cutting QA — added ProgrammingError catches (501 Not Implemented) to 10 admin_notifications routes and 5 notifications routes. Fixed 3 BDD feature/code mismatches (header name, auto-disable threshold, per-endpoint vs per-org secrets). Updated Known Gaps with new findings from audit.
