@@ -185,14 +185,11 @@ _KNOWN_FLAGS: list[FeatureFlag] = [
         tier="team",
     ),
     FeatureFlag(
-<<<<<<< HEAD
-=======
         name="admin_cost_controls",
         description="Budget overview, team budgets, alert thresholds, and billing settings",
         tier="team",
     ),
     FeatureFlag(
->>>>>>> feat/gating-show-disabled
         name="schema_version_history",
         description="Version history and diff for schema definitions",
         tier="team",
