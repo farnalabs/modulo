@@ -56,12 +56,6 @@ def pipeline_has_eval_suite(pipeline_name: str, suite_name: str, ctx):
     ctx["mock_pipeline"] = mock_pipeline
 
 
-@given(parsers.parse('I am authenticated in org "{org_name}"'))
-def i_am_authenticated_in_org(org_name: str, ctx):
-    ctx["org_name"] = org_name
-    ctx["org_id"] = uuid.UUID("00000000-0000-0000-0000-000000000001")
-
-
 @when(parsers.parse("I POST /api/pipelines/{pipeline_name}/evals"))
 def trigger_eval_run(request, pipeline_name: str, ctx):
     """POST to trigger an eval run — simulated API response."""
