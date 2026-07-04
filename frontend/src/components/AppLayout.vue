@@ -2,7 +2,7 @@
   <TooltipProvider :delay-duration="300">
   <div class="flex items-start min-h-screen">
     <!-- Sidebar -->
-    <aside class="hidden md:flex w-64 border-r bg-background p-4 flex-col min-h-screen">
+    <aside class="hidden md:flex w-64 border-r bg-background p-4 flex-col min-h-screen overflow-hidden">
       <div class="mb-6 flex items-center gap-2.5 pl-1">
         <div
           class="flex items-center justify-center rounded-lg bg-gradient-to-br from-teal-500/20 to-transparent p-1.5"
@@ -18,7 +18,7 @@
         @update:model-value="setViewMode"
       />
 
-      <SidebarNav :is-system-admin="isSystemAdmin" :user-role="userRole" />
+      <SidebarNav class="flex-1 overflow-y-auto" :is-system-admin="isSystemAdmin" :user-role="userRole" />
 
       <SidebarFooter
         :user-email="userEmail"
@@ -102,7 +102,7 @@
         @update:model-value="setViewMode"
       />
 
-      <SidebarNav
+      <SidebarNav class="flex-1"
         :is-system-admin="isSystemAdmin"
         :user-role="userRole"
         @navigate="mobileOpen = false"
