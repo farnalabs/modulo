@@ -21,7 +21,9 @@ from modulo.db.models.base import OrgScoped
 class LibraryPrimitive(OrgScoped):
     __tablename__ = "library_primitives"
     __table_args__ = (
-        CheckConstraint("source IN ('local', 'registry', 'modulo')", name="ck_library_primitives_source"),
+        CheckConstraint(
+            "source IN ('local', 'registry', 'modulo', 'community')", name="ck_library_primitives_source"
+        ),
         CheckConstraint(
             "primitive_type IN ('schema', 'workflow', 'agent', 'integration', "
             "'test_fixture', 'pipeline_template', 'composite')",
@@ -45,6 +47,9 @@ class LibraryPrimitive(OrgScoped):
             "AND download_count IS NULL AND average_rating IS NULL AND review_count IS NULL) "
             "OR (source = 'modulo' AND source_url IS NULL AND checksum IS NULL "
             "AND ed25519_signature IS NULL AND verified IS NULL "
+            "AND download_count IS NULL AND average_rating IS NULL AND review_count IS NULL) "
+            "OR (source = 'community' AND source_url IS NULL AND checksum IS NULL "
+            "AND ed25519_signature IS NULL "
             "AND download_count IS NULL AND average_rating IS NULL AND review_count IS NULL) "
             "OR (source = 'registry' AND owner_team_id IS NULL AND visibility = 'org' "
             "AND forked_from IS NULL AND source_url IS NOT NULL AND checksum IS NOT NULL "

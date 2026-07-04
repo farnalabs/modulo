@@ -6,10 +6,13 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from modulo.core.library_service import (
+    _COMMUNITY_BY_ID,
+    _COMMUNITY_PRIMITIVES,
     _MODULO_BY_ID,
     _MODULO_PRIMITIVES,
     MODULO_ORG_ID,
     CommunityPrimitiveReadOnlyError,
+    _filter_community,
     _filter_modulo,
     copy_to_adapt,
     get_primitive,
@@ -72,6 +75,40 @@ def test_filter_modulo_by_type():
     schemas = _filter_modulo(primitive_type="schema", search=None)
     assert all(p.primitive_type == "schema" for p in schemas)
     assert len(schemas) == 7
+
+
+# ---------------------------------------------------------------------------
+# _filter_community — community database (ADR 010 §2)
+# ---------------------------------------------------------------------------
+
+
+def test_filter_community_no_filters():
+    results = _filter_community(primitive_type=None, search=None)
+    assert len(results) == len(_COMMUNITY_PRIMITIVES)
+    assert len(results) == 3
+
+
+def test_filter_community_items_are_source_community_and_unverified():
+    results = _filter_community(primitive_type=None, search=None)
+    for p in results:
+        assert p.source == "community"
+        assert p.verified is False
+        assert p.visibility == "community"
+
+
+def test_filter_community_by_search():
+    results = _filter_community(primitive_type=None, search="French")
+    assert len(results) == 1
+    assert results[0].slug == "translate-to-french"
+
+
+def test_filter_community_no_match():
+    assert _filter_community(primitive_type=None, search="zzz_no_match_zzz") == []
+
+
+def test_community_by_id_index():
+    for p in _COMMUNITY_PRIMITIVES:
+        assert _COMMUNITY_BY_ID[p.id] is p
 
 
 def test_filter_modulo_by_type_agent():
@@ -332,6 +369,58 @@ async def test_list_primitives_exclude_community():
 
     assert result.items == []
     assert result.total == 0
+
+
+async def test_list_primitives_source_community_only():
+    """?source=community returns only the community-database items — no Native, no org items."""
+    session = _mock_session()
+    org_id = uuid.uuid4()
+    org_prim = _fake_primitive()
+    org_prim.source = "local"
+    org_page: PageResult = PageResult(items=[org_prim], total=1, page=1, page_size=20)
+
+    with (
+        patch("modulo.core.library_service.set_rls_org", new_callable=AsyncMock),
+        patch("modulo.core.library_service.list_library_primitives", new_callable=AsyncMock, return_value=org_page),
+    ):
+        result = await list_primitives(session, org_id, source="community")
+
+    assert org_prim not in result.items
+    assert len(result.items) == 3
+    assert all(p.source == "community" for p in result.items)
+    assert all(p.verified is False for p in result.items)
+
+
+async def test_list_primitives_source_modulo_excludes_community():
+    """?source=modulo returns only Native library items — no community-database items."""
+    session = _mock_session()
+    org_id = uuid.uuid4()
+    org_page: PageResult = PageResult(items=[], total=0, page=1, page_size=20)
+
+    with (
+        patch("modulo.core.library_service.set_rls_org", new_callable=AsyncMock),
+        patch("modulo.core.library_service.list_library_primitives", new_callable=AsyncMock, return_value=org_page),
+    ):
+        result = await list_primitives(session, org_id, source="modulo")
+
+    assert all(p.source == "modulo" for p in result.items)
+    assert not any(p.source == "community" for p in result.items)
+
+
+async def test_list_primitives_default_merges_community_database():
+    """Default (no source filter) merges org items, Native, and community-database items."""
+    session = _mock_session()
+    org_id = uuid.uuid4()
+    org_page: PageResult = PageResult(items=[], total=0, page=1, page_size=20)
+
+    with (
+        patch("modulo.core.library_service.set_rls_org", new_callable=AsyncMock),
+        patch("modulo.core.library_service.list_library_primitives", new_callable=AsyncMock, return_value=org_page),
+    ):
+        result = await list_primitives(session, org_id)
+
+    assert any(p.source == "modulo" for p in result.items)
+    assert any(p.source == "community" for p in result.items)
 
 
 async def test_list_primitives_type_filter_propagated():
