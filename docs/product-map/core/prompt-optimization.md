@@ -17,6 +17,7 @@ unit-tests:
   - backend/tests/unit/api/test_agent_prompt_versioning.py
   - backend/tests/unit/api/test_agent_prompts.py
   - backend/tests/unit/core/prompt_optimizer/test_prompt_optimizer.py
+  - backend/tests/unit/api/test_prompt_programming_error.py
 status: partial
 ---
 
@@ -86,6 +87,7 @@ LLM-driven prompt improvement from eval failures, with full version history, rol
 
 - [x] All 5 agent CRUD routes (list, create, get, update, delete) catch ProgrammingError → 501
 - [x] All 6 prompt routes (optimize, apply, list versions, get version, rollback, diff) catch ProgrammingError → 501
+- [x] All 6 prompt routes (optimize, apply, list versions, get version, rollback, diff) catch SQLAlchemyError → 503
 - [x] Missing DB table on ModelBackend query in optimize endpoint returns 501
 - [x] Missing DB table on get_eval_results_with_defs returns 501
 - [x] 422 on empty eval_result_ids in optimize endpoint
@@ -105,11 +107,24 @@ LLM-driven prompt improvement from eval failures, with full version history, rol
 - [x] Diff of same version (version_a == version_b) returns all lines as "unchanged"
 - [x] Empty version history returns empty list for list endpoint
 - [x] Empty template string accepted as valid prompt for version creation
+- [x] Diff endpoint rolls over when SQLAlchemyError is raised on get_agent call (returns 503)
+- [x] Diff endpoint rolls over when ProgrammingError is raised on get_agent call (returns 501)
+
+### Resilience & Integration Robustness
+
+- [x] LLM call failures (network, timeout) propagate to caller for optimize endpoint
+- [ ] LLM call timeout can hang indefinitely (no configurable timeout on backend.invoke)
+- [ ] No retry/backoff on LLM call failure in optimize endpoint
+- [ ] No retry/backoff on credential decryption failure in optimize endpoint
+- [ ] No circuit breaker if the LLM backend is persistently unavailable
 
 ## Known Gaps
-- No unit test for get_prompt_diffs hash comparison logic (existing test is mock-based, not testing real diff computation)
+- No unit test for get_prompt_diffs hash comparison logic as a standalone function — diff logic is inlined in the route handler (SequenceMatcher) and tested via the API endpoint, but not as an independent unit
+- No integration test exercising the full optimize→LLM→parse→response chain with a real model backend
 - No performance or regression tests for large version histories (100+ entries)
 - No unauthorized access scenarios for prompt history (non-member org, viewer role)
+- Bound check on LLM response length — very long suggested_prompt could hit DB column limits
+- No website docs stub for prompt optimization
 
 ## QA History
 
@@ -118,4 +133,13 @@ LLM-driven prompt improvement from eval failures, with full version history, rol
 - Added Error Handling section (12 behaviour checkboxes)
 - Added Edge Cases section (6 checkboxes)
 - Refined Known Gaps (gap #1: corrected to "mock-based test, not real diff computation")
-- Status: partial (3 known gaps remain) 
+- Status: partial (3 known gaps remain)
+
+### 2026-07-04 — QA fix-up (feat-core-prompt-optimization)
+- Confirmed all 6 prompt endpoints already catch both ProgrammingError → 501 and SQLAlchemyError → 503 (diff endpoint had both catches already)
+- Added `test_prompt_programming_error.py` — tests both error paths (ProgrammingError + SQLAlchemyError) for all 6 prompt routes
+- Added SQLAlchemyError → 503 checkbox to Error Handling section
+- Added 2 edge case checkboxes for diff endpoint error rollover
+- Added Resilience & Integration Robustness section with 5 checkboxes
+- Updated Known Gaps: refined gap #1, added 4 new gaps (no integration test, response length bound check, no retry/backoff, no website docs stub)
+- Status: partial (6 known gaps remain) 
