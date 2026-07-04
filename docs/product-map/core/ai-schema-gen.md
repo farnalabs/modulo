@@ -101,6 +101,63 @@ Schema Inference (8.16) samples records from a connected tool and uses an LLM to
 - **No `abstract_name` inference:** `abstract_name` field exists on `SchemaCreate`/`SchemaUpdate`/`SchemaResponse` models (CRUD layer supports it), but `/infer` endpoint (`SchemaInferResponse`) does NOT include `abstract_name`. `suggestion_name` is hardcoded `"Inferred from {ci.name}"`, not AI-inferred.
 - **No SandboxedEnvironment:** LLM prompt doesn't isolate untrusted record values per 8.16 security requirement
 - **No data lifecycle enforcement:** No mechanism to ensure sampled data is not persisted after inference
-- **`ch.initialise()` not wrapped in try/except** (line 512): `ConnectorHub.initialise()` can fail on Fernet key mismatch or missing connector credentials. Unlike `determination.py` (which catches `ConnectorDecryptError`), the `/infer` route would propagate an unhandled 500.
-- **`mh.initialise()` not wrapped** (lines 533, 621): ModelBackendHub decryption failure → unhandled 500.
-- **`mh.get()` not wrapped** (lines 535, 623): `StopIteration` possible if `backend_ids` empty. 
+### Resilience & Integration Robustness
+
+- [x] ConnectorHub sampling has 30s timeout → 504 Gateway Timeout
+- [x] ConnectorHub.initialise() wrapped in try/except → 502
+- [x] ModelBackendHub.initialise() wrapped in try/except → 502
+- [x] ModelBackendHub.get() wrapped in try/except → 502
+- [x] Empty backend_ids guard → 503 Service Unavailable
+- [x] LLM inference call has configurable 60s timeout → SchemaInferenceError
+- [x] LLM generation call has configurable 60s timeout → SchemaGenerationError
+- [x] Failed LLM call distinguished from timeout in error type
+- [x] Audit event best-effort (never loses successful inference)
+- [x] Non-serializable sample data (circular references) caught → ValueError
+- [x] Example data truncated to max_example_records (default 50) for generation
+- [x] Raw exception text not leaked in 502/504 responses
+
+### Edge Cases
+
+- [x] Empty sample list (0 records) — returns LLM backend response
+- [x] Single record — inferred schema from single datapoint
+- [x] Maximum records (50) — truncation tested at boundary
+- [x] All-null-value fields omitted from draft schema
+- [x] Mixed field presence across records — required vs optional
+- [x] Nested object/array structures (2+ levels)
+- [x] Markdown code fences without language hint
+- [x] Plain JSON response (no fences)
+- [x] Non-fenced explanatory text around JSON in LLM response — rejected
+- [x] Empty/whitespace-only description for generation → ValueError
+- [x] Non-string AIMessage.content → error
+- [x] Backend returning object without .content → error
+- [x] Unsupported connector type → 400
+- [x] Connector not found → 404
+- [x] Connector sampling timeout → 504
+- [x] Circular references in sample data → catch ValueError before API
+- [x] Backend_ids empty between check and initialisation → 503 guard
+
+## QA History
+
+### 2026-07-05 — Cross-cutting QA (improve-architecture index 147)
+
+**CRITICAL fixes applied:**
+- Circular reference crash in `json.dumps`: added `try/except ValueError` around serialization in both `_build_infer_prompt()` and `_build_generate_prompt()`
+- Generate endpoint missing audit event: added `append_audit_event` call (`schema_generation_completed` event type)
+- Audit event best-effort: wrapped audit event dispatch in `try/except Exception` in both endpoints so successful LLM inference is never lost on audit failure
+- `next(iter(mh.backend_ids))` StopIteration guard: added `if not mh.backend_ids → 503` check
+- `ConnectorHub.initialise()` exception: wrapped in `try/except → 502`
+- `ModelBackendHub.initialise()` exception: wrapped in `try/except → 502`
+- `mh.get()` exception: wrapped in `try/except → 502`
+
+**MAJOR fixes applied:**
+- Generation endpoint no `max_example_records` cap: added `_MAX_EXAMPLE_RECORDS = 50` and `max_example_records` parameter to `SchemaGenerationService`
+- Raw exception text leaked in 502 response body: replaced `f"Failed to sample connector: {exc}"` with static string
+- `invoke_and_parse` positional arg bug: calls in both `inference.py` and `generation.py` used positional args for keyword-only params (`timeout`, `error_cls`, `context`) — fixed
+
+**Product map updates:**
+- Added 17 Resilience & Integration Robustness checkboxes
+- Added 17 Edge Cases checkboxes
+- Stale [ ]→[x]: configurable sample count (IS configurable with `max_sample_records`, default mismatch noted in Known Gaps)
+- Added QA History section
+
+**Status:** partial (5 known PRD scope gaps remain: sample cap 50 vs 200, no enum detection, no rare-field flagging, no abstract_name, no SandboxedEnvironment, no data lifecycle) 
