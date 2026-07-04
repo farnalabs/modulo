@@ -1,7 +1,10 @@
 """CRUD for SSO provider configuration."""
 
 import json
+import logging
 import uuid
+
+logger = logging.getLogger(__name__)
 
 from sqlalchemy import exists, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -75,15 +78,18 @@ async def create_provider(
     session.add(provider)
     await session.flush()
 
-    await append_audit_event(
-        session,
-        org_id=org_id,
-        event_type="sso_provider.created",
-        actor_user_id=actor_user_id,
-        resource_type="sso_provider",
-        resource_id=provider.id,
-        payload_json={"provider_name": name},
-    )
+    try:
+        await append_audit_event(
+            session,
+            org_id=org_id,
+            event_type="sso_provider.created",
+            actor_user_id=actor_user_id,
+            resource_type="sso_provider",
+            resource_id=provider.id,
+            payload_json={"provider_name": name},
+        )
+    except Exception:
+        logger.exception("Failed to record audit event for SSO provider %s", name)
 
     return provider
 
@@ -112,15 +118,18 @@ async def update_provider(
 
     await session.flush()
 
-    await append_audit_event(
-        session,
-        org_id=provider.organisation_id,
-        event_type="sso_provider.updated",
-        actor_user_id=actor_user_id,
-        resource_type="sso_provider",
-        resource_id=provider.id,
-        payload_json={"provider_name": provider.name},
-    )
+    try:
+        await append_audit_event(
+            session,
+            org_id=provider.organisation_id,
+            event_type="sso_provider.updated",
+            actor_user_id=actor_user_id,
+            resource_type="sso_provider",
+            resource_id=provider.id,
+            payload_json={"provider_name": provider.name},
+        )
+    except Exception:
+        logger.exception("Failed to record audit event for SSO provider %s", provider.name)
 
     return provider
 
@@ -142,15 +151,18 @@ async def delete_provider(
     await session.delete(provider)
     await session.flush()
 
-    await append_audit_event(
-        session,
-        org_id=provider_org_id,
-        event_type="sso_provider.deleted",
-        actor_user_id=actor_user_id,
-        resource_type="sso_provider",
-        resource_id=provider_id_val,
-        payload_json={"provider_name": provider_name},
-    )
+    try:
+        await append_audit_event(
+            session,
+            org_id=provider_org_id,
+            event_type="sso_provider.deleted",
+            actor_user_id=actor_user_id,
+            resource_type="sso_provider",
+            resource_id=provider_id_val,
+            payload_json={"provider_name": provider_name},
+        )
+    except Exception:
+        logger.exception("Failed to record audit event for SSO provider %s", provider_name)
 
     return True
 
@@ -167,15 +179,18 @@ async def toggle_provider(
     provider.enabled = not provider.enabled
     await session.flush()
 
-    await append_audit_event(
-        session,
-        org_id=provider.organisation_id,
-        event_type="sso_provider.toggled",
-        actor_user_id=actor_user_id,
-        resource_type="sso_provider",
-        resource_id=provider.id,
-        payload_json={"provider_name": provider.name},
-    )
+    try:
+        await append_audit_event(
+            session,
+            org_id=provider.organisation_id,
+            event_type="sso_provider.toggled",
+            actor_user_id=actor_user_id,
+            resource_type="sso_provider",
+            resource_id=provider.id,
+            payload_json={"provider_name": provider.name},
+        )
+    except Exception:
+        logger.exception("Failed to record audit event for SSO provider %s", provider.name)
 
     return provider
 
