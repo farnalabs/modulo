@@ -6,6 +6,7 @@
         :label="group.label"
         :label-key="group.labelKey"
         :collapsed="isGroupCollapsed(group.id, group.defaultCollapsed)"
+        :force-expanded="activeGroupIds.has(group.id)"
         @toggle="toggleGroup(group.id, group.defaultCollapsed)"
       >
         <SidebarLink
@@ -24,6 +25,7 @@
 
 <script setup lang="ts">
 import { computed } from "vue";
+import { useRoute } from "vue-router";
 import SidebarLink from "./SidebarLink.vue";
 import SidebarGroup from "./SidebarGroup.vue";
 import { navGroups, canSeeItem } from "../config/navigation";
@@ -39,8 +41,23 @@ defineEmits<{
   navigate: [];
 }>();
 
+const route = useRoute();
 const { viewMode, toggleGroup, isGroupCollapsed } = useSidebar();
 const planStore = usePlanStore();
+
+const activeGroupIds = computed(() => {
+  const ids = new Set<string>()
+  const path = route.path
+  for (const group of visibleSidebarGroups.value) {
+    for (const item of group.items) {
+      if (item.exact ? path === item.to : path.startsWith(item.to)) {
+        ids.add(group.id)
+        break
+      }
+    }
+  }
+  return ids
+})
 
 const tierInfoLoaded = computed(() => Object.keys(planStore.tierRanks).length > 0);
 
