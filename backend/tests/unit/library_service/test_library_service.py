@@ -113,12 +113,12 @@ def test_community_by_id_index():
 
 def test_filter_modulo_by_type_agent():
     agents = _filter_modulo(primitive_type="agent", search=None)
-    assert len(agents) == 7
+    assert len(agents) == 8
 
 
 def test_filter_modulo_by_type_workflow():
     workflows = _filter_modulo(primitive_type="workflow", search=None)
-    assert len(workflows) == 2
+    assert len(workflows) == 3
 
 
 def test_filter_modulo_by_search():
@@ -144,8 +144,8 @@ def test_community_primitives_have_correct_visibiliy():
 
 
 def test_community_primitives_count():
-    # 7 schemas + 7 agents + 2 workflows + 1 fixture + 3 pipeline_templates + 7 composites
-    assert len(_MODULO_PRIMITIVES) == 27
+    # 7 schemas + 8 agents + 3 workflows + 1 fixture + 3 pipeline_templates + 7 composites
+    assert len(_MODULO_PRIMITIVES) == 29
 
 
 def test_modulo_by_id_index():
