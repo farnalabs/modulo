@@ -239,6 +239,8 @@ async def update_error_group(
 
     if status is not None:
         group.status = status
+        if status == "resolved":
+            group.resolved_at = datetime.now(UTC)
     if assigned_to is not None:
         group.assigned_to = assigned_to
 
