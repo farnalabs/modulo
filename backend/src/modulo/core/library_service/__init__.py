@@ -12,6 +12,17 @@ from sqlalchemy import update as sa_update
 from sqlalchemy.exc import ProgrammingError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from modulo.db.crud.base import PageResult
+from modulo.db.crud.library_primitive import (
+    create_library_primitive,
+    get_library_primitive,
+    list_library_primitives,
+    list_primitives_by_version_group,
+    update_library_primitive,
+)
+from modulo.db.models.library_primitive import LibraryPrimitive
+from modulo.db.rls import set_rls_org, set_rls_user_context
+
 _log = logging.getLogger(__name__)
 
 __all__ = [
@@ -36,17 +47,6 @@ __all__ = [
     "submit_contribution_for_review",
     "submit_contribution_version",
 ]
-
-from modulo.db.crud.base import PageResult
-from modulo.db.crud.library_primitive import (
-    create_library_primitive,
-    get_library_primitive,
-    list_library_primitives,
-    list_primitives_by_version_group,
-    update_library_primitive,
-)
-from modulo.db.models.library_primitive import LibraryPrimitive
-from modulo.db.rls import set_rls_org, set_rls_user_context
 
 # Fixed sentinel used as organisation_id for modulo (built-in) primitives.
 MODULO_ORG_ID: uuid.UUID = uuid.UUID("00000000-0000-0000-0000-000000000001")

@@ -11,7 +11,7 @@ from sqlalchemy.exc import ProgrammingError
 
 from modulo.api.dependencies import _get_engine, get_db_session
 from modulo.api.main import app
-from modulo.auth.dependencies import get_current_user, require_system_admin
+from modulo.auth.dependencies import get_current_user
 from modulo.auth.jwt import AuthenticatedPrincipal
 from modulo.core.library_service import (
     ContributionInvalidTransitionError,
@@ -186,7 +186,9 @@ class TestCommunityContribute:
         prim = _make_primitive(contribution_status="draft")
 
         with (
-            patch("modulo.api.routes.library.contribute_primitive", new_callable=AsyncMock, return_value=prim) as mock_fn,
+            patch(
+                "modulo.api.routes.library.contribute_primitive", new_callable=AsyncMock, return_value=prim,
+            ) as mock_fn,
         ):
             resp = client.post(
                 self.CONTRIBUTE_PATH,
