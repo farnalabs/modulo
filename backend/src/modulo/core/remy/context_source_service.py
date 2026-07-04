@@ -3,6 +3,7 @@ from __future__ import annotations
 import uuid
 
 from sqlalchemy import select
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.core.remy.config_service import RemyConfig
@@ -57,56 +58,40 @@ class RemyContextSourceService:
     async def set_user_override(
         self, org_id: uuid.UUID, user_id: uuid.UUID, source_key: str, source_mode: str
     ) -> None:
-        result = await self._session.execute(
-            select(RemyContextSource).where(
-                RemyContextSource.organisation_id == org_id,
-                RemyContextSource.user_id == user_id,
-                RemyContextSource.source_key == source_key,
-            )
+        stmt = pg_insert(RemyContextSource).values(
+            id=uuid.uuid4(),
+            organisation_id=org_id,
+            user_id=user_id,
+            source_key=source_key,
+            source_mode=source_mode,
         )
-        entry = result.scalar_one_or_none()
-        if entry is None:
-            entry = RemyContextSource(
-                id=uuid.uuid4(),
-                organisation_id=org_id,
-                user_id=user_id,
-                source_key=source_key,
-                source_mode=source_mode,
-            )
-            self._session.add(entry)
-        else:
-            entry.source_mode = source_mode
+        stmt = stmt.on_conflict_do_update(
+            constraint="uq_remy_context_sources_key",
+            set_={"source_mode": source_mode},
+        )
+        await self._session.execute(stmt)
 
     async def set_org_default(
         self, org_id: uuid.UUID, source_key: str, source_mode: str
     ) -> None:
-        result = await self._session.execute(
-            select(RemyContextSource).where(
-                RemyContextSource.organisation_id == org_id,
-                RemyContextSource.user_id.is_(None),
-                RemyContextSource.source_key == source_key,
-            )
+        stmt = pg_insert(RemyContextSource).values(
+            id=uuid.uuid4(),
+            organisation_id=org_id,
+            user_id=None,
+            source_key=source_key,
+            source_mode=source_mode,
         )
-        entry = result.scalar_one_or_none()
-        if entry is None:
-            entry = RemyContextSource(
-                id=uuid.uuid4(),
-                organisation_id=org_id,
-                user_id=None,
-                source_key=source_key,
-                source_mode=source_mode,
-            )
-            self._session.add(entry)
-        else:
-            entry.source_mode = source_mode
+        stmt = stmt.on_conflict_do_update(
+            constraint="uq_remy_context_sources_key",
+            set_={"source_mode": source_mode},
+        )
+        await self._session.execute(stmt)
 
     async def reset_user_overrides(self, org_id: uuid.UUID, user_id: uuid.UUID) -> None:
-        result = await self._session.execute(
-            select(RemyContextSource).where(
-                RemyContextSource.organisation_id == org_id,
-                RemyContextSource.user_id == user_id,
-            )
+        from sqlalchemy import delete as sa_delete
+
+        stmt = sa_delete(RemyContextSource).where(
+            RemyContextSource.organisation_id == org_id,
+            RemyContextSource.user_id == user_id,
         )
-        rows = list(result.scalars())
-        for row in rows:
-            await self._session.delete(row)
+        await self._session.execute(stmt)

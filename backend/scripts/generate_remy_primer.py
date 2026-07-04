@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import logging
 import re
 import sys
 from pathlib import Path
@@ -34,6 +35,8 @@ from modulo.db.models import (
 )
 from modulo.settings import get_settings
 
+
+_log = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
 # 1.  Glossary parsing — PRD §5
@@ -137,27 +140,19 @@ async def _get_org_counts(
     session: AsyncSession, org_id: str,
 ) -> dict[str, int]:
     """Query live counts for pipelines, connectors, and model backends."""
+    models_and_keys: list[tuple[type, str]] = [
+        (Pipeline, "pipelines"),
+        (ConnectorInstance, "connectors"),
+        (ModelBackend, "model_backends"),
+    ]
     counts: dict[str, int] = {}
-    try:
-        stmt = select(func.count()).select_from(Pipeline).where(Pipeline.organisation_id == org_id)
-        result = await session.execute(stmt)
-        counts["pipelines"] = result.scalar() or 0
-    except Exception:
-        counts["pipelines"] = 0
-
-    try:
-        stmt = select(func.count()).select_from(ConnectorInstance).where(ConnectorInstance.organisation_id == org_id)
-        result = await session.execute(stmt)
-        counts["connectors"] = result.scalar() or 0
-    except Exception:
-        counts["connectors"] = 0
-
-    try:
-        stmt = select(func.count()).select_from(ModelBackend).where(ModelBackend.organisation_id == org_id)
-        result = await session.execute(stmt)
-        counts["model_backends"] = result.scalar() or 0
-    except Exception:
-        counts["model_backends"] = 0
+    for model, key in models_and_keys:
+        try:
+            stmt = select(func.count()).select_from(model).where(model.organisation_id == org_id)
+            result = await session.execute(stmt)
+            counts[key] = result.scalar() or 0
+        except Exception:
+            counts[key] = 0
 
     return counts
 
@@ -235,7 +230,7 @@ async def _get_active_context(
             user_ctx = await _get_user_context(session, org_id, user_id)
             ctx.update(user_ctx)
     except Exception:
-        pass
+        _log.warning("Failed to query DB context for primer", exc_info=True)
 
     return ctx
 
@@ -259,7 +254,10 @@ def _estimate_tokens(text: str) -> int:
     return int(word_count * 1.3)
 
 
-def _truncate_primer(primer: str, max_tokens: int = 800) -> str:
+_MAX_PRIMER_TOKENS = 800
+
+
+def _truncate_primer(primer: str, max_tokens: int = _MAX_PRIMER_TOKENS) -> str:
     """Truncate from bottom sections to stay within token budget.
 
     Truncation order:

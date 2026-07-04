@@ -1,8 +1,7 @@
 """Unit tests for Remy context tools — get_documentation, get_integration_status, get_org_config, get_available_features."""
 
 import json
-import uuid
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import MagicMock
 
 import pytest
 
