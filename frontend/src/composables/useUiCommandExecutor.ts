@@ -1,3 +1,5 @@
+import router from '@/router'
+
 export interface UiCommand {
   id: string
   name: string
@@ -91,10 +93,8 @@ async function executeSingle(cmd: UiCommand): Promise<UiCommandResult> {
 }
 
 async function navigate(path: string): Promise<UiCommandResult> {
-  const { useRouter } = await import('vue-router')
-  const router = useRouter()
   _navHistory.push(location.pathname + location.search)
-  router.push(path)
+  await router.push(path)
   await waitForDomStable()
   return { id: `nav-${Date.now()}`, name: 'navigate', success: true, result: { url: location.href } }
 }
@@ -137,7 +137,7 @@ async function fill(selector: string, value: string): Promise<UiCommandResult> {
     return { id: `fill-${Date.now()}`, name: 'fill', success: true }
   }
 
-  if (role === 'switch' || el.getAttribute('aria-role') === 'switch') {
+  if (role === 'switch') {
     ;(el as HTMLElement).click()
     return { id: `fill-${Date.now()}`, name: 'fill', success: true }
   }
@@ -258,11 +258,9 @@ async function doWait(args: Record<string, unknown>): Promise<UiCommandResult> {
 }
 
 async function goBack(): Promise<UiCommandResult> {
-  const { useRouter } = await import('vue-router')
-  const router = useRouter()
   const prev = _navHistory.pop()
   if (prev) {
-    router.push(prev)
+    await router.push(prev)
     await waitForDomStable()
     return { id: `back-${Date.now()}`, name: 'go_back', success: true, result: { url: location.href } }
   }
@@ -286,8 +284,10 @@ function buildSelector(el: Element): string | null {
   const tag = el.tagName.toLowerCase()
   const text = (el.textContent || '').trim().slice(0, 50)
   if (text) {
-    const escaped = CSS.escape(text)
-    return `${tag}:contains("${escaped}")`
+    const parent = el.parentElement
+    const sameTagSiblings = parent ? Array.from(parent.children).filter(c => c.tagName === el.tagName) : [el]
+    const nth = 1 + sameTagSiblings.indexOf(el)
+    return `${tag}:nth-of-type(${nth})`
   }
   return null
 }

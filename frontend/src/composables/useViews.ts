@@ -24,6 +24,7 @@ export function useViews(viewType: string) {
   )
 
   async function fetchViews() {
+    if (loading.value) return
     loading.value = true
     error.value = null
     try {

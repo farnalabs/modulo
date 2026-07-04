@@ -29,6 +29,7 @@ function scheduleReconnect(): void {
   reconnectAttempts++
   if (reconnectAttempts > MAX_RECONNECT_ATTEMPTS) {
     console.error('[EventBus] Max reconnect attempts reached')
+    abortController = null
     return
   }
   const delay = Math.min(1000 * Math.pow(2, reconnectAttempts - 1), 30000)
