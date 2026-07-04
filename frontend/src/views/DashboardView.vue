@@ -46,25 +46,25 @@
 
       <!-- Row 1: Summary stat cards -->
       <div class="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-        <StatCard :label="$t('views.DashboardView.total_runs')" :value="summary.total_runs" color="primary">
+        <StatCard :label="$t('views.DashboardView.total_runs')" :value="summary.total_runs" color="primary" to="/pipelines">
           <template #icon><line x1="12" y1="20" x2="12" y2="10"/><line x1="18" y1="20" x2="18" y2="4"/><line x1="6" y1="20" x2="6" y2="16"/></template>
         </StatCard>
-        <StatCard :label="$t('views.DashboardView.active_pipelines')" :value="summary.active_pipelines" color="primary">
+        <StatCard :label="$t('views.DashboardView.active_pipelines')" :value="summary.active_pipelines" color="primary" to="/pipelines">
           <template #icon><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></template>
         </StatCard>
-        <StatCard :label="$t('views.DashboardView.running')" :value="summary.run_counts_by_status?.running ?? 0" color="success">
+        <StatCard :label="$t('views.DashboardView.running')" :value="summary.run_counts_by_status?.running ?? 0" color="success" to="/pipelines">
           <template #icon><polyline points="23 6 13.5 15.5 8.5 10.5 1 18"/><polyline points="17 6 23 6 23 12"/></template>
         </StatCard>
-        <StatCard :label="$t('views.DashboardView.awaiting_human')" :value="summary.run_counts_by_status?.awaiting_human ?? 0" color="warning">
+        <StatCard :label="$t('views.DashboardView.awaiting_human')" :value="summary.run_counts_by_status?.awaiting_human ?? 0" color="warning" to="/stages">
           <template #icon><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></template>
         </StatCard>
       </div>
 
       <div class="grid gap-4 sm:grid-cols-2">
-        <StatCard :label="$t('views.DashboardView.failed')" :value="summary.run_counts_by_status?.failed ?? 0" color="destructive">
+        <StatCard :label="$t('views.DashboardView.failed')" :value="summary.run_counts_by_status?.failed ?? 0" color="destructive" to="/admin/errors">
           <template #icon><circle cx="12" cy="12" r="10"/><line x1="15" y1="9" x2="9" y2="15"/><line x1="9" y1="9" x2="15" y2="15"/></template>
         </StatCard>
-        <StatCard :label="$t('views.DashboardView.idle')" :value="summary.run_counts_by_status?.idle ?? 0" color="muted">
+        <StatCard :label="$t('views.DashboardView.idle')" :value="summary.run_counts_by_status?.idle ?? 0" color="muted" to="/pipelines">
           <template #icon><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></template>
         </StatCard>
       </div>
@@ -72,7 +72,7 @@
       <!-- Eval pass rate + Token spend -->
       <div class="grid gap-4 sm:grid-cols-2">
         <!-- Eval pass rate card -->
-        <div class="card p-4">
+        <router-link to="/eval-editor" class="card card-hover p-4 block">
           <p class="text-sm font-medium text-muted-foreground mb-2">{{ $t('views.DashboardView.eval_pass_rate') }}</p>
           <div v-if="summary.eval_pass_rate">
             <p class="text-3xl font-bold">{{ summary.eval_pass_rate.overall_pass_rate }}%</p>
@@ -87,15 +87,15 @@
             <Sparkline class="mt-2 h-10 w-full" :data="evalSparklineData" color="var(--color-primary)" />
           </div>
           <div v-else class="flex items-center justify-center py-6 text-sm text-muted-foreground">{{ $t('views.DashboardView.no_eval_data_yet') }}</div>
-        </div>
+        </router-link>
 
         <!-- Token spend card -->
-        <div class="card p-4">
+        <router-link to="/admin/costs" class="card card-hover p-4 block">
           <p class="text-sm font-medium text-muted-foreground mb-2">{{ $t('views.DashboardView.token_spend_7d') }}</p>
           <p class="text-3xl font-bold">${{ totalSpend.toFixed(2) }}</p>
           <p class="text-xs text-muted-foreground mt-1">{{ summary.trend?.length ?? 0 }} {{ $t('views.DashboardView.days_tracked') }}</p>
           <Sparkline class="mt-2 h-10 w-full" :data="spendSparklineData" color="var(--color-warning)" />
-        </div>
+        </router-link>
       </div>
 
       <!-- Run a Pipeline shortcut -->
@@ -202,7 +202,7 @@
       <div class="card p-4">
         <h2 class="text-lg font-semibold mb-4">{{ $t('views.DashboardView.recent_runs') }}</h2>
         <div v-if="summary.recent_runs && summary.recent_runs.length > 0" class="divide-y">
-          <div v-for="run in summary.recent_runs" :key="run.id" class="flex items-center justify-between py-2.5 first:pt-0 last:pb-0">
+          <router-link v-for="run in summary.recent_runs" :key="run.id" :to="'/runs/' + run.id" class="flex items-center justify-between py-2.5 first:pt-0 last:pb-0">
             <div class="min-w-0 flex-1">
               <Tooltip :delay-duration="300">
                 <TooltipTrigger as-child>
@@ -220,7 +220,7 @@
               </span>
               <span class="text-xs text-muted-foreground hidden sm:inline">{{ run.trigger_type }}</span>
             </div>
-          </div>
+          </router-link>
         </div>
         <div v-else class="flex items-center justify-center py-6 text-sm text-muted-foreground">
           {{ $t('views.DashboardView.no_runs_yet') }}
