@@ -55,7 +55,7 @@ Discovered from 1 completed delivery tasks. Also specified in PRD 8.5 (Trigger S
 ### Run Creation
 
 - [x] Run created with `input_payload` containing `records`, `total`, `poll_query`
-- [x] `snapshot_id` resolved from `trigger.config_json.snapshot_id` (falls back to `uuid.uuid4()`)
+- [x] `snapshot_id` resolved from `trigger.config_json.snapshot_id` (falls back to `uuid.UUID(int=0)` with warning logged)
 - [x] TriggerEvent logged with `result='condition_met'` and `run_id`
 
 ### Concurrency & Limits
@@ -76,9 +76,75 @@ Discovered from 1 completed delivery tasks. Also specified in PRD 8.5 (Trigger S
 - [x] `TriggerEngine.evaluate_condition()` static method for one-off manual or test evaluation
 - [x] Returns structured dict with `status`, `records`, `total`, or `error`
 
-## Known Gaps - BDD feature file `backend/tests/bdd/features/pipelines/scheduling.feature` has 5 cron scenarios but zero polling scenarios — no BDD coverage exists for polling trigger behaviour
-- PRD 8.5 designates `polling` as v1 (not alpha); the delivery plan may need to scope this differently
+## Error Handling
+
+- [x] `_log.warning()` logged when connector instance not found (poll_error)
+- [x] `_log.warning()` logged when connector init fails (poll_error)
+- [x] `_log.warning()` logged when poll query execution fails (poll_error)
+- [x] `_log.warning()` logged when JMESPath condition evaluation fails (poll_error)
+- [x] `_log.warning()` logged when `_fetch_due_triggers` finds a trigger with missing `connector_instance_id`
+- [x] `_log.warning()` logged when `snapshot_id` config is missing or invalid (falls back to `uuid.UUID(int=0)`)
+- [x] Error detail strings truncated to 200 characters (prevents internal details leaking)
+- [x] Broad `except Exception` in `_fetch_due_triggers` caught and logged (returns empty list gracefully)
+- [x] TriggerEvent rows written for all outcomes: condition_met, no_match, poll_error, concurrency_limit_reached
+
+## Edge Cases
+
+- [x] Inactive trigger → skipped with `trigger_inactive_or_missing`, no new session
+- [x] `next_fire_at` in future → skipped with `already_fired_this_cycle`
+- [x] Connector instance missing from DB → poll_error logged, error returned
+- [x] Connector credentials fail to decrypt → poll_error logged (broad Exception catch in init block)
+- [x] Connector type unsupported in polling → poll_error logged (ValueError from `_build_polling_connector`)
+- [x] Poll query raises any exception → poll_error logged (broad Exception catch)
+- [x] JMESPath expression invalid → poll_error logged (catch in `evaluate_condition`)
+- [x] `evaluate_condition` returns `None`, `False`, `0`, `[]`, `{}`, `""` → falsy (no match)
+- [x] Concurrency limit reached → no run created, concurrency_limit_reached logged
+- [x] `snapshot_id` missing or invalid → falls back to `uuid.UUID(int=0)` with warning
+- [ ] Redis becomes unreachable mid-session — polling triggers stop firing (no reconnection)
+- [ ] Redis becomes available after starting without it — requires restart
+- [ ] `redis_url` empty-string vs unset edge case
+
+## Resilience & Integration Robustness
+
+- [x] `_fetch_due_triggers` wraps all DB queries in try/except — returns `[]` on failure (degrade)
+- [x] `PollingFireTask` has `autoretry_for=(Exception,)` with 2 retries and 30s delay
+- [x] Each polling trigger fire uses its own DB session — failure isolation
+- [x] FOR UPDATE lock serialises concurrent fire attempts for same trigger
+- [x] Connector errors logged as TriggerEvents — no silent data loss
+- [x] Broad `except Exception` around connector init, query exec, condition eval — isolated per-service failure
+- [ ] `_get_engine()` creates standalone engine outside app lifecycle — connection pool not managed by app
+- [ ] `DatabasePollingScheduler` uses `asyncio.run()` per tick — new event loop every 30s
+
+## Known Gaps
+
+### Resolved in this iteration
+- ~~`snapshot_id` falls back to `uuid.uuid4()` if unset/invalid~~ — RESOLVED: now falls back to `uuid.UUID(int=0)` with `_log.warning()` (2026-07-05)
+- ~~No `_log.warning()` calls on poll_error paths~~ — RESOLVED: added `_log.warning()` to all 4 poll_error paths and config validation path (2026-07-05)
+- ~~`raw_payload_hash` in TriggerEvent was static `sha256(b"polling")`~~ — RESOLVED: now includes `trigger.id` and `result` in hash (2026-07-05)
+- ~~Error strings in poll responses were untruncated~~ — RESOLVED: truncated to 200 characters (2026-07-05)
+
+### Remaining
+- BDD feature file `scheduling.feature` has 5 cron scenarios and 3 polling scenarios (all `@awaiting-implementation`) — step definitions not yet wired
+- PRD 8.5 designates `polling` as v1 (not alpha); delivery plan may need re-scoping
 - `max_concurrent_runs` uses pipeline-level active-run counting; PRD 8.5 suggests trigger-level counting (per-trigger, not per-pipeline)
-- `_build_polling_connector()` is a standalone copy of `connector_hub._build_connector()` -- drifts if connector hub gains new types or tracing wrappers; drift has widened (41+ types registered in hub vs 6 in polling); a drift parity test was added but the missing types are not yet implemented
-- `snapshot_id` falls back to `uuid.uuid4()` if unset or invalid in config -- this will create runs against the latest pipeline snapshot, which may not be intended; should probably block or use a predictable sentinel
-- Polling trigger has no `retain_payload` equivalent (webhook does for replay) -- intentional but undocumented
+- `_build_polling_connector()` is a standalone copy of `connector_hub._build_connector()` — 35+ types excluded; drift parity test exists but doesn't prevent behavioral drift
+- Polling trigger has no `retain_payload` equivalent (webhook does for replay)
+- `_get_engine()` creates standalone engine outside app lifecycle — connection pool not managed by app
+- `DatabasePollingScheduler._sync_with_db()` calls `asyncio.run()` per tick — new event loop every 30s
+- No per-pipeline daily spend limit prevents polling run creation
+- No queue depth / rejection mechanism for polling
+- Redis mid-session failure not handled (triggers stop firing, no reconnection)
+
+## QA History
+
+### 2026-07-05 — Cross-cutting QA (improve-architecture index 156)
+
+**Findings fixed:**
+- MAJOR: Added `_log.warning()` calls to all 4 poll_error paths in `fire_polling_trigger` (connector_not_found, connector_init_failed, query_failed, condition_eval_failed)
+- MAJOR: Changed `snapshot_id` fallback from `uuid.uuid4()` (random UUID) to `uuid.UUID(int=0)` with `_log.warning()` — prevents runs against non-existent snapshots
+- MAJOR: Replaced static `sha256(b"polling")` payload hash with trigger-id + result based hash — `raw_payload_hash` field is now meaningful
+- MINOR: Truncated error detail strings to 200 characters in poll error paths
+- MINOR: Added 3 `@awaiting-implementation` BDD scenarios to `scheduling.feature` for polling trigger happy path, no-match, and error paths
+
+**Test results:** 45/45 polling unit tests pass (42 existing + 3 new logging/hash tests).
+**Status:** partial (10 known gaps remain unchanged — see Known Gaps Remaining).
