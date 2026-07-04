@@ -10,7 +10,7 @@ from typing import Any
 from fastapi import APIRouter, Depends, File, HTTPException, Query, Response, UploadFile, status
 from pydantic import BaseModel, Field, model_validator
 from sqlalchemy import select
-from sqlalchemy.exc import DBAPIError, ProgrammingError
+from sqlalchemy.exc import DBAPIError, ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 _log = logging.getLogger(__name__)
@@ -289,6 +289,7 @@ async def list_library_primitives_endpoint(
                 cursor=cursor,
             )
     except ProgrammingError:
+        _log.warning("list_library_primitives_endpoint: ProgrammingError — missing DB table or migration")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
@@ -494,18 +495,11 @@ async def export_pipeline_endpoint(
             await set_rls_org(session, principal.organisation_id)
             await set_rls_user_context(session, principal.account_id, principal.org_role)
             pipeline = await get_pipeline(session, pipeline_id)
-    except ProgrammingError:
-        raise HTTPException(
-            status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="Feature is not available. Run database migrations to enable it.",
-        ) from None
-    if pipeline is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Pipeline {pipeline_id} not found",
-        )
-    try:
-        async with session.begin():
+            if pipeline is None:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail=f"Pipeline {pipeline_id} not found",
+                )
             bundle_bytes = await export_pipeline_bundle(session, pipeline_id)
     except ProgrammingError:
         raise HTTPException(
@@ -625,9 +619,16 @@ async def _analyse_bundle(
             teams_result = await session.execute(select(Team).where(Team.organisation_id == principal.organisation_id))
             teams = list(teams_result.scalars())
     except ProgrammingError:
+        _log.warning("_analyse_bundle: ProgrammingError — missing DB table or migration")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
+        ) from None
+    except SQLAlchemyError:
+        _log.warning("_analyse_bundle: SQLAlchemyError — database connection failure")
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Database connection failed. Please try again later.",
         ) from None
 
     available_teams = [{"id": str(t.id), "name": t.name} for t in teams]
@@ -728,7 +729,7 @@ async def confirm_import_endpoint(
             result = await materialize_import(
                 session,
                 org_id=principal.organisation_id,
-                account_id=principal.account_id,
+                created_by=principal.account_id,
                 bundle=bundle,
                 owner_team_id=body.owner_team_id,
                 pipeline_name_override=body.pipeline_name_override,
@@ -738,9 +739,16 @@ async def confirm_import_endpoint(
                 connector_instance_overrides=body.connector_overrides,
             )
     except ProgrammingError:
+        _log.warning("confirm_import_endpoint: ProgrammingError — missing DB table or migration")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
+        ) from None
+    except SQLAlchemyError:
+        _log.warning("confirm_import_endpoint: SQLAlchemyError — database connection failure")
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Database connection failed. Please try again later.",
         ) from None
 
     return {
