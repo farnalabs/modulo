@@ -20,7 +20,8 @@ export function registerHandler(
 export function getHandlers(
   resourceType: string,
 ): Set<(event: EventBusEvent) => void> {
-  return registry.get(resourceType) ?? new Set();
+  const handlers = registry.get(resourceType);
+  return new Set(handlers);
 }
 
 export function clearAllRegistrations(): void {
