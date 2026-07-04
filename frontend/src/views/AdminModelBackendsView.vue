@@ -141,14 +141,14 @@
           </form>
         </div>
 
-        <div v-if="backends.length === 0" class="card p-8 text-center">
+        <div v-if="nativeBackends.length === 0" class="card p-8 text-center">
           <p class="text-lg font-medium">{{ $t('views.AdminModelBackendsView.no_model_backends_configured') }}</p>
           <p class="mt-1 text-sm text-muted-foreground">
             Add a model backend to connect to an LLM provider.
           </p>
         </div>
 
-        <div class="overflow-hidden rounded-lg border">
+        <div v-else class="overflow-hidden rounded-lg border">
           <table class="w-full text-left text-sm">
             <thead class="bg-muted/50">
               <tr>
@@ -163,9 +163,10 @@
             </thead>
             <tbody class="divide-y">
               <tr
-                v-for="backend in backends"
+                v-for="backend in nativeBackends"
                 :key="backend.id"
                 class="hover:bg-muted/30 transition-colors"
+                :data-testid="`model-backend-row-${backend.id}`"
               >
                 <td class="px-4 py-3 font-medium">{{ backend.name }}</td>
                 <td class="px-4 py-3">
@@ -220,6 +221,66 @@
             </tbody>
           </table>
         </div>
+
+        <details v-if="previewBackends.length > 0" class="rounded-lg border bg-card" data-testid="model-backends-preview-section">
+          <summary class="cursor-pointer px-4 py-3 text-sm font-medium text-muted-foreground hover:text-foreground">
+            Preview model backends ({{ previewBackends.length }})
+          </summary>
+          <div class="overflow-hidden border-t">
+            <table class="w-full text-left text-sm">
+              <thead class="bg-muted/50">
+                <tr>
+                  <th class="px-4 py-3 font-medium">Name</th>
+                  <th class="px-4 py-3 font-medium">Provider</th>
+                  <th class="px-4 py-3 font-medium">{{ $t('views.AdminModelBackendsView.model_id') }}</th>
+                  <th class="px-4 py-3 font-medium">Tier</th>
+                  <th class="px-4 py-3 font-medium text-right">Actions</th>
+                </tr>
+              </thead>
+              <tbody class="divide-y">
+                <tr
+                  v-for="backend in previewBackends"
+                  :key="backend.id"
+                  class="hover:bg-muted/30 transition-colors"
+                  :data-testid="`model-backend-row-${backend.id}`"
+                >
+                  <td class="px-4 py-3 font-medium">{{ backend.name }}</td>
+                  <td class="px-4 py-3">
+                    <span class="rounded-full bg-primary/10 px-2.5 py-0.5 text-xs font-medium text-primary">
+                      {{ backend.provider }}
+                    </span>
+                  </td>
+                  <td class="px-4 py-3 font-mono text-xs">{{ backend.model_id }}</td>
+                  <td class="px-4 py-3">
+                    <span class="badge badge-context-amber text-xs">Preview</span>
+                  </td>
+                  <td class="px-4 py-3 text-right">
+                    <div class="flex items-center justify-end gap-1">
+                      <button
+                        class="rounded p-1 text-muted-foreground hover:bg-accent"
+                        data-testid="admin-model-backends-edit"
+                        @click="openEditForm(backend)"
+                      >
+                        <svg class="h-4 w-4" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                          <path d="M17 3a2.85 2.85 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z" />
+                        </svg>
+                      </button>
+                      <button
+                        class="rounded p-1 text-destructive hover:bg-destructive/10"
+                        data-testid="admin-model-backends-delete"
+                        @click="confirmDelete(backend)"
+                      >
+                        <svg class="h-4 w-4" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                          <path d="M3 6h18" /><path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6" /><path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2" />
+                        </svg>
+                      </button>
+                    </div>
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </details>
 
         <div v-if="editBackendId" class="card p-6">
           <h2 class="mb-4 text-lg font-semibold">{{ $t('views.AdminModelBackendsView.edit_model_backend') }}</h2>
@@ -372,6 +433,11 @@ function emptyForm(): BackendFormState {
 }
 
 const backends = ref<ModelBackendItem[]>([])
+
+// In-dev backends are hidden entirely; native backends stay in the primary
+// table; preview backends are segregated into a collapsed disclosure section.
+const nativeBackends = computed(() => backends.value.filter(b => (b.tier ?? 'native') !== 'preview' && (b.tier ?? 'native') !== 'in_dev'))
+const previewBackends = computed(() => backends.value.filter(b => b.tier === 'preview'))
 const loading = ref(true)
 const error = ref<string | null>(null)
 

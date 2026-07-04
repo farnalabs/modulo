@@ -3019,7 +3019,7 @@ wheels = [
 
 [[package]]
 name = "modulo"
-version = "0.1.80"
+version = "0.1.104"
 source = { editable = "." }
 dependencies = [
     { name = "aiosqlite" },
@@ -3107,6 +3107,7 @@ redis = [
 dev = [
     { name = "aiodocker" },
     { name = "bandit" },
+    { name = "celery", extra = ["redis"] },
     { name = "factory-boy" },
     { name = "httpx" },
     { name = "hypothesis" },
@@ -3211,6 +3212,7 @@ provides-extras = ["dev", "docker", "redis"]
 dev = [
     { name = "aiodocker", specifier = ">=0.21.0" },
     { name = "bandit", specifier = ">=1.9.4" },
+    { name = "celery", extras = ["redis"], specifier = ">=5.4.0" },
     { name = "factory-boy", specifier = ">=3.3.0" },
     { name = "httpx", specifier = ">=0.28.1" },
     { name = "hypothesis", specifier = ">=6.100.0" },
