@@ -27,7 +27,7 @@ def _mb_kwargs(test_org: uuid.UUID, test_user: uuid.UUID, *, suffix: str = "") -
         "provider": "anthropic",
         "model_id": "stub-model",
         "credentials_ciphertext": b"fake-encrypted-key",
-        "created_by": test_user,
+        "account_id": test_user,
     }
 
 
