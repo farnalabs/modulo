@@ -5,9 +5,7 @@ delivery-tasks: [task-nv1-team-isolation]
 bdd:
   - backend/tests/bdd/features/auth/tenant_isolation.feature
   - backend/tests/bdd/features/security/rls_enforcement.feature
-  - backend/tests/features/organisation/rls_isolation.feature
-  - backend/tests/integration/test_cross_tenant_isolation.py
-  - backend/tests/integration/test_rls_isolation.py
+  - backend/tests/bdd/features/organisation/rls_isolation.feature
 code:
   - backend/src/modulo/db/rls.py
   - backend/src/modulo/db/crud/base.py

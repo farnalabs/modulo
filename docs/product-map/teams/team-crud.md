@@ -3,7 +3,7 @@ id: feat-teams-team-crud
 prd: 9.3
 delivery-tasks: [task-nv1-team-entity]
 bdd:
-  - backend/tests/features/teams/team_crud.feature
+  - backend/tests/bdd/features/teams/team_crud.feature
 code:
   - backend/src/modulo/db/models/team.py
   - backend/src/modulo/db/models/team_membership.py
@@ -17,7 +17,7 @@ unit-tests:
   - backend/tests/unit/db/crud/test_team_membership.py
   - backend/tests/integration/crud/test_team_isolation.py
 depends-on: [feat-teams-org-entity]
-status: covered
+status: partial
 ---
 
 # Team CRUD
@@ -121,7 +121,7 @@ status: covered
 
 ## Known Gaps
 
-- Team deletion checks for pipelines (admin.py:824-832) but does NOT check for stages, connectors, model backends, or library primitives — partial implementation of PRD 9.3 deletion policy
+- Team deletion checks for pipelines, stages, connectors, and model backends (admin.py:1070-1082) but does NOT check for library primitives — partial implementation of PRD 9.3 deletion policy
 - Membership add does not enforce privilege cap for non-admin grantors (PRD 9.3: a team operator can only grant roles up to their own team role — currently requires org admin)
 - Notification endpoints not exposed through REST API (field exists in model, no route)
 - Daily spend limit not exposed through REST API

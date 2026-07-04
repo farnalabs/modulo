@@ -11,7 +11,6 @@ code:
   - frontend/src/router/index.ts
   - backend/tests/unit/api/test_dashboard.py
   - frontend/src/__tests__/DashboardView.spec.ts
-  - backend/tests/bdd/features/ui/eval_dashboard.feature
 unit-tests:
   - backend/tests/unit/api/test_dashboard.py
   - frontend/src/__tests__/DashboardView.spec.ts
