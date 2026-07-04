@@ -1,5 +1,5 @@
 <template>
-  <div data-testid="dashboard-stats-card" class="card card-hover p-4">
+  <component :is="to ? 'router-link' : 'div'" :to="to" data-testid="dashboard-stats-card" class="card card-hover p-4">
     <div class="flex items-center gap-3">
       <div
         class="flex h-9 w-9 items-center justify-center rounded-lg"
@@ -22,7 +22,7 @@
         <p class="text-2xl font-bold" :class="valueClass">{{ value }}</p>
       </div>
     </div>
-  </div>
+  </component>
 </template>
 
 <script setup lang="ts">
@@ -32,6 +32,7 @@ const props = defineProps<{
   label: string;
   value: number | string;
   color?: "primary" | "success" | "warning" | "destructive" | "muted";
+  to?: string;
 }>();
 
 const iconBgClass = computed(() => {
