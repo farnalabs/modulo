@@ -128,12 +128,11 @@ with enforcement via DB constraints, RLS policies, and ViewModel validation.
 
 ## Known Gaps
 
-- No dedicated BDD feature file for team ownership exists — only import/export/copy-to-adapt BDD features cover ownership propagation
+- No dedicated BDD feature file for team ownership exists — only import/export/copy-to-adapt BDD features (`ownership_picker.feature`, `import.feature`, `export.feature`, `copy_to_adapt.feature`) cover ownership propagation
 - No BDD scenarios for `stage_team_mismatch` error path
 - No BDD scenarios for `connector_team_mismatch` error path
 - No BDD scenarios for pipeline ownership change blocked during active runs
 - No BDD scenarios for `resource_team_ownership_changed` audit event
 - No BDD scenarios for the `visibility=team + owner_team_id=NULL` invalid state DB constraint
 - No BDD scenarios for team deletion blocked by owned resources at the API level
-- No integration tests for ownership change with concurrent active runs
-- No BDD feature file at `backend/tests/bdd/features/teams/` directory — the PRD lists 10 planned team feature files but none exist yet 
+- No integration tests for ownership change with concurrent active runs 
