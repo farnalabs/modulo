@@ -15,6 +15,10 @@ from modulo.connectors.base import (
 )
 
 
+class ConnectorTypeError(TypeError):
+    """Raised when an operation is not supported by the connector type."""
+
+
 class CIRunnerBase(ConnectorBase):
     """Abstract base for CI system connectors (GitHub Actions, GitLab CI, etc.).
 
@@ -54,7 +58,13 @@ class CIRunnerBase(ConnectorBase):
         """List recent CI runs, optionally filtered by pipeline or status."""
 
     async def query(self, q: ConnectorQuery) -> ConnectorResult:
-        raise NotImplementedError("Use CI-specific methods (trigger_run, get_run_status, etc.)")
+        raise ConnectorTypeError(
+            "CI runners do not support query(). Use CI-specific methods "
+            "(trigger_run, get_run_status, get_run_logs, list_runs) instead."
+        )
 
     async def write(self, payload: ConnectorPayload) -> dict[str, Any]:
-        raise NotImplementedError("Use CI-specific methods (trigger_run, get_run_status, etc.)")
+        raise ConnectorTypeError(
+            "CI runners do not support write(). Use CI-specific methods "
+            "(trigger_run, get_run_status, get_run_logs, list_runs) instead."
+        )

@@ -71,8 +71,10 @@ class GitHubConnector(ConnectorBase):
         try:
             async with self._client() as client:
                 r = await client.request(method, path, **kwargs)
-            r.raise_for_status()
-            return r
+                if r.status_code == 304:
+                    raise ValueError("GitHub API returned 304 Not Modified — resource unchanged")
+                r.raise_for_status()
+                return r
         except httpx.HTTPStatusError as exc:
             raise ValueError(f"GitHub API HTTP {exc.response.status_code}: {exc.response.text[:200]}") from exc
         except httpx.TimeoutException:
@@ -134,6 +136,13 @@ class GitHubConnector(ConnectorBase):
 
         return HealthResult(ok=True, detail=user_login)
 
+    def _require_filter(self, filters: dict[str, Any], key: str, resource: str) -> str:
+        """Get a required filter or raise a descriptive ValueError."""
+        value = filters.get(key)
+        if not value:
+            raise ValueError(f"GitHub {resource} query requires '{key}' filter")
+        return value
+
     async def query(self, q: ConnectorQuery) -> ConnectorResult:
         match q.resource:
             case "repos":
@@ -141,13 +150,13 @@ class GitHubConnector(ConnectorBase):
                 data: list[dict[str, Any]] = await self._parse_json(r)
                 return ConnectorResult(records=data, total=len(data))
             case "file":
-                owner_repo = q.filters["repo"]
-                path = q.filters["path"]
+                owner_repo = self._require_filter(q.filters, "repo", "file")
+                path = self._require_filter(q.filters, "path", "file")
                 ref = q.filters.get("ref", "main")
                 r = await self._call_api("GET", f"/repos/{owner_repo}/contents/{path}", params={"ref": ref})
                 return ConnectorResult(records=[await self._parse_json(r)])
             case "pulls":
-                owner_repo = q.filters["repo"]
+                owner_repo = self._require_filter(q.filters, "repo", "pulls")
                 state = q.filters.get("state", "open")
                 r = await self._call_api(
                     "GET", f"/repos/{owner_repo}/pulls",
@@ -156,7 +165,7 @@ class GitHubConnector(ConnectorBase):
                 prs: list[dict[str, Any]] = await self._parse_json(r)
                 return ConnectorResult(records=prs, total=len(prs))
             case "issues":
-                owner_repo = q.filters["repo"]
+                owner_repo = self._require_filter(q.filters, "repo", "issues")
                 params: dict[str, Any] = {"per_page": q.limit}
                 for key in ("state", "labels", "sort", "direction", "milestone", "assignee", "since"):
                     if key in q.filters:
@@ -165,17 +174,17 @@ class GitHubConnector(ConnectorBase):
                 issues: list[dict[str, Any]] = await self._parse_json(r)
                 return ConnectorResult(records=issues, total=len(issues))
             case "issue":
-                owner_repo = q.filters["repo"]
-                issue_number = q.filters["issue_number"]
+                owner_repo = self._require_filter(q.filters, "repo", "issue")
+                issue_number = self._require_filter(q.filters, "issue_number", "issue")
                 r = await self._call_api("GET", f"/repos/{owner_repo}/issues/{issue_number}")
                 return ConnectorResult(records=[await self._parse_json(r)])
             case "labels":
-                owner_repo = q.filters["repo"]
+                owner_repo = self._require_filter(q.filters, "repo", "labels")
                 r = await self._call_api("GET", f"/repos/{owner_repo}/labels", params={"per_page": q.limit})
                 labels: list[dict[str, Any]] = await self._parse_json(r)
                 return ConnectorResult(records=labels, total=len(labels))
             case "milestones":
-                owner_repo = q.filters["repo"]
+                owner_repo = self._require_filter(q.filters, "repo", "milestones")
                 params = {"per_page": q.limit}
                 if "state" in q.filters:
                     params["state"] = q.filters["state"]
@@ -187,8 +196,8 @@ class GitHubConnector(ConnectorBase):
                 milestones: list[dict[str, Any]] = await self._parse_json(r)
                 return ConnectorResult(records=milestones, total=len(milestones))
             case "issue_comments":
-                owner_repo = q.filters["repo"]
-                issue_number = q.filters["issue_number"]
+                owner_repo = self._require_filter(q.filters, "repo", "issue_comments")
+                issue_number = self._require_filter(q.filters, "issue_number", "issue_comments")
                 r = await self._call_api(
                     "GET", f"/repos/{owner_repo}/issues/{issue_number}/comments",
                     params={"per_page": q.limit},
@@ -196,8 +205,8 @@ class GitHubConnector(ConnectorBase):
                 comments: list[dict[str, Any]] = await self._parse_json(r)
                 return ConnectorResult(records=comments, total=len(comments))
             case "issue_events":
-                owner_repo = q.filters["repo"]
-                issue_number = q.filters["issue_number"]
+                owner_repo = self._require_filter(q.filters, "repo", "issue_events")
+                issue_number = self._require_filter(q.filters, "issue_number", "issue_events")
                 r = await self._call_api(
                     "GET", f"/repos/{owner_repo}/issues/{issue_number}/events",
                     params={"per_page": q.limit},
@@ -205,13 +214,13 @@ class GitHubConnector(ConnectorBase):
                 events: list[dict[str, Any]] = await self._parse_json(r)
                 return ConnectorResult(records=events, total=len(events))
             case "assignees":
-                owner_repo = q.filters["repo"]
+                owner_repo = self._require_filter(q.filters, "repo", "assignees")
                 r = await self._call_api("GET", f"/repos/{owner_repo}/assignees", params={"per_page": q.limit})
                 assignees: list[dict[str, Any]] = await self._parse_json(r)
                 return ConnectorResult(records=assignees, total=len(assignees))
             case "timeline":
-                owner_repo = q.filters["repo"]
-                issue_number = q.filters["issue_number"]
+                owner_repo = self._require_filter(q.filters, "repo", "timeline")
+                issue_number = self._require_filter(q.filters, "issue_number", "timeline")
                 r = await self._call_api(
                     "GET", f"/repos/{owner_repo}/issues/{issue_number}/timeline",
                     params={"per_page": q.limit},
@@ -221,14 +230,21 @@ class GitHubConnector(ConnectorBase):
             case _:
                 raise ValueError(f"Unsupported GitHub resource: {q.resource!r}")
 
+    def _require_write_filter(self, data: dict[str, Any], key: str, resource: str) -> str:
+        """Get a required write field or raise a descriptive ValueError."""
+        value = data.get(key)
+        if not value:
+            raise ValueError(f"GitHub {resource} write requires '{key}' in data")
+        return value
+
     async def write(self, payload: ConnectorPayload) -> dict[str, Any]:
         match payload.resource:
             case "file":
-                owner_repo = payload.data["repo"]
-                path = payload.data["path"]
+                owner_repo = self._require_write_filter(payload.data, "repo", "file")
+                path = self._require_write_filter(payload.data, "path", "file")
                 body: dict[str, Any] = {
                     "message": payload.data.get("message", "Update via Modulo"),
-                    "content": payload.data["content"],
+                    "content": self._require_write_filter(payload.data, "content", "file"),
                 }
                 if "sha" in payload.data:
                     body["sha"] = payload.data["sha"]
@@ -236,9 +252,9 @@ class GitHubConnector(ConnectorBase):
                 result: dict[str, Any] = await self._parse_json(r)
                 return result
             case "issue":
-                owner_repo = payload.data["repo"]
+                owner_repo = self._require_write_filter(payload.data, "repo", "issue")
                 issue_body: dict[str, Any] = {
-                    "title": payload.data["title"],
+                    "title": self._require_write_filter(payload.data, "title", "issue"),
                 }
                 if "body" in payload.data:
                     issue_body["body"] = payload.data["body"]
@@ -252,8 +268,8 @@ class GitHubConnector(ConnectorBase):
                 result = await self._parse_json(r)
                 return result
             case "issue_update":
-                owner_repo = payload.data["repo"]
-                issue_number = payload.data["issue_number"]
+                owner_repo = self._require_write_filter(payload.data, "repo", "issue_update")
+                issue_number = self._require_write_filter(payload.data, "issue_number", "issue_update")
                 update_body: dict[str, Any] = {}
                 for key in ("state", "title", "body", "labels", "milestone"):
                     if key in payload.data:
@@ -262,38 +278,38 @@ class GitHubConnector(ConnectorBase):
                 result = await self._parse_json(r)
                 return result
             case "issue_comment":
-                owner_repo = payload.data["repo"]
-                issue_number = payload.data["issue_number"]
+                owner_repo = self._require_write_filter(payload.data, "repo", "issue_comment")
+                issue_number = self._require_write_filter(payload.data, "issue_number", "issue_comment")
                 r = await self._call_api(
                     "POST", f"/repos/{owner_repo}/issues/{issue_number}/comments",
-                    json={"body": payload.data["body"]},
+                    json={"body": self._require_write_filter(payload.data, "body", "issue_comment")},
                 )
                 result = await self._parse_json(r)
                 return result
             case "issue_label":
-                owner_repo = payload.data["repo"]
-                issue_number = payload.data["issue_number"]
+                owner_repo = self._require_write_filter(payload.data, "repo", "issue_label")
+                issue_number = self._require_write_filter(payload.data, "issue_number", "issue_label")
                 r = await self._call_api(
                     "POST", f"/repos/{owner_repo}/issues/{issue_number}/labels",
-                    json={"labels": payload.data["labels"]},
+                    json={"labels": self._require_write_filter(payload.data, "labels", "issue_label")},
                 )
                 result = await self._parse_json(r)
                 return result
             case "issue_reaction":
-                owner_repo = payload.data["repo"]
-                issue_number = payload.data["issue_number"]
+                owner_repo = self._require_write_filter(payload.data, "repo", "issue_reaction")
+                issue_number = self._require_write_filter(payload.data, "issue_number", "issue_reaction")
                 r = await self._call_api(
                     "POST", f"/repos/{owner_repo}/issues/{issue_number}/reactions",
-                    json={"content": payload.data["content"]},
+                    json={"content": self._require_write_filter(payload.data, "content", "issue_reaction")},
                     headers={"Accept": "application/vnd.github.squirrel-girl-preview+json"},
                 )
                 result = await self._parse_json(r)
                 return result
             case "label":
-                owner_repo = payload.data["repo"]
+                owner_repo = self._require_write_filter(payload.data, "repo", "label")
                 label_body: dict[str, Any] = {
-                    "name": payload.data["name"],
-                    "color": payload.data["color"],
+                    "name": self._require_write_filter(payload.data, "name", "label"),
+                    "color": self._require_write_filter(payload.data, "color", "label"),
                 }
                 if "description" in payload.data:
                     label_body["description"] = payload.data["description"]
@@ -301,9 +317,9 @@ class GitHubConnector(ConnectorBase):
                 result = await self._parse_json(r)
                 return result
             case "milestone":
-                owner_repo = payload.data["repo"]
+                owner_repo = self._require_write_filter(payload.data, "repo", "milestone")
                 milestone_body: dict[str, Any] = {
-                    "title": payload.data["title"],
+                    "title": self._require_write_filter(payload.data, "title", "milestone"),
                 }
                 if "description" in payload.data:
                     milestone_body["description"] = payload.data["description"]

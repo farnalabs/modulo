@@ -78,16 +78,25 @@ class ConfluenceConnector(ConnectorBase):
 
     async def health_check(self) -> HealthResult:
         """Verify connectivity by fetching the current user via /wiki/rest/api/user/current."""
-        async with self._client() as client:
-            r = await client.get("/wiki/rest/api/user/current")
+        try:
+            async with self._client() as client:
+                r = await client.get("/wiki/rest/api/user/current")
 
-        if r.status_code != 200:
-            return HealthResult(ok=False, detail=f"HTTP {r.status_code}: {r.text[:200]}")
+            if r.status_code != 200:
+                return HealthResult(ok=False, detail=f"HTTP {r.status_code}: {r.text[:200]}")
 
-        user_info = r.json()
-        display_name = user_info.get("displayName", "")
+            user_info = r.json()
+            display_name = user_info.get("displayName", "")
 
-        return HealthResult(ok=True, detail=display_name)
+            return HealthResult(ok=True, detail=display_name)
+        except httpx.HTTPStatusError as exc:
+            return HealthResult(ok=False, detail=f"Confluence API HTTP {exc.response.status_code}: {exc.response.text[:200]}")
+        except httpx.TimeoutException:
+            return HealthResult(ok=False, detail="Confluence API timeout")
+        except httpx.ConnectError:
+            return HealthResult(ok=False, detail="Confluence API connection error")
+        except ValueError as exc:
+            return HealthResult(ok=False, detail=str(exc)[:200])
 
     async def query(self, q: ConnectorQuery) -> ConnectorResult:
         async with self._client() as client:

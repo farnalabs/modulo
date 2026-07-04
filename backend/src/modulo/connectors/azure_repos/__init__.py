@@ -67,18 +67,27 @@ class AzureReposConnector(ConnectorBase):
 
     async def health_check(self) -> HealthResult:
         """Verify API access by fetching the authenticated user's profile."""
-        async with httpx.AsyncClient(headers=self._headers(), timeout=30) as client:
-            r = await client.get(
-                "https://app.vssps.visualstudio.com/_apis/profile/profiles/me",
-                params={"api-version": "7.0"},
-            )
+        try:
+            async with httpx.AsyncClient(headers=self._headers(), timeout=30) as client:
+                r = await client.get(
+                    "https://app.vssps.visualstudio.com/_apis/profile/profiles/me",
+                    params={"api-version": "7.0"},
+                )
 
-        if r.status_code != 200:
-            return HealthResult(ok=False, detail=f"HTTP {r.status_code}: {r.text[:200]}")
+            if r.status_code != 200:
+                return HealthResult(ok=False, detail=f"HTTP {r.status_code}: {r.text[:200]}")
 
-        profile = r.json()
-        display_name = profile.get("displayName", "")
-        return HealthResult(ok=True, detail=display_name)
+            profile = r.json()
+            display_name = profile.get("displayName", "")
+            return HealthResult(ok=True, detail=display_name)
+        except httpx.HTTPStatusError as exc:
+            return HealthResult(ok=False, detail=f"Azure Repos API HTTP {exc.response.status_code}: {exc.response.text[:200]}")
+        except httpx.TimeoutException:
+            return HealthResult(ok=False, detail="Azure Repos API timeout")
+        except httpx.ConnectError:
+            return HealthResult(ok=False, detail="Azure Repos API connection error")
+        except ValueError as exc:
+            return HealthResult(ok=False, detail=str(exc)[:200])
 
     async def query(self, q: ConnectorQuery) -> ConnectorResult:
         async with self._client() as client:

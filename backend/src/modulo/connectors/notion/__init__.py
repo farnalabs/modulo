@@ -60,15 +60,24 @@ class NotionConnector(ConnectorBase):
 
     async def health_check(self) -> HealthResult:
         """Verify connectivity by listing users."""
-        async with self._client() as client:
-            r = await client.get("/users")
+        try:
+            async with self._client() as client:
+                r = await client.get("/users")
 
-        if r.status_code != 200:
-            return HealthResult(ok=False, detail=f"HTTP {r.status_code}: {r.text[:200]}")
+            if r.status_code != 200:
+                return HealthResult(ok=False, detail=f"HTTP {r.status_code}: {r.text[:200]}")
 
-        body: dict[str, Any] = r.json()
-        results = body.get("results", [])
-        return HealthResult(ok=True, detail=f"{len(results)} users accessible")
+            body: dict[str, Any] = r.json()
+            results = body.get("results", [])
+            return HealthResult(ok=True, detail=f"{len(results)} users accessible")
+        except httpx.HTTPStatusError as exc:
+            return HealthResult(ok=False, detail=f"Notion API HTTP {exc.response.status_code}: {exc.response.text[:200]}")
+        except httpx.TimeoutException:
+            return HealthResult(ok=False, detail="Notion API timeout")
+        except httpx.ConnectError:
+            return HealthResult(ok=False, detail="Notion API connection error")
+        except ValueError as exc:
+            return HealthResult(ok=False, detail=str(exc)[:200])
 
     async def query(self, q: ConnectorQuery) -> ConnectorResult:
         async with self._client() as client:

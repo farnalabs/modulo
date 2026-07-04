@@ -96,16 +96,23 @@ class AzurePipelinesConnector(ConnectorBase):
         )
 
     async def health_check(self) -> HealthResult:
-        async with self._client() as client:
-            r = await client.get(
-                f"/{self._organization}/_apis/projects",
-                params={"api-version": "7.0"},
-            )
-        if r.status_code == 200:
-            return HealthResult(ok=True)
-        if r.status_code in (401, 403):
-            return HealthResult(ok=False, detail="Authentication failed: invalid or expired PAT token")
-        return HealthResult(ok=False, detail=f"HTTP {r.status_code}: {r.text[:200]}")
+        try:
+            async with self._client() as client:
+                r = await client.get(
+                    f"/{self._organization}/_apis/projects",
+                    params={"api-version": "7.0"},
+                )
+            if r.status_code == 200:
+                return HealthResult(ok=True)
+            if r.status_code in (401, 403):
+                return HealthResult(ok=False, detail="Authentication failed: invalid or expired PAT token")
+            return HealthResult(ok=False, detail=f"HTTP {r.status_code}: {r.text[:200]}")
+        except httpx.HTTPStatusError as exc:
+            return HealthResult(ok=False, detail=f"Azure Pipelines API HTTP {exc.response.status_code}: {exc.response.text[:200]}")
+        except httpx.TimeoutException:
+            return HealthResult(ok=False, detail="Azure Pipelines API timeout")
+        except httpx.ConnectError:
+            return HealthResult(ok=False, detail="Azure Pipelines API connection error")
 
     async def trigger_run(
         self,
