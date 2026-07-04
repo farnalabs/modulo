@@ -21,7 +21,7 @@
           />
           <select
             v-model="typeFilter"
-            class="input-teal px-3 py-1.5 border border-input bg-background rounded-lg text-sm"
+            class="input-teal px-3 py-1.5 pr-8 border border-input bg-background rounded-lg text-sm"
             @change="onFilterChange"
             data-testid="library-type-filter"
           >
