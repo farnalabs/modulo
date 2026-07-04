@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import uuid
 from datetime import UTC, datetime
 from typing import Any
@@ -10,6 +11,8 @@ from sqlalchemy import select
 from sqlalchemy import update as sa_update
 from sqlalchemy.exc import ProgrammingError
 from sqlalchemy.ext.asyncio import AsyncSession
+
+_log = logging.getLogger(__name__)
 
 __all__ = [
     "CONTRIBUTION_DRAFT",
@@ -1816,31 +1819,34 @@ async def notify_importers_of_update(
     in the same version group and sets their ``update_available_version_id``
     to the newly published version.
     """
-    async with session.begin():
-        await set_rls_org(session, org_id)
-        prim = await get_library_primitive(session, primitive_id)
+    try:
+        async with session.begin():
+            await set_rls_org(session, org_id)
+            prim = await get_library_primitive(session, primitive_id)
 
-    if prim is None:
-        return
+        if prim is None:
+            return
 
-    group_id = prim.version_group_id
-    if group_id is None:
-        return
+        group_id = prim.version_group_id
+        if group_id is None:
+            return
 
-    # Find all primitives forked from any version in this group
-    stmt = select(LibraryPrimitive).where(
-        LibraryPrimitive.forked_from.in_(
-            select(LibraryPrimitive.id).where(LibraryPrimitive.version_group_id == group_id)
+        # Find all primitives forked from any version in this group
+        stmt = select(LibraryPrimitive).where(
+            LibraryPrimitive.forked_from.in_(
+                select(LibraryPrimitive.id).where(LibraryPrimitive.version_group_id == group_id)
+            )
         )
-    )
-    result = await session.execute(stmt)
-    fork_copies = list(result.scalars())
+        result = await session.execute(stmt)
+        fork_copies = list(result.scalars())
 
-    for copy in fork_copies:
-        if not copy.auto_update:
-            continue
-        await update_library_primitive(
-            session,
-            copy.id,
-            {"update_available_version_id": prim.id},
-        )
+        for copy in fork_copies:
+            if not copy.auto_update:
+                continue
+            await update_library_primitive(
+                session,
+                copy.id,
+                {"update_available_version_id": prim.id},
+            )
+    except ProgrammingError:
+        _log.warning("notify_importers_of_update failed (DB not migrated): %s", primitive_id)
