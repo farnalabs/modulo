@@ -8,13 +8,14 @@ URLs:
     POST   /api/v1/evals/from-run     â€” create eval definition from run data
 """
 
+import logging
 import uuid
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, Field
 from sqlalchemy import select
-from sqlalchemy.exc import ProgrammingError
+from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.api.dependencies import get_db_session
@@ -25,6 +26,8 @@ from modulo.db.models.eval_result import EvalResult
 from modulo.db.models.pipeline import Pipeline
 from modulo.db.models.run import Run
 from modulo.db.rls import set_rls_org, set_rls_user_context
+
+_log = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/v1", tags=["evals"])
 
@@ -150,6 +153,12 @@ async def create_eval_definition(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
         )
+    except SQLAlchemyError:
+        _log.warning("evals.create_eval_definition_db_error", extra={"org_id": str(principal.organisation_id)})
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Database operation failed. Please try again later.",
+        )
 
     return _eval_def_to_dict(eval_def)
 
@@ -194,6 +203,12 @@ async def list_eval_definitions(
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
+        )
+    except SQLAlchemyError:
+        _log.warning("evals.list_eval_definitions_db_error", extra={"org_id": str(principal.organisation_id)})
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Database operation failed. Please try again later.",
         )
 
     return EvalDefinitionListResponse(
@@ -251,6 +266,12 @@ async def eval_coverage(
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
+        )
+    except SQLAlchemyError:
+        _log.warning("evals.eval_coverage_db_error", extra={"org_id": str(principal.organisation_id)})
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Database operation failed. Please try again later.",
         )
 
     eval_count_by_node: dict[str, int] = {}
@@ -313,6 +334,12 @@ async def get_eval_definition(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
         )
+    except SQLAlchemyError:
+        _log.warning("evals.get_eval_definition_db_error", extra={"org_id": str(principal.organisation_id)})
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Database operation failed. Please try again later.",
+        )
     if eval_def is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Eval definition not found")
     return _eval_def_to_dict(eval_def)
@@ -352,6 +379,12 @@ async def update_eval_definition(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
         )
+    except SQLAlchemyError:
+        _log.warning("evals.update_eval_definition_db_error", extra={"org_id": str(principal.organisation_id)})
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Database operation failed. Please try again later.",
+        )
 
     return _eval_def_to_dict(eval_def)
 
@@ -384,6 +417,12 @@ async def delete_eval_definition(
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
+        )
+    except SQLAlchemyError:
+        _log.warning("evals.delete_eval_definition_db_error", extra={"org_id": str(principal.organisation_id)})
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Database operation failed. Please try again later.",
         )
 
 
@@ -440,6 +479,12 @@ async def list_run_evals(
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
+        )
+    except SQLAlchemyError:
+        _log.warning("evals.list_run_evals_db_error", extra={"org_id": str(principal.organisation_id)})
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Database operation failed. Please try again later.",
         )
 
     return {
@@ -534,6 +579,12 @@ async def compare_evals(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
         )
+    except SQLAlchemyError:
+        _log.warning("evals.compare_evals_first_block_db_error", extra={"org_id": str(principal.organisation_id)})
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Database operation failed. Please try again later.",
+        )
 
     eval_ids = {r.eval_id for r in results_a} | {r.eval_id for r in results_b}
     eval_defs = {}
@@ -549,6 +600,12 @@ async def compare_evals(
             raise HTTPException(
                 status_code=status.HTTP_501_NOT_IMPLEMENTED,
                 detail="Feature is not available. Run database migrations to enable it.",
+            )
+        except SQLAlchemyError:
+            _log.warning("evals.compare_evals_second_block_db_error", extra={"org_id": str(principal.organisation_id)})
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="Database operation failed. Please try again later.",
             )
 
     results_by_eval_a: dict[uuid.UUID, Any] = {}
@@ -655,6 +712,12 @@ async def create_eval_from_run(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
         )
+    except SQLAlchemyError:
+        _log.warning("evals.create_eval_from_run_first_block_db_error", extra={"org_id": str(principal.organisation_id)})
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Database operation failed. Please try again later.",
+        )
 
     config_json: dict[str, Any] = {}
     if req.eval_type == "regex":
@@ -696,6 +759,12 @@ async def create_eval_from_run(
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
+        )
+    except SQLAlchemyError:
+        _log.warning("evals.create_eval_from_run_second_block_db_error", extra={"org_id": str(principal.organisation_id)})
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Database operation failed. Please try again later.",
         )
 
     result = _eval_def_to_dict(eval_def)
