@@ -3019,11 +3019,7 @@ wheels = [
 
 [[package]]
 name = "modulo"
-<<<<<<< HEAD
-version = "0.3.24"
-=======
-version = "0.3.18"
->>>>>>> 8b61f165 (fix(bdd): fix 13 pre-existing test_library BDD failures)
+version = "0.3.28"
 source = { editable = "." }
 dependencies = [
     { name = "aiosqlite" },
