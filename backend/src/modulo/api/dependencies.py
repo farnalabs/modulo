@@ -108,17 +108,15 @@ def _get_session_factory(
 async def get_db_session(
     factory: async_sessionmaker[AsyncSession] = Depends(_get_session_factory),
 ) -> AsyncGenerator[AsyncSession, None]:
-    """Yield an AsyncSession inside an open transaction.
+    """Yield an AsyncSession.
 
-    Every route handler automatically gets an active transaction and a
-    centralised ``ProgrammingError`` → 501 conversion for missing DB tables.
-    Handlers that need finer-grained control can call ``session.begin()``
-    explicitly — nested calls create savepoints within the outer transaction.
+    Transaction management is left to the caller.  ``ProgrammingError``
+    (missing DB table) is caught centrally and converted to a 501 so that
+    unhandled migration gaps don't leak raw 500s to the client.
     """
     async with factory() as session:
         try:
-            async with session.begin():
-                yield session
+            yield session
         except ProgrammingError:
             raise HTTPException(
                 status_code=status.HTTP_501_NOT_IMPLEMENTED,
