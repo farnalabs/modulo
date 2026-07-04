@@ -249,17 +249,25 @@ async def batch_delete_langgraph_checkpoints(
     cutoff = datetime.now(UTC) - timedelta(days=RUN_RETENTION_DAYS)
     deleted_total = 0
 
-    for tbl in ("checkpoint_writes", "checkpoints"):
+    _table_sql = {
+        "checkpoint_writes": (
+            "DELETE FROM langgraph.checkpoint_writes "
+            "WHERE ctid IN ("
+            "  SELECT ctid FROM langgraph.checkpoint_writes "
+            "  WHERE created_at < :cutoff LIMIT :limit"
+            ")"
+        ),
+        "checkpoints": (
+            "DELETE FROM langgraph.checkpoints "
+            "WHERE ctid IN ("
+            "  SELECT ctid FROM langgraph.checkpoints "
+            "  WHERE created_at < :cutoff LIMIT :limit"
+            ")"
+        ),
+    }
+    for stmt_text in _table_sql.values():
         while True:
-            _sql = (
-                f"DELETE FROM langgraph.{tbl} "  # noqa: S608  # nosec B608
-                "WHERE ctid IN ("
-                f"  SELECT ctid FROM langgraph.{tbl} "
-                "  WHERE created_at < :cutoff "
-                "  LIMIT :limit"
-                ")"
-            )
-            stmt = text(_sql)
+            stmt = text(stmt_text)
             result = await session.execute(stmt, {"cutoff": cutoff, "limit": batch_size})
             count = result.rowcount if hasattr(result, "rowcount") else 0
             deleted_total += count

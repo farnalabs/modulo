@@ -3,6 +3,7 @@
 All functions require RLS org context to be set by the caller.
 """
 
+import logging
 import uuid
 from datetime import UTC, datetime
 from typing import Any
@@ -15,6 +16,8 @@ from modulo.db.crud.base import PageResult, apply_updates
 from modulo.db.models.agent import Agent
 from modulo.db.models.eval_definition import EvalDefinition
 from modulo.db.models.eval_result import EvalResult
+
+_log = logging.getLogger(__name__)
 
 
 async def create_agent(
@@ -74,7 +77,10 @@ async def list_agents(
     page_size: int = 20,
 ) -> PageResult[Agent]:
     offset = (page - 1) * page_size
-    total = (await session.execute(select(func.count()).select_from(Agent))).scalar_one()
+    try:
+        total = (await session.execute(select(func.count()).select_from(Agent))).scalar_one()
+    except ProgrammingError:
+        return PageResult(items=[], total=0, page=page, page_size=page_size)
     items = list(
         (
             await session.execute(select(Agent).order_by(Agent.created_at.desc()).offset(offset).limit(page_size))
@@ -204,7 +210,11 @@ async def rollback_prompt_version(
     if not target_template:
         return None
 
-    prev_version = agent.prompt_version_history[-1]["version"] if agent.prompt_version_history else "current"
+    prev_version = (
+        agent.prompt_version_history[-1]["version"]
+        if agent.prompt_version_history
+        else "current"
+    )
     notes = f"Rolled back from {prev_version} to {target_version}"
 
     history.append(
@@ -242,6 +252,7 @@ async def get_eval_results_with_defs(
             )
         )
     except ProgrammingError:
+        _log.warning("EvalResult table not found — returning empty results")
         return [], {}
 
     eval_results: list[EvalResult] = list(er_result.scalars().all())
@@ -250,6 +261,7 @@ async def get_eval_results_with_defs(
     try:
         ed_result = await session.execute(select(EvalDefinition).where(EvalDefinition.id.in_(eval_def_ids)))
     except ProgrammingError:
+        _log.warning("EvalDefinition table not found — returning empty definitions")
         return [], {}
     definitions: dict[str, Any] = {}
     for ed in ed_result.scalars().all():

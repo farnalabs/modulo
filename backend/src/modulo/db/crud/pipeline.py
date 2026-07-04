@@ -10,6 +10,7 @@ import uuid
 from typing import Any
 
 from sqlalchemy import delete, func, select
+from sqlalchemy.exc import ProgrammingError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.db.crud.base import PageResult, apply_updates
@@ -65,10 +66,12 @@ async def check_pipeline_name_available(
 ) -> bool:
     """Return True if no pipeline with *name* exists in the given org."""
     result = await session.execute(
-        select(Pipeline).where(
+        select(Pipeline)
+        .where(
             Pipeline.organisation_id == org_id,
             Pipeline.name == name,
         )
+        .with_for_update()
     )
     return result.scalar_one_or_none() is None
 
@@ -100,7 +103,10 @@ async def list_pipelines(
         )
 
     offset = (page - 1) * page_size
-    total = (await session.execute(select(func.count()).select_from(Pipeline))).scalar_one()
+    try:
+        total = (await session.execute(select(func.count()).select_from(Pipeline))).scalar_one()
+    except ProgrammingError:
+        return PageResult(items=[], total=0, page=page, page_size=page_size)
     items = list(
         (
             await session.execute(select(Pipeline).order_by(Pipeline.created_at.desc()).offset(offset).limit(page_size))
@@ -243,7 +249,7 @@ async def replace_pipeline_graph(
             source_node_id=edge["source_node_id"],
             target_node_id=edge["target_node_id"],
             edge_type=edge["edge_type"],
-            hitl_gate_config=edge["hitl_gate_config"],
+            hitl_gate_config=edge.get("hitl_gate_config"),
         )
         for edge in edges
     ]

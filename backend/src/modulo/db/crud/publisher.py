@@ -7,7 +7,7 @@ import uuid
 from datetime import UTC, datetime
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.db.crud.base import PageResult, apply_updates
@@ -60,8 +60,8 @@ async def list_publishers(
         term = f"%{search.strip()}%"
         conditions.append(Publisher.name.ilike(term))
 
-    count_stmt = select(Publisher).where(*conditions)
-    total = len((await session.execute(count_stmt)).scalars().all())
+    count_q = select(func.count()).select_from(Publisher).where(*conditions)
+    total = (await session.execute(count_q)).scalar() or 0
 
     items_stmt = (
         select(Publisher)
