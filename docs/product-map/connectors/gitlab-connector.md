@@ -118,7 +118,5 @@ Async GitLab REST API v4 connector implementing `ConnectorBase`. Provides read/w
 - [ ] **MR operations limited**: only listing and creation work — no comments, merges, approvals, or labels
 - [ ] **Scope verification incomplete**: health check doesn't verify individual scopes
 - [ ] **No pagination**: `query("projects")` and `query("mrs")` don't return `next_cursor`
-- [x] **BDD scenarios**: `gitlab_issues.feature` (25 scenarios) covers GitLab operations + `connector_health.feature` (shared) for health checks
-- [x] **Unit tests**: `test_gitlab.py` and `test_gitlab_issues.py` cover connector behaviour
 - [ ] **No rate-limit handling**: no 429 retry, no GitLab `RateLimit-*` header inspection
 
