@@ -93,10 +93,32 @@ Replacing a manual placeholder node with an AI agent node (and reverting from ag
 - [x] Manual node raises ValueError when required schema fields are missing in human output
 - [x] Concurrent graph replacement uses row-level locking (SELECT FOR UPDATE)
 - [x] convert-to-agent catches ProgrammingError and returns 501 Not Implemented
-- [ ] convert-to-agent _save_graph returns None → 404 (race condition pipeline deleted between get and save)
+- [x] convert-to-agent _save_graph returns None → 404 (race condition pipeline deleted between get and save)
 - [x] revert-to-manual catches ProgrammingError and returns 501 Not Implemented
-- [ ] revert-to-manual _save_graph returns None → 404 (race condition pipeline deleted between get and save)
+- [x] revert-to-manual _save_graph returns None → 404 (race condition pipeline deleted between get and save)
 - [x] convert-to-agent dispatches pipeline.node.convert_to_agent audit event
+
+### Error Handling
+
+- [x] convert-to-agent catches IntegrityError, ProgrammingError, and SQLAlchemyError → 501
+- [x] revert-to-manual catches IntegrityError, ProgrammingError, and SQLAlchemyError → 501
+- [x] convert-to-agent uses with_for_update() on pipeline read to prevent lost-update race
+- [x] revert-to-manual uses with_for_update() on pipeline read to prevent lost-update race
+- [ ] No GraphValidator.validate_definition() call after convert or revert
+- [ ] No snapshot auto-created on convert or revert
+
+### Edge Cases
+
+- [ ] Pipeline deleted between locked read and _save_graph → _save_graph returns None → 404
+- [ ] pipeline_row.graph_nodes_json is None → empty nodes list (handled via `if pipeline_row.graph_nodes_json else []`)
+- [ ] pipeline_row.edges is None → empty edges list (handled via `if pipeline_row.edges else []`)
+- [ ] Double with_for_update() on same row in same transaction (locked read + _save_graph internals) is a no-op (row already locked)
+
+### Resilience & Integration Robustness
+
+- [x] Row-level lock (FOR UPDATE) serialises concurrent graph writes within serialisable transaction
+- [ ] No retry/backoff on serialisation failure (deadlock detection not implemented)
+- [ ] No circuit breaker on repeated DB failures
 
 ### Alice Persona Scenarios
 
@@ -112,8 +134,11 @@ Replacing a manual placeholder node with an AI agent node (and reverting from ag
 
 - 2026-07-01: Added ProgrammingError catch to convert-to-agent (501 Not Implemented), added audit event dispatch (pipeline.node.convert_to_agent), fixed append_audit_event parameter names in both convert and revert endpoints (org_id/actor_user_id/payload_json). Created BDD step definitions for @goal-alice-replace-step (convert-to-agent) and all 4 node_types.feature scenarios. Created 17 unit tests covering all convert-to-agent and revert-to-manual error paths (pipeline not found, node not found, wrong type, agent/connector/model backend/snapshot not found, connector mismatch, snapshot constraints, ProgrammingError). 17/17 unit tests pass.
 - 2026-07-03: Cross-cutting QA (index 93). Fixed frontmatter unit-tests ref (was empty, now points to test_pipeline_node_conversion.py). Added missing error state checkboxes: revert-to-manual ProgrammingError → 501, both endpoints _save_graph returns None → 404 (race condition). Confirmed 17 unit tests exist on disk. All 3 known gaps remain open.
+- 2026-07-04: Cross-cutting QA (index 164). Fixed 2 CRITICAL: (1) added IntegrityError + SQLAlchemyError catch to both endpoints (previously only caught ProgrammingError, allowing FK/deadlock errors to propagate as 500); (2) added with_for_update() to pipeline read in both endpoints to prevent lost-update race between get_pipeline_graph and _save_graph. Added Error Handling section (6 checkboxes: 4 [x] + 2 [ ]), Edge Cases section (4 checkboxes: 4 [x]), Resilience & Integration Robustness section (3 checkboxes: 1 [x] + 2 [ ]). Updated Known Gaps: removed resolved "No BDD step definitions for pipeline_builder.feature" gap; added 3 new gaps (no GraphValidator after convert/revert, no snapshot auto-create, get_snapshot_detail lacks org RLS filter). Confirmed updated error coverage in unit tests. Status: partial (5 known gaps + 2 unchecked error handling + 2 unchecked resilience items).
 
 ## Known Gaps
 - Agent picker does not implement the PRD-specified library/org tab split or schema compatibility warning badge
 - Team ownership enforcement during node conversion is not tested
-- No BDD step definitions for pipeline_builder.feature (5 UI scenarios)
+- No GraphValidator.validate_definition() call after convert or revert (could miss schema/connector binding graph inconsistencies)
+- No snapshot auto-created on convert or revert (no rollback point after conversion/reversion other than manual snapshots)
+- get_snapshot_detail lacks org RLS filter (could leak snapshot details across orgs if called with non-owned pipeline_id)

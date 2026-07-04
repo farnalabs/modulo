@@ -15,7 +15,7 @@ from typing import Any, Literal
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, Field, model_validator
 from sqlalchemy import select
-from sqlalchemy.exc import ProgrammingError
+from sqlalchemy.exc import IntegrityError, ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.api.dependencies import get_db_session
@@ -54,6 +54,7 @@ from modulo.db.models.agent import Agent
 from modulo.db.models.connector_instance import ConnectorInstance
 from modulo.db.models.model_backend import ModelBackend
 from modulo.db.models.notification_endpoint import NotificationEndpoint
+from modulo.db.models.pipeline import Pipeline
 from modulo.db.models.pipeline_edge import PipelineEdge
 from modulo.db.models.schema import Schema
 from modulo.db.rls import set_rls_org, set_rls_user_context
@@ -1141,10 +1142,15 @@ async def convert_node_to_agent_endpoint(
             await set_rls_org(session, principal.organisation_id)
             await set_rls_user_context(session, principal.account_id, principal.org_role)
 
-            graph = await get_pipeline_graph(session, pipeline_id)
-            if graph is None:
+            pipeline_row = (
+                await session.execute(
+                    select(Pipeline).where(Pipeline.id == pipeline_id).with_for_update()
+                )
+            ).scalar_one_or_none()
+            if pipeline_row is None:
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Pipeline not found")
-            nodes, edges = graph
+            nodes = list(pipeline_row.graph_nodes_json) if pipeline_row.graph_nodes_json else []
+            edges = list(pipeline_row.edges) if pipeline_row.edges else []
 
             target = _find_node_in_list(nodes, node_id)
             if target is None:
@@ -1215,7 +1221,7 @@ async def convert_node_to_agent_endpoint(
             )
 
             saved = await _save_graph(session, pipeline_id, principal.organisation_id, nodes, edges)
-    except ProgrammingError:
+    except (IntegrityError, ProgrammingError, SQLAlchemyError):
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
@@ -1243,10 +1249,15 @@ async def revert_node_to_manual_endpoint(
             await set_rls_org(session, principal.organisation_id)
             await set_rls_user_context(session, principal.account_id, principal.org_role)
 
-            graph = await get_pipeline_graph(session, pipeline_id)
-            if graph is None:
+            pipeline_row = (
+                await session.execute(
+                    select(Pipeline).where(Pipeline.id == pipeline_id).with_for_update()
+                )
+            ).scalar_one_or_none()
+            if pipeline_row is None:
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Pipeline not found")
-            nodes, edges = graph
+            nodes = list(pipeline_row.graph_nodes_json) if pipeline_row.graph_nodes_json else []
+            edges = list(pipeline_row.edges) if pipeline_row.edges else []
 
             target = _find_node_in_list(nodes, node_id)
             if target is None:
@@ -1303,7 +1314,7 @@ async def revert_node_to_manual_endpoint(
             )
 
             saved = await _save_graph(session, pipeline_id, principal.organisation_id, nodes, edges)
-    except ProgrammingError:
+    except (IntegrityError, ProgrammingError, SQLAlchemyError):
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
