@@ -15,7 +15,7 @@ code:
 unit-tests:
   - backend/tests/unit/library_service/test_workflow_import_export.py
   - backend/tests/unit/library_service/test_workflow_import_export_resilience.py
-depends-on: []
+depends-on: [feat-pipelines-core, feat-pipelines-library]
 status: partial
 ---
 
@@ -137,7 +137,7 @@ import it into another organisation with schema/connector/model backend binding.
 - [x] export_pipeline uses single transaction for pipeline lookup and bundle building
 - [x] _get_latest_published_version catches SQLAlchemyError and logs warning
 - [x] export_pipeline_bundle catches SQLAlchemyError and logs warning
-- [ ] Non-existent owner_team_id on import: 400 validation error (was `[ ]` in original)
+- [ ] Non-existent owner_team_id on import: 400 validation error
 
 ### Additional Edge Cases (added in cross-cutting QA)
 
@@ -147,6 +147,10 @@ import it into another organisation with schema/connector/model backend binding.
 - [x] Export pipeline race condition fixed (single transaction)
 - [x] Concurrency: non-existent owner_team_id produces validation error, not cryptic FK violation
 - [ ] Import with already-deleted team produces clear validation error
+
+## QA History
+
+- 2026-07-05: Prodmap pipelines QA: Added depends-on (feat-pipelines-core, feat-pipelines-library). Added QA History section. Moved `confirm_import` account_id bug fix description from Known Gaps to QA History.
 
 ## Known Gaps
 
@@ -166,5 +170,4 @@ import it into another organisation with schema/connector/model backend binding.
 - No BDD scenarios for the ownership picker UI presentation before confirm
 - No BDD scenarios for workflow update / re-import flow
 - `visibility` defaults to `org` on import regardless of source value not verified in code
-- confirm_import endpoint had `account_id` parameter name bug (fatal TypeError on every call — fixed in this iteration)
 - No BDD scenarios for the import confirm endpoint covering error paths

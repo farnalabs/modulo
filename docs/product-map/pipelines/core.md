@@ -1,7 +1,7 @@
 ---
 id: feat-pipelines-core
 prd: 8.4
-delivery-tasks: []
+delivery-tasks: []  # not yet linked — ~180 behaviours across 11 sub-features
 bdd:
   - backend/tests/bdd/features/pipelines/pipeline_config_validation.feature
   - backend/tests/bdd/features/ui/pipeline_builder.feature
@@ -31,7 +31,7 @@ unit-tests:
   - backend/tests/unit/api/test_stages.py
   - backend/tests/unit/api/test_pipelines_endpoint.py
   - backend/tests/unit/test_pipeline_node_conversion.py
-depends-on: [feat-pipelines-cicd-pipeline]
+depends-on: []
 status: partial
 ---
 
@@ -242,8 +242,8 @@ frontend-side integration:
 
 ## Known Gaps
 
-### No GraphValidator unit tests
-No `test_graph_validator.py` file exists. The GraphValidator (~876 lines of complex topology, schema, connector, and composite validation logic) has zero unit test coverage. All validation is tested only through the BDD `pipeline_config_validation.feature` (4 simple scenarios) and the endpoint-level pipeline graph tests.
+### GraphValidator unit tests exist but are thin
+`backend/tests/unit/graph_validator/test_graph_validator.py` exists with coverage for HITL gate config validation but no unit tests for topology, connector, model backend, or composite validation logic. The GraphValidator (~876 lines) relies on BDD `pipeline_config_validation.feature` (4 scenarios) and endpoint-level tests.
 
 ### Canvas features missing
 - Undo/redo support for node/edge operations
@@ -261,7 +261,7 @@ No `test_graph_validator.py` file exists. The GraphValidator (~876 lines of comp
 - Copying community pipeline templates from the Library is handled by feat-pipelines-library
 
 ### Missing website docs
-- No pipeline-builder page at `Development/Website/modulo-website/src/docs/` — needs separate website worktree
+- No pipeline-builder page at `Website/modulo-website/src/docs/` — needs separate website worktree
 - No docs stubs for Pipeline Builder, Stage Board, or Graph Validation features
 
 ### Stage Board limitations
@@ -278,4 +278,8 @@ No `test_graph_validator.py` file exists. The GraphValidator (~876 lines of comp
 ### Ownership picker incomplete
 - Pipeline model lacks owner_team_id — only Stage has it
 - No dedicated ownership picker component in UI — only a visibility selector on stage creation dialog
+
+## QA History
+
+- 2026-07-05: Prodmap pipelines QA: Fixed depends-on direction (core → cicd was inverted). Fixed false Known Gap about missing `test_graph_validator.py`. Fixed website docs path prefix. Updated delivery-tasks note.
 
