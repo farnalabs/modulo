@@ -18,6 +18,7 @@ from typing import Any, Literal
 
 import click
 from sqlalchemy import select
+from sqlalchemy.exc import SQLAlchemyError
 from tqdm import tqdm  # type: ignore[import-untyped]
 
 _log = logging.getLogger(__name__)
@@ -199,6 +200,8 @@ def _write_jsonl(bundle: dict[str, Any], path: Path) -> dict[str, str]:
 
 
 async def _read_jsonl(path: Path) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    if not path.exists():
+        raise click.ClickException(f"Input file not found: {path}")
     meta: dict[str, Any] = {}
     records: list[dict[str, Any]] = []
     with path.open("r", encoding="utf-8") as f:
@@ -394,13 +397,16 @@ async def _async_export_org(
     pipelines_only: bool,
     users_only: bool,
 ) -> None:
-    async with AsyncSessionLocal() as session:
-        await _verify_admin_access(session, org_id, ctx.obj["admin_user_id"])
-        bundle = await _collect_org_data(session, org_id, pipelines_only=pipelines_only, users_only=users_only)
-        hashes = _write_jsonl(bundle, output)
-        record_count = sum(len(v) for k, v in bundle.items() if isinstance(v, list))
-        click.echo(f"Exported {record_count} records to {output}")
-        click.echo(f"Export hash: {hashes['__export__']}")
+    try:
+        async with AsyncSessionLocal() as session:
+            await _verify_admin_access(session, org_id, ctx.obj["admin_user_id"])
+            bundle = await _collect_org_data(session, org_id, pipelines_only=pipelines_only, users_only=users_only)
+            hashes = _write_jsonl(bundle, output)
+            record_count = sum(len(v) for k, v in bundle.items() if isinstance(v, list))
+            click.echo(f"Exported {record_count} records to {output}")
+            click.echo(f"Export hash: {hashes['__export__']}")
+    except SQLAlchemyError as exc:
+        raise click.ClickException(f"Database error during export: {exc}") from exc
 
 
 @cli.command()
@@ -445,23 +451,26 @@ async def _async_import_org(
     _meta, records = await _read_jsonl(input_path)
     click.echo(f"Loaded {len(records)} records from {input_path}")
 
-    async with AsyncSessionLocal() as session:
-        await _verify_admin_access(session, org_id, ctx.obj["admin_user_id"])
-        counts = await _import_org_data(
-            session,
-            org_id,
-            records,
-            strategy,
-            pipelines_only=pipelines_only,
-            users_only=users_only,
-        )
-        await session.commit()
-        click.echo(
-            f"Import complete: {counts['created']} created, "
-            f"{counts['overwritten']} overwritten, "
-            f"{counts['skipped']} skipped, "
-            f"{counts['errors']} errors"
-        )
+    try:
+        async with AsyncSessionLocal() as session:
+            await _verify_admin_access(session, org_id, ctx.obj["admin_user_id"])
+            counts = await _import_org_data(
+                session,
+                org_id,
+                records,
+                strategy,
+                pipelines_only=pipelines_only,
+                users_only=users_only,
+            )
+            await session.commit()
+            click.echo(
+                f"Import complete: {counts['created']} created, "
+                f"{counts['overwritten']} overwritten, "
+                f"{counts['skipped']} skipped, "
+                f"{counts['errors']} errors"
+            )
+    except SQLAlchemyError as exc:
+        raise click.ClickException(f"Database error during import: {exc}") from exc
 
 
 @cli.command()
