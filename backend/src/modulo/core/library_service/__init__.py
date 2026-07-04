@@ -56,6 +56,59 @@ class CommunityPrimitiveReadOnlyError(Exception):
     """Raised when a modulo/community primitive is adapted via MCP — browser UI only."""
 
 
+def _make_community_db_item(
+    pid: str,
+    primitive_type: str,
+    name: str,
+    slug: str,
+    description: str,
+    content_json: dict[str, Any],
+    tags: list[str],
+) -> LibraryPrimitive:
+    """Build an in-memory "community database" example pipeline (ADR 010 §2).
+
+    These are opinionated, narrower example pipelines contributed by users,
+    shown to demonstrate what's possible but explicitly NOT held to Native
+    library maintenance standards. They use ``source="community"`` (distinct
+    from ``source="modulo"`` used by the Native library) and are always
+    ``verified=False`` so the UI can render a clear "not verified by Modulo"
+    indicator. Modelled as in-memory built-ins — same mechanism as
+    ``_make_modulo`` — since community-database items must be visible to
+    every organisation, and the org-scoped DB query path filters by the
+    caller's own organisation_id before RLS is consulted.
+    """
+    p = LibraryPrimitive(
+        id=uuid.UUID(pid),
+        organisation_id=MODULO_ORG_ID,
+        source="community",
+        primitive_type=primitive_type,
+        name=name,
+        slug=slug,
+        description=description,
+        author="community",
+        version="1.0",
+        tags=tags,
+        content_json=content_json,
+        source_url=None,
+        forked_from=None,
+        checksum=None,
+        ed25519_signature=None,
+        verified=False,
+        download_count=None,
+        average_rating=None,
+        review_count=None,
+        owner_team_id=None,
+        visibility="community",
+        account_id=None,
+    )
+    # server_default fields are not populated without a DB flush; set them explicitly.
+    p.created_at = _EPOCH
+    p.updated_at = _EPOCH
+    p.auto_update = True
+    p.contribution_status = None
+    return p
+
+
 def _make_modulo(
     pid: str,
     primitive_type: str,
@@ -940,9 +993,18 @@ async def list_primitives(
     page: int = 1,
     page_size: int = 20,
     include_community: bool = True,
+    source: str | None = None,
     cursor: str | None = None,
 ) -> PageResult[LibraryPrimitive]:
-    """Return org-scoped and community primitives merged into a single page."""
+    """Return org-scoped, Native library, and community-database primitives merged into a single page.
+
+    ``source`` (when given) restricts the result to exactly that source
+    value — e.g. ``source="community"`` returns only community-database
+    example pipelines, ``source="modulo"`` returns only Native library
+    built-ins, ``source="local"`` returns only the org's own saved
+    primitives. When omitted, all sources are merged (existing default
+    behaviour, unchanged for backwards compatibility).
+    """
     await set_rls_org(session, org_id)
     org_page = await list_library_primitives(
         session,
@@ -954,14 +1016,24 @@ async def list_primitives(
         cursor=cursor,
     )
 
-    modulo: list[LibraryPrimitive] = (
-        _filter_modulo(primitive_type=primitive_type, search=search) if include_community else []
-    )
+    org_items = list(org_page.items)
+    org_total = org_page.total
+    if source is not None:
+        org_items = [p for p in org_items if p.source == source]
+        org_total = len(org_items)
 
-    all_items: list[LibraryPrimitive] = list(org_page.items) + modulo
+    modulo: list[LibraryPrimitive] = []
+    community: list[LibraryPrimitive] = []
+    if include_community:
+        if source is None or source == "modulo":
+            modulo = _filter_modulo(primitive_type=primitive_type, search=search)
+        if source is None or source == "community":
+            community = _filter_community(primitive_type=primitive_type, search=search)
+
+    all_items: list[LibraryPrimitive] = org_items + modulo + community
     return PageResult(
         items=all_items,
-        total=org_page.total + len(modulo),
+        total=org_total + len(modulo) + len(community),
         page=page,
         page_size=page_size,
         next_cursor=org_page.next_cursor,
@@ -994,7 +1066,7 @@ async def get_primitive(
         return None
     if item is not None:
         return item
-    return _MODULO_BY_ID.get(primitive_id)
+    return _MODULO_BY_ID.get(primitive_id) or _COMMUNITY_BY_ID.get(primitive_id)
 
 
 async def get_primitive_by_slug(
@@ -1030,7 +1102,7 @@ async def get_primitive_by_slug(
         return None
     if item is not None:
         return item
-    return _MODULO_BY_SLUG.get((primitive_type, slug))
+    return _MODULO_BY_SLUG.get((primitive_type, slug)) or _COMMUNITY_BY_SLUG.get((primitive_type, slug))
 
 
 async def copy_to_adapt(
@@ -1505,6 +1577,125 @@ _MODULO_BY_ID: dict[uuid.UUID, LibraryPrimitive] = {p.id: p for p in _MODULO_PRI
 _MODULO_BY_SLUG: dict[tuple[str, str], LibraryPrimitive] = {
     (p.primitive_type, p.slug): p for p in _MODULO_PRIMITIVES
 }
+
+# ---------------------------------------------------------------------------
+# Community database — opinionated, narrower example pipelines contributed
+# by users (ADR 010 §2). Launch-seeded with a small curated starter set;
+# NOT marketed as "community-driven" until real external contributions
+# exist. Never mixed into the Native library — always rendered as a
+# separate, clearly-labelled UI section (source == "community").
+# ---------------------------------------------------------------------------
+
+_COMMUNITY_PRIMITIVES: list[LibraryPrimitive] = [
+    _make_community_db_item(
+        pid="00000000-0000-0000-0000-0000000000c1",
+        primitive_type="workflow",
+        name="Translate to French",
+        slug="translate-to-french",
+        description=(
+            "Translates freeform input text into French. A narrow, "
+            "single-purpose example pipeline — not maintained to Native "
+            "library standards. Use as a starting point and adapt as needed."
+        ),
+        content_json={
+            "nodes": [{"id": "translator", "agent": "french-translator"}],
+            "edges": [],
+            "entry": "translator",
+            "agents": [
+                {
+                    "name": "French Translator",
+                    "description": "Translates the given text into French.",
+                    "prompt_template": (
+                        "Translate the following text into French. Preserve tone and "
+                        "meaning; do not add commentary.\n\nText:\n{{ input }}"
+                    ),
+                    "connector_type_refs": [],
+                    "required_environment_capabilities": [],
+                }
+            ],
+        },
+        tags=["community", "translation", "french", "example"],
+    ),
+    _make_community_db_item(
+        pid="00000000-0000-0000-0000-0000000000c2",
+        primitive_type="workflow",
+        name="QA Reviewer",
+        slug="qa-reviewer",
+        description=(
+            "Reviews a code diff or PR description and flags likely bugs, "
+            "missing tests, and style issues. Opinionated and narrow — "
+            "contributed by users, not verified by Modulo."
+        ),
+        content_json={
+            "nodes": [{"id": "reviewer", "agent": "qa-review-agent"}],
+            "edges": [],
+            "entry": "reviewer",
+            "agents": [
+                {
+                    "name": "QA Review Agent",
+                    "description": "Reviews a code diff for bugs, missing tests, and style issues.",
+                    "prompt_template": (
+                        "You are a QA reviewer. Review the following code diff and list: "
+                        "1) likely bugs, 2) missing test coverage, 3) style issues.\n\n"
+                        "Diff:\n{{ input }}"
+                    ),
+                    "connector_type_refs": [],
+                    "required_environment_capabilities": [],
+                }
+            ],
+        },
+        tags=["community", "qa", "code-review", "example"],
+    ),
+    _make_community_db_item(
+        pid="00000000-0000-0000-0000-0000000000c3",
+        primitive_type="workflow",
+        name="Commit Message Linter",
+        slug="commit-message-linter",
+        description=(
+            "Checks a commit message against Conventional Commits style and "
+            "suggests a corrected version. A small, illustrative example "
+            "pipeline — not held to Native maintenance standards."
+        ),
+        content_json={
+            "nodes": [{"id": "linter", "agent": "commit-lint-agent"}],
+            "edges": [],
+            "entry": "linter",
+            "agents": [
+                {
+                    "name": "Commit Lint Agent",
+                    "description": "Checks a commit message against Conventional Commits style.",
+                    "prompt_template": (
+                        "Check whether the following commit message follows the Conventional "
+                        "Commits style (type(scope): summary). If it does not, suggest a "
+                        "corrected version.\n\nCommit message:\n{{ input }}"
+                    ),
+                    "connector_type_refs": [],
+                    "required_environment_capabilities": [],
+                }
+            ],
+        },
+        tags=["community", "git", "linting", "example"],
+    ),
+]
+
+_COMMUNITY_BY_ID: dict[uuid.UUID, LibraryPrimitive] = {p.id: p for p in _COMMUNITY_PRIMITIVES}
+_COMMUNITY_BY_SLUG: dict[tuple[str, str], LibraryPrimitive] = {
+    (p.primitive_type, p.slug): p for p in _COMMUNITY_PRIMITIVES
+}
+
+
+def _filter_community(
+    *,
+    primitive_type: str | None,
+    search: str | None,
+) -> list[LibraryPrimitive]:
+    results = _COMMUNITY_PRIMITIVES
+    if primitive_type is not None:
+        results = [p for p in results if p.primitive_type == primitive_type]
+    if search:
+        term = search.strip().lower()
+        results = [p for p in results if term in p.name.lower() or term in (p.description or "").lower()]
+    return results
 
 # Fixture contribution flow
 # ---------------------------------------------------------------------------
