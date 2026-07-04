@@ -19,17 +19,13 @@ class SchemaValidationResult:
 
 
 _VALID_ITEM_KEYWORDS = {"oneOf", "anyOf", "allOf", "not", "if", "then", "else"}
-_SIMPLE_TYPES = {"string", "number", "integer", "boolean", "null", "object", "array"}
 
 
 def _normalize_type(raw: Any) -> str | None:
     if isinstance(raw, str):
         return raw
-    if isinstance(raw, list) and len(raw) == 1:
-        val = raw[0]
-        if isinstance(val, str):
-            return val
-        return None
+    if isinstance(raw, list) and len(raw) == 1 and isinstance(raw[0], str):
+        return raw[0]
     return None
 
 
@@ -85,14 +81,6 @@ def validate_union_schema(schema: dict[str, Any], path: str = "#") -> SchemaVali
     return result
 
 
-def _merge_results(results: list[SchemaValidationResult]) -> SchemaValidationResult:
-    combined = SchemaValidationResult()
-    for r in results:
-        combined.errors.extend(r.errors)
-    combined.valid = len(combined.errors) == 0
-    return combined
-
-
 def validate_array_schema(schema: dict[str, Any], path: str = "#") -> SchemaValidationResult:
     result = SchemaValidationResult()
 
@@ -103,8 +91,17 @@ def validate_array_schema(schema: dict[str, Any], path: str = "#") -> SchemaVali
             variants = schema.get(kw)
             if isinstance(variants, list):
                 for i, v in enumerate(variants):
+                    if not isinstance(v, dict):
+                        result.errors.append(
+                            SchemaValidationError(
+                                path=f"{path}/{kw}/{i}",
+                                message=f"Each variant in '{kw}' must be a JSON Schema object, got {type(v).__name__}",
+                            )
+                        )
+                        continue
                     nested = validate_array_schema(v, f"{path}/{kw}/{i}")
                     result.errors.extend(nested.errors)
+        result.valid = len(result.errors) == 0
         return result
 
     if schema_type != "array":
@@ -112,8 +109,10 @@ def validate_array_schema(schema: dict[str, Any], path: str = "#") -> SchemaVali
 
     current = f"{path}/items"
     items = schema.get("items")
+    contains = schema.get("contains")
+    prefix_items = schema.get("prefixItems")
 
-    if items is None and not schema.get("contains") and not schema.get("prefixItems"):
+    if items is None and contains is None and prefix_items is None:
         result.errors.append(
             SchemaValidationError(
                 path=current,
@@ -125,11 +124,11 @@ def validate_array_schema(schema: dict[str, Any], path: str = "#") -> SchemaVali
 
     if isinstance(items, dict):
         t = _normalize_type(items.get("type"))
-        if t is None and not items.get("oneOf") and not items.get("anyOf") and not items.get("$ref"):
+        if t is None and not any(k in items for k in _VALID_ITEM_KEYWORDS) and not items.get("$ref"):
             result.errors.append(
                 SchemaValidationError(
                     path=f"{current}",
-                    message="Array items schema should specify 'type', oneOf/anyOf, or $ref",
+                    message="Array items schema should specify 'type', oneOf/anyOf/allOf, or $ref",
                 )
             )
         nested = validate_union_schema(items, str(current))

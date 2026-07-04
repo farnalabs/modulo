@@ -12,7 +12,7 @@ from modulo.model_backends.base import ModelBackendBase
 
 _log = logging.getLogger(__name__)
 
-_FENCE_RE = re.compile(r"^```(?:\w+)?\s*\n(.*?)\n```", re.DOTALL)
+_FENCE_RE = re.compile(r"```(?:\w+)?\s*\n(.*?)\n```", re.DOTALL)
 
 
 def parse_schema_from_response(response_text: str) -> dict[str, Any]:
@@ -46,10 +46,10 @@ async def invoke_and_parse(
         _log.exception("LLM call failed during schema %s", context)
         raise error_cls("LLM call failed") from exc
 
-    if not hasattr(response, "content"):
+    try:
+        content = response.content
+    except AttributeError:
         raise error_cls("Backend returned unexpected response type")
-
-    content = response.content
     if not isinstance(content, str):
         raise error_cls(f"Expected string response, got {type(content).__name__}")
 
