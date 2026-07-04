@@ -41,8 +41,10 @@ Outbound webhook notifications for pipeline lifecycle events, with HMAC signing,
 - [x] Payload includes `run_id` and `gate_id` for HITL-related events
 - [x] Payload includes `pipeline_name` and `node_name` for gate events
 - [x] Payload includes `error_code` and `error_message` for failure events
-- [ ] `Notifier.dispatch_event` wraps main dispatch body in try/except — unexpected errors in `_get_subscribed_endpoints` or per-endpoint dispatch propagate unhandled
-- [ ] `Notifier._record_delivery` wraps session operations in try/except — DB failure on delivery recording propagates unhandled
+- [x] `Notifier.dispatch_event` wraps main dispatch body in try/except — unexpected errors caught and logged, returns empty list
+- [x] `Notifier._record_delivery` wraps session operations in try/except — DB failure on delivery recording caught and logged
+- [x] `Notifier._increment_dead_letter` wraps session operations in try/except
+- [x] `Notifier._reset_dead_letter` wraps session operations in try/except
 
 ### HMAC signing
 
@@ -90,7 +92,8 @@ Outbound webhook notifications for pipeline lifecycle events, with HMAC signing,
 - [x] Non-admin role gets 403 on all notification endpoints — _require_admin checks principal.org_role
 - [x] RLS enforces org-scoped isolation on all queries — set_rls_org called per-transaction
 - [x] Endpoint not found returns 404 across all operations — org_id cross-check on GET/PUT/DELETE/test/re-enable
-- [ ] All admin notification routes catch `sqlalchemy.exc.ProgrammingError` and return 501 Not Implemented — list_webhooks, create_webhook, get_webhook, update_webhook, delete_webhook, test_webhook, re_enable_webhook, list_deliveries, retry_delivery, retry_all_failed_deliveries, list_available_events lack the catch (only list_all_deliveries has it)
+- [x] All admin notification routes catch `sqlalchemy.exc.ProgrammingError` and return 501 Not Implemented
+- [x] All admin notification routes catch `sqlalchemy.exc.SQLAlchemyError` and return 503 Service Unavailable
 
 ### Team-scoped dispatch
 
@@ -144,11 +147,15 @@ Outbound webhook notifications for pipeline lifecycle events, with HMAC signing,
 - Team notification endpoint configuration (team_id field) not exposed in admin API create/update routes — NotificationEndpoint model has team_id column but API does not surface it
 - `hitl_overdue` event type constant exists in AVAILABLE_EVENTS but no background job dispatches it
 - 429 Retry-After header not honored — all retries use fixed delay schedule
-- `Notifier.dispatch_event` lacks top-level try/except — unexpected errors propagate to caller
+- `Notifier.dispatch_event` lacked top-level try/except — fixed in QA (index 154)
+- `Notifier._record_delivery`, `_increment_dead_letter`, `_reset_dead_letter` lacked try/except — fixed in QA (index 154)
+- Admin notification routes lacked `SQLAlchemyError` catch (503) — added in QA (index 154)
 - `signing.feature` referenced header `X-Modulo-Signature-256` but code emits `X-Modulo-Signature` — fixed in QA (index 69)
 - `signing.feature` described per-org secrets; code uses per-endpoint secrets — fixed in QA (index 69)
 - `failure_webhook.feature` said 5 consecutive failures; code uses MAX_DEAD_LETTERS=10 — fixed in QA (index 69)
-- All 10 admin notification routes and all 5 non-admin notification routes now have `sqlalchemy.exc.ProgrammingError` catch (501 Not Implemented fallback) — added in QA (index 69)
 
 ## QA History (index 69)
 - 2026-07-03: Cross-cutting QA — added ProgrammingError catches (501 Not Implemented) to 10 admin_notifications routes and 5 notifications routes. Fixed 3 BDD feature/code mismatches (header name, auto-disable threshold, per-endpoint vs per-org secrets). Updated Known Gaps with new findings from audit.
+
+## QA History (index 154)
+- 2026-07-04: Cross-cutting QA — added top-level try/except to Notifier.dispatch_event (behaviour #44). Added try/except to _record_delivery, _increment_dead_letter, _reset_dead_letter (behaviour #45). Added `_log.warning()` calls with route context to all ProgrammingError catch blocks in admin_notifications.py. Added SQLAlchemyError→503 Service Unavailable catches to all DB-accessing admin notification routes. Marked stale behaviour checkboxes [ ]→[x]. Created website docs stub for notifications/webhooks. Updated known gaps and QA history.

@@ -11,7 +11,7 @@ from cryptography.fernet import Fernet
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, Field, field_validator
 from sqlalchemy import select
-from sqlalchemy.exc import ProgrammingError
+from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.api.dependencies import get_db_session
@@ -157,10 +157,17 @@ async def list_all_deliveries(
             principal=principal,
         )
     except ProgrammingError:
+        logger.warning("notifications.delivery_table_missing", extra={"route": "list_all_deliveries"})
         logger.exception("notifications.delivery_table_missing")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Notification delivery logging is not available. Run database migrations to enable it.",
+        ) from None
+    except SQLAlchemyError:
+        logger.exception("notifications.db_error", extra={"route": "list_all_deliveries"})
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Database error. Please try again later.",
         ) from None
 
 
@@ -306,10 +313,17 @@ async def retry_all_failed_deliveries(
                 ).all()
             )
     except ProgrammingError:
+        logger.warning("notifications.delivery_table_missing", extra={"route": "retry_all_failed_deliveries"})
         logger.exception("notifications.delivery_table_missing")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Notification delivery logging is not available. Run database migrations to enable it.",
+        ) from None
+    except SQLAlchemyError:
+        logger.exception("notifications.db_error", extra={"route": "retry_all_failed_deliveries"})
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Database error. Please try again later.",
         ) from None
 
     retried = 0
@@ -359,10 +373,17 @@ async def retry_all_failed_deliveries(
                     )
                     session.add(new_log)
             except ProgrammingError:
+                logger.warning("notifications.delivery_table_missing", extra={"route": "retry_all_failed_deliveries.record"})
                 logger.exception("notifications.delivery_table_missing")
                 raise HTTPException(
                     status_code=status.HTTP_501_NOT_IMPLEMENTED,
                     detail="Notification delivery logging is not available. Run database migrations to enable it.",
+                ) from None
+            except SQLAlchemyError:
+                logger.exception("notifications.db_error", extra={"route": "retry_all_failed_deliveries.record"})
+                raise HTTPException(
+                    status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                    detail="Database error. Please try again later.",
                 ) from None
 
             retried += 1
@@ -382,10 +403,17 @@ async def retry_all_failed_deliveries(
                     )
                     session.add(new_log)
             except ProgrammingError:
+                logger.warning("notifications.delivery_table_missing", extra={"route": "retry_all_failed_deliveries.error_record"})
                 logger.exception("notifications.delivery_table_missing")
                 raise HTTPException(
                     status_code=status.HTTP_501_NOT_IMPLEMENTED,
                     detail="Notification delivery logging is not available. Run database migrations to enable it.",
+                ) from None
+            except SQLAlchemyError:
+                logger.exception("notifications.db_error", extra={"route": "retry_all_failed_deliveries.error_record"})
+                raise HTTPException(
+                    status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                    detail="Database error. Please try again later.",
                 ) from None
 
             errors.append(str(exc))
@@ -421,10 +449,17 @@ async def list_webhooks(
             )
             endpoints = list(result.scalars())
     except ProgrammingError:
+        logger.warning("notifications.endpoint_table_missing", extra={"route": "list_webhooks"})
         logger.exception("notifications.endpoint_table_missing")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Notifications are not available. Run database migrations to enable this feature.",
+        ) from None
+    except SQLAlchemyError:
+        logger.exception("notifications.db_error", extra={"route": "list_webhooks"})
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Database error. Please try again later.",
         ) from None
     return [_ep_to_response(ep) for ep in endpoints]
 
@@ -457,10 +492,17 @@ async def create_webhook(
             session.add(ep)
             await session.flush()
     except ProgrammingError:
+        logger.warning("notifications.endpoint_table_missing", extra={"route": "create_webhook"})
         logger.exception("notifications.endpoint_table_missing")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Notifications are not available. Run database migrations to enable this feature.",
+        ) from None
+    except SQLAlchemyError:
+        logger.exception("notifications.db_error", extra={"route": "create_webhook"})
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Database error. Please try again later.",
         ) from None
 
     return _ep_to_response(ep)
@@ -480,10 +522,17 @@ async def get_webhook(
             if ep is None or ep.organisation_id != principal.organisation_id:
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Webhook not found")
     except ProgrammingError:
+        logger.warning("notifications.endpoint_table_missing", extra={"route": "get_webhook", "webhook_id": str(webhook_id)})
         logger.exception("notifications.endpoint_table_missing")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Notifications are not available. Run database migrations to enable this feature.",
+        ) from None
+    except SQLAlchemyError:
+        logger.exception("notifications.db_error", extra={"route": "get_webhook", "webhook_id": str(webhook_id)})
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Database error. Please try again later.",
         ) from None
     return _ep_to_response(ep)
 
@@ -516,10 +565,17 @@ async def update_webhook(
 
             await session.flush()
     except ProgrammingError:
+        logger.warning("notifications.endpoint_table_missing", extra={"route": "update_webhook", "webhook_id": str(webhook_id)})
         logger.exception("notifications.endpoint_table_missing")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Notifications are not available. Run database migrations to enable this feature.",
+        ) from None
+    except SQLAlchemyError:
+        logger.exception("notifications.db_error", extra={"route": "update_webhook", "webhook_id": str(webhook_id)})
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Database error. Please try again later.",
         ) from None
 
     return _ep_to_response(ep)
@@ -540,10 +596,17 @@ async def delete_webhook(
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Webhook not found")
             await session.delete(ep)
     except ProgrammingError:
+        logger.warning("notifications.endpoint_table_missing", extra={"route": "delete_webhook", "webhook_id": str(webhook_id)})
         logger.exception("notifications.endpoint_table_missing")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Notifications are not available. Run database migrations to enable this feature.",
+        ) from None
+    except SQLAlchemyError:
+        logger.exception("notifications.db_error", extra={"route": "delete_webhook", "webhook_id": str(webhook_id)})
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Database error. Please try again later.",
         ) from None
 
 
@@ -565,10 +628,17 @@ async def test_webhook(
             if ep is None or ep.organisation_id != principal.organisation_id:
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Webhook not found")
     except ProgrammingError:
+        logger.warning("notifications.endpoint_table_missing", extra={"route": "test_webhook", "webhook_id": str(webhook_id)})
         logger.exception("notifications.endpoint_table_missing")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Notifications are not available. Run database migrations to enable this feature.",
+        ) from None
+    except SQLAlchemyError:
+        logger.exception("notifications.db_error", extra={"route": "test_webhook", "webhook_id": str(webhook_id)})
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Database error. Please try again later.",
         ) from None
 
     import httpx
@@ -636,10 +706,17 @@ async def re_enable_webhook(
             ep.consecutive_dead_letter_count = 0
             await session.flush()
     except ProgrammingError:
+        logger.warning("notifications.endpoint_table_missing", extra={"route": "re_enable_webhook", "webhook_id": str(webhook_id)})
         logger.exception("notifications.endpoint_table_missing")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Notifications are not available. Run database migrations to enable this feature.",
+        ) from None
+    except SQLAlchemyError:
+        logger.exception("notifications.db_error", extra={"route": "re_enable_webhook", "webhook_id": str(webhook_id)})
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Database error. Please try again later.",
         ) from None
     return _ep_to_response(ep)
 
@@ -688,10 +765,17 @@ async def list_deliveries(
 
             rows = list((await session.execute(query)).scalars())
     except ProgrammingError:
+        logger.warning("notifications.delivery_table_missing", extra={"route": "list_deliveries", "webhook_id": str(webhook_id)})
         logger.exception("notifications.delivery_table_missing")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Notification delivery logging is not available. Run database migrations to enable it.",
+        ) from None
+    except SQLAlchemyError:
+        logger.exception("notifications.db_error", extra={"route": "list_deliveries", "webhook_id": str(webhook_id)})
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Database error. Please try again later.",
         ) from None
 
     has_more = len(rows) > limit
@@ -754,10 +838,17 @@ async def retry_delivery(
 
             delivery = await session.get(NotificationDeliveryLog, delivery_id)
     except ProgrammingError:
+        logger.warning("notifications.delivery_table_missing", extra={"route": "retry_delivery", "webhook_id": str(webhook_id), "delivery_id": str(delivery_id)})
         logger.exception("notifications.delivery_table_missing")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Notifications are not available. Run database migrations to enable this feature.",
+        ) from None
+    except SQLAlchemyError:
+        logger.exception("notifications.db_error", extra={"route": "retry_delivery", "webhook_id": str(webhook_id), "delivery_id": str(delivery_id)})
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Database error. Please try again later.",
         ) from None
 
     if delivery is None or delivery.endpoint_id != webhook_id:
@@ -809,10 +900,17 @@ async def retry_delivery(
                 )
                 session.add(new_log)
         except ProgrammingError:
+            logger.warning("notifications.delivery_table_missing", extra={"route": "retry_delivery.record", "webhook_id": str(webhook_id), "delivery_id": str(delivery_id)})
             logger.exception("notifications.delivery_table_missing")
             raise HTTPException(
                 status_code=status.HTTP_501_NOT_IMPLEMENTED,
                 detail="Notification delivery logging is not available. Run database migrations to enable it.",
+            ) from None
+        except SQLAlchemyError:
+            logger.exception("notifications.db_error", extra={"route": "retry_delivery.record", "webhook_id": str(webhook_id), "delivery_id": str(delivery_id)})
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="Database error. Please try again later.",
             ) from None
 
         return TestResult(
@@ -837,10 +935,17 @@ async def retry_delivery(
                 )
                 session.add(new_log)
         except ProgrammingError:
+            logger.warning("notifications.delivery_table_missing", extra={"route": "retry_delivery.error_record", "webhook_id": str(webhook_id), "delivery_id": str(delivery_id)})
             logger.exception("notifications.delivery_table_missing")
             raise HTTPException(
                 status_code=status.HTTP_501_NOT_IMPLEMENTED,
                 detail="Notification delivery logging is not available. Run database migrations to enable it.",
+            ) from None
+        except SQLAlchemyError:
+            logger.exception("notifications.db_error", extra={"route": "retry_delivery.error_record", "webhook_id": str(webhook_id), "delivery_id": str(delivery_id)})
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="Database error. Please try again later.",
             ) from None
 
         return TestResult(
