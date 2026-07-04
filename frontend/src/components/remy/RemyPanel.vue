@@ -189,6 +189,13 @@
             >
               Sessions
             </button>
+            <button
+              class="remy-tab"
+              :class="{ active: activeTab === 'sources' }"
+              @click="activeTab = 'sources'"
+            >
+              Sources
+            </button>
           </div>
           <RemyChat v-show="activeTab === 'chat'" ref="chatRef" />
           <RemySkillManager v-if="activeTab === 'skills'" />
@@ -198,6 +205,7 @@
           >
             <RemySessionDrawer @select-session="activeTab = 'chat'" />
           </div>
+          <RemyContextSources v-show="activeTab === 'sources'" />
         </template>
       </div>
     </div>
@@ -238,6 +246,7 @@ import Button from "@/components/ui/button/Button.vue";
 import RemyChat from "./RemyChat.vue";
 import RemySessionDrawer from "./RemySessionDrawer.vue";
 import RemySkillManager from "./RemySkillManager.vue";
+import RemyContextSources from "./RemyContextSources.vue";
 
 const store = useRemyStore();
 const { pageContext } = useRemyContext();
@@ -250,7 +259,7 @@ watch(
 );
 const chatRef = ref<InstanceType<typeof RemyChat> | null>(null);
 const showSidebar = ref(false);
-const activeTab = ref<"chat" | "skills" | "sessions">("chat");
+const activeTab = ref<"chat" | "skills" | "sessions" | "sources">("chat");
 
 const panelClasses = computed(() => ({
   "remy-floating": store.panelState === "floating",
