@@ -1,0 +1,31 @@
+rules:
+  - id: missing-session-begin
+    patterns:
+      - pattern-inside: |
+          @$ROUTER.$METHOD(...)
+          async def $HANDLER(...):
+            ...
+      - pattern-either:
+          - patterns:
+              - pattern: await $SESSION.execute(...)
+              - metavariable-regex:
+                  metavariable: $SESSION
+                  regex: ^(session|db_session)$
+          - patterns:
+              - pattern: $SESSION.add(...)
+              - metavariable-regex:
+                  metavariable: $SESSION
+                  regex: ^(session|db_session)$
+          - patterns:
+              - pattern: await $SESSION.flush()
+              - metavariable-regex:
+                  metavariable: $SESSION
+                  regex: ^(session|db_session)$
+      - pattern-not-inside: |
+          async with $SESSION.begin():
+            ...
+    message: "Route handler with get_db_session — get_db_session now auto-begins a transaction; explicit session.begin() here is redundant but harmless"
+    languages: [python]
+    severity: WARNING
+    paths:
+      include: ["**/backend/src/**"]
