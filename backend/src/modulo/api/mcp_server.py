@@ -1538,6 +1538,7 @@ def build_mcp_asgi_app() -> Starlette:
             Middleware(McpAuthMiddleware),
             Middleware(RateLimiterMiddleware),  # type: ignore[arg-type]
         ],
-        lifespan=lambda app: mcp.session_manager.run(),
+        # Note: lifespan is managed by the parent FastAPI app's _lifespan
+        # to ensure it is called — Starlette does not invoke sub-app lifespans.
     )
     return app

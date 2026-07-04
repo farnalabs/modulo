@@ -32,11 +32,11 @@ from modulo.api.middleware.sensitive_mask import router as sensitive_router
 from modulo.api.routes.admin import router as admin_router
 from modulo.api.routes.admin_feature_flags import router as admin_feature_flags_router
 from modulo.api.routes.admin_license import router as admin_license_router
+from modulo.api.routes.admin_monitor_config import router as admin_monitor_config_router
 from modulo.api.routes.admin_notifications import router as admin_notifications_router
 from modulo.api.routes.admin_orgs import router as admin_orgs_router
 from modulo.api.routes.admin_rate_limits import router as admin_rate_limits_router
 from modulo.api.routes.admin_remy import router as admin_remy_router
-from modulo.api.routes.admin_monitor_config import router as admin_monitor_config_router
 from modulo.api.routes.admin_rotation import router as admin_rotation_router
 from modulo.api.routes.admin_runtime_config import router as admin_runtime_config_router
 from modulo.api.routes.admin_sso import router as admin_sso_router
@@ -64,7 +64,9 @@ from modulo.api.routes.events import router as events_router
 from modulo.api.routes.feedback import router as feedback_router
 from modulo.api.routes.health import router as health_router
 from modulo.api.routes.hitl import router as hitl_router
+from modulo.api.routes.in_app_notifications import router as in_app_notifications_router
 from modulo.api.routes.library import router as library_router
+from modulo.api.routes.manifest import router as manifest_router
 from modulo.api.routes.mcp_oauth import router as mcp_oauth_router
 from modulo.api.routes.me import router as me_router
 from modulo.api.routes.model_backends import router as model_backends_router
@@ -89,8 +91,6 @@ from modulo.api.routes.triggers import router as triggers_router
 from modulo.api.routes.variants import router as variants_router
 from modulo.api.routes.viewmodel import router as viewmodel_router
 from modulo.api.routes.views import router as views_router
-from modulo.api.routes.in_app_notifications import router as in_app_notifications_router
-from modulo.api.routes.manifest import router as manifest_router
 from modulo.api.routes.webhooks import router as webhooks_router
 from modulo.core.events.event_bus import configure_event_bus
 from modulo.core.events.listeners import register_listeners
@@ -507,7 +507,14 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
     _claim_expiry_job = ClaimExpiryJob(db_engine)
     await _claim_expiry_job.start()
 
+    # Start the MCP session manager (FastMCP's anyio task group).
+    from modulo.api.mcp_server import mcp
+    _mcp_cm = mcp.session_manager.run()
+    _mcp_exit_stack = await _mcp_cm.__aenter__()
+
     yield
+
+    await _mcp_cm.__aexit__(None, None, None)
     retention_task.cancel()
     await _claim_expiry_job.stop()
     for st in _scheduler_tasks:
