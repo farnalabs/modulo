@@ -34,6 +34,14 @@ for (const [path, entry] of Object.entries(manifestRoutes)) {
   }
 }
 
+function decodeJwtPayload(token: string): Record<string, unknown> | null {
+  try {
+    return JSON.parse(atob(token.split('.')[1].replace(/-/g, '+').replace(/_/g, '/')))
+  } catch {
+    return null
+  }
+}
+
 const DashboardView = () => import('../views/DashboardView.vue')
 const LoginView = () => import('../views/LoginView.vue')
 const LibraryView = () => import('../views/LibraryView.vue')
@@ -403,7 +411,9 @@ const router = createRouter({
 })
 
 router.beforeEach((to) => {
-  const entry = manifestByName.get(to.name as string)
+  const routeName = to.name
+  if (typeof routeName !== 'string') return
+  const entry = manifestByName.get(routeName)
   if (entry) {
     to.meta.breadcrumb = entry.breadcrumb
     to.meta.testid = entry.testid
@@ -412,7 +422,7 @@ router.beforeEach((to) => {
     to.meta.requiredPermissions = entry.required_permissions ?? undefined
     to.meta.featureFlag = entry.feature_flag ?? undefined
     if (entry.parent) {
-      const parentEntry = manifestRoutes[entry.parent]
+      const parentEntry = manifestByName.get(entry.parent)
       to.meta.parent = parentEntry?.name ?? entry.parent
     } else {
       to.meta.parent = undefined
@@ -421,25 +431,23 @@ router.beforeEach((to) => {
 })
 
 router.onError((err) => {
-  console.error('[router] unhandled error:', err)
+  console.error('[router] navigation error:', err)
+  if (err instanceof Error && err.message.includes('Failed to fetch dynamically imported module')) {
+    window.location.reload()
+  }
 })
 
 router.beforeEach((to) => {
-  if (to.name === 'login' && getAccessToken()) {
+  const token = getAccessToken()
+  if (to.name === 'login' && token) {
     return { name: 'dashboard' }
   }
-  if (to.name !== 'login' && !getAccessToken()) {
+  if (to.name !== 'login' && !token) {
     return { name: 'login' }
   }
   if (to.meta?.requiresSystemAdmin) {
-    const token = getAccessToken()
-    if (!token) return { name: 'login' }
-    try {
-      const payload = JSON.parse(atob(token.split('.')[1].replace(/-/g, '+').replace(/_/g, '/')))
-      if (payload.is_system_admin !== true) {
-        return { name: 'dashboard' }
-      }
-    } catch {
+    const payload = decodeJwtPayload(token!)
+    if (!payload || payload.is_system_admin !== true) {
       return { name: 'dashboard' }
     }
   }
