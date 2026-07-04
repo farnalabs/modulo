@@ -27,5 +27,7 @@ class TokenFamily(Base):
     )
     max_sequence: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     is_blacklisted: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.current_timestamp(), nullable=False
+    )
     blacklisted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)

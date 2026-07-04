@@ -25,7 +25,6 @@ class Schema(OrgScoped):
 class SchemaVersion(OrgScoped):
     __tablename__ = "schema_versions"
     __table_args__ = (
-        UniqueConstraint("schema_id", "version", name="uq_schema_versions_schema_version"),
         UniqueConstraint(
             "schema_id",
             "version",
