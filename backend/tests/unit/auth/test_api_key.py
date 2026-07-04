@@ -146,7 +146,7 @@ async def test_create_api_key_accepts_expires_at() -> None:
         org_id=org_id,
         name="Test Key",
         role="runner",
-        created_by=user_id,
+        account_id=user_id,
         expires_at=future,
     )
     assert key is not None
