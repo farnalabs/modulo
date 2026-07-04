@@ -193,12 +193,16 @@ class TestVerifyChain:
             call_count += 1
             r = MagicMock()
             if call_count == 1:
-                # First call: fetch events
+                # First call: count query
+                r.scalar = MagicMock(return_value=2)
+            elif call_count == 2:
+                # Second call: fetch events
                 r.scalars = MagicMock(return_value=[e1, e2])
             else:
-                # Second call: get_chain_head
+                # Third call: get_chain_head
                 head = MagicMock()
                 head.last_event_hash = h2
+                head.event_count = 2
                 r.scalar_one_or_none = MagicMock(return_value=head)
             return r
 
@@ -271,9 +275,18 @@ class TestVerifyChain:
         e2.previous_hash = "bad-hash"
         e2.created_at = created_at2
 
+        call_count = 0
+
         async def _execute(*a, **kw):
+            nonlocal call_count
+            call_count += 1
             r = MagicMock()
-            r.scalars = MagicMock(return_value=[e1, e2])
+            if call_count == 1:
+                # First call: count query
+                r.scalar = MagicMock(return_value=2)
+            else:
+                # Second call: fetch events
+                r.scalars = MagicMock(return_value=[e1, e2])
             return r
 
         session.execute = _execute
