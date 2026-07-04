@@ -66,9 +66,12 @@ export const useRemyStore = defineStore('remy', () => {
   )
 
   const sortedSessions = computed(() =>
-    [...sessions.value].sort(
-      (a, b) => new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime(),
-    ),
+    [...sessions.value].sort((a, b) => {
+      const ta = new Date(a.updated_at).getTime()
+      const tb = new Date(b.updated_at).getTime()
+      if (isNaN(ta) || isNaN(tb)) return 0
+      return tb - ta
+    }),
   )
 
   function persistPosition() {
@@ -117,7 +120,6 @@ export const useRemyStore = defineStore('remy', () => {
   async function loadSession(id: string) {
     loading.value = true
     error.value = null
-    activeSessionId.value = id
     messages.value = []
     try {
       const { data, error: err } = await (api as any).GET('/api/v1/remy/sessions/{id}/messages', {
@@ -127,6 +129,7 @@ export const useRemyStore = defineStore('remy', () => {
         error.value = extractErrorMessage(err)
       } else {
         messages.value = (data as any) ?? []
+        activeSessionId.value = id
       }
     } catch (e: unknown) {
       error.value = e instanceof Error ? e.message : extractErrorMessage(e)
@@ -183,8 +186,8 @@ export const useRemyStore = defineStore('remy', () => {
 
   function updateSize(size: { width: number; height: number }) {
     panelSize.value = {
-      width: Math.min(size.width, window.innerWidth - 16),
-      height: Math.min(size.height, window.innerHeight - 40),
+      width: Math.max(100, Math.min(size.width, window.innerWidth - 16)),
+      height: Math.max(100, Math.min(size.height, window.innerHeight - 40)),
     }
     persistSize()
   }
@@ -215,10 +218,10 @@ export const useRemyStore = defineStore('remy', () => {
         },
         body: JSON.stringify({ request_id: requestId, action }),
       })
+      pendingPermission.value = null
     } catch {
       // Best effort — the stream will surface errors
     }
-    pendingPermission.value = null
   }
 
   async function resetSessionPermissions() {
