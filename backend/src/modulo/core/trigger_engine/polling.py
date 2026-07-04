@@ -13,6 +13,7 @@ import uuid
 from typing import Any
 
 import jmespath
+import jmespath.exceptions
 from sqlalchemy import select, text, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
@@ -40,7 +41,7 @@ _log = logging.getLogger(__name__)
 
 _ACTIVE_STATUSES = ("pending", "running", "awaiting_human", "claimed", "waiting_for_lock")
 
-_engine = None
+_engine: Any = None
 
 
 def _get_engine() -> Any:
@@ -48,6 +49,12 @@ def _get_engine() -> Any:
     if _engine is None:
         _engine = create_async_engine(get_settings().database_url)
     return _engine
+
+
+def _dispose_engine() -> None:
+    global _engine
+    if _engine is not None:
+        _engine = None
 
 
 # ---------------------------------------------------------------------------
@@ -114,7 +121,7 @@ def evaluate_condition(
 
     try:
         compiled = jmespath.compile(condition_expression)
-    except Exception as exc:
+    except jmespath.exceptions.JMESPathError as exc:
         raise ValueError(f"Invalid JMESPath expression: {exc}") from exc
 
     value = compiled.search(result.records)
@@ -134,6 +141,7 @@ def evaluate_condition(
 # ---------------------------------------------------------------------------
 # Celery task — fire one polling trigger
 # ---------------------------------------------------------------------------
+
 
 def get_celery_app() -> Celery:
     from modulo.celery_app import get_celery_app as _get_celery_app
@@ -234,7 +242,9 @@ async def fire_polling_trigger(
             )
             connector_instance = conn_result.scalar_one_or_none()
             if connector_instance is None:
-                _log.warning("Connector instance %s not found for polling trigger %s", connector_instance_id, trigger_id)
+                _log.warning(
+                    "Connector instance %s not found for polling trigger %s", connector_instance_id, trigger_id
+                )
                 await _log_poll_event(
                     session,
                     trigger=trigger,
@@ -511,56 +521,56 @@ class DatabasePollingScheduler(Scheduler):  # type: ignore[misc]
             factory = async_sessionmaker(_get_engine(), expire_on_commit=False)
 
             async with factory() as session:
-                now = datetime.datetime.now(datetime.UTC)
-                result = await session.execute(
-                    select(
-                        Trigger.id,
-                        Trigger.organisation_id,
-                        Trigger.pipeline_id,
-                        Trigger.config_json,
-                        Trigger.next_fire_at,
-                    ).where(
-                        Trigger.trigger_type == "polling",
-                        Trigger.active == True,  # noqa: E712
-                        Trigger.next_fire_at <= now,
-                    )
-                )
-                rows = result.all()
-
-                triggers: list[dict[str, Any]] = []
-                for row in rows:
-                    config = row.config_json or {}
-                    ci_id_str = config.get("connector_instance_id")
-                    try:
-                        connector_instance_id = uuid.UUID(ci_id_str) if ci_id_str else None
-                    except (ValueError, TypeError):
-                        connector_instance_id = None
-                    if connector_instance_id is None:
-                        _log.warning("Polling trigger %s has no connector_instance_id", row.id)
-                        event = TriggerEvent(
-                            organisation_id=row.organisation_id,
-                            trigger_id=row.id,
-                            trigger_type="polling",
-                            raw_payload_hash=hashlib.sha256(b"").hexdigest(),
-                            validation_result="poll_error",
-                            error_detail="Polling trigger missing connector_instance_id in config_json",
+                async with session.begin():
+                    now = datetime.datetime.now(datetime.UTC)
+                    result = await session.execute(
+                        select(
+                            Trigger.id,
+                            Trigger.organisation_id,
+                            Trigger.pipeline_id,
+                            Trigger.config_json,
+                            Trigger.next_fire_at,
+                        ).where(
+                            Trigger.trigger_type == "polling",
+                            Trigger.active == True,  # noqa: E712
+                            Trigger.next_fire_at <= now,
                         )
-                        session.add(event)
-                        await session.flush()
-                        continue
-
-                    triggers.append(
-                        {
-                            "trigger_id": row.id,
-                            "org_id": row.organisation_id,
-                            "pipeline_id": row.pipeline_id,
-                            "connector_instance_id": connector_instance_id,
-                            "poll_query": config.get("poll_query", ""),
-                            "condition_expression": config.get("condition_expression"),
-                            "next_fire_at": row.next_fire_at,
-                        }
                     )
-                return triggers
+                    rows = result.all()
+
+                    triggers: list[dict[str, Any]] = []
+                    for row in rows:
+                        config = row.config_json or {}
+                        ci_id_str = config.get("connector_instance_id")
+                        try:
+                            connector_instance_id = uuid.UUID(ci_id_str) if ci_id_str else None
+                        except (ValueError, TypeError):
+                            connector_instance_id = None
+                        if connector_instance_id is None:
+                            _log.warning("Polling trigger %s has no connector_instance_id", row.id)
+                            event = TriggerEvent(
+                                organisation_id=row.organisation_id,
+                                trigger_id=row.id,
+                                trigger_type="polling",
+                                raw_payload_hash=hashlib.sha256(b"").hexdigest(),
+                                validation_result="poll_error",
+                                error_detail="Polling trigger missing connector_instance_id in config_json",
+                            )
+                            session.add(event)
+                            continue
+
+                        triggers.append(
+                            {
+                                "trigger_id": row.id,
+                                "org_id": row.organisation_id,
+                                "pipeline_id": row.pipeline_id,
+                                "connector_instance_id": connector_instance_id,
+                                "poll_query": config.get("poll_query", ""),
+                                "condition_expression": config.get("condition_expression"),
+                                "next_fire_at": row.next_fire_at,
+                            }
+                        )
+                    return triggers
         except Exception:
             _log.exception("Failed to fetch polling triggers from database")
             return []
@@ -572,10 +582,14 @@ class DatabasePollingScheduler(Scheduler):  # type: ignore[misc]
 
 
 async def _set_rls_org(session: AsyncSession, org_id: uuid.UUID) -> None:
-    await session.execute(
-        text("SELECT set_config('app.organisation_id', :val, true)"),
-        {"val": str(org_id)},
-    )
+    dialect = session.get_bind().dialect.name
+    if dialect == "postgresql":
+        await session.execute(
+            text("SELECT set_config('app.organisation_id', :val, true)"),
+            {"val": str(org_id)},
+        )
+    else:
+        session.info["organisation_id"] = org_id
 
 
 async def _count_active_runs(session: AsyncSession, pipeline_id: uuid.UUID) -> int:
@@ -587,7 +601,7 @@ async def _count_active_runs(session: AsyncSession, pipeline_id: uuid.UUID) -> i
             Run.status.in_(_ACTIVE_STATUSES),
         )
     )
-    return result.scalar_one()
+    return int(result.scalar_one() or 0)
 
 
 async def _log_poll_event(
