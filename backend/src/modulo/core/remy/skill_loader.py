@@ -11,6 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.api.ui_tools import build_tool_definitions_for_text
 from modulo.core.remy.config_service import RemyConfigService
+from modulo.core.remy.context_source_service import RemyContextSourceService
 from modulo.db.models.remy_skill import RemySkill
 
 logger = logging.getLogger(__name__)
@@ -18,8 +19,19 @@ logger = logging.getLogger(__name__)
 _SECTION_ORG_SKILLS = "## Organisation Skills"
 _SECTION_USER_SKILLS = "## User Skills"
 _SECTION_PAGE_CONTEXT = "## Page Context"
+_SECTION_PRODUCT_OVERVIEW = "## Product Overview"
+_SECTION_USER_PROFILE = "## User Profile"
+_SECTION_KNOWLEDGE_TOOLS = "## Available Knowledge Tools"
 _DELIMITER = "---"
 _DELIMITER_LEN = 3
+
+# Tool descriptions for built-in context sources with tool mode
+_TOOL_DESCRIPTIONS: dict[str, str] = {
+    "product_docs": "get_documentation(query, section?) — Search product docs, FAQ, how-to guides",
+    "integration_status": "get_integration_status() — Get connector and model backend health",
+    "org_config": "get_org_config(section?) — Get org settings and feature flags",
+    "feature_overview": "get_available_features() — Get feature availability by plan tier",
+}
 
 
 class SkillEntry(BaseModel):
@@ -29,6 +41,7 @@ class SkillEntry(BaseModel):
     triggers: list[str] | None = None
     body: str
     frontmatter: dict[str, Any] | None = None
+    source_mode: str | None = None
 
 
 class SkillLoader:
@@ -67,6 +80,62 @@ class SkillLoader:
         for skill in skills:
             parts.append(f"### {skill.name}\n\n{skill.body}")
 
+    async def _build_user_profile(self, org_id: uuid.UUID, user_id: uuid.UUID) -> str | None:
+        from modulo.db.models.account import Account
+        from modulo.db.models.org_membership import OrgMembership
+        from modulo.db.models.organisation import Organisation
+
+        try:
+            acct_result = await self._session.execute(
+                select(Account).where(Account.id == user_id)
+            )
+            account = acct_result.scalar_one_or_none()
+            if not account:
+                return None
+
+            membership_result = await self._session.execute(
+                select(OrgMembership).where(
+                    OrgMembership.account_id == user_id,
+                    OrgMembership.organisation_id == org_id,
+                )
+            )
+            membership = membership_result.scalar_one_or_none()
+
+            org_result = await self._session.execute(
+                select(Organisation).where(Organisation.id == org_id)
+            )
+            org = org_result.scalar_one_or_none()
+
+            lines = [f"{_SECTION_USER_PROFILE}\n"]
+            lines.append(f"- **Name:** {account.display_name}")
+            lines.append(f"- **Email:** {account.email}")
+            if membership:
+                lines.append(f"- **Role:** {membership.role}")
+            if org:
+                lines.append(f"- **Organisation:** {org.name}")
+                if org.plan_id:
+                    lines.append(f"- **Plan:** {org.plan_id}")
+            return "\n".join(lines)
+        except Exception:
+            logger.exception("Failed to build user profile for user %s", user_id)
+            return None
+
+    def _build_knowledge_tools_section(self, skills: list[SkillEntry], ctx_sources: dict[str, str]) -> str | None:
+        lines: list[str] = []
+
+        for source_key, mode in ctx_sources.items():
+            if mode == "tool" and source_key in _TOOL_DESCRIPTIONS:
+                lines.append(f"- {_TOOL_DESCRIPTIONS[source_key]}")
+
+        tool_skills = [s for s in skills if s.source_mode == "tool"]
+        if tool_skills:
+            lines.append("- get_skill(name) — Load an organisation or personal skill by name")
+
+        if not lines:
+            return None
+
+        return f"{_SECTION_KNOWLEDGE_TOOLS}\n\nYou can retrieve additional knowledge by calling these tools:\n" + "\n".join(lines) + "\n"
+
     async def build_system_prompt(
         self,
         org_id: uuid.UUID,
@@ -82,24 +151,56 @@ class SkillLoader:
             logger.exception("Failed to load Remy config for org %s", org_id)
             config = None
 
+        ctx_service = RemyContextSourceService(self._session)
+        try:
+            effective = await ctx_service.get_effective_config(org_id, user_id)
+        except Exception:
+            logger.exception("Failed to load context source config for org %s", org_id)
+            effective = None
+
+        ctx_sources: dict[str, str] = effective.context_sources if effective else {}
+
         parts: list[str] = []
 
+        # 1. Base admin system prompt
         if config:
             base_prompt = system_prompt_override if system_prompt_override is not None else config.system_prompt
             if base_prompt:
                 parts.append(base_prompt)
 
+        # 2. Additional guidance
             if config.additional_guidance:
                 parts.append(config.additional_guidance)
 
-        if page_context:
+        # 3. Product Overview
+            if ctx_sources.get("product_primer") == "always_on" and config.product_primer:
+                parts.append(f"{_SECTION_PRODUCT_OVERVIEW}\n\n{config.product_primer}")
+
+        # 4. Page Context
+        if ctx_sources.get("page_context") == "always_on" and page_context:
             parts.append(f"{_SECTION_PAGE_CONTEXT}\n\n{page_context}")
 
-        org_skills = await self.get_org_skills(org_id)
-        self._append_skills_block(parts, org_skills, _SECTION_ORG_SKILLS)
+        # 5. User Profile
+        if ctx_sources.get("user_profile") == "always_on":
+            profile = await self._build_user_profile(org_id, user_id)
+            if profile:
+                parts.append(profile)
 
+        # 6. Available Knowledge Tools
+        org_skills = await self.get_org_skills(org_id)
         user_skills = await self.get_user_skills(user_id)
-        self._append_skills_block(parts, user_skills, _SECTION_USER_SKILLS)
+
+        tool_section = self._build_knowledge_tools_section(org_skills + user_skills, ctx_sources)
+        if tool_section:
+            parts.append(tool_section)
+
+        # 7. Organisation Skills (source_mode = always_on or null)
+        always_on_org = [s for s in org_skills if s.source_mode is None or s.source_mode == "always_on"]
+        self._append_skills_block(parts, always_on_org, _SECTION_ORG_SKILLS)
+
+        # 8. User Skills (source_mode = always_on or null)
+        always_on_user = [s for s in user_skills if s.source_mode is None or s.source_mode == "always_on"]
+        self._append_skills_block(parts, always_on_user, _SECTION_USER_SKILLS)
 
         if include_ui_tools_text:
             tools_text = build_tool_definitions_for_text()
@@ -154,4 +255,5 @@ class SkillLoader:
             triggers=skill.triggers,
             body=body if fm is not None else skill.body,
             frontmatter=fm,
+            source_mode=skill.source_mode,
         )
