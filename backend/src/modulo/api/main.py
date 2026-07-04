@@ -474,6 +474,7 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
 
     # Initialise the runtime-config store so it captures env-var state at boot.
     from modulo.core.runtime_config.store import get_runtime_config_store
+
     get_runtime_config_store()
 
     # Initialise the graceful shutdown manager with the configured timeout.
@@ -499,6 +500,7 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
     # Configure the EventBus with Redis broker if Redis is available.
     if settings.redis_url:
         from modulo.core.events.redis_broker import RedisEventBroker
+
         redis_broker = RedisEventBroker(settings.redis_url)
         configure_event_bus(redis_broker=redis_broker)
         logger.info("startup.event_bus_redis_enabled")
@@ -511,6 +513,7 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
     import anyio
 
     from modulo.api.mcp_server import mcp
+
     _mcp_tg = await anyio.create_task_group().__aenter__()
     mcp.session_manager._task_group = _mcp_tg
 
@@ -565,8 +568,7 @@ app.add_middleware(DeprecationHeaderMiddleware)  # type: ignore[arg-type]
 app.add_middleware(SecurityHeadersMiddleware)  # type: ignore[arg-type]
 app.add_middleware(CatchAllMiddleware)
 app.add_middleware(ShutdownMiddleware, manager=_shutdown_manager)  # type: ignore[arg-type]
-app.add_middleware(RequestTimeoutMiddleware, timeout_seconds=120,
-    overrides={"/healthz": 5, "/healthz/ready": 15})
+app.add_middleware(RequestTimeoutMiddleware, timeout_seconds=120, overrides={"/healthz": 5, "/healthz/ready": 15})
 
 app.include_router(health_router)
 app.include_router(admin_router)
