@@ -115,3 +115,18 @@ class TestAWSSecretsManagerBackend:
             RecoveryWindowInDays=7,
             ForceDeleteWithoutRecovery=False,
         )
+
+    async def test_get_secret_timeout_wraps_as_runtime_error(self, mock_boto3):
+        import asyncio
+        backend = _make_backend()
+
+        with patch.object(asyncio, "wait_for", side_effect=TimeoutError()):
+            with pytest.raises(RuntimeError, match="timeout reading secret"):
+                await backend.get_secret("my-key")
+
+    async def test_get_secret_network_error_wraps_as_runtime_error(self, mock_boto3):
+        backend = _make_backend()
+        backend._client.get_secret_value.side_effect = ConnectionError("connection refused")
+
+        with pytest.raises(RuntimeError, match="unexpected error reading secret"):
+            await backend.get_secret("my-key")

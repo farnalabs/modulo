@@ -20,6 +20,8 @@ from typing import Any
 
 from modulo.core.secrets_backend import SecretsBackend
 
+_TIMEOUT: float = 30.0
+
 _MODULE_AVAILABLE: bool = True
 _hvac: Any = None
 
@@ -96,15 +98,22 @@ class VaultSecretsBackend(SecretsBackend):
         path = self._secret_path(key)
 
         try:
-            response = await asyncio.to_thread(
-                client.secrets.kv.v2.read_secret_version,
-                path=path,
-                mount_point=self._mount_point,
+            response = await asyncio.wait_for(
+                asyncio.to_thread(
+                    client.secrets.kv.v2.read_secret_version,
+                    path=path,
+                    mount_point=self._mount_point,
+                ),
+                timeout=_TIMEOUT,
             )
         except _hvac.exceptions.InvalidPath:
             raise KeyError(key) from None
         except _hvac.exceptions.Forbidden as exc:
             raise PermissionError("VaultSecretsBackend: permission denied reading secret") from exc
+        except TimeoutError:
+            raise RuntimeError("VaultSecretsBackend: timeout reading secret") from None
+        except Exception as exc:
+            raise RuntimeError(f"VaultSecretsBackend: unexpected error reading secret: {exc}") from exc
 
         data: dict[str, Any] = response.get("data", {})
         secret_data: dict[str, Any] = data.get("data", {})
@@ -119,22 +128,37 @@ class VaultSecretsBackend(SecretsBackend):
         client = await self._ensure_client()
         path = self._secret_path(key)
 
-        await asyncio.to_thread(
-            client.secrets.kv.v2.create_or_update_secret,
-            path=path,
-            secret={"value": value},
-            mount_point=self._mount_point,
-        )
+        try:
+            await asyncio.wait_for(
+                asyncio.to_thread(
+                    client.secrets.kv.v2.create_or_update_secret,
+                    path=path,
+                    secret={"value": value},
+                    mount_point=self._mount_point,
+                ),
+                timeout=_TIMEOUT,
+            )
+        except TimeoutError:
+            raise RuntimeError("VaultSecretsBackend: timeout writing secret") from None
+        except Exception as exc:
+            raise RuntimeError(f"VaultSecretsBackend: unexpected error writing secret: {exc}") from exc
 
     async def delete_secret(self, key: str) -> None:
         client = await self._ensure_client()
         path = self._secret_path(key)
 
         try:
-            await asyncio.to_thread(
-                client.secrets.kv.v2.delete_metadata_and_all_versions,
-                path=path,
-                mount_point=self._mount_point,
+            await asyncio.wait_for(
+                asyncio.to_thread(
+                    client.secrets.kv.v2.delete_metadata_and_all_versions,
+                    path=path,
+                    mount_point=self._mount_point,
+                ),
+                timeout=_TIMEOUT,
             )
         except _hvac.exceptions.InvalidPath:
             pass
+        except TimeoutError:
+            raise RuntimeError("VaultSecretsBackend: timeout deleting secret") from None
+        except Exception as exc:
+            raise RuntimeError(f"VaultSecretsBackend: unexpected error deleting secret: {exc}") from exc

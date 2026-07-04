@@ -87,3 +87,18 @@ class TestVaultSecretsBackend:
         # Should not raise despite the underlying Vault exception
         await backend.delete_secret("missing-key")
         backend._client.secrets.kv.v2.delete_metadata_and_all_versions.assert_called_once()
+
+    async def test_get_secret_timeout_wraps_as_runtime_error(self, mock_hvac):
+        import asyncio
+        backend = _make_backend(mock_hvac)
+
+        with patch.object(asyncio, "wait_for", side_effect=TimeoutError()):
+            with pytest.raises(RuntimeError, match="timeout reading secret"):
+                await backend.get_secret("my-key")
+
+    async def test_get_secret_network_error_wraps_as_runtime_error(self, mock_hvac):
+        backend = _make_backend(mock_hvac)
+        backend._client.secrets.kv.v2.read_secret_version.side_effect = ConnectionError("connection refused")
+
+        with pytest.raises(RuntimeError, match="unexpected error reading secret"):
+            await backend.get_secret("my-key")
