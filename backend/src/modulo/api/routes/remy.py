@@ -434,7 +434,7 @@ async def list_sessions(
 
 @router.post("/sessions", status_code=status.HTTP_201_CREATED)
 async def create_session(
-    body: CreateSessionRequest,
+    req: CreateSessionRequest,
     session: AsyncSession = Depends(get_db_session),
     principal: AuthenticatedPrincipal = Depends(get_current_user),
 ) -> dict[str, Any]:
@@ -451,10 +451,10 @@ async def create_session(
             chat_session = ChatSession(
                 organisation_id=principal.organisation_id,
                 user_id=principal.account_id,
-                name=body.name,
-                provider=body.provider,
-                model=body.model,
-                context_window_tokens=body.context_window_tokens,
+                name=req.name,
+                provider=req.provider,
+                model=req.model,
+                context_window_tokens=req.context_window_tokens,
                 session_number=next_session_number,
             )
             session.add(chat_session)
@@ -508,7 +508,7 @@ async def get_session(
 @router.patch("/sessions/{session_id}", status_code=status.HTTP_200_OK)
 async def rename_session(
     session_id: uuid.UUID,
-    body: RenameSessionRequest,
+    req: RenameSessionRequest,
     session: AsyncSession = Depends(get_db_session),
     principal: AuthenticatedPrincipal = Depends(get_current_user),
 ) -> dict[str, Any]:
@@ -519,7 +519,7 @@ async def rename_session(
             if chat_session is None or chat_session.user_id != principal.account_id:
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Session not found")
 
-            chat_session.name = body.name
+            chat_session.name = req.name
             await session.flush()
 
         return _serialise_session(chat_session)
@@ -619,7 +619,7 @@ async def list_messages(
 @router.post("/sessions/{session_id}/messages", status_code=status.HTTP_201_CREATED)
 async def append_message(
     session_id: uuid.UUID,
-    body: AppendMessageRequest,
+    req: AppendMessageRequest,
     session: AsyncSession = Depends(get_db_session),
     principal: AuthenticatedPrincipal = Depends(get_current_user),
 ) -> dict[str, Any]:
@@ -633,12 +633,12 @@ async def append_message(
             msg = ChatMessage(
                 organisation_id=principal.organisation_id,
                 session_id=session_id,
-                role=body.role,
-                content=body.content,
-                tool_calls_json=body.tool_calls_json,
-                tool_results_json=body.tool_results_json,
-                token_count=body.token_count,
-                parent_id=body.parent_id,
+                role=req.role,
+                content=req.content,
+                tool_calls_json=req.tool_calls_json,
+                tool_results_json=req.tool_results_json,
+                token_count=req.token_count,
+                parent_id=req.parent_id,
             )
             session.add(msg)
             await session.flush()
@@ -663,7 +663,7 @@ async def append_message(
 @router.post("/sessions/{session_id}/stream")
 async def stream_chat(
     session_id: uuid.UUID,
-    body: StreamRequest,
+    req: StreamRequest,
     request: Request,
     session: AsyncSession = Depends(get_db_session),
     principal: AuthenticatedPrincipal = Depends(get_current_user),
@@ -700,16 +700,16 @@ async def stream_chat(
         try:
             async with AsyncSession(session.bind) as db_session:
                 # 1. Resolve API key
-                api_key = body.api_key
+                api_key = req.api_key
                 if not api_key:
                     async with db_session.begin():
                         await set_rls_org(db_session, principal.organisation_id)
                         resolved = await _resolve_api_key(
-                            body.provider, principal.organisation_id, db_session, settings.fernet_key,
+                            req.provider, principal.organisation_id, db_session, settings.fernet_key,
                         )
                     if resolved is None:
                         msg = (
-                            f"No active {body.provider} API key configured. "
+                            f"No active {req.provider} API key configured. "
                             "Add one in Settings > Model Backends or provide an api_key."
                         )
                         yield f"event: error\ndata: {json.dumps({'detail': msg})}\n\n"
@@ -718,7 +718,7 @@ async def stream_chat(
 
                 # 2. Create backend (needed before system prompt for supports_tools)
                 try:
-                    backend = _build_backend(body.provider, body.model, api_key)
+                    backend = _build_backend(req.provider, req.model, api_key)
                 except HTTPException as exc:
                     yield f"event: error\ndata: {json.dumps({'detail': exc.detail})}\n\n"
                     return
@@ -731,8 +731,8 @@ async def stream_chat(
                     system_prompt = await skill_loader.build_system_prompt(
                         org_id=principal.organisation_id,
                         user_id=principal.account_id,
-                        page_context=body.page_context,
-                        system_prompt_override=body.system_prompt,
+                        page_context=req.page_context,
+                        system_prompt_override=req.system_prompt,
                         include_ui_tools_text=not supports_tools,
                     )
 
@@ -743,7 +743,7 @@ async def stream_chat(
                         organisation_id=principal.organisation_id,
                         session_id=session_id,
                         role="user",
-                        content=body.content,
+                        content=req.content,
                     )
                     db_session.add(user_msg)
                     await db_session.flush()
@@ -760,8 +760,8 @@ async def stream_chat(
 
                 # 7. Context window pruning
                 context_window = (
-                    body.context_window_tokens
-                    if body.context_window_tokens is not None
+                    req.context_window_tokens
+                    if req.context_window_tokens is not None
                     else (chat_session.context_window_tokens or 200000)
                 )
                 budget = int(context_window * 0.8)
@@ -832,7 +832,7 @@ async def stream_chat(
 
                     # Execute MCP tools
                     if mcp_tool_calls:
-                        if not body.mcp_api_key:
+                        if not req.mcp_api_key:
                             yield (
                                 "event: error\ndata: "
                                 + json.dumps({"detail": "Tool execution requires an MCP API key"})
@@ -844,7 +844,7 @@ async def stream_chat(
                                 result = await _call_mcp_tool(
                                     tool_name=tc["name"],
                                     arguments=tc["args"],
-                                    mcp_api_key=body.mcp_api_key,
+                                    mcp_api_key=req.mcp_api_key,
                                     base_url=mcp_base_url,
                                 )
                                 tool_results.append({
@@ -908,7 +908,7 @@ async def stream_chat(
                             if perm == "disabled":
                                 continue
                             elif perm == "requires_approval":
-                                page_path = body.page_context or ""
+                                page_path = req.page_context or ""
                                 if not _is_approved_for_session(
                                     session_id_str, tc["name"], page_path,
                                 ):
@@ -934,7 +934,7 @@ async def stream_chat(
                                     if decision["action"] == "approve_for_session":
                                         for tc in pending_permission_calls:
                                             _set_session_approval(
-                                                session_id_str, tc["name"], body.page_context or "",
+                                                session_id_str, tc["name"], req.page_context or "",
                                             )
                             except TimeoutError:
                                 pass
@@ -1058,7 +1058,7 @@ async def stream_chat(
 @router.post("/sessions/{session_id}/permission-response")
 async def submit_permission_response(
     session_id: uuid.UUID,
-    body: PermissionResponse,
+    req: PermissionResponse,
     session: AsyncSession = Depends(get_db_session),
     principal: AuthenticatedPrincipal = Depends(get_current_user),
 ) -> dict[str, str]:
@@ -1078,13 +1078,13 @@ async def submit_permission_response(
             detail="Database error. Please try again later.",
         ) from None
 
-    entry = _pending_permissions.get(body.request_id)
+    entry = _pending_permissions.get(req.request_id)
     if entry is None:
         raise HTTPException(status_code=404, detail="Permission request not found or expired")
     event, req_session_id = entry
     if req_session_id != str(session_id):
         raise HTTPException(status_code=403, detail="Permission request does not belong to this session")
-    _permission_decisions[body.request_id] = {"action": body.action}
+    _permission_decisions[req.request_id] = {"action": req.action}
     event.set()
     return {"status": "ok"}
 
@@ -1092,7 +1092,7 @@ async def submit_permission_response(
 @router.post("/sessions/{session_id}/ui-command-results")
 async def submit_ui_command_results(
     session_id: uuid.UUID,
-    body: UiCommandResultsBatch,
+    req: UiCommandResultsBatch,
     session: AsyncSession = Depends(get_db_session),
     principal: AuthenticatedPrincipal = Depends(get_current_user),
 ) -> dict[str, str]:
@@ -1116,7 +1116,7 @@ async def submit_ui_command_results(
     event = _pending_ui_results.get(sid)
     if event is None:
         raise HTTPException(status_code=404, detail="No pending UI command batch")
-    _ui_command_results[sid] = [r.model_dump() for r in body.results]
+    _ui_command_results[sid] = [r.model_dump() for r in req.results]
     event.set()
     return {"status": "ok"}
 
