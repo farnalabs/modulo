@@ -76,6 +76,7 @@
 <script setup lang="ts">
 import { ref, onMounted } from "vue";
 import { api } from "@/lib/api/client";
+import { formatApiError } from "@/lib/api/formatError";
 import Button from "@/components/ui/button/Button.vue";
 import type { ContextSourceItem, ContextSourceMode, ContextSourceUpdate } from "@/types/remy";
 
@@ -91,7 +92,7 @@ async function fetchSources() {
   try {
     const { data, error: err } = await (api as any).GET("/api/v1/me/remy/context-sources");
     if (err) {
-      error.value = `Failed to load sources: ${err}`;
+      error.value = `Failed to load sources: ${formatApiError(err)}`;
     } else if (data) {
       sources.value = (data as ContextSourceItem[]) ?? [];
     }
@@ -119,7 +120,7 @@ async function updateSource(key: string, mode: ContextSourceMode) {
       },
     );
     if (err) {
-      error.value = `Failed to update source: ${err}`;
+      error.value = `Failed to update source: ${formatApiError(err)}`;
       if (prev && prevMode) {
         prev.source_mode = prevMode;
       }

@@ -144,6 +144,7 @@
 <script setup lang="ts">
 import { ref, onMounted } from "vue";
 import { api } from "@/lib/api/client";
+import { formatApiError } from "@/lib/api/formatError";
 import Button from "@/components/ui/button/Button.vue";
 import type { UserSkill } from "@/types/remy";
 
@@ -158,7 +159,7 @@ async function fetchSkills() {
   try {
     const { data, error: err } = await (api as any).GET("/api/v1/me/remy/skills");
     if (err) {
-      skillError.value = `Failed to load skills: ${err}`;
+      skillError.value = `Failed to load skills: ${formatApiError(err)}`;
     } else if (data) {
       skills.value = (data as UserSkill[]) ?? [];
     }
@@ -211,7 +212,7 @@ async function saveSkill() {
         },
       );
       if (err) {
-        skillError.value = `Failed to update skill: ${err}`;
+        skillError.value = `Failed to update skill: ${formatApiError(err)}`;
         return;
       }
     } else {
@@ -220,7 +221,7 @@ async function saveSkill() {
         { body: payload },
       );
       if (err || !data) {
-        skillError.value = `Failed to create skill: ${err}`;
+        skillError.value = `Failed to create skill: ${formatApiError(err)}`;
         return;
       }
     }
@@ -242,7 +243,7 @@ async function deleteSkill(id: string) {
       },
     );
     if (err) {
-      skillError.value = `Failed to delete skill: ${err}`;
+      skillError.value = `Failed to delete skill: ${formatApiError(err)}`;
     } else {
       skills.value = skills.value.filter((s) => s.id !== id);
     }
