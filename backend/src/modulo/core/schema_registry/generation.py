@@ -81,7 +81,10 @@ class SchemaGenerationService:
         if not description or not description.strip():
             raise ValueError("description must be a non-empty string")
 
-        messages = _build_generate_prompt(description, examples, self._system_prompt, self._max_example_records)
+        try:
+            messages = _build_generate_prompt(description, examples, self._system_prompt, self._max_example_records)
+        except ValueError as exc:
+            raise SchemaGenerationError(str(exc)) from exc
         return await invoke_and_parse(
             self._backend,
             messages,

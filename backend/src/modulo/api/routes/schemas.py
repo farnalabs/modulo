@@ -12,7 +12,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from jsonschema import Draft202012Validator, ValidationError  # type: ignore[import-untyped]
 from jsonschema.exceptions import SchemaError as JsSchemaError
 from pydantic import BaseModel, Field
-from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
+from sqlalchemy.exc import IntegrityError, ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.api.dependencies import get_db_session
@@ -177,6 +177,12 @@ async def create_schema_endpoint(
                 description=body.description,
                 abstract_name=body.abstract_name,
             )
+    except IntegrityError:
+        logger.exception("schemas.create.conflict")
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="A schema with this name already exists.",
+        ) from None
     except ProgrammingError:
         logger.exception("schemas.create")
         raise HTTPException(
@@ -376,6 +382,12 @@ async def create_schema_version_endpoint(
                 account_id=principal.account_id,
                 published=body.published,
             )
+    except IntegrityError:
+        logger.exception("schemas.create_version.conflict")
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="A schema version with this version already exists.",
+        ) from None
     except ProgrammingError:
         logger.exception("schemas.create_version")
         raise HTTPException(
