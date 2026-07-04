@@ -15,12 +15,41 @@ class TestRemyConfigDefaults:
         config = RemyConfig()
         assert config.system_prompt == ""
         assert config.additional_guidance == ""
-        assert config.access_list == {"user_ids": [], "team_ids": [], "org_roles": ["admin"]}
+        assert config.access_rules == {"user_ids": [], "team_ids": [], "org_roles": ["admin"]}
         assert config.default_provider == "anthropic"
         assert config.default_model == "claude-sonnet-4-20250514"
         assert config.default_context_window == 200000
-        assert config.allowed_providers == ["anthropic", "openai", "google-gemini", "deepseek", "groq"]
+        assert config.allowed_providers == ["anthropic", "openai", "gemini", "deepseek", "groq"]
         assert config.allowed_models == []
+
+    def test_schema_version_default(self) -> None:
+        config = RemyConfig()
+        assert config.schema_version == 3
+
+    def test_product_primer_default(self) -> None:
+        config = RemyConfig()
+        assert config.product_primer == ""
+
+    def test_context_sources_defaults(self) -> None:
+        config = RemyConfig()
+        expected = {
+            "page_context": "always_on",
+            "user_profile": "always_on",
+            "product_primer": "always_on",
+            "product_docs": "tool",
+            "integration_status": "tool",
+            "org_config": "tool",
+            "feature_overview": "tool",
+        }
+        assert config.context_sources == expected
+        assert config.context_sources["page_context"] == "always_on"
+        assert config.context_sources["product_docs"] == "tool"
+
+    def test_default_context_sources_immutable(self) -> None:
+        config = RemyConfig()
+        config2 = RemyConfig()
+        config.context_sources["page_context"] = "off"
+        assert config2.context_sources["page_context"] == "always_on"
 
 
 class TestRemyConfigServiceGetConfig:
@@ -129,7 +158,7 @@ class TestRemyConfigServiceCheckAccess:
     ) -> None:
         user_id = uuid.uuid4()
         stored_value = {
-            "access_list": {
+            "access_rules": {
                 "user_ids": [str(user_id)],
                 "team_ids": [],
                 "org_roles": [],
@@ -149,7 +178,7 @@ class TestRemyConfigServiceCheckAccess:
     ) -> None:
         user_id = uuid.uuid4()
         stored_value = {
-            "access_list": {
+            "access_rules": {
                 "user_ids": [],
                 "team_ids": [],
                 "org_roles": ["admin"],
@@ -170,7 +199,7 @@ class TestRemyConfigServiceCheckAccess:
         user_id = uuid.uuid4()
         team_id = uuid.uuid4()
         stored_value = {
-            "access_list": {
+            "access_rules": {
                 "user_ids": [],
                 "team_ids": [str(team_id)],
                 "org_roles": [],
@@ -190,7 +219,7 @@ class TestRemyConfigServiceCheckAccess:
     ) -> None:
         user_id = uuid.uuid4()
         stored_value: dict = {
-            "access_list": {
+            "access_rules": {
                 "user_ids": [],
                 "team_ids": [],
                 "org_roles": [],
@@ -211,7 +240,7 @@ class TestRemyConfigServiceCheckAccess:
         user_id = uuid.uuid4()
         team_id = uuid.uuid4()
         stored_value = {
-            "access_list": {
+            "access_rules": {
                 "user_ids": [],
                 "team_ids": [team_id],  # stored as UUID, not string
                 "org_roles": [],
@@ -231,7 +260,7 @@ class TestRemyConfigServiceCheckAccess:
     ) -> None:
         user_id = uuid.uuid4()
         stored_value = {
-            "access_list": {
+            "access_rules": {
                 "user_ids": [user_id],  # UUID, not string
                 "team_ids": [],
                 "org_roles": [],
