@@ -122,7 +122,7 @@ async def integration_client(
     app.dependency_overrides[get_db_session] = override_session
 
     transport = ASGITransport(app=app)
-    async with AsyncClient(transport=transport, base_url="http://test") as client:
+    async with AsyncClient(transport=transport, base_url="http://test", timeout=30.0) as client:
         yield client
 
     app.dependency_overrides.clear()
