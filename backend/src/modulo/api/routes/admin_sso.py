@@ -252,7 +252,7 @@ async def test_provider_connection(
             return await _test_oidc_connection(provider)
         else:
             return await _test_saml_connection(provider)
-    except (httpx.HTTPError, ValueError, ET.ParseError, Exception) as exc:
+    except Exception as exc:
         _log.warning("SSO test connection failed: %s", exc)
         return SsoProviderTestResult(
             success=False,
@@ -269,7 +269,7 @@ async def _test_oidc_connection(provider: Any) -> SsoProviderTestResult:
 
     try:
         async with httpx.AsyncClient() as client:
-            resp = await client.get(provider.discovery_url, timeout=10)
+            resp = await client.get(provider.discovery_url, timeout=httpx.Timeout(10.0, connect=5.0))
             resp.raise_for_status()
             disc = resp.json()
     except Exception as exc:
@@ -317,7 +317,7 @@ async def _test_saml_connection(provider: Any) -> SsoProviderTestResult:
     if not metadata_xml and provider.metadata_url:
         try:
             async with httpx.AsyncClient() as client:
-                resp = await client.get(provider.metadata_url, timeout=10)
+                resp = await client.get(provider.metadata_url, timeout=httpx.Timeout(10.0, connect=5.0))
                 resp.raise_for_status()
                 metadata_xml = resp.text
         except Exception as exc:
@@ -349,7 +349,11 @@ async def _test_saml_connection(provider: Any) -> SsoProviderTestResult:
             message="No IDPSSODescriptor found in metadata XML",
         )
 
-    sso_service = sso_descriptor.find(f"{{{md_ns}}}SingleSignOnService")
+    sso_service = sso_descriptor.find(
+        f"{{{md_ns}}}SingleSignOnService[@Binding='urn:oasis:names:tc:SAML:2.0:bindings:HTTP-Redirect']"
+    )
+    if sso_service is None:
+        sso_service = sso_descriptor.find(f"{{{md_ns}}}SingleSignOnService")
     sso_url = ""
     cert_info = []
     if sso_service is not None:
