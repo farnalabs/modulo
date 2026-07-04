@@ -281,9 +281,9 @@ const panelStyle = computed(() => {
 });
 
 let dragging = false;
-const dragStart = { x: 0, y: 0, posX: 0, posY: 0 };
+let dragStart = { x: 0, y: 0, posX: 0, posY: 0 };
 let resizing = false;
-const resizeStart = { x: 0, y: 0, w: 0, h: 0 };
+let resizeStart = { x: 0, y: 0, w: 0, h: 0 };
 
 function startDrag(e: MouseEvent) {
   if (store.panelState !== "floating") return;
