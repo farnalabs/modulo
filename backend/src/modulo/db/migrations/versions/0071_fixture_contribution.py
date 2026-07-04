@@ -5,7 +5,7 @@ Adds:
 - contribution_status column on library_primitives
 - input_payload and outputs_json columns on runs
 
-Revision ID: 0014_fixture_contribution
+Revision ID: 0071_fixture_contribution
 Revises: 0013_environment_profiles_workspace_leases
 Create Date: 2026-06-24
 """
@@ -15,7 +15,7 @@ from collections.abc import Sequence
 import sqlalchemy as sa
 from alembic import op
 
-revision: str = "0014_fixture_contribution"
+revision: str = "0071_fixture_contribution"
 down_revision: str | None = "0013_environment_profiles_workspace_leases"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None

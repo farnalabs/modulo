@@ -1,6 +1,6 @@
 """Add pass_threshold and suite_id columns to eval_definitions.
 
-Revision ID: 0023_eval_suite_threshold
+Revision ID: 0072_eval_suite_threshold
 Revises: 0022_cost_export_anomalies
 Create Date: 2026-06-25
 """
@@ -10,7 +10,7 @@ from collections.abc import Sequence
 import sqlalchemy as sa
 from alembic import op
 
-revision: str = "0023_eval_suite_threshold"
+revision: str = "0072_eval_suite_threshold"
 down_revision: str | Sequence[str] | None = "0022_cost_export_anomalies"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None

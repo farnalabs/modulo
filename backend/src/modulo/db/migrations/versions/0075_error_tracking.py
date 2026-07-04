@@ -1,6 +1,6 @@
 """Create error_events and error_groups tables for native error tracking.
 
-Revision ID: 0051_error_tracking
+Revision ID: 0075_error_tracking
 Revises: 0050_composite_templates
 Create Date: 2026-07-01
 """
@@ -10,7 +10,7 @@ from collections.abc import Sequence
 import sqlalchemy as sa
 from alembic import op
 
-revision: str = "0051_error_tracking"
+revision: str = "0075_error_tracking"
 down_revision: str | Sequence[str] | None = "0050_composite_templates"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None

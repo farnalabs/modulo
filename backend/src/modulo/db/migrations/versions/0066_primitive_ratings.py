@@ -1,6 +1,6 @@
 """Add primitive_ratings table for community rating system.
 
-Revision ID: 0006_primitive_ratings
+Revision ID: 0066_primitive_ratings
 Revises: 0005_library_community_visibility
 Create Date: 2026-06-22
 """
@@ -10,7 +10,7 @@ from collections.abc import Sequence
 import sqlalchemy as sa
 from alembic import op
 
-revision: str = "0006_primitive_ratings"
+revision: str = "0066_primitive_ratings"
 down_revision: str | None = "0005_library_community_visibility"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None

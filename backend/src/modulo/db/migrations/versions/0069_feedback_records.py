@@ -1,6 +1,6 @@
 """Create feedback_records table.
 
-Revision ID: 0012_feedback_records
+Revision ID: 0069_feedback_records
 Revises: 0011_eval_tables
 Create Date: 2026-06-24
 """
@@ -10,7 +10,7 @@ from collections.abc import Sequence
 import sqlalchemy as sa
 from alembic import op
 
-revision: str = "0012_feedback_records"
+revision: str = "0069_feedback_records"
 down_revision: str | None = "0011_eval_tables"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None

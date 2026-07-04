@@ -3,7 +3,7 @@
 Also registers the ORM-level event listeners for defense in depth.
 
 Revision ID: 0024_audit_append_only
-Revises: 0023_run_error_detail, 0023_eval_suite_threshold
+Revises: 0023_run_error_detail, 0072_eval_suite_threshold
 Create Date: 2026-06-25
 """
 
@@ -15,7 +15,7 @@ from alembic import op
 revision: str = "0024_audit_append_only"
 down_revision: str | Sequence[str] | None = (
     "0023_run_error_detail",
-    "0023_eval_suite_threshold",
+    "0072_eval_suite_threshold",
 )
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
