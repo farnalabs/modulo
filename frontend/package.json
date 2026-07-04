@@ -1,6 +1,6 @@
 {
     "name":  "modulo-frontend",
-"version": "0.1.110",
+    "version": "0.2.0",
     "private":  true,
     "scripts":  {
                     "generate:api":  "powershell -ExecutionPolicy Bypass -File scripts/generate-api-types.ps1",

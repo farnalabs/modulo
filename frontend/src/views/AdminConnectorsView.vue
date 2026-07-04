@@ -93,14 +93,14 @@
         </form>
       </div>
 
-      <div v-if="connectors.length === 0" class="card p-8 text-center">
+      <div v-if="nativeConnectors.length === 0" class="card p-8 text-center">
         <p class="text-lg font-medium">No connectors configured</p>
         <p class="mt-1 text-sm text-muted-foreground">
           Add a connector to integrate with external data sources.
         </p>
       </div>
 
-      <div class="overflow-hidden rounded-lg border">
+      <div v-else class="overflow-hidden rounded-lg border">
         <table class="w-full text-left text-sm">
           <thead class="bg-muted/50">
             <tr>
@@ -113,9 +113,10 @@
           </thead>
           <tbody class="divide-y">
             <tr
-              v-for="connector in connectors"
+              v-for="connector in nativeConnectors"
               :key="connector.id"
               class="hover:bg-muted/30 transition-colors"
+              :data-testid="`connector-row-${connector.id}`"
             >
               <td class="px-4 py-3 font-medium">{{ connector.name }}</td>
               <td class="px-4 py-3">
@@ -166,6 +167,64 @@
           </tbody>
         </table>
       </div>
+
+      <details v-if="previewConnectors.length > 0" class="rounded-lg border bg-card" data-testid="connectors-preview-section">
+        <summary class="cursor-pointer px-4 py-3 text-sm font-medium text-muted-foreground hover:text-foreground">
+          {{ $t('views.AdminConnectorsView.preview_connectors_count', { count: previewConnectors.length }, previewConnectors.length) }}
+        </summary>
+        <div class="overflow-hidden border-t">
+          <table class="w-full text-left text-sm">
+            <thead class="bg-muted/50">
+              <tr>
+                <th class="px-4 py-3 font-medium">Name</th>
+                <th class="px-4 py-3 font-medium">Type</th>
+                <th class="px-4 py-3 font-medium">Tier</th>
+                <th class="px-4 py-3 font-medium text-right">Actions</th>
+              </tr>
+            </thead>
+            <tbody class="divide-y">
+              <tr
+                v-for="connector in previewConnectors"
+                :key="connector.id"
+                class="hover:bg-muted/30 transition-colors"
+                :data-testid="`connector-row-${connector.id}`"
+              >
+                <td class="px-4 py-3 font-medium">{{ connector.name }}</td>
+                <td class="px-4 py-3">
+                  <span class="rounded-full bg-primary/10 px-2.5 py-0.5 text-xs font-medium text-primary">
+                    {{ connector.connector_type }}
+                  </span>
+                </td>
+                <td class="px-4 py-3">
+                  <span class="badge badge-context-amber text-xs">{{ $t('views.AdminConnectorsView.preview_badge') }}</span>
+                </td>
+                <td class="px-4 py-3 text-right">
+                  <div class="flex items-center justify-end gap-1">
+                    <button
+                      class="rounded p-1 text-muted-foreground hover:bg-accent"
+                      data-testid="admin-connectors-edit"
+                      @click="openEditForm(connector)"
+                    >
+                      <svg class="h-4 w-4" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M17 3a2.85 2.85 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z" />
+                      </svg>
+                    </button>
+                    <button
+                      class="rounded p-1 text-destructive hover:bg-destructive/10"
+                      data-testid="admin-connectors-delete"
+                      @click="confirmDelete(connector)"
+                    >
+                      <svg class="h-4 w-4" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M3 6h18" /><path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6" /><path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2" />
+                      </svg>
+                    </button>
+                  </div>
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </details>
 
       <div v-if="editConnectorId" class="card p-6">
         <h2 class="mb-4 text-lg font-semibold">Edit Connector</h2>
@@ -249,7 +308,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, reactive, onMounted } from 'vue'
+import { ref, reactive, computed, onMounted } from 'vue'
 import { api } from '../lib/api/client'
 import type { components } from '../lib/api/client'
 import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
@@ -259,7 +318,10 @@ import FeatureGate from '../components/FeatureGate.vue'
 
 const planStore = usePlanStore()
 
-type ConnectorItem = components['schemas']['ConnectorItem'] & { enabled?: boolean }
+type ConnectorItem = components['schemas']['ConnectorItem'] & {
+  enabled?: boolean
+  tier?: 'native' | 'preview' | 'in_dev'
+}
 
 interface ConnectorFormState {
   name: string
@@ -278,6 +340,12 @@ function emptyForm(): ConnectorFormState {
 }
 
 const connectors = ref<ConnectorItem[]>([])
+
+// In-dev connectors are hidden entirely; native connectors stay in the
+// primary table; preview connectors are segregated into a collapsed
+// disclosure section.
+const nativeConnectors = computed(() => connectors.value.filter(c => (c.tier ?? 'native') !== 'preview' && (c.tier ?? 'native') !== 'in_dev'))
+const previewConnectors = computed(() => connectors.value.filter(c => c.tier === 'preview'))
 const loading = ref(true)
 const error = ref<string | null>(null)
 

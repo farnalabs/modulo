@@ -6,7 +6,7 @@ never exposed in any response — only a boolean `has_credentials` field.
 
 import uuid
 from datetime import datetime
-from typing import Any
+from typing import Any, Literal
 
 from cryptography.fernet import Fernet
 from fastapi import APIRouter, Depends, HTTPException, Query, status
@@ -46,6 +46,7 @@ class ModelBackendCreate(BaseModel):
     default_params: dict[str, Any] = {}
     visibility: str = Field(default="org")
     fallback_backend_ids: list[uuid.UUID] | None = None
+    tier: Literal["native", "preview", "in_dev"] = Field(default="native")
 
 
 class ModelBackendUpdate(BaseModel):
@@ -56,6 +57,7 @@ class ModelBackendUpdate(BaseModel):
     default_params: dict[str, Any] | None = None
     visibility: str | None = None
     fallback_backend_ids: list[uuid.UUID] | None = None
+    tier: Literal["native", "preview", "in_dev"] | None = None
 
 
 class ModelBackendResponse(BaseModel):
@@ -68,6 +70,7 @@ class ModelBackendResponse(BaseModel):
     has_credentials: bool
     default_params: dict[str, Any]
     visibility: str
+    tier: str
     fallback_backend_ids: list[uuid.UUID] | None = None
     created_by: uuid.UUID = Field(validation_alias="account_id")
     created_at: datetime
@@ -98,6 +101,7 @@ def _to_response(mb: Any) -> ModelBackendResponse:
         has_credentials=bool(mb.credentials_ciphertext),
         default_params=mb.default_params,
         visibility=mb.visibility,
+        tier=mb.tier,
         fallback_backend_ids=fallback_ids,
         account_id=mb.account_id,
         created_at=mb.created_at,
@@ -203,6 +207,7 @@ async def create_model_backend_endpoint(
                 default_params=req.default_params,
                 visibility=req.visibility,
                 fallback_backend_ids=fallback_ids,
+                tier=body.tier,
             )
     except ProgrammingError:
         raise HTTPException(

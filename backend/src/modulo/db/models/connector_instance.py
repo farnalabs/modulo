@@ -16,6 +16,10 @@ class ConnectorInstance(OrgScoped):
             "visibility = 'org' OR owner_team_id IS NOT NULL",
             name="ck_connector_instances_team_owner",
         ),
+        CheckConstraint(
+            "tier IN ('native', 'preview', 'in_dev')",
+            name="ck_connector_instances_tier",
+        ),
     )
 
     name: Mapped[str] = mapped_column(String(255), nullable=False)
@@ -31,3 +35,4 @@ class ConnectorInstance(OrgScoped):
     status: Mapped[str] = mapped_column(String(30), nullable=False, server_default="active")
     last_health_check_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     last_health_check_error: Mapped[str | None] = mapped_column(String(2000))
+    tier: Mapped[str] = mapped_column(String(20), nullable=False, server_default="native")

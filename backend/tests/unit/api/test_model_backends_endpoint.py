@@ -46,6 +46,7 @@ def _make_backend(credentials_ciphertext: bytes = b"encrypted") -> MagicMock:
     mb.credentials_ciphertext = credentials_ciphertext
     mb.default_params = {}
     mb.visibility = "org"
+    mb.tier = "native"
     mb.fallback_backend_ids = None
     mb.account_id = uuid.uuid4()
     mb.created_at = _NOW

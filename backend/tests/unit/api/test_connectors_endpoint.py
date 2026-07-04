@@ -47,6 +47,7 @@ def _make_connector(credentials_ciphertext: bytes = b"encrypted") -> MagicMock:
     ci.allowed_operations = []
     ci.status = "active"
     ci.visibility = "org"
+    ci.tier = "native"
     ci.created_at = _NOW
     ci.updated_at = _NOW
     return ci
