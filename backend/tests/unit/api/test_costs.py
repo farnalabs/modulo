@@ -524,6 +524,7 @@ class TestGetAnomalies:
         app.dependency_overrides[get_settings] = _make_settings
         app.dependency_overrides[get_db_session] = override_session
         app.dependency_overrides[_get_engine] = lambda: MagicMock()
+        app.dependency_overrides[get_plan_context] = lambda: _EnterprisePlan()
         app.dependency_overrides[get_current_user] = lambda: AuthenticatedPrincipal(
             username="admin",
             organisation_id=_ORG_ID,
