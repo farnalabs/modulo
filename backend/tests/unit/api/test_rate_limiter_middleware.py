@@ -78,7 +78,8 @@ class TestConstructorOverrides:
             resp = client.post("/api/v1/runs")
         assert resp.status_code == 429
         body = resp.json()
-        assert body["error_code"] == "rate_limit_exceeded"
+        assert body["type"] == "urn:problem:modulo:rate_limited"
+        assert body["status"] == 429
 
     def test_get_requests_not_rate_limited(self):
         """Only POST/PUT/PATCH are rate limited."""

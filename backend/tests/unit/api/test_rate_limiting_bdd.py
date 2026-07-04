@@ -152,7 +152,8 @@ class TestRateLimitExceeded:
             resp = client.post("/api/v1/runs")
 
         body = resp.json()
-        assert body["error_code"] == "rate_limit_exceeded"
+        assert body["type"] == "urn:problem:modulo:rate_limited"
+        assert body["status"] == 429
 
     def test_retry_after_value_is_positive(self) -> None:
         registry = _make_mock_registry(allowed=False)

@@ -23,7 +23,7 @@ from modulo.settings import Settings
 # Register feature file
 # ---------------------------------------------------------------------------
 try:
-    scenarios("../../bdd/features/rate_limiting/rate_limiting.feature")
+    scenarios("../../bdd/features/model_backends/rate_limiting.feature")
 except (FileNotFoundError, OSError):
     pass
 
