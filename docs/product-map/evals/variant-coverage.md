@@ -24,7 +24,7 @@ status: partial
 
 # Run Variants — Coverage Gap Signal
 
-Discovered from 1 completed delivery tasks.
+Discovered from 1 completed delivery task.
 
 ## Behaviours
 
@@ -67,7 +67,7 @@ Discovered from 1 completed delivery tasks.
 - [x] Coverage map summary: `total_nodes`, `covered_nodes`, `uncovered_nodes`, `coverage_pct`
 - [x] Admin eval dashboard identifies pipeline nodes with no eval definitions as coverage gaps
 - [x] Feedback system: `detect_eval_gap()` flags when human rejection is not caught by existing evals
-- [x] `POST /api/v1/feedback/{record_id}/detect-gap` endpoint triggers eval gap check on a feedback record (NOW actually works after Fix A — fetches eval definitions instead of passing eval_suite=[])
+- [x] `POST /api/v1/feedback/{record_id}/detect-gap` endpoint triggers eval gap check on a feedback record (fetches eval definitions instead of passing eval_suite=[])
 - [ ] FeedbackRecords with `eval_gap = True` feed into eval proposal generation
 - [x] `GET /api/v1/variant-groups/{group_id}/prompt-diffs` — compares prompt hash diffs between variants
 
