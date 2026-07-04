@@ -124,52 +124,6 @@ class TestBuildPollingConnector:
 # ---------------------------------------------------------------------------
 
 
-def _make_mock_session(
-    trigger: MagicMock | None = None,
-    active_run_count: int = 0,
-    connector_instance: MagicMock | None = None,
-) -> AsyncMock:
-    """Build a mocked session that returns controlled values on execute()."""
-    session = AsyncMock()
-
-    trigger_result = MagicMock()
-    trigger_result.scalar_one_or_none.return_value = trigger
-    trigger_result.scalar_one.return_value = active_run_count
-
-    ci_result = MagicMock()
-    ci_result.scalar_one_or_none.return_value = connector_instance
-
-    count_result = MagicMock()
-    count_result.scalar_one.return_value = active_run_count
-
-    call_index: int = 0
-
-    async def _execute(stmt: Any, *args: Any, **kwargs: Any) -> Any:
-        nonlocal call_index
-        call_index += 1
-        stmt_str = str(stmt)
-        # Determine response based on query type (order may vary)
-        if "SELECT count" in stmt_str:
-            return count_result
-        return trigger_result
-
-    session.execute = _execute
-    session.add = MagicMock()
-    session.flush = AsyncMock()
-
-    # Support async session.begin() context manager
-    begin_cm = AsyncMock()
-    begin_cm.__aenter__ = AsyncMock(return_value=None)
-    begin_cm.__aexit__ = AsyncMock(return_value=False)
-
-    # Support begin_nested for savepoints
-    nested_cm = AsyncMock()
-    nested_cm.__aenter__ = AsyncMock(return_value=None)
-    nested_cm.__aexit__ = AsyncMock(return_value=False)
-    session.begin_nested = MagicMock(return_value=nested_cm)
-
-    return session
-
 
 def _make_trigger(
     active: bool = True,
