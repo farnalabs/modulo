@@ -10,7 +10,7 @@ from typing import Any
 from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from modulo.db.crud.base import PageResult
+from modulo.db.crud.base import PageResult, apply_updates
 from modulo.db.models.account import Account
 
 
@@ -51,8 +51,6 @@ async def update_account(
     account = await get_account_by_id(session, account_id)
     if account is None:
         return None
-    from modulo.db.crud.base import apply_updates
-
     apply_updates(account, updates)
     await session.flush()
     return account

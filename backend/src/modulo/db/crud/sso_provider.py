@@ -74,6 +74,7 @@ async def create_provider(
         enabled=enabled,
         auto_provision=auto_provision,
         default_role=default_role,
+        organisation_id=org_id,
     )
     session.add(provider)
     await session.flush()
@@ -105,7 +106,7 @@ async def update_provider(
     if provider is None:
         return None
 
-    if "scopes" in updates and updates["scopes"] is not None:
+    if "scopes" in updates and updates["scopes"] is not None and not isinstance(updates["scopes"], str):
         updates["scopes"] = json.dumps(updates["scopes"])
 
     for key, value in updates.items():

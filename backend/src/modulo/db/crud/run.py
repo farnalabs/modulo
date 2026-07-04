@@ -261,7 +261,7 @@ async def get_run_stats(
         by_day[day]["count"] += 1
         if r.status == "complete":
             by_day[day]["success"] += 1
-        elif r.status == "failed":
+        elif r.status in ("failed", "cancelled", "eval_failed", "expired"):
             by_day[day]["failed"] += 1
 
     for r in completed_runs:
