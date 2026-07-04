@@ -89,7 +89,7 @@ class TestCursorEncoding:
 
     @staticmethod
     def test_decode_malformed_cursor_raises() -> None:
-        with pytest.raises(Exception):
+        with pytest.raises(ValueError):
             CursorPaginator.decode_cursor("not-base64!!!")
 
 # ---------------------------------------------------------------------------

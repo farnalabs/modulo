@@ -15,7 +15,8 @@ from modulo.core.pipeline_engine.graph_cache import (
 )
 
 
-def _clear_cache() -> None:
+@pytest.fixture(autouse=True)
+def _auto_clear_cache() -> None:
     _CACHE.clear()
 
 
@@ -25,7 +26,6 @@ def _clear_cache() -> None:
 
 
 def test_get_or_compile_calls_factory_once():
-    _clear_cache()
     pid, sid = uuid.uuid4(), uuid.uuid4()
     call_count = 0
 
@@ -45,7 +45,6 @@ def test_get_or_compile_calls_factory_once():
 
 
 def test_get_or_compile_different_pipeline_calls_factory():
-    _clear_cache()
     sid = uuid.uuid4()
     calls: list[str] = []
 
@@ -56,7 +55,6 @@ def test_get_or_compile_different_pipeline_calls_factory():
 
 
 def test_evict_removes_entry():
-    _clear_cache()
     pid, sid = uuid.uuid4(), uuid.uuid4()
     get_or_compile(pid, sid, lambda: "cached")
     assert (pid, sid) in _CACHE
@@ -66,7 +64,6 @@ def test_evict_removes_entry():
 
 
 def test_cache_evicts_oldest_when_full():
-    _clear_cache()
     base_sid = uuid.uuid4()
     for i in range(_MAX_SIZE):
         get_or_compile(uuid.uuid4(), base_sid, lambda: "v")
@@ -81,7 +78,6 @@ def test_cache_evicts_oldest_when_full():
 
 
 def test_evict_does_not_affect_other_pipelines():
-    _clear_cache()
     pid1, pid2, sid = uuid.uuid4(), uuid.uuid4(), uuid.uuid4()
     get_or_compile(pid1, sid, lambda: "1")
     get_or_compile(pid2, sid, lambda: "2")
@@ -92,7 +88,6 @@ def test_evict_does_not_affect_other_pipelines():
 
 
 def test_lru_moves_entry_on_access():
-    _clear_cache()
     sid = uuid.uuid4()
     keys = [uuid.uuid4() for _ in range(3)]
     for k in keys:

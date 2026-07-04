@@ -51,10 +51,9 @@ def test_setup_otel_idempotent() -> None:
     assert isinstance(provider, TracerProvider)
 
 
-def test_setup_otel_no_otlp_without_env() -> None:
+def test_setup_otel_no_otlp_without_env(monkeypatch: pytest.MonkeyPatch) -> None:
     """Should not crash when OTEL_EXPORTER_OTLP_ENDPOINT is not set."""
-    # Ensure env var is absent
-    os.environ.pop("OTEL_EXPORTER_OTLP_ENDPOINT", None)
+    monkeypatch.delenv("OTEL_EXPORTER_OTLP_ENDPOINT", raising=False)
     setup_otel(service_name="no-otlp")
     provider = trace.get_tracer_provider()
     assert isinstance(provider, TracerProvider)
