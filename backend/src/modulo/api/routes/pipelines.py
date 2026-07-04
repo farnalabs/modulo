@@ -363,10 +363,16 @@ async def list_pipelines_endpoint(
     session: AsyncSession = Depends(get_db_session),
     principal: AuthenticatedPrincipal = Depends(get_current_user),
 ) -> PipelineListResponse:
-    async with session.begin():
-        await set_rls_org(session, principal.organisation_id)
-        await set_rls_user_context(session, principal.account_id, principal.org_role)
-        result = await list_pipelines(session, page=page, page_size=page_size, cursor=cursor)
+    try:
+        async with session.begin():
+            await set_rls_org(session, principal.organisation_id)
+            await set_rls_user_context(session, principal.account_id, principal.org_role)
+            result = await list_pipelines(session, page=page, page_size=page_size, cursor=cursor)
+    except ProgrammingError:
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="Feature is not available. Run database migrations to enable it.",
+        )
     return PipelineListResponse(
         items=[PipelineResponse.model_validate(p) for p in result.items],
         total=result.total,
@@ -383,21 +389,27 @@ async def create_pipeline_endpoint(
     session: AsyncSession = Depends(get_db_session),
     principal: AuthenticatedPrincipal = Depends(get_current_user),
 ) -> PipelineResponse:
-    async with session.begin():
-        await set_rls_org(session, principal.organisation_id)
-        await set_rls_user_context(session, principal.account_id, principal.org_role)
-        pipeline = await create_pipeline(
-            session,
-            org_id=principal.organisation_id,
-            name=body.name,
-            account_id=principal.account_id,
-            description=body.description,
-            visibility=body.visibility,
-            max_concurrent_runs=body.max_concurrent_runs,
-            lock_wait_timeout_seconds=body.lock_wait_timeout_seconds,
-            node_timeout_seconds=body.node_timeout_seconds,
-            run_context_defaults=body.run_context_defaults,
-            default_autonomy_level=body.default_autonomy_level,
+    try:
+        async with session.begin():
+            await set_rls_org(session, principal.organisation_id)
+            await set_rls_user_context(session, principal.account_id, principal.org_role)
+            pipeline = await create_pipeline(
+                session,
+                org_id=principal.organisation_id,
+                name=body.name,
+                account_id=principal.account_id,
+                description=body.description,
+                visibility=body.visibility,
+                max_concurrent_runs=body.max_concurrent_runs,
+                lock_wait_timeout_seconds=body.lock_wait_timeout_seconds,
+                node_timeout_seconds=body.node_timeout_seconds,
+                run_context_defaults=body.run_context_defaults,
+                default_autonomy_level=body.default_autonomy_level,
+            )
+    except ProgrammingError:
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="Feature is not available. Run database migrations to enable it.",
         )
     return PipelineResponse.model_validate(pipeline)
 
@@ -408,10 +420,16 @@ async def get_pipeline_endpoint(
     session: AsyncSession = Depends(get_db_session),
     principal: AuthenticatedPrincipal = Depends(get_current_user),
 ) -> PipelineResponse:
-    async with session.begin():
-        await set_rls_org(session, principal.organisation_id)
-        await set_rls_user_context(session, principal.account_id, principal.org_role)
-        pipeline = await get_pipeline(session, pipeline_id)
+    try:
+        async with session.begin():
+            await set_rls_org(session, principal.organisation_id)
+            await set_rls_user_context(session, principal.account_id, principal.org_role)
+            pipeline = await get_pipeline(session, pipeline_id)
+    except ProgrammingError:
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="Feature is not available. Run database migrations to enable it.",
+        )
     if pipeline is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Pipeline not found")
     return PipelineResponse.model_validate(pipeline)
@@ -423,10 +441,16 @@ async def get_pipeline_graph_endpoint(
     session: AsyncSession = Depends(get_db_session),
     principal: AuthenticatedPrincipal = Depends(get_current_user),
 ) -> PipelineGraphResponse:
-    async with session.begin():
-        await set_rls_org(session, principal.organisation_id)
-        await set_rls_user_context(session, principal.account_id, principal.org_role)
-        graph = await get_pipeline_graph(session, pipeline_id)
+    try:
+        async with session.begin():
+            await set_rls_org(session, principal.organisation_id)
+            await set_rls_user_context(session, principal.account_id, principal.org_role)
+            graph = await get_pipeline_graph(session, pipeline_id)
+    except ProgrammingError:
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="Feature is not available. Run database migrations to enable it.",
+        )
     if graph is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Pipeline not found")
     nodes, edges = graph
@@ -530,27 +554,33 @@ async def update_pipeline_endpoint(
     principal: AuthenticatedPrincipal = Depends(get_current_user),
 ) -> PipelineResponse:
     updates = {k: v for k, v in body.model_dump().items() if v is not None}
-    async with session.begin():
-        await set_rls_org(session, principal.organisation_id)
-        await set_rls_user_context(session, principal.account_id, principal.org_role)
-        if "default_autonomy_level" in updates:
-            previous = await get_pipeline(session, pipeline_id)
-            prev_level = previous.default_autonomy_level if previous else None
-            if prev_level != updates["default_autonomy_level"]:
-                await append_audit_event(
-                    session,
-                    org_id=principal.organisation_id,
-                    event_type="pipeline.autonomy_level_changed",
-                    actor_user_id=principal.account_id,
-                    resource_type="pipeline",
-                    resource_id=pipeline_id,
-                    payload_json=autonomy_change_payload(
-                        previous=prev_level,
-                        current=updates["default_autonomy_level"],
-                    ),
-                    request_id=getattr(principal, "request_id", None),
-                )
-        pipeline = await update_pipeline(session, pipeline_id, updates)
+    try:
+        async with session.begin():
+            await set_rls_org(session, principal.organisation_id)
+            await set_rls_user_context(session, principal.account_id, principal.org_role)
+            if "default_autonomy_level" in updates:
+                previous = await get_pipeline(session, pipeline_id)
+                prev_level = previous.default_autonomy_level if previous else None
+                if prev_level != updates["default_autonomy_level"]:
+                    await append_audit_event(
+                        session,
+                        org_id=principal.organisation_id,
+                        event_type="pipeline.autonomy_level_changed",
+                        actor_user_id=principal.account_id,
+                        resource_type="pipeline",
+                        resource_id=pipeline_id,
+                        payload_json=autonomy_change_payload(
+                            previous=prev_level,
+                            current=updates["default_autonomy_level"],
+                        ),
+                        request_id=getattr(principal, "request_id", None),
+                    )
+            pipeline = await update_pipeline(session, pipeline_id, updates)
+    except ProgrammingError:
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="Feature is not available. Run database migrations to enable it.",
+        )
     if pipeline is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Pipeline not found")
     return PipelineResponse.model_validate(pipeline)
@@ -562,10 +592,16 @@ async def delete_pipeline_endpoint(
     session: AsyncSession = Depends(get_db_session),
     principal: AuthenticatedPrincipal = Depends(get_current_user),
 ) -> None:
-    async with session.begin():
-        await set_rls_org(session, principal.organisation_id)
-        await set_rls_user_context(session, principal.account_id, principal.org_role)
-        deleted = await delete_pipeline(session, pipeline_id)
+    try:
+        async with session.begin():
+            await set_rls_org(session, principal.organisation_id)
+            await set_rls_user_context(session, principal.account_id, principal.org_role)
+            deleted = await delete_pipeline(session, pipeline_id)
+    except ProgrammingError:
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="Feature is not available. Run database migrations to enable it.",
+        )
     if not deleted:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Pipeline not found")
 
@@ -604,13 +640,14 @@ async def clone_pipeline_endpoint(
             detail="Only organisation members and admins can clone pipelines",
         )
 
-    async with session.begin():
-        await set_rls_org(session, principal.organisation_id)
-        await set_rls_user_context(session, principal.account_id, principal.org_role)
+    try:
+        async with session.begin():
+            await set_rls_org(session, principal.organisation_id)
+            await set_rls_user_context(session, principal.account_id, principal.org_role)
 
-        # Step 1 — validate source exists
-        _log.info("Step 1/4: verifying source pipeline %s exists", pipeline_id)
-        source = await get_pipeline(session, pipeline_id)
+            # Step 1 — validate source exists
+            _log.info("Step 1/4: verifying source pipeline %s exists", pipeline_id)
+            source = await get_pipeline(session, pipeline_id)
         if source is None:
             _log.warning("Copy aborted: source pipeline %s not found", pipeline_id)
             raise HTTPException(
@@ -654,6 +691,11 @@ async def clone_pipeline_endpoint(
 
         # Step 4 — audit event
         _log.info("Step 4/4: recording audit event for clone %s -> %s", pipeline_id, cloned.id)
+    except ProgrammingError:
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="Feature is not available. Run database migrations to enable it.",
+        )
 
     _log.info("Copy complete: %s -> %s (%s)", pipeline_id, cloned.id, target_name)
     return PipelineResponse.model_validate(cloned)
@@ -680,11 +722,12 @@ async def save_as_composite_endpoint(
     session: AsyncSession = Depends(get_db_session),
     principal: AuthenticatedPrincipal = Depends(get_current_user),
 ) -> dict[str, Any]:
-    async with session.begin():
-        await set_rls_org(session, principal.organisation_id)
-        await set_rls_user_context(session, principal.account_id, principal.org_role)
+    try:
+        async with session.begin():
+            await set_rls_org(session, principal.organisation_id)
+            await set_rls_user_context(session, principal.account_id, principal.org_role)
 
-        pipeline = await get_pipeline(session, pipeline_id)
+            pipeline = await get_pipeline(session, pipeline_id)
         if pipeline is None:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Pipeline not found")
 
@@ -753,6 +796,11 @@ async def save_as_composite_endpoint(
             sub_pipeline_graph_json={"nodes": [dict(n) for n in sub_nodes], "edges": sub_edges},
             parameter_ports_json=detected_ports,
             version="0.1.0",
+        )
+    except ProgrammingError:
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="Feature is not available. Run database migrations to enable it.",
         )
 
     return {
