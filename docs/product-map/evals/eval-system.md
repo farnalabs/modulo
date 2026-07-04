@@ -188,6 +188,8 @@ block or warn on failure.
 - [x] Run not found (from-run) → 404 Not Found
 - [x] Run A not found (compare) → 404 Not Found
 - [x] Run B not found (compare) → 404 Not Found
+- [x] All eval routes: SQLAlchemyError → 503 Service Unavailable
+- [x] All eval routes: logging on DB error
 - [x] Invalid eval type in create → 422
 
 ## Known Gaps

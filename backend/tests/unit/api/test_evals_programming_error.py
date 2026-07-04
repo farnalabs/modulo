@@ -11,7 +11,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from fastapi.testclient import TestClient
-from sqlalchemy.exc import ProgrammingError
+from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
 
 from modulo.api.dependencies import _get_engine, get_db_session
 from modulo.api.main import app
@@ -45,6 +45,64 @@ def _make_session_raising_programming_error() -> AsyncMock:
     bind_mock = MagicMock()
     bind_mock.dialect.name = "postgresql"
     session.get_bind = AsyncMock(return_value=bind_mock)
+    return session
+
+
+def _make_session_raising_sqlalchemy_error() -> AsyncMock:
+    session = AsyncMock()
+    begin_cm = AsyncMock()
+    begin_cm.__aenter__ = AsyncMock(side_effect=SQLAlchemyError("statement", "params", "orig"))
+    begin_cm.__aexit__ = AsyncMock(return_value=False)
+    session.begin = MagicMock(return_value=begin_cm)
+    bind_mock = MagicMock()
+    bind_mock.dialect.name = "postgresql"
+    session.get_bind = AsyncMock(return_value=bind_mock)
+    return session
+
+
+def _make_session_with_data_second_begin_raises(exc_class: type[Exception], exc_args: tuple) -> AsyncMock:
+    """Returns a session that succeeds on first begin(), raises exc_class on second.
+    Execute mocks return valid data so code reaches the second try block."""
+    call_count: list[int] = [0]
+
+    async def _aenter_impl() -> AsyncMock:
+        call_count[0] += 1
+        if call_count[0] == 2:
+            raise exc_class(*exc_args)
+        return AsyncMock()
+
+    session = AsyncMock()
+    begin_cm = AsyncMock()
+    begin_cm.__aenter__ = AsyncMock(side_effect=_aenter_impl)
+    begin_cm.__aexit__ = AsyncMock(return_value=False)
+    session.begin = MagicMock(return_value=begin_cm)
+    bind_mock = MagicMock()
+    bind_mock.dialect.name = "postgresql"
+    session.get_bind = AsyncMock(return_value=bind_mock)
+
+    run_mock = MagicMock()
+    run_mock.id = _RUN_ID
+    run_mock.pipeline_id = _PIPELINE_ID
+    run_mock.created_at = None
+    run_mock.outputs_json = {}
+
+    eval_result_mock = MagicMock()
+    eval_result_mock.eval_id = _EVAL_DEF_ID
+    eval_result_mock.node_id = None
+    eval_result_mock.passed = True
+    eval_result_mock.score = 1.0
+    eval_result_mock.detail = None
+    eval_result_mock.evaluated_at = None
+
+    scalars_chain = MagicMock()
+    scalars_chain.all.return_value = [eval_result_mock]
+
+    execute_result = MagicMock()
+    execute_result.scalar_one_or_none.return_value = run_mock
+    execute_result.scalars.return_value = scalars_chain
+
+    session.execute = AsyncMock(return_value=execute_result)
+
     return session
 
 
@@ -87,6 +145,20 @@ class TestCreateEvalDefinitionProgrammingError:
         assert resp.status_code == 501
         assert "migrations" in resp.json()["detail"].lower()
 
+    def test_create_returns_503_on_sqlalchemy_error(self, admin_client: TestClient) -> None:
+        session = _make_session_raising_sqlalchemy_error()
+        _override_session(session)
+        resp = admin_client.post(
+            self.URL,
+            json={
+                "pipeline_id": str(_PIPELINE_ID),
+                "name": "Test Eval",
+                "eval_type": "regex",
+            },
+        )
+        assert resp.status_code == 503
+        assert "database" in resp.json()["detail"].lower()
+
 
 class TestListEvalDefinitionsProgrammingError:
     URL = "/api/v1/evals"
@@ -98,6 +170,13 @@ class TestListEvalDefinitionsProgrammingError:
         assert resp.status_code == 501
         assert "migrations" in resp.json()["detail"].lower()
 
+    def test_list_returns_503_on_sqlalchemy_error(self, admin_client: TestClient) -> None:
+        session = _make_session_raising_sqlalchemy_error()
+        _override_session(session)
+        resp = admin_client.get(self.URL)
+        assert resp.status_code == 503
+        assert "database" in resp.json()["detail"].lower()
+
 
 class TestGetEvalDefinitionProgrammingError:
     URL = "/api/v1/evals"
@@ -108,6 +187,13 @@ class TestGetEvalDefinitionProgrammingError:
         resp = admin_client.get(f"{self.URL}/{_EVAL_DEF_ID}")
         assert resp.status_code == 501
         assert "migrations" in resp.json()["detail"].lower()
+
+    def test_get_returns_503_on_sqlalchemy_error(self, admin_client: TestClient) -> None:
+        session = _make_session_raising_sqlalchemy_error()
+        _override_session(session)
+        resp = admin_client.get(f"{self.URL}/{_EVAL_DEF_ID}")
+        assert resp.status_code == 503
+        assert "database" in resp.json()["detail"].lower()
 
 
 class TestUpdateEvalDefinitionProgrammingError:
@@ -123,6 +209,16 @@ class TestUpdateEvalDefinitionProgrammingError:
         assert resp.status_code == 501
         assert "migrations" in resp.json()["detail"].lower()
 
+    def test_update_returns_503_on_sqlalchemy_error(self, admin_client: TestClient) -> None:
+        session = _make_session_raising_sqlalchemy_error()
+        _override_session(session)
+        resp = admin_client.put(
+            f"{self.URL}/{_EVAL_DEF_ID}",
+            json={"name": "Updated"},
+        )
+        assert resp.status_code == 503
+        assert "database" in resp.json()["detail"].lower()
+
 
 class TestDeleteEvalDefinitionProgrammingError:
     URL = "/api/v1/evals"
@@ -133,6 +229,13 @@ class TestDeleteEvalDefinitionProgrammingError:
         resp = admin_client.delete(f"{self.URL}/{_EVAL_DEF_ID}")
         assert resp.status_code == 501
         assert "migrations" in resp.json()["detail"].lower()
+
+    def test_delete_returns_503_on_sqlalchemy_error(self, admin_client: TestClient) -> None:
+        session = _make_session_raising_sqlalchemy_error()
+        _override_session(session)
+        resp = admin_client.delete(f"{self.URL}/{_EVAL_DEF_ID}")
+        assert resp.status_code == 503
+        assert "database" in resp.json()["detail"].lower()
 
 
 class TestEvalCoverageProgrammingError:
@@ -145,6 +248,13 @@ class TestEvalCoverageProgrammingError:
         assert resp.status_code == 501
         assert "migrations" in resp.json()["detail"].lower()
 
+    def test_coverage_returns_503_on_sqlalchemy_error(self, admin_client: TestClient) -> None:
+        session = _make_session_raising_sqlalchemy_error()
+        _override_session(session)
+        resp = admin_client.get(f"{self.URL}?pipeline_id={_PIPELINE_ID}")
+        assert resp.status_code == 503
+        assert "database" in resp.json()["detail"].lower()
+
 
 class TestListRunEvalsProgrammingError:
     URL = "/api/v1/runs"
@@ -155,6 +265,56 @@ class TestListRunEvalsProgrammingError:
         resp = admin_client.get(f"{self.URL}/{_RUN_ID}/evals")
         assert resp.status_code == 501
         assert "migrations" in resp.json()["detail"].lower()
+
+    def test_list_run_evals_returns_503_on_sqlalchemy_error(self, admin_client: TestClient) -> None:
+        session = _make_session_raising_sqlalchemy_error()
+        _override_session(session)
+        resp = admin_client.get(f"{self.URL}/{_RUN_ID}/evals")
+        assert resp.status_code == 503
+        assert "database" in resp.json()["detail"].lower()
+
+
+class TestCompareEvalsProgrammingError:
+    URL = "/api/v1/evals/compare"
+
+    def test_compare_returns_501_on_programming_error(self, admin_client: TestClient) -> None:
+        session = _make_session_raising_programming_error()
+        _override_session(session)
+        resp = admin_client.post(
+            self.URL,
+            json={
+                "run_id_a": str(_RUN_ID),
+                "run_id_b": str(_RUN_ID),
+            },
+        )
+        assert resp.status_code == 501
+        assert "migrations" in resp.json()["detail"].lower()
+
+    def test_compare_returns_503_on_sqlalchemy_error(self, admin_client: TestClient) -> None:
+        session = _make_session_raising_sqlalchemy_error()
+        _override_session(session)
+        resp = admin_client.post(
+            self.URL,
+            json={
+                "run_id_a": str(_RUN_ID),
+                "run_id_b": str(_RUN_ID),
+            },
+        )
+        assert resp.status_code == 503
+        assert "database" in resp.json()["detail"].lower()
+
+    def test_compare_returns_503_on_sqlalchemy_error_second_block(self, admin_client: TestClient) -> None:
+        session = _make_session_with_data_second_begin_raises(SQLAlchemyError, ("statement", "params", "orig"))
+        _override_session(session)
+        resp = admin_client.post(
+            self.URL,
+            json={
+                "run_id_a": str(_RUN_ID),
+                "run_id_b": str(_RUN_ID),
+            },
+        )
+        assert resp.status_code == 503
+        assert "database" in resp.json()["detail"].lower()
 
 
 class TestCreateEvalFromRunProgrammingError:
@@ -174,3 +334,33 @@ class TestCreateEvalFromRunProgrammingError:
         )
         assert resp.status_code == 501
         assert "migrations" in resp.json()["detail"].lower()
+
+    def test_from_run_returns_503_on_sqlalchemy_error(self, admin_client: TestClient) -> None:
+        session = _make_session_raising_sqlalchemy_error()
+        _override_session(session)
+        resp = admin_client.post(
+            self.URL,
+            json={
+                "run_id": str(_RUN_ID),
+                "node_id": str(uuid.uuid4()),
+                "eval_type": "regex",
+                "name": "From Run Eval",
+            },
+        )
+        assert resp.status_code == 503
+        assert "database" in resp.json()["detail"].lower()
+
+    def test_from_run_returns_503_on_sqlalchemy_error_second_block(self, admin_client: TestClient) -> None:
+        session = _make_session_with_data_second_begin_raises(SQLAlchemyError, ("statement", "params", "orig"))
+        _override_session(session)
+        resp = admin_client.post(
+            self.URL,
+            json={
+                "run_id": str(_RUN_ID),
+                "node_id": str(uuid.uuid4()),
+                "eval_type": "regex",
+                "name": "From Run Eval",
+            },
+        )
+        assert resp.status_code == 503
+        assert "database" in resp.json()["detail"].lower()
