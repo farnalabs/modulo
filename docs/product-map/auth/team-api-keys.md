@@ -14,6 +14,7 @@ code:
 unit-tests:
   - backend/tests/unit/auth/test_api_key.py
   - backend/tests/unit/api/test_api_keys_endpoint.py
+  - backend/tests/unit/auth/test_api_keys_programming_error.py
 depends-on: [feat-teams-team-crud]
 status: partial
 ---
@@ -94,4 +95,11 @@ Per-org, role-scoped API keys for CI/CD pipelines and external agents, with opti
 - **BDD coverage is incomplete.** Feature file at `backend/tests/bdd/features/auth/api_keys.feature` has 5 real scenarios (happy path, create, list, revoke, invalid, reject) but is missing scenarios for: admin role rejection, team-scoped key creation, MCP auth validation, role-scope enforcement, MCP config endpoint, not-found handling, unauthenticated access, soft-delete revocation.
 - **No team-scoped enforcement unit tests.** `test_api_key.py` does not test validation of team-scoped keys — no tests verify that a team-scoped key cannot access resources outside its team boundary.
 - **No RLS policy on `org_api_keys` table for team isolation.** When querying API keys via MCP, a team-scoped key could theoretically enumerate org-wide keys via the list endpoint — the list endpoint filters by `organisation_id` only, not by the requesting key's `team_id`.
-- **`update_api_key` endpoint does not support updating `expires_at` in the route layer.** The `update_api_key` function in `api_key.py` accepts `expires_at`, and the route now parses it from the request body (Fix C), but no test coverage exists for the new field on the update path.
+- **`update_api_key` endpoint now supports `expires_at` on update** but lacks test coverage for this path.
+
+## QA History
+
+### Index 135 — 2026-07-04
+- Fixed CRITICAL: `test_create_api_key_accepts_expires_at` passed `created_by=user_id` instead of `account_id=user_id` — would raise TypeError
+- Added `test_api_keys_programming_error.py` with 4 unit tests covering all DB-accessing route handlers (create, list, update, revoke → 501)
+- Stale `expires_at` gap corrected: PUT route DOES parse and propagate `expires_at`, but lacks dedicated test
