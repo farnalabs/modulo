@@ -1,7 +1,7 @@
 """Add deletion_token, deletion_token_expires_at, export_bundle_json to organisations.
 
 Revision ID: 0015_org_deletion
-Revises: 0014_team_cost_attribution, 0014_fixture_contribution
+Revises: 0014_team_cost_attribution, 0071_fixture_contribution
 Create Date: 2026-06-24 08:08:00.000000
 """
 
@@ -13,7 +13,7 @@ from alembic import op
 revision: str = "0015_org_deletion"
 down_revision: str | Sequence[str] | None = (
     "0014_team_cost_attribution",
-    "0014_fixture_contribution",
+    "0071_fixture_contribution",
 )
 depends_on: str | Sequence[str] | None = None
 

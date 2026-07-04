@@ -1,6 +1,6 @@
 """Add node_observations table for tracking human observation of node output.
 
-Revision ID: 0041_node_observations
+Revision ID: 0073_node_observations
 Revises: 0040_runaway_run_protection
 Create Date: 2026-06-29
 """
@@ -9,7 +9,7 @@ from collections.abc import Sequence
 
 from alembic import op
 
-revision: str = "0041_node_observations"
+revision: str = "0073_node_observations"
 down_revision: str | Sequence[str] | None = "0040_runaway_run_protection"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
