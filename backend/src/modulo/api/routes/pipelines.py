@@ -554,7 +554,7 @@ async def update_pipeline_endpoint(
     session: AsyncSession = Depends(get_db_session),
     principal: AuthenticatedPrincipal = Depends(get_current_user),
 ) -> PipelineResponse:
-    updates = {k: v for k, v in req.model_dump(exclude_unset=True).items() if v is not None}
+    updates = req.model_dump(exclude_unset=True)
     try:
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
@@ -684,6 +684,18 @@ async def clone_pipeline_endpoint(
 
             # Step 4 — audit event
             _log.info("Step 4/4: recording audit event for clone %s -> %s", pipeline_id, cloned.id)
+            await append_audit_event(
+                session,
+                org_id=principal.organisation_id,
+                event_type="pipeline.cloned",
+                actor_user_id=principal.account_id,
+                resource_type="pipeline",
+                resource_id=pipeline_id,
+                payload_json={
+                    "cloned_pipeline_id": str(cloned.id),
+                    "target_name": target_name,
+                },
+            )
     except ProgrammingError:
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,

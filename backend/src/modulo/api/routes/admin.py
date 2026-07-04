@@ -1999,7 +1999,7 @@ async def admin_update_publisher(
             detail="Only admin users can update publishers",
         )
 
-    updates: dict[str, object] = {k: v for k, v in req.model_dump().items() if v is not None}
+    updates: dict[str, object] = req.model_dump(exclude_unset=True)
 
     try:
         async with session.begin():
