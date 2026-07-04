@@ -1,19 +1,22 @@
 import uuid
 from datetime import datetime
 
-from sqlalchemy import Boolean, CheckConstraint, DateTime, ForeignKey, String, Text, Uuid, func
-from sqlalchemy.dialects.postgresql import JSON
+from sqlalchemy import CheckConstraint, DateTime, ForeignKey, String, Uuid, func
 from sqlalchemy.orm import Mapped, mapped_column
 
 from modulo.db.models.base import Base
 
 
-class RemySkill(Base):
-    __tablename__ = "remy_skills"
+class RemyContextSource(Base):
+    __tablename__ = "remy_context_sources"
     __table_args__ = (
         CheckConstraint(
             "(organisation_id IS NOT NULL AND user_id IS NULL) OR (organisation_id IS NULL AND user_id IS NOT NULL)",
-            name="ck_remy_skills_owner",
+            name="ck_remy_context_sources_owner",
+        ),
+        CheckConstraint(
+            "source_mode IN ('always_on', 'tool', 'off')",
+            name="ck_remy_context_sources_mode",
         ),
     )
 
@@ -22,20 +25,14 @@ class RemySkill(Base):
         Uuid(),
         ForeignKey("organisations.id", ondelete="CASCADE"),
         nullable=True,
-        index=True,
     )
     user_id: Mapped[uuid.UUID | None] = mapped_column(
         Uuid(),
         ForeignKey("accounts.id", ondelete="CASCADE"),
         nullable=True,
-        index=True,
     )
-    name: Mapped[str] = mapped_column(String(100), nullable=False)
-    description: Mapped[str | None] = mapped_column(Text)
-    triggers: Mapped[list[str] | None] = mapped_column(JSON, nullable=True)
-    body: Mapped[str] = mapped_column(Text, nullable=False)
-    active: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="true")
-    source_mode: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    source_key: Mapped[str] = mapped_column(String(64), nullable=False)
+    source_mode: Mapped[str] = mapped_column(String(16), nullable=False, server_default="always_on")
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         server_default=func.current_timestamp(),

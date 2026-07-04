@@ -8,6 +8,8 @@ from pydantic import BaseModel, Field
 from sqlalchemy.exc import ProgrammingError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from pydantic import BaseModel, Field
+
 from modulo.api.dependencies import get_db_session
 from modulo.api.routes.admin_remy import (
     SkillCreate,
@@ -22,6 +24,7 @@ from modulo.api.routes.auth import me as _me_handler
 from modulo.auth.dependencies import get_current_user
 from modulo.auth.jwt import AuthenticatedPrincipal
 from modulo.auth.passwords import hash_password, validate_password_strength
+from modulo.core.remy.context_source_service import RemyContextSourceService
 from modulo.db.crud.account import get_account_by_id, update_account_preferences
 from modulo.db.crud.token_family import blacklist_family, list_families_for_account
 from modulo.db.models.remy_skill import RemySkill
@@ -209,6 +212,81 @@ async def delete_user_skill(
         async with session.begin():
             skill = await get_user_skill_or_404(session, current_user.account_id, skill_id)
             await session.delete(skill)
+    except ProgrammingError:
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="Feature is not available. Run database migrations to enable it.",
+        ) from None
+
+
+# ── User-level Context Sources ─────────────────────────────────────────
+
+
+class ContextSourceModeUpdate(BaseModel):
+    source_mode: str = Field(..., pattern=r"^(always_on|tool|off)$")
+
+
+@router.get("/me/remy/context-sources")
+async def get_user_context_sources(
+    current_user: AuthenticatedPrincipal = Depends(get_current_user),
+    session: AsyncSession = Depends(get_db_session),
+) -> dict[str, str]:
+    try:
+        async with session.begin():
+            service = RemyContextSourceService(session)
+            config = await service.get_effective_config(
+                current_user.organisation_id, current_user.account_id
+            )
+        return config.context_sources
+    except ProgrammingError:
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="Feature is not available. Run database migrations to enable it.",
+        ) from None
+
+
+@router.put("/me/remy/context-sources/{source_key}")
+async def set_user_context_source(
+    source_key: str,
+    body: ContextSourceModeUpdate,
+    current_user: AuthenticatedPrincipal = Depends(get_current_user),
+    session: AsyncSession = Depends(get_db_session),
+) -> dict[str, str]:
+    try:
+        async with session.begin():
+            service = RemyContextSourceService(session)
+            await service.set_user_override(
+                current_user.organisation_id,
+                current_user.account_id,
+                source_key,
+                body.source_mode,
+            )
+            config = await service.get_effective_config(
+                current_user.organisation_id, current_user.account_id
+            )
+        return config.context_sources
+    except ProgrammingError:
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="Feature is not available. Run database migrations to enable it.",
+        ) from None
+
+
+@router.delete("/me/remy/context-sources", status_code=status.HTTP_200_OK)
+async def reset_user_context_sources(
+    current_user: AuthenticatedPrincipal = Depends(get_current_user),
+    session: AsyncSession = Depends(get_db_session),
+) -> dict[str, str]:
+    try:
+        async with session.begin():
+            service = RemyContextSourceService(session)
+            await service.reset_user_overrides(
+                current_user.organisation_id, current_user.account_id
+            )
+            config = await service.get_effective_config(
+                current_user.organisation_id, current_user.account_id
+            )
+        return config.context_sources
     except ProgrammingError:
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
