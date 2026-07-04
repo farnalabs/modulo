@@ -7,7 +7,7 @@ migrates existing ``users`` rows into both, drops all 29 FK constraints
 pointing to ``users.id``, renames columns to ``account_id``, recreates FKs
 pointing to ``accounts.id``, then drops the ``users`` table.
 
-Revision ID: 0045_account_org_membership
+Revision ID: 0074_account_org_membership
 Revises: 0044_library_auto_update
 Create Date: 2026-06-30
 """
@@ -17,7 +17,7 @@ from collections.abc import Sequence
 import sqlalchemy as sa
 from alembic import op
 
-revision: str = "0045_account_org_membership"
+revision: str = "0074_account_org_membership"
 down_revision: str | Sequence[str] | None = "0044_library_auto_update"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None

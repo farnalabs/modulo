@@ -20,7 +20,7 @@ from alembic import op
 revision: str = "0047_create_missing_tables"
 down_revision: str | Sequence[str] | None = "0046_system_config"
 branch_labels: str | Sequence[str] | None = None
-depends_on: str | Sequence[str] | None = "0045_account_org_membership"
+depends_on: str | Sequence[str] | None = "0074_account_org_membership"
 
 
 def upgrade() -> None:
