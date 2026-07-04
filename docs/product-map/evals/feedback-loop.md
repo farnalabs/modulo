@@ -11,7 +11,11 @@ code:
   - backend/src/modulo/core/pipeline_engine/executor.py
   - backend/src/modulo/db/models/feedback_record.py
   - backend/src/modulo/db/crud/run.py
-unit-tests: []
+unit-tests:
+  - backend/tests/unit/core/feedback_manager/test_feedback_manager.py
+  - backend/tests/unit/api/test_feedback_endpoint.py
+  - backend/tests/unit/api/test_feedback_programming_error.py
+  - backend/tests/integration/feedback_manager/test_feedback_flow.py
 depends-on: [feat-core-feedback-correction, feat-evals-feedback-proposals, feat-frontend-feedback-inbox-ui]
 status: partial
 ---
@@ -111,9 +115,9 @@ The Feedback System treats every human rejection as structured signal. Handles F
 - [ ] Input validation on rejected_output size — not enforced
 
 ## Known Gaps
-- BDD feature file (feedback_system.feature) is a placeholder with zero real scenarios
-- detect_eval_gap logic is implemented — now returns True when all evals pass (gap) and False when any fails. API endpoint still passes eval_suite=[] (no pipeline eval fetch wired yet).
+- BDD feature file (feedback_system.feature) has 7 real scenarios (not a placeholder) — covers create, status transitions, invalid transitions, gap detection, and correction run spawning
+- detect_eval_gap logic is implemented — now returns True when all evals pass (gap) and False when any fails. API endpoint now fetches eval definitions from the pipeline (no longer passes eval_suite=[])
 - Correction run mechanics create a fresh run rather than seeding from original LangGraph checkpoint
 - No feedback_handler supersedes reject_target enforcement at validation/gate level
 - No audit events recorded for FeedbackRecord status transitions
-- No UI for feedback inbox, annotation, or eval proposal curation 
+- Feedback inbox UI exists (FeedbackInboxView.vue), but no annotation or eval proposal curation UI

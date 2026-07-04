@@ -49,13 +49,13 @@ Conditional HITL gating and eval-before-interrupt for pipeline nodes. A HITL gat
 - [x] Suite-level pass_threshold check after run completion — suite passes, run stays "complete"
 - [x] Suite-level pass_threshold check — suite fails, run transitions to "failed" with `error_code="eval_suite_blocked"`
 - [x] Multiple evals on one node: all pass — gate proceeds normally
-- [ ] Cancel during eval evaluation stops run with status "cancelled"
-- [ ] `EvalBlockedError` includes eval name and detail in exception message
-- [ ] `EvalSuiteBlockedError` includes suite_id, score, and threshold in exception message
+- [x] Cancel during eval evaluation stops run with status "cancelled"
+- [x] `EvalBlockedError` includes eval name and detail in exception message
+- [x] `EvalSuiteBlockedError` includes suite_id, score, and threshold in exception message
 - [x] Block failure publishes `run_failed` broker event
 - [x] `standalone_evaluate()` runs an ad-hoc eval without a persisted EvalDefinition (for Feedback System)
 - [x] Resume from interrupt: gate detects `_hitl_decision` in state and does not re-evaluate condition or evals
-- [ ] Resume from interrupt: rejected decision routes via reject edge if configured
+- [x] Resume from interrupt: rejected decision routes via reject edge if configured
 - [x] `list_pending` returns all unclaimed, undecided gates for an org
 - [x] `list_overdue` returns gates whose `claimed_at` exceeds the overdue threshold
 - [x] `count_overdue` returns count of overdue gates
@@ -109,16 +109,16 @@ Conditional HITL gating and eval-before-interrupt for pipeline nodes. A HITL gat
 - [x] Multiple suites with thresholds — first failing suite terminates check
 
 ### Error States
-- [ ] Gate not found on claim → `GateNotFoundError`
-- [ ] Gate already claimed → `AlreadyClaimedError` (not idempotent)
-- [ ] Gate already decided → `GateAlreadyDecidedError`
-- [ ] Non-team-member tries to claim team-scoped gate → `NotTeamMemberError`
-- [ ] Viewers/non-approvers cannot approve/reject → 403 response
-- [ ] Expired claim token → `ClaimTokenExpiredError` (not silently accepted)
+- [x] Gate not found on claim → `GateNotFoundError`
+- [x] Gate already claimed → `AlreadyClaimedError` (not idempotent)
+- [x] Gate already decided → `GateAlreadyDecidedError`
+- [x] Non-team-member tries to claim team-scoped gate → `NotTeamMemberError`
+- [x] Viewers/non-approvers cannot approve/reject → 403 response
+- [x] Expired claim token → `ClaimTokenExpiredError` (not silently accepted)
 - [x] `EvalSuiteBlockedError` is raised when suite fails threshold check
-- [ ] Expiry job tick failure logged and recovered on next tick
-- [ ] Cancelled expiry job stops cleanly
-- [ ] DB session failure in expiry job does not crash the background loop
+- [x] Expiry job tick failure logged and recovered on next tick
+- [x] Cancelled expiry job stops cleanly
+- [x] DB session failure in expiry job does not crash the background loop
 
 ### Routing Error Handling
 - [x] ProgrammingError on claim_gate → 501 Not Implemented
@@ -129,11 +129,6 @@ Conditional HITL gating and eval-before-interrupt for pipeline nodes. A HITL gat
 - [x] ProgrammingError on submit_manual → 501 Not Implemented
 - [x] ProgrammingError on list_run_pending_gates → 501 Not Implemented
 - [x] ProgrammingError on list_org_pending_gates → 501 Not Implemented
-- [x] EvalSuiteBlockedError raised when suite fails threshold check
-- [x] Expiry job tick failure logged and recovered
-- [x] Cancelled expiry job stops cleanly
-- [x] DB session failure in expiry job does not crash background loop
-
 ### Edge Cases
 - [ ] Condition expression runtime error → JMESPath raises, percolates as node error
 - [ ] Eval definitions list is empty → no eval check performed (gate proceeds)
@@ -191,7 +186,7 @@ Conditional HITL gating and eval-before-interrupt for pipeline nodes. A HITL gat
 ## Known Gaps
 - [ ] PRD 8.17 specifies HITL gate `condition` as `{eval_id, threshold, operator}` referencing an eval definition. The code implements condition as a JMESPath expression against state (node_runner.py:128-163), with eval-definitions as a separate array. These are different mechanisms. The BDD `conditional_hitl.feature` includes scenarios for both — the implementation's eval-before-interrupt evaluates ALL eval_definitions against state with no per-eval threshold or operator. The PRD-specified eval-reference format (eval_id + threshold + operator) is not implemented.
 - [x] **RESOLVED** (2026-07-03): `for sr in suite_results` dead-code loop in executor.py post-run suite check removed. `_check_eval_suites()` raises `EvalSuiteBlockedError` before returning non-passing results, so the iteration was unreachable.
-- [ ] All 8 HITL API routes now have ProgrammingError→501 catches, with unit test coverage (test_hitl_programming_error.py). Routes covered: claim, approve, approve-with-modification, reject, deliver-manual, submit-manual, list-run-pending, list-org-pending.
+- [x] **RESOLVED** (2026-07-03): All 8 HITL API routes now have ProgrammingError→501 catches, with unit test coverage (test_hitl_programming_error.py). Routes covered: claim, approve, approve-with-modification, reject, deliver-manual, submit-manual, list-run-pending, list-org-pending.
 - [ ] `node_runner.py:168` — `engine.evaluate(state, eval_def)` return value is discarded. Eval results are not logged or persisted for eval-before-interrupt. Only exceptions are surfaced. Warn-level eval failures produce no output.
 - [ ] `eval_block.feature` scenario "Block failure is recorded in AuditEvent" references AuditEvent recording, but no AuditEvent integration exists in the eval engine or executor. AuditEvent writing for block failures is not implemented.
 - [ ] `eval_block.feature` scenario "Multiple evals on one node all must pass" expects "remaining evals are not evaluated" on first block failure — the code iterates all eval_definitions and only raises after the loop, but calls `engine.evaluate()` which raises `EvalBlockedError` on block failure, so remaining evals are actually skipped (by exception propagation). This happens to be correct but is implicit.

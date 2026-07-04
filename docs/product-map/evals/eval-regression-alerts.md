@@ -3,9 +3,9 @@ id: feat-evals-eval-regression-alerts
 prd: 8.17
 delivery-tasks: [task-nv7-eval-regression-alerts]
 bdd:
-  - tests/features/evals/eval_regex.feature
-  - tests/features/evals/eval_llm_judge.feature
-  - tests/features/evals/eval_block.feature
+  - backend/tests/features/evals/eval_regex.feature
+  - backend/tests/features/evals/eval_llm_judge.feature
+  - backend/tests/features/evals/eval_block.feature
 code:
   - backend/src/modulo/core/eval_engine/regression.py
   - backend/src/modulo/api/routes/admin.py

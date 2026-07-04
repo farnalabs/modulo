@@ -15,7 +15,6 @@ bdd:
   - backend/tests/bdd/features/eval/eval_scorer.feature
   - backend/tests/bdd/features/eval/eval_run.feature
   - backend/tests/bdd/features/eval/feedback_system.feature
-  - backend/tests/bdd/features/eval/conditional_hitl.feature
   - backend/tests/features/evals/eval_regex.feature
   - backend/tests/features/evals/eval_llm_judge.feature
   - backend/tests/features/evals/eval_block.feature
@@ -23,7 +22,7 @@ bdd:
   - backend/tests/bdd/features/ui/eval_dashboard.feature
 code:
   - backend/src/modulo/core/eval_engine/
-  - backend/src/modulo/db/crud/eval_definition.py
+  - backend/src/modulo/api/routes/evals.py
   - backend/src/modulo/api/routes/evals.py
   - backend/src/modulo/db/models/eval_definition.py
   - backend/src/modulo/db/models/eval_result.py
@@ -69,7 +68,7 @@ block or warn on failure.
 - [x] Content exceeds max length → ContentTooLongError, eval fail
 - [x] Block behaviour on fail → EvalBlockedError raised
 - [ ] Rubric with no criteria → default rubric or error?
-- [ ] Judge uses dedicated model_backend_id (not agent's own) — separate feature
+- [x] Judge uses dedicated model_backend_id (not agent's own)
 
 ### Eval Engine — regex
 

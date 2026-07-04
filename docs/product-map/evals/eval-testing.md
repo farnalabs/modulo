@@ -14,7 +14,7 @@ bdd:
   - backend/tests/bdd/features/eval/conditional_hitl.feature
 code:
   - backend/src/modulo/core/eval_engine/
-  - backend/src/modulo/api/admin/evals/
+  - backend/src/modulo/api/routes/admin.py
 unit-tests:
   - backend/tests/unit/api/test_evals_endpoint.py
   - backend/tests/unit/api/test_evals_dashboard.py
@@ -87,7 +87,7 @@ Discovered from 1 completed delivery task (task-nv2-eval-bdd-tests). Tests valid
 - [x] Warn behaviour logs warning and does not halt pipeline
 - [x] Suite-level pass_threshold blocks run on aggregate failure (eval_suite_blocked)
 - [x] Suite-level pass_threshold passes on aggregate success
-- [x] Block failure recorded in AuditEvent with type eval_blocked
+- [ ] Block failure recorded in AuditEvent with type eval_blocked — not wired to AuditEvent DB table (BDD step defs are stubs)
 - [x] Multiple evals on one node: first failure blocks remaining evals, EvalBlockedError raised
 
 ### Eval suite aggregation
