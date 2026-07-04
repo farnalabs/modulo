@@ -130,7 +130,12 @@ jobs:
         shell: powershell
         run: |
           $script = Join-Path $env:GITHUB_WORKSPACE "scripts\verify-alpha-exit.ps1"
-          & $script
+          $skipBDD = "${{ inputs.skip_bdd }}"
+          if ($skipBDD -eq "true") {
+            & $script -SkipBDD
+          } else {
+            & $script
+          }
           $exitCode = $LASTEXITCODE
           Write-Host "Verification exit code: $exitCode"
           if ($exitCode -eq 0) {
