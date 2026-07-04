@@ -14,6 +14,7 @@ from datetime import UTC, datetime
 from typing import Any
 
 from sqlalchemy import func, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.db.models.audit_event import AuditChainHead, AuditEvent
@@ -70,8 +71,47 @@ def _compute_event_hash(
         },
         separators=(",", ":"),
         sort_keys=True,
+        default=str,
     )
     return hashlib.sha256(canonical.encode()).hexdigest()
+
+
+def _audit_event_to_dict(e: AuditEvent) -> dict[str, Any]:
+    return {
+        "id": str(e.id),
+        "event_type": e.event_type,
+        "actor_user_id": str(e.account_id) if e.account_id else None,
+        "resource_type": e.resource_type,
+        "resource_id": str(e.resource_id) if e.resource_id else None,
+        "payload_json": e.payload_json,
+        "request_id": e.request_id,
+        "previous_hash": e.previous_hash,
+        "created_at": e.created_at.isoformat() if e.created_at else None,
+    }
+
+
+def _apply_filters(
+    query: Any,
+    org_id: uuid.UUID,
+    *,
+    event_type: str | None = None,
+    actor_user_id: uuid.UUID | None = None,
+    resource_type: str | None = None,
+    from_date: str | None = None,
+    to_date: str | None = None,
+) -> Any:
+    query = query.where(AuditEvent.organisation_id == org_id)
+    if event_type:
+        query = query.where(AuditEvent.event_type == event_type)
+    if actor_user_id:
+        query = query.where(AuditEvent.account_id == actor_user_id)
+    if resource_type:
+        query = query.where(AuditEvent.resource_type == resource_type)
+    if from_date:
+        query = query.where(AuditEvent.created_at >= from_date)
+    if to_date:
+        query = query.where(AuditEvent.created_at <= to_date)
+    return query
 
 
 async def get_chain_head(session: AsyncSession, org_id: uuid.UUID) -> AuditChainHead | None:
@@ -95,54 +135,65 @@ async def append_audit_event(
 
     Uses SELECT ... FOR UPDATE on the chain head to prevent forks from
     concurrent appends within the same organisation.
+
+    Retries up to 3 times if a concurrent transaction creates the chain head
+    between our lock check and our insert (race on the first event for an org).
     """
-    head = await _get_chain_head_locked(session, org_id)
-    prev_hash = head.last_event_hash if head else None
+    max_retries = 3
+    resolved_payload = payload_json or {}
+    for attempt in range(max_retries):
+        try:
+            async with session.begin_nested():
+                head = await _get_chain_head_locked(session, org_id)
+                prev_hash = head.last_event_hash if head else None
 
-    event = AuditEvent(
-        organisation_id=org_id,
-        event_type=event_type,
-        account_id=actor_user_id,
-        resource_type=resource_type,
-        resource_id=resource_id,
-        payload_json=payload_json or {},
-        request_id=request_id,
-        previous_hash=prev_hash,
-    )
-    if event.created_at is None:
-        event.created_at = datetime.now(UTC)
-    session.add(event)
-    await session.flush()
+                event = AuditEvent(
+                    organisation_id=org_id,
+                    event_type=event_type,
+                    account_id=actor_user_id,
+                    resource_type=resource_type,
+                    resource_id=resource_id,
+                    payload_json=resolved_payload,
+                    request_id=request_id,
+                    previous_hash=prev_hash,
+                )
+                if event.created_at is None:
+                    event.created_at = datetime.now(UTC)
+                session.add(event)
+                await session.flush()
 
-    event_hash = _compute_event_hash(
-        event_type=event_type,
-        actor_user_id=actor_user_id,
-        resource_type=resource_type,
-        resource_id=resource_id,
-        payload_json=payload_json or {},
-        request_id=request_id,
-        previous_hash=prev_hash,
-        event_id=event.id,
-        organisation_id=org_id,
-        created_at=event.created_at.isoformat(),
-    )
+                event_hash = _compute_event_hash(
+                    event_type=event_type,
+                    actor_user_id=actor_user_id,
+                    resource_type=resource_type,
+                    resource_id=resource_id,
+                    payload_json=resolved_payload,
+                    request_id=request_id,
+                    previous_hash=prev_hash,
+                    event_id=event.id,
+                    organisation_id=org_id,
+                    created_at=event.created_at.isoformat(),
+                )
 
-    # Upsert chain head
-    if head:
-        head.last_event_hash = event_hash
-        head.last_event_id = event.id
-        head.event_count += 1
-    else:
-        head = AuditChainHead(
-            organisation_id=org_id,
-            last_event_hash=event_hash,
-            last_event_id=event.id,
-            event_count=1,
-        )
-        session.add(head)
+                if head:
+                    head.last_event_hash = event_hash
+                    head.last_event_id = event.id
+                    head.event_count += 1
+                else:
+                    head = AuditChainHead(
+                        organisation_id=org_id,
+                        last_event_hash=event_hash,
+                        last_event_id=event.id,
+                        event_count=1,
+                    )
+                    session.add(head)
 
-    await session.flush()
-    return event
+                await session.flush()
+                return event
+        except IntegrityError:
+            if attempt == max_retries - 1:
+                raise
+    raise RuntimeError("append_audit_event: unreachable")  # pragma: no cover
 
 
 async def _get_chain_head_locked(session: AsyncSession, org_id: uuid.UUID) -> AuditChainHead | None:
@@ -167,13 +218,20 @@ async def verify_chain(
     """Recompute the entire audit chain and report gaps or tampering.
 
     Returns a dict with:
-      - valid: bool — True if the chain is intact
-      - total_events: int
-      - checked_events: int
+      - valid: bool — True if the chain is intact within the checked range
+      - total_events: int — total event count in the DB for this org
+      - checked_events: int — number of events actually verified
+      - truncated: bool — True if total_events > max_events (partial check)
       - first_gap_index: int | None
       - first_tampered_id: str | None
       - chain_head_match: bool | None
     """
+    # Count total events first
+    count_result = await session.execute(
+        select(func.count(AuditEvent.id)).where(AuditEvent.organisation_id == org_id)
+    )
+    total_events = count_result.scalar() or 0
+
     result = await session.execute(
         select(AuditEvent)
         .where(AuditEvent.organisation_id == org_id)
@@ -187,8 +245,13 @@ async def verify_chain(
             "valid": True,
             "total_events": 0,
             "checked_events": 0,
-            "event_count": 0,
+            "truncated": False,
+            "first_gap_index": None,
+            "first_tampered_id": None,
+            "chain_head_match": None,
         }
+
+    truncated = len(events) < total_events
 
     expected_prev: str | None = None
     for idx, event in enumerate(events):
@@ -210,28 +273,34 @@ async def verify_chain(
             )
             return {
                 "valid": False,
-                "total_events": len(events),
+                "total_events": total_events,
                 "checked_events": idx + 1,
+                "truncated": truncated,
                 "first_gap_index": idx,
                 "first_tampered_id": str(event.id),
+                "chain_head_match": None,
                 "detail": detail,
-                "event_count": len(events),
-                "error": detail,
             }
         expected_prev = canonical_hash
 
     # Validate against chain head
     head = await get_chain_head(session, org_id)
-    chain_head_match = head.last_event_hash == expected_prev if head else None
+    if head:
+        chain_head_match = head.last_event_hash == expected_prev
+        count_mismatch = head.event_count != total_events if head.event_count is not None else False
+    else:
+        chain_head_match = None
+        count_mismatch = None
 
     return {
-        "valid": True,
-        "total_events": len(events),
+        "valid": not truncated and (chain_head_match is not False),
+        "total_events": total_events,
         "checked_events": len(events),
+        "truncated": truncated,
         "first_gap_index": None,
         "first_tampered_id": None,
         "chain_head_match": chain_head_match,
-        "event_count": len(events),
+        "chain_count_mismatch": count_mismatch,
     }
 
 
@@ -248,53 +317,34 @@ async def export_chain(
     to_date: str | None = None,
 ) -> dict[str, Any]:
     """Export audit events as paginated JSON lines with optional filters."""
-    query = select(AuditEvent).where(AuditEvent.organisation_id == org_id)
-
-    if event_type:
-        query = query.where(AuditEvent.event_type == event_type)
-    if actor_user_id:
-        query = query.where(AuditEvent.account_id == actor_user_id)
-    if resource_type:
-        query = query.where(AuditEvent.resource_type == resource_type)
-    if from_date:
-        query = query.where(AuditEvent.created_at >= from_date)
-    if to_date:
-        query = query.where(AuditEvent.created_at <= to_date)
+    query = select(AuditEvent)
+    query = _apply_filters(
+        query, org_id,
+        event_type=event_type,
+        actor_user_id=actor_user_id,
+        resource_type=resource_type,
+        from_date=from_date,
+        to_date=to_date,
+    )
 
     offset = (page - 1) * page_size
     query = query.order_by(AuditEvent.created_at.asc(), AuditEvent.id.asc()).offset(offset).limit(page_size)
     result = await session.execute(query)
     events = list(result.scalars())
 
-    count_query = select(func.count(AuditEvent.id)).where(AuditEvent.organisation_id == org_id)
-    if event_type:
-        count_query = count_query.where(AuditEvent.event_type == event_type)
-    if actor_user_id:
-        count_query = count_query.where(AuditEvent.account_id == actor_user_id)
-    if resource_type:
-        count_query = count_query.where(AuditEvent.resource_type == resource_type)
-    if from_date:
-        count_query = count_query.where(AuditEvent.created_at >= from_date)
-    if to_date:
-        count_query = count_query.where(AuditEvent.created_at <= to_date)
+    count_query = select(func.count(AuditEvent.id))
+    count_query = _apply_filters(
+        count_query, org_id,
+        event_type=event_type,
+        actor_user_id=actor_user_id,
+        resource_type=resource_type,
+        from_date=from_date,
+        to_date=to_date,
+    )
     total_result = await session.execute(count_query)
     total = total_result.scalar() or 0
 
-    items = []
-    for e in events:
-        items.append(
-            {
-                "id": str(e.id),
-                "event_type": e.event_type,
-                "actor_user_id": str(e.account_id) if e.account_id else None,
-                "resource_type": e.resource_type,
-                "resource_id": str(e.resource_id) if e.resource_id else None,
-                "payload_json": e.payload_json,
-                "request_id": e.request_id,
-                "previous_hash": e.previous_hash,
-                "created_at": e.created_at.isoformat() if e.created_at else None,
-            }
-        )
+    items = [_audit_event_to_dict(e) for e in events]
 
     return {
         "items": items,
@@ -322,20 +372,20 @@ async def list_audit_events(
     that encodes both sort columns so pagination is correct across
     ``created_at DESC, id DESC``.
 
-    Returns dict with items, next_cursor, prev_cursor, total.
+    Returns dict with items, next_cursor, total. Previous-page cursor
+    is not provided — this is a forward-only cursor pattern. Callers
+    should reset cursor to None to go back to the first page.
     """
-    query = select(AuditEvent).where(AuditEvent.organisation_id == org_id)
+    resolved_limit = max(1, min(limit, 1000))
 
-    if event_type:
-        query = query.where(AuditEvent.event_type == event_type)
-    if actor_user_id:
-        query = query.where(AuditEvent.account_id == actor_user_id)
-    if resource_type:
-        query = query.where(AuditEvent.resource_type == resource_type)
-    if from_date:
-        query = query.where(AuditEvent.created_at >= from_date)
-    if to_date:
-        query = query.where(AuditEvent.created_at <= to_date)
+    query = _apply_filters(
+        select(AuditEvent), org_id,
+        event_type=event_type,
+        actor_user_id=actor_user_id,
+        resource_type=resource_type,
+        from_date=from_date,
+        to_date=to_date,
+    )
 
     # Total count (before pagination)
     count_query = select(func.count()).select_from(query.subquery())
@@ -354,34 +404,20 @@ async def list_audit_events(
             )
         except (ValueError, KeyError, TypeError):
             _log.warning(
-                "list_audit_events: failed to decode cursor %r — falling back to unfiltered query",
+                "list_audit_events: failed to decode cursor %r — falling back to first page",
                 cursor,
             )
 
-    query = query.order_by(AuditEvent.created_at.desc(), AuditEvent.id.desc()).limit(limit + 1)
+    query = query.order_by(AuditEvent.created_at.desc(), AuditEvent.id.desc()).limit(resolved_limit + 1)
 
     result = await session.execute(query)
     events = list(result.scalars())
 
-    has_more = len(events) > limit
+    has_more = len(events) > resolved_limit
     if has_more:
-        events = events[:limit]
+        events = events[:resolved_limit]
 
-    items = []
-    for e in events:
-        items.append(
-            {
-                "id": str(e.id),
-                "event_type": e.event_type,
-                "actor_user_id": str(e.account_id) if e.account_id else None,
-                "resource_type": e.resource_type,
-                "resource_id": str(e.resource_id) if e.resource_id else None,
-                "payload_json": e.payload_json,
-                "request_id": e.request_id,
-                "previous_hash": e.previous_hash,
-                "created_at": e.created_at.isoformat() if e.created_at else None,
-            }
-        )
+    items = [_audit_event_to_dict(e) for e in events]
 
     last_event = events[-1] if events else None
     next_cursor = (
@@ -389,18 +425,12 @@ async def list_audit_events(
         if last_event and has_more
         else None
     )
-    prev_cursor = (
-        json.dumps({"c": events[0].created_at.isoformat(), "i": str(events[0].id)}, separators=(",", ":"))
-        if events
-        else None
-    )
 
     return {
         "items": items,
         "total": total,
         "next_cursor": next_cursor,
-        "prev_cursor": prev_cursor,
-        "limit": limit,
+        "limit": resolved_limit,
     }
 
 
@@ -409,9 +439,10 @@ async def get_audit_events_batch(
     org_id: uuid.UUID,
     event_ids: list[str],
 ) -> list[dict[str, Any]]:
-    """Return full details for a batch of event IDs."""
+    """Return full details for a batch of event IDs (max 100)."""
+    capped = event_ids[:100]
     ids = []
-    for eid in event_ids:
+    for eid in capped:
         try:
             ids.append(uuid.UUID(eid))
         except ValueError:
@@ -426,20 +457,4 @@ async def get_audit_events_batch(
     )
     events = list(result.scalars())
 
-    items = []
-    for e in events:
-        items.append(
-            {
-                "id": str(e.id),
-                "event_type": e.event_type,
-                "actor_user_id": str(e.account_id) if e.account_id else None,
-                "resource_type": e.resource_type,
-                "resource_id": str(e.resource_id) if e.resource_id else None,
-                "payload_json": e.payload_json,
-                "request_id": e.request_id,
-                "previous_hash": e.previous_hash,
-                "created_at": e.created_at.isoformat() if e.created_at else None,
-            }
-        )
-
-    return items
+    return [_audit_event_to_dict(e) for e in events]
