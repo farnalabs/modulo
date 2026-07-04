@@ -12,6 +12,7 @@ in OpenTelemetry spans with connector_type, operation_name, and org_id attribute
 Sensitive data (credentials, API keys, user content) is never included in span attributes.
 """
 
+import copy
 import json
 import logging
 import uuid
@@ -114,6 +115,7 @@ class ConnectorHub:
         self._tracer = trace.get_tracer("modulo.connector_hub")
         self._org_id = org_id
         self._runtime_provider = runtime_provider
+        self._initialised = False
 
     async def __aenter__(self) -> "ConnectorHub":
         return self
@@ -129,6 +131,9 @@ class ConnectorHub:
         Connectors that fail to initialise are skipped and logged individually
         so that one misconfigured connector does not block the rest.
         """
+        if self._initialised:
+            logger.warning("ConnectorHub already initialised — skipping")
+            return
         for ci in instances:
             try:
                 raw_str = await self._secrets_backend.get_secret(str(ci.id))
@@ -144,7 +149,7 @@ class ConnectorHub:
                 )
                 acl = ConnectorACL(
                     visibility=ci.visibility,
-                    allowed_operations=ci.allowed_operations or None,
+                    allowed_operations=ci.allowed_operations,
                 )
                 traced = _TracedConnector(
                     connector,
@@ -160,13 +165,18 @@ class ConnectorHub:
                     ci.id,
                     ci.connector_type_id,
                     exc,
+                    exc_info=True,
                 )
+        self._initialised = True
 
-    def _lookup(self, connector_id: uuid.UUID) -> ConnectorBase:
+    def _get_or_raise(self, connector_id: uuid.UUID) -> ConnectorBase:
         try:
             return self._connectors[connector_id]
         except KeyError:
             raise ConnectorNotFoundError(connector_id) from None
+
+    def _lookup(self, connector_id: uuid.UUID) -> ConnectorBase:
+        return self._get_or_raise(connector_id)
 
     def get(self, connector_id: uuid.UUID, *, operation: str | None = None) -> ConnectorBase:
         """Return the initialised connector. Raises ConnectorNotFoundError if absent.
@@ -181,10 +191,8 @@ class ConnectorHub:
 
     def acl(self, connector_id: uuid.UUID) -> ConnectorACL:
         """Return the ACL for a connector. Raises ConnectorNotFoundError if absent."""
-        try:
-            return self._acls[connector_id]
-        except KeyError:
-            raise ConnectorNotFoundError(connector_id) from None
+        self._get_or_raise(connector_id)
+        return self._acls[connector_id]
 
     async def sample(
         self,
@@ -198,8 +206,7 @@ class ConnectorHub:
         Convenience method that wraps get() + query() into a single call.
         ACL is enforced for 'read' operation.
         """
-        connector = self._lookup(connector_id)
-        self._acls[connector_id].check("read")
+        connector = self.get(connector_id, operation="read")
         query = ConnectorQuery(
             resource=resource,
             filters=filters or {},
@@ -273,7 +280,7 @@ class _TracedConnector(ConnectorBase):
                     post_span(span, result)
                 return result
             except Exception as exc:
-                span.set_status(Status(StatusCode.ERROR, f"{operation} failed"))
+                span.set_status(Status(StatusCode.ERROR, f"{operation} failed: {exc}"))
                 span.record_exception(exc)
                 raise
 
@@ -306,6 +313,7 @@ class _TracedConnector(ConnectorBase):
         )
 
     async def write(self, payload: ConnectorPayload) -> dict[str, Any]:
+        payload = copy.deepcopy(payload)
         filter_payload_for_injection(payload)
         return cast(
             dict[str, Any],
@@ -327,25 +335,30 @@ def _get_cred(creds: dict[str, Any], key: str, type_id: str) -> Any:
         raise ValueError(f"Missing credential key {key!r} for connector type {type_id!r}") from None
 
 
+def _require_config(config: dict[str, Any] | None, key: str, label: str) -> str:
+    """Extract and validate a required config value. Raises ValueError if missing."""
+    value = (config or {}).get(key)
+    if not value:
+        raise ValueError(f"{label} requires {key!r} in config_json")
+    return value
+
+
 def _build_connector(
     type_id: str,
-    config: dict[str, Any],
+    config: dict[str, Any] | None,
     creds: dict[str, Any],
     runtime_provider: Any = None,
 ) -> ConnectorBase:
+    config = config or {}
     match type_id:
         case "filesystem":
-            base_path = config.get("base_path")
-            if not base_path:
-                raise ValueError("FilesystemConnector requires 'base_path' in config_json")
+            base_path = _require_config(config, "base_path", "FilesystemConnector")
             return FilesystemConnector(base_path=base_path)
         case "gitea":
             base_url = config.get("base_url", "https://codeberg.org")
             return GiteaConnector(token=_get_cred(creds, "token", type_id), base_url=base_url)
         case "azure_repos":
-            organization = config.get("organization", "")
-            if not organization:
-                raise ValueError("AzureReposConnector requires 'organization' in config_json")
+            organization = _require_config(config, "organization", "AzureReposConnector")
             return AzureReposConnector(token=_get_cred(creds, "token", type_id), organization=organization)
         case "bitbucket":
             return BitbucketConnector(token=_get_cred(creds, "token", type_id))
@@ -366,9 +379,9 @@ def _build_connector(
         case "linear":
             return LinearConnector(api_key=_get_cred(creds, "api_key", type_id))
         case "jira":
-            instance = config.get("instance", config.get("base_url", ""))
+            instance = config.get("instance") or config.get("base_url")
             if not instance:
-                raise ValueError("JiraConnector requires 'instance' in config_json")
+                raise ValueError("JiraConnector requires 'instance' or 'base_url' in config_json")
             return JiraConnector(instance=instance, creds=creds)
         case "slack":
             return SlackConnector(bot_token=_get_cred(creds, "bot_token", type_id))
@@ -393,11 +406,9 @@ def _build_connector(
         case "notion":
             return NotionConnector(token=_get_cred(creds, "token", type_id))
         case "npm":
-            token = creds.get("token", "")
-            return NpmConnector(token=token)
+            return NpmConnector(token=_get_cred(creds, "token", type_id))
         case "pypi":
-            token = creds.get("token", "")
-            return PyPIConnector(token=token)
+            return PyPIConnector(token=_get_cred(creds, "token", type_id))
         case "dropbox_paper":
             return DropboxPaperConnector(token=_get_cred(creds, "token", type_id))
         case "buildkite":
@@ -411,9 +422,7 @@ def _build_connector(
                 base_url=config.get("base_url", "http://localhost:8080"),
             )
         case "confluence":
-            instance = config.get("instance", "")
-            if not instance:
-                raise ValueError("ConfluenceConnector requires 'instance' in config_json")
+            instance = _require_config(config, "instance", "ConfluenceConnector")
             return ConfluenceConnector(instance=instance, creds=creds)
         case "teamcity":
             return TeamCityConnector(
@@ -421,17 +430,13 @@ def _build_connector(
                 base_url=config.get("base_url", "http://localhost:8111"),
             )
         case "azure_key_vault":
-            vault_url = config.get("vault_url", "")
-            if not vault_url:
-                raise ValueError("AzureKeyVaultConnector requires 'vault_url' in config_json")
+            vault_url = _require_config(config, "vault_url", "AzureKeyVaultConnector")
             return AzureKeyVaultConnector(
                 token=_get_cred(creds, "token", type_id),
                 vault_url=vault_url,
             )
         case "azure_pipelines":
-            organization = config.get("organization", "")
-            if not organization:
-                raise ValueError("AzurePipelinesConnector requires 'organization' in config_json")
+            organization = _require_config(config, "organization", "AzurePipelinesConnector")
             project = config.get("project", "")
             return AzurePipelinesConnector(
                 token=_get_cred(creds, "token", type_id),
@@ -453,7 +458,9 @@ def _build_connector(
         case "pagerduty":
             return PagerDutyConnector(token=_get_cred(creds, "token", type_id))
         case "grafana":
-            return GrafanaConnector(token=_get_cred(creds, "token", type_id), base_url=config.get("base_url", "http://localhost:3000"))
+            return GrafanaConnector(
+                token=_get_cred(creds, "token", type_id), base_url=config.get("base_url", "http://localhost:3000")
+            )
         case "microsoft_teams":
             return MicrosoftTeamsConnector(token=_get_cred(creds, "token", type_id))
         case "discord":
@@ -476,7 +483,7 @@ def _build_connector(
             return SnykConnector(token=_get_cred(creds, "token", type_id))
         case "trivy":
             return TrivyConnector(
-                token=creds.get("token", ""),
+                token=_get_cred(creds, "token", type_id),
                 base_url=config.get("base_url", "http://localhost:8080"),
             )
         case "n8n":
