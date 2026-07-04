@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import threading
 import traceback as tb_module
 import uuid
 from typing import Any
@@ -28,6 +29,31 @@ def celery_task_failure_handler(
     **_kw: Any,
 ) -> None:
     """Capture Celery task failures and send to error tracking."""
+    try:
+        asyncio.get_running_loop()
+        # Already in an event loop — run in a separate thread
+        thread = threading.Thread(
+            target=_run_async_ingest,
+            args=(sender, task_id, exception, args, kwargs, einfo),
+            daemon=True,
+        )
+        thread.start()
+    except RuntimeError:
+        # No running event loop — safe to use asyncio.run
+        try:
+            asyncio.run(_async_ingest(sender, task_id, exception, args, kwargs, einfo))
+        except Exception:
+            _log.exception("celery_hooks.ingest_failed")
+
+
+def _run_async_ingest(
+    sender: Any,
+    task_id: str | None,
+    exception: BaseException | None,
+    args: tuple[Any, ...] | None,
+    kwargs: dict[str, Any] | None,
+    einfo: Any,
+) -> None:
     try:
         asyncio.run(_async_ingest(sender, task_id, exception, args, kwargs, einfo))
     except Exception:
@@ -53,7 +79,7 @@ async def _async_ingest(
     engine = get_or_create_engine(settings)
     factory = get_or_create_session_factory(engine)
 
-    task_name = sender.name if sender and hasattr(sender, "name") else str(sender or "unknown")
+    task_name = getattr(sender, "name", str(sender or "unknown"))
     exc_type = type(exception).__name__ if exception else "Unknown"
     exc_msg = str(exception) if exception else ""
     message = f"{exc_type}: {exc_msg}"
@@ -74,6 +100,8 @@ async def _async_ingest(
         except (ValueError, TypeError):
             org_id = _SYSTEM_ORG_ID
 
+    effective_org_id = org_id or _SYSTEM_ORG_ID
+
     event_data: dict[str, Any] = {
         "level": "error",
         "message": message,
@@ -90,6 +118,6 @@ async def _async_ingest(
     }
 
     async with factory() as session:
-        await set_rls_org(session, org_id)
         async with session.begin():
-            await _SERVICE.ingest(session, org_id or _SYSTEM_ORG_ID, event_data)
+            await set_rls_org(session, effective_org_id)
+            await _SERVICE.ingest(session, effective_org_id, event_data)

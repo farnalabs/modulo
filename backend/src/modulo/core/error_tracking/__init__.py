@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import hmac
 import logging
@@ -29,6 +30,7 @@ _HMAC_KEY_TTL = 3600
 
 # Module-level alert engine (lazy-initialised)
 _alert_engine: AlertEngine | None = None
+_alert_engine_lock = asyncio.Lock()
 
 
 def _normalize_stacktrace(stacktrace: str) -> str:
@@ -62,8 +64,11 @@ class ErrorIngestionService:
 
     async def _ensure_alert_engine(self) -> AlertEngine:
         global _alert_engine
-        if _alert_engine is None:
-            _alert_engine = AlertEngine(redis_client=self._redis)
+        if _alert_engine is not None:
+            return _alert_engine
+        async with _alert_engine_lock:
+            if _alert_engine is None:
+                _alert_engine = AlertEngine(redis_client=self._redis)
         return _alert_engine
 
     async def ingest(
@@ -72,13 +77,17 @@ class ErrorIngestionService:
         org_id: Any,
         event_data: dict[str, Any],
     ) -> dict[str, Any]:
+        message = event_data.get("message")
+        level = event_data.get("level")
+        source = event_data.get("source")
+        if not message or not level or not source:
+            raise ValueError("ingest requires 'message', 'level', and 'source' in event_data")
+
         fp = self.fingerprint(
-            message=event_data["message"],
+            message=message,
             stacktrace=event_data.get("stacktrace"),
-            source=event_data["source"],
+            source=source,
         )
-        level = event_data["level"]
-        source = event_data["source"]
         environment = event_data.get("environment")
 
         event = await create_error_event(
@@ -86,7 +95,7 @@ class ErrorIngestionService:
             org_id=org_id,
             fingerprint=fp,
             level=level,
-            message=event_data["message"],
+            message=message,
             source=source,
             stacktrace=event_data.get("stacktrace"),
             context_json=event_data.get("context_json"),
@@ -128,7 +137,10 @@ class ErrorIngestionService:
         except Exception:
             _log.exception("error_tracking.alert_evaluation_failed")
 
-        await _dispatch_forwarders(org_id, group, event, event_data, session)
+        try:
+            await _dispatch_forwarders(org_id, group, event, event_data, session=session)
+        except Exception:
+            _log.exception("error_tracking.forwarder_dispatch_failed")
 
         return {"group_id": str(group.id), "is_new": existing is None}
 
@@ -140,7 +152,10 @@ class ErrorIngestionService:
     ) -> list[dict[str, Any]]:
         results: list[dict[str, Any]] = []
         for event_data in events:
-            results.append(await self.ingest(session, org_id, event_data))
+            try:
+                results.append(await self.ingest(session, org_id, event_data))
+            except Exception:
+                _log.exception("error_tracking.batch_item_failed", extra={"org_id": str(org_id)})
         return results
 
 
@@ -176,15 +191,22 @@ class SessionKeyStore:
     async def generate_key(self, account_id: str) -> str:
         key = secrets.token_hex(32)
         if self._redis is not None:
-            await self._redis.setex(f"error_hmac_key:{account_id}", _HMAC_KEY_TTL, key)
+            try:
+                await self._redis.setex(f"error_hmac_key:{account_id}", _HMAC_KEY_TTL, key)
+            except Exception:
+                _log.exception("session_key_store.redis_set_failed", extra={"account_id": account_id})
         else:
             self._memory[account_id] = _SessionKeyEntry(key)
         return key
 
     async def get_key(self, account_id: str) -> str | None:
         if self._redis is not None:
-            val = await self._redis.get(f"error_hmac_key:{account_id}")
-            return val.decode() if isinstance(val, bytes) else val
+            try:
+                val = await self._redis.get(f"error_hmac_key:{account_id}")
+                return val.decode() if isinstance(val, bytes) else val
+            except Exception:
+                _log.exception("session_key_store.redis_get_failed", extra={"account_id": account_id})
+                return None
         entry = self._memory.get(account_id)
         if entry is None or entry.expired:
             self._memory.pop(account_id, None)
@@ -224,7 +246,7 @@ async def _dispatch_forwarders(
     org_id: Any,
     error_group: Any,
     error_event: Any,
-    _event_data: dict[str, Any],
+    event_data: dict[str, Any],
     session: Any | None = None,
 ) -> None:
     """Call all configured forwarders for the org.
@@ -235,15 +257,16 @@ async def _dispatch_forwarders(
     """
     per_org_configs: dict[str, dict[str, Any]] = {}
     if session is not None:
-        result = await session.execute(
-            select(ErrorForwarderConfig).where(
-                ErrorForwarderConfig.organisation_id == org_id,
-                ErrorForwarderConfig.enabled.is_(True),
-            ),
-        )
-        for row in result.scalars().all():
-            if row.config_json:
-                per_org_configs[row.forwarder_type] = row.config_json
+        async with session.begin():
+            result = await session.execute(
+                select(ErrorForwarderConfig).where(
+                    ErrorForwarderConfig.organisation_id == org_id,
+                    ErrorForwarderConfig.enabled.is_(True),
+                ),
+            )
+            for row in result.scalars().all():
+                if row.config_json:
+                    per_org_configs[row.forwarder_type] = row.config_json
 
     configs = per_org_configs or _DEFAULT_FORWARDER_CONFIGS
     if not configs:

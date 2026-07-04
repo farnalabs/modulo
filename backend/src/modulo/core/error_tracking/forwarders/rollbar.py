@@ -36,6 +36,9 @@ class RollbarErrorForwarder(BaseForwarder):
         try:
             url = "https://api.rollbar.com/api/1/item/"
             level = _LEVEL_MAP.get(error_event.level, "error")
+            message = error_event.message or ""
+            source = error_event.source or ""
+            code_version = error_event.version or "unknown"
 
             body = {
                 "access_token": access_token,
@@ -44,18 +47,18 @@ class RollbarErrorForwarder(BaseForwarder):
                     "level": level,
                     "body": {
                         "message": {
-                            "body": error_event.message[:4096],
+                            "body": message[:4096],
                         },
                     },
                     "fingerprint": error_group.fingerprint if error_group else "",
-                    "code_version": error_event.version or "unknown",
+                    "code_version": code_version,
                     "request": {
                         "url": "",
                         "method": "",
                     },
                     "custom": {
                         "org_id": str(org_id),
-                        "source": error_event.source,
+                        "source": source,
                         "fingerprint": error_group.fingerprint if error_group else "",
                         "count": error_group.count if error_group else 1,
                     },
