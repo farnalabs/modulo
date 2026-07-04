@@ -16,9 +16,20 @@ code:
   - backend/src/modulo/db/models/eval_result.py
   - backend/src/modulo/api/routes/evals.py
   - backend/src/modulo/core/eval_engine/__init__.py
-unit-tests: []
+unit-tests:
+  - backend/tests/unit/api/test_evals_endpoint.py
+  - backend/tests/unit/api/test_evals_programming_error.py
+  - backend/tests/unit/api/test_evals_compare.py
+  - backend/tests/unit/api/test_evals_compare_programming_error.py
+  - backend/tests/unit/api/test_evals_admin_programming_error.py
+  - backend/tests/unit/api/test_evals_dashboard.py
+  - backend/tests/unit/api/test_evals_okr_progress_programming_error.py
+  - backend/tests/unit/core/test_eval_engine.py
+  - backend/tests/unit/core/test_eval_suite.py
+  - backend/tests/unit/core/test_eval_regressions.py
+  - backend/tests/unit/core/test_eval_judge_injection.py
 depends-on: [feat-pipelines-core]
-status: covered
+status: partial
 ---
 
 # Eval Definitions
@@ -46,8 +57,8 @@ Eval definitions describe automated quality checks that run as a post-node step 
 - [x] Delete on non-existent ID returns 404
 - [x] Non-admin cannot update eval definition
 - [x] Non-admin cannot delete eval definition
-- [ ] Eval definition "from-run" endpoint creates a definition pre-populated from run output with type-specific config stubs
-- [ ] Eval coverage endpoint returns per-node coverage map for a pipeline
+- [x] Eval definition "from-run" endpoint creates a definition pre-populated from run output with type-specific config stubs
+- [x] Eval coverage endpoint returns per-node coverage map for a pipeline
 
 ### Eval Definition Fields
 - [x] Eval definition has fields: id, organisation_id, pipeline_id, name, eval_type, config_json, failure_behaviour, created_by
@@ -93,7 +104,7 @@ Eval definitions describe automated quality checks that run as a post-node step 
 - [x] JSON Schema without additionalProperties allows extra fields
 - [x] JSON Schema with additionalProperties=false rejects extra fields
 - [x] JSON Schema without field validates the entire output dict
-- [ ] JSON Schema eval with no schema defined returns appropriate failure
+- [x] JSON Schema eval with no schema defined returns appropriate failure
 
 ### Eval Engine — Custom Function
 - [x] Custom function from registry is called with output and config
@@ -144,9 +155,37 @@ Eval definitions describe automated quality checks that run as a post-node step 
 - [x] Any authenticated user can list and read eval definitions within their org
 
 ### Edge Cases
-- [ ] Eval definition with empty config_json defaults to empty dict
-- [ ] Eval definition node_id can be null (pipeline-level eval, not node-specific)
-- [ ] Deleted eval definition cascades to delete associated eval_results
-- [ ] Eval "from-run" with missing run output creates an eval with empty config
-- [ ] Coverage endpoint returns coverage_pct=0.0 when no nodes exist in pipeline
-- [ ] Eval engine with unknown eval_type raises ValueError
+- [x] Eval definition with empty config_json defaults to empty dict
+- [x] Eval definition node_id can be null (pipeline-level eval, not node-specific)
+- [ ] Deleted eval definition cascades to delete associated eval_results (DB-level CASCADE, no test)
+- [ ] Eval "from-run" with missing run output creates an eval with empty config (no test)
+- [x] Coverage endpoint returns coverage_pct=0.0 when no nodes exist in pipeline
+- [x] Eval engine with unknown eval_type raises ValueError
+
+### Error Handling
+- [x] All DB-accessing routes (CRUD, coverage, compare, from-run, run-evals) catch ProgrammingError and return 501 with migration instructions
+- [x] Auth checks return 403 with specific, actionable messages per operation
+- [x] 404 errors include the specific entity name ("Run not found", "Eval definition not found", "Pipeline not found")
+- [x] Eval engine errors are captured as structured EvalResult detail, not propagated as exceptions (except block/warn behaviour)
+- [x] No bare except blocks in API routes — every try/except catches specific exceptions (ProgrammingError, HTTPException)
+- [x] Custom function eval errors are caught at the callable boundary and returned as structured results
+- [x] LLM judge callable exceptions are caught and returned as structured results with error detail
+
+### Additional Edge Cases
+- [ ] pass_threshold has no DB CHECK constraint or Pydantic Field range validation (0.0–1.0) on CreateEvalRequest or UpdateEvalRequest — user can set -1.0 or 2.0
+- [ ] No uniqueness constraint on eval definition name per pipeline — duplicate eval names possible
+- [ ] EvalResult DB model has no `created_at` timestamp from base (uses `evaluated_at` instead)
+- [ ] Multiple evals with same suite_id but mixed failure_behaviour — block evals are checked before warn evals per the engine's evaluate() call order
+- [ ] Concurrent eval definition creation has no advisory lock — two admins creating the same eval simultaneously may create duplicates
+
+### QA History
+- **2026-07-04**: Cross-cutting architecture QA by Worker sub-agent (worktree qa-eval-definitions-150)
+  - **Verified [x] claims (82 of 82 checked):** All 82 claimed behaviours confirmed against code and tests. No false claims found.
+  - **Updated from [ ]→[x]:** 7 edge case/behaviour checkboxes confirmed implemented and tested.
+  - **Added Error Handling section:** 7 checkboxes covering ProgrammingError→501 catches, auth/404 error specificity, engine error boundaries.
+  - **Added Additional Edge Cases section:** 5 new edge cases discovered during audit (pass_threshold range validation, name uniqueness, timestamp, mixed behaviours, concurrency).
+  - **Updated frontmatter:** `unit-tests` populated with 11 test file paths; `status` changed from `covered` to `partial` (several edge cases not yet tested).
+  - **Findings summary:**
+    - **Critical:** 0
+    - **Major:** Unit test file paths were missing from frontmatter (empty `unit-tests: []`). Fixed. `pass_threshold` field lacks range validation in both API and DB layers. `conditional_hitl.feature` duplicated in two directory trees (`tests/bdd/features/eval/` and `tests/features/evals/`).
+    - **Minor:** Cascade delete and from-run-with-missing-output edge cases lack tests. Warn logging uses `eval.failed_warn` instead of a human-readable message. No uniqueness constraint on eval name per pipeline.
