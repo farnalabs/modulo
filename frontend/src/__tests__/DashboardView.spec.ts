@@ -286,6 +286,28 @@ describe('DashboardView', () => {
     expect(trendButtons.length).toBe(3)
   })
 
+  it('shows error alert when fetch fails', async () => {
+    mockGet.mockImplementation((url: string) => {
+      if (url === '/api/v1/dashboard/summary') return Promise.reject(new Error('Network error'))
+      if (url === '/api/v1/admin/feature-flags') return Promise.resolve({ data: mockFlagData, error: undefined })
+      if (url === '/api/v1/admin/license') return Promise.resolve({ data: mockLicenseData, error: undefined })
+      return Promise.resolve({ data: null, error: undefined })
+    })
+    const wrapper = mount(DashboardView)
+    await flushPromises()
+    const errorEl = wrapper.findComponent({ name: 'ErrorAlert' })
+    expect(errorEl.exists()).toBe(true)
+  })
+
+  it('shows empty state CTA for fresh orgs', async () => {
+    setupEmptyMocks()
+    const wrapper = mount(DashboardView)
+    await flushPromises()
+    expect(wrapper.text()).toContain('Welcome to Modulo')
+    expect(wrapper.text()).toContain('Create Pipeline')
+    expect(wrapper.text()).toContain('Browse Templates')
+  })
+
   it('shows no eval data for null pass rate', async () => {
     setupEmptyMocks()
     const wrapper = mount(DashboardView)
