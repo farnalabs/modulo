@@ -1,11 +1,15 @@
 """FastAPI auth dependencies for v1 user management."""
 
+import logging
+
 from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from jose import JWTError
 
 from modulo.auth.jwt import AuthenticatedPrincipal, decode_principal
 from modulo.settings import Settings, get_settings
+
+_log = logging.getLogger(__name__)
 
 _bearer = HTTPBearer()
 
@@ -18,6 +22,7 @@ async def get_current_user(
     try:
         principal = decode_principal(credentials.credentials, settings.secret_key)
     except JWTError:
+        _log.warning("auth.jwt_decode_failed")
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid or expired token",

@@ -5,6 +5,10 @@ team role is capped by their org role — the effective team role is the
 lower of the two.
 """
 
+import logging
+
+_log = logging.getLogger(__name__)
+
 TEAM_ROLE_HIERARCHY: dict[str, int] = {
     "viewer": 0,
     "runner": 1,
@@ -37,7 +41,16 @@ def get_effective_team_role(org_role: str, team_role: str) -> str:
     The effective role is the lower of the org role and team role in the
     hierarchy.  If either input is unrecognised the fallback is ``viewer``.
     """
-    return EFFECTIVE_ACCESS_MODEL.get(org_role, {}).get(team_role, "viewer")
+    result = EFFECTIVE_ACCESS_MODEL.get(org_role, {}).get(team_role, "viewer")
+    if result == "viewer" and (
+        org_role not in EFFECTIVE_ACCESS_MODEL
+        or team_role not in EFFECTIVE_ACCESS_MODEL.get(org_role, {})
+    ):
+        _log.warning(
+            "rbac.unknown_role_fallback",
+            extra={"org_role": org_role, "team_role": team_role, "fallback": "viewer"},
+        )
+    return result
 
 
 def team_role_level(role: str) -> int:
