@@ -580,6 +580,10 @@ export default {
       "configure_external_error_tracking_and_alerting_integrations": "Configure external error tracking and alerting integrations",
       "configuration_saved": "Configuration saved."
     },
+    "SettingsMonitorConfigView": {
+      "feature_locked": "Monitoring configuration is not available on your current plan.",
+      "browser_monitoring": "Browser Monitoring"
+    },
     "ABTestModelsView": {
       "model_backend": "Model Backend",
       "pipeline": "Pipeline:",
@@ -913,6 +917,7 @@ export default {
       "item_hitl_review": "HITL Review",
       "item_observability": "Observability",
       "item_error_forwarders": "Error Forwarders",
+      "item_browser_monitoring": "Browser Monitoring",
       "item_users": "Users",
       "item_org_settings": "Org Settings",
       "item_audit_log": "Audit Log",

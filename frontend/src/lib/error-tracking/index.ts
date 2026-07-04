@@ -6,7 +6,7 @@ import { initTransport, disposeTransport } from './transport'
 import { onAuthChange } from '../api/client'
 import type { Router } from 'vue-router'
 import { MonitorBackendRegistry } from '../../monitor/registry'
-import type { UserInfo } from '../../monitor/types'
+import type { UserInfo, MonitorBackend } from '../../monitor/types'
 
 interface ActiveConfig {
   appName: string
@@ -105,19 +105,22 @@ export class ErrorTracker {
   }
 
   setUser(user: UserInfo | null): void {
+    this._user = user
     this.backends.setUser(user)
   }
 
   setTags(tags: Record<string, string>): void {
+    this._tags = { ...tags }
     this.backends.setTags(tags)
   }
 
-  setUser(user: { id: string; email?: string; name?: string } | null): void {
-    this._user = user
-  }
-
-  setTags(tags: Record<string, string>): void {
-    this._tags = { ...tags }
+  async reloadBackends(newBackends: MonitorBackend[]): Promise<void> {
+    this.backends.disposeAll()
+    for (const b of newBackends) {
+      this.backends.add(b)
+    }
+    if (this._user) this.backends.setUser(this._user)
+    if (Object.keys(this._tags).length > 0) this.backends.setTags(this._tags)
   }
 
   dispose(): void {

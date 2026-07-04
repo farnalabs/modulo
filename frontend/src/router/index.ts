@@ -89,6 +89,7 @@ const AdminErrorsView = () => import('../views/AdminErrorsView.vue')
 const AdminErrorDetailView = () => import('../views/AdminErrorDetailView.vue')
 const UserRemySkillsView = () => import('../views/UserRemySkillsView.vue')
 const SettingsErrorForwardersView = () => import('../views/SettingsErrorForwardersView.vue')
+const SettingsMonitorConfigView = () => import('../views/SettingsMonitorConfigView.vue')
 const PipelineListView = () => import('../views/PipelineListView.vue')
 
 const router = createRouter({
@@ -347,6 +348,11 @@ const router = createRouter({
       path: '/admin/errors/:id',
       name: 'admin-error-detail',
       component: AdminErrorDetailView,
+    },
+    {
+      path: '/settings/monitoring',
+      name: 'settings-monitoring',
+      component: SettingsMonitorConfigView,
     },
     {
       path: '/admin/remy',
