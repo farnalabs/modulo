@@ -597,7 +597,8 @@ export default {
     },
     "SettingsMonitorConfigView": {
       "feature_locked": "Monitoring configuration is not available on your current plan.",
-      "browser_monitoring": "Browser Monitoring"
+      "browser_monitoring": "Browser Monitoring",
+      "description": "Configure which client-side monitoring SDKs to load. Changes take effect immediately — no rebuild or page reload required."
     },
     "ABTestModelsView": {
       "model_backend": "Model Backend",
@@ -1005,6 +1006,11 @@ export default {
     "close": "Close",
     "back": "Back",
     "active": "Active",
-    "inactive": "Inactive"
+    "inactive": "Inactive",
+    "show": "Show",
+    "hide": "Hide",
+    "failed_to_load": "Failed to load",
+    "failed_to_save": "Failed to save",
+    "configuration_saved": "Configuration saved"
   }
 }

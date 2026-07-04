@@ -1,13 +1,3 @@
-"""Admin API for frontend monitor backend configuration.
-
-Stores the monitor backend config (which backends are active, their DSNs/API keys)
-in the SystemConfig DB table under the key ``monitor_backends``.
-
-The frontend fetches this on boot (after auth) to configure the MonitorBackend
-abstraction layer. Env vars (``VITE_*``) override the DB config at build time;
-this API is the runtime alternative for self-hosters who prefer UI over env vars.
-"""
-
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -40,18 +30,25 @@ def _require_admin(principal: AuthenticatedPrincipal) -> None:
         )
 
 
-class MonitorConfigResponse(BaseModel):
+class MonitorConfigBase(BaseModel):
     backends: list[str]
     sentry: dict[str, Any] | None = None
     datadog_rum: dict[str, Any] | None = None
     grafana_faro: dict[str, Any] | None = None
 
 
-class MonitorConfigUpdate(BaseModel):
-    backends: list[str]
-    sentry: dict[str, Any] | None = None
-    datadog_rum: dict[str, Any] | None = None
-    grafana_faro: dict[str, Any] | None = None
+class MonitorConfigResponse(MonitorConfigBase):
+    pass
+
+
+class MonitorConfigUpdate(MonitorConfigBase):
+    pass
+
+
+def _merge(entry: Any | None) -> dict[str, Any]:
+    if entry is None or entry.value is None:
+        return dict(DEFAULT_CONFIG)
+    return {**DEFAULT_CONFIG, **entry.value}
 
 
 @router.get("", response_model=MonitorConfigResponse)
@@ -67,14 +64,12 @@ async def get_monitor_config(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
         )
-    if entry is None:
-        return dict(DEFAULT_CONFIG)
-    return {**DEFAULT_CONFIG, **entry.value}
+    return _merge(entry)
 
 
 @router.put("", response_model=MonitorConfigResponse)
 async def set_monitor_config(
-    body: MonitorConfigUpdate,
+    req: MonitorConfigUpdate,
     current_user: AuthenticatedPrincipal = Depends(get_current_user),
     session: AsyncSession = Depends(get_db_session),
 ) -> dict[str, Any]:
@@ -83,7 +78,7 @@ async def set_monitor_config(
         entry = await set_config(
             session,
             _CONFIG_KEY,
-            body.model_dump(),
+            req.model_dump(),
             updated_by=current_user.account_id,
         )
     except ProgrammingError:
@@ -91,4 +86,4 @@ async def set_monitor_config(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
         )
-    return {**DEFAULT_CONFIG, **entry.value}
+    return _merge(entry)

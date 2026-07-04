@@ -127,6 +127,11 @@ const router = createRouter({
       component: SettingsErrorForwardersView,
     },
     {
+      path: '/settings/monitoring',
+      name: 'settings-monitoring',
+      component: SettingsMonitorConfigView,
+    },
+    {
       path: '/settings/observability',
       name: 'settings-observability',
       component: SettingsObservabilityView,
@@ -348,11 +353,6 @@ const router = createRouter({
       path: '/admin/errors/:id',
       name: 'admin-error-detail',
       component: AdminErrorDetailView,
-    },
-    {
-      path: '/settings/monitoring',
-      name: 'settings-monitoring',
-      component: SettingsMonitorConfigView,
     },
     {
       path: '/admin/remy',

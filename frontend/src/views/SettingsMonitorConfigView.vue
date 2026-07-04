@@ -7,10 +7,9 @@
     </template>
     <template #default>
       <div class="max-w-3xl mx-auto space-y-8 p-6">
-        <h1 class="text-2xl font-semibold">Browser Monitoring</h1>
+        <h1 class="text-2xl font-semibold">{{ $t('views.SettingsMonitorConfigView.browser_monitoring') }}</h1>
         <p class="text-muted-foreground text-sm">
-          Configure which client-side monitoring SDKs to load.
-          Changes take effect immediately — no rebuild or page reload required.
+          {{ $t('views.SettingsMonitorConfigView.description') }}
         </p>
 
         <div v-if="loading" class="flex items-center justify-center h-32">
@@ -20,7 +19,7 @@
         <template v-else>
           <div class="space-y-6">
             <div
-              v-for="b in backends"
+              v-for="b in backendForms"
               :key="b.key"
               class="border rounded-lg p-5 space-y-4"
               :class="{ 'opacity-50': !b.enabled }"
@@ -48,7 +47,7 @@
                   />
                   <div v-if="field.secret" class="mt-1">
                     <button class="text-xs text-muted-foreground hover:text-foreground" @click="field.revealed = !field.revealed">
-                      {{ field.revealed ? 'Hide' : 'Show' }}
+                      {{ field.revealed ? $t('common.hide') : $t('common.show') }}
                     </button>
                   </div>
                 </div>
@@ -100,7 +99,7 @@ interface BackendForm {
   fields: BackendField[]
 }
 
-const backends = reactive<BackendForm[]>([
+const backendForms = reactive<BackendForm[]>([
   {
     key: 'builtin',
     label: 'Built-in (DB)',
@@ -157,36 +156,64 @@ function showFlash(msg: string, type: 'success' | 'error') {
   flashTimer = setTimeout(() => { flash.value = '' }, 4000)
 }
 
-function toApiPayload(): MonitorConfig {
-  const payload: Record<string, any> = { backends: [] }
-  for (const b of backends) {
+function toMonitorConfig(): MonitorConfig {
+  const activeKeys: string[] = []
+  let perBackend: Record<string, Record<string, string>> = {}
+  for (const b of backendForms) {
     if (b.enabled) {
-      payload.backends.push(b.key)
+      activeKeys.push(b.key)
       if (b.key !== 'builtin') {
         const cfg: Record<string, string> = {}
         for (const f of b.fields) {
           if (f.value) cfg[f.key] = f.value
         }
         if (Object.keys(cfg).length > 0) {
-          payload[b.key] = cfg
+          perBackend[b.key] = cfg
         }
       }
     }
   }
-  if (payload.backends.length === 0) {
-    payload.backends.push('builtin')
+  if (activeKeys.length === 0) activeKeys.push('builtin')
+
+  return {
+    monitorBackends: activeKeys,
+    sentry: activeKeys.includes('sentry') ? (perBackend.sentry ?? { dsn: '' }) : undefined,
+    'datadog-rum': activeKeys.includes('datadog_rum') ? (perBackend.datadog_rum ?? { clientToken: '' }) : undefined,
+    'grafana-faro': activeKeys.includes('grafana_faro') ? (perBackend.grafana_faro ?? { url: '' }) : undefined,
   }
-  return payload as unknown as MonitorConfig
+}
+
+function toApiPayload() {
+  const activeKeys: string[] = []
+  const perBackend: Record<string, Record<string, string>> = {}
+  for (const b of backendForms) {
+    if (b.enabled) {
+      const apiKey = b.key === 'datadog_rum' ? 'datadog_rum' : b.key
+      activeKeys.push(apiKey)
+      if (b.key !== 'builtin') {
+        const cfg: Record<string, string> = {}
+        for (const f of b.fields) {
+          if (f.value) cfg[f.key] = f.value
+        }
+        if (Object.keys(cfg).length > 0) {
+          perBackend[apiKey] = cfg
+        }
+      }
+    }
+  }
+  if (activeKeys.length === 0) activeKeys.push('builtin')
+  return { backends: activeKeys, ...perBackend }
 }
 
 function fromApiPayload(data: Record<string, any>) {
   const activeBackends: string[] = data.backends ?? ['builtin']
 
-  for (const b of backends) {
-    b.enabled = activeBackends.includes(b.key) || (b.key === 'builtin' && activeBackends.length === 0)
+  for (const b of backendForms) {
+    const apiKey = b.key === 'datadog_rum' ? 'datadog_rum' : b.key
+    b.enabled = activeBackends.includes(apiKey) || (b.key === 'builtin' && activeBackends.length === 0)
 
     if (b.key !== 'builtin') {
-      const cfg = data[b.key] as Record<string, string> | undefined
+      const cfg = data[apiKey] as Record<string, string> | undefined
       for (const f of b.fields) {
         f.value = cfg?.[f.key] ?? ''
         f.revealed = false
@@ -205,7 +232,7 @@ async function load() {
       fromApiPayload(res.data as Record<string, any>)
     }
   } catch (e) {
-    showFlash('Failed to load monitor configuration', 'error')
+    showFlash(`${$t('common.failed_to_load')}: ${e}`, 'error')
   } finally {
     loading.value = false
   }
@@ -214,24 +241,24 @@ async function load() {
 async function save() {
   saving.value = true
   try {
-    const payload = toApiPayload()
-    const res = await api.PUT('/api/v1/admin/monitor-config', { body: payload as any })
+    const apiPayload = toApiPayload()
+    const res = await api.PUT('/api/v1/admin/monitor-config', { body: apiPayload as any })
     if (res.error) {
-      showFlash('Failed to save: ' + (res.error as any).detail, 'error')
+      showFlash(`${$t('common.failed_to_save')}: ${(res.error as any).detail}`, 'error')
       return
     }
 
-    // Hot-reload: reinitialize monitor backends with the new config
-    const backends = await loadBackends(payload)
+    const monitorConfig = toMonitorConfig()
+    const activeBackends = await loadBackends(monitorConfig)
     const tracker = getErrorTracker()
     if (tracker) {
-      tracker.reloadBackends(backends)
+      tracker.reloadBackends(activeBackends)
     }
 
     fromApiPayload(res.data as Record<string, any>)
-    showFlash('Monitor configuration saved and applied', 'success')
+    showFlash($t('common.configuration_saved'), 'success')
   } catch (e) {
-    showFlash('Failed to save monitor configuration', 'error')
+    showFlash(`${$t('common.failed_to_save')}: ${e}`, 'error')
   } finally {
     saving.value = false
   }
