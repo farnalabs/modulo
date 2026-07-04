@@ -1,9 +1,14 @@
+import manifest from '@/manifest.yaml'
+
 export interface NavItem {
   to: string
   icon: string
   label: string
   labelKey: string
   exact?: boolean
+  requiredRoles?: string[] | null
+  requiredTier?: string | null
+  requiredPermissions?: string[] | null
 }
 
 export interface NavGroup {
@@ -16,162 +21,214 @@ export interface NavGroup {
   systemAdminOnly?: boolean
 }
 
-export const navGroups: NavGroup[] = [
-  {
-    id: 'core',
-    label: 'Core',
-    labelKey: 'components.SidebarNav.group_core',
-    simpleMode: true,
-    defaultCollapsed: false,
-    items: [
-      { to: '/', icon: 'LayoutDashboard', label: 'Dashboard', labelKey: 'components.SidebarNav.item_dashboard' },
-      { to: '/notifications', icon: 'Bell', label: 'Notifications', labelKey: 'components.SidebarNav.item_notifications' },
-    ],
-  },
-  {
-    id: 'pipelines',
-    label: 'Pipelines',
-    labelKey: 'components.SidebarNav.group_pipelines',
-    simpleMode: true,
-    defaultCollapsed: false,
-    items: [
-      { to: '/pipelines', icon: 'GitBranch', label: 'My Pipelines', labelKey: 'components.SidebarNav.item_my_pipelines', exact: true },
-      { to: '/library', icon: 'BookOpen', label: 'Library', labelKey: 'components.SidebarNav.item_library' },
-      { to: '/templates', icon: 'LayoutTemplate', label: 'Templates', labelKey: 'components.SidebarNav.item_templates' },
-      { to: '/pipelines/copy', icon: 'Copy', label: 'Copy Pipeline', labelKey: 'components.SidebarNav.item_copy_pipeline' },
-      { to: '/stages', icon: 'Columns', label: 'Stages Board', labelKey: 'components.SidebarNav.item_stages_board' },
-    ],
-  },
-  {
-    id: 'runs-evaluation',
-    label: 'Runs & Evaluation',
-    labelKey: 'components.SidebarNav.group_runs_evaluation',
-    simpleMode: true,
-    defaultCollapsed: true,
-    items: [
-      { to: '/runs/diff', icon: 'GitCommit', label: 'Output Diff', labelKey: 'components.SidebarNav.item_output_diff' },
-      { to: '/evals/editor', icon: 'CheckSquare', label: 'Evals', labelKey: 'components.SidebarNav.item_evals' },
-      { to: '/evals/proposals', icon: 'Clipboard', label: 'Eval Proposals', labelKey: 'components.SidebarNav.item_eval_proposals' },
-      { to: '/variants/compare', icon: 'GitFork', label: 'Variants', labelKey: 'components.SidebarNav.item_variants' },
-      { to: '/variants/ab-test', icon: 'FlaskConical', label: 'AB Test Models', labelKey: 'components.SidebarNav.item_ab_test_models' },
-    ],
-  },
-  {
-    id: 'schemas',
-    label: 'Schemas',
-    labelKey: 'components.SidebarNav.group_schemas',
-    simpleMode: true,
-    defaultCollapsed: true,
-    items: [
-      { to: '/schemas', icon: 'Database', label: 'Browse', labelKey: 'components.SidebarNav.item_browse', exact: true },
-      { to: '/schemas/editor', icon: 'Database', label: 'Editor', labelKey: 'components.SidebarNav.item_editor' },
-      { to: '/schemas/infer', icon: 'Database', label: 'Infer', labelKey: 'components.SidebarNav.item_infer' },
-    ],
-  },
-  {
-    id: 'remy',
-    label: 'Remy',
-    labelKey: 'components.SidebarNav.group_remy',
-    simpleMode: true,
-    defaultCollapsed: true,
-    items: [
-      { to: '/settings/remy', icon: 'Bot', label: 'My Skills', labelKey: 'components.SidebarNav.item_my_skills' },
-      { to: '/admin/remy', icon: 'Settings', label: 'Admin Config', labelKey: 'components.SidebarNav.item_admin_config' },
-    ],
-  },
-  {
-    id: 'settings',
-    label: 'Settings',
-    labelKey: 'components.SidebarNav.group_settings',
-    simpleMode: true,
-    defaultCollapsed: true,
-    items: [
-      { to: '/settings/teams', icon: 'Users', label: 'Teams', labelKey: 'components.SidebarNav.item_teams' },
-      { to: '/settings/sso', icon: 'Shield', label: 'SSO', labelKey: 'components.SidebarNav.item_sso' },
-      { to: '/settings/license', icon: 'KeyRound', label: 'License', labelKey: 'components.SidebarNav.item_license' },
-      { to: '/settings/mcp', icon: 'Cable', label: 'MCP', labelKey: 'components.SidebarNav.item_mcp' },
-      { to: '/settings/triggers', icon: 'Zap', label: 'Triggers', labelKey: 'components.SidebarNav.item_triggers' },
-      { to: '/settings/runtime-config', icon: 'Settings', label: 'Runtime Config', labelKey: 'components.SidebarNav.item_runtime_config' },
-      { to: '/settings/rate-limits', icon: 'Gauge', label: 'Rate Limits', labelKey: 'components.SidebarNav.item_rate_limits' },
-      { to: '/settings/hitl-review', icon: 'ShieldQuestion', label: 'HITL Review', labelKey: 'components.SidebarNav.item_hitl_review' },
-      { to: '/settings/observability', icon: 'Eye', label: 'Observability', labelKey: 'components.SidebarNav.item_observability' },
-      { to: '/settings/error-forwarders', icon: 'AlertTriangle', label: 'Error Forwarders', labelKey: 'components.SidebarNav.item_error_forwarders' },
-    ],
-  },
-  {
-    id: 'admin-access-control',
-    label: 'Access Control',
-    labelKey: 'components.SidebarNav.group_access_control',
-    simpleMode: false,
-    defaultCollapsed: true,
-    items: [
-      { to: '/admin/users', icon: 'UserCircle', label: 'Users', labelKey: 'components.SidebarNav.item_users' },
-      { to: '/admin/org', icon: 'Building', label: 'Org Settings', labelKey: 'components.SidebarNav.item_org_settings' },
-      { to: '/admin/audit', icon: 'FileText', label: 'Audit Log', labelKey: 'components.SidebarNav.item_audit_log' },
-    ],
-  },
-  {
-    id: 'admin-cost-management',
-    label: 'Cost Management',
-    labelKey: 'components.SidebarNav.group_cost_management',
-    simpleMode: false,
-    defaultCollapsed: true,
-    items: [
-      { to: '/admin/costs', icon: 'DollarSign', label: 'Overview', labelKey: 'components.SidebarNav.item_overview', exact: true },
-      { to: '/admin/costs/limits', icon: 'CreditCard', label: 'Spend Limits', labelKey: 'components.SidebarNav.item_spend_limits' },
-      { to: '/admin/costs/controls', icon: 'SlidersHorizontal', label: 'Cost Controls', labelKey: 'components.SidebarNav.item_cost_controls' },
-    ],
-  },
-  {
-    id: 'admin-system',
-    label: 'System',
-    labelKey: 'components.SidebarNav.group_system',
-    simpleMode: false,
-    defaultCollapsed: true,
-    items: [
-      { to: '/admin/connectors', icon: 'Plug', label: 'Connectors', labelKey: 'components.SidebarNav.item_connectors' },
-      { to: '/admin/model-backends', icon: 'Cpu', label: 'Model Backends', labelKey: 'components.SidebarNav.item_model_backends' },
-      { to: '/admin/node-categories', icon: 'Tag', label: 'Node Categories', labelKey: 'components.SidebarNav.item_node_categories' },
-      { to: '/admin/feature-flags', icon: 'Flag', label: 'Feature Flags', labelKey: 'components.SidebarNav.item_feature_flags' },
-      { to: '/admin/environments', icon: 'Container', label: 'Environments', labelKey: 'components.SidebarNav.item_environments' },
-      { to: '/admin/run-retention', icon: 'Clock', label: 'Run Retention', labelKey: 'components.SidebarNav.item_run_retention' },
-      { to: '/admin/views', icon: 'Eye', label: 'Saved Views', labelKey: 'components.SidebarNav.item_saved_views' },
-    ],
-  },
-  {
-    id: 'admin-monitoring',
-    label: 'Monitoring',
-    labelKey: 'components.SidebarNav.group_monitoring',
-    simpleMode: false,
-    defaultCollapsed: true,
-    items: [
-      { to: '/admin/errors', icon: 'AlertTriangle', label: 'Error Dashboard', labelKey: 'components.SidebarNav.item_error_dashboard' },
-      { to: '/admin/notification-delivery', icon: 'Bell', label: 'Notification Log', labelKey: 'components.SidebarNav.item_notification_log' },
-      { to: '/admin/api-changelog', icon: 'History', label: 'API Changelog', labelKey: 'components.SidebarNav.item_api_changelog' },
-      { to: '/admin/teams/comparison', icon: 'BarChart', label: 'Team Comparison', labelKey: 'components.SidebarNav.item_team_comparison' },
-    ],
-  },
-  {
-    id: 'admin-extensions',
-    label: 'Extensions',
-    labelKey: 'components.SidebarNav.group_extensions',
-    simpleMode: false,
-    defaultCollapsed: true,
-    items: [
-      { to: '/admin/plugins', icon: 'Puzzle', label: 'Plugins', labelKey: 'components.SidebarNav.item_plugins' },
-      { to: '/feedback/inbox', icon: 'MessageSquare', label: 'Feedback Inbox', labelKey: 'components.SidebarNav.item_feedback_inbox' },
-    ],
-  },
-  {
-    id: 'system',
-    label: 'System',
-    labelKey: 'components.SidebarNav.group_system_admin',
-    simpleMode: false,
-    defaultCollapsed: true,
-    systemAdminOnly: true,
-    items: [
-      { to: '/admin/system/orgs', icon: 'Building2', label: 'Organisations', labelKey: 'components.SidebarNav.item_organisations' },
-      { to: '/admin/system/config', icon: 'Settings', label: 'System Config', labelKey: 'components.SidebarNav.item_system_config' },
-    ],
-  },
-]
+const routeIconMap: Record<string, string> = {
+  dashboard: 'LayoutDashboard',
+  notifications: 'Bell',
+  'pipeline-list': 'BookOpen',
+  library: 'BookOpen',
+  'pipeline-templates': 'LayoutTemplate',
+  'pipeline-copy': 'Copy',
+  stages: 'Columns',
+  'runs-diff': 'GitCommit',
+  'eval-editor': 'CheckSquare',
+  'eval-proposals-queue': 'Clipboard',
+  'variant-compare': 'GitFork',
+  'ab-test-models': 'FlaskConical',
+  schemas: 'Database',
+  'schema-editor': 'Database',
+  'schema-infer': 'Database',
+  'settings-remy': 'Bot',
+  'admin-remy': 'Settings',
+  'settings-teams': 'Users',
+  'settings-sso': 'Shield',
+  'settings-license': 'KeyRound',
+  'settings-mcp': 'Cable',
+  'settings-triggers': 'Zap',
+  'admin-triggers': 'Zap',
+  'settings-runtime-config': 'Settings',
+  'settings-rate-limits': 'Gauge',
+  'settings-hitl-review': 'ShieldQuestion',
+  'settings-observability': 'Eye',
+  'settings-error-forwarders': 'AlertTriangle',
+  'admin-users': 'UserCircle',
+  'admin-org': 'Building',
+  'admin-audit': 'FileText',
+  'admin-costs': 'DollarSign',
+  'admin-costs-limits': 'CreditCard',
+  'admin-costs-controls': 'SlidersHorizontal',
+  'admin-connectors': 'Plug',
+  'admin-model-backends': 'Cpu',
+  'admin-node-categories': 'Tag',
+  'admin-feature-flags': 'Flag',
+  'admin-environments': 'Container',
+  'admin-run-retention': 'Clock',
+  'admin-views': 'Eye',
+  'admin-pipelines': 'BookOpen',
+  'admin-errors': 'AlertTriangle',
+  'admin-error-detail': 'AlertTriangle',
+  'admin-notification-delivery': 'Bell',
+  'api-changelog': 'History',
+  'team-comparison': 'BarChart',
+  'admin-plugins': 'Puzzle',
+  'feedback-inbox': 'MessageSquare',
+}
+
+const routeLabelKeyMap: Record<string, string> = {
+  dashboard: 'components.SidebarNav.item_dashboard',
+  notifications: 'components.SidebarNav.item_notifications',
+  library: 'components.SidebarNav.item_library',
+  'pipeline-templates': 'components.SidebarNav.item_templates',
+  'pipeline-copy': 'components.SidebarNav.item_copy_pipeline',
+  stages: 'components.SidebarNav.item_stages_board',
+  'runs-diff': 'components.SidebarNav.item_output_diff',
+  'eval-editor': 'components.SidebarNav.item_evals',
+  'eval-proposals-queue': 'components.SidebarNav.item_eval_proposals',
+  'variant-compare': 'components.SidebarNav.item_variants',
+  'ab-test-models': 'components.SidebarNav.item_ab_test_models',
+  schemas: 'components.SidebarNav.item_browse',
+  'schema-editor': 'components.SidebarNav.item_editor',
+  'schema-infer': 'components.SidebarNav.item_infer',
+  'settings-remy': 'components.SidebarNav.item_my_skills',
+  'admin-remy': 'components.SidebarNav.item_admin_config',
+  'settings-teams': 'components.SidebarNav.item_teams',
+  'settings-sso': 'components.SidebarNav.item_sso',
+  'settings-license': 'components.SidebarNav.item_license',
+  'settings-mcp': 'components.SidebarNav.item_mcp',
+  'settings-triggers': 'components.SidebarNav.item_triggers',
+  'settings-runtime-config': 'components.SidebarNav.item_runtime_config',
+  'settings-rate-limits': 'components.SidebarNav.item_rate_limits',
+  'settings-hitl-review': 'components.SidebarNav.item_hitl_review',
+  'settings-observability': 'components.SidebarNav.item_observability',
+  'settings-error-forwarders': 'components.SidebarNav.item_error_forwarders',
+  'admin-users': 'components.SidebarNav.item_users',
+  'admin-org': 'components.SidebarNav.item_org_settings',
+  'admin-audit': 'components.SidebarNav.item_audit_log',
+  'admin-costs': 'components.SidebarNav.item_overview',
+  'admin-costs-limits': 'components.SidebarNav.item_spend_limits',
+  'admin-costs-controls': 'components.SidebarNav.item_cost_controls',
+  'admin-connectors': 'components.SidebarNav.item_connectors',
+  'admin-model-backends': 'components.SidebarNav.item_model_backends',
+  'admin-node-categories': 'components.SidebarNav.item_node_categories',
+  'admin-feature-flags': 'components.SidebarNav.item_feature_flags',
+  'admin-environments': 'components.SidebarNav.item_environments',
+  'admin-run-retention': 'components.SidebarNav.item_run_retention',
+  'admin-views': 'components.SidebarNav.item_saved_views',
+  'admin-errors': 'components.SidebarNav.item_error_dashboard',
+  'admin-notification-delivery': 'components.SidebarNav.item_notification_log',
+  'api-changelog': 'components.SidebarNav.item_api_changelog',
+  'team-comparison': 'components.SidebarNav.item_team_comparison',
+  'admin-plugins': 'components.SidebarNav.item_plugins',
+  'feedback-inbox': 'components.SidebarNav.item_feedback_inbox',
+}
+
+const groupLabelKeyMap: Record<string, string> = {
+  core: 'components.SidebarNav.group_core',
+  remy: 'components.SidebarNav.group_remy',
+  settings: 'components.SidebarNav.group_settings',
+  'access-control': 'components.SidebarNav.group_access_control',
+  'cost-management': 'components.SidebarNav.group_cost_management',
+  system: 'components.SidebarNav.group_system',
+  monitoring: 'components.SidebarNav.group_monitoring',
+  extensions: 'components.SidebarNav.group_extensions',
+  'system-admin': 'components.SidebarNav.group_system_admin',
+}
+
+interface ManifestRoute {
+  name: string
+  breadcrumb: string
+  sidebar_group?: string | null
+  sidebar_order?: number | null
+  type?: string
+  exact?: boolean
+  required_tier?: string | null
+  required_roles?: string[] | null
+  required_permissions?: string[] | null
+}
+
+interface ManifestSidebarGroup {
+  label: string
+  order: number
+  default_expanded: boolean
+  simple_mode: boolean
+  labelKey?: string
+}
+
+interface Manifest {
+  routes: Record<string, ManifestRoute>
+  sidebar_groups: Record<string, ManifestSidebarGroup>
+}
+
+function isManifestRoute(route: ManifestRoute): route is ManifestRoute & { sidebar_group: string; sidebar_order: number } {
+  return typeof route.sidebar_group === 'string' && typeof route.sidebar_order === 'number'
+}
+
+function buildSidebarGroups(): NavGroup[] {
+  const m = manifest as Manifest
+  const orderMap: Record<string, number> = {}
+  const itemsByGroup: Record<string, NavItem[]> = {}
+
+  for (const routeGroup of Object.values(m.sidebar_groups || {})) {
+    orderMap[routeGroup.label] = 0
+  }
+
+  for (const [path, route] of Object.entries(m.routes || {})) {
+    if (!route.sidebar_group) continue
+    if (route.type === 'detail_page') continue
+    if (!isManifestRoute(route)) continue
+
+    const group = m.sidebar_groups[route.sidebar_group]
+    if (!group) continue
+
+    if (!itemsByGroup[route.sidebar_group]) {
+      itemsByGroup[route.sidebar_group] = []
+    }
+
+    itemsByGroup[route.sidebar_group].push({
+      to: path,
+      icon: routeIconMap[route.name] || 'File',
+      label: route.breadcrumb,
+      labelKey: routeLabelKeyMap[route.name] || `nav.${route.name}`,
+      exact: route.exact || undefined,
+      requiredRoles: route.required_roles || null,
+      requiredTier: route.required_tier || null,
+      requiredPermissions: route.required_permissions || null,
+    })
+  }
+
+  for (const groupId of Object.keys(itemsByGroup)) {
+    itemsByGroup[groupId].sort((a, b) => {
+      const routeA = m.routes[a.to]
+      const routeB = m.routes[b.to]
+      return (routeA?.sidebar_order ?? 0) - (routeB?.sidebar_order ?? 0)
+    })
+  }
+
+  const groups = Object.entries(m.sidebar_groups || {})
+    .sort(([, a], [, b]) => a.order - b.order)
+    .map(([id, sg]) => {
+      const items = itemsByGroup[id] || []
+      return {
+        id,
+        label: sg.label,
+        labelKey: sg.labelKey || groupLabelKeyMap[id] || `components.SidebarNav.group_${id}`,
+        items,
+        defaultCollapsed: !sg.default_expanded,
+        simpleMode: sg.simple_mode,
+      }
+    })
+
+  return groups
+}
+
+export function canSeeItem(
+  item: NavItem,
+  user: { role: string },
+  plan: { isAtMinimumTier: (tier: string) => boolean },
+): boolean {
+  if (item.requiredRoles && item.requiredRoles.length > 0 && !item.requiredRoles.includes(user.role)) return false
+  if (item.requiredTier && !plan.isAtMinimumTier(item.requiredTier)) return false
+  return true
+}
+
+export const navGroups: NavGroup[] = buildSidebarGroups()
+>>>>>>> task-recover-sidebar
