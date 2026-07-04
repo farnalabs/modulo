@@ -120,12 +120,12 @@ class _IngestMocks:
             patch("modulo.core.error_tracking.upsert_error_group", AsyncMock(return_value=grp)),
         ]
         for p in self.patches:
-            await p.start().__aenter__() if hasattr(p.start(), "__aenter__") else None
+            p.start()
         return self
 
     async def __aexit__(self, *args):
         for p in self.patches:
-            await p.stop().__aexit__(*args) if hasattr(p.stop(), "__aexit__") else None
+            p.stop()
 
 
 class TestIngest:

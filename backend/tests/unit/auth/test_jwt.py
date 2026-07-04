@@ -59,7 +59,7 @@ def test_none_algorithm_rejected() -> None:
     }
     # The library may reject alg:none at encode time (preferred) or at decode time
     # Either way the test passes: alg:none must never be accepted
-    with pytest.raises(Exception):
+    with pytest.raises((JWTError, ValueError)):
         token = jose_jwt.encode(claims, "", algorithm="none")
         decode_principal(token, _KEY)
 
