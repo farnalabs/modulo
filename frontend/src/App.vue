@@ -6,7 +6,7 @@
 <script setup lang="ts">
 import { ref, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
-import { getAccessToken, setAccessToken, onAuthChange } from './lib/api/client'
+import { getAccessToken, setAccessToken, setRefreshToken, onAuthChange } from './lib/api/client'
 import { getErrorTracker } from './lib/error-tracking'
 import LoginView from './views/LoginView.vue'
 import AppLayout from './components/AppLayout.vue'
@@ -34,6 +34,7 @@ onMounted(async () => {
     if (!res.ok) return
     const data = await res.json()
     setAccessToken(data.access_token)
+    if (data.refresh_token) setRefreshToken(data.refresh_token)
     if (data.user) {
       const tracker = getErrorTracker()
       if (tracker) {
