@@ -1,7 +1,11 @@
-"""Step definitions for library features — browse, copy-to-adapt, and rate primitives."""
+"""Step definitions for library features — browse, copy-to-adapt, rate, and
+tier-classify primitives."""
 
+import json
 import uuid
+from datetime import UTC, datetime
 from typing import Any
+from unittest.mock import patch
 
 import pytest
 from pytest_bdd import given, parsers, scenarios, then, when
@@ -9,6 +13,7 @@ from pytest_bdd import given, parsers, scenarios, then, when
 scenarios("../features/library/browse.feature")
 scenarios("../features/library/copy_to_adapt.feature")
 scenarios("../features/library/ratings.feature")
+scenarios("../features/library/tiering.feature")
 
 PRIMITIVE_10 = uuid.UUID("00000000-0000-0000-0000-000000000010")
 FAKE_TEAM_ID = uuid.UUID("00000000-0000-0000-0000-0000000000aa")
@@ -190,6 +195,22 @@ def _no_community_primitives(ctx: dict[str, Any]) -> None:
     items = ctx["response"].json()["items"]
     for p in items:
         assert p["source"] != "community", f"Community primitive {p['id']} included"
+
+
+@then("the response contains only community-sourced primitives")
+def _response_only_community(ctx: dict[str, Any]) -> None:
+    items = ctx["response"].json()["items"]
+    assert items, "Expected at least one community primitive"
+    for p in items:
+        assert p["source"] == "community", f"Expected source=community, got {p['source']}"
+
+
+@then(parsers.parse('the response includes a primitive named "{name}"'))
+def _response_includes_named_primitive(ctx: dict[str, Any], name: str) -> None:
+    items = ctx["response"].json()["items"]
+    assert any(p["name"] == name for p in items), (
+        f"Expected a primitive named '{name}' in response, got names: {[p['name'] for p in items]}"
+    )
 
 
 @given(parsers.parse('a specific primitive exists with id "{primitive_id}"'))
@@ -483,3 +504,60 @@ def _aggregate_increases(client, ctx: dict[str, Any]) -> None:
 def _review_count_becomes(client, count: int) -> None:
     agg = client.get(f"/api/v1/libraries/{PRIMITIVE_10}/ratings/aggregate").json()
     assert agg["review_count"] == count, f"Expected review_count={count}, got {agg['review_count']}"
+
+
+# ============================================================================
+# tiering.feature steps
+# ============================================================================
+
+
+def _make_primitive_dict(*, name: str, slug: str, tier: str) -> dict[str, Any]:
+    """Build a dict matching LibraryPrimitiveResponse for a freshly created primitive."""
+    now = datetime(2025, 1, 1, tzinfo=UTC).isoformat()
+    return {
+        "id": str(uuid.uuid4()),
+        "organisation_id": str(uuid.UUID("00000000-0000-0000-0000-000000000001")),
+        "name": name,
+        "slug": slug,
+        "description": None,
+        "primitive_type": "schema",
+        "source": "local",
+        "version": "1.0",
+        "author": "testuser",
+        "tags": [],
+        "content_json": {},
+        "source_url": None,
+        "forked_from": None,
+        "checksum": None,
+        "ed25519_signature": None,
+        "verified": None,
+        "tier": tier,
+        "download_count": None,
+        "average_rating": None,
+        "review_count": None,
+        "owner_team_id": None,
+        "visibility": "org",
+        "created_by": str(uuid.UUID("00000000-0000-0000-0000-000000000002")),
+        "created_at": now,
+        "updated_at": now,
+    }
+
+
+@when("the user creates a library primitive with body")
+def _post_create_library_primitive(client, docstring, ctx: dict[str, Any]) -> None:
+    data = json.loads(docstring)
+    tier = data.get("tier", "native")
+    created = _make_primitive_dict(name=data["name"], slug=data["slug"], tier=tier)
+    with (
+        patch("modulo.api.routes.library.get_primitive_by_slug", return_value=None),
+        patch("modulo.api.routes.library.create_library_primitive", return_value=created),
+        patch("modulo.api.routes.library.set_rls_org"),
+        patch("modulo.api.routes.library.set_rls_user_context"),
+    ):
+        ctx["response"] = client.post("/api/v1/libraries", json=data)
+
+
+@then(parsers.parse('the response has tier "{expected_tier}"'))
+def _response_has_tier(ctx: dict[str, Any], expected_tier: str) -> None:
+    data = ctx["response"].json()
+    assert data.get("tier") == expected_tier, f"Expected tier '{expected_tier}', got '{data.get('tier')}'"
