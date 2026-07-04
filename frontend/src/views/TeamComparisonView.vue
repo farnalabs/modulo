@@ -27,7 +27,7 @@
           </p>
         </div>
         <div class="rounded-lg border bg-card p-4 text-card-foreground shadow-sm">
-          <p class="text-sm font-medium text-muted-foreground">Teams</p>
+          <p class="text-sm font-medium text-muted-foreground">{{ $t('views.TeamComparisonView.teams') }}</p>
           <p class="mt-1 text-3xl font-bold">{{ data.teams.length }}</p>
         </div>
       </div>
@@ -37,8 +37,8 @@
         <table class="w-full">
           <thead>
             <tr class="border-b bg-muted/50 text-left text-xs font-medium uppercase text-muted-foreground">
-              <th class="px-4 py-3">Team</th>
-              <th class="px-4 py-3">Members</th>
+              <th class="px-4 py-3">{{ $t('views.TeamComparisonView.team') }}</th>
+              <th class="px-4 py-3">{{ $t('views.TeamComparisonView.members') }}</th>
               <th class="px-4 py-3">{{ $t('views.TeamComparisonView.total_runs') }}</th>
               <th class="px-4 py-3">{{ $t('views.TeamComparisonView.active_pipelines') }}</th>
               <th class="px-4 py-3">{{ $t('views.ABTestModelsView.eval_pass_rate') }}</th>
@@ -79,10 +79,10 @@
               </td>
               <td class="px-4 py-3">
                 <div class="flex gap-1.5 text-xs">
-                  <span class="badge badge-status-primary" title="Running">{{ team.runCounts.running }}</span>
-                  <span class="badge badge-status-warning" title="Awaiting">{{ team.runCounts.awaiting_human }}</span>
-                  <span class="badge badge-status-destructive" title="Failed">{{ team.runCounts.failed }}</span>
-                  <span class="badge badge-status-muted" title="Idle">{{ team.runCounts.idle }}</span>
+                  <span class="badge badge-status-primary" :title="$t('views.TeamComparisonView.running')">{{ team.runCounts.running }}</span>
+                  <span class="badge badge-status-warning" :title="$t('views.TeamComparisonView.awaiting')">{{ team.runCounts.awaiting_human }}</span>
+                  <span class="badge badge-status-destructive" :title="$t('views.TeamComparisonView.failed')">{{ team.runCounts.failed }}</span>
+                  <span class="badge badge-status-muted" :title="$t('views.TeamComparisonView.idle')">{{ team.runCounts.idle }}</span>
                 </div>
               </td>
               <td class="px-4 py-3 text-xs text-muted-foreground">
@@ -104,14 +104,14 @@
               <td colspan="7" class="border-t bg-muted p-4">
                 <div class="space-y-4">
                   <div class="flex items-center justify-between">
-                    <h3 class="text-lg font-semibold">{{ expandedTeam?.name }} — Pipeline Eval Breakdown</h3>
+                    <h3 class="text-lg font-semibold">{{ $t('views.TeamComparisonView.pipeline_eval_breakdown', { name: expandedTeam?.name }) }}</h3>
                     <span class="text-sm text-muted-foreground">
-                      {{ pipelineEvals.length }} pipeline{{ pipelineEvals.length === 1 ? '' : 's' }}
+                      {{ $t('views.TeamComparisonView.pipeline_count', { count: pipelineEvals.length }, pipelineEvals.length) }}
                     </span>
                   </div>
 
                   <div v-if="pipelineEvals.length === 0" class="rounded-lg border bg-background p-6 text-center text-sm text-muted-foreground">
-                    No eval data available for this team's pipelines.
+                    {{ $t('views.TeamComparisonView.no_eval_data_available') }}
                   </div>
 
                   <div v-else class="space-y-2">
@@ -131,8 +131,8 @@
                             </TooltipContent>
                           </Tooltip>
                           <p class="text-xs text-muted-foreground">
-                            {{ pe.totalEvals }} eval{{ pe.totalEvals === 1 ? '' : 's' }}
-                            · {{ pe.passedEvals }} passed
+                            {{ $t('views.TeamComparisonView.eval_count', { count: pe.totalEvals }, pe.totalEvals) }}
+                            · {{ $t('views.TeamComparisonView.passed_count', { count: pe.passedEvals }, pe.passedEvals) }}
                           </p>
                         </div>
                         <div class="ml-4 flex items-center gap-3">
@@ -158,7 +158,7 @@
       </div>
 
       <p v-if="data.teams.length === 0" class="rounded-lg border bg-card p-8 text-center text-sm text-muted-foreground">
-        No teams found. Create teams in Settings to see comparison data.
+        {{ $t('views.TeamComparisonView.no_teams_found') }}
       </p>
     </template>
   </div>
@@ -354,8 +354,8 @@ async function toggleExpand(teamId: string) {
         const teamPipelineData = pipelineEvalCache.value[teamId] ?? {}
         pipelineEvals.value = buildPipelineEvals(teamPipelineData, map)
       }
-    } catch {
-      // Silently fail — pipeline IDs shown as fallback
+    } catch (e) {
+      console.warn('Failed to fetch pipeline names, falling back to IDs:', e)
     }
   }
 }

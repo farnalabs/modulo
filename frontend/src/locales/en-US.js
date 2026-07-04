@@ -7,7 +7,20 @@ export default {
       "team_comparison": "Team Comparison",
       "active_pipelines": "Active Pipelines",
       "run_status": "Run Status",
-      "failed_to_load_dashboard": "Failed to load dashboard:"
+      "failed_to_load_dashboard": "Failed to load dashboard:",
+      "teams": "Teams",
+      "team": "Team",
+      "members": "Members",
+      "running": "Running",
+      "awaiting": "Awaiting",
+      "failed": "Failed",
+      "idle": "Idle",
+      "pipeline_eval_breakdown": "{name} — Pipeline Eval Breakdown",
+      "pipeline_count": "{count} pipeline | {count} pipelines",
+      "no_eval_data_available": "No eval data available for this team's pipelines.",
+      "no_teams_found": "No teams found. Create teams in Settings to see comparison data.",
+      "eval_count": "{count} eval | {count} evals",
+      "passed_count": "{count} passed"
     },
     "LibraryView": {
       "failed_to_load_primitives": "Failed to load primitives",
