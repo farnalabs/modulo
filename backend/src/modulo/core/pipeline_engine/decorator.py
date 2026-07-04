@@ -1,13 +1,14 @@
 """@cancellable_node — LangGraph node wrapper for cancellation, timeout, and run_context guard.
 
 Every node in a Modulo pipeline must be wrapped with this decorator. It enforces
-four invariants:
+six invariants:
 
 1. Cancellation check: if state["run_context"]["cancelled"] is True before the node
    runs, raise RunCancelledError immediately without invoking the node function.
    Additionally, if the executor has registered a DB-backed cancellation check hook
    (via set_cancellation_check), it is called to verify against
-   run.cancellation_requested — the authoritative source of truth.
+   run.cancellation_requested — the authoritative source of truth. DB check failures
+   are caught and logged as warnings; the run continues (conservative degrade).
 
 2. Per-node timeout: the node coroutine is wrapped in asyncio.wait_for(coro, timeout).
    TimeoutError propagates to the run state machine.
@@ -16,10 +17,18 @@ four invariants:
    and the node's role is not "context_setter", raise ContextSetterViolationError.
    This prevents agents from overwriting each other's run context.
 
-4. Run-context write log: every context-setter write to run_context is recorded in
+4. Reserved-key protection: context-setter agents may not write to internal reserved
+   keys (cancelled, input, _pipeline_default_autonomy, _run_context_write_log).
+   Attempts are silently stripped and logged as warnings.
+
+5. Run-context write log: every context-setter write to run_context is recorded in
    ``state["_run_context_write_log"]`` as an ordered log entry with node name,
    timestamp, written fields, and last-write-wins semantics.  Non-context-setter
    violations are also logged as warnings.
+
+6. Graceful DB degradation: if the DB-backed cancellation check hook raises an
+   exception (e.g. connection failure), the error is caught, logged with
+   exc_info=True, and the run continues as if not cancelled.
 """
 
 import asyncio
@@ -51,6 +60,14 @@ _cancellation_check_cv: ContextVar[Callable[[], Awaitable[bool]] | None] = Conte
 
 # Canonical write-log key in LangGraph state.
 _RUN_CONTEXT_WRITE_LOG_KEY = "_run_context_write_log"
+
+# Keys in run_context that context-setter agents may NOT modify.
+_RESERVED_RUN_CONTEXT_KEYS = frozenset({
+    "cancelled",
+    "input",
+    "_pipeline_default_autonomy",
+    "_run_context_write_log",
+})
 
 
 def set_cancellation_check(
@@ -90,8 +107,18 @@ def cancellable_node(
 
             # 1b. DB-backed cancellation check (authoritative source)
             db_check = _get_cancellation_check()
-            if db_check is not None and await db_check():
-                raise RunCancelledError(f"Run cancelled (DB check) before node {fn.__name__!r} could execute.")
+            if db_check is not None:
+                try:
+                    db_cancelled = await db_check()
+                except Exception:
+                    _log.warning(
+                        "run_context.cancellation_check_failed",
+                        extra={"node_name": fn.__name__},
+                        exc_info=True,
+                    )
+                    db_cancelled = False
+                if db_cancelled:
+                    raise RunCancelledError(f"Run cancelled (DB check) before node {fn.__name__!r} could execute.")
 
             # 2. Timeout-wrapped execution
             coro = fn(state, **kwargs)
@@ -106,34 +133,50 @@ def cancellable_node(
             # 3. Context-setter guard and write log
             if result and "run_context" in result:
                 if role == "context_setter":
-                    # Record write in the ordered write-log with last-write-wins semantics.
-                    write_log: list[dict[str, Any]] = list(state.get(_RUN_CONTEXT_WRITE_LOG_KEY) or [])
-                    written_fields = list(result["run_context"].keys())
-                    write_log.append(
-                        {
-                            "node_name": fn.__name__,
-                            "role": role,
-                            "timestamp": datetime.now(UTC).isoformat(),
-                            "written_fields": written_fields,
-                        }
-                    )
-                    result[_RUN_CONTEXT_WRITE_LOG_KEY] = write_log
+                    # Strip reserved keys that context-setters may not modify.
+                    result_rc: dict[str, Any] = result["run_context"]
+                    attempted_reserved = [k for k in result_rc if k in _RESERVED_RUN_CONTEXT_KEYS]
+                    for k in attempted_reserved:
+                        result_rc.pop(k)
+                    if attempted_reserved:
+                        _log.warning(
+                            "run_context.reserved_key_attempt",
+                            extra={
+                                "node_name": fn.__name__,
+                                "reserved_keys": attempted_reserved,
+                            },
+                        )
+                    # Only record write-log entry if there are non-reserved keys to persist.
+                    if result_rc:
+                        write_log: list[dict[str, Any]] = list(state.get(_RUN_CONTEXT_WRITE_LOG_KEY) or [])
+                        written_fields = list(result_rc.keys())
+                        write_log.append(
+                            {
+                                "node_name": fn.__name__,
+                                "role": role,
+                                "timestamp": datetime.now(UTC).isoformat(),
+                                "written_fields": written_fields,
+                            }
+                        )
+                        result[_RUN_CONTEXT_WRITE_LOG_KEY] = write_log
 
-                    _log.info(
-                        "run_context.write",
-                        extra={
-                            "node_name": fn.__name__,
-                            "fields": written_fields,
-                        },
-                    )
+                        _log.info(
+                            "run_context.write",
+                            extra={
+                                "node_name": fn.__name__,
+                                "fields": written_fields,
+                            },
+                        )
+                    result["run_context"] = result_rc
                 else:
                     # Non-context-setter violation — log warning and raise.
+                    attempted = list(result["run_context"].keys())
                     _log.warning(
                         "run_context.violation",
                         extra={
                             "node_name": fn.__name__,
                             "role": role,
-                            "attempted_fields": list(result["run_context"].keys()),
+                            "attempted_fields": attempted,
                         },
                     )
                     raise ContextSetterViolationError(
