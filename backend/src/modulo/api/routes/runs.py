@@ -165,9 +165,15 @@ async def trigger_run(
     Returns 202 immediately; execution happens in a background task.
     The run status can be polled via GET /api/v1/runs/{run_id}.
     """
-    async with session.begin():
-        await set_rls_org(session, principal.organisation_id)
-        pipeline = await get_pipeline(session, body.pipeline_id)
+    try:
+        async with session.begin():
+            await set_rls_org(session, principal.organisation_id)
+            pipeline = await get_pipeline(session, body.pipeline_id)
+    except ProgrammingError:
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="Feature is not available. Run database migrations to enable it.",
+        )
 
     if pipeline is None:
         raise HTTPException(
@@ -177,32 +183,38 @@ async def trigger_run(
 
     org_id = principal.organisation_id
 
-    # Create the run record inside a transaction.
-    async with session.begin():
-        await set_rls_org(session, org_id)
-        snapshot = await create_snapshot_from_live_graph(
-            session,
-            pipeline_id=pipeline.id,
-            account_id=principal.account_id,
-        )
-        if snapshot is None:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail=f"Pipeline {body.pipeline_id} not found",
+    try:
+        # Create the run record inside a transaction.
+        async with session.begin():
+            await set_rls_org(session, org_id)
+            snapshot = await create_snapshot_from_live_graph(
+                session,
+                pipeline_id=pipeline.id,
+                account_id=principal.account_id,
             )
+            if snapshot is None:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail=f"Pipeline {body.pipeline_id} not found",
+                )
 
-        # Pre-run input health checks against entry agent.
-        await _validate_run_input_basics(session, snapshot.graph_json, snapshot, body.input_payload)
+            # Pre-run input health checks against entry agent.
+            await _validate_run_input_basics(session, snapshot.graph_json, snapshot, body.input_payload)
 
-        run = await create_run(
-            session,
-            org_id=org_id,
-            pipeline_id=pipeline.id,
-            snapshot_id=snapshot.id,
-            trigger_type="manual",
-            input_payload=body.input_payload,
+            run = await create_run(
+                session,
+                org_id=org_id,
+                pipeline_id=pipeline.id,
+                snapshot_id=snapshot.id,
+                trigger_type="manual",
+                input_payload=body.input_payload,
+            )
+            run_id = run.id
+    except ProgrammingError:
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="Feature is not available. Run database migrations to enable it.",
         )
-        run_id = run.id
 
     executor = PipelineExecutor(
         engine,
@@ -225,9 +237,15 @@ async def get_run_stats_endpoint(
     principal: AuthenticatedPrincipal = Depends(get_current_user),
 ) -> dict[str, Any]:
     """Aggregated run stats for a period (7d|30d|90d)."""
-    async with session.begin():
-        await set_rls_org(session, principal.organisation_id)
-        return await get_run_stats(session, period)
+    try:
+        async with session.begin():
+            await set_rls_org(session, principal.organisation_id)
+            return await get_run_stats(session, period)
+    except ProgrammingError:
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="Feature is not available. Run database migrations to enable it.",
+        )
 
 
 @router.get("/stats/heatmap", response_model=list[dict[str, Any]])
@@ -237,9 +255,15 @@ async def get_run_heatmap_endpoint(
     principal: AuthenticatedPrincipal = Depends(get_current_user),
 ) -> list[dict[str, Any]]:
     """Run counts per day for the given year (calendar heatmap)."""
-    async with session.begin():
-        await set_rls_org(session, principal.organisation_id)
-        return await get_run_heatmap(session, year)
+    try:
+        async with session.begin():
+            await set_rls_org(session, principal.organisation_id)
+            return await get_run_heatmap(session, year)
+    except ProgrammingError:
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="Feature is not available. Run database migrations to enable it.",
+        )
 
 
 @router.get("/{run_id}", response_model=RunResponse)
@@ -248,9 +272,15 @@ async def get_run_status(
     session: AsyncSession = Depends(get_db_session),
     principal: AuthenticatedPrincipal = Depends(get_current_user),
 ) -> RunResponse:
-    async with session.begin():
-        await set_rls_org(session, principal.organisation_id)
-        run = await get_run(session, run_id)
+    try:
+        async with session.begin():
+            await set_rls_org(session, principal.organisation_id)
+            run = await get_run(session, run_id)
+    except ProgrammingError:
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="Feature is not available. Run database migrations to enable it.",
+        )
 
     if run is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Run not found")
@@ -268,9 +298,15 @@ async def cancel_run(
 
     Returns 202 immediately. The run may transition to cancelled asynchronously.
     """
-    async with session.begin():
-        await set_rls_org(session, principal.organisation_id)
-        run = await get_run(session, run_id)
+    try:
+        async with session.begin():
+            await set_rls_org(session, principal.organisation_id)
+            run = await get_run(session, run_id)
+    except ProgrammingError:
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="Feature is not available. Run database migrations to enable it.",
+        )
 
     if run is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Run not found")
@@ -281,9 +317,15 @@ async def cancel_run(
             detail=f"Run is already in terminal status: {run.status}",
         )
 
-    async with session.begin():
-        await set_rls_org(session, principal.organisation_id)
-        await request_cancellation(session, run_id)
+    try:
+        async with session.begin():
+            await set_rls_org(session, principal.organisation_id)
+            await request_cancellation(session, run_id)
+    except ProgrammingError:
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="Feature is not available. Run database migrations to enable it.",
+        )
 
     return {"status": "accepted"}
 
@@ -376,9 +418,15 @@ async def get_run_io_endpoint(
     principal: AuthenticatedPrincipal = Depends(get_current_user),
 ) -> RunIOResponse:
     """Return per-node IO for a completed run, plus generated fixture_map."""
-    async with session.begin():
-        await set_rls_org(session, principal.organisation_id)
-        result = await get_run_io(session, run_id)
+    try:
+        async with session.begin():
+            await set_rls_org(session, principal.organisation_id)
+            result = await get_run_io(session, run_id)
+    except ProgrammingError:
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="Feature is not available. Run database migrations to enable it.",
+        )
 
     if result is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Run not found")
@@ -403,17 +451,23 @@ async def export_run_fixture(
     a ``fixture_map`` that can be loaded directly into
     ``StubModelBackend(fixture_map=...)`` for regression testing.
     """
-    async with session.begin():
-        await set_rls_org(session, principal.organisation_id)
-        run = await get_run(session, run_id)
-        if run is None:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Run not found")
+    try:
+        async with session.begin():
+            await set_rls_org(session, principal.organisation_id)
+            run = await get_run(session, run_id)
+            if run is None:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Run not found")
 
-        from modulo.db.models.pipeline_snapshot import PipelineSnapshot as SnapModel
-        snap_result = await session.execute(
-            select(SnapModel).where(SnapModel.id == run.snapshot_id)
+            from modulo.db.models.pipeline_snapshot import PipelineSnapshot as SnapModel
+            snap_result = await session.execute(
+                select(SnapModel).where(SnapModel.id == run.snapshot_id)
+            )
+            snapshot = snap_result.scalar_one_or_none()
+    except ProgrammingError:
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="Feature is not available. Run database migrations to enable it.",
         )
-        snapshot = snap_result.scalar_one_or_none()
 
     graph_json = snapshot.graph_json if snapshot else {}
 
@@ -446,12 +500,18 @@ async def get_run_workspace_lease(
     principal: AuthenticatedPrincipal = Depends(get_current_user),
 ) -> dict[str, Any] | None:
     """Return the WorkspaceLease associated with a run, if any."""
-    async with session.begin():
-        await set_rls_org(session, principal.organisation_id)
-        from modulo.db.models.workspace_lease import WorkspaceLease
+    try:
+        async with session.begin():
+            await set_rls_org(session, principal.organisation_id)
+            from modulo.db.models.workspace_lease import WorkspaceLease
 
-        result = await session.execute(select(WorkspaceLease).where(WorkspaceLease.run_id == run_id))
-        lease = result.scalar_one_or_none()
+            result = await session.execute(select(WorkspaceLease).where(WorkspaceLease.run_id == run_id))
+            lease = result.scalar_one_or_none()
+    except ProgrammingError:
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="Feature is not available. Run database migrations to enable it.",
+        )
     if lease is None:
         return None
     return {
@@ -474,19 +534,25 @@ async def get_run_workspace_events(
     principal: AuthenticatedPrincipal = Depends(get_current_user),
 ) -> list[dict[str, str]]:
     """Return workspace lifecycle events for a run as a timeline."""
-    async with session.begin():
-        await set_rls_org(session, principal.organisation_id)
-        from modulo.db.models.audit_event import AuditEvent
+    try:
+        async with session.begin():
+            await set_rls_org(session, principal.organisation_id)
+            from modulo.db.models.audit_event import AuditEvent
 
-        result = await session.execute(
-            select(AuditEvent)
-            .where(
-                AuditEvent.resource_type == "workspace",
-                AuditEvent.resource_id == run_id,
+            result = await session.execute(
+                select(AuditEvent)
+                .where(
+                    AuditEvent.resource_type == "workspace",
+                    AuditEvent.resource_id == run_id,
+                )
+                .order_by(AuditEvent.created_at)
             )
-            .order_by(AuditEvent.created_at)
+            events = result.scalars().all()
+    except ProgrammingError:
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="Feature is not available. Run database migrations to enable it.",
         )
-        events = result.scalars().all()
     return [
         {
             "event": evt.event_type.replace("workspace_", ""),
@@ -544,9 +610,15 @@ async def get_run_node_output(
     *password*, *key*, *credential*) in the output are masked with
     bullet characters.
     """
-    async with session.begin():
-        await set_rls_org(session, principal.organisation_id)
-        run = await get_run(session, run_id)
+    try:
+        async with session.begin():
+            await set_rls_org(session, principal.organisation_id)
+            run = await get_run(session, run_id)
+    except ProgrammingError:
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="Feature is not available. Run database migrations to enable it.",
+        )
 
     if run is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Run not found")
@@ -593,21 +665,33 @@ async def observe_run_node(
             detail="Only operators and admins can observe nodes",
         )
 
-    async with session.begin():
-        await set_rls_org(session, principal.organisation_id)
-        run = await get_run(session, run_id)
+    try:
+        async with session.begin():
+            await set_rls_org(session, principal.organisation_id)
+            run = await get_run(session, run_id)
+    except ProgrammingError:
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="Feature is not available. Run database migrations to enable it.",
+        )
 
     if run is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Run not found")
 
-    async with session.begin():
-        await set_rls_org(session, principal.organisation_id)
-        obs = await observe_node(
-            session,
-            organisation_id=principal.organisation_id,
-            run_id=run_id,
-            node_id=node_id,
-            observed_by=principal.account_id,
+    try:
+        async with session.begin():
+            await set_rls_org(session, principal.organisation_id)
+            obs = await observe_node(
+                session,
+                organisation_id=principal.organisation_id,
+                run_id=run_id,
+                node_id=node_id,
+                observed_by=principal.account_id,
+            )
+    except ProgrammingError:
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="Feature is not available. Run database migrations to enable it.",
         )
 
     return ObserveNodeResponse(
@@ -662,25 +746,31 @@ async def recover_run_node(
             detail="Only operators and admins can recover nodes",
         )
 
-    async with session.begin():
-        await set_rls_org(session, principal.organisation_id)
-        try:
-            run = await recover_node(
-                session,
-                org_id=principal.organisation_id,
-                run_id=run_id,
-                node_id=node_id,
-                input_data=body.input_data,
-                actor_id=principal.account_id,
-            )
-        except RecoveryNotAllowedError as exc:
-            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
-        except NodeNotFoundInGraphError as exc:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
-        except NodeAlreadyCompletedError as exc:
-            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
-        except ConcurrentRecoveryError as exc:
-            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+    try:
+        async with session.begin():
+            await set_rls_org(session, principal.organisation_id)
+            try:
+                run = await recover_node(
+                    session,
+                    org_id=principal.organisation_id,
+                    run_id=run_id,
+                    node_id=node_id,
+                    input_data=body.input_data,
+                    actor_id=principal.account_id,
+                )
+            except RecoveryNotAllowedError as exc:
+                raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+            except NodeNotFoundInGraphError as exc:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+            except NodeAlreadyCompletedError as exc:
+                raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+            except ConcurrentRecoveryError as exc:
+                raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+    except ProgrammingError:
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="Feature is not available. Run database migrations to enable it.",
+        )
 
     action = "skip" if body.input_data is None else "replay"
 
@@ -1003,10 +1093,16 @@ async def diff_node_output(
     applies sensitive masking, and returns a structured line-level diff
     using difflib.SequenceMatcher.
     """
-    async with session.begin():
-        await set_rls_org(session, principal.organisation_id)
-        run_a = await get_run(session, body.run_id_a)
-        run_b = await get_run(session, body.run_id_b)
+    try:
+        async with session.begin():
+            await set_rls_org(session, principal.organisation_id)
+            run_a = await get_run(session, body.run_id_a)
+            run_b = await get_run(session, body.run_id_b)
+    except ProgrammingError:
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="Feature is not available. Run database migrations to enable it.",
+        )
 
     if run_a is None:
         raise HTTPException(
