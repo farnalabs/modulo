@@ -12,9 +12,9 @@ build-backend = "hatchling.build"
 [project]
 name = "modulo"
 <<<<<<< HEAD
-version = "0.1.82"
+version = "0.1.84"
 =======
-version = "0.1.83"
+version = "0.1.84"
 >>>>>>> task-nv38-primer-generator
 description = "Governed orchestration for your agentic SDLC"
 license = "MIT"
