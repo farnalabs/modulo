@@ -196,6 +196,7 @@
 import { ref, computed, onMounted, watch } from 'vue'
 import { api } from '../lib/api/client'
 import { usePlanStore } from '../stores/planStore'
+import { formatApiError } from '../lib/api/formatError'
 import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
 import { Input } from '../components/ui/input'
@@ -319,7 +320,7 @@ async function loadFlags() {
   try {
     const { data, error: err } = await (api as any).GET('/api/v1/admin/feature-flags')
     if (err) {
-      error.value = `Failed to load feature flags: ${err}`
+      error.value = `Failed to load feature flags: ${formatApiError(err)}`
     } else if (data) {
       const resp = data as FlagsResponse
       flags.value = resp.flags
@@ -327,7 +328,7 @@ async function loadFlags() {
       wouldActivate.value = resp.would_activate ?? []
     }
   } catch (e: unknown) {
-    error.value = `Failed to load feature flags: ${e instanceof Error ? e.message : String(e)}`
+    error.value = `Failed to load feature flags: ${formatApiError(e)}`
   } finally {
     loading.value = false
   }
@@ -343,7 +344,7 @@ async function toggleFlag(flag: FlagItem) {
     body: { enabled },
   })
   if (err) {
-    error.value = `Failed to toggle flag: ${err}`
+    error.value = `Failed to toggle flag: ${formatApiError(err)}`
     flagToggling.value[flag.name] = false
     return
   }
