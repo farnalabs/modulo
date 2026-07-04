@@ -27,6 +27,13 @@ _TODAY = date(2026, 6, 24)
 def mock_session() -> AsyncMock:
     s = AsyncMock()
     s.add = MagicMock()
+    # begin_nested() is an async context manager used for savepoint isolation.
+    # async with expr: calls expr() (NOT awaited), then awaits __aenter__ on the result.
+    # We make begin_nested a synchronous callable that returns an async context manager.
+    cm = AsyncMock()
+    cm.__aenter__ = AsyncMock(return_value=cm)
+    cm.__aexit__ = AsyncMock(return_value=None)
+    s.begin_nested = MagicMock(return_value=cm)
     return s
 
 
@@ -67,7 +74,7 @@ class TestGetOrCreateDailyCount:
         assert result.run_count == 0
         assert result.total_spend_usd == Decimal("0")
         mock_session.add.assert_called_once()
-        mock_session.flush.assert_awaited_once()
+        mock_session.begin_nested.assert_called_once()
 
     async def test_creates_new_team_row(self, mock_session: AsyncMock) -> None:
         first = MagicMock(scalar_one_or_none=MagicMock(return_value=None))
