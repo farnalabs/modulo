@@ -2,9 +2,10 @@
   <div>
     <button
       type="button"
-      :aria-expanded="!collapsed"
+      :aria-expanded="!effectiveCollapsed"
       :aria-controls="`sidebar-group-${id}`"
       @click="$emit('toggle')"
+      :disabled="forceExpanded"
       class="sidebar-group-header"
     >
       <span class="sidebar-group-label">{{ labelKey ? $t(labelKey) : label }}</span>
@@ -26,7 +27,7 @@
     </button>
     <Transition name="fade">
       <div
-        v-show="!collapsed"
+        v-show="!effectiveCollapsed"
         :id="`sidebar-group-${id}`"
         class="sidebar-group-items"
         role="region"
@@ -39,16 +40,24 @@
 </template>
 
 <script setup lang="ts">
-defineProps<{
+import { computed } from "vue";
+
+const props = withDefaults(defineProps<{
   id: string;
   label: string;
   labelKey: string;
   collapsed: boolean;
-}>();
+  forceExpanded?: boolean;
+}>(), { forceExpanded: false });
 
 defineEmits<{
   toggle: [];
 }>();
+
+const effectiveCollapsed = computed(() => {
+  if (props.forceExpanded) return false
+  return props.collapsed
+});
 </script>
 
 <style scoped>
@@ -77,6 +86,15 @@ defineEmits<{
 .sidebar-group-header:hover {
   background-color: hsl(var(--accent));
   color: hsl(var(--foreground));
+}
+
+.sidebar-group-header:disabled {
+  cursor: default;
+  opacity: 0.7;
+}
+
+.sidebar-group-header:disabled:hover {
+  background: transparent;
 }
 
 .sidebar-group-header:focus-visible {
