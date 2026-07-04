@@ -7,12 +7,12 @@ Feature: Rate community primitives
     And 3 users have rated it (2 thumbs up, 1 thumbs down)
 
   Scenario: View rating aggregate
-    When the user requests GET /api/v1/libraries/{primitive_id}/ratings/aggregate
+    When the user requests GET /api/v1/libraries/00000000-0000-0000-0000-000000000010/ratings/aggregate
     Then the response contains average_rating
     And the response contains review_count = 3
 
   Scenario: Submit a thumbs-up rating
-    When the user sends POST /api/v1/libraries/{primitive_id}/ratings
+    When the user sends POST /api/v1/libraries/00000000-0000-0000-0000-000000000010/ratings
       | thumbs_up | true |
       | comment   | "Great schema!" |
     Then the response status is 201
@@ -20,14 +20,14 @@ Feature: Rate community primitives
     And the rating has comment = "Great schema!"
 
   Scenario: Submit a thumbs-down rating without comment
-    When the user sends POST /api/v1/libraries/{primitive_id}/ratings
+    When the user sends POST /api/v1/libraries/00000000-0000-0000-0000-000000000010/ratings
       | thumbs_up | false |
     Then the response status is 201
     And the rating has thumbs_up = false
     And the rating has comment = null
 
   Scenario: List ratings for a primitive
-    When the user requests GET /api/v1/libraries/{primitive_id}/ratings
+    When the user requests GET /api/v1/libraries/00000000-0000-0000-0000-000000000010/ratings
     Then the response contains a list of ratings
     And each rating has id, thumbs_up, comment, and created_at
 

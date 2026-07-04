@@ -84,8 +84,8 @@ def make_mock_session() -> AsyncMock:
     team_mock.organisation_id = ORG_ID
     team_mock.name = "test-team"
     hitl_result = AsyncMock()
-    hitl_result.scalar_one_or_none = AsyncMock(return_value=team_mock)
-    hitl_result.scalar_one = AsyncMock(return_value=0)
+    hitl_result.scalar_one_or_none = MagicMock(return_value=team_mock)
+    hitl_result.scalar_one = MagicMock(return_value=0)
     hitl_result.scalars = MagicMock(return_value=scalar_mock)
     session.execute.return_value = hitl_result
     return session
