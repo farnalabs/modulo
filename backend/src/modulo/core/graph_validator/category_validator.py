@@ -22,6 +22,22 @@ _NODE_TYPE_ALLOWED_CATEGORIES: dict[str, set[str] | None] = {
 }
 
 
+def _check_node_type_compatibility(
+    node_id: str | None,
+    node_type: str,
+    category_name: str,
+    result: ValidationResult,
+) -> None:
+    """Emit a warning if the node type is incompatible with the category."""
+    allowed = _NODE_TYPE_ALLOWED_CATEGORIES.get(node_type)
+    if allowed is not None and category_name not in allowed:
+        result.warning(
+            "CATEGORY_NODE_TYPE_MISMATCH",
+            f"Node '{node_id}' type '{node_type}' not compatible with category '{category_name}'",
+            node_id=node_id,
+        )
+
+
 async def validate_node_category(
     node: dict[str, Any],
     category_id: str | None,
@@ -66,13 +82,7 @@ async def validate_node_category(
         return result
 
     node_type: str = node.get("node_type", "agent")
-    allowed = _NODE_TYPE_ALLOWED_CATEGORIES.get(node_type)
-    if allowed is not None and row.name not in allowed:
-        result.warning(
-            "CATEGORY_NODE_TYPE_MISMATCH",
-            f"Node '{node_id}' type '{node_type}' not compatible with category '{row.name}'",
-            node_id=node_id,
-        )
+    _check_node_type_compatibility(node_id, node_type, row.name, result)
 
     return result
 
@@ -137,12 +147,6 @@ async def validate_node_categories(
                     )
                 else:
                     node_type = node.get("node_type", "agent")
-                    allowed = _NODE_TYPE_ALLOWED_CATEGORIES.get(node_type)
-                    if allowed is not None and category.name not in allowed:
-                        result.warning(
-                            "CATEGORY_NODE_TYPE_MISMATCH",
-                            f"Node '{node_id}' type '{node_type}' not compatible with category '{category.name}'",
-                            node_id=node_id,
-                        )
+                    _check_node_type_compatibility(node_id, node_type, category.name, result)
 
     return result
