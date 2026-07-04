@@ -301,8 +301,8 @@ function startDrag(e: MouseEvent) {
 function onDrag(e: MouseEvent) {
   if (!dragging) return;
   store.updatePosition({
-    x: dragStart.posX + (e.clientX - dragStart.x),
-    y: dragStart.posY + (e.clientY - dragStart.y),
+    x: Math.max(8, Math.min(dragStart.posX + (e.clientX - dragStart.x), window.innerWidth - 340)),
+    y: Math.max(8, Math.min(dragStart.posY + (e.clientY - dragStart.y), window.innerHeight - 100)),
   });
 }
 
@@ -327,8 +327,8 @@ function startResize(e: MouseEvent) {
 function onResize(e: MouseEvent) {
   if (!resizing) return;
   store.updateSize({
-    width: Math.max(320, resizeStart.w + (e.clientX - resizeStart.x)),
-    height: Math.max(400, resizeStart.h + (e.clientY - resizeStart.y)),
+    width: Math.min(Math.max(320, resizeStart.w + (e.clientX - resizeStart.x)), window.innerWidth - 16),
+    height: Math.min(Math.max(400, resizeStart.h + (e.clientY - resizeStart.y)), window.innerHeight - 40),
   });
 }
 
