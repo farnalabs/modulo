@@ -10,8 +10,8 @@
 
     <div class="mx-auto max-w-5xl space-y-8 p-6">
     <header>
-      <h1 class="text-3xl font-bold tracking-tight">Eval Editor</h1>
-      <p class="mt-1 text-muted-foreground">Create and manage evaluation definitions for your pipelines</p>
+      <h1 class="text-3xl font-bold tracking-tight">{{ $t('views.EvalEditorView.eval_editor') }}</h1>
+      <p class="mt-1 text-muted-foreground">{{ $t('views.EvalEditorView.create_and_manage_eval_definitions') }}</p>
     </header>
 
     <LoadingSpinner v-if="loading" />
@@ -21,79 +21,80 @@
     <template v-else>
       <div class="grid gap-6 lg:grid-cols-2">
         <div>
-          <label class="mb-1.5 block text-sm font-medium">Pipeline</label>
+          <label class="mb-1.5 block text-sm font-medium">{{ $t('views.EvalEditorView.pipeline') }}</label>
           <select
             v-model="selectedPipelineId"
             data-testid="eval-editor-pipeline"
             class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
             @change="onPipelineChange"
           >
-            <option value="">Select a pipeline...</option>
+            <option value="">{{ $t('views.EvalEditorView.select_a_pipeline') }}</option>
             <option v-for="p in pipelines" :key="p.id" :value="p.id">{{ p.name }}</option>
           </select>
         </div>
 
         <div>
-          <label class="mb-1.5 block text-sm font-medium">Node <span class="text-muted-foreground">(optional)</span></label>
+          <label class="mb-1.5 block text-sm font-medium">{{ $t('views.EvalEditorView.node') }} <span class="text-muted-foreground">({{ $t('views.EvalEditorView.node_optional') }})</span></label>
           <select
             v-model="form.node_id"
             :disabled="!selectedPipelineId || nodesLoading"
             data-testid="eval-editor-node"
             class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50"
           >
-            <option value="">All pipeline outputs</option>
+            <option value="">{{ $t('views.EvalEditorView.all_pipeline_outputs') }}</option>
             <option v-for="n in nodes" :key="n.id" :value="n.id">{{ n.label || n.node_type || shortId(n.id) }}</option>
           </select>
-          <div v-if="nodesLoading" class="mt-1 text-xs text-muted-foreground">Loading nodes...</div>
+          <div v-if="nodesLoading" class="mt-1 text-xs text-muted-foreground">{{ $t('views.EvalEditorView.loading_nodes') }}</div>
+          <div v-if="nodesError" class="mt-1 text-xs text-destructive">{{ nodesError }}</div>
         </div>
       </div>
 
       <div class="grid gap-8 lg:grid-cols-5">
         <div class="lg:col-span-3">
           <div class="rounded-lg border bg-card p-6 shadow-sm">
-            <h2 class="mb-4 text-lg font-semibold">{{ editingEvalId ? 'Edit Eval' : 'New Eval' }}</h2>
+            <h2 class="mb-4 text-lg font-semibold">{{ editingEvalId ? $t('views.EvalEditorView.edit_eval') : $t('views.EvalEditorView.new_eval') }}</h2>
 
             <div class="space-y-4">
               <div>
-                <label class="mb-1 block text-sm font-medium">Name</label>
+                <label class="mb-1 block text-sm font-medium">{{ $t('views.EvalEditorView.name') }}</label>
                 <input
                   v-model="form.name"
                   type="text"
                   data-testid="eval-editor-name"
                   class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                  placeholder="e.g. Response quality check"
+                  :placeholder="$t('views.EvalEditorView.name_placeholder')"
                 />
               </div>
 
               <div>
-                <label class="mb-1 block text-sm font-medium">Eval Type</label>
+                <label class="mb-1 block text-sm font-medium">{{ $t('views.EvalEditorView.eval_type') }}</label>
                 <select
                   v-model="form.eval_type"
                   data-testid="eval-editor-eval-type"
                   class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                 >
-                  <option value="llm_judge">LLM Judge</option>
-                  <option value="regex">Regex</option>
-                  <option value="json_schema">JSON Schema</option>
-                  <option value="custom_function">Custom Function</option>
+                  <option value="llm_judge">{{ $t('views.EvalEditorView.llm_judge') }}</option>
+                  <option value="regex">{{ $t('views.EvalEditorView.regex') }}</option>
+                  <option value="json_schema">{{ $t('views.EvalEditorView.json_schema') }}</option>
+                  <option value="custom_function">{{ $t('views.EvalEditorView.custom_function') }}</option>
                 </select>
               </div>
 
               <div>
-                <label class="mb-1 block text-sm font-medium">Config <span class="text-muted-foreground">(JSON)</span></label>
+                <label class="mb-1 block text-sm font-medium">{{ $t('views.EvalEditorView.config_json') }} <span class="text-muted-foreground">(JSON)</span></label>
                 <textarea
                   v-model="form.config_json"
                   rows="6"
                   data-testid="eval-editor-config"
                   class="w-full rounded-lg border border-input bg-background px-3 py-2 font-mono text-xs ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                  placeholder='{ "field": "output", "instructions": "..." }'
+                  :placeholder="$t('views.EvalEditorView.config_placeholder')"
                 />
                 <div v-if="configParseError" class="mt-1 text-xs text-destructive">{{ configParseError }}</div>
               </div>
 
               <div>
                 <label class="mb-1 block text-sm font-medium">
-                  Pass Threshold
+                  {{ $t('views.EvalEditorView.pass_threshold') }}
                   <span class="text-muted-foreground">({{ form.pass_threshold.toFixed(2) }})</span>
                 </label>
                 <div class="flex items-center gap-3">
@@ -112,7 +113,7 @@
               </div>
 
               <div>
-                <label class="mb-1 block text-sm font-medium">Failure Behaviour</label>
+                <label class="mb-1 block text-sm font-medium">{{ $t('views.EvalEditorView.failure_behaviour') }}</label>
                 <div class="flex items-center gap-4">
                   <label class="flex cursor-pointer items-center gap-2 text-sm">
                     <input
@@ -122,7 +123,7 @@
                       data-testid="eval-editor-failure-warn"
                       class="accent-primary"
                     />
-                    Warn
+                    {{ $t('views.EvalEditorView.warn') }}
                   </label>
                   <label class="flex cursor-pointer items-center gap-2 text-sm">
                     <input
@@ -132,11 +133,11 @@
                       data-testid="eval-editor-failure-block"
                       class="accent-primary"
                     />
-                    Block
+                    {{ $t('views.EvalEditorView.block') }}
                   </label>
                 </div>
                 <p class="mt-1 text-xs text-muted-foreground">
-                  {{ form.failure_behaviour === 'warn' ? 'Log a warning but allow the pipeline to continue.' : 'Fail the pipeline run immediately.' }}
+                  {{ form.failure_behaviour === 'warn' ? $t('views.EvalEditorView.warn_description') : $t('views.EvalEditorView.block_description') }}
                 </p>
               </div>
 
@@ -147,7 +148,7 @@
                   class="rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
                   @click="saveEval"
                 >
-                  {{ saving ? 'Saving...' : editingEvalId ? 'Update' : 'Save' }}
+                  {{ saving ? $t('common.saving') : editingEvalId ? $t('views.EvalEditorView.update') : $t('common.save') }}
                 </button>
                 <button
                   v-if="editingEvalId"
@@ -155,7 +156,7 @@
                   class="rounded-lg border border-input bg-background px-4 py-2 text-sm font-medium hover:bg-accent"
                   @click="resetForm"
                 >
-                  Cancel
+                  {{ $t('common.cancel') }}
                 </button>
               </div>
 
@@ -166,10 +167,12 @@
         </div>
 
         <div class="lg:col-span-2">
-          <h2 class="mb-4 text-lg font-semibold">Existing Evals</h2>
+          <h2 class="mb-4 text-lg font-semibold">{{ $t('views.EvalEditorView.existing_evals') }}</h2>
+
+          <div v-if="evalsError" class="mb-2 text-sm text-destructive">{{ evalsError }}</div>
 
           <div v-if="!selectedPipelineId" class="rounded-lg border bg-card p-6 text-center text-sm text-muted-foreground">
-            Select a pipeline above to see its evals.
+            {{ $t('views.EvalEditorView.prompt_select_pipeline') }}
           </div>
 
           <div v-else-if="evalsLoading" class="flex items-center justify-center py-8">
@@ -177,7 +180,7 @@
           </div>
 
           <div v-else-if="evals.length === 0" class="rounded-lg border bg-card p-6 text-center text-sm text-muted-foreground">
-            No evals for this pipeline yet.
+            {{ $t('views.EvalEditorView.no_evals_yet') }}
           </div>
 
           <div v-else class="space-y-2">
@@ -208,9 +211,9 @@
                 <div class="flex shrink-0 items-center gap-1">
                   <button
                     data-testid="eval-editor-edit"
-                    aria-label="Edit"
+                    :aria-label="$t('common.edit')"
                     class="rounded p-1 text-muted-foreground hover:bg-accent"
-                    title="Edit"
+                    :title="$t('common.edit')"
                     @click="startEdit(ev)"
                   >
                     <svg class="h-4 w-4" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -220,9 +223,9 @@
                   <button
                     v-if="deletingEvalId !== ev.id"
                     data-testid="eval-editor-delete"
-                    aria-label="Delete"
+                    :aria-label="$t('common.delete')"
                     class="rounded p-1 text-destructive hover:bg-destructive/10"
-                    title="Delete"
+                    :title="$t('common.delete')"
                     @click="confirmDelete(ev.id)"
                   >
                     <svg class="h-4 w-4" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -236,14 +239,14 @@
                       class="rounded bg-destructive px-2 py-1 text-xs font-medium text-destructive-foreground hover:bg-destructive/90 disabled:opacity-50"
                       @click="deleteEval(ev.id)"
                     >
-                      {{ deleting ? '...' : 'Confirm' }}
+                      {{ deleting ? '...' : $t('common.confirm') }}
                     </button>
                     <button
                       data-testid="eval-editor-cancel-delete"
                       class="rounded px-2 py-1 text-xs font-medium hover:bg-accent"
                       @click="deletingEvalId = null"
                     >
-                      No
+                      {{ $t('common.no') }}
                     </button>
                   </div>
                 </div>
@@ -259,6 +262,7 @@
 
 <script setup lang="ts">
 import { ref, reactive, computed, onMounted } from 'vue'
+import { useI18n } from 'vue-i18n'
 import { useApi } from '../composables/useApi'
 import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
@@ -266,6 +270,8 @@ import { shortId } from '../utils/format'
 import { usePlanStore } from '../stores/planStore'
 import FeatureGate from '../components/FeatureGate.vue'
 import PageTabs from "../components/PageTabs.vue"
+
+const { t } = useI18n()
 
 const planStore = usePlanStore()
 const { get, post, put, del } = useApi()
@@ -318,6 +324,9 @@ const selectedPipelineId = ref('')
 const nodes = ref<GraphNode[]>([])
 const nodesLoading = ref(false)
 
+const nodesError = ref<string | null>(null)
+const evalsError = ref<string | null>(null)
+
 const form = reactive({
   name: '',
   node_id: '',
@@ -345,7 +354,7 @@ const configParseError = computed(() => {
     JSON.parse(form.config_json)
     return null
   } catch {
-    return 'Invalid JSON'
+    return t('views.EvalEditorView.invalid_json')
   }
 })
 
@@ -375,7 +384,7 @@ async function loadPipelines() {
     const data = await get<PipelineItem[]>('/api/v1/pipelines')
     pipelines.value = data
   } catch (e: unknown) {
-    pageError.value = `Failed to load pipelines: ${e instanceof Error ? e.message : String(e)}`
+    pageError.value = `${t('views.EvalEditorView.failed_to_load_pipelines')} ${e instanceof Error ? e.message : String(e)}`
   }
 }
 
@@ -385,11 +394,13 @@ async function loadNodes() {
     return
   }
   nodesLoading.value = true
+  nodesError.value = null
   try {
     const data = await get<GraphResponse>(`/api/v1/pipelines/${selectedPipelineId.value}/graph`)
     nodes.value = data.nodes ?? []
   } catch {
     nodes.value = []
+    nodesError.value = t('views.EvalEditorView.failed_to_load_nodes')
   } finally {
     nodesLoading.value = false
   }
@@ -401,11 +412,13 @@ async function loadEvals() {
     return
   }
   evalsLoading.value = true
+  evalsError.value = null
   try {
     const data = await get<EvalListResponse>(`/api/v1/evals?pipeline_id=${selectedPipelineId.value}`)
     evals.value = data.items ?? []
   } catch {
     evals.value = []
+    evalsError.value = t('views.EvalEditorView.failed_to_load_evals')
   } finally {
     evalsLoading.value = false
   }
@@ -414,6 +427,8 @@ async function loadEvals() {
 async function onPipelineChange() {
   resetForm()
   deletingEvalId.value = null
+  nodesError.value = null
+  evalsError.value = null
   await Promise.all([loadNodes(), loadEvals()])
 }
 
@@ -428,7 +443,7 @@ async function saveEval() {
   try {
     configParsed = JSON.parse(form.config_json)
   } catch {
-    formError.value = 'Config JSON is invalid'
+    formError.value = t('views.EvalEditorView.config_json_is_invalid')
     saving.value = false
     return
   }
@@ -448,10 +463,10 @@ async function saveEval() {
   try {
     if (editingEvalId.value) {
       await put<unknown>(`/api/v1/evals/${editingEvalId.value}`, body)
-      formSuccess.value = 'Eval updated.'
+      formSuccess.value = t('views.EvalEditorView.eval_updated')
     } else {
       await post<unknown>('/api/v1/evals', body)
-      formSuccess.value = 'Eval created.'
+      formSuccess.value = t('views.EvalEditorView.eval_created')
     }
     resetForm()
     await loadEvals()
@@ -487,7 +502,11 @@ async function deleteEval(id: string) {
     evals.value = evals.value.filter(e => e.id !== id)
     deletingEvalId.value = null
   } catch (e: unknown) {
-    formError.value = e instanceof Error ? e.message : String(e)
+    if (e instanceof Error && (e.message === 'Not found' || e.message.includes('404'))) {
+      formError.value = t('views.EvalEditorView.eval_already_deleted')
+    } else {
+      formError.value = e instanceof Error ? e.message : String(e)
+    }
   } finally {
     deleting.value = false
   }
@@ -499,7 +518,7 @@ async function loadAll() {
   try {
     await loadPipelines()
   } catch (e: unknown) {
-    pageError.value = `Failed to load: ${e instanceof Error ? e.message : String(e)}`
+    pageError.value = `${t('views.EvalEditorView.failed_to_load')} ${e instanceof Error ? e.message : String(e)}`
   } finally {
     loading.value = false
   }
