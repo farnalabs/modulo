@@ -11,7 +11,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "modulo"
-version = "0.3.23"
+version = "0.3.24"
 description = "Governed orchestration for your agentic SDLC"
 license = "MIT"
 authors = [
@@ -82,8 +82,7 @@ dependencies = [
     # Fixes CVE-2025-64439 (RCE via jsonplus) and CVE-2026-27794 (RCE via pickle)
     "langgraph-checkpoint-postgres>=3.0.0",
     "psycopg-binary>=3.3.4",
-    "psycopg2-binary>=2.9.0",
-    "types-jmespath>=1.1.0.20260508",
+
     # Runtime environments
     "e2b>=0.15.0",
     # CLI
@@ -216,9 +215,6 @@ exclude_lines = [
     "@abstractmethod",
 ]
 
-# [tool.uv.scripts]  -- removed; this field is not supported by hatchling/pip
-lint-imports = "lint-imports"
-
 [tool.importlinter]
 root_package = "modulo"
 
@@ -243,6 +239,7 @@ dev = [
     "semgrep>=1.70.0",
     "testcontainers[postgres]>=4.5.0",
     "locust>=2.32.0",
+    "types-jmespath>=1.1.0.20260508",
     "types-passlib>=1.7.7",
     "types-PyYAML>=6.0.12.20260518",
     "aiodocker>=0.21.0",

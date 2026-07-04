@@ -40,5 +40,7 @@ class DeepSeekBackend(ModelBackendBase):
     async def invoke(self, messages: list[BaseMessage], **kwargs: Any) -> BaseMessage:
         return await self._model.ainvoke(messages, **kwargs)
 
-    def stream(self, messages: list[BaseMessage], **kwargs: Any) -> AsyncIterator[BaseMessage]:
+    def stream(
+    self, messages: list[BaseMessage], tools: list[dict] | None = None, **kwargs: Any,
+) -> AsyncIterator[BaseMessage]:
         return self._model.astream(messages, **kwargs)
