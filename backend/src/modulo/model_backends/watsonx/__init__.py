@@ -14,6 +14,8 @@ WATSONX_BASE_URL = "https://us-south.ml.cloud.ibm.com"
 class WatsonXBackend(ModelBackendBase):
     """Thin adapter over ChatWatsonx for IBM watsonx.ai models."""
 
+    supports_tools: bool = True
+
     def __init__(
         self,
         api_key: str,
@@ -48,5 +50,7 @@ class WatsonXBackend(ModelBackendBase):
     async def invoke(self, messages: list[BaseMessage], **kwargs: Any) -> BaseMessage:
         return await self._model.ainvoke(messages, **kwargs)
 
-    def stream(self, messages: list[BaseMessage], **kwargs: Any) -> AsyncIterator[BaseMessage]:
+    def stream(
+    self, messages: list[BaseMessage], tools: list[dict] | None = None, **kwargs: Any,
+) -> AsyncIterator[BaseMessage]:
         return self._model.astream(messages, **kwargs)

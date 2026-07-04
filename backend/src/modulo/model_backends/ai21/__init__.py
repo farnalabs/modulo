@@ -14,6 +14,8 @@ AI21_BASE_URL = "https://api.ai21.com/studio/v1"
 class Ai21Backend(ModelBackendBase):
     """Thin adapter over ChatOpenAI targeting AI21 Labs' OpenAI-compatible API."""
 
+    supports_tools: bool = True
+
     def __init__(
         self,
         api_key: str,
@@ -45,5 +47,7 @@ class Ai21Backend(ModelBackendBase):
     async def invoke(self, messages: list[BaseMessage], **kwargs: Any) -> BaseMessage:
         return await self._model.ainvoke(messages, **kwargs)
 
-    def stream(self, messages: list[BaseMessage], **kwargs: Any) -> AsyncIterator[BaseMessage]:
+    def stream(
+    self, messages: list[BaseMessage], tools: list[dict] | None = None, **kwargs: Any,
+) -> AsyncIterator[BaseMessage]:
         return self._model.astream(messages, **kwargs)

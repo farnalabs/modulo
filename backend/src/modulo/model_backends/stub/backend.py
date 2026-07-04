@@ -24,7 +24,9 @@ def normalize_input(messages: Sequence[BaseMessage]) -> str:
     return " ".join(content.split())
 
 
-def _content_as_text(content: str | list[str | dict[str, Any]]) -> str:
+def _content_as_text(content: str | list[str | dict[str, Any]] | None) -> str:
+    if content is None:
+        return ""
     if isinstance(content, str):
         return content
 
@@ -32,10 +34,10 @@ def _content_as_text(content: str | list[str | dict[str, Any]]) -> str:
     for block in content:
         if isinstance(block, str):
             parts.append(block)
-            continue
-        text = block.get("text")
-        if isinstance(text, str):
-            parts.append(text)
+        elif isinstance(block, dict):
+            text = block.get("text")
+            if isinstance(text, str):
+                parts.append(text)
     return "\n".join(parts)
 
 
