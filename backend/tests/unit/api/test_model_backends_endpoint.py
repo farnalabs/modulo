@@ -399,3 +399,61 @@ def test_create_azure_openai_model_backend_round_trips(client: TestClient) -> No
     assert "credentials_ciphertext" not in body
     assert "api_key" not in body
     assert body["has_credentials"] is True
+
+
+def test_list_model_backends_sqlalchemy_error_returns_503(client: TestClient) -> None:
+    from sqlalchemy.exc import SQLAlchemyError as SAE
+    with (
+        patch("modulo.api.routes.model_backends.list_model_backends", side_effect=SAE("mock", "mock", "mock")),
+        patch("modulo.api.routes.model_backends.set_rls_org"),
+        patch("modulo.api.routes.model_backends.set_rls_user_context"),
+    ):
+        resp = client.get("/api/v1/model-backends")
+    assert resp.status_code == 503
+
+
+def test_create_model_backend_sqlalchemy_error_returns_503(client: TestClient) -> None:
+    from sqlalchemy.exc import SQLAlchemyError as SAE
+    with (
+        patch("modulo.api.routes.model_backends.create_model_backend", side_effect=SAE("mock", "mock", "mock")),
+        patch("modulo.api.routes.model_backends.set_rls_org"),
+        patch("modulo.api.routes.model_backends.set_rls_user_context"),
+    ):
+        resp = client.post("/api/v1/model-backends", json={
+            "name": "x", "display_name": "x", "provider": "openai",
+            "model_id": "gpt-4", "api_key": "sk-test",
+        })
+    assert resp.status_code == 503
+
+
+def test_get_model_backend_sqlalchemy_error_returns_503(client: TestClient) -> None:
+    from sqlalchemy.exc import SQLAlchemyError as SAE
+    with (
+        patch("modulo.api.routes.model_backends.get_model_backend", side_effect=SAE("mock", "mock", "mock")),
+        patch("modulo.api.routes.model_backends.set_rls_org"),
+        patch("modulo.api.routes.model_backends.set_rls_user_context"),
+    ):
+        resp = client.get(f"/api/v1/model-backends/{uuid.uuid4()}")
+    assert resp.status_code == 503
+
+
+def test_update_model_backend_sqlalchemy_error_returns_503(client: TestClient) -> None:
+    from sqlalchemy.exc import SQLAlchemyError as SAE
+    with (
+        patch("modulo.api.routes.model_backends.update_model_backend", side_effect=SAE("mock", "mock", "mock")),
+        patch("modulo.api.routes.model_backends.set_rls_org"),
+        patch("modulo.api.routes.model_backends.set_rls_user_context"),
+    ):
+        resp = client.patch(f"/api/v1/model-backends/{uuid.uuid4()}", json={"name": "x"})
+    assert resp.status_code == 503
+
+
+def test_delete_model_backend_sqlalchemy_error_returns_503(client: TestClient) -> None:
+    from sqlalchemy.exc import SQLAlchemyError as SAE
+    with (
+        patch("modulo.api.routes.model_backends.delete_model_backend", side_effect=SAE("mock", "mock", "mock")),
+        patch("modulo.api.routes.model_backends.set_rls_org"),
+        patch("modulo.api.routes.model_backends.set_rls_user_context"),
+    ):
+        resp = client.delete(f"/api/v1/model-backends/{uuid.uuid4()}")
+    assert resp.status_code == 503
