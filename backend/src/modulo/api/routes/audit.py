@@ -102,7 +102,7 @@ async def list_audit_events_endpoint(
 
 @router.post("/batch-detail", response_model=list[dict[str, object]], dependencies=[require_feature("audit_viewer")])
 async def batch_detail_endpoint(
-    body: BatchDetailRequest,
+    req: BatchDetailRequest,
     session: AsyncSession = Depends(get_db_session),
     principal: AuthenticatedPrincipal = Depends(get_current_user),
 ) -> list[dict[str, object]]:
@@ -114,7 +114,7 @@ async def batch_detail_endpoint(
             result = await get_audit_events_batch(
                 session,
                 principal.organisation_id,
-                body.event_ids,
+                req.event_ids,
             )
     except ProgrammingError:
         raise HTTPException(

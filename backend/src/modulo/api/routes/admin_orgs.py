@@ -48,7 +48,7 @@ class CreateOrgResponse(BaseModel):
 
 @router.post("", response_model=CreateOrgResponse, status_code=status.HTTP_201_CREATED)
 async def admin_create_org(
-    body: CreateOrgRequest,
+    req: CreateOrgRequest,
     current_user: AuthenticatedPrincipal = Depends(get_current_user),
     session: AsyncSession = Depends(get_db_session),
 ) -> CreateOrgResponse:
@@ -60,18 +60,18 @@ async def admin_create_org(
 
     try:
         async with session.begin():
-            existing = await get_organisation_by_slug(session, body.slug)
+            existing = await get_organisation_by_slug(session, req.slug)
             if existing is not None:
                 raise HTTPException(
                     status_code=status.HTTP_409_CONFLICT,
-                    detail=f"An organisation with slug '{body.slug}' already exists",
+                    detail=f"An organisation with slug '{req.slug}' already exists",
                 )
 
             org = await create_organisation(
                 session,
-                name=body.name,
-                slug=body.slug,
-                plan_id=body.plan_id,
+                name=req.name,
+                slug=req.slug,
+                plan_id=req.plan_id,
                 created_by=current_user.account_id,
             )
 
@@ -152,7 +152,7 @@ class CreateOrgUserResponse(BaseModel):
 @router.post("/{org_id}/users", response_model=CreateOrgUserResponse, status_code=status.HTTP_201_CREATED)
 async def admin_create_org_user(
     org_id: uuid.UUID,
-    body: CreateOrgUserRequest,
+    req: CreateOrgUserRequest,
     current_user: AuthenticatedPrincipal = Depends(get_current_user),
     session: AsyncSession = Depends(get_db_session),
 ) -> CreateOrgUserResponse:
@@ -162,14 +162,14 @@ async def admin_create_org_user(
             detail="System admin role required",
         )
 
-    if body.org_role not in ("admin", "operator", "runner", "viewer"):
+    if req.org_role not in ("admin", "operator", "runner", "viewer"):
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail=f"Invalid role: {body.org_role}. Must be one of: admin, operator, runner, viewer",
+            detail=f"Invalid role: {req.org_role}. Must be one of: admin, operator, runner, viewer",
         )
 
     try:
-        validate_password_strength(body.password)
+        validate_password_strength(req.password)
     except ValueError as exc:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
@@ -185,7 +185,7 @@ async def admin_create_org_user(
                     detail="Organisation not found",
                 )
 
-            existing = await get_account_by_email(session, body.email)
+            existing = await get_account_by_email(session, req.email)
             if existing is not None:
                 from modulo.db.crud.org_membership import get_membership_by_account_and_org
 
@@ -196,7 +196,7 @@ async def admin_create_org_user(
                         detail="A user with this email already exists in this organisation",
                     )
 
-            pw_hash = hash_password(body.password)
+            pw_hash = hash_password(req.password)
 
             if existing is not None:
                 account = existing
@@ -204,8 +204,8 @@ async def admin_create_org_user(
             else:
                 account = await create_account(
                     session,
-                    email=body.email,
-                    display_name=body.display_name,
+                    email=req.email,
+                    display_name=req.display_name,
                     password_hash=pw_hash,
                 )
 
@@ -213,7 +213,7 @@ async def admin_create_org_user(
                 session,
                 account_id=account.id,
                 org_id=org_id,
-                role=body.org_role,
+                role=req.org_role,
             )
 
             return CreateOrgUserResponse(
@@ -324,7 +324,7 @@ async def admin_get_org_license(
 @router.put("/{org_id}/license", response_model=OrgLicenseResponse)
 async def admin_set_org_license(
     org_id: uuid.UUID,
-    body: SetOrgLicenseRequest,
+    req: SetOrgLicenseRequest,
     current_user: AuthenticatedPrincipal = Depends(get_current_user),
     session: AsyncSession = Depends(get_db_session),
 ) -> OrgLicenseResponse:
@@ -344,7 +344,7 @@ async def admin_set_org_license(
     from modulo.core.license import parse_and_verify
 
     try:
-        validation = parse_and_verify(body.license_key)
+        validation = parse_and_verify(req.license_key)
     except Exception as exc:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
 
@@ -355,7 +355,7 @@ async def admin_set_org_license(
         )
 
     settings_json = dict(org.settings_json or {})
-    settings_json["license_key"] = body.license_key
+    settings_json["license_key"] = req.license_key
 
     try:
         await update_organisation(session, org_id, {"settings_json": settings_json})

@@ -214,18 +214,18 @@ async def get_registry_primitive_endpoint(
     status_code=status.HTTP_201_CREATED,
 )
 async def publish_primitive_endpoint(
-    body: PublishRequest,
+    req: PublishRequest,
     principal: AuthenticatedPrincipal = Depends(get_current_user),
 ) -> RegistryEntryResponse:
     """Publish a new primitive to the registry (in-memory for alpha)."""
     entry = await publish_primitive(
-        author=body.author,
-        name=body.name,
-        primitive_type=body.primitive_type,
-        description=body.description,
-        tags=body.tags,
-        content_json=body.content_json,
-        signing_key_hex=body.signing_key_hex,
+        author=req.author,
+        name=req.name,
+        primitive_type=req.primitive_type,
+        description=req.description,
+        tags=req.tags,
+        content_json=req.content_json,
+        signing_key_hex=req.signing_key_hex,
     )
     return RegistryEntryResponse.model_validate(entry)
 
@@ -354,7 +354,7 @@ class VerifyResponseV2(BaseModel):
 
 @router.post("/publish", response_model=PublishResponseV2, status_code=status.HTTP_201_CREATED)
 async def publish_primitive_v2(
-    body: PublishRequestV2,
+    req: PublishRequestV2,
     principal: AuthenticatedPrincipal = Depends(get_current_user),
 ) -> PublishResponseV2:
     """Publish a primitive to the registry (v2 protocol).
@@ -365,29 +365,29 @@ async def publish_primitive_v2(
     """
     payload_bytes = json.dumps(
         {
-            "author": body.author,
-            "name": body.name,
-            "primitive_type": body.primitive_type,
-            "description": body.description,
-            "tags": body.tags,
-            "content_json": body.content_json,
+            "author": req.author,
+            "name": req.name,
+            "primitive_type": req.primitive_type,
+            "description": req.description,
+            "tags": req.tags,
+            "content_json": req.content_json,
         },
         separators=(",", ":"),
         sort_keys=True,
     ).encode()
 
-    if not crypto_pem_verify(body.public_key_pem, payload_bytes, body.signature):
+    if not crypto_pem_verify(req.public_key_pem, payload_bytes, req.signature):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Signature verification failed — payload does not match the provided public key",
         )
 
-    trust_anchor_ok = verify_trust_anchor(body.public_key_pem, body.signature)
+    trust_anchor_ok = verify_trust_anchor(req.public_key_pem, req.signature)
 
     from cryptography.hazmat.primitives import serialization as pem_serialization
     from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
 
-    pub_key = pem_serialization.load_pem_public_key(body.public_key_pem.encode())
+    pub_key = pem_serialization.load_pem_public_key(req.public_key_pem.encode())
     if not isinstance(pub_key, Ed25519PublicKey):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -399,16 +399,16 @@ async def publish_primitive_v2(
     )
     fingerprint = hashlib.sha256(public_raw).hexdigest()[:16]
 
-    sig_hex = base64.b64decode(body.signature).hex()
+    sig_hex = base64.b64decode(req.signature).hex()
 
     temp_keypair = crypto_generate_keypair()
     entry = await publish_primitive(
-        author=body.author,
-        name=body.name,
-        primitive_type=body.primitive_type,
-        description=body.description,
-        tags=body.tags,
-        content_json=body.content_json,
+        author=req.author,
+        name=req.name,
+        primitive_type=req.primitive_type,
+        description=req.description,
+        tags=req.tags,
+        content_json=req.content_json,
         signing_key_hex=temp_keypair["private_key"],
     )
 
@@ -423,7 +423,7 @@ async def publish_primitive_v2(
         checksum_sha256=checksum,
         ed25519_signature_hex=sig_hex,
         signing_key_fingerprint=fingerprint,
-        public_key_pem=body.public_key_pem,
+        public_key_pem=req.public_key_pem,
         trust_anchor_verified=trust_anchor_ok,
         verified=True,
     )
@@ -556,15 +556,15 @@ async def verify_registry_primitive_v2(
 
 @router.post("/publishers", status_code=status.HTTP_201_CREATED)
 async def register_publisher_endpoint(
-    body: RegisterPublisherRequest,
+    req: RegisterPublisherRequest,
     principal: AuthenticatedPrincipal = Depends(get_current_user),
 ) -> dict[str, str]:
     """Register a verified publisher (admin operation)."""
     pub = register_publisher(
-        fingerprint_hex=body.fingerprint_hex,
-        author=body.author,
-        name=body.name,
-        website=body.website,
+        fingerprint_hex=req.fingerprint_hex,
+        author=req.author,
+        name=req.name,
+        website=req.website,
     )
     return {"status": "registered", "fingerprint": pub.fingerprint, "author": pub.author}
 

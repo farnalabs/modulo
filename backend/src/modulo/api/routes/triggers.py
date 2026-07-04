@@ -105,7 +105,7 @@ class CronConfigUpdate(BaseModel):
 @router.patch("/triggers/{trigger_id}/cron", status_code=status.HTTP_200_OK)
 async def update_cron_config(
     trigger_id: uuid.UUID,
-    body: CronConfigUpdate,
+    req: CronConfigUpdate,
     session: AsyncSession = Depends(get_db_session),
     principal: AuthenticatedPrincipal = Depends(get_current_user),
 ) -> dict[str, Any]:
@@ -133,37 +133,37 @@ async def update_cron_config(
                     detail="Only cron triggers can have cron configuration",
                 )
 
-            if body.active is not None:
-                trigger.active = body.active
+            if req.active is not None:
+                trigger.active = req.active
 
-            if body.cron_expression is not None:
+            if req.cron_expression is not None:
                 err = validate_cron_expression(
-                    body.cron_expression,
-                    body.cron_timezone or trigger.cron_timezone or "UTC",
+                    req.cron_expression,
+                    req.cron_timezone or trigger.cron_timezone or "UTC",
                 )
                 if err:
                     raise HTTPException(
                         status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
                         detail=f"Invalid cron expression: {err}",
                     )
-                trigger.cron_expression = body.cron_expression
+                trigger.cron_expression = req.cron_expression
 
-            if body.cron_timezone is not None:
-                trigger.cron_timezone = body.cron_timezone
+            if req.cron_timezone is not None:
+                trigger.cron_timezone = req.cron_timezone
 
             # Recompute next_fire_at if relevant
-            if body.cron_expression is not None or body.cron_timezone is not None:
+            if req.cron_expression is not None or req.cron_timezone is not None:
                 if trigger.cron_expression:
                     tz = trigger.cron_timezone or "UTC"
                     err = validate_cron_expression(trigger.cron_expression, tz)
                     if err is None:
                         trigger.next_fire_at = compute_next_fire(trigger.cron_expression)
 
-            if body.snapshot_id is not None:
-                trigger.config_json = {**(trigger.config_json or {}), "snapshot_id": body.snapshot_id}
+            if req.snapshot_id is not None:
+                trigger.config_json = {**(trigger.config_json or {}), "snapshot_id": req.snapshot_id}
 
-            if body.input_template is not None:
-                trigger.config_json = {**(trigger.config_json or {}), "input_template": body.input_template}
+            if req.input_template is not None:
+                trigger.config_json = {**(trigger.config_json or {}), "input_template": req.input_template}
 
             await session.flush()
     except ProgrammingError:
@@ -259,7 +259,7 @@ class PollingConfigUpdate(BaseModel):
 @router.patch("/triggers/{trigger_id}/polling", status_code=status.HTTP_200_OK)
 async def update_polling_config(
     trigger_id: uuid.UUID,
-    body: PollingConfigUpdate,
+    req: PollingConfigUpdate,
     session: AsyncSession = Depends(get_db_session),
     principal: AuthenticatedPrincipal = Depends(get_current_user),
 ) -> dict[str, Any]:
@@ -287,21 +287,21 @@ async def update_polling_config(
                     detail="Only polling triggers can have polling configuration",
                 )
 
-            if body.active is not None:
-                trigger.active = body.active
+            if req.active is not None:
+                trigger.active = req.active
 
             config = dict(trigger.config_json or {})
 
-            if body.connector_instance_id is not None:
-                config["connector_instance_id"] = body.connector_instance_id
-            if body.poll_query is not None:
-                config["poll_query"] = body.poll_query
-            if body.condition_expression is not None:
-                config["condition_expression"] = body.condition_expression
-            if body.poll_interval_seconds is not None:
-                config["poll_interval_seconds"] = body.poll_interval_seconds
-            if body.snapshot_id is not None:
-                config["snapshot_id"] = body.snapshot_id
+            if req.connector_instance_id is not None:
+                config["connector_instance_id"] = req.connector_instance_id
+            if req.poll_query is not None:
+                config["poll_query"] = req.poll_query
+            if req.condition_expression is not None:
+                config["condition_expression"] = req.condition_expression
+            if req.poll_interval_seconds is not None:
+                config["poll_interval_seconds"] = req.poll_interval_seconds
+            if req.snapshot_id is not None:
+                config["snapshot_id"] = req.snapshot_id
 
             trigger.config_json = config
 
@@ -309,9 +309,9 @@ async def update_polling_config(
             if any(
                 x is not None
                 for x in [
-                    body.poll_interval_seconds,
-                    body.connector_instance_id,
-                    body.poll_query,
+                    req.poll_interval_seconds,
+                    req.connector_instance_id,
+                    req.poll_query,
                 ]
             ):
                 trigger_engine = TriggerEngine()
@@ -350,7 +350,7 @@ class PollingTestRequest(BaseModel):
 @router.post("/triggers/{trigger_id}/polling/test", status_code=status.HTTP_200_OK)
 async def test_polling_condition(
     trigger_id: uuid.UUID,
-    body: PollingTestRequest,
+    req: PollingTestRequest,
     session: AsyncSession = Depends(get_db_session),
     principal: AuthenticatedPrincipal = Depends(get_current_user),
 ) -> dict[str, Any]:
@@ -394,9 +394,9 @@ async def test_polling_condition(
         session,
         trigger=trigger,
         org_id=principal.organisation_id,
-        connector_instance_id=uuid.UUID(body.connector_instance_id),
-        poll_query=body.poll_query,
-        condition_expression=body.condition_expression,
+        connector_instance_id=uuid.UUID(req.connector_instance_id),
+        poll_query=req.poll_query,
+        condition_expression=req.condition_expression,
     )
 
     return eval_result
@@ -419,7 +419,7 @@ class TriggerCreate(BaseModel):
 @router.post("/pipelines/{pipeline_id}/triggers", status_code=status.HTTP_201_CREATED)
 async def create_trigger(
     pipeline_id: uuid.UUID,
-    body: TriggerCreate,
+    req: TriggerCreate,
     session: AsyncSession = Depends(get_db_session),
     principal: AuthenticatedPrincipal = Depends(get_current_user),
 ) -> dict[str, Any]:
@@ -430,22 +430,22 @@ async def create_trigger(
             trigger = Trigger(
                 organisation_id=principal.organisation_id,
                 pipeline_id=pipeline_id,
-                trigger_type=body.trigger_type,
-                active=body.active,
-                max_concurrent_runs=body.max_concurrent_runs,
-                config_json=body.config_json,
-                cron_expression=body.cron_expression,
-                cron_timezone=body.cron_timezone,
+                trigger_type=req.trigger_type,
+                active=req.active,
+                max_concurrent_runs=req.max_concurrent_runs,
+                config_json=req.config_json,
+                cron_expression=req.cron_expression,
+                cron_timezone=req.cron_timezone,
                 account_id=principal.account_id,
             )
-            if body.cron_expression:
-                err = validate_cron_expression(body.cron_expression, body.cron_timezone or "UTC")
+            if req.cron_expression:
+                err = validate_cron_expression(req.cron_expression, req.cron_timezone or "UTC")
                 if err:
                     raise HTTPException(
                         status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
                         detail=f"Invalid cron expression: {err}",
                     )
-                trigger.next_fire_at = compute_next_fire(body.cron_expression)
+                trigger.next_fire_at = compute_next_fire(req.cron_expression)
             session.add(trigger)
             await session.flush()
     except ProgrammingError:
@@ -485,7 +485,7 @@ class TriggerUpdate(BaseModel):
 @router.put("/triggers/{trigger_id}", status_code=status.HTTP_200_OK)
 async def update_trigger(
     trigger_id: uuid.UUID,
-    body: TriggerUpdate,
+    req: TriggerUpdate,
     session: AsyncSession = Depends(get_db_session),
     principal: AuthenticatedPrincipal = Depends(get_current_user),
 ) -> dict[str, Any]:
@@ -503,29 +503,29 @@ async def update_trigger(
             if trigger is None:
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Trigger not found")
 
-            if body.active is not None:
-                trigger.active = body.active
-            if body.max_concurrent_runs is not None:
-                trigger.max_concurrent_runs = body.max_concurrent_runs
-            if body.config_json is not None:
-                trigger.config_json = body.config_json
-            if body.cron_expression is not None:
+            if req.active is not None:
+                trigger.active = req.active
+            if req.max_concurrent_runs is not None:
+                trigger.max_concurrent_runs = req.max_concurrent_runs
+            if req.config_json is not None:
+                trigger.config_json = req.config_json
+            if req.cron_expression is not None:
                 if trigger.trigger_type not in ("cron",):
                     raise HTTPException(
                         status_code=status.HTTP_400_BAD_REQUEST,
                         detail="Only cron triggers can have cron expressions",
                     )
-                tz = body.cron_timezone or trigger.cron_timezone or "UTC"
-                err = validate_cron_expression(body.cron_expression, tz)
+                tz = req.cron_timezone or trigger.cron_timezone or "UTC"
+                err = validate_cron_expression(req.cron_expression, tz)
                 if err:
                     raise HTTPException(
                         status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
                         detail=f"Invalid cron expression: {err}",
                     )
-                trigger.cron_expression = body.cron_expression
-            if body.cron_timezone is not None:
-                trigger.cron_timezone = body.cron_timezone
-            if body.cron_expression is not None or body.cron_timezone is not None:
+                trigger.cron_expression = req.cron_expression
+            if req.cron_timezone is not None:
+                trigger.cron_timezone = req.cron_timezone
+            if req.cron_expression is not None or req.cron_timezone is not None:
                 if trigger.cron_expression:
                     tz = trigger.cron_timezone or "UTC"
                     err = validate_cron_expression(trigger.cron_expression, tz)
@@ -633,7 +633,7 @@ class TestTriggerRequest(BaseModel):
 @router.post("/triggers/{trigger_id}/test", status_code=status.HTTP_200_OK)
 async def test_trigger(
     trigger_id: uuid.UUID,
-    body: TestTriggerRequest,
+    req: TestTriggerRequest,
     session: AsyncSession = Depends(get_db_session),
     principal: AuthenticatedPrincipal = Depends(get_current_user),
 ) -> dict[str, Any]:
@@ -658,7 +658,7 @@ async def test_trigger(
             import hashlib
             import json
 
-            raw_body = json.dumps(body.payload, sort_keys=True).encode()
+            raw_body = json.dumps(req.payload, sort_keys=True).encode()
             payload_hash = hashlib.sha256(raw_body).hexdigest()
 
             event = TriggerEvent(
@@ -690,7 +690,7 @@ async def test_trigger(
                     pipeline_id=trigger.pipeline_id,
                     snapshot_id=snapshot.id,
                     trigger_type="manual",
-                    input_payload=body.payload,
+                    input_payload=req.payload,
                     account_id=principal.account_id,
                     trigger_id=trigger.id,
                 )

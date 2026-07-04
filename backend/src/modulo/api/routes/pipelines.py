@@ -386,7 +386,7 @@ async def list_pipelines_endpoint(
 
 @router.post("", response_model=PipelineResponse, status_code=status.HTTP_201_CREATED)
 async def create_pipeline_endpoint(
-    body: PipelineCreate,
+    req: PipelineCreate,
     session: AsyncSession = Depends(get_db_session),
     principal: AuthenticatedPrincipal = Depends(get_current_user),
 ) -> PipelineResponse:
@@ -397,15 +397,15 @@ async def create_pipeline_endpoint(
             pipeline = await create_pipeline(
                 session,
                 org_id=principal.organisation_id,
-                name=body.name,
+                name=req.name,
                 account_id=principal.account_id,
-                description=body.description,
-                visibility=body.visibility,
-                max_concurrent_runs=body.max_concurrent_runs,
-                lock_wait_timeout_seconds=body.lock_wait_timeout_seconds,
-                node_timeout_seconds=body.node_timeout_seconds,
-                run_context_defaults=body.run_context_defaults,
-                default_autonomy_level=body.default_autonomy_level,
+                description=req.description,
+                visibility=req.visibility,
+                max_concurrent_runs=req.max_concurrent_runs,
+                lock_wait_timeout_seconds=req.lock_wait_timeout_seconds,
+                node_timeout_seconds=req.node_timeout_seconds,
+                run_context_defaults=req.run_context_defaults,
+                default_autonomy_level=req.default_autonomy_level,
             )
     except ProgrammingError:
         raise HTTPException(
@@ -461,11 +461,11 @@ async def get_pipeline_graph_endpoint(
 @router.patch("/{pipeline_id}/graph", response_model=PipelineGraphResponse)
 async def replace_pipeline_graph_endpoint(
     pipeline_id: uuid.UUID,
-    body: PipelineGraphUpdate,
+    req: PipelineGraphUpdate,
     session: AsyncSession = Depends(get_db_session),
     principal: AuthenticatedPrincipal = Depends(get_current_user),
 ) -> PipelineGraphResponse:
-    node_data = [node.model_dump(mode="json") for node in body.nodes]
+    node_data = [node.model_dump(mode="json") for node in req.nodes]
     edge_data = [
         {
             "id": edge.id,
@@ -477,7 +477,7 @@ async def replace_pipeline_graph_endpoint(
                 edge.hitl_gate_config.model_dump(mode="json") if edge.hitl_gate_config is not None else None
             ),
         }
-        for edge in body.edges
+        for edge in req.edges
     ]
     validator_graph = {
         "nodes": node_data,
@@ -491,7 +491,7 @@ async def replace_pipeline_graph_endpoint(
                     edge.hitl_gate_config.model_dump(mode="json") if edge.hitl_gate_config is not None else None
                 ),
             }
-            for edge in body.edges
+            for edge in req.edges
         ],
     }
     connector_bindings = [
@@ -499,7 +499,7 @@ async def replace_pipeline_graph_endpoint(
             "node_id": str(node.id),
             "connector_instance_id": str(node.connector_binding.instance_id),
         }
-        for node in body.nodes
+        for node in req.nodes
         if node.connector_binding is not None
     ]
 
@@ -509,7 +509,7 @@ async def replace_pipeline_graph_endpoint(
             await set_rls_user_context(session, principal.account_id, principal.org_role)
             schema_pins, model_backend_pins = await _resolve_graph_references(
                 session,
-                body.nodes,
+                req.nodes,
                 principal.organisation_id,
             )
             graph = await replace_pipeline_graph(
@@ -550,11 +550,11 @@ async def replace_pipeline_graph_endpoint(
 @router.patch("/{pipeline_id}", response_model=PipelineResponse)
 async def update_pipeline_endpoint(
     pipeline_id: uuid.UUID,
-    body: PipelineUpdate,
+    req: PipelineUpdate,
     session: AsyncSession = Depends(get_db_session),
     principal: AuthenticatedPrincipal = Depends(get_current_user),
 ) -> PipelineResponse:
-    updates = {k: v for k, v in body.model_dump().items() if v is not None}
+    updates = {k: v for k, v in req.model_dump().items() if v is not None}
     try:
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
@@ -624,7 +624,7 @@ class PipelineCloneRequest(BaseModel):
 @router.post("/{pipeline_id}/clone", response_model=PipelineResponse, status_code=status.HTTP_201_CREATED)
 async def clone_pipeline_endpoint(
     pipeline_id: uuid.UUID,
-    body: PipelineCloneRequest,
+    req: PipelineCloneRequest,
     session: AsyncSession = Depends(get_db_session),
     principal: AuthenticatedPrincipal = Depends(get_current_user),
 ) -> PipelineResponse:
@@ -657,7 +657,7 @@ async def clone_pipeline_endpoint(
             )
 
         # Step 2 — validate name availability
-        target_name = body.name or f"Copy of {source.name}"
+        target_name = req.name or f"Copy of {source.name}"
         _log.info("Step 2/4: checking name '%s' is available", target_name)
         if not await check_pipeline_name_available(session, principal.organisation_id, target_name):
             _log.warning("Copy aborted: name '%s' already exists in org %s", target_name, principal.organisation_id)
@@ -674,7 +674,7 @@ async def clone_pipeline_endpoint(
                 org_id=principal.organisation_id,
                 pipeline_id=pipeline_id,
                 account_id=principal.account_id,
-                new_name=body.name,
+                new_name=req.name,
             )
         except Exception:
             _log.exception("Step 3/4 failed: unexpected error cloning pipeline %s", pipeline_id)
@@ -719,7 +719,7 @@ _PARAM_PATTERN = re.compile(r"\{\{parameter\.(\w+)\}\}")
 @router.post("/{pipeline_id}/save-as-composite", status_code=status.HTTP_201_CREATED)
 async def save_as_composite_endpoint(
     pipeline_id: uuid.UUID,
-    body: SaveAsCompositeRequest,
+    req: SaveAsCompositeRequest,
     session: AsyncSession = Depends(get_db_session),
     principal: AuthenticatedPrincipal = Depends(get_current_user),
 ) -> dict[str, Any]:
@@ -733,7 +733,7 @@ async def save_as_composite_endpoint(
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Pipeline not found")
 
         all_nodes = pipeline.graph_nodes_json
-        selected_ids_str = {str(nid) for nid in body.selected_node_ids}
+        selected_ids_str = {str(nid) for nid in req.selected_node_ids}
         sub_nodes = [n for n in all_nodes if str(n.get("id")) in selected_ids_str]
         if not sub_nodes:
             raise HTTPException(
@@ -792,8 +792,8 @@ async def save_as_composite_endpoint(
             session,
             org_id=principal.organisation_id,
             account_id=principal.account_id,
-            name=body.name,
-            description=body.description,
+            name=req.name,
+            description=req.description,
             sub_pipeline_graph_json={"nodes": [dict(n) for n in sub_nodes], "edges": sub_edges},
             parameter_ports_json=detected_ports,
             version="0.1.0",
@@ -1017,7 +1017,7 @@ async def get_snapshot_detail_endpoint(
 async def tag_snapshot_endpoint(
     pipeline_id: uuid.UUID,
     snapshot_id: uuid.UUID,
-    body: SnapshotTagUpdate,
+    req: SnapshotTagUpdate,
     session: AsyncSession = Depends(get_db_session),
     principal: AuthenticatedPrincipal = Depends(get_current_user),
 ) -> SnapshotResponse:
@@ -1025,7 +1025,7 @@ async def tag_snapshot_endpoint(
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
             await set_rls_user_context(session, principal.account_id, principal.org_role)
-            snapshot = await tag_snapshot(session, snapshot_id, tag=body.tag, notes=body.notes)
+            snapshot = await tag_snapshot(session, snapshot_id, tag=req.tag, notes=req.notes)
     except ProgrammingError:
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
@@ -1093,7 +1093,7 @@ async def delete_snapshot_endpoint(
 @router.post("/{pipeline_id}/snapshots/diff", response_model=SnapshotDiffResponse)
 async def diff_snapshot_endpoint(
     pipeline_id: uuid.UUID,
-    body: SnapshotDiffQuery,
+    req: SnapshotDiffQuery,
     session: AsyncSession = Depends(get_db_session),
     principal: AuthenticatedPrincipal = Depends(get_current_user),
 ) -> SnapshotDiffResponse:
@@ -1101,7 +1101,7 @@ async def diff_snapshot_endpoint(
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
             await set_rls_user_context(session, principal.account_id, principal.org_role)
-            result = await diff_snapshots(session, body.snapshot_a_id, body.snapshot_b_id)
+            result = await diff_snapshots(session, req.snapshot_a_id, req.snapshot_b_id)
     except ProgrammingError:
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
@@ -1133,7 +1133,7 @@ class ConvertToAgentRequest(BaseModel):
 async def convert_node_to_agent_endpoint(
     pipeline_id: uuid.UUID,
     node_id: uuid.UUID,
-    body: ConvertToAgentRequest,
+    req: ConvertToAgentRequest,
     session: AsyncSession = Depends(get_db_session),
     principal: AuthenticatedPrincipal = Depends(get_current_user),
 ) -> PipelineGraphResponse:
@@ -1164,7 +1164,7 @@ async def convert_node_to_agent_endpoint(
             agent = (
                 await session.execute(
                     select(Agent).where(
-                        Agent.id == body.agent_id,
+                        Agent.id == req.agent_id,
                         Agent.organisation_id == principal.organisation_id,
                     )
                 )
@@ -1175,14 +1175,14 @@ async def convert_node_to_agent_endpoint(
             connector = (
                 await session.execute(
                     select(ConnectorInstance).where(
-                        ConnectorInstance.id == body.connector_binding.instance_id,
+                        ConnectorInstance.id == req.connector_binding.instance_id,
                         ConnectorInstance.organisation_id == principal.organisation_id,
                     )
                 )
             ).scalar_one_or_none()
             if connector is None:
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Connector not found")
-            if connector.connector_type_id != body.connector_binding.type:
+            if connector.connector_type_id != req.connector_binding.type:
                 raise HTTPException(
                     status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
                     detail="Connector type mismatch",
@@ -1191,7 +1191,7 @@ async def convert_node_to_agent_endpoint(
             model_backend = (
                 await session.execute(
                     select(ModelBackend).where(
-                        ModelBackend.id == body.model_backend_id,
+                        ModelBackend.id == req.model_backend_id,
                         ModelBackend.organisation_id == principal.organisation_id,
                     )
                 )
@@ -1200,10 +1200,10 @@ async def convert_node_to_agent_endpoint(
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Model backend not found")
 
             target["node_type"] = "agent"
-            target["agent_id"] = str(body.agent_id)
+            target["agent_id"] = str(req.agent_id)
             target["connector_binding"] = {
-                "type": body.connector_binding.type,
-                "instance_id": str(body.connector_binding.instance_id),
+                "type": req.connector_binding.type,
+                "instance_id": str(req.connector_binding.instance_id),
             }
             target.pop("output_schema_id", None)
 
@@ -1216,7 +1216,7 @@ async def convert_node_to_agent_endpoint(
                 resource_id=str(pipeline_id),
                 payload_json={
                     "node_id": str(node_id),
-                    "agent_id": str(body.agent_id),
+                    "agent_id": str(req.agent_id),
                 },
             )
 

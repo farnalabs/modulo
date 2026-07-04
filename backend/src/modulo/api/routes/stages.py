@@ -89,7 +89,7 @@ async def list_stages_endpoint(
 
 @router.post("", response_model=StageResponse, status_code=status.HTTP_201_CREATED)
 async def create_stage_endpoint(
-    body: StageCreate,
+    req: StageCreate,
     session: AsyncSession = Depends(get_db_session),
     principal: AuthenticatedPrincipal = Depends(get_current_user),
 ) -> StageResponse:
@@ -100,12 +100,12 @@ async def create_stage_endpoint(
             stage = await create_stage(
                 session,
                 org_id=principal.organisation_id,
-                name=body.name,
+                name=req.name,
                 account_id=principal.account_id,
-                description=body.description,
-                position=body.position,
-                owner_team_id=body.owner_team_id,
-                visibility=body.visibility,
+                description=req.description,
+                position=req.position,
+                owner_team_id=req.owner_team_id,
+                visibility=req.visibility,
             )
     except ProgrammingError:
         raise HTTPException(
@@ -139,11 +139,11 @@ async def get_stage_endpoint(
 @router.patch("/{stage_id}", response_model=StageResponse)
 async def update_stage_endpoint(
     stage_id: uuid.UUID,
-    body: StageUpdate,
+    req: StageUpdate,
     session: AsyncSession = Depends(get_db_session),
     principal: AuthenticatedPrincipal = Depends(get_current_user),
 ) -> StageResponse:
-    updates = {k: v for k, v in body.model_dump().items() if v is not None}
+    updates = {k: v for k, v in req.model_dump().items() if v is not None}
     try:
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)

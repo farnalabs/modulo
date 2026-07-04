@@ -76,24 +76,24 @@ def _require_admin(principal: AuthenticatedPrincipal) -> None:
 
 @router.post("", response_model=ApiKeyCreatedResponse, status_code=status.HTTP_201_CREATED)
 async def create_api_key_endpoint(
-    body: ApiKeyCreate,
+    req: ApiKeyCreate,
     session: AsyncSession = Depends(get_db_session),
     principal: AuthenticatedPrincipal = Depends(get_current_user),
     settings: Settings = Depends(get_settings),
 ) -> ApiKeyCreatedResponse:
-    if body.role not in ("operator", "runner"):
+    if req.role not in ("operator", "runner"):
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail="role must be 'operator' or 'runner'. admin keys are prohibited.",
         )
     team_id: uuid.UUID | None = None
-    if body.team_id is not None:
+    if req.team_id is not None:
         await _require_team_rbac(settings, session)
         _require_admin(principal)
-        team_id = uuid.UUID(body.team_id)
+        team_id = uuid.UUID(req.team_id)
     expires_at: datetime | None = None
-    if body.expires_at:
-        expires_at = datetime.fromisoformat(body.expires_at)
+    if req.expires_at:
+        expires_at = datetime.fromisoformat(req.expires_at)
     try:
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
@@ -101,8 +101,8 @@ async def create_api_key_endpoint(
             key, full_key = await create_api_key(
                 session,
                 org_id=principal.organisation_id,
-                name=body.name,
-                role=body.role,
+                name=req.name,
+                role=req.role,
                 account_id=principal.account_id,
                 team_id=team_id,
                 expires_at=expires_at,
@@ -143,24 +143,24 @@ async def list_api_keys_endpoint(
 @router.put("/{key_id}")
 async def update_api_key_endpoint(
     key_id: uuid.UUID,
-    body: ApiKeyUpdate,
+    req: ApiKeyUpdate,
     session: AsyncSession = Depends(get_db_session),
     principal: AuthenticatedPrincipal = Depends(get_current_user),
     settings: Settings = Depends(get_settings),
 ) -> dict[str, Any]:
-    if body.role is not None and body.role not in ("operator", "runner"):
+    if req.role is not None and req.role not in ("operator", "runner"):
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail="role must be 'operator' or 'runner'.",
         )
     team_id: uuid.UUID | None = None
-    if body.team_id is not None:
+    if req.team_id is not None:
         await _require_team_rbac(settings, session)
         _require_admin(principal)
-        team_id = uuid.UUID(body.team_id)
+        team_id = uuid.UUID(req.team_id)
     expires_at: datetime | None = None
-    if body.expires_at:
-        expires_at = datetime.fromisoformat(body.expires_at)
+    if req.expires_at:
+        expires_at = datetime.fromisoformat(req.expires_at)
     try:
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
@@ -169,8 +169,8 @@ async def update_api_key_endpoint(
                 session,
                 key_id,
                 principal.organisation_id,
-                name=body.name,
-                role=body.role,
+                name=req.name,
+                role=req.role,
                 team_id=team_id,
                 expires_at=expires_at,
             )

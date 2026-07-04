@@ -101,7 +101,7 @@ async def list_views_endpoint(
 
 @router.post("", response_model=ViewResponse, status_code=status.HTTP_201_CREATED)
 async def create_view_endpoint(
-    body: ViewCreate,
+    req: ViewCreate,
     session: AsyncSession = Depends(get_db_session),
     principal: AuthenticatedPrincipal = Depends(get_current_user),
 ) -> ViewResponse:
@@ -112,14 +112,14 @@ async def create_view_endpoint(
             view = await create_view(
                 session,
                 org_id=principal.organisation_id,
-                name=body.name,
-                view_type=body.view_type,
+                name=req.name,
+                view_type=req.view_type,
                 account_id=principal.account_id,
-                description=body.description,
-                filters=body.filters,
-                columns=body.columns,
-                sort_by=body.sort_by,
-                sort_order=body.sort_order,
+                description=req.description,
+                filters=req.filters,
+                columns=req.columns,
+                sort_by=req.sort_by,
+                sort_order=req.sort_order,
             )
     except ProgrammingError:
         logger.exception("views.table_missing")
@@ -155,11 +155,11 @@ async def get_view_endpoint(
 @router.patch("/{view_id}", response_model=ViewResponse)
 async def update_view_endpoint(
     view_id: uuid.UUID,
-    body: ViewUpdate,
+    req: ViewUpdate,
     session: AsyncSession = Depends(get_db_session),
     principal: AuthenticatedPrincipal = Depends(get_current_user),
 ) -> ViewResponse:
-    updates = {k: v for k, v in body.model_dump().items() if v is not None}
+    updates = {k: v for k, v in req.model_dump().items() if v is not None}
     try:
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)

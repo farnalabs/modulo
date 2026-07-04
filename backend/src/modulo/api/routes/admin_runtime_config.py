@@ -57,12 +57,12 @@ async def get_runtime_config(
 
 @router.put("")
 async def set_runtime_config_overrides(
-    body: dict[str, Any],
+    req: dict[str, Any],
     current_user: AuthenticatedPrincipal = Depends(get_current_user),
 ) -> dict[str, Any]:
     _require_admin(current_user)
     store = get_runtime_config_store()
-    overrides = body.get("overrides", {})
+    overrides = req.get("overrides", {})
     if not isinstance(overrides, dict):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -81,7 +81,7 @@ async def set_runtime_config_overrides(
             )
         store.set_override(key, value)
 
-    clear_keys = body.get("clear", [])
+    clear_keys = req.get("clear", [])
     if not isinstance(clear_keys, list):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,

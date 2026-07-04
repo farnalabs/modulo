@@ -347,7 +347,7 @@ async def get_library_primitive_endpoint(
 
 @router.post("", response_model=LibraryPrimitiveResponse, status_code=status.HTTP_201_CREATED)
 async def create_library_primitive_endpoint(
-    body: LibraryPrimitiveCreate,
+    req: LibraryPrimitiveCreate,
     session: AsyncSession = Depends(get_db_session),
     principal: AuthenticatedPrincipal = Depends(get_current_user),
 ) -> LibraryPrimitiveResponse:
@@ -356,25 +356,25 @@ async def create_library_primitive_endpoint(
             await set_rls_org(session, principal.organisation_id)
             await set_rls_user_context(session, principal.account_id, principal.org_role)
             existing = await get_primitive_by_slug(
-                session, principal.organisation_id, body.primitive_type, body.slug
+                session, principal.organisation_id, req.primitive_type, req.slug
             )
             if existing is not None:
                 raise HTTPException(
                     status_code=status.HTTP_409_CONFLICT,
-                    detail=f"Primitive with type '{body.primitive_type}' and slug '{body.slug}' already exists",
+                    detail=f"Primitive with type '{req.primitive_type}' and slug '{req.slug}' already exists",
                 )
             prim = await create_library_primitive(
                 session,
                 org_id=principal.organisation_id,
                 source="local",
-                primitive_type=body.primitive_type,
-                name=body.name,
-                slug=body.slug,
-                description=body.description,
+                primitive_type=req.primitive_type,
+                name=req.name,
+                slug=req.slug,
+                description=req.description,
                 author=principal.account_id.hex,
                 version="1.0",
-                tags=body.tags,
-                content_json=body.content_json,
+                tags=req.tags,
+                content_json=req.content_json,
                 source_url=None,
                 forked_from=None,
                 checksum=None,
@@ -383,8 +383,8 @@ async def create_library_primitive_endpoint(
                 download_count=None,
                 average_rating=None,
                 review_count=None,
-                owner_team_id=body.owner_team_id,
-                visibility=body.visibility,
+                owner_team_id=req.owner_team_id,
+                visibility=req.visibility,
                 account_id=principal.account_id,
             )
     except ProgrammingError:
@@ -398,11 +398,11 @@ async def create_library_primitive_endpoint(
 @router.patch("/{primitive_id}", response_model=LibraryPrimitiveResponse)
 async def update_library_primitive_endpoint(
     primitive_id: uuid.UUID,
-    body: LibraryPrimitiveUpdate,
+    req: LibraryPrimitiveUpdate,
     session: AsyncSession = Depends(get_db_session),
     principal: AuthenticatedPrincipal = Depends(get_current_user),
 ) -> LibraryPrimitiveResponse:
-    updates = body.model_dump(exclude_unset=True)
+    updates = req.model_dump(exclude_unset=True)
     try:
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
@@ -452,7 +452,7 @@ async def delete_library_primitive_endpoint(
 @router.post("/{primitive_id}/adapt", response_model=LibraryPrimitiveResponse)
 async def copy_to_adapt_endpoint(
     primitive_id: uuid.UUID,
-    body: CopyToAdaptRequest,
+    req: CopyToAdaptRequest,
     session: AsyncSession = Depends(get_db_session),
     principal: AuthenticatedPrincipal = Depends(get_current_user),
 ) -> LibraryPrimitiveResponse:
@@ -461,7 +461,7 @@ async def copy_to_adapt_endpoint(
             session,
             principal.organisation_id,
             primitive_id,
-            target_team_id=body.target_team_id,
+            target_team_id=req.target_team_id,
             account_id=principal.account_id,
             org_role=principal.org_role,
             via_mcp=False,
@@ -690,7 +690,7 @@ async def upload_zip_and_analyse_endpoint(
 
 @router.post("/import/analyse", response_model=ImportBundleResponse)
 async def analyse_import_bundle_endpoint(
-    body: AnalyseBundleRequest,
+    req: AnalyseBundleRequest,
     session: AsyncSession = Depends(get_db_session),
     principal: AuthenticatedPrincipal = Depends(get_current_user),
 ) -> ImportBundleResponse:
@@ -699,7 +699,7 @@ async def analyse_import_bundle_endpoint(
     Accepts raw JSON body with bundle content, or use /import/upload-zip
     to upload a .modulo.zip file directly.
     """
-    return await _analyse_bundle(session, principal, body.bundle)
+    return await _analyse_bundle(session, principal, req.bundle)
 
 
 # ---------------------------------------------------------------------------
@@ -709,7 +709,7 @@ async def analyse_import_bundle_endpoint(
 
 @router.post("/import/confirm", response_model=dict[str, Any])
 async def confirm_import_endpoint(
-    body: ImportConfirmRequest,
+    req: ImportConfirmRequest,
     session: AsyncSession = Depends(get_db_session),
     principal: AuthenticatedPrincipal = Depends(get_current_user),
 ) -> dict[str, Any]:
@@ -720,7 +720,7 @@ async def confirm_import_endpoint(
     LibraryPrimitive for the workflow.
     """
     try:
-        bundle = json.loads(body.bundle_json)
+        bundle = json.loads(req.bundle_json)
     except (json.JSONDecodeError, ValueError):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -736,12 +736,12 @@ async def confirm_import_endpoint(
                 org_id=principal.organisation_id,
                 created_by=principal.account_id,
                 bundle=bundle,
-                owner_team_id=body.owner_team_id,
-                pipeline_name_override=body.pipeline_name_override,
-                model_backend_overrides=body.model_backend_overrides,
-                schema_id_overrides=body.schema_overrides,
-                schema_version_overrides=body.schema_version_overrides,
-                connector_instance_overrides=body.connector_overrides,
+                owner_team_id=req.owner_team_id,
+                pipeline_name_override=req.pipeline_name_override,
+                model_backend_overrides=req.model_backend_overrides,
+                schema_id_overrides=req.schema_overrides,
+                schema_version_overrides=req.schema_version_overrides,
+                connector_instance_overrides=req.connector_overrides,
             )
     except ProgrammingError:
         _log.warning("confirm_import_endpoint: ProgrammingError — missing DB table or migration")
@@ -826,7 +826,7 @@ async def get_rating_aggregate_endpoint(
 )
 async def submit_rating_endpoint(
     primitive_id: uuid.UUID,
-    body: RatingSubmit,
+    req: RatingSubmit,
     session: AsyncSession = Depends(get_db_session),
     principal: AuthenticatedPrincipal = Depends(get_current_user),
 ) -> RatingResponse:
@@ -838,8 +838,8 @@ async def submit_rating_endpoint(
                 session,
                 org_id=principal.organisation_id,
                 primitive_id=primitive_id,
-                thumbs_up=body.thumbs_up,
-                comment=body.comment,
+                thumbs_up=req.thumbs_up,
+                comment=req.comment,
                 account_id=principal.account_id,
             )
             await update_primitive_ratings_aggregate(session, primitive_id)
@@ -858,7 +858,7 @@ async def submit_rating_endpoint(
 )
 async def submit_abuse_report_endpoint(
     primitive_id: uuid.UUID,
-    body: AbuseReportSubmit,
+    req: AbuseReportSubmit,
     session: AsyncSession = Depends(get_db_session),
     principal: AuthenticatedPrincipal = Depends(get_current_user),
 ) -> AbuseReportResponse:
@@ -870,9 +870,9 @@ async def submit_abuse_report_endpoint(
                 session,
                 org_id=principal.organisation_id,
                 primitive_id=primitive_id,
-                rating_id=body.rating_id,
+                rating_id=req.rating_id,
                 reporter_account_id=principal.account_id,
-                reason=body.reason,
+                reason=req.reason,
             )
     except ProgrammingError:
         raise HTTPException(

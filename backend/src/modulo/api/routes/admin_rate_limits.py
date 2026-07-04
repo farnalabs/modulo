@@ -55,11 +55,11 @@ async def get_rate_limits(
 
 @router.put("", response_model=RateLimitStatusResponse)
 async def update_rate_limits(
-    body: RateLimitUpdateRequest,
+    req: RateLimitUpdateRequest,
     current_user: AuthenticatedPrincipal = Depends(get_current_user),
 ) -> RateLimitStatusResponse:
     _require_admin(current_user)
-    new_rules = [(r.path_prefix, r.max_requests, r.window_s) for r in body.rules]
+    new_rules = [(r.path_prefix, r.max_requests, r.window_s) for r in req.rules]
     if not new_rules:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,

@@ -142,7 +142,7 @@ async def get_providers(
 
 @router.post("/providers", response_model=SsoProviderResponse, status_code=status.HTTP_201_CREATED)
 async def create_provider_endpoint(
-    body: SsoProviderCreate,
+    req: SsoProviderCreate,
     _: None = require_feature("sso"),
     current_user: AuthenticatedPrincipal = Depends(get_current_user),
     session: AsyncSession = Depends(get_db_session),
@@ -151,18 +151,18 @@ async def create_provider_endpoint(
     try:
         provider = await create_provider(
             session,
-            provider_type=body.provider_type,
-            name=body.name,
-            client_id=body.client_id,
-            client_secret=body.client_secret,
-            discovery_url=body.discovery_url,
-            metadata_url=body.metadata_url,
-            metadata_xml=body.metadata_xml,
-            entity_id=body.entity_id,
-            scopes=body.scopes,
-            enabled=body.enabled,
-            auto_provision=body.auto_provision,
-            default_role=body.default_role,
+            provider_type=req.provider_type,
+            name=req.name,
+            client_id=req.client_id,
+            client_secret=req.client_secret,
+            discovery_url=req.discovery_url,
+            metadata_url=req.metadata_url,
+            metadata_xml=req.metadata_xml,
+            entity_id=req.entity_id,
+            scopes=req.scopes,
+            enabled=req.enabled,
+            auto_provision=req.auto_provision,
+            default_role=req.default_role,
             org_id=current_user.organisation_id,
             actor_user_id=current_user.account_id,
         )
@@ -180,13 +180,13 @@ async def create_provider_endpoint(
 @router.put("/providers/{provider_id}", response_model=SsoProviderResponse)
 async def update_provider_endpoint(
     provider_id: uuid.UUID,
-    body: SsoProviderUpdate,
+    req: SsoProviderUpdate,
     _: None = require_feature("sso"),
     current_user: AuthenticatedPrincipal = Depends(get_current_user),
     session: AsyncSession = Depends(get_db_session),
 ) -> SsoProviderResponse:
     _require_admin(current_user)
-    updates = {k: v for k, v in body.model_dump(exclude_none=True).items()}
+    updates = {k: v for k, v in req.model_dump(exclude_none=True).items()}
     if not updates:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No fields to update")
 
@@ -428,13 +428,13 @@ class GroupMappingsResponse(BaseModel):
 @router.put("/providers/{provider_id}/group-mappings", response_model=GroupMappingsResponse)
 async def set_group_mappings_endpoint(
     provider_id: uuid.UUID,
-    body: GroupMappingsRequest,
+    req: GroupMappingsRequest,
     _: None = require_feature("sso"),
     current_user: AuthenticatedPrincipal = Depends(get_current_user),
     session: AsyncSession = Depends(get_db_session),
 ) -> GroupMappingsResponse:
     _require_admin(current_user)
-    mappings_dict = [m.model_dump() for m in body.mappings]
+    mappings_dict = [m.model_dump() for m in req.mappings]
     try:
         provider = await set_group_mappings(session, provider_id, mappings_dict)
     except ProgrammingError as exc:
