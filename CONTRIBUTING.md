@@ -378,7 +378,7 @@ Use the `gate.ps1` script from the tooling repo to run the full CI suite on a
 worktree branch before merging to main:
 
 ```powershell
-..\..\Dev-Harness\tools\gate.ps1
+..\..\harness\tools\gate.ps1
 ```
 
 ---

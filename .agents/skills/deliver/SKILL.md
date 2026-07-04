@@ -14,7 +14,7 @@ disable-model-invocation: true
 
 Autonomous delivery sprint. The workflow:
 
-1. **Load state** — read `Development/Dev-Harness/delivery/delivery-plan.json` + `Development/Product/AGENTS.md`
+1. **Load state** — read `Development/harness/delivery/delivery-plan.json` + `Development/Product/AGENTS.md`
 2. **Resolve stuck PRs** — check all open PRs for merge conflicts (`DIRTY` status), fix them by merging main in, then continue
 3. **Find next task** — first `pending` task whose entire `dependsOn` array is `completed`
 4. **Start task** — `task.ps1 start <id>`, create a branch `deliver/<task-id>-<slug>`
@@ -27,8 +27,8 @@ Autonomous delivery sprint. The workflow:
 
 - Skill: `.agents/skills/deliver/SKILL.md`
 - Conductor: `.agents/agents/conductor/CONDUCTOR.md`
-- Delivery plan: `Development/Dev-Harness/delivery/delivery-plan.json`
-- Task script: `Development/Dev-Harness/tools/task.ps1`
+- Delivery plan: `Development/harness/delivery/delivery-plan.json`
+- Task script: `Development/harness/tools/task.ps1`
 - Codebase guidance: `Development/Product/AGENTS.md`
 - CI auto-merge: `.github/workflows/automerge.yml`
 
