@@ -25,6 +25,18 @@ Feature: Browse community and organisation library primitives
     Then the response contains only organisation-local primitives
     And no community primitives are included
 
+  Scenario: Filter to community only
+    When the user requests GET /api/v1/libraries?source=community
+    Then the response contains 3 primitives total
+    And the response contains only community-sourced primitives
+    And the response includes a primitive named "Translate to French"
+    And the response includes a primitive named "QA Reviewer"
+    And the response includes a primitive named "Commit Message Linter"
+
+  Scenario: Filter to native library only excludes community primitives
+    When the user requests GET /api/v1/libraries?source=modulo
+    Then no community primitives are included
+
   Scenario: View single primitive
     Given a specific primitive exists with id "00000000-0000-0000-0000-000000000010"
     When the user requests GET /api/v1/libraries/00000000-0000-0000-0000-000000000010

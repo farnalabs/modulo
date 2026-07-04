@@ -106,6 +106,7 @@ def _make_community_db_item(
     p.updated_at = _EPOCH
     p.auto_update = True
     p.contribution_status = None
+    p.tier = "native"
     return p
 
 
