@@ -45,7 +45,7 @@ async def create_run(
             Run.organisation_id == org_id
         )
     )
-    next_run_number = max_rn.scalar() + 1
+    next_run_number = max_rn.scalar_one() + 1
 
     run = Run(
         id=run_id,
@@ -141,7 +141,7 @@ async def list_runs(
         )
 
     offset = (page - 1) * page_size
-    total = (await session.execute(count_q)).scalar_one()
+    total = (await session.execute(count_q)).scalar_one_or_none() or 0
     items = list((await session.execute(q.order_by(Run.created_at.desc()).offset(offset).limit(page_size))).scalars())
     return PageResult(items=items, total=total, page=page, page_size=page_size)
 
@@ -204,7 +204,7 @@ async def count_active_runs_for_pipeline(
             Run.status.in_(active_statuses),
         )
     )
-    return int(result.scalar_one())
+    return int(result.scalar_one_or_none() or 0)
 
 
 def _percentile(sorted_data: list[float], p: float) -> float:
@@ -261,7 +261,7 @@ async def get_run_stats(
         by_day[day]["count"] += 1
         if r.status == "complete":
             by_day[day]["success"] += 1
-        elif r.status == "failed":
+        elif r.status in ("failed", "cancelled", "eval_failed", "expired"):
             by_day[day]["failed"] += 1
 
     for r in completed_runs:
@@ -273,7 +273,7 @@ async def get_run_stats(
 
     failure_reasons: dict[str, int] = defaultdict(int)
     for r in runs:
-        if r.status == "failed" and r.error_code:
+        if r.status in ("failed", "eval_failed") and r.error_code:
             failure_reasons[r.error_code] += 1
 
     return {
