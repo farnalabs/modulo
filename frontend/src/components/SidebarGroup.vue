@@ -9,7 +9,7 @@
       class="sidebar-group-header"
     >
       <span class="sidebar-group-label">{{ labelKey ? $t(labelKey) : label }}</span>
-      <span class="sidebar-group-chevron" :class="{ rotated: !collapsed }">
+      <span class="sidebar-group-chevron" :class="{ rotated: !effectiveCollapsed }">
         <svg
           xmlns="http://www.w3.org/2000/svg"
           width="14"
