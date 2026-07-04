@@ -7,24 +7,24 @@
 
     <div class="flex flex-wrap items-center gap-4">
       <div class="flex items-center gap-2">
-        <label class="text-sm font-medium text-muted-foreground">Status</label>
+        <label class="text-sm font-medium text-muted-foreground">{{ $t('views.FeedbackInboxView.status') }}</label>
         <select
           v-model="statusFilter"
           data-testid="feedback-inbox-status-select"
           class="rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
           @change="loadFeedback"
         >
-          <option value="">All</option>
-          <option value="pending">Pending</option>
-          <option value="routing">Routing</option>
-          <option value="correcting">Correcting</option>
-          <option value="resolved">Resolved</option>
-          <option value="escalated">Escalated</option>
+          <option value="">{{ $t('views.FeedbackInboxView.all') }}</option>
+          <option value="pending">{{ $t('views.FeedbackInboxView.pending') }}</option>
+          <option value="routing">{{ $t('views.FeedbackInboxView.routing') }}</option>
+          <option value="correcting">{{ $t('views.FeedbackInboxView.correcting') }}</option>
+          <option value="resolved">{{ $t('views.FeedbackInboxView.resolved') }}</option>
+          <option value="escalated">{{ $t('views.FeedbackInboxView.escalated') }}</option>
         </select>
       </div>
 
       <div class="flex items-center gap-2">
-        <label class="text-sm font-medium text-muted-foreground">Pipeline</label>
+        <label class="text-sm font-medium text-muted-foreground">{{ $t('views.FeedbackInboxView.pipeline') }}</label>
         <select
           v-model="pipelineFilter"
           data-testid="feedback-inbox-pipeline-select"
@@ -43,7 +43,7 @@
       </div>
 
       <div class="flex items-center gap-2">
-        <label class="text-sm font-medium text-muted-foreground">From</label>
+        <label class="text-sm font-medium text-muted-foreground">{{ $t('views.FeedbackInboxView.from') }}</label>
         <input
           v-model="dateFrom"
           type="date"
@@ -54,7 +54,7 @@
       </div>
 
       <div class="flex items-center gap-2">
-        <label class="text-sm font-medium text-muted-foreground">To</label>
+        <label class="text-sm font-medium text-muted-foreground">{{ $t('views.FeedbackInboxView.to') }}</label>
         <input
           v-model="dateTo"
           type="date"
@@ -159,24 +159,24 @@
             <template v-else-if="detailError[record.id]">
               <div class="rounded-lg border border-destructive/50 bg-destructive/10 p-4 text-sm text-destructive">
                 {{ detailError[record.id] }}
-                <button data-testid="feedback-inbox-retry" class="ml-2 underline" @click="loadDetail(record.id)">Retry</button>
+                <button data-testid="feedback-inbox-retry" class="ml-2 underline" @click="loadDetail(record.id)">{{ $t('views.FeedbackInboxView.retry') }}</button>
               </div>
             </template>
 
             <template v-else-if="detailMap[record.id]">
               <div class="space-y-6">
                 <div>
-                  <h3 class="mb-2 text-sm font-semibold text-muted-foreground uppercase tracking-wider">Rejection Reason</h3>
-                  <p class="text-sm">{{ detailMap[record.id].rejection_reason || 'No rejection reason provided.' }}</p>
+                  <h3 class="mb-2 text-sm font-semibold text-muted-foreground uppercase tracking-wider">{{ $t('views.FeedbackInboxView.rejection_reason_heading') }}</h3>
+                  <p class="text-sm">{{ detailMap[record.id].rejection_reason || $t('views.FeedbackInboxView.no_rejection_reason') }}</p>
                 </div>
 
                 <div>
-                  <h3 class="mb-2 text-sm font-semibold text-muted-foreground uppercase tracking-wider">Rejected Output</h3>
+                  <h3 class="mb-2 text-sm font-semibold text-muted-foreground uppercase tracking-wider">{{ $t('views.FeedbackInboxView.rejected_output') }}</h3>
                   <pre class="max-h-64 overflow-auto rounded-lg bg-muted p-4 text-xs"><code>{{ formatJson(detailMap[record.id].rejected_output) }}</code></pre>
                 </div>
 
                 <div v-if="detailMap[record.id].correction_proposal">
-                  <h3 class="mb-2 text-sm font-semibold text-muted-foreground uppercase tracking-wider">Correction Proposal</h3>
+                  <h3 class="mb-2 text-sm font-semibold text-muted-foreground uppercase tracking-wider">{{ $t('views.FeedbackInboxView.correction_proposal') }}</h3>
                   <pre class="max-h-48 overflow-auto rounded-lg border border-primary/20 bg-primary/5 p-4 text-xs"><code>{{ formatJson(detailMap[record.id].correction_proposal) }}</code></pre>
                 </div>
 
@@ -187,18 +187,18 @@
                     class="rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
                     @click="triggerCorrection(record.id)"
                   >
-                    {{ triggering[record.id] ? 'Triggering...' : 'Trigger Correction Run' }}
+                    {{ triggering[record.id] ? $t('views.FeedbackInboxView.triggering') : $t('views.FeedbackInboxView.trigger_correction_run') }}
                   </button>
                 </div>
 
                 <div>
-                  <h3 class="mb-2 text-sm font-semibold text-muted-foreground uppercase tracking-wider">Annotation</h3>
+                  <h3 class="mb-2 text-sm font-semibold text-muted-foreground uppercase tracking-wider">{{ $t('views.FeedbackInboxView.annotation_heading') }}</h3>
                   <textarea
                     v-model="annotations[record.id]"
                     rows="3"
                     data-testid="feedback-inbox-annotation"
                     class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                    placeholder="Add your review annotation..."
+                    :placeholder="$t('views.FeedbackInboxView.add_your_review_annotation')"
                   />
                   <div class="mt-2 flex items-center gap-2">
                     <button
@@ -207,7 +207,7 @@
                       class="rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
                       @click="saveAnnotation(record.id)"
                     >
-                      {{ savingAnnotation[record.id] ? 'Saving...' : 'Save Annotation' }}
+                      {{ savingAnnotation[record.id] ? $t('views.FeedbackInboxView.saving') : $t('views.FeedbackInboxView.save_annotation') }}
                     </button>
                     <button
                       :disabled="savingAnnotation[record.id]"
@@ -215,7 +215,7 @@
                       class="rounded-lg border border-input bg-background px-4 py-2 text-sm font-medium hover:bg-accent disabled:opacity-50"
                       @click="resolveRecord(record.id)"
                     >
-                      Mark Resolved
+                      {{ $t('views.FeedbackInboxView.mark_resolved') }}
                     </button>
                     <div v-if="annotationMessage[record.id]" class="text-sm" :class="annotationMessage[record.id]?.type === 'error' ? 'text-destructive' : 'text-success'">
                       {{ annotationMessage[record.id]?.text }}
