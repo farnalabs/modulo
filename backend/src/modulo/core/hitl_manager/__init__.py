@@ -23,6 +23,8 @@ run_id + gate_id + client_id, signed with SECRET_KEY. Opaque tokens from the
 alpha are still accepted for backwards compatibility.
 """
 
+from __future__ import annotations
+
 import logging
 import secrets
 import uuid
@@ -51,6 +53,7 @@ __all__: list[str] = [
     "ClaimTokenInvalidError",
     "GateAlreadyDecidedError",
     "GateNotFoundError",
+    "HITLError",
     "HITLManager",
     "NotTeamMemberError",
 ]
@@ -60,36 +63,40 @@ __all__: list[str] = [
 # ---------------------------------------------------------------------------
 
 
-class GateNotFoundError(KeyError):
+class HITLError(Exception):
+    """Base exception for all HITL manager errors."""
+
+
+class GateNotFoundError(HITLError, KeyError):
     def __init__(self, run_id: uuid.UUID, gate_id: str) -> None:
         super().__init__(f"run={run_id} gate={gate_id}")
         self.run_id = run_id
         self.gate_id = gate_id
 
 
-class AlreadyClaimedError(RuntimeError):
+class AlreadyClaimedError(HITLError, RuntimeError):
     def __init__(self, run_id: uuid.UUID, gate_id: str) -> None:
         super().__init__(f"Gate {gate_id!r} on run {run_id} is already claimed")
         self.run_id = run_id
         self.gate_id = gate_id
 
 
-class ClaimTokenInvalidError(PermissionError):
+class ClaimTokenInvalidError(HITLError, PermissionError):
     def __init__(self) -> None:
         super().__init__("claim_token is invalid")
 
 
-class ClaimTokenExpiredError(PermissionError):
+class ClaimTokenExpiredError(HITLError, PermissionError):
     def __init__(self) -> None:
         super().__init__("claim_token has expired")
 
 
-class GateAlreadyDecidedError(RuntimeError):
+class GateAlreadyDecidedError(HITLError, RuntimeError):
     def __init__(self, run_id: uuid.UUID, gate_id: str) -> None:
         super().__init__(f"Gate {gate_id!r} on run {run_id} already has a decision")
 
 
-class NotTeamMemberError(PermissionError):
+class NotTeamMemberError(HITLError, PermissionError):
     def __init__(self, run_id: uuid.UUID, gate_id: str, team_id: uuid.UUID, user_id: uuid.UUID) -> None:
         super().__init__(
             f"User {user_id} is not a member of team {team_id} required by gate {gate_id!r} on run {run_id}"
@@ -106,6 +113,9 @@ class NotTeamMemberError(PermissionError):
 
 _TOKEN_BYTES = 32
 _DEFAULT_EXPIRY_MINUTES = 15
+_DECISION_APPROVED = "approved"
+_DECISION_REJECTED = "rejected"
+_DECISION_DELIVER_MANUAL = "deliver_manual"
 
 
 class HITLManager:
@@ -173,6 +183,9 @@ class HITLManager:
         If the gate has a ``required_team_id``, the claimant must be a
         member of that team, otherwise ``NotTeamMemberError`` is raised.
         """
+        if expiry_minutes <= 0:
+            raise ValueError(f"expiry_minutes must be positive, got {expiry_minutes}")
+
         now = datetime.now(UTC)
 
         # Pre-check: gate must exist, not already decided, and claimant must
@@ -236,7 +249,7 @@ class HITLManager:
             # Race condition — someone else claimed between our check and update
             raise AlreadyClaimedError(run_id, gate_id)
 
-        gate = await self._get(session, run_id=run_id, gate_id=gate_id, org_id=org_id)
+        gate = await session.get(HitlClaim, claimed_id, populate_existing=True)
         if gate is None:
             msg = f"Claim acquired but gate row vanished: run={run_id} gate={gate_id}"
             raise RuntimeError(msg)
@@ -270,7 +283,7 @@ class HITLManager:
             gate_id=gate_id,
             org_id=org_id,
             claim_token=claim_token,
-            decision="approved",
+            decision=_DECISION_APPROVED,
         )
 
         await self._log_audit_and_deliver(
@@ -308,7 +321,7 @@ class HITLManager:
             gate_id=gate_id,
             org_id=org_id,
             claim_token=claim_token,
-            decision="approved",
+            decision=_DECISION_APPROVED,
         )
 
         await self._log_audit_and_deliver(
@@ -329,16 +342,30 @@ class HITLManager:
         gate_id: str,
         org_id: uuid.UUID,
         claim_token: str,
+        actor_id: uuid.UUID | None = None,
     ) -> HitlClaim:
-        """Record rejection. Raises on missing token, expired token, or decided gate."""
-        return await self._decide(
+        """Record rejection and log a ``hitl.output_rejected`` audit event.
+
+        Raises on missing token, expired token, or decided gate.
+        """
+        gate = await self._decide(
             session,
             run_id=run_id,
             gate_id=gate_id,
             org_id=org_id,
             claim_token=claim_token,
-            decision="rejected",
+            decision=_DECISION_REJECTED,
         )
+
+        await self._log_audit_and_deliver(
+            session,
+            gate,
+            org_id=org_id,
+            actor_id=actor_id,
+            events=[("hitl.output_rejected", self._base_audit_payload(gate))],
+        )
+
+        return gate
 
     async def deliver_manual(
         self,
@@ -368,7 +395,7 @@ class HITLManager:
             gate_id=gate_id,
             org_id=org_id,
             claim_token=claim_token,
-            decision="deliver_manual",
+            decision=_DECISION_DELIVER_MANUAL,
         )
 
         await self._log_audit_and_deliver(
@@ -404,7 +431,7 @@ class HITLManager:
             .returning(HitlClaim.run_id, HitlClaim.gate_id)
         )
         rows = (await session.execute(stmt)).all()
-        return [{"run_id": r[0], "gate_id": r[1]} for r in rows]
+        return [{"run_id": r.run_id, "gate_id": r.gate_id} for r in rows]
 
     # ------------------------------------------------------------------
     # Read
@@ -467,7 +494,6 @@ class HITLManager:
                 "minutes_overdue": int((now - g.claimed_at).total_seconds() / 60),
             }
             for g in gates
-            if g.claimed_at is not None
         ]
 
     async def count_overdue(
@@ -556,8 +582,8 @@ class HITLManager:
             .returning(HitlClaim.id)
         )
         result = await session.execute(stmt)
-        gate_id_val = result.scalar_one_or_none()
-        if gate_id_val is None:
+        claim_id = result.scalar_one_or_none()
+        if claim_id is None:
             existing = await self._get(session, run_id=run_id, gate_id=gate_id, org_id=org_id)
             if existing is None:
                 raise GateNotFoundError(run_id, gate_id)
@@ -565,8 +591,8 @@ class HITLManager:
                 raise GateAlreadyDecidedError(run_id, gate_id)
             if existing.claim_token != claim_token:
                 raise ClaimTokenInvalidError()
-            raise ClaimTokenExpiredError
-        gate = await session.get(HitlClaim, gate_id_val, populate_existing=True)
+            raise ClaimTokenExpiredError()
+        gate = await session.get(HitlClaim, claim_id, populate_existing=True)
         if gate is None:
             msg = f"Decision recorded but gate row vanished: run={run_id} gate={gate_id}"
             raise RuntimeError(msg)
@@ -599,7 +625,10 @@ class HITLManager:
     ) -> None:
         """Log audit events, mark delivered, and flush.
 
-        On failure, logs ``hitl.output_delivery_failed`` as a fallback and re-raises.
+        On failure, the original session transaction is in a broken state,
+        so the decision rolls back along with the audit events — preventing
+        half-completed operations.  The failure is logged with enough context
+        for operators to investigate.
         """
         try:
             for event_type, payload in events:
@@ -612,23 +641,11 @@ class HITLManager:
                     resource_id=gate.id,
                     payload_json=payload,
                 )
-            gate.delivered_at = datetime.now(UTC)
+            if gate.decision != _DECISION_REJECTED:
+                gate.delivered_at = datetime.now(UTC)
             await session.flush()
         except Exception:
             _log.exception("Failed to log audit event for claim %s", gate.id)
-            try:
-                await append_audit_event(
-                    session,
-                    org_id=org_id,
-                    event_type="hitl.output_delivery_failed",
-                    actor_user_id=actor_id,
-                    resource_type="hitl_claim",
-                    resource_id=gate.id,
-                    payload_json=self._base_audit_payload(gate),
-                )
-                await session.flush()
-            except Exception:
-                _log.exception("Failed to log hitl.output_delivery_failed audit event for claim %s", gate.id)
             raise
 
 
