@@ -107,13 +107,13 @@ class TestSchemaGenerationService:
     async def test_generate_raises_on_empty_description(self) -> None:
         backend = _FakeBackend(response='{"type": "object", "properties": {}}')
         service = SchemaGenerationService(backend)
-        with pytest.raises(ValueError, match="description must be a non-empty string"):
+        with pytest.raises(SchemaGenerationError, match="description must be a non-empty string"):
             await service.generate("")
 
     async def test_generate_raises_on_blank_description(self) -> None:
         backend = _FakeBackend(response='{"type": "object", "properties": {}}')
         service = SchemaGenerationService(backend)
-        with pytest.raises(ValueError, match="description must be a non-empty string"):
+        with pytest.raises(SchemaGenerationError, match="description must be a non-empty string"):
             await service.generate("   ")
 
     async def test_generate_raises_on_non_string_content(self) -> None:

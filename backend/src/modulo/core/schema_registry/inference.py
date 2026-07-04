@@ -71,7 +71,7 @@ class SchemaInferenceService:
 
     async def infer(self, samples: list[dict[str, Any]]) -> dict[str, Any]:
         if not all(isinstance(r, dict) for r in samples):
-            raise ValueError("samples must be a list of dicts")
+            raise SchemaInferenceError("samples must be a list of dicts")
 
         try:
             messages = _build_infer_prompt(samples, self._system_prompt, self._max_sample_records)
