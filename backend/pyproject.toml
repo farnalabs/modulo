@@ -12,7 +12,7 @@ build-backend = "hatchling.build"
 [project]
 name = "modulo"
 <<<<<<< HEAD
-version = "0.1.82"
+version = "0.1.83"
 =======
 version = "0.1.83"
 >>>>>>> task-nv38-primer-generator
