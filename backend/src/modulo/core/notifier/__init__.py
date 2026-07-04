@@ -107,12 +107,16 @@ class Notifier:
 
         Returns a list of DispatchResult, one per endpoint.
         """
-        if self._use_celery:
-            return await self._dispatch_via_celery(
-                org_id, event_type, payload, run_id=run_id, retain_payload=retain_payload, team_id=team_id
-            )
+        try:
+            if self._use_celery:
+                return await self._dispatch_via_celery(
+                    org_id, event_type, payload, run_id=run_id, retain_payload=retain_payload, team_id=team_id
+                )
 
-        return await self._dispatch_inline(org_id, event_type, payload, run_id, retain_payload, team_id)
+            return await self._dispatch_inline(org_id, event_type, payload, run_id, retain_payload, team_id)
+        except Exception:
+            _log.exception("notifier.dispatch_failed", extra={"event_type": event_type, "org_id": str(org_id)})
+            return []
 
     async def _dispatch_via_celery(
         self,
@@ -342,61 +346,84 @@ class Notifier:
         last_error: str | None,
         payload_ciphertext: bytes | None,
     ) -> None:
-        async with self._session_factory() as session:
-            async with session.begin():
-                log_entry = NotificationDeliveryLog(
-                    organisation_id=endpoint.organisation_id,
-                    event_type=event_type,
-                    endpoint_id=endpoint.id,
-                    run_id=run_id,
-                    status=status,
-                    attempt_count=attempt_count,
-                    response_code=response_code,
-                    last_error=last_error,
-                    payload_ciphertext=payload_ciphertext,
-                )
-                session.add(log_entry)
+        try:
+            async with self._session_factory() as session:
+                async with session.begin():
+                    log_entry = NotificationDeliveryLog(
+                        organisation_id=endpoint.organisation_id,
+                        event_type=event_type,
+                        endpoint_id=endpoint.id,
+                        run_id=run_id,
+                        status=status,
+                        attempt_count=attempt_count,
+                        response_code=response_code,
+                        last_error=last_error,
+                        payload_ciphertext=payload_ciphertext,
+                    )
+                    session.add(log_entry)
+        except Exception:
+            _log.exception(
+                "notifier.record_delivery_failed",
+                extra={
+                    "endpoint_id": str(endpoint.id),
+                    "event_type": event_type,
+                    "status": status,
+                    "attempt_count": attempt_count,
+                },
+            )
 
     async def _increment_dead_letter(self, endpoint: NotificationEndpoint) -> None:
         """Increment dead-letter counter and auto-disable if threshold exceeded."""
-        async with self._session_factory() as session:
-            async with session.begin():
-                result = await session.execute(
-                    update(NotificationEndpoint)
-                    .where(NotificationEndpoint.id == endpoint.id)
-                    .values(
-                        consecutive_dead_letter_count=(NotificationEndpoint.consecutive_dead_letter_count + 1),
-                    )
-                    .returning(NotificationEndpoint.consecutive_dead_letter_count)
-                )
-                new_count = result.scalar_one()
-
-                if new_count >= MAX_DEAD_LETTERS:
-                    await session.execute(
+        try:
+            async with self._session_factory() as session:
+                async with session.begin():
+                    result = await session.execute(
                         update(NotificationEndpoint)
                         .where(NotificationEndpoint.id == endpoint.id)
                         .values(
-                            auto_disabled=True,
-                            disabled_at=datetime.now(UTC),
+                            consecutive_dead_letter_count=(NotificationEndpoint.consecutive_dead_letter_count + 1),
                         )
+                        .returning(NotificationEndpoint.consecutive_dead_letter_count)
                     )
-                    _log.warning(
-                        "notifier.auto_disabled",
-                        extra={"endpoint_id": str(endpoint.id), "dead_letter_count": new_count},
-                    )
+                    new_count = result.scalar_one()
+
+                    if new_count >= MAX_DEAD_LETTERS:
+                        await session.execute(
+                            update(NotificationEndpoint)
+                            .where(NotificationEndpoint.id == endpoint.id)
+                            .values(
+                                auto_disabled=True,
+                                disabled_at=datetime.now(UTC),
+                            )
+                        )
+                        _log.warning(
+                            "notifier.auto_disabled",
+                            extra={"endpoint_id": str(endpoint.id), "dead_letter_count": new_count},
+                        )
+        except Exception:
+            _log.exception(
+                "notifier.increment_dead_letter_failed",
+                extra={"endpoint_id": str(endpoint.id)},
+            )
 
     async def _reset_dead_letter(self, endpoint: NotificationEndpoint) -> None:
         """Reset consecutive dead-letter counter to 0 on successful delivery."""
-        async with self._session_factory() as session:
-            async with session.begin():
-                await session.execute(
-                    update(NotificationEndpoint)
-                    .where(
-                        NotificationEndpoint.id == endpoint.id,
-                        NotificationEndpoint.consecutive_dead_letter_count > 0,
+        try:
+            async with self._session_factory() as session:
+                async with session.begin():
+                    await session.execute(
+                        update(NotificationEndpoint)
+                        .where(
+                            NotificationEndpoint.id == endpoint.id,
+                            NotificationEndpoint.consecutive_dead_letter_count > 0,
+                        )
+                        .values(consecutive_dead_letter_count=0)
                     )
-                    .values(consecutive_dead_letter_count=0)
-                )
+        except Exception:
+            _log.exception(
+                "notifier.reset_dead_letter_failed",
+                extra={"endpoint_id": str(endpoint.id)},
+            )
 
     async def close(self) -> None:
         """Close the underlying HTTP client, if one was created."""
