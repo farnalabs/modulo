@@ -129,16 +129,28 @@ Two categories exist:
 ### Error Handling
 
 - [x] `GET /api/v1/agents` returns 501 Not Implemented on `ProgrammingError` (missing DB table)
+- [x] `GET /api/v1/agents` returns 503 Service Unavailable on general `SQLAlchemyError`
 - [x] `POST /api/v1/agents` returns 501 Not Implemented on `ProgrammingError`
+- [x] `POST /api/v1/agents` returns 503 Service Unavailable on general `SQLAlchemyError`
+- [x] `POST /api/v1/agents` returns 422 Unprocessable Entity on `IntegrityError` (FK reference not found)
 - [x] `GET /api/v1/agents/{id}` returns 501 Not Implemented on `ProgrammingError`
+- [x] `GET /api/v1/agents/{id}` returns 503 Service Unavailable on general `SQLAlchemyError`
 - [x] `PATCH /api/v1/agents/{id}` returns 501 Not Implemented on `ProgrammingError`
+- [x] `PATCH /api/v1/agents/{id}` returns 503 Service Unavailable on general `SQLAlchemyError`
 - [x] `DELETE /api/v1/agents/{id}` returns 501 Not Implemented on `ProgrammingError`
+- [x] `DELETE /api/v1/agents/{id}` returns 503 Service Unavailable on general `SQLAlchemyError`
 - [x] `POST /{id}/prompts/{version}/optimize` returns 501 Not Implemented on `ProgrammingError`
+- [x] `POST /{id}/prompts/{version}/optimize` returns 503 Service Unavailable on general `SQLAlchemyError`
 - [x] `POST /{id}/prompts/{version}/apply` returns 501 Not Implemented on `ProgrammingError`
+- [x] `POST /{id}/prompts/{version}/apply` returns 503 Service Unavailable on general `SQLAlchemyError`
 - [x] `GET /{id}/prompts` returns 501 Not Implemented on `ProgrammingError`
+- [x] `GET /{id}/prompts` returns 503 Service Unavailable on general `SQLAlchemyError`
 - [x] `GET /{id}/prompts/{version}` returns 501 Not Implemented on `ProgrammingError`
+- [x] `GET /{id}/prompts/{version}` returns 503 Service Unavailable on general `SQLAlchemyError`
 - [x] `PUT /{id}/prompts/rollback/{version}` returns 501 Not Implemented on `ProgrammingError`
+- [x] `PUT /{id}/prompts/rollback/{version}` returns 503 Service Unavailable on general `SQLAlchemyError`
 - [x] `POST /{id}/prompts/diff` returns 501 Not Implemented on `ProgrammingError`
+- [x] `POST /{id}/prompts/diff` returns 503 Service Unavailable on general `SQLAlchemyError`
 - [x] `POST /{id}/prompts/{version}/optimize` returns 404 when model backend not found
 - [x] `POST /{id}/prompts/{version}/optimize` returns 500 on secret decryption failure (`KeyError`)
 - [x] `GET /{id}/prompts` returns 404 when agent not found
@@ -146,41 +158,36 @@ Two categories exist:
 - [x] `PUT /{id}/prompts/rollback/{version}` returns 404 when agent or version not found
 - [x] `POST /{id}/prompts/diff` returns 404 when version A or B not found
 
-## Known Gaps
+## Edge Cases
 
-- **Website docs exist but could be deeper.** The page at
-  `Website/modulo-website/src/docs/agents.md` already exists and covers agent
-  configuration, prompt versioning, and schema assignment at a general level. It
-  does not specifically reference PRD §8.2 or document the generic agent criteria,
-  library agent model, or the CRUD API. Consider expanding it with a reference to
-  the API endpoints and the generic-vs-library agent distinction.
-- **BDD features test old `/api/agents` endpoints.** The feature files at
-  `tests/features/agents/` and step defs at `tests/bdd/steps/test_alpha_agents.py` use the
-  legacy `/api/agents` path with `modulo.core.pipeline_engine.run_crud` patches. A new
-  BDD feature (`tests/bdd/features/agents/crud.feature`) targets the current `/api/v1/agents`
-  endpoints but is a smoke-level coverage — full BDD coverage for error paths
-  (RLS enforcement, validation edge cases) is tracked separately.
-- **Production eval requirement.** PRD §15 states generic agents require
-  eval rubric before production promotion. Currently this is a logged
-  warning in alpha. When the Eval System (§8.17) ships in v1, the create
-  endpoint should reject generic agents without at least one eval
-  definition. Tracked by: v1 delivery dependency graph.
-- **Schema→prompt construction.** PRD §8.2 mentions automatic prompt
-  template construction from novel input/output schema pairs. Not yet
-  implemented. When built, the constructed prompt should also pass the
-  generic agent criteria validation above.
-- **Generic agent promotion workflow.** No UI workflow exists to promote
-  a generic agent to a library primitive. The data model supports it
-  (setting `library_id`), but there is no "Publish to library" action.
-- **BDD step definitions patch dead code.** The legacy BDD step definitions at
-  `tests/bdd/steps/test_alpha_agents.py` patch `modulo.core.pipeline_engine.run_crud.*`
-  and test the old `/api/agents` endpoint. The actual routes live at `/api/v1/agents`
-  with `modulo.api.routes.agents.*` as the call target. The BDD patches are dead code
-  and do not exercise any real route logic.
-- **ProgrammingError→501 catches lack test coverage.** All 13 endpoints have
-  `except ProgrammingError` blocks, but no unit or integration test exercises the
-  catch path. A test that triggers a real `ProgrammingError` (e.g. by querying a
-  non-existent table) would verify the 501 response is returned correctly.
+- [x] Generic agent missing description returns 422 on create
+- [x] Library agent without description succeeds (skips check)
+- [x] Non-executable agent missing description returns 422
+- [x] Generic agent with description succeeds
+- [x] Update removing description on generic agent returns 422
+- [x] Update removing description on library agent succeeds
+- [x] Making an agent non-executable without description returns 422
+- [x] `is_executable` persists and round-trips correctly
+- [x] Default `is_executable` is `True`
+- [x] Empty string `""` description on generic agent treated as missing (caught by `not description`)
+- [x] `required_environment_capabilities` accepted on create and persisted
+- [x] `prompt_always_visible` accepted on create and update
+- [x] `max_input_length` and `token_budget` accepted with `ge=0` validation
+- [x] ProgrammingError on any endpoint returns 501 with consistent message
+- [x] SQLAlchemyError on any endpoint returns 503 with consistent message
+- [x] IntegrityError (FK not found) on create returns 422 with descriptive message
+- [ ] Duplicate prompt version label on apply is accepted (no uniqueness check)
+- [ ] Schema version FK changability — input/output schemas are fixed after create (no PATCH support)
+
+## Resilience & Integration Robustness
+
+- [x] ProgrammingError→501 on all 14 DB-accessing endpoints (missing migrations)
+- [x] SQLAlchemyError→503 on all 14 DB-accessing endpoints (connection/deadlock)
+- [x] IntegrityError→422 on create endpoint (FK reference not found)
+- [ ] No LLM timeout in optimize_prompt — `backend.invoke()` has no connect/read timeout
+- [ ] No retry on LLM call failure in optimize_prompt — single failure causes 500
+- [ ] No fallback if PromptOptimizer LLM call fails — entire endpoint fails
+- [ ] No connection pooling error handling — DB connection pool exhaustion returns 5xx
 
 ## QA History
 
@@ -202,3 +209,20 @@ Two categories exist:
   remain pre-existing (Pydantic validation failures — unrelated to agent model logic).
   Website docs stub still missing; Known Gaps updated accordingly.
   Status: partial (same known gaps remain, website docs exist but could be deeper).
+- **2026-07-04 — improve-architecture index 161**: Cross-cutting QA. Fixed 1 CRITICAL finding —
+  IntegrityError (FK validation) on create was uncaught, would return raw 500; now returns 422
+  with descriptive message. Fixed 4 MAJOR findings: (1) `required_environment_capabilities` was
+  missing from AgentCreate/AgentUpdate Pydantic models (model field existed but API couldn't set
+  it); (2) all 14 DB-accessing endpoints only caught ProgrammingError→501 but not the parent
+  SQLAlchemyError→503 (connection failures, deadlocks, timeouts would propagate as 500); (3)
+  website docs stub created at Website/modulo-website/src/docs/agents.md; (4) added 8 unit tests
+  in test_agent_programming_error.py covering ProgrammingError→501, SQLAlchemyError→503, and
+  IntegrityError→422 catch paths (previously had zero coverage). Added Edge Cases section (18
+  checkboxes: 16 [x] + 2 [ ] — duplicate version label, schema FK immutability). Added
+  Resilience & Integration Robustness section (7 checkboxes: 3 [x] + 4 [ ] — no LLM timeout,
+  no retry, no fallback, no connection pool handling). Updated Known Gaps: resolved
+  "ProgrammingError→501 catches lack test coverage" (8 tests now exercise all catch paths);
+  added "required_environment_capabilities was missing from API models" (now fixed); website
+  docs gap changed from "doesn't exist" to "exists but could be deeper" (stub created).
+  All 59/59 agent unit tests pass. Status: partial (10 known gaps remain — 6 pre-existing + 4
+  resilience gaps + 2 edge case gaps, minus 2 resolved).
