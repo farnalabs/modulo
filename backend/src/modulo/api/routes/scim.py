@@ -5,11 +5,13 @@ Team gating. Maps SCIM Users → internal User, SCIM Groups → internal
 Team + TeamMembership.
 """
 
+import logging
 import uuid
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, Field
+from sqlalchemy.exc import ProgrammingError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.api.dependencies import get_db_session
@@ -41,6 +43,8 @@ _SCIM_GROUP_SCHEMA = "urn:ietf:params:scim:schemas:core:2.0:Group"
 _SCIM_LIST_SCHEMA = "urn:ietf:params:scim:api:messages:2.0:ListResponse"
 _SCIM_ERROR_SCHEMA = "urn:ietf:params:scim:api:messages:2.0:Error"
 _SCIM_PATCH_OP_SCHEMA = "urn:ietf:params:scim:api:messages:2.0:PatchOp"
+
+_log = logging.getLogger(__name__)
 
 
 # ── Helpers ──────────────────────────────────────────────────────────
@@ -219,15 +223,22 @@ async def list_users(
     principal: ScimPrincipal = Depends(get_scim_principal),
     session: AsyncSession = Depends(get_db_session),
 ) -> ScimListResponse:
-    async with session.begin():
-        await set_rls_org(session, principal.organisation_id)
-        accounts, total = await scim_list_users(
-            session,
-            principal.organisation_id,
-            filter_str=filter,
-            start_index=startIndex,
-            count=count,
-        )
+    try:
+        async with session.begin():
+            await set_rls_org(session, principal.organisation_id)
+            accounts, total = await scim_list_users(
+                session,
+                principal.organisation_id,
+                filter_str=filter,
+                start_index=startIndex,
+                count=count,
+            )
+    except ProgrammingError:
+        _log.warning("SCIM endpoint failed: database migration required")
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="SCIM provisioning is not available. Run database migrations to enable it.",
+        ) from None
 
     base_url = _get_base_url(settings)
     return ScimListResponse(
@@ -246,36 +257,43 @@ async def create_user(
     principal: ScimPrincipal = Depends(get_scim_principal),
     session: AsyncSession = Depends(get_db_session),
 ) -> dict[str, object]:
-    async with session.begin():
-        await set_rls_org(session, principal.organisation_id)
+    try:
+        async with session.begin():
+            await set_rls_org(session, principal.organisation_id)
 
-        from modulo.db.crud.account import get_account_by_email
+            from modulo.db.crud.account import get_account_by_email
 
-        existing = await get_account_by_email(session, body.userName)
-        if existing is not None:
-            from modulo.db.crud.org_membership import get_membership_by_account_and_org
+            existing = await get_account_by_email(session, body.userName)
+            if existing is not None:
+                from modulo.db.crud.org_membership import get_membership_by_account_and_org
 
-            membership = await get_membership_by_account_and_org(session, existing.id, principal.organisation_id)
-            if membership is not None:
-                raise _scim_error(
-                    status.HTTP_409_CONFLICT,
-                    f"User with userName {body.userName} already exists in this org",
-                )
+                membership = await get_membership_by_account_and_org(session, existing.id, principal.organisation_id)
+                if membership is not None:
+                    raise _scim_error(
+                        status.HTTP_409_CONFLICT,
+                        f"User with userName {body.userName} already exists in this org",
+                    )
 
-        display_name = body.userName
-        if body.name and body.name.formatted:
-            display_name = body.name.formatted
-        elif body.name and (body.name.givenName or body.name.familyName):
-            parts = [p for p in (body.name.givenName, body.name.familyName) if p]
-            display_name = " ".join(parts)
+            display_name = body.userName
+            if body.name and body.name.formatted:
+                display_name = body.name.formatted
+            elif body.name and (body.name.givenName or body.name.familyName):
+                parts = [p for p in (body.name.givenName, body.name.familyName) if p]
+                display_name = " ".join(parts)
 
-        account = await scim_create_user(
-            session,
-            org_id=principal.organisation_id,
-            email=body.userName,
-            display_name=display_name,
-            active=body.active,
-        )
+            account = await scim_create_user(
+                session,
+                org_id=principal.organisation_id,
+                email=body.userName,
+                display_name=display_name,
+                active=body.active,
+            )
+    except ProgrammingError:
+        _log.warning("SCIM endpoint failed: database migration required")
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="SCIM provisioning is not available. Run database migrations to enable it.",
+        ) from None
 
     return _user_to_scim(account, _get_base_url(settings))
 
@@ -287,9 +305,16 @@ async def get_user(
     principal: ScimPrincipal = Depends(get_scim_principal),
     session: AsyncSession = Depends(get_db_session),
 ) -> dict[str, object]:
-    async with session.begin():
-        await set_rls_org(session, principal.organisation_id)
-        account = await scim_get_user(session, principal.organisation_id, user_id)
+    try:
+        async with session.begin():
+            await set_rls_org(session, principal.organisation_id)
+            account = await scim_get_user(session, principal.organisation_id, user_id)
+    except ProgrammingError:
+        _log.warning("SCIM endpoint failed: database migration required")
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="SCIM provisioning is not available. Run database migrations to enable it.",
+        ) from None
 
     if account is None:
         raise _scim_error(status.HTTP_404_NOT_FOUND, f"User {user_id} not found")
@@ -305,20 +330,27 @@ async def replace_user(
     principal: ScimPrincipal = Depends(get_scim_principal),
     session: AsyncSession = Depends(get_db_session),
 ) -> dict[str, object]:
-    async with session.begin():
-        await set_rls_org(session, principal.organisation_id)
-        account = await scim_get_user(session, principal.organisation_id, user_id)
-        if account is None:
-            raise _scim_error(status.HTTP_404_NOT_FOUND, f"User {user_id} not found")
+    try:
+        async with session.begin():
+            await set_rls_org(session, principal.organisation_id)
+            account = await scim_get_user(session, principal.organisation_id, user_id)
+            if account is None:
+                raise _scim_error(status.HTTP_404_NOT_FOUND, f"User {user_id} not found")
 
-        display_name = body.name.formatted if body.name and body.name.formatted else body.userName
-        account = await scim_update_user(
-            session,
-            account,
-            email=body.userName,
-            display_name=display_name,
-            active=body.active,
-        )
+            display_name = body.name.formatted if body.name and body.name.formatted else body.userName
+            account = await scim_update_user(
+                session,
+                account,
+                email=body.userName,
+                display_name=display_name,
+                active=body.active,
+            )
+    except ProgrammingError:
+        _log.warning("SCIM endpoint failed: database migration required")
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="SCIM provisioning is not available. Run database migrations to enable it.",
+        ) from None
 
     return _user_to_scim(account, _get_base_url(settings))
 
@@ -331,43 +363,50 @@ async def patch_user(
     principal: ScimPrincipal = Depends(get_scim_principal),
     session: AsyncSession = Depends(get_db_session),
 ) -> dict[str, object]:
-    async with session.begin():
-        await set_rls_org(session, principal.organisation_id)
-        account = await scim_get_user(session, principal.organisation_id, user_id)
-        if account is None:
-            raise _scim_error(status.HTTP_404_NOT_FOUND, f"User {user_id} not found")
+    try:
+        async with session.begin():
+            await set_rls_org(session, principal.organisation_id)
+            account = await scim_get_user(session, principal.organisation_id, user_id)
+            if account is None:
+                raise _scim_error(status.HTTP_404_NOT_FOUND, f"User {user_id} not found")
 
-        for op in body.Operations:
-            if op.op not in ("replace", "remove", "add"):
-                raise _scim_error(
-                    status.HTTP_400_BAD_REQUEST,
-                    f"Unsupported PATCH operation '{op.op}'. Supported: replace, remove, add",
-                )
-            if op.op == "replace":
-                if isinstance(op.value, dict):
-                    if "userName" in op.value:
-                        account.email = str(op.value["userName"])
-                    if "active" in op.value:
-                        account.active = bool(op.value["active"])
-                    if isinstance(op.value.get("name"), dict):
-                        name_data = op.value["name"]
-                        formatted = name_data.get("formatted") or name_data.get("givenName", "") + " " + name_data.get(
-                            "familyName", ""
-                        )
-                        account.display_name = str(formatted).strip()
-                if op.path == "active":
-                    account.active = bool(op.value)
-            elif op.op == "remove":
-                if op.path == "active":
-                    account.active = False
-            elif op.op == "add":
-                if isinstance(op.value, dict):
-                    if "userName" in op.value:
-                        account.email = str(op.value["userName"])
-                    if "active" in op.value:
-                        account.active = bool(op.value["active"])
+            for op in body.Operations:
+                if op.op not in ("replace", "remove", "add"):
+                    raise _scim_error(
+                        status.HTTP_400_BAD_REQUEST,
+                        f"Unsupported PATCH operation '{op.op}'. Supported: replace, remove, add",
+                    )
+                if op.op == "replace":
+                    if isinstance(op.value, dict):
+                        if "userName" in op.value:
+                            account.email = str(op.value["userName"])
+                        if "active" in op.value:
+                            account.active = bool(op.value["active"])
+                        if isinstance(op.value.get("name"), dict):
+                            name_data = op.value["name"]
+                            formatted = name_data.get("formatted") or name_data.get("givenName", "") + " " + name_data.get(
+                                "familyName", ""
+                            )
+                            account.display_name = str(formatted).strip()
+                    if op.path == "active":
+                        account.active = bool(op.value)
+                elif op.op == "remove":
+                    if op.path == "active":
+                        account.active = False
+                elif op.op == "add":
+                    if isinstance(op.value, dict):
+                        if "userName" in op.value:
+                            account.email = str(op.value["userName"])
+                        if "active" in op.value:
+                            account.active = bool(op.value["active"])
 
-        await session.flush()
+            await session.flush()
+    except ProgrammingError:
+        _log.warning("SCIM endpoint failed: database migration required")
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="SCIM provisioning is not available. Run database migrations to enable it.",
+        ) from None
 
     return _user_to_scim(account, _get_base_url(settings))
 
@@ -379,9 +418,16 @@ async def delete_user(
     session: AsyncSession = Depends(get_db_session),
     settings: Settings = Depends(_require_team),
 ) -> None:
-    async with session.begin():
-        await set_rls_org(session, principal.organisation_id)
-        deleted = await scim_delete_user_by_id(session, principal.organisation_id, user_id)
+    try:
+        async with session.begin():
+            await set_rls_org(session, principal.organisation_id)
+            deleted = await scim_delete_user_by_id(session, principal.organisation_id, user_id)
+    except ProgrammingError:
+        _log.warning("SCIM endpoint failed: database migration required")
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="SCIM provisioning is not available. Run database migrations to enable it.",
+        ) from None
 
     if not deleted:
         raise _scim_error(status.HTTP_404_NOT_FOUND, f"User {user_id} not found")
@@ -399,15 +445,22 @@ async def list_groups(
     principal: ScimPrincipal = Depends(get_scim_principal),
     session: AsyncSession = Depends(get_db_session),
 ) -> ScimListResponse:
-    async with session.begin():
-        await set_rls_org(session, principal.organisation_id)
-        groups, total = await scim_list_groups(
-            session,
-            principal.organisation_id,
-            filter_str=filter,
-            start_index=startIndex,
-            count=count,
-        )
+    try:
+        async with session.begin():
+            await set_rls_org(session, principal.organisation_id)
+            groups, total = await scim_list_groups(
+                session,
+                principal.organisation_id,
+                filter_str=filter,
+                start_index=startIndex,
+                count=count,
+            )
+    except ProgrammingError:
+        _log.warning("SCIM endpoint failed: database migration required")
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="SCIM provisioning is not available. Run database migrations to enable it.",
+        ) from None
 
     base_url = _get_base_url(settings)
     resources: list[dict[str, object]] = []
@@ -439,53 +492,58 @@ async def create_group(
     principal: ScimPrincipal = Depends(get_scim_principal),
     session: AsyncSession = Depends(get_db_session),
 ) -> dict[str, object]:
-    _license_gate(settings)
+    try:
+        async with session.begin():
+            await set_rls_org(session, principal.organisation_id)
 
-    async with session.begin():
-        await set_rls_org(session, principal.organisation_id)
+            from modulo.db.crud.team import get_team_by_name
 
-        from modulo.db.crud.team import get_team_by_name
+            existing = await get_team_by_name(session, principal.organisation_id, body.displayName)
+            if existing is not None:
+                raise _scim_error(
+                    status.HTTP_409_CONFLICT,
+                    f"Group with displayName {body.displayName} already exists",
+                )
 
-        existing = await get_team_by_name(session, principal.organisation_id, body.displayName)
-        if existing is not None:
-            raise _scim_error(
-                status.HTTP_409_CONFLICT,
-                f"Group with displayName {body.displayName} already exists",
+            # Use the first member's ID as created_by, or a fallback.
+            # SCIM does not carry a "creator" concept, so we use the first
+            # admin-like account or a placeholder.
+            from modulo.db.crud.account import get_account_by_id
+            from modulo.db.crud.org_membership import list_memberships_for_org
+
+            org_memberships = await list_memberships_for_org(session, principal.organisation_id)
+            creator_id = None
+            if org_memberships:
+                first_account = await get_account_by_id(session, org_memberships[0].account_id)
+                if first_account is not None:
+                    creator_id = first_account.id
+
+            team = await scim_create_group(
+                session,
+                org_id=principal.organisation_id,
+                display_name=body.displayName,
+                account_id=creator_id,
             )
 
-        # Use the first member's ID as created_by, or a fallback.
-        # SCIM does not carry a "creator" concept, so we use the first
-        # admin-like account or a placeholder.
-        from modulo.db.crud.account import get_account_by_id
-        from modulo.db.crud.org_membership import list_memberships_for_org
-
-        org_memberships = await list_memberships_for_org(session, principal.organisation_id)
-        creator_id = None
-        if org_memberships:
-            first_account = await get_account_by_id(session, org_memberships[0].account_id)
-            if first_account is not None:
-                creator_id = first_account.id
-
-        team = await scim_create_group(
-            session,
-            org_id=principal.organisation_id,
-            display_name=body.displayName,
-            account_id=creator_id,
-        )
-
-        for member_ref in body.members:
-            try:
-                uid = uuid.UUID(member_ref.value)
-            except ValueError:
-                continue
-            user = await scim_get_user(session, principal.organisation_id, uid)
-            if user is not None:
-                await scim_add_group_member(
-                    session,
-                    org_id=principal.organisation_id,
-                    team_id=team.id,
-                    user_id=uid,
-                )
+            for member_ref in body.members:
+                try:
+                    uid = uuid.UUID(member_ref.value)
+                except ValueError:
+                    continue
+                user = await scim_get_user(session, principal.organisation_id, uid)
+                if user is not None:
+                    await scim_add_group_member(
+                        session,
+                        org_id=principal.organisation_id,
+                        team_id=team.id,
+                        user_id=uid,
+                    )
+    except ProgrammingError:
+        _log.warning("SCIM endpoint failed: database migration required")
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="SCIM provisioning is not available. Run database migrations to enable it.",
+        ) from None
 
     base_url = _get_base_url(settings)
     members = [
@@ -506,9 +564,16 @@ async def get_group(
     principal: ScimPrincipal = Depends(get_scim_principal),
     session: AsyncSession = Depends(get_db_session),
 ) -> dict[str, object]:
-    async with session.begin():
-        await set_rls_org(session, principal.organisation_id)
-        group = await scim_get_group(session, group_id)
+    try:
+        async with session.begin():
+            await set_rls_org(session, principal.organisation_id)
+            group = await scim_get_group(session, group_id)
+    except ProgrammingError:
+        _log.warning("SCIM endpoint failed: database migration required")
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="SCIM provisioning is not available. Run database migrations to enable it.",
+        ) from None
 
     if group is None:
         raise _scim_error(status.HTTP_404_NOT_FOUND, f"Group {group_id} not found")
@@ -534,32 +599,39 @@ async def replace_group(
     principal: ScimPrincipal = Depends(get_scim_principal),
     session: AsyncSession = Depends(get_db_session),
 ) -> dict[str, object]:
-    async with session.begin():
-        await set_rls_org(session, principal.organisation_id)
-        group = await scim_get_group(session, group_id)
-        if group is None:
-            raise _scim_error(status.HTTP_404_NOT_FOUND, f"Group {group_id} not found")
+    try:
+        async with session.begin():
+            await set_rls_org(session, principal.organisation_id)
+            group = await scim_get_group(session, group_id)
+            if group is None:
+                raise _scim_error(status.HTTP_404_NOT_FOUND, f"Group {group_id} not found")
 
-        await scim_update_group(session, group, name=body.displayName)
+            await scim_update_group(session, group, name=body.displayName)
 
-        # Replace all members: remove existing, add new
-        existing_members = await scim_list_group_members(session, group.id)
-        for em in existing_members:
-            await scim_remove_group_member(session, group.id, em.user_id)
+            # Replace all members: remove existing, add new
+            existing_members = await scim_list_group_members(session, group.id)
+            for em in existing_members:
+                await scim_remove_group_member(session, group.id, em.user_id)
 
-        for member_ref in body.members:
-            try:
-                uid = uuid.UUID(member_ref.value)
-            except ValueError:
-                continue
-            user = await scim_get_user(session, principal.organisation_id, uid)
-            if user is not None:
-                await scim_add_group_member(
-                    session,
-                    org_id=principal.organisation_id,
-                    team_id=group.id,
-                    user_id=uid,
-                )
+            for member_ref in body.members:
+                try:
+                    uid = uuid.UUID(member_ref.value)
+                except ValueError:
+                    continue
+                user = await scim_get_user(session, principal.organisation_id, uid)
+                if user is not None:
+                    await scim_add_group_member(
+                        session,
+                        org_id=principal.organisation_id,
+                        team_id=group.id,
+                        user_id=uid,
+                    )
+    except ProgrammingError:
+        _log.warning("SCIM endpoint failed: database migration required")
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="SCIM provisioning is not available. Run database migrations to enable it.",
+        ) from None
 
     base_url = _get_base_url(settings)
     members = [
@@ -581,84 +653,91 @@ async def patch_group(
     principal: ScimPrincipal = Depends(get_scim_principal),
     session: AsyncSession = Depends(get_db_session),
 ) -> dict[str, object]:
-    async with session.begin():
-        await set_rls_org(session, principal.organisation_id)
-        group = await scim_get_group(session, group_id)
-        if group is None:
-            raise _scim_error(status.HTTP_404_NOT_FOUND, f"Group {group_id} not found")
+    try:
+        async with session.begin():
+            await set_rls_org(session, principal.organisation_id)
+            group = await scim_get_group(session, group_id)
+            if group is None:
+                raise _scim_error(status.HTTP_404_NOT_FOUND, f"Group {group_id} not found")
 
-        for op in body.Operations:
-            if op.op not in ("replace", "remove", "add"):
-                raise _scim_error(
-                    status.HTTP_400_BAD_REQUEST,
-                    f"Unsupported PATCH operation '{op.op}'. Supported: replace, remove, add",
-                )
-            if op.op == "replace":
-                if isinstance(op.value, dict):
-                    if "displayName" in op.value:
-                        await scim_update_group(session, group, name=str(op.value["displayName"]))
-                    if "members" in op.value and isinstance(op.value["members"], list):
-                        existing = await scim_list_group_members(session, group.id)
-                        for em in existing:
-                            await scim_remove_group_member(session, group.id, em.user_id)
-                        for m in op.value["members"]:
-                            if isinstance(m, dict) and "value" in m:
-                                try:
-                                    uid = uuid.UUID(str(m["value"]))
-                                except ValueError:
-                                    continue
-                                await scim_add_group_member(
-                                    session,
-                                    org_id=principal.organisation_id,
-                                    team_id=group.id,
-                                    user_id=uid,
-                                )
-            elif op.op == "add":
-                if op.path == "members" or op.path is None:
-                    values = op.value
-                    if isinstance(values, dict):
-                        values = [values]
-                    if isinstance(values, list):
-                        for m in values:
-                            if isinstance(m, dict) and "value" in m:
-                                try:
-                                    uid = uuid.UUID(str(m["value"]))
-                                except ValueError:
-                                    continue
-                                await scim_add_group_member(
-                                    session,
-                                    org_id=principal.organisation_id,
-                                    team_id=group.id,
-                                    user_id=uid,
-                                )
-            elif op.op == "remove":
-                if op.path and op.path.startswith("members"):
-                    # Extract user ID from path: members[value eq "uuid"]
-                    import re as _re
+            for op in body.Operations:
+                if op.op not in ("replace", "remove", "add"):
+                    raise _scim_error(
+                        status.HTTP_400_BAD_REQUEST,
+                        f"Unsupported PATCH operation '{op.op}'. Supported: replace, remove, add",
+                    )
+                if op.op == "replace":
+                    if isinstance(op.value, dict):
+                        if "displayName" in op.value:
+                            await scim_update_group(session, group, name=str(op.value["displayName"]))
+                        if "members" in op.value and isinstance(op.value["members"], list):
+                            existing = await scim_list_group_members(session, group.id)
+                            for em in existing:
+                                await scim_remove_group_member(session, group.id, em.user_id)
+                            for m in op.value["members"]:
+                                if isinstance(m, dict) and "value" in m:
+                                    try:
+                                        uid = uuid.UUID(str(m["value"]))
+                                    except ValueError:
+                                        continue
+                                    await scim_add_group_member(
+                                        session,
+                                        org_id=principal.organisation_id,
+                                        team_id=group.id,
+                                        user_id=uid,
+                                    )
+                elif op.op == "add":
+                    if op.path == "members" or op.path is None:
+                        values = op.value
+                        if isinstance(values, dict):
+                            values = [values]
+                        if isinstance(values, list):
+                            for m in values:
+                                if isinstance(m, dict) and "value" in m:
+                                    try:
+                                        uid = uuid.UUID(str(m["value"]))
+                                    except ValueError:
+                                        continue
+                                    await scim_add_group_member(
+                                        session,
+                                        org_id=principal.organisation_id,
+                                        team_id=group.id,
+                                        user_id=uid,
+                                    )
+                elif op.op == "remove":
+                    if op.path and op.path.startswith("members"):
+                        # Extract user ID from path: members[value eq "uuid"]
+                        import re as _re
 
-                    m = _re.search(r'value\s+eq\s+"([^"]+)"', op.path)
-                    if m:
-                        uid_str = m.group(1)
-                        try:
-                            uid = uuid.UUID(uid_str)
-                        except ValueError:
-                            continue
-                        await scim_remove_group_member(session, group.id, uid)
-                elif op.value:
-                    if isinstance(op.value, dict) and "value" in op.value:
-                        try:
-                            uid = uuid.UUID(str(op.value["value"]))
-                        except ValueError:
-                            continue
-                        await scim_remove_group_member(session, group.id, uid)
-                    elif isinstance(op.value, list):
-                        for item in op.value:
-                            if isinstance(item, dict) and "value" in item:
-                                try:
-                                    uid = uuid.UUID(str(item["value"]))
-                                except ValueError:
-                                    continue
-                                await scim_remove_group_member(session, group.id, uid)
+                        m = _re.search(r'value\s+eq\s+"([^"]+)"', op.path)
+                        if m:
+                            uid_str = m.group(1)
+                            try:
+                                uid = uuid.UUID(uid_str)
+                            except ValueError:
+                                continue
+                            await scim_remove_group_member(session, group.id, uid)
+                    elif op.value:
+                        if isinstance(op.value, dict) and "value" in op.value:
+                            try:
+                                uid = uuid.UUID(str(op.value["value"]))
+                            except ValueError:
+                                continue
+                            await scim_remove_group_member(session, group.id, uid)
+                        elif isinstance(op.value, list):
+                            for item in op.value:
+                                if isinstance(item, dict) and "value" in item:
+                                    try:
+                                        uid = uuid.UUID(str(item["value"]))
+                                    except ValueError:
+                                        continue
+                                    await scim_remove_group_member(session, group.id, uid)
+    except ProgrammingError:
+        _log.warning("SCIM endpoint failed: database migration required")
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="SCIM provisioning is not available. Run database migrations to enable it.",
+        ) from None
 
     base_url = _get_base_url(settings)
     memberships = await scim_list_group_members(session, group.id)
@@ -680,9 +759,16 @@ async def delete_group(
     session: AsyncSession = Depends(get_db_session),
     settings: Settings = Depends(_require_team),
 ) -> None:
-    async with session.begin():
-        await set_rls_org(session, principal.organisation_id)
-        deleted = await scim_delete_group_by_id(session, group_id)
+    try:
+        async with session.begin():
+            await set_rls_org(session, principal.organisation_id)
+            deleted = await scim_delete_group_by_id(session, group_id)
+    except ProgrammingError:
+        _log.warning("SCIM endpoint failed: database migration required")
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="SCIM provisioning is not available. Run database migrations to enable it.",
+        ) from None
 
     if not deleted:
         raise _scim_error(status.HTTP_404_NOT_FOUND, f"Group {group_id} not found")

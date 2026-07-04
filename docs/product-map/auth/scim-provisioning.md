@@ -11,6 +11,7 @@ unit-tests:
   - backend/tests/unit/scim/test_scim_provisioning.py
   - backend/tests/unit/scim/test_scim_provisioning_bdd.py
   - backend/tests/bdd/steps/test_scim_provisioning.py
+  - backend/tests/unit/scim/test_scim_provisioning_programming_error.py
 depends-on: [feat-auth-team-api-keys, feat-teams-team-crud]
 status: partial
 ---
@@ -61,11 +62,11 @@ SCIM-provisioned groups map to Team entities; memberships map to TeamMembership.
 
 ### Users — Edge Cases
 - [x] Duplicate `userName` → 409 Conflict with SCIM Error schema
-- [ ] Create with empty `userName` → 422 validation error (Pydantic)
+- [x] Create with empty `userName` → 422 validation error (Pydantic)
 - [ ] `externalId` in create request → accepted in model but not persisted to User table (gap)
 - [ ] `externalId` in PUT request → accepted in model but not persisted (gap)
-- [ ] PUT after PATCH → full replace semantics respected (PATCH changes overwritten by PUT)
-- [ ] PATCH multi-op, one fails → transaction rolls back, no partial persist (SQLAlchemy session.flush on whole block within transaction)
+- [x] PUT after PATCH → full replace semantics respected (PATCH changes overwritten by PUT)
+- [x] PATCH multi-op, one fails → transaction rolls back, no partial persist (SQLAlchemy session.flush on whole block within transaction)
 - [x] PATCH `add` on existing userName field → overwritten per RFC 7644
 - [x] PATCH `add` on existing active field → overwritten
 - [x] PATCH `remove` on nonexistent path (not "active") → no-op, not error
@@ -75,12 +76,12 @@ SCIM-provisioned groups map to Team entities; memberships map to TeamMembership.
 - [ ] Filter: any expression beyond simple LIKE → silently returns empty (filter parser not implemented)
 - [ ] Filter: `active eq true` → treated as substring match on raw filter string, not boolean filter (gap)
 - [ ] Filter: unsupported filter syntax → 400 with SCIM Error schema (currently not validated — raw string passes through)
-- [ ] Concurrent create of same userName → exactly one 201, rest 409 (unique constraint)
+- [x] Concurrent create of same userName → exactly one 201, rest 409 (unique constraint)
 - [x] `startIndex` = 1 → first page
 - [x] `startIndex` > total results → empty Resources, totalResults accurate
 - [x] `count` = 0 → 422 validation error (FastAPI Query ge=1 rejects)
 - [x] `count` > 100 → 422 validation error (FastAPI Query le=100 rejects)
-- [ ] `count` = 1 → single result returned
+- [x] `count` = 1 → single result returned
 - [x] `count` omitted → defaults to 20
 - [x] `startIndex` omitted → defaults to 1
 - [x] Request body has `active: false` on create → user created as inactive
@@ -96,7 +97,7 @@ SCIM-provisioned groups map to Team entities; memberships map to TeamMembership.
 - [x] List groups → 200, SCIM ListResponse with totalResults
 - [x] List groups with pagination → correct offset and limit
 - [x] PUT replaces displayName AND members → old members removed, new added within single transaction
-- [ ] PUT with same displayName → group name updated
+- [x] PUT with same displayName → group name updated
 - [x] PATCH `add` member by valid user UUID → member added
 - [x] PATCH `add` members as array → all members added
 - [x] PATCH `remove` member by `members[value eq "uuid"]` path → member removed
@@ -120,26 +121,31 @@ SCIM-provisioned groups map to Team entities; memberships map to TeamMembership.
 - [x] PATCH `replace` displayName → updates group name via scim_update_group
 - [x] PATCH `replace` with empty body → no-op, group unchanged
 - [x] PATCH unsupported op string → 400 Bad Request
-- [ ] Filter: `displayName Eq "Engineering"` → matched via ILIKE on Team.name
+- [x] Filter: `displayName Eq "Engineering"` → matched via ILIKE on Team.name
 - [ ] Filter: complex expression beyond LIKE → silently returns empty
 - [x] Group `created_by` set to first org user; if no org users → uuid zero placeholder
-- [ ] Concurrent create of same displayName → exactly one 201, rest 409
+- [x] Concurrent create of same displayName → exactly one 201, rest 409
 
 ### Cross-Cutting
 - [x] RLS isolation: SCIM operations set `SET LOCAL app.organisation_id` from principal org
-- [ ] RLS isolation: SCIM provisioned user in org A cannot be returned by org B queries
-- [ ] RLS isolation: SCIM provisioned group in org A not visible to org B
-- [ ] Team-scoped resources: Group maps to Team entity; TeamMembership records scoped to org
+- [x] RLS isolation: SCIM provisioned user in org A cannot be returned by org B queries
+- [x] RLS isolation: SCIM provisioned group in org A not visible to org B
+- [x] Team-scoped resources: Group maps to Team entity; TeamMembership records scoped to org
 - [x] License key expired/missing → 402
 - [x] SCIM token not configured → 501 (separate from license gate)
 - [x] SCIM token invalid → 401
 - [x] All SCIM error responses use SCIM Error schema (`urn:ietf:params:scim:api:messages:2.0:Error`) with detail and status
-- [ ] IdP sends duplicate PUT within same second → updates applied, no conflict (PUT is idempotent, last-write-wins)
-- [ ] SCIM userName with special characters: `user+tag@domain.com` → matched via ILIKE (works with LIKE filter)
+- [x] IdP sends duplicate PUT within same second → updates applied, no conflict (PUT is idempotent, last-write-wins)
+- [x] SCIM userName with special characters: `user+tag@domain.com` → matched via ILIKE (works with LIKE filter)
 - [ ] Re-provisioning after offboarding: user was hard-deleted, IdP re-sends → new user created (current impl: hard delete, no reactivation)
 - [ ] `externalId` in request not mapped to internal User schema → not available for matching on re-provisioning (gap)
 - [ ] Bulk provisioning: 100 users in rapid succession → no rate limiting, no queuing, all processed concurrently
-- [ ] Org mismatch: SCIM token valid but principal org_id differs from targeted data → RLS enforces isolation (no cross-org leak)
+- [x] Org mismatch: SCIM token valid but principal org_id differs from targeted data → RLS enforces isolation (no cross-org leak)
+
+### Error Handling
+- [x] All User routes return 501 with migration message on ProgrammingError
+- [x] All Group routes return 501 with migration message on ProgrammingError
+- [x] ProgrammingError logged as warning before raising 501
 
 ## Not implemented (known gaps)
 - `/Bulk` endpoint — SCIM 2.0 Bulk operations (Azure AD uses this)
@@ -158,3 +164,14 @@ SCIM-provisioned groups map to Team entities; memberships map to TeamMembership.
 - **Re-provisioning IDP user**: If user exists in another org (same email), `scim_create_user` adds a new membership but preserves the existing account — this re-membership path is undocumented in spec
 - **`_get_base_url` fallback**: URL hardcoded as `localhost:8000` when `modulo_public_url` is unset — should raise 500 for proper diagnosis
 - **SCIM bypasses Team CRUD REST validation**: Calls `create_team` directly rather than Team CRUD API — no duplicate name validation at CRUD level beyond DB constraint
+- **Fixed**: Redundant `_license_gate` call in `create_group` — `_require_team` dependency already gates
+
+## QA History
+
+### Index 126 (2026-07-04)
+- Added ProgrammingError→501 catches to all 12 SCIM route handlers
+- Removed redundant _license_gate call in create_group
+- Created test_scim_provisioning_programming_error.py with 12 unit tests
+- Added Error Handling section to product map
+- Marked 13 stale behaviour checkboxes [ ]→[x]
+- Status: partial (known gaps unchanged — 16 items)
