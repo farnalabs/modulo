@@ -277,42 +277,61 @@ async def list_library_primitives_endpoint(
     principal: AuthenticatedPrincipal = Depends(get_current_user),
 ) -> LibraryPrimitiveListResponse:
     try:
-        async with session.begin():
-            await set_rls_org(session, principal.organisation_id)
-            await set_rls_user_context(session, principal.account_id, principal.org_role)
-            include_community = source != "local"
-            result = await list_primitives(
-                session,
-                principal.organisation_id,
-                primitive_type=primitive_type,
-                search=search,
-                page=page,
-                page_size=page_size,
-                include_community=include_community,
-                source=source,
-                cursor=cursor,
+        try:
+            async with session.begin():
+                await set_rls_org(session, principal.organisation_id)
+                await set_rls_user_context(session, principal.account_id, principal.org_role)
+                include_community = source != "local"
+                result = await list_primitives(
+                    session,
+                    principal.organisation_id,
+                    primitive_type=primitive_type,
+                    search=search,
+                    page=page,
+                    page_size=page_size,
+                    include_community=include_community,
+                    source=source,
+                    cursor=cursor,
+                )
+        except ProgrammingError:
+            _log.warning("list_library_primitives_endpoint: ProgrammingError — missing DB table or migration")
+            raise HTTPException(
+                status_code=status.HTTP_501_NOT_IMPLEMENTED,
+                detail="Feature is not available. Run database migrations to enable it.",
+            ) from None
+        try:
+            items = [LibraryPrimitiveResponse.model_validate(p) for p in result.items]
+        except Exception:
+            _log.exception("LibraryPrimitiveResponse.model_validate failed on %d items", len(result.items))
+            if result.items:
+                _log.error("first item type=%s id=%s", type(result.items[0]).__name__, getattr(result.items[0], "id", "?"))
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Failed to parse library primitives. The schema may be out of sync with the database.",
+            ) from None
+        try:
+            return LibraryPrimitiveListResponse(
+                items=items,
+                total=result.total,
+                page=result.page,
+                page_size=result.page_size,
+                next_cursor=result.next_cursor,
+                has_more=result.has_more,
             )
-    except ProgrammingError:
-        _log.warning("list_library_primitives_endpoint: ProgrammingError — missing DB table or migration")
-        raise HTTPException(
-            status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="Feature is not available. Run database migrations to enable it.",
-        ) from None
-    try:
-        items = [LibraryPrimitiveResponse.model_validate(p) for p in result.items]
-    except Exception:
-        _log.exception("LibraryPrimitiveResponse.model_validate failed on %d items", len(result.items))
-        if result.items:
-            _log.error("first item type=%s id=%s", type(result.items[0]).__name__, getattr(result.items[0], "id", "?"))
+        except Exception:
+            _log.exception("LibraryPrimitiveListResponse construction failed")
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Failed to build library primitives response.",
+            ) from None
+    except HTTPException:
         raise
-    return LibraryPrimitiveListResponse(
-        items=items,
-        total=result.total,
-        page=result.page,
-        page_size=result.page_size,
-        next_cursor=result.next_cursor,
-        has_more=result.has_more,
-    )
+    except Exception:
+        _log.exception("list_library_primitives_endpoint: unexpected error")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="An unexpected error occurred while listing library primitives.",
+        ) from None
 
 
 @router.get("/ping")
