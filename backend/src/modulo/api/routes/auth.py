@@ -190,7 +190,8 @@ async def refresh(
         ) from exc
 
     try:
-        new_sequence, theft_detected = await advance_sequence(session, family_uuid, sequence)
+        async with session.begin():
+            new_sequence, theft_detected = await advance_sequence(session, family_uuid, sequence)
     except ProgrammingError:
         _log.warning("refresh.programming_error")
         raise HTTPException(
@@ -254,9 +255,10 @@ async def logout(
         try:
             family_uuid = uuid.UUID(family_id_val)
             try:
-                blacklisted = await blacklist_family(session, family_uuid)
-                if not blacklisted:
-                    _log.warning("logout.family_not_found", extra={"family_id": family_id_val})
+                async with session.begin():
+                    blacklisted = await blacklist_family(session, family_uuid)
+                    if not blacklisted:
+                        _log.warning("logout.family_not_found", extra={"family_id": family_id_val})
             except ProgrammingError:
                 _log.warning("logout.programming_error")
                 raise HTTPException(
@@ -287,6 +289,7 @@ async def ws_token(
     }
 
     if settings.redis_url:
+        redis = None
         try:
             from redis.asyncio import Redis
 
@@ -303,6 +306,9 @@ async def ws_token(
             )
         except Exception as exc:
             _log.warning("ws_token.redis_fallback", extra={"error": str(exc)})
+        finally:
+            if redis is not None:
+                await redis.aclose()
 
     token = create_jwt_ws_token(
         current_user.username,
@@ -325,7 +331,8 @@ async def me(
     session: AsyncSession = Depends(get_db_session),
 ) -> MeResponse:
     try:
-        account = await get_account_by_id(session, current_user.account_id)
+        async with session.begin():
+            account = await get_account_by_id(session, current_user.account_id)
     except ProgrammingError:
         _log.warning("me.programming_error")
         raise HTTPException(
