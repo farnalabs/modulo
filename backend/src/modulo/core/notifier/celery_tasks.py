@@ -19,9 +19,9 @@ import logging
 import uuid
 from typing import Any
 
-from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
+from sqlalchemy.ext.asyncio import create_async_engine
 
-from modulo.core.notifier import MAX_RETRIES, Notifier
+from modulo.core.notifier import MAX_ATTEMPTS, Notifier
 from modulo.settings import get_settings
 
 try:
@@ -41,15 +41,6 @@ __all__ = [
 ]
 
 _log = logging.getLogger(__name__)
-
-_ENGINE: AsyncEngine | None = None
-
-
-def _get_engine() -> AsyncEngine:
-    global _ENGINE
-    if _ENGINE is None:
-        _ENGINE = create_async_engine(get_settings().database_url)
-    return _ENGINE
 
 
 # ---------------------------------------------------------------------------
@@ -79,12 +70,12 @@ class DispatchNotificationTask(Task):  # type: ignore[misc]
     Runs inside a Celery worker process. Opens its own DB engine and
     creates a ``Notifier`` instance to perform the dispatch.
 
-    Retries up to ``MAX_RETRIES`` times with a 5-second default delay.
+    Retries up to ``MAX_ATTEMPTS - 1`` times with a 5-second default delay.
     """
 
     name = "modulo.notifier.dispatch"
-    autoretry_for = (Exception,)
-    max_retries = MAX_RETRIES
+    autoretry_for = (ConnectionError, TimeoutError, OSError)
+    max_retries = MAX_ATTEMPTS - 1
     default_retry_delay = 5
 
     def run(
@@ -120,7 +111,7 @@ async def _dispatch_notification(
 ) -> list[dict[str, Any]]:
     """Core dispatch logic — runs inside ``asyncio.run()`` inside the Celery task."""
     settings = get_settings()
-    engine = _get_engine()
+    engine = create_async_engine(settings.database_url)
     notifier = Notifier(engine, settings.fernet_key)
     try:
         results = await notifier.dispatch_event(
@@ -133,6 +124,7 @@ async def _dispatch_notification(
         )
     finally:
         await notifier.close()
+        await engine.dispose()
     return [
         {
             "endpoint_id": str(r.endpoint_id),
@@ -159,50 +151,35 @@ async def enqueue_dispatch(
     retain_payload: bool = False,
     team_id: uuid.UUID | None = None,
 ) -> list[dict[str, Any]]:
-    """Enqueue a notification dispatch to Celery, or run inline if Celery is unavailable.
+    """Enqueue a notification dispatch to Celery.
 
     This is the entry point called by ``Notifier.dispatch_event()`` when
-    Celery mode is enabled.
+    Celery mode is enabled. The caller handles fallback to inline dispatch.
     """
-    try:
-        app = get_celery_app()
-        app.send_task(
-            "modulo.notifier.dispatch",
-            args=[
-                str(org_id),
-                event_type,
-                json.dumps(payload, default=str),
-                str(run_id) if run_id else None,
-                retain_payload,
-                str(team_id) if team_id else None,
-            ],
-        )
-        _log.debug(
-            "notifier.enqueued_celery_task",
-            extra={"event_type": event_type, "org_id": str(org_id)},
-        )
-        return [
-            {
-                "endpoint_id": "celery-enqueued",
-                "status": "enqueued",
-                "attempt_count": 0,
-                "response_code": None,
-                "last_error": None,
-            }
-        ]
-    except Exception:
-        _log.warning(
-            "notifier.celery_unavailable_falling_back_to_inline",
-            extra={"event_type": event_type, "org_id": str(org_id)},
-        )
-        settings = get_settings()
-        engine = _get_engine()
-        notifier = Notifier(engine, settings.fernet_key)
-        return await notifier.dispatch_event(
-            org_id,
+    app = get_celery_app()
+    if app is None:
+        raise RuntimeError("Celery is not available")
+    app.send_task(
+        "modulo.notifier.dispatch",
+        args=[
+            str(org_id),
             event_type,
-            payload,
-            run_id=run_id,
-            retain_payload=retain_payload,
-            team_id=team_id,
-        )
+            json.dumps(payload, default=str),
+            str(run_id) if run_id else None,
+            retain_payload,
+            str(team_id) if team_id else None,
+        ],
+    )
+    _log.debug(
+        "notifier.enqueued_celery_task",
+        extra={"event_type": event_type, "org_id": str(org_id)},
+    )
+    return [
+        {
+            "endpoint_id": "celery-enqueued",
+            "status": "enqueued",
+            "attempt_count": 0,
+            "response_code": None,
+            "last_error": None,
+        }
+    ]

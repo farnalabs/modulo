@@ -10,7 +10,6 @@ from decimal import Decimal
 from typing import Any
 
 from sqlalchemy import func, select
-from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.db.models.daily_run_count import OrgDailyRunCount
@@ -51,22 +50,15 @@ async def get_or_create_daily_count(
     if row is not None:
         return row
 
-    try:
-        async with session.begin_nested():
-            row = OrgDailyRunCount(
-                organisation_id=org_id,
-                run_date=run_date,
-                team_id=team_id,
-                run_count=0,
-                total_spend_usd=Decimal("0"),
-            )
-            session.add(row)
-    except IntegrityError:
-        result = await session.execute(q)
-        row = result.scalar_one_or_none()
-        if row is None:
-            raise
-
+    row = OrgDailyRunCount(
+        organisation_id=org_id,
+        run_date=run_date,
+        team_id=team_id,
+        run_count=0,
+        total_spend_usd=Decimal("0"),
+    )
+    session.add(row)
+    await session.flush()
     return row
 
 
@@ -83,9 +75,6 @@ async def check_and_record_spend(
     If the spend would exceed the daily limit, returns (False, "Daily spend limit exceeded").
     Otherwise increments the daily count and returns (True, None).
     """
-    if cost_usd < 0:
-        raise ValueError("cost_usd must be non-negative")
-
     today = datetime.now(UTC).date()
 
     # Lock and load the org daily count row
@@ -187,7 +176,6 @@ async def get_cost_report(
                 OrgDailyRunCount.team_id.isnot(None),
             )
             .group_by(OrgDailyRunCount.team_id)
-            .order_by(OrgDailyRunCount.team_id)
         )
 
         result = await session.execute(q)
