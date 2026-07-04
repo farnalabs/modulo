@@ -13,6 +13,8 @@ _log = logging.getLogger(__name__)
 DEFAULT_RETENTION_DAYS = 30
 BATCH_SIZE = 500
 
+_TERMINAL_STATES = ("complete", "failed", "eval_failed", "cancelled")
+
 
 async def cleanup_retained_payloads(
     db_session: AsyncSession,
@@ -27,12 +29,21 @@ async def cleanup_retained_payloads(
 
     Returns the number of rows updated.
     """
+    if retention_days < 1:
+        raise ValueError(f"retention_days must be >= 1, got {retention_days}")
+
     cutoff = datetime.now(UTC) - timedelta(days=retention_days)
     total = 0
 
     while True:
         result = await db_session.execute(
-            select(Run.id).where(Run.created_at < cutoff).limit(BATCH_SIZE)
+            select(Run.id)
+            .where(
+                Run.created_at < cutoff,
+                Run.status.in_(_TERMINAL_STATES),
+                (Run.input_payload.isnot(None) | Run.outputs_json.isnot(None)),
+            )
+            .limit(BATCH_SIZE)
         )
         ids = result.scalars().all()
         if not ids:

@@ -12,14 +12,13 @@ from modulo.db.models.trigger_event import TriggerEvent
 from modulo.settings import get_settings
 
 try:
-    from celery import Celery, Task  # type: ignore[import-untyped]
+    from celery import Task
 except ImportError:
     import typing
 
     if typing.TYPE_CHECKING:
-        from celery import Celery, Task  # type: ignore[import-untyped]
-    Celery = None  # type: ignore[misc]
-    Task = object  # type: ignore[misc]
+        from celery import Task
+    Task = object
 
 _log = logging.getLogger(__name__)
 
@@ -50,10 +49,8 @@ async def cleanup_old_webhook_events(db_session: AsyncSession) -> int:
     await db_session.execute(delete(TriggerEvent).where(TriggerEvent.id.in_(ids)))
     await db_session.commit()
 
-    count = len(ids)
-    if count > 0:
-        _log.info("Cleaned up %d old webhook trigger events", count)
-    return count
+    _log.info("Cleaned up %d old webhook trigger events", len(ids))
+    return len(ids)
 
 
 # ---------------------------------------------------------------------------
@@ -99,8 +96,6 @@ class WebhookDedupCleanupTask(Task):  # type: ignore[misc]
 
 async def _run_cleanup() -> dict[str, Any]:
     """Execute cleanup in batches until the table is under the retention threshold."""
-    from sqlalchemy.ext.asyncio import async_sessionmaker
-
     engine = _get_engine()
     factory = async_sessionmaker(engine, expire_on_commit=False)
     total = 0
@@ -129,7 +124,6 @@ async def cleanup_scheduler_loop(factory: async_sessionmaker) -> None:
     """
     while True:
         try:
-            await asyncio.sleep(_CLEANUP_INTERVAL_SECONDS)
             total = 0
             async with factory() as session:
                 while True:
@@ -139,6 +133,7 @@ async def cleanup_scheduler_loop(factory: async_sessionmaker) -> None:
                         break
             if total > 0:
                 _log.info("Scheduled cleanup removed %d old webhook trigger events", total)
+            await asyncio.sleep(_CLEANUP_INTERVAL_SECONDS)
         except asyncio.CancelledError:
             break
         except Exception:
