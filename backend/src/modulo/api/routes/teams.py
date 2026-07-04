@@ -148,7 +148,7 @@ async def list_teams_endpoint(
 
 @router.post("", response_model=TeamResponse, status_code=status.HTTP_201_CREATED)
 async def create_team_endpoint(
-    body: CreateTeamRequest,
+    req: CreateTeamRequest,
     current_user: AuthenticatedPrincipal = Depends(get_current_user),
     session: AsyncSession = Depends(get_db_session),
 ) -> TeamResponse:
@@ -158,7 +158,7 @@ async def create_team_endpoint(
         async with session.begin():
             await set_rls_org(session, current_user.organisation_id)
             await set_rls_user_context(session, current_user.account_id, current_user.org_role)
-            existing = await get_team_by_name(session, current_user.organisation_id, body.name)
+            existing = await get_team_by_name(session, current_user.organisation_id, req.name)
             if existing is not None:
                 raise HTTPException(
                     status_code=status.HTTP_409_CONFLICT,
@@ -167,9 +167,9 @@ async def create_team_endpoint(
             team = await create_team(
                 session,
                 org_id=current_user.organisation_id,
-                name=body.name,
+                name=req.name,
                 account_id=current_user.account_id,
-                description=body.description,
+                description=req.description,
             )
     except ProgrammingError:
         raise HTTPException(
@@ -218,13 +218,13 @@ async def get_team_endpoint(
 @router.patch("/{team_id}", response_model=TeamResponse)
 async def update_team_endpoint(
     team_id: uuid.UUID,
-    body: UpdateTeamRequest,
+    req: UpdateTeamRequest,
     current_user: AuthenticatedPrincipal = Depends(get_current_user),
     session: AsyncSession = Depends(get_db_session),
 ) -> TeamResponse:
     _require_admin(current_user)
 
-    updates = {k: v for k, v in body.model_dump(exclude_unset=True).items() if v is not None}
+    updates = {k: v for k, v in req.model_dump(exclude_unset=True).items() if v is not None}
 
     try:
         async with session.begin():
@@ -368,11 +368,11 @@ async def list_members_endpoint(
 )
 async def add_member_endpoint(
     team_id: uuid.UUID,
-    body: AddMemberRequest,
+    req: AddMemberRequest,
     current_user: AuthenticatedPrincipal = Depends(get_current_user),
     session: AsyncSession = Depends(get_db_session),
 ) -> MembershipResponse:
-    user_id = uuid.UUID(body.user_id)
+    user_id = uuid.UUID(req.user_id)
 
     try:
         async with session.begin():
@@ -395,10 +395,10 @@ async def add_member_endpoint(
                         status_code=status.HTTP_403_FORBIDDEN,
                         detail="Only admin users or team operators can add members",
                     )
-                if TEAM_ROLE_HIERARCHY.get(body.role, -1) > TEAM_ROLE_HIERARCHY.get(caller_membership.role, -1):
+                if TEAM_ROLE_HIERARCHY.get(req.role, -1) > TEAM_ROLE_HIERARCHY.get(caller_membership.role, -1):
                     raise HTTPException(
                         status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-                        detail=f"Cannot grant role '{body.role}' above your own team role '{caller_membership.role}'",
+                        detail=f"Cannot grant role '{req.role}' above your own team role '{caller_membership.role}'",
                     )
 
             target_account = await get_account_by_id(session, user_id)
@@ -406,10 +406,10 @@ async def add_member_endpoint(
             if target_account is None or target_membership is None:
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found in organisation")
 
-            if TEAM_ROLE_HIERARCHY.get(body.role, -1) > ORG_ROLE_HIERARCHY.get(target_membership.role, -1):
+            if TEAM_ROLE_HIERARCHY.get(req.role, -1) > ORG_ROLE_HIERARCHY.get(target_membership.role, -1):
                 raise HTTPException(
                     status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-                    detail=f"Team role '{body.role}' exceeds user's org role '{target_membership.role}'",
+                    detail=f"Team role '{req.role}' exceeds user's org role '{target_membership.role}'",
                 )
 
             membership = await add_team_member(
@@ -417,7 +417,7 @@ async def add_member_endpoint(
                 org_id=current_user.organisation_id,
                 team_id=team_id,
                 account_id=user_id,
-                role=body.role,
+                role=req.role,
             )
     except ProgrammingError:
         raise HTTPException(
@@ -468,7 +468,7 @@ async def remove_member_endpoint(
 async def change_member_role_endpoint(
     team_id: uuid.UUID,
     membership_id: uuid.UUID,
-    body: ChangeMemberRoleRequest,
+    req: ChangeMemberRoleRequest,
     current_user: AuthenticatedPrincipal = Depends(get_current_user),
     session: AsyncSession = Depends(get_db_session),
 ) -> MembershipResponse:
@@ -489,13 +489,13 @@ async def change_member_role_endpoint(
                         status_code=status.HTTP_403_FORBIDDEN,
                         detail="Only admin users or team operators can change member roles",
                     )
-                if TEAM_ROLE_HIERARCHY.get(body.role, -1) > TEAM_ROLE_HIERARCHY.get(caller_membership.role, -1):
+                if TEAM_ROLE_HIERARCHY.get(req.role, -1) > TEAM_ROLE_HIERARCHY.get(caller_membership.role, -1):
                     raise HTTPException(
                         status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-                        detail=f"Cannot grant role '{body.role}' above your own team role '{caller_membership.role}'",
+                        detail=f"Cannot grant role '{req.role}' above your own team role '{caller_membership.role}'",
                     )
 
-            membership = await update_member_role(session, membership_id, body.role)
+            membership = await update_member_role(session, membership_id, req.role)
             if membership is None or membership.team_id != team_id:
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Membership not found")
     except ProgrammingError:

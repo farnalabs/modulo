@@ -60,7 +60,7 @@ def _validate_fernet_key(key: str, label: str) -> None:
 
 @router.post("/rotate-key", response_model=RotateKeyResponse, status_code=status.HTTP_202_ACCEPTED)
 async def rotate_key(
-    body: RotateKeyRequest,
+    req: RotateKeyRequest,
     current_user: AuthenticatedPrincipal = Depends(get_current_user),
     session: AsyncSession = Depends(get_db_session),
     settings: Settings = Depends(get_settings),
@@ -76,9 +76,9 @@ async def rotate_key(
             detail="Only admin users can rotate keys",
         )
 
-    _validate_fernet_key(body.new_fernet_key, "new_fernet_key")
+    _validate_fernet_key(req.new_fernet_key, "new_fernet_key")
 
-    old_key = body.old_fernet_key or settings.fernet_key
+    old_key = req.old_fernet_key or settings.fernet_key
 
     global _rotation_in_progress
     if _rotation_in_progress:
@@ -98,7 +98,7 @@ async def rotate_key(
             resource_id=current_user.organisation_id,
             payload_json={
                 "initiated_by": str(current_user.account_id),
-                "old_key_provided": bool(body.old_fernet_key),
+                "old_key_provided": bool(req.old_fernet_key),
             },
         )
     except Exception:
@@ -117,7 +117,7 @@ async def rotate_key(
     task = asyncio.create_task(
         _run_rotation_background(
             factory=factory,
-            new_key=body.new_fernet_key,
+            new_key=req.new_fernet_key,
             old_key=old_key,
             org_id=current_user.organisation_id,
             actor_user_id=current_user.account_id,

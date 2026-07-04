@@ -162,7 +162,7 @@ async def list_schemas_endpoint(
 
 @router.post("", response_model=SchemaResponse, status_code=status.HTTP_201_CREATED)
 async def create_schema_endpoint(
-    body: SchemaCreate,
+    req: SchemaCreate,
     session: AsyncSession = Depends(get_db_session),
     principal: AuthenticatedPrincipal = Depends(get_current_user),
 ) -> SchemaResponse:
@@ -172,10 +172,10 @@ async def create_schema_endpoint(
             schema = await create_schema(
                 session,
                 org_id=principal.organisation_id,
-                name=body.name,
+                name=req.name,
                 account_id=principal.account_id,
-                description=body.description,
-                abstract_name=body.abstract_name,
+                description=req.description,
+                abstract_name=req.abstract_name,
             )
     except IntegrityError:
         logger.exception("schemas.create.conflict")
@@ -228,11 +228,11 @@ async def get_schema_endpoint(
 @router.patch("/{schema_id}", response_model=SchemaResponse)
 async def update_schema_endpoint(
     schema_id: uuid.UUID,
-    body: SchemaUpdate,
+    req: SchemaUpdate,
     session: AsyncSession = Depends(get_db_session),
     principal: AuthenticatedPrincipal = Depends(get_current_user),
 ) -> SchemaResponse:
-    updates = {k: v for k, v in body.model_dump().items() if v is not None}
+    updates = {k: v for k, v in req.model_dump().items() if v is not None}
     try:
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
@@ -362,7 +362,7 @@ async def list_schema_versions_endpoint(
 )
 async def create_schema_version_endpoint(
     schema_id: uuid.UUID,
-    body: SchemaVersionCreate,
+    req: SchemaVersionCreate,
     session: AsyncSession = Depends(get_db_session),
     principal: AuthenticatedPrincipal = Depends(get_current_user),
 ) -> SchemaVersionResponse:
@@ -376,11 +376,11 @@ async def create_schema_version_endpoint(
                 session,
                 org_id=principal.organisation_id,
                 schema_id=schema_id,
-                version=body.version,
-                version_number=body.version_number,
-                definition_json=body.definition_json,
+                version=req.version,
+                version_number=req.version_number,
+                definition_json=req.definition_json,
                 account_id=principal.account_id,
-                published=body.published,
+                published=req.published,
             )
     except IntegrityError:
         logger.exception("schemas.create_version.conflict")
@@ -530,7 +530,7 @@ class SchemaInferResponse(BaseModel):
 
 @router.post("/infer", response_model=SchemaInferResponse)
 async def infer_schema_endpoint(
-    body: SchemaInferRequest,
+    req: SchemaInferRequest,
     session: AsyncSession = Depends(get_db_session),
     principal: AuthenticatedPrincipal = Depends(get_current_user),
     settings: Settings = Depends(get_settings),
@@ -546,7 +546,7 @@ async def infer_schema_endpoint(
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
 
-            ci = await get_connector_instance(session, body.connector_instance_id)
+            ci = await get_connector_instance(session, req.connector_instance_id)
             if ci is None:
                 raise HTTPException(
                     status_code=status.HTTP_404_NOT_FOUND,
@@ -598,10 +598,10 @@ async def infer_schema_endpoint(
         try:
             async with asyncio.timeout(30.0):
                 records = await ch.sample(
-                    connector_id=body.connector_instance_id,
-                    resource=body.sample_query.resource,
-                    filters=body.sample_query.filters,
-                    limit=body.sample_query.limit,
+                    connector_id=req.connector_instance_id,
+                    resource=req.sample_query.resource,
+                    filters=req.sample_query.filters,
+                    limit=req.sample_query.limit,
                 )
         except TimeoutError:
             raise HTTPException(
@@ -661,10 +661,10 @@ async def infer_schema_endpoint(
                 event_type="schema_inference_completed",
                 actor_user_id=principal.account_id,
                 resource_type="connector_instance",
-                resource_id=body.connector_instance_id,
+                resource_id=req.connector_instance_id,
                 payload_json={
                     "connector_name": ci.name,
-                    "resource": body.sample_query.resource,
+                    "resource": req.sample_query.resource,
                     "sample_count": len(records),
                     "model_backend_id": str(first_backend_id),
                 },
@@ -696,7 +696,7 @@ class SchemaGenerateResponse(BaseModel):
 
 @router.post("/generate", response_model=SchemaGenerateResponse)
 async def generate_schema_endpoint(
-    body: SchemaGenerateRequest,
+    req: SchemaGenerateRequest,
     session: AsyncSession = Depends(get_db_session),
     principal: AuthenticatedPrincipal = Depends(get_current_user),
     settings: Settings = Depends(get_settings),
@@ -758,8 +758,8 @@ async def generate_schema_endpoint(
         service = SchemaGenerationService(backend)
         try:
             definition_json = await service.generate(
-                description=body.description,
-                examples=body.examples or None,
+                description=req.description,
+                examples=req.examples or None,
             )
         except SchemaGenerationError:
             logger.exception("schemas.generate.failed")
@@ -778,8 +778,8 @@ async def generate_schema_endpoint(
                 resource_type="schema",
                 resource_id="generate",
                 payload_json={
-                    "description_length": len(body.description),
-                    "example_count": len(body.examples),
+                    "description_length": len(req.description),
+                    "example_count": len(req.examples),
                     "model_backend_id": str(first_backend_id),
                 },
             )
@@ -812,7 +812,7 @@ class SchemaMigrationPlanRequest(BaseModel):
 
 @router.post("/migrate", response_model=SchemaMigrationResponse)
 async def migrate_data_endpoint(
-    body: SchemaMigrationRequest,
+    req: SchemaMigrationRequest,
     session: AsyncSession = Depends(get_db_session),
     principal: AuthenticatedPrincipal = Depends(get_current_user),
     dry_run: bool = Query(False, description="If true, preview the migration plan without applying it"),
@@ -829,17 +829,17 @@ async def migrate_data_endpoint(
     try:
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
-            from_schema = await get_schema(session, body.from_schema_id)
+            from_schema = await get_schema(session, req.from_schema_id)
             if from_schema is None:
                 raise HTTPException(status_code=404, detail="Source schema not found")
-            from_sv = await _get_latest_version(session, body.from_schema_id)
+            from_sv = await _get_latest_version(session, req.from_schema_id)
             if from_sv is None:
                 raise HTTPException(status_code=404, detail="Source schema has no versions")
 
-            to_schema = await get_schema(session, body.to_schema_id)
+            to_schema = await get_schema(session, req.to_schema_id)
             if to_schema is None:
                 raise HTTPException(status_code=404, detail="Target schema not found")
-            to_sv = await _get_latest_version(session, body.to_schema_id)
+            to_sv = await _get_latest_version(session, req.to_schema_id)
             if to_sv is None:
                 raise HTTPException(status_code=404, detail="Target schema has no versions")
     except ProgrammingError:
@@ -866,11 +866,11 @@ async def migrate_data_endpoint(
     if dry_run:
         plan_dict["dry_run"] = True
         return SchemaMigrationResponse(
-            migrated_data=deepcopy(body.data),
+            migrated_data=deepcopy(req.data),
             plan=plan_dict,
         )
 
-    migrated = apply_migration(body.data, plan)
+    migrated = apply_migration(req.data, plan)
 
     return SchemaMigrationResponse(
         migrated_data=migrated,
@@ -880,10 +880,10 @@ async def migrate_data_endpoint(
 
 @router.post("/migrate/plan", response_model=dict[str, Any])
 async def migration_plan_endpoint(
-    body: SchemaMigrationPlanRequest,
+    req: SchemaMigrationPlanRequest,
 ) -> dict[str, Any]:
     """Preview a migration plan between two schemas without applying it."""
-    plan = create_migration(body.from_definition, body.to_definition)
+    plan = create_migration(req.from_definition, req.to_definition)
     return {
         "field_additions": plan.field_additions,
         "field_removals": plan.field_removals,
@@ -954,20 +954,20 @@ def _find_json_location(raw: str, instance: dict[str, Any], error_path: str) -> 
 
 @router.post("/validate", response_model=SchemaValidateResponse)
 async def validate_schema_endpoint(
-    body: SchemaValidateRequest,
+    req: SchemaValidateRequest,
 ) -> SchemaValidateResponse:
     """Validate a JSON Schema against JSON Schema Draft 2020-12.
 
     Returns structural validation errors with best-effort line/column info.
     """
-    raw = json.dumps(body.definition, indent=2)
+    raw = json.dumps(req.definition, indent=2)
     errors: list[SchemaValidationError] = []
 
     try:
-        Draft202012Validator.check_schema(body.definition)
+        Draft202012Validator.check_schema(req.definition)
     except (ValidationError, JsSchemaError) as exc:
         path_parts = str(exc.path.popleft()) if exc.path else ""
-        line, col = _find_json_location(raw, body.definition, path_parts)
+        line, col = _find_json_location(raw, req.definition, path_parts)
         errors.append(
             SchemaValidationError(
                 line=line,
@@ -1006,7 +1006,7 @@ class SchemaImportResponse(BaseModel):
 
 @router.post("/import", response_model=SchemaImportResponse)
 async def import_schema_endpoint(
-    body: SchemaImportRequest,
+    req: SchemaImportRequest,
 ) -> SchemaImportResponse:
     """Parse raw JSON Schema content and extract fields for the schema builder.
 
@@ -1014,7 +1014,7 @@ async def import_schema_endpoint(
     and each property as a ``SchemaImportField``.
     """
     try:
-        schema = json.loads(body.content)
+        schema = json.loads(req.content)
     except json.JSONDecodeError as exc:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,

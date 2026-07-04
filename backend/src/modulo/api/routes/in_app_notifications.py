@@ -293,7 +293,7 @@ async def review_later_endpoint(
 @router.post("/{notification_id}/dismiss", status_code=status.HTTP_200_OK)
 async def dismiss_endpoint(
     notification_id: uuid.UUID,
-    body: DismissRequest,
+    req: DismissRequest,
     session: AsyncSession = Depends(get_db_session),
     principal: AuthenticatedPrincipal = Depends(get_current_user),
 ) -> dict:
@@ -307,7 +307,7 @@ async def dismiss_endpoint(
                     notification_id=notification_id,
                     user_id=principal.account_id,
                     org_id=principal.organisation_id,
-                    dismiss_scope=body.dismiss_scope,
+                    dismiss_scope=req.dismiss_scope,
                     is_admin=principal.org_role == "admin",
                 )
             except ValueError as exc:
@@ -335,7 +335,7 @@ async def dismiss_endpoint(
     except Exception:
         _log.warning("dismiss_endpoint.publish_failed", exc_info=True)
 
-    scope_label = "for_everyone" if body.dismiss_scope == "scope" else "for_self"
+    scope_label = "for_everyone" if req.dismiss_scope == "scope" else "for_self"
     return {"status": f"dismissed_{scope_label}"}
 
 
@@ -352,7 +352,7 @@ async def get_preferences(
 
 @router.put("/preferences", response_model=NotificationPreferencesResponse)
 async def update_preferences(
-    body: NotificationPreferencesUpdate,
+    req: NotificationPreferencesUpdate,
     session: AsyncSession = Depends(get_db_session),
     principal: AuthenticatedPrincipal = Depends(get_current_user),
 ) -> NotificationPreferencesResponse:

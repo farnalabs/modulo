@@ -113,7 +113,7 @@ class EvalDefinitionListResponse(BaseModel):
 
 @router.post("/evals", response_model=dict[str, Any], status_code=status.HTTP_201_CREATED)
 async def create_eval_definition(
-    body: CreateEvalRequest,
+    req: CreateEvalRequest,
     session: AsyncSession = Depends(get_db_session),
     principal: AuthenticatedPrincipal = Depends(get_current_user),
 ) -> dict[str, Any]:
@@ -133,14 +133,14 @@ async def create_eval_definition(
             await set_rls_user_context(session, principal.account_id, principal.org_role)
             eval_def = EvalDefinition(
                 organisation_id=principal.organisation_id,
-                pipeline_id=body.pipeline_id,
-                node_id=body.node_id,
-                name=body.name,
-                eval_type=body.eval_type,
-                config_json=body.config_json,
-                failure_behaviour=body.failure_behaviour,
-                pass_threshold=body.pass_threshold,
-                suite_id=body.suite_id,
+                pipeline_id=req.pipeline_id,
+                node_id=req.node_id,
+                name=req.name,
+                eval_type=req.eval_type,
+                config_json=req.config_json,
+                failure_behaviour=req.failure_behaviour,
+                pass_threshold=req.pass_threshold,
+                suite_id=req.suite_id,
                 account_id=principal.account_id,
             )
             session.add(eval_def)
@@ -321,7 +321,7 @@ async def get_eval_definition(
 @router.put("/evals/{eval_id}", response_model=dict[str, Any])
 async def update_eval_definition(
     eval_id: uuid.UUID,
-    body: UpdateEvalRequest,
+    req: UpdateEvalRequest,
     session: AsyncSession = Depends(get_db_session),
     principal: AuthenticatedPrincipal = Depends(get_current_user),
 ) -> dict[str, Any]:
@@ -343,7 +343,7 @@ async def update_eval_definition(
             if eval_def is None:
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Eval definition not found")
 
-            updates = body.model_dump(exclude_unset=True)
+            updates = req.model_dump(exclude_unset=True)
             for key, value in updates.items():
                 setattr(eval_def, key, value)
             await session.flush()
@@ -490,7 +490,7 @@ class CreateEvalFromRunRequest(BaseModel):
 
 @router.post("/evals/compare", status_code=status.HTTP_200_OK)
 async def compare_evals(
-    body: CompareEvalsRequest,
+    req: CompareEvalsRequest,
     session: AsyncSession = Depends(get_db_session),
     principal: AuthenticatedPrincipal = Depends(get_current_user),
 ) -> dict[str, Any]:
@@ -503,7 +503,7 @@ async def compare_evals(
             run_a = (
                 await session.execute(
                     select(Run).where(
-                        Run.id == body.run_id_a,
+                        Run.id == req.run_id_a,
                         Run.organisation_id == principal.organisation_id,
                     )
                 )
@@ -514,7 +514,7 @@ async def compare_evals(
             run_b = (
                 await session.execute(
                     select(Run).where(
-                        Run.id == body.run_id_b,
+                        Run.id == req.run_id_b,
                         Run.organisation_id == principal.organisation_id,
                     )
                 )
@@ -523,11 +523,11 @@ async def compare_evals(
                 raise HTTPException(status_code=404, detail="Run B not found")
 
             results_a = (
-                (await session.execute(select(EvalResult).where(EvalResult.run_id == body.run_id_a))).scalars().all()
+                (await session.execute(select(EvalResult).where(EvalResult.run_id == req.run_id_a))).scalars().all()
             )
 
             results_b = (
-                (await session.execute(select(EvalResult).where(EvalResult.run_id == body.run_id_b))).scalars().all()
+                (await session.execute(select(EvalResult).where(EvalResult.run_id == req.run_id_b))).scalars().all()
             )
     except ProgrammingError:
         raise HTTPException(
@@ -619,7 +619,7 @@ async def compare_evals(
 
 @router.post("/evals/from-run", status_code=status.HTTP_201_CREATED)
 async def create_eval_from_run(
-    body: CreateEvalFromRunRequest,
+    req: CreateEvalFromRunRequest,
     session: AsyncSession = Depends(get_db_session),
     principal: AuthenticatedPrincipal = Depends(get_current_user),
 ) -> dict[str, Any]:
@@ -638,7 +638,7 @@ async def create_eval_from_run(
             run = (
                 await session.execute(
                     select(Run).where(
-                        Run.id == body.run_id,
+                        Run.id == req.run_id,
                         Run.organisation_id == principal.organisation_id,
                     )
                 )
@@ -647,7 +647,7 @@ async def create_eval_from_run(
                 raise HTTPException(status_code=404, detail="Run not found")
 
             outputs = run.outputs_json or {}
-            node_output = outputs.get(str(body.node_id)) or outputs.get(body.node_id.hex) or {}
+            node_output = outputs.get(str(req.node_id)) or outputs.get(req.node_id.hex) or {}
 
             sample_output = node_output if isinstance(node_output, dict) else {"output": str(node_output)}
     except ProgrammingError:
@@ -657,22 +657,22 @@ async def create_eval_from_run(
         )
 
     config_json: dict[str, Any] = {}
-    if body.eval_type == "regex":
+    if req.eval_type == "regex":
         config_json = {
             "field": next(iter(sample_output.keys())) if sample_output else "",
             "pattern": "",
         }
-    elif body.eval_type == "json_schema":
+    elif req.eval_type == "json_schema":
         config_json = {
             "field": next(iter(sample_output.keys())) if sample_output else "",
             "schema": {},
         }
-    elif body.eval_type == "llm_judge":
+    elif req.eval_type == "llm_judge":
         config_json = {
             "field": next(iter(sample_output.keys())) if sample_output else "",
             "instructions": "",
         }
-    elif body.eval_type == "custom_function":
+    elif req.eval_type == "custom_function":
         config_json = {
             "field": next(iter(sample_output.keys())) if sample_output else "",
             "function": "",
@@ -683,9 +683,9 @@ async def create_eval_from_run(
             eval_def = EvalDefinition(
                 organisation_id=principal.organisation_id,
                 pipeline_id=run.pipeline_id,
-                node_id=body.node_id,
-                name=body.name,
-                eval_type=body.eval_type,
+                node_id=req.node_id,
+                name=req.name,
+                eval_type=req.eval_type,
                 config_json=config_json,
                 failure_behaviour="warn",
                 account_id=principal.account_id,

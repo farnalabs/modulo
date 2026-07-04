@@ -120,7 +120,7 @@ async def list_composite_templates_endpoint(
 
 @router.post("", response_model=CompositeTemplateResponse, status_code=status.HTTP_201_CREATED)
 async def create_composite_template_endpoint(
-    body: CompositeTemplateCreate,
+    req: CompositeTemplateCreate,
     session: AsyncSession = Depends(get_db_session),
     principal: AuthenticatedPrincipal = Depends(get_current_user),
 ) -> CompositeTemplateResponse:
@@ -131,13 +131,13 @@ async def create_composite_template_endpoint(
                 session,
                 org_id=principal.organisation_id,
                 account_id=principal.account_id,
-                name=body.name,
-                description=body.description,
-                sub_pipeline_graph_json=body.sub_pipeline_graph_json,
-                parameter_ports_json=[p.model_dump() for p in body.parameter_ports_json],
-                input_schema_id=body.input_schema_id,
-                output_schema_id=body.output_schema_id,
-                version=body.version,
+                name=req.name,
+                description=req.description,
+                sub_pipeline_graph_json=req.sub_pipeline_graph_json,
+                parameter_ports_json=[p.model_dump() for p in req.parameter_ports_json],
+                input_schema_id=req.input_schema_id,
+                output_schema_id=req.output_schema_id,
+                version=req.version,
             )
         return CompositeTemplateResponse.model_validate(template)
     except ProgrammingError:
@@ -170,12 +170,12 @@ async def get_composite_template_endpoint(
 @router.patch("/{template_id}", response_model=CompositeTemplateResponse)
 async def update_composite_template_endpoint(
     template_id: uuid.UUID,
-    body: CompositeTemplateUpdate,
+    req: CompositeTemplateUpdate,
     session: AsyncSession = Depends(get_db_session),
     principal: AuthenticatedPrincipal = Depends(get_current_user),
 ) -> CompositeTemplateResponse:
     updates: dict[str, Any] = {}
-    for k, v in body.model_dump(exclude_unset=True).items():
+    for k, v in req.model_dump(exclude_unset=True).items():
         if k == "parameter_ports_json" and v is not None:
             updates[k] = [p.model_dump() if isinstance(p, BaseModel) else p for p in v]
         else:
@@ -257,7 +257,7 @@ async def get_composite_editor_endpoint(
 @router.put("/{template_id}/editor", response_model=EditorGraphResponse)
 async def save_composite_editor_endpoint(
     template_id: uuid.UUID,
-    body: EditorGraphUpdate,
+    req: EditorGraphUpdate,
     session: AsyncSession = Depends(get_db_session),
     principal: AuthenticatedPrincipal = Depends(get_current_user),
 ) -> EditorGraphResponse:
@@ -268,8 +268,8 @@ async def save_composite_editor_endpoint(
             if template is None:
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Composite template not found")
             graph = dict(template.sub_pipeline_graph_json) if template.sub_pipeline_graph_json else {}
-            graph["nodes"] = body.nodes
-            graph["edges"] = body.edges
+            graph["nodes"] = req.nodes
+            graph["edges"] = req.edges
             template = await update_composite_template(session, template_id, {
                 "sub_pipeline_graph_json": graph,
             })
@@ -306,7 +306,7 @@ class DetectParamsResponse(BaseModel):
 
 @router.post("/detect-params", response_model=DetectParamsResponse)
 async def detect_params_endpoint(
-    body: DetectParamsRequest,
+    req: DetectParamsRequest,
     principal: AuthenticatedPrincipal = Depends(get_current_user),
 ) -> DetectParamsResponse:
     """Scan sub-pipeline agent prompts for ``{{parameter.*}}`` placeholders.
@@ -335,11 +335,11 @@ class PublishResponse(BaseModel):
 @router.post("/{template_id}/publish", response_model=PublishResponse)
 async def publish_composite_endpoint(
     template_id: uuid.UUID,
-    body: PublishRequest,
+    req: PublishRequest,
     session: AsyncSession = Depends(get_db_session),
     principal: AuthenticatedPrincipal = Depends(get_current_user),
 ) -> PublishResponse:
-    version = body.version or "1.0.0"
+    version = req.version or "1.0.0"
     try:
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)

@@ -98,7 +98,7 @@ def _variant_to_response(group: Any) -> dict[str, Any]:
 
 @router.post("", response_model=VariantGroupResponse, status_code=status.HTTP_201_CREATED)
 async def create_group(
-    body: CreateVariantGroupRequest,
+    req: CreateVariantGroupRequest,
     session: AsyncSession = Depends(get_db_session),
     principal: AuthenticatedPrincipal = Depends(get_current_user),
 ) -> dict[str, Any]:
@@ -108,13 +108,13 @@ async def create_group(
             group = await create_variant_group(
                 session,
                 org_id=principal.organisation_id,
-                pipeline_id=body.pipeline_id,
-                name=body.name,
-                variants=[v.model_dump() for v in body.variants],
-                description=body.description,
-                selection_strategy=body.selection_strategy,
-                max_concurrent_runs=body.max_concurrent_runs,
-                degraded_evals=body.degraded_evals,
+                pipeline_id=req.pipeline_id,
+                name=req.name,
+                variants=[v.model_dump() for v in req.variants],
+                description=req.description,
+                selection_strategy=req.selection_strategy,
+                max_concurrent_runs=req.max_concurrent_runs,
+                degraded_evals=req.degraded_evals,
             )
     except ProgrammingError:
         raise HTTPException(
@@ -167,7 +167,7 @@ async def get_group(
 @router.put("/{group_id}", response_model=VariantGroupResponse)
 async def update_group(
     group_id: uuid.UUID,
-    body: CreateVariantGroupRequest,
+    req: CreateVariantGroupRequest,
     session: AsyncSession = Depends(get_db_session),
     principal: AuthenticatedPrincipal = Depends(get_current_user),
 ) -> dict[str, Any]:
@@ -177,12 +177,12 @@ async def update_group(
             group = await update_variant_group(
                 session,
                 group_id,
-                name=body.name,
-                description=body.description,
-                variants=[v.model_dump() for v in body.variants],
-                selection_strategy=body.selection_strategy,
-                max_concurrent_runs=body.max_concurrent_runs,
-                degraded_evals=body.degraded_evals,
+                name=req.name,
+                description=req.description,
+                variants=[v.model_dump() for v in req.variants],
+                selection_strategy=req.selection_strategy,
+                max_concurrent_runs=req.max_concurrent_runs,
+                degraded_evals=req.degraded_evals,
             )
     except ProgrammingError:
         raise HTTPException(
@@ -217,7 +217,7 @@ async def delete_group(
 @router.post("/{group_id}/run", response_model=RunVariantResponse)
 async def run_variant(
     group_id: uuid.UUID,
-    body: RunVariantRequest,
+    req: RunVariantRequest,
     session: AsyncSession = Depends(get_db_session),
     principal: AuthenticatedPrincipal = Depends(get_current_user),
 ) -> dict[str, Any]:
@@ -247,7 +247,7 @@ async def run_variant(
                 session,
                 org_id=principal.organisation_id,
                 group=group,
-                input_payload=body.input_payload,
+                input_payload=req.input_payload,
                 account_id=principal.account_id,
             )
     except ProgrammingError:

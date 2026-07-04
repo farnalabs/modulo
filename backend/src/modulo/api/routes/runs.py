@@ -154,7 +154,7 @@ async def _validate_run_input_basics(
 
 @router.post("", response_model=RunResponse, status_code=status.HTTP_202_ACCEPTED)
 async def trigger_run(
-    body: TriggerRunRequest,
+    req: TriggerRunRequest,
     background_tasks: BackgroundTasks,
     session: AsyncSession = Depends(get_db_session),
     engine: AsyncEngine = Depends(_get_engine),
@@ -168,7 +168,7 @@ async def trigger_run(
     try:
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
-            pipeline = await get_pipeline(session, body.pipeline_id)
+            pipeline = await get_pipeline(session, req.pipeline_id)
     except ProgrammingError:
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
@@ -178,7 +178,7 @@ async def trigger_run(
     if pipeline is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Pipeline {body.pipeline_id} not found",
+            detail=f"Pipeline {req.pipeline_id} not found",
         )
 
     org_id = principal.organisation_id
@@ -195,11 +195,11 @@ async def trigger_run(
             if snapshot is None:
                 raise HTTPException(
                     status_code=status.HTTP_404_NOT_FOUND,
-                    detail=f"Pipeline {body.pipeline_id} not found",
+                    detail=f"Pipeline {req.pipeline_id} not found",
                 )
 
             # Pre-run input health checks against entry agent.
-            await _validate_run_input_basics(session, snapshot.graph_json, snapshot, body.input_payload)
+            await _validate_run_input_basics(session, snapshot.graph_json, snapshot, req.input_payload)
 
             run = await create_run(
                 session,
@@ -207,7 +207,7 @@ async def trigger_run(
                 pipeline_id=pipeline.id,
                 snapshot_id=snapshot.id,
                 trigger_type="manual",
-                input_payload=body.input_payload,
+                input_payload=req.input_payload,
             )
             run_id = run.id
     except ProgrammingError:
@@ -220,7 +220,7 @@ async def trigger_run(
         engine,
         checkpointer_conn_string=pg_connection_string(str(engine.url)),
     )
-    background_tasks.add_task(_run_in_background, executor, run_id, org_id, body.input_payload)
+    background_tasks.add_task(_run_in_background, executor, run_id, org_id, req.input_payload)
 
     return _build_run_response(run)
 
@@ -726,7 +726,7 @@ class NodeRecoverResponse(BaseModel):
 async def recover_run_node(
     run_id: uuid.UUID,
     node_id: str,
-    body: NodeRecoverRequest,
+    req: NodeRecoverRequest,
     session: AsyncSession = Depends(get_db_session),
     engine: AsyncEngine = Depends(_get_engine),
     principal: AuthenticatedPrincipal = Depends(get_current_user),
@@ -755,7 +755,7 @@ async def recover_run_node(
                     org_id=principal.organisation_id,
                     run_id=run_id,
                     node_id=node_id,
-                    input_data=body.input_data,
+                    input_data=req.input_data,
                     actor_id=principal.account_id,
                 )
             except RecoveryNotAllowedError as exc:
@@ -772,10 +772,10 @@ async def recover_run_node(
             detail="Feature is not available. Run database migrations to enable it.",
         )
 
-    action = "skip" if body.input_data is None else "replay"
+    action = "skip" if req.input_data is None else "replay"
 
     # Resume the graph with the recovery data.
-    resume_data: dict[str, Any] = {"output": body.input_data}
+    resume_data: dict[str, Any] = {"output": req.input_data}
     if action == "skip":
         resume_data = {"action": "skip", "output": None}
 
@@ -1083,7 +1083,7 @@ class NodeOutputDiffResponse(BaseModel):
 
 @router.post("/diff", response_model=NodeOutputDiffResponse)
 async def diff_node_output(
-    body: NodeOutputDiffRequest,
+    req: NodeOutputDiffRequest,
     session: AsyncSession = Depends(get_db_session),
     principal: AuthenticatedPrincipal = Depends(get_current_user),
 ) -> NodeOutputDiffResponse:
@@ -1096,8 +1096,8 @@ async def diff_node_output(
     try:
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
-            run_a = await get_run(session, body.run_id_a)
-            run_b = await get_run(session, body.run_id_b)
+            run_a = await get_run(session, req.run_id_a)
+            run_b = await get_run(session, req.run_id_b)
     except ProgrammingError:
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
@@ -1107,29 +1107,29 @@ async def diff_node_output(
     if run_a is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Run {body.run_id_a} not found",
+            detail=f"Run {req.run_id_a} not found",
         )
     if run_b is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Run {body.run_id_b} not found",
+            detail=f"Run {req.run_id_b} not found",
         )
 
     outputs_a = run_a.outputs_json or {}
     outputs_b = run_b.outputs_json or {}
 
-    node_output_a = outputs_a.get(body.node_id_a)
-    node_output_b = outputs_b.get(body.node_id_b)
+    node_output_a = outputs_a.get(req.node_id_a)
+    node_output_b = outputs_b.get(req.node_id_b)
 
     if node_output_a is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Node {body.node_id_a} not found in run {body.run_id_a} outputs",
+            detail=f"Node {req.node_id_a} not found in run {req.run_id_a} outputs",
         )
     if node_output_b is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Node {body.node_id_b} not found in run {body.run_id_b} outputs",
+            detail=f"Node {req.node_id_b} not found in run {req.run_id_b} outputs",
         )
 
     masked_a = _mask_output_value(node_output_a)
@@ -1211,8 +1211,8 @@ async def diff_node_output(
     has_diff = any(d.type != "unchanged" for d in diff_lines)
 
     return NodeOutputDiffResponse(
-        run_id_a=body.run_id_a,
-        run_id_b=body.run_id_b,
+        run_id_a=req.run_id_a,
+        run_id_b=req.run_id_b,
         node_output_a=masked_a,
         node_output_b=masked_b,
         diff_lines=diff_lines,

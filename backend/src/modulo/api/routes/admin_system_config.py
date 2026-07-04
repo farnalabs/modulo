@@ -48,7 +48,7 @@ class SetConfigRequest(BaseModel):
 @router.put("/{key}")
 async def admin_set_config(
     key: str,
-    body: SetConfigRequest,
+    req: SetConfigRequest,
     current_user: AuthenticatedPrincipal = Depends(get_current_user),
     session: AsyncSession = Depends(get_db_session),
 ) -> ConfigEntry:
@@ -57,7 +57,7 @@ async def admin_set_config(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="System admin role required",
         )
-    entry = await set_config(session, key, body.value, updated_by=current_user.account_id)
+    entry = await set_config(session, key, req.value, updated_by=current_user.account_id)
     return ConfigEntry(
         key=entry.key,
         value=entry.value,

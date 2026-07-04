@@ -203,15 +203,15 @@ async def get_available_providers(
 
 @router.put("/config", response_model=RemyConfigResponse)
 async def update_remy_config(
-    body: RemyConfigUpdate,
+    req: RemyConfigUpdate,
     session: AsyncSession = Depends(get_db_session),
     principal: AuthenticatedPrincipal = Depends(get_current_user),
 ) -> RemyConfigResponse:
     _require_admin(principal)
-    if body.allowed_providers is not None:
+    if req.allowed_providers is not None:
         from modulo.api.routes.remy import _SIMPLE_BACKENDS
 
-        invalid = [p for p in body.allowed_providers if p not in _SIMPLE_BACKENDS]
+        invalid = [p for p in req.allowed_providers if p not in _SIMPLE_BACKENDS]
         if invalid:
             raise HTTPException(
                 status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
@@ -228,22 +228,22 @@ async def update_remy_config(
                 session.add(entry)
 
             current: dict[str, Any] = entry.value if isinstance(entry.value, dict) else {}
-            if body.system_prompt is not None:
-                current["system_prompt"] = body.system_prompt
-            if body.additional_guidance is not None:
-                current["additional_guidance"] = body.additional_guidance
-            if body.access_list is not None:
-                current["access_list"] = body.access_list.model_dump()
-            if body.default_provider is not None:
-                current["default_provider"] = body.default_provider
-            if body.default_model is not None:
-                current["default_model"] = body.default_model
-            if body.default_context_window is not None:
-                current["default_context_window"] = body.default_context_window
-            if body.allowed_providers is not None:
-                current["allowed_providers"] = body.allowed_providers
-            if body.allowed_models is not None:
-                current["allowed_models"] = body.allowed_models
+            if req.system_prompt is not None:
+                current["system_prompt"] = req.system_prompt
+            if req.additional_guidance is not None:
+                current["additional_guidance"] = req.additional_guidance
+            if req.access_list is not None:
+                current["access_list"] = req.access_list.model_dump()
+            if req.default_provider is not None:
+                current["default_provider"] = req.default_provider
+            if req.default_model is not None:
+                current["default_model"] = req.default_model
+            if req.default_context_window is not None:
+                current["default_context_window"] = req.default_context_window
+            if req.allowed_providers is not None:
+                current["allowed_providers"] = req.allowed_providers
+            if req.allowed_models is not None:
+                current["allowed_models"] = req.allowed_models
             entry.updated_by = principal.account_id
             entry.value = current
             await session.flush()
@@ -325,7 +325,7 @@ async def list_org_skills(
 
 @router.post("/skills", response_model=SkillResponse, status_code=status.HTTP_201_CREATED)
 async def create_org_skill(
-    body: SkillCreate,
+    req: SkillCreate,
     session: AsyncSession = Depends(get_db_session),
     principal: AuthenticatedPrincipal = Depends(get_current_user),
 ) -> SkillResponse:
@@ -337,11 +337,11 @@ async def create_org_skill(
                 id=uuid.uuid4(),
                 organisation_id=principal.organisation_id,
                 user_id=None,
-                name=body.name,
-                description=body.description,
-                triggers=body.triggers,
-                body=body.body,
-                active=body.active,
+                name=req.name,
+                description=req.description,
+                triggers=req.triggers,
+                body=req.body,
+                active=req.active,
             )
             session.add(skill)
             await session.flush()
@@ -356,7 +356,7 @@ async def create_org_skill(
 @router.put("/skills/{skill_id}", response_model=SkillResponse)
 async def update_org_skill(
     skill_id: uuid.UUID,
-    body: SkillUpdate,
+    req: SkillUpdate,
     session: AsyncSession = Depends(get_db_session),
     principal: AuthenticatedPrincipal = Depends(get_current_user),
 ) -> SkillResponse:
@@ -365,16 +365,16 @@ async def update_org_skill(
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
             skill = await _get_org_skill(session, skill_id, principal.organisation_id)
-            if body.name is not None:
-                skill.name = body.name
-            if body.description is not None:
-                skill.description = body.description
-            if body.triggers is not None:
-                skill.triggers = body.triggers
-            if body.body is not None:
-                skill.body = body.body
-            if body.active is not None:
-                skill.active = body.active
+            if req.name is not None:
+                skill.name = req.name
+            if req.description is not None:
+                skill.description = req.description
+            if req.triggers is not None:
+                skill.triggers = req.triggers
+            if req.body is not None:
+                skill.body = req.body
+            if req.active is not None:
+                skill.active = req.active
             await session.flush()
         return _skill_to_response(skill)
     except ProgrammingError:
@@ -438,7 +438,7 @@ async def get_org_context_sources(
 @router.put("/context-sources/{source_key}")
 async def set_org_context_source(
     source_key: str,
-    body: ContextSourceModeUpdate,
+    req: ContextSourceModeUpdate,
     session: AsyncSession = Depends(get_db_session),
     principal: AuthenticatedPrincipal = Depends(get_current_user),
 ) -> dict[str, str]:
@@ -451,7 +451,7 @@ async def set_org_context_source(
 
             service = RemyContextSourceService(session)
             await service.set_org_default(
-                principal.organisation_id, source_key, body.source_mode
+                principal.organisation_id, source_key, req.source_mode
             )
             org_defaults = await service.get_org_defaults(principal.organisation_id)
         return org_defaults

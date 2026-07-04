@@ -156,20 +156,20 @@ async def get_onboarding_status(
 
 @router.post("/step", response_model=MarkStepResponse)
 async def mark_step_completed(
-    body: MarkStepRequest,
+    req: MarkStepRequest,
     session: AsyncSession = Depends(get_db_session),
     principal: AuthenticatedPrincipal = Depends(get_current_user),
 ) -> MarkStepResponse:
     valid_ids: set[str] = {str(s["id"]) for s in _ONBOARDING_STEPS}
-    if body.step_id not in valid_ids:
+    if req.step_id not in valid_ids:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
-            detail=(f"Invalid step_id '{body.step_id}'. Must be one of: {', '.join(sorted(valid_ids))}"),
+            detail=(f"Invalid step_id '{req.step_id}'. Must be one of: {', '.join(sorted(valid_ids))}"),
         )
 
     state = _load_onboarding_state()
-    if body.step_id not in state.completed_steps:
-        state.completed_steps.append(body.step_id)
+    if req.step_id not in state.completed_steps:
+        state.completed_steps.append(req.step_id)
 
     all_completed = len(state.completed_steps) >= len(_ONBOARDING_STEPS)
     if all_completed:
@@ -178,7 +178,7 @@ async def mark_step_completed(
     _save_onboarding_state(state)
 
     return MarkStepResponse(
-        step_id=body.step_id,
+        step_id=req.step_id,
         completed=True,
         completed_steps=state.completed_steps,
     )

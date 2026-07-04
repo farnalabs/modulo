@@ -166,26 +166,26 @@ async def get_observability_settings(
 
 @router.put("", response_model=OtelSettingsResponse)
 async def update_observability_settings(
-    body: OtelSettingsUpdate,
+    req: OtelSettingsUpdate,
     session: AsyncSession = Depends(get_db_session),
     principal: AuthenticatedPrincipal = Depends(get_current_user),
     settings: Settings = Depends(get_settings),
 ) -> OtelSettingsResponse:
     updates: dict[str, Any] = {}
-    if body.otlp_endpoint is not None:
-        updates["otlp_endpoint"] = body.otlp_endpoint
-    if body.otlp_headers is not None:
-        updates["otlp_headers"] = body.otlp_headers
-    if body.export_interval_seconds is not None:
-        updates["export_interval_seconds"] = body.export_interval_seconds
-    if body.langsmith_enabled is not None:
-        updates["langsmith_enabled"] = body.langsmith_enabled
-    if body.langsmith_api_key is not None:
-        if body.langsmith_api_key == "":
+    if req.otlp_endpoint is not None:
+        updates["otlp_endpoint"] = req.otlp_endpoint
+    if req.otlp_headers is not None:
+        updates["otlp_headers"] = req.otlp_headers
+    if req.export_interval_seconds is not None:
+        updates["export_interval_seconds"] = req.export_interval_seconds
+    if req.langsmith_enabled is not None:
+        updates["langsmith_enabled"] = req.langsmith_enabled
+    if req.langsmith_api_key is not None:
+        if req.langsmith_api_key == "":
             updates["langsmith_api_key_ciphertext"] = None
         else:
             fernet = Fernet(settings.fernet_key.encode())
-            updates["langsmith_api_key_ciphertext"] = fernet.encrypt(body.langsmith_api_key.encode()).decode()
+            updates["langsmith_api_key_ciphertext"] = fernet.encrypt(req.langsmith_api_key.encode()).decode()
 
     try:
         async with asyncio.timeout(_DB_TIMEOUT):
@@ -215,10 +215,10 @@ async def update_observability_settings(
 
 @router.post("/test", response_model=TestSpanResult)
 async def test_otel_connection(
-    body: TestOtelConfig,
+    req: TestOtelConfig,
     principal: AuthenticatedPrincipal = Depends(get_current_user),
 ) -> TestSpanResult:
-    endpoint = body.otlp_endpoint.rstrip("/")
+    endpoint = req.otlp_endpoint.rstrip("/")
     if not endpoint:
         return TestSpanResult(success=False, message="OTLP endpoint is required")
 
@@ -257,7 +257,7 @@ async def test_otel_connection(
 
     try:
         async with httpx.AsyncClient(timeout=10) as client:
-            resp = await client.post(url, json=test_span, headers=body.otlp_headers or {})
+            resp = await client.post(url, json=test_span, headers=req.otlp_headers or {})
         if resp.status_code < 500:
             return TestSpanResult(
                 success=True,

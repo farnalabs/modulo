@@ -173,7 +173,7 @@ async def list_profiles(
 
 @router.post("", response_model=ProfileResponse, status_code=status.HTTP_201_CREATED)
 async def create_profile(
-    body: ProfileCreate,
+    req: ProfileCreate,
     session: AsyncSession = Depends(get_db_session),
     principal: AuthenticatedPrincipal = Depends(get_current_user),
 ) -> ProfileResponse:
@@ -183,15 +183,15 @@ async def create_profile(
             profile = await create_environment_profile(
                 session,
                 org_id=principal.organisation_id,
-                name=body.name,
-                image_ref=body.image_ref,
+                name=req.name,
+                image_ref=req.image_ref,
                 account_id=principal.account_id,
-                description=body.description,
-                capabilities=body.capabilities,
-                egress_policy=body.egress_policy,
-                timeout_seconds=body.timeout_seconds,
-                resource_limits=body.resource_limits,
-                persistence_policy=body.persistence_policy,
+                description=req.description,
+                capabilities=req.capabilities,
+                egress_policy=req.egress_policy,
+                timeout_seconds=req.timeout_seconds,
+                resource_limits=req.resource_limits,
+                persistence_policy=req.persistence_policy,
             )
     except IntegrityError:
         raise HTTPException(
@@ -237,11 +237,11 @@ async def get_profile(
 @router.patch("/{profile_id}", response_model=ProfileResponse)
 async def update_profile(
     profile_id: uuid.UUID,
-    body: ProfileUpdate,
+    req: ProfileUpdate,
     session: AsyncSession = Depends(get_db_session),
     principal: AuthenticatedPrincipal = Depends(get_current_user),
 ) -> ProfileResponse:
-    updates = {k: v for k, v in body.model_dump().items() if v is not None}
+    updates = {k: v for k, v in req.model_dump().items() if v is not None}
     if "resource_limits" in updates:
         updates["resource_limits_json"] = updates.pop("resource_limits")
     try:

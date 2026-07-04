@@ -152,7 +152,7 @@ class ToggleFlagRequest(BaseModel):
 @router.put("/{flag_name}")
 async def toggle_feature_flag(
     flag_name: str,
-    body: ToggleFlagRequest,
+    req: ToggleFlagRequest,
     settings: Settings = Depends(get_settings),
     session: AsyncSession = Depends(get_db_session),
     current_user: AuthenticatedPrincipal = Depends(get_current_user),
@@ -165,7 +165,7 @@ async def toggle_feature_flag(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail=f"Unknown feature flag: {flag_name}",
             )
-        registry.set_override(flag_name, body.enabled)
+        registry.set_override(flag_name, req.enabled)
         return {
             "name": flag.name,
             "description": flag.description,
