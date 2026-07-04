@@ -234,6 +234,7 @@ async def fire_polling_trigger(
             )
             connector_instance = conn_result.scalar_one_or_none()
             if connector_instance is None:
+                _log.warning("Connector instance %s not found for polling trigger %s", connector_instance_id, trigger_id)
                 await _log_poll_event(
                     session,
                     trigger=trigger,
@@ -254,12 +255,13 @@ async def fire_polling_trigger(
                     creds,
                 )
             except Exception as exc:
+                _log.warning("Failed to initialise connector for polling trigger %s: %s", trigger_id, exc)
                 await _log_poll_event(
                     session,
                     trigger=trigger,
                     org_id=org_id,
                     result="poll_error",
-                    error_detail=f"Failed to initialise connector: {exc}",
+                    error_detail=f"Failed to initialise connector: {str(exc)[:200]}",
                 )
                 return {"status": "error", "reason": "connector_init_failed"}
 
@@ -268,12 +270,13 @@ async def fire_polling_trigger(
                 query = ConnectorQuery(resource=poll_query)
                 query_result = await connector.query(query)
             except Exception as exc:
+                _log.warning("Poll query failed for trigger %s: %s", trigger_id, exc)
                 await _log_poll_event(
                     session,
                     trigger=trigger,
                     org_id=org_id,
                     result="poll_error",
-                    error_detail=f"Poll query failed: {exc}",
+                    error_detail=f"Poll query failed: {str(exc)[:200]}",
                 )
                 return {"status": "error", "reason": "query_failed", "error": str(exc)}
 
@@ -281,6 +284,7 @@ async def fire_polling_trigger(
             try:
                 condition_met = evaluate_condition(query_result, condition_expression)
             except Exception as exc:
+                _log.warning("Condition evaluation failed for trigger %s: %s", trigger_id, exc)
                 await _log_poll_event(
                     session,
                     trigger=trigger,
@@ -305,10 +309,16 @@ async def fire_polling_trigger(
             # Snapshot ID from trigger config
             config = trigger.config_json or {}
             snapshot_id_str = config.get("snapshot_id")
-            try:
-                snapshot_id = uuid.UUID(snapshot_id_str) if snapshot_id_str else uuid.uuid4()
-            except (ValueError, TypeError):
-                snapshot_id = uuid.uuid4()
+            if snapshot_id_str:
+                try:
+                    snapshot_id = uuid.UUID(snapshot_id_str)
+                except (ValueError, TypeError):
+                    snapshot_id = uuid.UUID(int=0)
+            else:
+                snapshot_id = uuid.UUID(int=0)
+
+            if snapshot_id == uuid.UUID(int=0):
+                _log.warning("Polling trigger %s has no valid snapshot_id in config", trigger_id)
 
             # Build input payload from query result
             input_payload: dict[str, Any] = {
@@ -589,7 +599,7 @@ async def _log_poll_event(
     run_id: uuid.UUID | None = None,
     error_detail: str | None = None,
 ) -> TriggerEvent:
-    payload_hash = hashlib.sha256(b"polling").hexdigest()
+    payload_hash = hashlib.sha256(f"polling:{trigger.id}:{result}".encode()).hexdigest()
     event = TriggerEvent(
         organisation_id=org_id,
         trigger_id=trigger.id,
