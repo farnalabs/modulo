@@ -4,19 +4,30 @@ import uuid
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from sqlalchemy.exc import ProgrammingError
 
 from modulo.core.library_service import (
     _COMMUNITY_BY_ID,
+    _COMMUNITY_BY_SLUG,
     _COMMUNITY_PRIMITIVES,
     _MODULO_BY_ID,
     _MODULO_PRIMITIVES,
+    CONTRIBUTION_DRAFT,
+    CONTRIBUTION_PUBLISHED,
+    CONTRIBUTION_REVIEW_QUEUE,
     MODULO_ORG_ID,
     CommunityPrimitiveReadOnlyError,
+    ContributionInvalidTransitionError,
+    ContributionNotFoundError,
+    _fetch_published_community_from_db,
     _filter_community,
     _filter_modulo,
+    contribute_primitive,
     copy_to_adapt,
     get_primitive,
+    list_org_contributions,
     list_primitives,
+    publish_contribution,
 )
 from modulo.db.crud.base import PageResult
 
@@ -637,3 +648,348 @@ async def test_copy_to_adapt_bumps_version():
         await copy_to_adapt(session, org_id, source.id)
 
     assert captured["version"] == "2.4"
+
+
+# ---------------------------------------------------------------------------
+# contribute_primitive
+# ---------------------------------------------------------------------------
+
+
+async def test_contribute_primitive_creates_draft():
+    session = _mock_session()
+    org_id = uuid.uuid4()
+    created_by = uuid.uuid4()
+    primitive_id = uuid.uuid4()
+
+    created = _fake_primitive(pid=primitive_id)
+    created.contribution_status = None
+    updated = _fake_primitive(pid=primitive_id)
+    updated.contribution_status = CONTRIBUTION_DRAFT
+
+    with (
+        patch("modulo.core.library_service.set_rls_org", new_callable=AsyncMock),
+        patch("modulo.core.library_service.create_library_primitive", new_callable=AsyncMock, return_value=created),
+        patch("modulo.core.library_service.update_library_primitive", new_callable=AsyncMock, return_value=updated),
+    ):
+        result = await contribute_primitive(
+            session,
+            org_id=org_id,
+            created_by=created_by,
+            primitive_type="schema",
+            name="Test Schema",
+            slug="test-schema",
+            description="A test schema",
+            tags=["test"],
+            content_json={"fields": []},
+            source_url="https://example.com/schema.json",
+        )
+
+    assert result.contribution_status == CONTRIBUTION_DRAFT
+    assert result.id == primitive_id
+
+
+async def test_contribute_primitive_forwards_correct_fields():
+    session = _mock_session()
+    org_id = uuid.uuid4()
+    created_by = uuid.uuid4()
+    primitive_id = uuid.uuid4()
+
+    created = _fake_primitive(pid=primitive_id)
+    updated = _fake_primitive(pid=primitive_id)
+    updated.contribution_status = CONTRIBUTION_DRAFT
+
+    captured: dict = {}
+
+    async def _capture_create(*args, **kwargs):
+        captured.update(kwargs)
+        return created
+
+    with (
+        patch("modulo.core.library_service.set_rls_org", new_callable=AsyncMock),
+        patch("modulo.core.library_service.create_library_primitive", side_effect=_capture_create),
+        patch("modulo.core.library_service.update_library_primitive", new_callable=AsyncMock, return_value=updated),
+    ):
+        await contribute_primitive(
+            session,
+            org_id=org_id,
+            created_by=created_by,
+            primitive_type="agent",
+            name="Test Agent",
+            slug="test-agent",
+            description="An agent",
+            tags=["agent", "test"],
+            content_json={"prompt": "hello"},
+            source_url=None,
+        )
+
+    assert captured["org_id"] == org_id
+    assert captured["source"] == "local"
+    assert captured["primitive_type"] == "agent"
+    assert captured["name"] == "Test Agent"
+    assert captured["slug"] == "test-agent"
+    assert captured["description"] == "An agent"
+    assert captured["author"] == created_by.hex
+    assert captured["version"] == "1.0"
+    assert captured["tags"] == ["agent", "test"]
+    assert captured["visibility"] == "org"
+    assert captured["account_id"] == created_by
+    assert captured["source_url"] is None
+
+
+# ---------------------------------------------------------------------------
+# list_org_contributions
+# ---------------------------------------------------------------------------
+
+
+async def test_list_org_contributions_returns_all_when_no_status_filter():
+    session = _mock_session()
+    org_id = uuid.uuid4()
+
+    draft = _fake_primitive()
+    draft.contribution_status = CONTRIBUTION_DRAFT
+    published = _fake_primitive()
+    published.contribution_status = CONTRIBUTION_PUBLISHED
+    page = PageResult(items=[draft, published], total=2, page=1, page_size=20)
+
+    with (
+        patch("modulo.core.library_service.set_rls_org", new_callable=AsyncMock),
+        patch("modulo.core.library_service.list_library_primitives", new_callable=AsyncMock, return_value=page),
+    ):
+        result = await list_org_contributions(session, org_id)
+
+    assert len(result.items) == 2
+    assert result.total == 2
+
+
+async def test_list_org_contributions_filters_by_status():
+    session = _mock_session()
+    org_id = uuid.uuid4()
+
+    draft = _fake_primitive()
+    draft.contribution_status = CONTRIBUTION_DRAFT
+    review = _fake_primitive()
+    review.contribution_status = CONTRIBUTION_REVIEW_QUEUE
+    page = PageResult(items=[draft, review], total=2, page=1, page_size=20)
+
+    with (
+        patch("modulo.core.library_service.set_rls_org", new_callable=AsyncMock),
+        patch("modulo.core.library_service.list_library_primitives", new_callable=AsyncMock, return_value=page),
+    ):
+        result = await list_org_contributions(session, org_id, contribution_status=CONTRIBUTION_REVIEW_QUEUE)
+
+    assert len(result.items) == 1
+    assert result.items[0].contribution_status == CONTRIBUTION_REVIEW_QUEUE
+    assert result.total == 1
+
+
+async def test_list_org_contributions_empty_when_no_match():
+    session = _mock_session()
+    org_id = uuid.uuid4()
+
+    draft = _fake_primitive()
+    draft.contribution_status = CONTRIBUTION_DRAFT
+    page = PageResult(items=[draft], total=1, page=1, page_size=20)
+
+    with (
+        patch("modulo.core.library_service.set_rls_org", new_callable=AsyncMock),
+        patch("modulo.core.library_service.list_library_primitives", new_callable=AsyncMock, return_value=page),
+    ):
+        result = await list_org_contributions(session, org_id, contribution_status=CONTRIBUTION_PUBLISHED)
+
+    assert len(result.items) == 0
+    assert result.total == 0
+
+
+async def test_list_org_contributions_passes_page_params():
+    session = _mock_session()
+    org_id = uuid.uuid4()
+
+    page = PageResult(items=[], total=0, page=1, page_size=20)
+
+    with (
+        patch("modulo.core.library_service.set_rls_org", new_callable=AsyncMock),
+        patch(
+            "modulo.core.library_service.list_library_primitives", new_callable=AsyncMock, return_value=page,
+        ) as mock_list,
+    ):
+        await list_org_contributions(session, org_id, page=2, page_size=10)
+
+    call_kwargs = mock_list.call_args.kwargs
+    assert call_kwargs["page"] == 2
+    assert call_kwargs["page_size"] == 10
+
+
+# ---------------------------------------------------------------------------
+# _fetch_published_community_from_db
+# ---------------------------------------------------------------------------
+
+
+async def test_fetch_published_community_from_db_returns_empty_on_programming_error():
+    session = _mock_session()
+    org_id = uuid.uuid4()
+    session.info = {}
+    session.execute = AsyncMock(side_effect=ProgrammingError("mock", {}, ""))
+
+    result = await _fetch_published_community_from_db(session, org_id)
+    assert result == []
+
+
+async def test_fetch_published_community_from_db_returns_empty_on_generic_error():
+    session = _mock_session()
+    org_id = uuid.uuid4()
+    session.info = {}
+    session.execute = AsyncMock(side_effect=RuntimeError("boom"))
+
+    result = await _fetch_published_community_from_db(session, org_id)
+    assert result == []
+
+
+async def test_fetch_published_community_from_db_saves_and_restores_tenant():
+    session = _mock_session()
+    org_id = uuid.uuid4()
+    saved_tenant = uuid.uuid4()
+    session.info = {"org_id": saved_tenant}
+
+    mock_item = _fake_primitive()
+    mock_item.contribution_status = CONTRIBUTION_PUBLISHED
+    mock_item.visibility = "community"
+
+    mock_result = MagicMock()
+    mock_result.scalars = MagicMock(return_value=[mock_item])
+    session.execute = AsyncMock(return_value=mock_result)
+
+    result = await _fetch_published_community_from_db(session, org_id)
+
+    assert len(result) == 1
+    assert result[0].id == mock_item.id
+    assert session.info["org_id"] == saved_tenant
+
+
+# ---------------------------------------------------------------------------
+# publish_contribution
+# ---------------------------------------------------------------------------
+
+
+async def test_publish_contribution_accepts_draft_status():
+    session = _mock_session()
+    org_id = uuid.uuid4()
+    prim_id = uuid.uuid4()
+    approved_by = uuid.uuid4()
+
+    prim = _fake_primitive(pid=prim_id, visibility="org")
+    prim.contribution_status = CONTRIBUTION_DRAFT
+
+    updated = _fake_primitive(pid=prim_id, visibility="community")
+    updated.contribution_status = CONTRIBUTION_PUBLISHED
+
+    with (
+        patch("modulo.core.library_service.set_rls_org", new_callable=AsyncMock),
+        patch("modulo.core.library_service.get_library_primitive", new_callable=AsyncMock, return_value=prim),
+        patch("modulo.core.library_service.update_library_primitive", new_callable=AsyncMock, return_value=updated),
+        patch("modulo.core.library_service.notify_importers_of_update", new_callable=AsyncMock),
+    ):
+        result = await publish_contribution(session, org_id, prim_id, approved_by=approved_by)
+
+    assert result.contribution_status == CONTRIBUTION_PUBLISHED
+    assert result.visibility == "community"
+
+
+async def test_publish_contribution_accepts_review_queue_status():
+    session = _mock_session()
+    org_id = uuid.uuid4()
+    prim_id = uuid.uuid4()
+    approved_by = uuid.uuid4()
+
+    prim = _fake_primitive(pid=prim_id, visibility="org")
+    prim.contribution_status = CONTRIBUTION_REVIEW_QUEUE
+
+    updated = _fake_primitive(pid=prim_id, visibility="community")
+    updated.contribution_status = CONTRIBUTION_PUBLISHED
+
+    with (
+        patch("modulo.core.library_service.set_rls_org", new_callable=AsyncMock),
+        patch("modulo.core.library_service.get_library_primitive", new_callable=AsyncMock, return_value=prim),
+        patch("modulo.core.library_service.update_library_primitive", new_callable=AsyncMock, return_value=updated),
+        patch("modulo.core.library_service.notify_importers_of_update", new_callable=AsyncMock),
+    ):
+        result = await publish_contribution(session, org_id, prim_id, approved_by=approved_by)
+
+    assert result.contribution_status == CONTRIBUTION_PUBLISHED
+
+
+async def test_publish_contribution_raises_for_published_status():
+    session = _mock_session()
+    org_id = uuid.uuid4()
+    prim_id = uuid.uuid4()
+    approved_by = uuid.uuid4()
+
+    prim = _fake_primitive(pid=prim_id)
+    prim.contribution_status = CONTRIBUTION_PUBLISHED
+
+    with (
+        patch("modulo.core.library_service.set_rls_org", new_callable=AsyncMock),
+        patch("modulo.core.library_service.get_library_primitive", new_callable=AsyncMock, return_value=prim),
+    ):
+        with pytest.raises(ContributionInvalidTransitionError):
+            await publish_contribution(session, org_id, prim_id, approved_by=approved_by)
+
+
+async def test_publish_contribution_raises_for_none_status():
+    session = _mock_session()
+    org_id = uuid.uuid4()
+    prim_id = uuid.uuid4()
+    approved_by = uuid.uuid4()
+
+    prim = _fake_primitive(pid=prim_id)
+    prim.contribution_status = None
+
+    with (
+        patch("modulo.core.library_service.set_rls_org", new_callable=AsyncMock),
+        patch("modulo.core.library_service.get_library_primitive", new_callable=AsyncMock, return_value=prim),
+    ):
+        with pytest.raises(ContributionInvalidTransitionError):
+            await publish_contribution(session, org_id, prim_id, approved_by=approved_by)
+
+
+async def test_publish_contribution_raises_not_found():
+    session = _mock_session()
+    org_id = uuid.uuid4()
+    prim_id = uuid.uuid4()
+    approved_by = uuid.uuid4()
+
+    with (
+        patch("modulo.core.library_service.set_rls_org", new_callable=AsyncMock),
+        patch("modulo.core.library_service.get_library_primitive", new_callable=AsyncMock, return_value=None),
+    ):
+        with pytest.raises(ContributionNotFoundError):
+            await publish_contribution(session, org_id, prim_id, approved_by=approved_by)
+
+
+async def test_publish_contribution_updates_in_memory_cache():
+    session = _mock_session()
+    org_id = uuid.uuid4()
+    prim_id = uuid.uuid4()
+    approved_by = uuid.uuid4()
+
+    prim = _fake_primitive(pid=prim_id)
+    prim.contribution_status = CONTRIBUTION_DRAFT
+    prim.slug = "test-prim"
+    prim.primitive_type = "schema"
+
+    updated = _fake_primitive(pid=prim_id)
+    updated.contribution_status = CONTRIBUTION_PUBLISHED
+    updated.visibility = "community"
+    updated.slug = "test-prim"
+    updated.primitive_type = "schema"
+
+    with (
+        patch("modulo.core.library_service.set_rls_org", new_callable=AsyncMock),
+        patch("modulo.core.library_service.get_library_primitive", new_callable=AsyncMock, return_value=prim),
+        patch("modulo.core.library_service.update_library_primitive", new_callable=AsyncMock, return_value=updated),
+        patch("modulo.core.library_service.notify_importers_of_update", new_callable=AsyncMock),
+    ):
+        await publish_contribution(session, org_id, prim_id, approved_by=approved_by)
+
+    assert updated in _COMMUNITY_PRIMITIVES
+    assert _COMMUNITY_BY_ID[updated.id] is updated
+    assert _COMMUNITY_BY_SLUG[("schema", "test-prim")] is updated

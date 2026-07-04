@@ -12,6 +12,17 @@ from sqlalchemy import update as sa_update
 from sqlalchemy.exc import ProgrammingError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from modulo.db.crud.base import PageResult
+from modulo.db.crud.library_primitive import (
+    create_library_primitive,
+    get_library_primitive,
+    list_library_primitives,
+    list_primitives_by_version_group,
+    update_library_primitive,
+)
+from modulo.db.models.library_primitive import LibraryPrimitive
+from modulo.db.rls import set_rls_org, set_rls_user_context
+
 _log = logging.getLogger(__name__)
 
 __all__ = [
@@ -23,28 +34,19 @@ __all__ = [
     "ContributionInvalidTransitionError",
     "ContributionNotFoundError",
     "contribute_fixture",
+    "contribute_primitive",
     "copy_to_adapt",
     "get_primitive",
     "get_primitive_by_slug",
     "list_contribution_versions",
     "list_contributions",
+    "list_org_contributions",
     "list_primitives",
     "notify_importers_of_update",
     "publish_contribution",
     "submit_contribution_for_review",
     "submit_contribution_version",
 ]
-
-from modulo.db.crud.base import PageResult
-from modulo.db.crud.library_primitive import (
-    create_library_primitive,
-    get_library_primitive,
-    list_library_primitives,
-    list_primitives_by_version_group,
-    update_library_primitive,
-)
-from modulo.db.models.library_primitive import LibraryPrimitive
-from modulo.db.rls import set_rls_org, set_rls_user_context
 
 # Fixed sentinel used as organisation_id for modulo (built-in) primitives.
 MODULO_ORG_ID: uuid.UUID = uuid.UUID("00000000-0000-0000-0000-000000000001")
@@ -1034,6 +1036,17 @@ async def list_primitives(
             modulo = _filter_modulo(primitive_type=primitive_type, search=search)
         if source is None or source == "community":
             community = _filter_community(primitive_type=primitive_type, search=search)
+            # Best-effort supplement: fetch published community items from DB
+            # (the in-memory cache at publish time is the primary mechanism;
+            # this handles warm-start scenarios after server restart)
+            db_community = await _fetch_published_community_from_db(
+                session, org_id, primitive_type=primitive_type, search=search,
+            )
+            seen_ids = {p.id for p in community}
+            for p in db_community:
+                if p.id not in seen_ids:
+                    community.append(p)
+                    seen_ids.add(p.id)
 
     if excluded_tiers:
         modulo = [p for p in modulo if p.tier not in excluded_tiers]
@@ -1706,6 +1719,47 @@ def _filter_community(
         results = [p for p in results if term in p.name.lower() or term in (p.description or "").lower()]
     return results
 
+async def _fetch_published_community_from_db(
+    session: AsyncSession,
+    org_id: uuid.UUID,
+    *,
+    primitive_type: str | None = None,
+    search: str | None = None,
+) -> list[LibraryPrimitive]:
+    """Fetch published community items from the database.
+
+    Queries for items with contribution_status='published' and visibility='community'.
+    Returns an empty list on DB errors (missing tables, RLS restrictions).
+    Published items are also cached in the in-memory community list at publish time,
+    so this query is a best-effort supplement that handles warm-start scenarios.
+    """
+    try:
+        saved_tenant = session.info.pop("org_id", None)
+        try:
+            stmt = (
+                select(LibraryPrimitive)
+                .where(LibraryPrimitive.contribution_status == CONTRIBUTION_PUBLISHED)
+                .where(LibraryPrimitive.visibility == "community")
+                .order_by(LibraryPrimitive.created_at.desc())
+            )
+            if primitive_type is not None:
+                stmt = stmt.where(LibraryPrimitive.primitive_type == primitive_type)
+            if search:
+                term = f"%{search.strip()}%"
+                stmt = stmt.where(LibraryPrimitive.name.ilike(term))
+            result = await session.execute(stmt)
+            return list(result.scalars())
+        finally:
+            if saved_tenant is not None:
+                session.info["org_id"] = saved_tenant
+    except ProgrammingError:
+        _log.warning("_fetch_published_community_from_db: ProgrammingError — missing DB table or migration")
+        return []
+    except Exception:
+        _log.exception("_fetch_published_community_from_db: unexpected error")
+        return []
+
+
 # Fixture contribution flow
 # ---------------------------------------------------------------------------
 
@@ -1750,6 +1804,61 @@ async def contribute_fixture(
             tags=tags,
             content_json=content,
             source_url=None,
+            forked_from=None,
+            checksum=None,
+            ed25519_signature=None,
+            verified=None,
+            download_count=None,
+            average_rating=None,
+            review_count=None,
+            owner_team_id=owner_team_id,
+            visibility="org",
+            account_id=created_by,
+        )
+        update = await update_library_primitive(
+            session,
+            prim.id,
+            {"contribution_status": CONTRIBUTION_DRAFT},
+        )
+    if update is None:
+        raise ContributionNotFoundError(f"Contribution {prim.id} not found after creation")
+    return update
+
+
+async def contribute_primitive(
+    session: AsyncSession,
+    *,
+    org_id: uuid.UUID,
+    created_by: uuid.UUID,
+    primitive_type: str,
+    name: str,
+    slug: str,
+    description: str | None,
+    tags: list[str],
+    content_json: dict[str, Any],
+    source_url: str | None = None,
+    owner_team_id: uuid.UUID | None = None,
+) -> LibraryPrimitive:
+    """Create a contribution for the community library.
+
+    Stores the primitive with source='local' and contribution_status='draft'.
+    An admin can review and publish it to the community library.
+    """
+    async with session.begin():
+        await set_rls_org(session, org_id)
+        prim = await create_library_primitive(
+            session,
+            org_id=org_id,
+            source="local",
+            primitive_type=primitive_type,
+            name=name,
+            slug=slug,
+            description=description,
+            author=created_by.hex,
+            version="1.0",
+            tags=tags,
+            content_json=content_json,
+            source_url=source_url,
             forked_from=None,
             checksum=None,
             ed25519_signature=None,
@@ -1819,7 +1928,7 @@ async def publish_contribution(
 
     Changes visibility to 'community' and sets contribution_status to 'published'.
     The primitive is reassigned to the community sentinel org so it appears
-    for all users.
+    for all users. Accepts contributions in either 'draft' or 'review_queue' status.
     """
     async with session.begin():
         await set_rls_org(session, org_id)
@@ -1828,10 +1937,11 @@ async def publish_contribution(
     if prim is None:
         raise ContributionNotFoundError(f"Contribution {primitive_id} not found")
 
-    if prim.contribution_status != CONTRIBUTION_REVIEW_QUEUE:
+    if prim.contribution_status not in (CONTRIBUTION_DRAFT, CONTRIBUTION_REVIEW_QUEUE):
         raise ContributionInvalidTransitionError(
             f"Cannot publish contribution {primitive_id}: "
-            f"expected status '{CONTRIBUTION_REVIEW_QUEUE}', got '{prim.contribution_status}'"
+            f"expected status '{CONTRIBUTION_DRAFT}' or '{CONTRIBUTION_REVIEW_QUEUE}', "
+            f"got '{prim.contribution_status}'"
         )
 
     async with session.begin():
@@ -1848,6 +1958,12 @@ async def publish_contribution(
     if updated is None:
         raise ContributionNotFoundError(f"Contribution {primitive_id} not found")
     await notify_importers_of_update(session, org_id, primitive_id)
+
+    # Add to in-memory community cache so it appears in community listings immediately.
+    _COMMUNITY_PRIMITIVES.append(updated)
+    _COMMUNITY_BY_ID[updated.id] = updated
+    _COMMUNITY_BY_SLUG[(updated.primitive_type, updated.slug)] = updated
+
     return updated
 
 
@@ -1867,6 +1983,28 @@ async def list_contributions(
             page=page,
             page_size=page_size,
             primitive_type="test_fixture",
+        )
+    if contribution_status is not None:
+        result.items = [p for p in result.items if p.contribution_status == contribution_status]
+        result.total = len(result.items)
+    return result
+
+
+async def list_org_contributions(
+    session: AsyncSession,
+    org_id: uuid.UUID,
+    *,
+    contribution_status: str | None = None,
+    page: int = 1,
+    page_size: int = 20,
+) -> PageResult[LibraryPrimitive]:
+    """List contributions submitted by the org, optionally filtered by status."""
+    async with session.begin():
+        await set_rls_org(session, org_id)
+        result = await list_library_primitives(
+            session,
+            page=page,
+            page_size=page_size,
         )
     if contribution_status is not None:
         result.items = [p for p in result.items if p.contribution_status == contribution_status]
