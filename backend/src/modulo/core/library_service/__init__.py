@@ -996,6 +996,7 @@ async def list_primitives(
     include_community: bool = True,
     source: str | None = None,
     cursor: str | None = None,
+    excluded_tiers: list[str] | None = None,
 ) -> PageResult[LibraryPrimitive]:
     """Return org-scoped, Native library, and community-database primitives merged into a single page.
 
@@ -1006,6 +1007,8 @@ async def list_primitives(
     primitives. When omitted, all sources are merged (existing default
     behaviour, unchanged for backwards compatibility).
     """
+    if excluded_tiers is None:
+        excluded_tiers = ["in_dev"]
     await set_rls_org(session, org_id)
     org_page = await list_library_primitives(
         session,
@@ -1015,6 +1018,7 @@ async def list_primitives(
         primitive_type=primitive_type,
         search=search,
         cursor=cursor,
+        excluded_tiers=excluded_tiers,
     )
 
     org_items = list(org_page.items)
@@ -1030,6 +1034,10 @@ async def list_primitives(
             modulo = _filter_modulo(primitive_type=primitive_type, search=search)
         if source is None or source == "community":
             community = _filter_community(primitive_type=primitive_type, search=search)
+
+    if excluded_tiers:
+        modulo = [p for p in modulo if p.tier not in excluded_tiers]
+        community = [p for p in community if p.tier not in excluded_tiers]
 
     all_items: list[LibraryPrimitive] = org_items + modulo + community
     return PageResult(
