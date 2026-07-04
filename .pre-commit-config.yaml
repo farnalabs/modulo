@@ -27,19 +27,19 @@ repos:
     hooks:
       - id: graph-validate
         name: graph-validate
-        entry: powershell -NoProfile -File ..\Dev-Harness\tools\graph-validate.ps1
+        entry: powershell -NoProfile -File ..\harness\tools\graph-validate.ps1
         language: system
         files: ^docs/product-map/
         pass_filenames: false
       - id: pre-commit-checks
         name: pre-commit checks (Lessons Learned)
-        entry: powershell -NoProfile -File ..\Dev-Harness\tools\pre-commit-checks.ps1
+        entry: powershell -NoProfile -File ..\harness\tools\pre-commit-checks.ps1
         language: system
         files: \.(vue|ts|py|ps1)$
         pass_filenames: false
       - id: check-migration-heads
         name: check migration number/revision collisions
-        entry: powershell -NoProfile -File ..\Dev-Harness\tools\check-migration-heads.ps1
+        entry: powershell -NoProfile -File ..\harness\tools\check-migration-heads.ps1
         language: system
         files: ^backend/src/modulo/db/migrations/versions/.*\.py$
         pass_filenames: false
