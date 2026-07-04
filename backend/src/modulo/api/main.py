@@ -476,8 +476,16 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
     get_runtime_config_store()
 
     # Initialise the graceful shutdown manager with the configured timeout.
+    # Two session factories exist:
+    #   - modulo.db.session    (module-level, used by entrypoint.sh + ClaimExpiryJob)
+    #   - modulo.api.dependencies  (DI-injected, used by all route handlers)
+    # Both point to the same DB URL but have separate connection pools.  They
+    # are intentionally decoupled — the entrypoint runs before FastAPI is
+    # initialised and can't use DI.  Dispose both so no connections leak.
+    _di_engine = get_or_create_engine(settings)
     _shutdown_manager.register("otel", shutdown_otel)
     _shutdown_manager.register("db_engine", db_engine.dispose)
+    _shutdown_manager.register("di_engine", _di_engine.dispose)
     _shutdown_manager.register("rate_limiter_redis", shutdown_rate_limiters)
     _shutdown_manager.register("scheduler_engine", dispose_scheduler_engine)
 

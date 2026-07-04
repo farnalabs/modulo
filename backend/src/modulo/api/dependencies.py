@@ -10,7 +10,8 @@ if test isolation is needed.
 from collections.abc import AsyncGenerator
 from typing import Any
 
-from fastapi import Depends
+from fastapi import Depends, HTTPException, status
+from sqlalchemy.exc import ProgrammingError
 from sqlalchemy.ext.asyncio import (
     AsyncEngine,
     AsyncSession,
@@ -107,9 +108,22 @@ def _get_session_factory(
 async def get_db_session(
     factory: async_sessionmaker[AsyncSession] = Depends(_get_session_factory),
 ) -> AsyncGenerator[AsyncSession, None]:
-    """Yield an AsyncSession. Transaction management is left to the caller."""
+    """Yield an AsyncSession inside an open transaction.
+
+    Every route handler automatically gets an active transaction and a
+    centralised ``ProgrammingError`` → 501 conversion for missing DB tables.
+    Handlers that need finer-grained control can call ``session.begin()``
+    explicitly — nested calls create savepoints within the outer transaction.
+    """
     async with factory() as session:
-        yield session
+        try:
+            async with session.begin():
+                yield session
+        except ProgrammingError:
+            raise HTTPException(
+                status_code=status.HTTP_501_NOT_IMPLEMENTED,
+                detail="Feature is not available. Run database migrations to enable it.",
+            )
 
 
 async def get_plan_context(
