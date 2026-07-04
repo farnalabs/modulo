@@ -509,7 +509,14 @@ async def infer_schema_endpoint(
     secrets_backend = create_secrets_backend(fernet_key=settings.fernet_key)
 
     async with ConnectorHub(secrets_backend=secrets_backend) as ch:
-        await ch.initialise([ci])
+        try:
+            await ch.initialise([ci])
+        except Exception:
+            logger.exception("schemas.infer.connector_init_failed")
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                detail="Failed to initialise connector for sampling.",
+            )
         try:
             async with asyncio.timeout(30.0):
                 records = await ch.sample(
@@ -523,16 +530,36 @@ async def infer_schema_endpoint(
                 status_code=status.HTTP_504_GATEWAY_TIMEOUT,
                 detail="Connector sampling timed out after 30s",
             ) from None
-        except Exception as exc:
+        except Exception:
+            logger.exception("schemas.infer.sampling_failed")
             raise HTTPException(
                 status_code=status.HTTP_502_BAD_GATEWAY,
-                detail=f"Failed to sample connector: {exc}",
-            ) from exc
+                detail="Failed to sample connector data.",
+            )
 
     async with ModelBackendHub() as mh:
-        await mh.initialise(mbs.items, secrets_backend=secrets_backend)
+        try:
+            await mh.initialise(mbs.items, secrets_backend=secrets_backend)
+        except Exception:
+            logger.exception("schemas.infer.backend_init_failed")
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                detail="Failed to initialise model backend for inference.",
+            )
+        if not mh.backend_ids:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="No model backends available for inference.",
+            )
         first_backend_id = next(iter(mh.backend_ids))
-        backend = await mh.get(first_backend_id)
+        try:
+            backend = await mh.get(first_backend_id)
+        except Exception:
+            logger.exception("schemas.infer.backend_get_failed")
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                detail="Selected model backend is unavailable.",
+            )
 
         service = SchemaInferenceService(backend)
         try:
@@ -548,21 +575,24 @@ async def infer_schema_endpoint(
         f"Auto-inferred schema from {ci.name} ({body.sample_query.resource}, {len(records)} samples)"
     )
 
-    async with session.begin():
-        await append_audit_event(
-            session,
-            org_id=principal.organisation_id,
-            event_type="schema_inference_completed",
-            actor_user_id=principal.account_id,
-            resource_type="connector_instance",
-            resource_id=body.connector_instance_id,
-            payload_json={
-                "connector_name": ci.name,
-                "resource": body.sample_query.resource,
-                "sample_count": len(records),
-                "model_backend_id": str(first_backend_id),
-            },
-        )
+    try:
+        async with session.begin():
+            await append_audit_event(
+                session,
+                org_id=principal.organisation_id,
+                event_type="schema_inference_completed",
+                actor_user_id=principal.account_id,
+                resource_type="connector_instance",
+                resource_id=body.connector_instance_id,
+                payload_json={
+                    "connector_name": ci.name,
+                    "resource": body.sample_query.resource,
+                    "sample_count": len(records),
+                    "model_backend_id": str(first_backend_id),
+                },
+            )
+    except Exception:
+        logger.exception("schemas.infer.audit_failed")
 
     return SchemaInferResponse(
         definition_json=definition_json,
@@ -618,9 +648,28 @@ async def generate_schema_endpoint(
     secrets_backend = create_secrets_backend(fernet_key=settings.fernet_key)
 
     async with ModelBackendHub() as mh:
-        await mh.initialise(mbs.items, secrets_backend=secrets_backend)
+        try:
+            await mh.initialise(mbs.items, secrets_backend=secrets_backend)
+        except Exception:
+            logger.exception("schemas.generate.backend_init_failed")
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                detail="Failed to initialise model backend for generation.",
+            )
+        if not mh.backend_ids:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="No model backends available for generation.",
+            )
         first_backend_id = next(iter(mh.backend_ids))
-        backend = await mh.get(first_backend_id)
+        try:
+            backend = await mh.get(first_backend_id)
+        except Exception:
+            logger.exception("schemas.generate.backend_get_failed")
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                detail="Selected model backend is unavailable.",
+            )
 
         service = SchemaGenerationService(backend)
         try:
@@ -628,11 +677,30 @@ async def generate_schema_endpoint(
                 description=body.description,
                 examples=body.examples or None,
             )
-        except SchemaGenerationError as exc:
+        except SchemaGenerationError:
+            logger.exception("schemas.generate.failed")
             raise HTTPException(
                 status_code=status.HTTP_502_BAD_GATEWAY,
-                detail=f"Schema generation failed: {exc}",
-            ) from exc
+                detail="Schema generation failed.",
+            )
+
+    try:
+        async with session.begin():
+            await append_audit_event(
+                session,
+                org_id=principal.organisation_id,
+                event_type="schema_generation_completed",
+                actor_user_id=principal.account_id,
+                resource_type="schema",
+                resource_id="generate",
+                payload_json={
+                    "description_length": len(body.description),
+                    "example_count": len(body.examples),
+                    "model_backend_id": str(first_backend_id),
+                },
+            )
+    except Exception:
+        logger.exception("schemas.generate.audit_failed")
 
     return SchemaGenerateResponse(definition_json=definition_json)
 

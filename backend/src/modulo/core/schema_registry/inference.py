@@ -36,7 +36,10 @@ def _build_infer_prompt(
     max_records: int = _MAX_SAMPLE_RECORDS,
 ) -> list[BaseMessage]:
     display = samples[:max_records]
-    sample_text = json.dumps(display, indent=2, default=str)
+    try:
+        sample_text = json.dumps(display, indent=2, default=str)
+    except ValueError as exc:
+        raise ValueError(f"Sample data contains non-serializable values (e.g. circular references): {exc}") from exc
     message_text = (
         f"Sample data ({len(display)} records):\n```\n{sample_text}\n```\nReturn ONLY the JSON Schema object."
     )
@@ -74,7 +77,7 @@ class SchemaInferenceService:
         return await invoke_and_parse(
             self._backend,
             messages,
-            self._timeout,
-            SchemaInferenceError,
-            "inference",
+            timeout=self._timeout,
+            error_cls=SchemaInferenceError,
+            context="inference",
         )

@@ -29,15 +29,23 @@ _GENERATION_SYSTEM_PROMPT = (
 _GENERATE_TIMEOUT = 60.0
 
 
+_MAX_EXAMPLE_RECORDS = 50
+
+
 def _build_generate_prompt(
     description: str,
     examples: list[dict[str, Any]] | None = None,
     system_prompt: str | None = None,
+    max_examples: int = _MAX_EXAMPLE_RECORDS,
 ) -> list[BaseMessage]:
     parts = [f"Description:\n{description}\n"]
     if examples:
-        sample_text = json.dumps(examples, indent=2, default=str)
-        parts.append(f"Example records ({len(examples)}):\n```\n{sample_text}\n```\n")
+        display = examples[:max_examples]
+        try:
+            sample_text = json.dumps(display, indent=2, default=str)
+        except ValueError as exc:
+            raise ValueError(f"Example data contains non-serializable values (e.g. circular references): {exc}") from exc
+        parts.append(f"Example records ({len(display)}):\n```\n{sample_text}\n```\n")
     parts.append("Return ONLY the JSON Schema object.")
     return [
         SystemMessage(content=system_prompt or _GENERATION_SYSTEM_PROMPT),
@@ -58,10 +66,12 @@ class SchemaGenerationService:
         *,
         system_prompt: str | None = None,
         timeout: float = _GENERATE_TIMEOUT,
+        max_example_records: int = _MAX_EXAMPLE_RECORDS,
     ) -> None:
         self._backend = backend
         self._system_prompt = system_prompt
         self._timeout = timeout
+        self._max_example_records = max_example_records
 
     async def generate(
         self,
@@ -71,11 +81,11 @@ class SchemaGenerationService:
         if not description or not description.strip():
             raise ValueError("description must be a non-empty string")
 
-        messages = _build_generate_prompt(description, examples, self._system_prompt)
+        messages = _build_generate_prompt(description, examples, self._system_prompt, self._max_example_records)
         return await invoke_and_parse(
             self._backend,
             messages,
-            self._timeout,
-            SchemaGenerationError,
-            "generation",
+            timeout=self._timeout,
+            error_cls=SchemaGenerationError,
+            context="generation",
         )
