@@ -49,25 +49,25 @@ equivalent filtering via an ORM `do_orm_execute` listener. Team-visibility RLS
 
 ### Edge Cases
 
-- [ ] User not in any team sees only org-visibility resources — no team-private leakage
-- [ ] User in multiple teams sees each team's resources independently with their respective team roles
+- [x] User not in any team sees only org-visibility resources — no team-private leakage
+- [x] User in multiple teams sees each team's resources independently with their respective team roles
 - [ ] Resource with `owner_team_id=NULL` and `visibility=org` (legacy/unowned) accessible to all org members
 - [ ] Resource with `owner_team_id=NULL` and `visibility=team` is blocked by DB check constraint
 - [ ] Empty org returns empty lists from all CRUD functions without error
 - [ ] User removed from team loses access to that team's resources at next token refresh (JWT) or immediately (DB-live HITL check)
 - [x] `set_config(is_local=true)` reverts to the session-level empty string after COMMIT or ROLLBACK
 - [x] Second transaction on the same pooled connection starts without stale org context
-- [ ] Org role does not override team visibility — an org-level `operator` outside the owning team cannot see team-private resources
+- [x] Org role does not override team visibility — an org-level `operator` outside the owning team cannot see team-private resources
 
 ### Error States
 
 - [x] Calling `set_rls_org` outside an active transaction raises `RuntimeError`
-- [ ] Cross-org pipeline fetch by ID returns `None` (RLS filters the row) — not an error
+- [x] Cross-org pipeline fetch by ID returns `None` (RLS filters the row) — not an error
 - [x] Cross-org pipeline run POST returns 404 (resource non-existence, not 403)
-- [ ] Non-admin using `view_as_team` parameter returns 403
-- [ ] Team deletion blocked (`team_has_resources` error) when owned resources exist
+- [x] Non-admin using `view_as_team` parameter returns 403
+- [x] Team deletion blocked (`team_has_resources` error) when owned resources exist
 - [ ] Connector binding across teams returns `connector_team_mismatch` error
-- [ ] Team member grant with role exceeding the granting user's role is blocked (privilege escalation prevention)
+- [x] Team member grant with role exceeding the granting user's role is blocked (privilege escalation prevention)
 - [ ] HITL gate with `required_team_id` — non-member attempting claim returns 403
 
 ### Security
@@ -99,6 +99,15 @@ equivalent filtering via an ORM `do_orm_execute` listener. Team-visibility RLS
 - [ ] BDD test patches for `set_rls_org` continue working alongside new user context function
 - [x] Existing API responses unchanged — RLS filtering is invisible to the client (fewer rows, same schema)
 
+### Migration Column Rename
+
+- [x] `rls_team_isolation` policy correctly references `team_memberships.account_id` (post-migration 0060 fix)
+- [ ] No automated test verifies the RLS policy works after the column rename
+
+### API Response Inconsistencies
+
+- [x] `MembershipResponse.user_id` returns the value of `account_id` column (cosmetic — field name mismatches column name)
+
 ## Known Gaps
 
 - No BDD scenario for connector_team_mismatch error path
@@ -106,3 +115,6 @@ equivalent filtering via an ORM `do_orm_execute` listener. Team-visibility RLS
 - No BDD scenario for `set_rls_user_context` error paths
 - No test for cross-org single-resource fetch by ID (should return None/404)
 - No test for `view_as_team` parameter enforcement
+- Migration 0060 only fixes the RLS policy — no test proves the policy still works after the column rename
+- `connector_team_mismatch` error (PRD §9.3) is not implemented — connector bindings at pipeline-save time do not enforce team scoping
+- `MembershipResponse.user_id` field name in teams.py doesn't match the DB column `account_id` (cosmetic)
