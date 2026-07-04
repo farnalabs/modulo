@@ -50,6 +50,7 @@
     @confirm="onDismiss"
     @cancel="showDismiss = false"
   />
+  <p v-if="dismissError" class="mt-1 text-xs text-destructive">{{ dismissError }}</p>
 </template>
 
 <script setup lang="ts">
@@ -82,14 +83,19 @@ const levelClass = computed(() => {
 });
 
 const levelAbbreviation = computed(() => {
-  return props.notification.level.charAt(0).toUpperCase();
+  const level = props.notification.level;
+  if (!level) return "?";
+  return level.charAt(0).toUpperCase();
 });
 
 const scopeLabel = computed(() => props.notification.scope_label);
 
 const relativeTime = computed(() => {
   const now = Date.now();
-  const created = new Date(props.notification.created_at).getTime();
+  const raw = props.notification.created_at;
+  if (!raw) return "";
+  const created = new Date(raw).getTime();
+  if (isNaN(created)) return "";
   const diff = now - created;
   const minutes = Math.floor(diff / 60000);
   if (minutes < 1) return "just now";

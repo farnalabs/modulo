@@ -225,8 +225,8 @@ const isSystemAdmin = computed(
 const userRole = computed(() => jwtPayload.value?.org_role || null);
 
 onMounted(() => {
-  planStore.fetchPlan().catch(() => {
-    // Silently handle — store manages its own error state
+  planStore.fetchPlan().catch((e) => {
+    console.warn("Failed to fetch plan:", e);
   });
 });
 </script>

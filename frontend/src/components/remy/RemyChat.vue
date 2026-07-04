@@ -259,7 +259,9 @@ async function handleSend() {
 }
 
 function copyMessage(text: string) {
-  navigator.clipboard.writeText(text).catch(() => {});
+  navigator.clipboard.writeText(text).catch((e) => {
+    console.warn("Clipboard write failed:", e);
+  });
 }
 
 function escapeHtml(text: string): string {

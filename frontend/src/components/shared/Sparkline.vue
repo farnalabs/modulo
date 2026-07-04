@@ -45,8 +45,9 @@ const props = withDefaults(
   },
 );
 
+let gradientCounter = 0;
 const gradientId = computed(
-  () => `sparkline-${Math.random().toString(36).slice(2, 8)}`,
+  () => `sparkline-${++gradientCounter}`,
 );
 
 const normalizedData = computed(() =>
