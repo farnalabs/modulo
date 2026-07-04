@@ -79,9 +79,38 @@ _ctx_user_id: contextvars.ContextVar[uuid.UUID] = contextvars.ContextVar("mcp_us
 _ctx_auth_type: contextvars.ContextVar[str] = contextvars.ContextVar("mcp_auth_type")
 
 # Fallback store for auth data when contextvars are unavailable (child tasks).
-# Written by McpAuthMiddleware, read by validate_current_auth.
+# Written by McpAuthMiddleware, read by validate_current_auth and tool handlers.
 _auth_token_fallback: str | None = None
 _auth_org_id_fallback: uuid.UUID | None = None
+_auth_user_id_fallback: uuid.UUID | None = None
+_auth_role_fallback: str | None = None
+
+
+def _ctx_org_id_val() -> uuid.UUID:
+    """Get org_id from context var, falling back to module-level store for FastMCP child tasks."""
+    v = _ctx_org_id.get(None)
+    if v is not None:
+        return v
+    global _auth_org_id_fallback
+    return _auth_org_id_fallback or _PLACEHOLDER_ORG_ID
+
+
+def _ctx_user_id_val() -> uuid.UUID:
+    """Get user/account_id from context var, falling back to module-level store."""
+    v = _ctx_user_id.get(None)
+    if v is not None:
+        return v
+    global _auth_user_id_fallback
+    return _auth_user_id_fallback or uuid.UUID(int=0)
+
+
+def _ctx_role_val() -> str | None:
+    """Get role from context var, falling back to module-level store."""
+    v = _ctx_role.get(None)
+    if v is not None:
+        return v
+    global _auth_role_fallback
+    return _auth_role_fallback
 
 # Fallback sentinel — replaced by the real org_id from the API key record or OAuth claims.
 _PLACEHOLDER_ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
@@ -100,8 +129,8 @@ async def _session(org_id: uuid.UUID) -> AsyncGenerator[AsyncSession, None]:
         async with s.begin():
             await set_rls_org(s, org_id)
             try:
-                uid = _ctx_user_id.get()
-                role = _ctx_role.get()
+                uid = _ctx_user_id_val()
+                role = _ctx_role_val() or ""
                 await set_rls_user_context(s, uid, role)
             except (LookupError, ValueError):
                 pass
@@ -126,13 +155,11 @@ async def validate_current_auth() -> bool:
     """
     auth_type = _ctx_auth_type.get(None)
     token = _ctx_auth_token.get(None)
-    org_id = _ctx_org_id.get(None)
-
-    # FastMCP child tasks lose contextvars — fall back to module-level store.
-    if token is None or org_id is None:
-        global _auth_token_fallback, _auth_org_id_fallback
-        token = token or _auth_token_fallback
-        org_id = org_id or _auth_org_id_fallback
+    # Use fallback-aware helper (contextvars are lost in FastMCP child tasks).
+    org_id = _ctx_org_id_val()
+    if token is None:
+        global _auth_token_fallback
+        token = _auth_token_fallback
 
     if auth_type is None:
         auth_type = "api_key" if token and token.startswith("mk_") else None
@@ -240,9 +267,11 @@ class McpAuthMiddleware(BaseHTTPMiddleware):
                 _ctx_auth_token.set(token)
                 _ctx_auth_type.set("api_key")
                 # Also set fallbacks for FastMCP child tasks (contextvars don't propagate).
-                global _auth_token_fallback, _auth_org_id_fallback
+                global _auth_token_fallback, _auth_org_id_fallback, _auth_user_id_fallback, _auth_role_fallback
                 _auth_token_fallback = token
                 _auth_org_id_fallback = org_id
+                _auth_user_id_fallback = key.account_id
+                _auth_role_fallback = key.role
                 request.scope["auth_principal"] = {
                     "type": "api_key",
                     "org_id": str(org_id),
@@ -349,7 +378,7 @@ async def list_pipelines_tool(page: int = 1, page_size: int = 20) -> dict[str, A
     try:
         if not await validate_current_auth():
             return _tool_error("Token revoked or expired — re-authenticate")
-        org_id = _ctx_org_id.get(_PLACEHOLDER_ORG_ID)
+        org_id = _ctx_org_id_val()
         async with _session(org_id) as s:
             result = await list_pipelines(s, page=page, page_size=page_size)
         return {
@@ -378,8 +407,8 @@ async def create_pipeline(
             return _tool_error("Token revoked or expired — re-authenticate")
         from modulo.db.crud.pipeline import create_pipeline
 
-        org_id = _ctx_org_id.get(_PLACEHOLDER_ORG_ID)
-        account_id = _ctx_user_id.get(uuid.UUID(int=0))
+        org_id = _ctx_org_id_val()
+        account_id = _ctx_user_id_val()
 
         async with _session(org_id) as s:
             pipeline = await create_pipeline(
@@ -423,10 +452,10 @@ async def update_pipeline_graph(
     try:
         if not await validate_current_auth():
             return _tool_error("Token revoked or expired — re-authenticate")
-        check_tool_scope(_ctx_role.get(None), "update_pipeline_graph")
+        check_tool_scope(_ctx_role_val(), "update_pipeline_graph")
         from modulo.db.crud.pipeline import replace_pipeline_graph
 
-        org_id = _ctx_org_id.get(_PLACEHOLDER_ORG_ID)
+        org_id = _ctx_org_id_val()
         pid = uuid.UUID(pipeline_id)
 
         async with _session(org_id) as s:
@@ -471,12 +500,12 @@ async def trigger_pipeline(
     try:
         if not await validate_current_auth():
             return _tool_error("Token revoked or expired — re-authenticate")
-        check_tool_scope(_ctx_role.get(None), "trigger_pipeline")
+        check_tool_scope(_ctx_role_val(), "trigger_pipeline")
         from modulo.db.crud.pipeline import get_pipeline
         from modulo.db.crud.pipeline_snapshot import create_snapshot_from_live_graph
         from modulo.db.crud.run import create_run
 
-        org_id = _ctx_org_id.get(_PLACEHOLDER_ORG_ID)
+        org_id = _ctx_org_id_val()
         pid = uuid.UUID(pipeline_id)
         payload = input_payload or {}
 
@@ -515,7 +544,7 @@ async def get_run_status(run_id: str, detail: bool = False) -> dict[str, Any]:
     try:
         if not await validate_current_auth():
             return _tool_error("Token revoked or expired — re-authenticate")
-        org_id = _ctx_org_id.get(_PLACEHOLDER_ORG_ID)
+        org_id = _ctx_org_id_val()
         rid = uuid.UUID(run_id)
         async with _session(org_id) as s:
             run = await get_run(s, rid)
@@ -551,10 +580,10 @@ async def get_run_output(run_id: str, node_id: str) -> dict[str, Any]:
     try:
         if not await validate_current_auth():
             return _tool_error("Token revoked or expired — re-authenticate")
-        check_tool_scope(_ctx_role.get(None), "get_run_output")
+        check_tool_scope(_ctx_role_val(), "get_run_output")
         from modulo.api.routes.runs import _mask_output_value
 
-        org_id = _ctx_org_id.get(_PLACEHOLDER_ORG_ID)
+        org_id = _ctx_org_id_val()
         rid = uuid.UUID(run_id)
         async with _session(org_id) as s:
             run = await get_run(s, rid)
@@ -590,10 +619,10 @@ async def cancel_run(run_id: str) -> dict[str, Any]:
     try:
         if not await validate_current_auth():
             return _tool_error("Token revoked or expired — re-authenticate")
-        check_tool_scope(_ctx_role.get(None), "cancel_run")
+        check_tool_scope(_ctx_role_val(), "cancel_run")
         from modulo.db.crud.run import request_cancellation
 
-        org_id = _ctx_org_id.get(_PLACEHOLDER_ORG_ID)
+        org_id = _ctx_org_id_val()
         rid = uuid.UUID(run_id)
         async with _session(org_id) as s:
             run = await request_cancellation(s, rid)
@@ -612,10 +641,10 @@ async def list_pending_hitl(page: int = 1, page_size: int = 20) -> dict[str, Any
     try:
         if not await validate_current_auth():
             return _tool_error("Token revoked or expired — re-authenticate")
-        check_tool_scope(_ctx_role.get(None), "list_pending_hitl")
+        check_tool_scope(_ctx_role_val(), "list_pending_hitl")
         from sqlalchemy import select
 
-        org_id = _ctx_org_id.get(_PLACEHOLDER_ORG_ID)
+        org_id = _ctx_org_id_val()
         async with _session(org_id) as s:
             offset = (page - 1) * page_size
             result = await s.execute(
@@ -670,7 +699,7 @@ async def review_hitl(
 
     from sqlalchemy import select
 
-    org_id = _ctx_org_id.get(_PLACEHOLDER_ORG_ID)
+    org_id = _ctx_org_id_val()
     key_id = _ctx_key_id.get(uuid.UUID("00000000-0000-0000-0000-000000000002"))
     rid = uuid.UUID(run_id)
     mgr = HITLManager()
@@ -679,7 +708,7 @@ async def review_hitl(
         return {"error": "invalid_action", "detail": "action must be claim, approve, reject, or deliver_manual"}
 
     try:
-        check_tool_scope(_ctx_role.get(None), "review_hitl", action=action)
+        check_tool_scope(_ctx_role_val(), "review_hitl", action=action)
     except MCPAuthorizationError as exc:
         return {"error": "insufficient_scope", "detail": str(exc)}
 
@@ -799,11 +828,11 @@ async def copy_library_primitive(
     if not await validate_current_auth():
         return _tool_error("Token revoked or expired — re-authenticate")
     try:
-        check_tool_scope(_ctx_role.get(None), "copy_library_primitive")
+        check_tool_scope(_ctx_role_val(), "copy_library_primitive")
     except MCPAuthorizationError as exc:
         return {"error": "insufficient_scope", "detail": str(exc)}
 
-    org_id = _ctx_org_id.get(_PLACEHOLDER_ORG_ID)
+    org_id = _ctx_org_id_val()
     pid = uuid.UUID(primitive_id)
 
     async with _session(org_id) as s:
@@ -853,7 +882,7 @@ async def browse_library(
     try:
         if not await validate_current_auth():
             return _tool_error("Token revoked or expired — re-authenticate")
-        org_id = _ctx_org_id.get(_PLACEHOLDER_ORG_ID)
+        org_id = _ctx_org_id_val()
         async with _session(org_id) as s:
             result = await list_primitives(
                 s,
@@ -902,13 +931,13 @@ async def get_trigger_events(
     try:
         if not await validate_current_auth():
             return _tool_error("Token revoked or expired — re-authenticate")
-        check_tool_scope(_ctx_role.get(None), "get_trigger_events")
+        check_tool_scope(_ctx_role_val(), "get_trigger_events")
         from sqlalchemy import select
 
         from modulo.db.models.trigger import Trigger
         from modulo.db.models.trigger_event import TriggerEvent
 
-        org_id = _ctx_org_id.get(_PLACEHOLDER_ORG_ID)
+        org_id = _ctx_org_id_val()
         async with _session(org_id) as s:
             q = (
                 select(TriggerEvent)
@@ -969,12 +998,12 @@ async def create_model_backend(
     try:
         if not await validate_current_auth():
             return _tool_error("Token revoked or expired — re-authenticate")
-        check_tool_scope(_ctx_role.get(None), "create_model_backend")
+        check_tool_scope(_ctx_role_val(), "create_model_backend")
 
         from cryptography.fernet import Fernet
 
-        org_id = _ctx_org_id.get(_PLACEHOLDER_ORG_ID)
-        account_id = _ctx_user_id.get(uuid.UUID(int=0))
+        org_id = _ctx_org_id_val()
+        account_id = _ctx_user_id_val()
         settings = get_settings()
 
         ciphertext = Fernet(settings.fernet_key.encode()).encrypt(api_key.encode())
@@ -1095,7 +1124,7 @@ async def get_integration_status() -> dict[str, Any]:
         from modulo.db.models.model_backend import ModelBackend
         from modulo.db.models.trigger import Trigger
 
-        org_id = _ctx_org_id.get(_PLACEHOLDER_ORG_ID)
+        org_id = _ctx_org_id_val()
         async with _session(org_id) as s:
             connector_rows = (
                 (await s.execute(
@@ -1156,7 +1185,7 @@ async def get_org_config(section: str | None = None) -> dict[str, Any]:
             return _tool_error("Token revoked or expired — re-authenticate")
         from modulo.db.crud.system_config import list_config
 
-        org_id = _ctx_org_id.get(_PLACEHOLDER_ORG_ID)
+        org_id = _ctx_org_id_val()
         async with _session(org_id) as s:
             configs = await list_config(s)
 
@@ -1206,7 +1235,7 @@ async def get_available_features() -> dict[str, Any]:
             return _tool_error("Token revoked or expired — re-authenticate")
         from modulo.core.feature_flags import resolve_plan_context
 
-        org_id = _ctx_org_id.get(_PLACEHOLDER_ORG_ID)
+        org_id = _ctx_org_id_val()
         settings = get_settings()
 
         from modulo.db.crud.organisation import get_organisation
@@ -1241,7 +1270,7 @@ async def get_available_features() -> dict[str, Any]:
 async def resource_pipelines() -> str:
     if not await validate_current_auth():
         return "error: Token revoked or expired — re-authenticate"
-    org_id = _ctx_org_id.get(_PLACEHOLDER_ORG_ID)
+    org_id = _ctx_org_id_val()
     async with _session(org_id) as s:
         result = await list_pipelines(s, page=1, page_size=50)
     lines = [f"- {p.name} (id={p.id}, visibility={p.visibility})" for p in result.items]
@@ -1254,7 +1283,7 @@ async def resource_pipeline_runs(pipeline_id: str) -> str:
         return "error: Token revoked or expired — re-authenticate"
     from modulo.db.crud.run import list_runs
 
-    org_id = _ctx_org_id.get(_PLACEHOLDER_ORG_ID)
+    org_id = _ctx_org_id_val()
     pid = uuid.UUID(pipeline_id)
     async with _session(org_id) as s:
         pipeline = await get_pipeline(s, pid)
@@ -1283,7 +1312,7 @@ async def resource_pipeline_detail(pipeline_id: str) -> str:
     from modulo.db.models.pipeline_snapshot import PipelineSnapshot
     from modulo.db.models.run import Run
 
-    org_id = _ctx_org_id.get(_PLACEHOLDER_ORG_ID)
+    org_id = _ctx_org_id_val()
     pid = uuid.UUID(pipeline_id)
     async with _session(org_id) as s:
         pipeline = await get_pipeline(s, pid)
@@ -1325,7 +1354,7 @@ async def resource_pipeline_detail(pipeline_id: str) -> str:
 async def resource_run(run_id: str) -> str:
     if not await validate_current_auth():
         return "error: Token revoked or expired — re-authenticate"
-    org_id = _ctx_org_id.get(_PLACEHOLDER_ORG_ID)
+    org_id = _ctx_org_id_val()
     rid = uuid.UUID(run_id)
     async with _session(org_id) as s:
         run = await get_run(s, rid)
@@ -1350,7 +1379,7 @@ async def resource_hitl_gate(run_id: str, gate_id: str) -> str:
         return "error: Token revoked or expired — re-authenticate"
     from sqlalchemy import select
 
-    org_id = _ctx_org_id.get(_PLACEHOLDER_ORG_ID)
+    org_id = _ctx_org_id_val()
     rid = uuid.UUID(run_id)
     async with _session(org_id) as s:
         result = await s.execute(
@@ -1383,7 +1412,7 @@ async def resource_schemas() -> str:
 
     from modulo.db.models.schema import Schema
 
-    org_id = _ctx_org_id.get(_PLACEHOLDER_ORG_ID)
+    org_id = _ctx_org_id_val()
     async with _session(org_id) as s:
         result = await s.execute(select(Schema).where(Schema.organisation_id == org_id).order_by(Schema.name))
         schemas = list(result.scalars())
@@ -1399,7 +1428,7 @@ async def resource_schema_detail(schema_id: str, version: str) -> str:
 
     from modulo.db.models.schema import Schema, SchemaVersion
 
-    org_id = _ctx_org_id.get(_PLACEHOLDER_ORG_ID)
+    org_id = _ctx_org_id_val()
     sid = uuid.UUID(schema_id)
     async with _session(org_id) as s:
         schema = await s.get(Schema, sid)
@@ -1469,7 +1498,7 @@ async def resource_connectors() -> str:
 
     from modulo.db.models.connector_instance import ConnectorInstance
 
-    org_id = _ctx_org_id.get(_PLACEHOLDER_ORG_ID)
+    org_id = _ctx_org_id_val()
     async with _session(org_id) as s:
         result = await s.execute(
             select(ConnectorInstance)
@@ -1489,7 +1518,7 @@ async def resource_model_backends() -> str:
 
     from modulo.db.models.model_backend import ModelBackend
 
-    org_id = _ctx_org_id.get(_PLACEHOLDER_ORG_ID)
+    org_id = _ctx_org_id_val()
     async with _session(org_id) as s:
         result = await s.execute(
             select(ModelBackend).where(ModelBackend.organisation_id == org_id).order_by(ModelBackend.name)
@@ -1508,7 +1537,7 @@ async def resource_library() -> str:
     if not await validate_current_auth():
         return "error: Token revoked or expired — re-authenticate"
     try:
-        org_id = _ctx_org_id.get(_PLACEHOLDER_ORG_ID)
+        org_id = _ctx_org_id_val()
         async with _session(org_id) as s:
             result = await list_primitives(
                 s,
@@ -1541,7 +1570,7 @@ async def resource_library_detail(primitive_type: str, slug: str) -> str:
     if not await validate_current_auth():
         return "error: Token revoked or expired — re-authenticate"
     try:
-        org_id = _ctx_org_id.get(_PLACEHOLDER_ORG_ID)
+        org_id = _ctx_org_id_val()
         async with _session(org_id) as s:
             p = await get_primitive_by_slug(s, org_id, primitive_type, slug)
         if p is None:
