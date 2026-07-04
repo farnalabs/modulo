@@ -508,13 +508,15 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
     await _claim_expiry_job.start()
 
     # Start the MCP session manager (FastMCP's anyio task group).
+    import anyio
+
     from modulo.api.mcp_server import mcp
-    _mcp_cm = mcp.session_manager.run()
-    _mcp_exit_stack = await _mcp_cm.__aenter__()
+    _mcp_tg = await anyio.create_task_group().__aenter__()
+    mcp.session_manager._task_group = _mcp_tg
 
     yield
 
-    await _mcp_cm.__aexit__(None, None, None)
+    await _mcp_tg.__aexit__(None, None, None)
     retention_task.cancel()
     await _claim_expiry_job.stop()
     for st in _scheduler_tasks:
