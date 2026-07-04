@@ -11,9 +11,9 @@
     <ErrorAlert v-else-if="error" :message="error" />
     <template v-else>
       <header>
-        <h1 class="text-3xl font-bold tracking-tight">Variant Comparison</h1>
+        <h1 class="text-3xl font-bold tracking-tight">{{ $t('views.variantCompare.title') }}</h1>
         <p class="mt-1 text-muted-foreground">
-          Side-by-side eval scores, token costs, and output diffs across A/B test variants
+          {{ $t('views.variantCompare.subtitle') }}
         </p>
       </header>
 
@@ -23,7 +23,7 @@
           data-testid="variant-compare-group-select"
           class="min-w-[280px] rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
         >
-          <option value="" disabled>Select a variant group…</option>
+          <option value="" disabled>{{ $t('views.variantCompare.selectGroup') }}</option>
           <option v-for="g in groups" :key="g.id" :value="g.id">
             {{ g.name }}
           </option>
@@ -36,11 +36,11 @@
           @click="runVariants"
         >
           <span v-if="runningVariants.size > 0" class="inline-block h-4 w-4 animate-spin rounded-full border-2 border-current border-t-transparent" />
-          {{ runningVariants.size > 0 ? 'Running…' : 'Run Variants' }}
+          {{ runningVariants.size > 0 ? $t('views.variantCompare.running') : $t('views.variantCompare.runVariants') }}
         </button>
 
         <span v-if="selectedGroup" class="text-xs text-muted-foreground">
-          {{ selectedGroup.run_count }} run{{ selectedGroup.run_count !== 1 ? 's' : '' }} ·
+          {{ $t('views.variantCompare.runs', { count: selectedGroup.run_count }) }} ·
           {{ selectedGroup.selection_strategy }}
         </span>
       </div>
@@ -50,7 +50,7 @@
           <table class="w-full text-left text-sm">
             <thead>
               <tr class="border-b bg-muted/50">
-                <th class="sticky left-0 z-10 bg-muted/50 px-4 py-3 font-semibold">Node</th>
+                <th class="sticky left-0 z-10 bg-muted/50 px-4 py-3 font-semibold">{{ $t('views.variantCompare.node') }}</th>
                 <th
                   v-for="v in variants"
                   :key="v.name"
@@ -58,7 +58,7 @@
                 >
                   <div class="flex flex-col gap-0.5">
                     <span>{{ v.name }}</span>
-                    <span class="text-xs font-normal text-muted-foreground">weight: {{ v.weight }}</span>
+                    <span class="text-xs font-normal text-muted-foreground">{{ $t('views.variantCompare.weight') }}: {{ v.weight }}</span>
                   </div>
                 </th>
               </tr>
@@ -83,19 +83,19 @@
                     v-if="getCellStatus(node, v.name) === 'pass'"
                     class="badge badge-status-success"
                   >
-                    pass
+                    {{ $t('views.variantCompare.statusPass') }}
                   </span>
                   <span
                     v-else-if="getCellStatus(node, v.name) === 'fail'"
                     class="badge badge-status-destructive"
                   >
-                    fail
+                    {{ $t('views.variantCompare.statusFail') }}
                   </span>
                   <span
                     v-else-if="getCellStatus(node, v.name) === 'partial'"
                     class="badge badge-status-warning"
                   >
-                    partial
+                    {{ $t('views.variantCompare.statusPartial') }}
                   </span>
                       <span
                         v-else
@@ -118,17 +118,17 @@
               <tr v-if="nodeNames.length === 0" class="border-b last:border-b-0">
                 <td colspan="100" class="px-4 py-8 text-center text-sm text-muted-foreground">
                   <template v-if="runEntries.size === 0">
-                    No run data yet. Click <strong>Run Variants</strong> above to execute a comparison run.
+                    {{ $t('views.variantCompare.noRunData') }}
                   </template>
                   <template v-else>
-                    Waiting for runs to complete…
+                    {{ $t('views.variantCompare.waitingForRuns') }}
                   </template>
                 </td>
               </tr>
             </tbody>
             <tfoot v-if="summaryByVariant.length > 0">
               <tr class="border-t bg-muted/30 font-medium">
-                <td class="sticky left-0 z-10 bg-muted/30 px-4 py-3">Summary</td>
+                <td class="sticky left-0 z-10 bg-muted/30 px-4 py-3">{{ $t('views.variantCompare.summary') }}</td>
                 <td
                   v-for="s in summaryByVariant"
                   :key="s.name"
@@ -144,19 +144,19 @@
                         {{ s.passRate.toFixed(0) }}%
                       </span>
                       <span v-else class="text-muted-foreground">—</span>
-                      <span class="text-muted-foreground">pass</span>
+                      <span class="text-muted-foreground">{{ $t('views.variantCompare.pass') }}</span>
                     </div>
                     <div v-if="s.totalCost !== null" class="text-muted-foreground">
-                      ${{ Number(s.totalCost).toFixed(6) }}
+                      {{ $t('views.variantCompare.cost', { cost: Number(s.totalCost).toFixed(6) }) }}
                     </div>
                     <div v-if="s.tokenTotal !== null" class="text-muted-foreground">
-                      {{ s.tokenTotal.toLocaleString() }} tokens
+                      {{ $t('views.variantCompare.tokens', { count: s.tokenTotal.toLocaleString() }) }}
                     </div>
                     <div class="flex gap-2 text-muted-foreground">
-                      <span v-if="s.approved > 0" class="text-success">+{{ s.approved }}</span>
-                      <span v-if="s.rejected > 0" class="text-destructive">-{{ s.rejected }}</span>
-                      <span v-if="s.pending > 0" class="text-warning">~{{ s.pending }}</span>
-                      <span v-if="s.approved === 0 && s.rejected === 0 && s.pending === 0" class="text-muted-foreground/60">no HITL</span>
+                      <span v-if="s.approved > 0" class="text-success">{{ $t('views.variantCompare.approved', { count: s.approved }) }}</span>
+                      <span v-if="s.rejected > 0" class="text-destructive">{{ $t('views.variantCompare.rejected', { count: s.rejected }) }}</span>
+                      <span v-if="s.pending > 0" class="text-warning">{{ $t('views.variantCompare.pending', { count: s.pending }) }}</span>
+                      <span v-if="s.approved === 0 && s.rejected === 0 && s.pending === 0" class="text-muted-foreground/60">{{ $t('views.variantCompare.noHitl') }}</span>
                     </div>
                   </div>
                 </td>
@@ -166,10 +166,10 @@
         </div>
 
         <div v-if="nodeNames.length > 0 && diffVariantsAvailable.length >= 2" class="space-y-4">
-          <h2 class="text-xl font-semibold tracking-tight">Output Diff Viewer</h2>
+          <h2 class="text-xl font-semibold tracking-tight">{{ $t('views.variantCompare.outputDiffViewer') }}</h2>
           <div class="flex flex-wrap gap-4">
             <label class="flex items-center gap-2 text-sm">
-              <span class="text-muted-foreground">Node:</span>
+              <span class="text-muted-foreground">{{ $t('views.variantCompare.node') }}:</span>
               <select
                 v-model="diffNode"
                 data-testid="variant-compare-diff-node"
@@ -179,7 +179,7 @@
               </select>
             </label>
             <label class="flex items-center gap-2 text-sm">
-              <span class="text-muted-foreground">Variant A:</span>
+              <span class="text-muted-foreground">{{ $t('views.variantCompare.variantA') }}:</span>
               <select
                 v-model="diffVarA"
                 data-testid="variant-compare-diff-variant-a"
@@ -189,7 +189,7 @@
               </select>
             </label>
             <label class="flex items-center gap-2 text-sm">
-              <span class="text-muted-foreground">Variant B:</span>
+              <span class="text-muted-foreground">{{ $t('views.variantCompare.variantB') }}:</span>
               <select
                 v-model="diffVarB"
                 data-testid="variant-compare-diff-variant-b"
@@ -220,7 +220,7 @@
         v-else-if="!loading && groups.length === 0"
         class="rounded-lg border bg-card p-8 text-center text-muted-foreground"
       >
-        No variant groups found. Create a variant group first to see comparison data.
+        {{ $t('views.variantCompare.noGroups') }}
       </div>
     </template>
   </div>
@@ -228,11 +228,14 @@
 
 <script setup lang="ts">
 import { ref, computed, onMounted, onBeforeUnmount, watch } from 'vue'
+import { useI18n } from 'vue-i18n'
 import { api } from '../lib/api/client'
 import type { components } from '../lib/api/client'
 import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
 import PageTabs from "../components/PageTabs.vue"
+
+const { t } = useI18n()
 
 type VariantGroup = components['schemas']['VariantGroupResponse']
 type RunResponse = components['schemas']['RunResponse']
@@ -407,7 +410,7 @@ async function fetchGroups() {
   try {
     const { data, error: err } = await api.GET('/api/v1/variant-groups')
     if (err) {
-      error.value = `Failed to load variant groups: ${JSON.stringify(err)}`
+      error.value = `${t('views.variantCompare.failedToLoadGroups')} ${JSON.stringify(err)}`
       return
     }
     const list = (data ?? []) as unknown as VariantGroup[]
@@ -416,7 +419,7 @@ async function fetchGroups() {
       selectedGroupId.value = list[0].id
     }
   } catch (e: unknown) {
-    error.value = `Failed to load variant groups: ${e instanceof Error ? e.message : String(e)}`
+    error.value = `${t('views.variantCompare.failedToLoadGroups')} ${e instanceof Error ? e.message : String(e)}`
   } finally {
     loading.value = false
   }
@@ -429,12 +432,12 @@ async function fetchGroupDetail(id: string) {
       params: { path: { group_id: id } },
     })
     if (err) {
-      error.value = `Failed to load variant group: ${JSON.stringify(err)}`
+      error.value = `${t('views.variantCompare.failedToLoadGroup')} ${JSON.stringify(err)}`
       return
     }
     selectedGroup.value = data as unknown as VariantGroup
   } catch (e: unknown) {
-    error.value = `Failed to load variant group: ${e instanceof Error ? e.message : String(e)}`
+    error.value = `${t('views.variantCompare.failedToLoadGroup')} ${e instanceof Error ? e.message : String(e)}`
   }
 }
 
@@ -450,7 +453,7 @@ async function runVariants() {
     })
 
     if (err) {
-      error.value = `Run failed: ${JSON.stringify(err)}`
+      error.value = `${t('views.variantCompare.runFailed')} ${JSON.stringify(err)}`
       return
     }
 
@@ -476,7 +479,7 @@ async function runVariants() {
 
     await pollRunStatus(run_id, variant_name)
   } catch (e: unknown) {
-    error.value = `Failed to run variants: ${e instanceof Error ? e.message : String(e)}`
+    error.value = `${t('views.variantCompare.failedToRunVariants')} ${e instanceof Error ? e.message : String(e)}`
   }
 }
 
@@ -512,7 +515,7 @@ async function pollRunStatus(runId: string, variantName: string) {
               fetchRunEvals(runId, variantName),
             ])
           } else {
-            error.value = `Run failed with status: ${status}`
+            error.value = `${t('views.variantCompare.runFailedStatus')} ${status}`
           }
           break
         }
