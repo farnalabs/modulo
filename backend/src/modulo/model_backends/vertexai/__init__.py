@@ -8,11 +8,13 @@ from langchain_google_vertexai import ChatVertexAI
 
 from modulo.model_backends.base import HealthResult, ModelBackendBase
 
-VERTEXAI_DEFAULT_LOCATION = "us-central-1"
+VERTEXAI_DEFAULT_LOCATION = "us-central1"
 
 
 class VertexAIBackend(ModelBackendBase):
     """Thin adapter over ChatVertexAI for Google Vertex AI (Gemini, Claude, Llama)."""
+
+    supports_tools: bool = True
 
     def __init__(
         self,
@@ -46,5 +48,7 @@ class VertexAIBackend(ModelBackendBase):
     async def invoke(self, messages: list[BaseMessage], **kwargs: Any) -> BaseMessage:
         return await self._model.ainvoke(messages, **kwargs)
 
-    def stream(self, messages: list[BaseMessage], **kwargs: Any) -> AsyncIterator[BaseMessage]:
+    def stream(
+    self, messages: list[BaseMessage], tools: list[dict] | None = None, **kwargs: Any,
+) -> AsyncIterator[BaseMessage]:
         return self._model.astream(messages, **kwargs)

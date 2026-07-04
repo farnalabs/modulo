@@ -1,3 +1,4 @@
+import logging
 from abc import ABC, abstractmethod
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
@@ -5,6 +6,11 @@ from typing import Any
 
 import httpx
 from langchain_core.messages import BaseMessage
+
+logger = logging.getLogger(__name__)
+
+HEALTH_CHECK_TIMEOUT = 10.0
+HEALTH_DETAIL_MAX_LENGTH = 500
 
 
 @dataclass(frozen=True)
@@ -23,15 +29,17 @@ async def _openai_compatible_health_check(
     if api_key:
         headers["Authorization"] = f"Bearer {api_key}"
     try:
-        async with httpx.AsyncClient(timeout=10.0) as client:
+        async with httpx.AsyncClient(timeout=HEALTH_CHECK_TIMEOUT) as client:
             response = await client.get(url, headers=headers)
             if response.is_success:
                 return HealthResult(ok=True)
-            return HealthResult(ok=False, detail=response.text[:500])
+            return HealthResult(ok=False, detail=response.text[:HEALTH_DETAIL_MAX_LENGTH])
     except httpx.TimeoutException:
+        logger.warning("Health check timed out for %s", url)
         return HealthResult(ok=False, detail="Health check timed out")
     except Exception as exc:
-        return HealthResult(ok=False, detail=str(exc)[:500])
+        logger.warning("Health check failed for %s: %s", url, exc)
+        return HealthResult(ok=False, detail=str(exc)[:HEALTH_DETAIL_MAX_LENGTH])
 
 
 class ModelBackendBase(ABC):
@@ -69,10 +77,12 @@ class ModelBackendBase(ABC):
         try:
             await asyncio.wait_for(
                 self.invoke([HumanMessage(content="ping")], max_tokens=1),
-                timeout=10.0,
+                timeout=HEALTH_CHECK_TIMEOUT,
             )
             return HealthResult(ok=True)
         except TimeoutError:
+            logger.warning("Health check timed out for %s", type(self).__name__)
             return HealthResult(ok=False, detail="Health check timed out")
         except Exception as exc:
-            return HealthResult(ok=False, detail=str(exc)[:500])
+            logger.warning("Health check failed for %s: %s", type(self).__name__, exc)
+            return HealthResult(ok=False, detail=str(exc)[:HEALTH_DETAIL_MAX_LENGTH])
