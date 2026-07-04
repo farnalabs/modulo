@@ -11,7 +11,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "modulo"
-version = "0.1.98"
+version = "0.1.99"
 description = "Governed orchestration for your agentic SDLC"
 license = "MIT"
 authors = [
@@ -249,4 +249,5 @@ dev = [
     "hypothesis>=6.100.0",
     "schemathesis>=3.30.0",
     "pytest-recording>=0.13.0",
+    "celery[redis]>=5.4.0",
 ]
