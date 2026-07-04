@@ -3019,7 +3019,7 @@ wheels = [
 
 [[package]]
 name = "modulo"
-version = "0.1.18"
+version = "0.1.55"
 source = { editable = "." }
 dependencies = [
     { name = "aiosqlite" },
