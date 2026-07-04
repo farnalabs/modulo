@@ -200,7 +200,10 @@ async def oidc_get_authorize_url(
     if not provider:
         raise ValueError(f"OIDC provider '{provider_id}' not configured")
 
-    disc = await _fetch_discovery(provider["discovery_url"])
+    try:
+        disc = await _fetch_discovery(provider["discovery_url"])
+    except httpx.HTTPError as exc:
+        raise ValueError(f"Failed to fetch discovery document: {exc}") from None
     auth_endpoint = disc.get("authorization_endpoint")
     if not auth_endpoint:
         raise ValueError("No authorization_endpoint in discovery document")
@@ -238,18 +241,25 @@ async def oidc_process_callback(
     if not provider:
         raise ValueError(f"OIDC provider '{provider_id}' not found")
 
-    disc = await _fetch_discovery(provider["discovery_url"])
+    try:
+        disc = await _fetch_discovery(provider["discovery_url"])
+    except httpx.HTTPError as exc:
+        raise ValueError(f"Failed to fetch discovery document: {exc}") from None
+
     token_endpoint = disc.get("token_endpoint")
     if not token_endpoint:
         raise ValueError("No token_endpoint in discovery document")
 
-    token_data = await _exchange_code(
-        token_endpoint,
-        provider["client_id"],
-        provider["client_secret"],
-        code,
-        redirect_uri,
-    )
+    try:
+        token_data = await _exchange_code(
+            token_endpoint,
+            provider["client_id"],
+            provider["client_secret"],
+            code,
+            redirect_uri,
+        )
+    except httpx.HTTPError as exc:
+        raise ValueError(f"Failed to exchange authorization code: {exc}") from None
 
     id_token = token_data.get("id_token", "")
 
@@ -270,7 +280,10 @@ async def oidc_process_callback(
     name = claims.get("name", "") or claims.get("preferred_username", "") or email.split("@")[0]
     sso_subject = f"{provider_id}:{claims.get('sub', email)}"
 
-    account, org_id, org_role = await jit_provision_user(session, settings, email, name, "oidc", sso_subject)
+    try:
+        account, org_id, org_role = await jit_provision_user(session, settings, email, name, "oidc", sso_subject)
+    except RuntimeError as exc:
+        raise ValueError(str(exc)) from None
 
     idp_groups: list[str] = claims.get("groups", []) or []
     if idp_groups:
@@ -305,7 +318,7 @@ def _parse_oidc_providers(settings: Settings) -> list[dict[str, str]]:
 
 async def _fetch_discovery(discovery_url: str) -> dict[str, Any]:
     async with httpx.AsyncClient() as client:
-        resp = await client.get(discovery_url, timeout=10)
+        resp = await client.get(discovery_url, timeout=httpx.Timeout(10.0, connect=5.0))
         resp.raise_for_status()
         return resp.json()
 

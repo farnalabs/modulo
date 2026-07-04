@@ -2,6 +2,7 @@
 
 import base64
 import json
+import uuid
 from datetime import UTC, datetime, timedelta
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -484,7 +485,7 @@ class TestOidcCallbackIntegration:
             patch("httpx.AsyncClient") as cls,
         ):
             cls.return_value.__aenter__.return_value = mock_client
-            mock_jit.return_value = MagicMock()
+            mock_jit.return_value = (MagicMock(), uuid.uuid4(), "runner")
             mock_tok.return_value = {"access_token": "at", "refresh_token": "rt", "token_type": "bearer"}
 
             result = await oidc_process_callback(
@@ -538,6 +539,123 @@ class TestOidcCallbackIntegration:
             cls.return_value.__aenter__.return_value = mock_client
 
             with pytest.raises(ValueError, match="ID token verification failed"):
+                await oidc_process_callback(
+                    "auth-code", signed, settings, session, "http://localhost/callback",
+                )
+
+    async def test_callback_fails_on_discovery_http_error(self) -> None:
+        from modulo.auth.sso import oidc_process_callback, sign_state
+        from modulo.settings import Settings
+
+        settings = Settings(
+            database_url="postgresql+asyncpg://localhost/test",
+            secret_key="a" * 32,
+            fernet_key="a" * 32,
+            modulo_oidc_providers=json.dumps(
+                [{
+                    "provider_id": "testprovider",
+                    "client_id": _CLIENT_ID,
+                    "client_secret": "secret",
+                    "discovery_url": _DISCOVERY_URL,
+                }]
+            ),
+        )
+
+        session = AsyncMock()
+        signed = sign_state("testprovider:test-state", settings.secret_key)
+
+        mock_client = AsyncMock()
+        mock_client.get = AsyncMock(side_effect=httpx.ConnectError("Connection refused"))
+        mock_client.post = AsyncMock()
+
+        with patch("httpx.AsyncClient") as cls:
+            cls.return_value.__aenter__.return_value = mock_client
+
+            with pytest.raises(ValueError, match="Failed to fetch discovery document"):
+                await oidc_process_callback(
+                    "auth-code", signed, settings, session, "http://localhost/callback",
+                )
+
+    async def test_callback_fails_on_code_exchange_http_error(self) -> None:
+        from modulo.auth.sso import oidc_process_callback, sign_state
+        from modulo.settings import Settings
+
+        settings = Settings(
+            database_url="postgresql+asyncpg://localhost/test",
+            secret_key="a" * 32,
+            fernet_key="a" * 32,
+            modulo_oidc_providers=json.dumps(
+                [{
+                    "provider_id": "testprovider",
+                    "client_id": _CLIENT_ID,
+                    "client_secret": "secret",
+                    "discovery_url": _DISCOVERY_URL,
+                }]
+            ),
+        )
+
+        session = AsyncMock()
+        signed = sign_state("testprovider:test-state", settings.secret_key)
+
+        disc_resp = _make_resp(json_data=_discovery_doc())
+        token_resp = _make_resp(500)
+        mock_client = _make_httpx_mock(
+            get_map={_DISCOVERY_URL: disc_resp},
+            post_map={_TOKEN_ENDPOINT: token_resp},
+        )
+
+        with patch("httpx.AsyncClient") as cls:
+            cls.return_value.__aenter__.return_value = mock_client
+
+            with pytest.raises(ValueError, match="Failed to exchange authorization code"):
+                await oidc_process_callback(
+                    "auth-code", signed, settings, session, "http://localhost/callback",
+                )
+
+    async def test_callback_fails_on_provisioning_runtime_error(self) -> None:
+        from modulo.auth.sso import oidc_process_callback, sign_state
+        from modulo.settings import Settings
+
+        settings = Settings(
+            database_url="postgresql+asyncpg://localhost/test",
+            secret_key="a" * 32,
+            fernet_key="a" * 32,
+            modulo_oidc_providers=json.dumps(
+                [{
+                    "provider_id": "testprovider",
+                    "client_id": _CLIENT_ID,
+                    "client_secret": "secret",
+                    "discovery_url": _DISCOVERY_URL,
+                }]
+            ),
+        )
+
+        session = AsyncMock()
+        signed = sign_state("testprovider:test-state", settings.secret_key)
+
+        disc_resp = _make_resp(json_data=_discovery_doc())
+        token_resp = _make_resp(json_data={"id_token": "header.payload.sig"})
+
+        mock_client = _make_httpx_mock(
+            get_map={_DISCOVERY_URL: disc_resp},
+            post_map={_TOKEN_ENDPOINT: token_resp},
+        )
+
+        with (
+            patch("modulo.auth.sso.verify_id_token", new_callable=AsyncMock) as mock_verify,
+            patch("modulo.auth.sso.jit_provision_user", new_callable=AsyncMock) as mock_jit,
+            patch("modulo.auth.sso.issue_sso_tokens", new_callable=AsyncMock),
+            patch("httpx.AsyncClient") as cls,
+        ):
+            cls.return_value.__aenter__.return_value = mock_client
+            mock_verify.return_value = {
+                "email": "user@example.com",
+                "name": "Test User",
+                "sub": "abc123",
+            }
+            mock_jit.side_effect = RuntimeError("No organisation exists")
+
+            with pytest.raises(ValueError, match="No organisation exists"):
                 await oidc_process_callback(
                     "auth-code", signed, settings, session, "http://localhost/callback",
                 )
