@@ -53,6 +53,14 @@ def make_session():
     return session
 
 
+def make_pipeline_row(nodes=None, edges=None):
+    pipeline = MagicMock()
+    pipeline.id = PIPELINE_ID
+    pipeline.graph_nodes_json = nodes or []
+    pipeline.edges = edges or []
+    return pipeline
+
+
 def make_agent_mock():
     agent = MagicMock()
     agent.id = AGENT_ID
@@ -115,11 +123,6 @@ def make_snapshot(nodes=None):
 
 
 def setup_execute_side_effect(session, results):
-    """Set up session.execute with a side effect that returns different results per call.
-
-    ``results`` is a list where each element is either a value (for scalar_one_or_none)
-    or a special marker like _NO_ENTITY_FOUND.
-    """
     call_count = 0
 
     async def execute_side(*args, **kwargs):
@@ -151,6 +154,7 @@ class TestConvertToAgent:
     async def test_happy_path(self):
         session = make_session()
         setup_execute_side_effect(session, [
+            make_pipeline_row(nodes=[make_manual_node()]),
             make_agent_mock(),
             make_connector_mock(),
             make_model_backend_mock(),
@@ -162,12 +166,8 @@ class TestConvertToAgent:
         saved_nodes[0]["node_type"] = "agent"
         saved_nodes[0]["agent_id"] = str(AGENT_ID)
 
-        with (
-            patch("modulo.api.routes.pipelines.get_pipeline_graph",
-                  return_value=([make_manual_node()], [])),
-            patch("modulo.api.routes.pipelines.replace_pipeline_graph",
-                  return_value=(saved_nodes, [])),
-        ):
+        with patch("modulo.api.routes.pipelines.replace_pipeline_graph",
+                    return_value=(saved_nodes, [])):
             resp = await convert_node_to_agent_endpoint(
                 pipeline_id=PIPELINE_ID,
                 node_id=NODE_ID,
@@ -181,99 +181,96 @@ class TestConvertToAgent:
 
     async def test_pipeline_not_found(self):
         session = make_session()
-        setup_execute_side_effect(session, [make_agent_mock()])
         principal = make_principal()
         body = make_convert_body()
 
-        with patch("modulo.api.routes.pipelines.get_pipeline_graph", return_value=None):
-            with pytest.raises(HTTPException) as excinfo:
-                await convert_node_to_agent_endpoint(
-                    pipeline_id=PIPELINE_ID,
-                    node_id=NODE_ID,
-                    body=body,
-                    session=session,
-                    principal=principal,
-                )
+        with pytest.raises(HTTPException) as excinfo:
+            await convert_node_to_agent_endpoint(
+                pipeline_id=PIPELINE_ID,
+                node_id=NODE_ID,
+                body=body,
+                session=session,
+                principal=principal,
+            )
 
         assert excinfo.value.status_code == status.HTTP_404_NOT_FOUND
 
     async def test_node_not_found(self):
         session = make_session()
-        setup_execute_side_effect(session, [make_agent_mock()])
-        principal = make_principal()
-        body = make_convert_body()
         other_id = uuid.uuid4()
         nodes = [{"id": str(other_id), "node_type": "manual", "position": {"x": 0, "y": 0}}]
+        setup_execute_side_effect(session, [make_pipeline_row(nodes=nodes)])
+        principal = make_principal()
+        body = make_convert_body()
 
-        with patch("modulo.api.routes.pipelines.get_pipeline_graph",
-                   return_value=(nodes, [])):
-            with pytest.raises(HTTPException) as excinfo:
-                await convert_node_to_agent_endpoint(
-                    pipeline_id=PIPELINE_ID,
-                    node_id=NODE_ID,
-                    body=body,
-                    session=session,
-                    principal=principal,
-                )
+        with pytest.raises(HTTPException) as excinfo:
+            await convert_node_to_agent_endpoint(
+                pipeline_id=PIPELINE_ID,
+                node_id=NODE_ID,
+                body=body,
+                session=session,
+                principal=principal,
+            )
 
         assert excinfo.value.status_code == status.HTTP_404_NOT_FOUND
 
     async def test_node_not_manual(self):
         session = make_session()
-        setup_execute_side_effect(session, [make_agent_mock()])
+        nodes = [{"id": str(NODE_ID), "node_type": "agent", "position": {"x": 0, "y": 0}}]
+        setup_execute_side_effect(session, [make_pipeline_row(nodes=nodes)])
         principal = make_principal()
         body = make_convert_body()
-        nodes = [{"id": str(NODE_ID), "node_type": "agent", "position": {"x": 0, "y": 0}}]
 
-        with patch("modulo.api.routes.pipelines.get_pipeline_graph",
-                   return_value=(nodes, [])):
-            with pytest.raises(HTTPException) as excinfo:
-                await convert_node_to_agent_endpoint(
-                    pipeline_id=PIPELINE_ID,
-                    node_id=NODE_ID,
-                    body=body,
-                    session=session,
-                    principal=principal,
-                )
+        with pytest.raises(HTTPException) as excinfo:
+            await convert_node_to_agent_endpoint(
+                pipeline_id=PIPELINE_ID,
+                node_id=NODE_ID,
+                body=body,
+                session=session,
+                principal=principal,
+            )
 
         assert excinfo.value.status_code == status.HTTP_422_UNPROCESSABLE_ENTITY
 
     async def test_agent_not_found(self):
         session = make_session()
-        setup_execute_side_effect(session, [None])
+        setup_execute_side_effect(session, [
+            make_pipeline_row(nodes=[make_manual_node()]),
+            None,
+        ])
         principal = make_principal()
         body = make_convert_body()
 
-        with patch("modulo.api.routes.pipelines.get_pipeline_graph",
-                   return_value=([make_manual_node()], [])):
-            with pytest.raises(HTTPException) as excinfo:
-                await convert_node_to_agent_endpoint(
-                    pipeline_id=PIPELINE_ID,
-                    node_id=NODE_ID,
-                    body=body,
-                    session=session,
-                    principal=principal,
-                )
+        with pytest.raises(HTTPException) as excinfo:
+            await convert_node_to_agent_endpoint(
+                pipeline_id=PIPELINE_ID,
+                node_id=NODE_ID,
+                body=body,
+                session=session,
+                principal=principal,
+            )
 
         assert excinfo.value.status_code == status.HTTP_404_NOT_FOUND
         assert "Agent not found" in excinfo.value.detail
 
     async def test_connector_not_found(self):
         session = make_session()
-        setup_execute_side_effect(session, [make_agent_mock(), None])
+        setup_execute_side_effect(session, [
+            make_pipeline_row(nodes=[make_manual_node()]),
+            make_agent_mock(),
+            None,
+        ])
         principal = make_principal()
         body = make_convert_body()
 
-        with patch("modulo.api.routes.pipelines.get_pipeline_graph",
-                   return_value=([make_manual_node()], [])):
-            with pytest.raises(HTTPException) as excinfo:
-                await convert_node_to_agent_endpoint(
-                    pipeline_id=PIPELINE_ID,
-                    node_id=NODE_ID,
-                    body=body,
-                    session=session,
-                    principal=principal,
-                )
+        with pytest.raises(HTTPException) as excinfo:
+            await convert_node_to_agent_endpoint(
+                pipeline_id=PIPELINE_ID,
+                node_id=NODE_ID,
+                body=body,
+                session=session,
+                principal=principal,
+            )
 
         assert excinfo.value.status_code == status.HTTP_404_NOT_FOUND
         assert "Connector not found" in excinfo.value.detail
@@ -281,28 +278,28 @@ class TestConvertToAgent:
     async def test_connector_type_mismatch(self):
         session = make_session()
         setup_execute_side_effect(session, [
+            make_pipeline_row(nodes=[make_manual_node()]),
             make_agent_mock(),
-            make_connector_mock(connector_type="gitlab"),  # mismatched type
+            make_connector_mock(connector_type="gitlab"),
         ])
         principal = make_principal()
         body = make_convert_body()
 
-        with patch("modulo.api.routes.pipelines.get_pipeline_graph",
-                   return_value=([make_manual_node()], [])):
-            with pytest.raises(HTTPException) as excinfo:
-                await convert_node_to_agent_endpoint(
-                    pipeline_id=PIPELINE_ID,
-                    node_id=NODE_ID,
-                    body=body,
-                    session=session,
-                    principal=principal,
-                )
+        with pytest.raises(HTTPException) as excinfo:
+            await convert_node_to_agent_endpoint(
+                pipeline_id=PIPELINE_ID,
+                node_id=NODE_ID,
+                body=body,
+                session=session,
+                principal=principal,
+            )
 
         assert excinfo.value.status_code == status.HTTP_422_UNPROCESSABLE_ENTITY
 
     async def test_model_backend_not_found(self):
         session = make_session()
         setup_execute_side_effect(session, [
+            make_pipeline_row(nodes=[make_manual_node()]),
             make_agent_mock(),
             make_connector_mock(),
             None,
@@ -310,16 +307,14 @@ class TestConvertToAgent:
         principal = make_principal()
         body = make_convert_body()
 
-        with patch("modulo.api.routes.pipelines.get_pipeline_graph",
-                   return_value=([make_manual_node()], [])):
-            with pytest.raises(HTTPException) as excinfo:
-                await convert_node_to_agent_endpoint(
-                    pipeline_id=PIPELINE_ID,
-                    node_id=NODE_ID,
-                    body=body,
-                    session=session,
-                    principal=principal,
-                )
+        with pytest.raises(HTTPException) as excinfo:
+            await convert_node_to_agent_endpoint(
+                pipeline_id=PIPELINE_ID,
+                node_id=NODE_ID,
+                body=body,
+                session=session,
+                principal=principal,
+            )
 
         assert excinfo.value.status_code == status.HTTP_404_NOT_FOUND
         assert "Model backend not found" in excinfo.value.detail
@@ -327,6 +322,7 @@ class TestConvertToAgent:
     async def test_programming_error_caught(self):
         session = make_session()
         setup_execute_side_effect(session, [
+            make_pipeline_row(nodes=[make_manual_node()]),
             make_agent_mock(),
             make_connector_mock(),
             make_model_backend_mock(),
@@ -334,13 +330,9 @@ class TestConvertToAgent:
         principal = make_principal()
         body = make_convert_body()
 
-        with (
-            patch("modulo.api.routes.pipelines.get_pipeline_graph",
-                  return_value=([make_manual_node()], [])),
-            patch(
-                "modulo.api.routes.pipelines.replace_pipeline_graph",
-                side_effect=ProgrammingError("stmt", {}, "table not found"),
-            ),
+        with patch(
+            "modulo.api.routes.pipelines.replace_pipeline_graph",
+            side_effect=ProgrammingError("stmt", {}, "table not found"),
         ):
             with pytest.raises(HTTPException) as excinfo:
                 await convert_node_to_agent_endpoint(
@@ -364,6 +356,7 @@ class TestRevertToManual:
 
     async def test_happy_path(self):
         session = make_session()
+        setup_execute_side_effect(session, [make_pipeline_row(nodes=[make_agent_node()])])
         principal = make_principal()
         snapshot = make_snapshot()
 
@@ -374,8 +367,6 @@ class TestRevertToManual:
         saved_nodes[0]["label"] = "qa-review"
 
         with (
-            patch("modulo.api.routes.pipelines.get_pipeline_graph",
-                  return_value=([make_agent_node()], [])),
             patch("modulo.api.routes.pipelines.get_snapshot_detail",
                   return_value=snapshot),
             patch("modulo.api.routes.pipelines.replace_pipeline_graph",
@@ -396,65 +387,58 @@ class TestRevertToManual:
         session = make_session()
         principal = make_principal()
 
-        with patch("modulo.api.routes.pipelines.get_pipeline_graph", return_value=None):
-            with pytest.raises(HTTPException) as excinfo:
-                await revert_node_to_manual_endpoint(
-                    pipeline_id=PIPELINE_ID,
-                    node_id=NODE_ID,
-                    snapshot_id=SNAPSHOT_ID,
-                    session=session,
-                    principal=principal,
-                )
+        with pytest.raises(HTTPException) as excinfo:
+            await revert_node_to_manual_endpoint(
+                pipeline_id=PIPELINE_ID,
+                node_id=NODE_ID,
+                snapshot_id=SNAPSHOT_ID,
+                session=session,
+                principal=principal,
+            )
 
         assert excinfo.value.status_code == status.HTTP_404_NOT_FOUND
 
     async def test_node_not_found(self):
         session = make_session()
-        principal = make_principal()
         other_id = uuid.uuid4()
         nodes = [{"id": str(other_id), "node_type": "agent", "position": {"x": 0, "y": 0}}]
+        setup_execute_side_effect(session, [make_pipeline_row(nodes=nodes)])
+        principal = make_principal()
 
-        with patch("modulo.api.routes.pipelines.get_pipeline_graph",
-                   return_value=(nodes, [])):
-            with pytest.raises(HTTPException) as excinfo:
-                await revert_node_to_manual_endpoint(
-                    pipeline_id=PIPELINE_ID,
-                    node_id=NODE_ID,
-                    snapshot_id=SNAPSHOT_ID,
-                    session=session,
-                    principal=principal,
-                )
+        with pytest.raises(HTTPException) as excinfo:
+            await revert_node_to_manual_endpoint(
+                pipeline_id=PIPELINE_ID,
+                node_id=NODE_ID,
+                snapshot_id=SNAPSHOT_ID,
+                session=session,
+                principal=principal,
+            )
 
         assert excinfo.value.status_code == status.HTTP_404_NOT_FOUND
 
     async def test_node_not_agent(self):
         session = make_session()
-        principal = make_principal()
         nodes = [{"id": str(NODE_ID), "node_type": "manual", "position": {"x": 0, "y": 0}}]
+        setup_execute_side_effect(session, [make_pipeline_row(nodes=nodes)])
+        principal = make_principal()
 
-        with patch("modulo.api.routes.pipelines.get_pipeline_graph",
-                   return_value=(nodes, [])):
-            with pytest.raises(HTTPException) as excinfo:
-                await revert_node_to_manual_endpoint(
-                    pipeline_id=PIPELINE_ID,
-                    node_id=NODE_ID,
-                    snapshot_id=SNAPSHOT_ID,
-                    session=session,
-                    principal=principal,
-                )
+        with pytest.raises(HTTPException) as excinfo:
+            await revert_node_to_manual_endpoint(
+                pipeline_id=PIPELINE_ID,
+                node_id=NODE_ID,
+                snapshot_id=SNAPSHOT_ID,
+                session=session,
+                principal=principal,
+            )
 
         assert excinfo.value.status_code == status.HTTP_422_UNPROCESSABLE_ENTITY
 
     async def test_snapshot_not_found(self):
         session = make_session()
+        setup_execute_side_effect(session, [make_pipeline_row(nodes=[make_agent_node()])])
         principal = make_principal()
 
-        with (
-            patch("modulo.api.routes.pipelines.get_pipeline_graph",
-                  return_value=([make_agent_node()], [])),
-            patch("modulo.api.routes.pipelines.get_snapshot_detail",
-                  return_value=None),
-        ):
+        with patch("modulo.api.routes.pipelines.get_snapshot_detail", return_value=None):
             with pytest.raises(HTTPException) as excinfo:
                 await revert_node_to_manual_endpoint(
                     pipeline_id=PIPELINE_ID,
@@ -469,17 +453,13 @@ class TestRevertToManual:
 
     async def test_snapshot_no_node(self):
         session = make_session()
+        setup_execute_side_effect(session, [make_pipeline_row(nodes=[make_agent_node()])])
         principal = make_principal()
         snapshot = make_snapshot(nodes=[
             {"id": str(uuid.uuid4()), "node_type": "manual", "output_schema_id": str(uuid.uuid4())},
         ])
 
-        with (
-            patch("modulo.api.routes.pipelines.get_pipeline_graph",
-                  return_value=([make_agent_node()], [])),
-            patch("modulo.api.routes.pipelines.get_snapshot_detail",
-                  return_value=snapshot),
-        ):
+        with patch("modulo.api.routes.pipelines.get_snapshot_detail", return_value=snapshot):
             with pytest.raises(HTTPException) as excinfo:
                 await revert_node_to_manual_endpoint(
                     pipeline_id=PIPELINE_ID,
@@ -493,17 +473,13 @@ class TestRevertToManual:
 
     async def test_snapshot_node_not_manual(self):
         session = make_session()
+        setup_execute_side_effect(session, [make_pipeline_row(nodes=[make_agent_node()])])
         principal = make_principal()
         snapshot = make_snapshot(nodes=[
             {"id": str(NODE_ID), "node_type": "agent", "output_schema_id": str(uuid.uuid4())},
         ])
 
-        with (
-            patch("modulo.api.routes.pipelines.get_pipeline_graph",
-                  return_value=([make_agent_node()], [])),
-            patch("modulo.api.routes.pipelines.get_snapshot_detail",
-                  return_value=snapshot),
-        ):
+        with patch("modulo.api.routes.pipelines.get_snapshot_detail", return_value=snapshot):
             with pytest.raises(HTTPException) as excinfo:
                 await revert_node_to_manual_endpoint(
                     pipeline_id=PIPELINE_ID,
@@ -517,17 +493,13 @@ class TestRevertToManual:
 
     async def test_snapshot_no_output_schema(self):
         session = make_session()
+        setup_execute_side_effect(session, [make_pipeline_row(nodes=[make_agent_node()])])
         principal = make_principal()
         snapshot = make_snapshot(nodes=[
-            {"id": str(NODE_ID), "node_type": "manual"},  # No output_schema_id
+            {"id": str(NODE_ID), "node_type": "manual"},
         ])
 
-        with (
-            patch("modulo.api.routes.pipelines.get_pipeline_graph",
-                  return_value=([make_agent_node()], [])),
-            patch("modulo.api.routes.pipelines.get_snapshot_detail",
-                  return_value=snapshot),
-        ):
+        with patch("modulo.api.routes.pipelines.get_snapshot_detail", return_value=snapshot):
             with pytest.raises(HTTPException) as excinfo:
                 await revert_node_to_manual_endpoint(
                     pipeline_id=PIPELINE_ID,
