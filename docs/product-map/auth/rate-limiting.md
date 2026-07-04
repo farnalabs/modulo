@@ -21,11 +21,6 @@ status: partial
 
 ## Behaviours
 
-### Auth rate limiting (§6.10)
-- [x] Login endpoint: 10 failed attempts per IP per minute returns 429
-- [x] Exponential backoff applied after rate limit exceeded on login
-- [x] Counter resets after successful login
-
 ### POST /api/v1/runs
 - [x] 60 requests per minute per API key (middleware rule matches PRD §7.18)
 - [x] Returns 429 with `retry-after` header when exceeded
