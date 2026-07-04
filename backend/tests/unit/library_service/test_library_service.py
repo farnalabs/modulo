@@ -113,12 +113,12 @@ def test_community_by_id_index():
 
 def test_filter_modulo_by_type_agent():
     agents = _filter_modulo(primitive_type="agent", search=None)
-    assert len(agents) == 7
+    assert len(agents) == 8
 
 
 def test_filter_modulo_by_type_workflow():
     workflows = _filter_modulo(primitive_type="workflow", search=None)
-    assert len(workflows) == 2
+    assert len(workflows) == 3
 
 
 def test_filter_modulo_by_search():
@@ -144,11 +144,11 @@ def test_community_primitives_have_correct_visibiliy():
 
 
 def test_community_primitives_count():
-    # 7 schemas + 7 agents + 2 workflows + 1 fixture + 3 pipeline_templates + 7 composites
-    assert len(_MODULO_PRIMITIVES) == 27
+    # 7 schemas + 8 agents + 3 workflows + 1 fixture + 3 pipeline_templates + 7 composites
+    assert len(_MODULO_PRIMITIVES) == 29
 
 
-def test_community_by_id_index():
+def test_modulo_by_id_index():
     for p in _MODULO_PRIMITIVES:
         assert _MODULO_BY_ID[p.id] is p
 
@@ -441,6 +441,116 @@ async def test_list_primitives_type_filter_propagated():
     assert call_kwargs["primitive_type"] == "schema"
     # Community result should also be filtered
     assert all(p.primitive_type == "schema" for p in result.items)
+
+
+async def test_list_primitives_passes_excluded_tiers_to_crud():
+    """excluded_tiers is forwarded to list_library_primitives."""
+    session = _mock_session()
+    org_id = uuid.uuid4()
+    org_page: PageResult = PageResult(items=[], total=0, page=1, page_size=20)
+
+    with (
+        patch("modulo.core.library_service.set_rls_org", new_callable=AsyncMock),
+        patch(
+            "modulo.core.library_service.list_library_primitives", new_callable=AsyncMock, return_value=org_page
+        ) as mock_list,
+    ):
+        await list_primitives(session, org_id, excluded_tiers=["preview"])
+
+    mock_list.assert_awaited_once()
+    call_kwargs = mock_list.call_args.kwargs
+    assert call_kwargs["excluded_tiers"] == ["preview"]
+
+
+async def test_list_primitives_default_excluded_tiers_is_in_dev():
+    """Default (no excluded_tiers) passes ["in_dev"] to list_library_primitives."""
+    session = _mock_session()
+    org_id = uuid.uuid4()
+    org_page: PageResult = PageResult(items=[], total=0, page=1, page_size=20)
+
+    with (
+        patch("modulo.core.library_service.set_rls_org", new_callable=AsyncMock),
+        patch(
+            "modulo.core.library_service.list_library_primitives", new_callable=AsyncMock, return_value=org_page
+        ) as mock_list,
+    ):
+        await list_primitives(session, org_id)
+
+    mock_list.assert_awaited_once()
+    call_kwargs = mock_list.call_args.kwargs
+    assert call_kwargs["excluded_tiers"] == ["in_dev"]
+
+
+async def test_list_primitives_filters_in_dev_modulo_items():
+    """In-memory modulo items with tier='in_dev' are excluded by default."""
+    session = _mock_session()
+    org_id = uuid.uuid4()
+    org_page: PageResult = PageResult(items=[], total=0, page=1, page_size=20)
+
+    native_prim = _fake_primitive()
+    native_prim.tier = "native"
+    in_dev_prim = _fake_primitive()
+    in_dev_prim.tier = "in_dev"
+    modulo_with_in_dev = [native_prim, in_dev_prim]
+
+    with (
+        patch("modulo.core.library_service.set_rls_org", new_callable=AsyncMock),
+        patch("modulo.core.library_service.list_library_primitives", new_callable=AsyncMock, return_value=org_page),
+        patch("modulo.core.library_service._filter_modulo", return_value=modulo_with_in_dev),
+        patch("modulo.core.library_service._filter_community", return_value=[]),
+    ):
+        result = await list_primitives(session, org_id)
+
+    assert native_prim in result.items
+    assert in_dev_prim not in result.items
+
+
+async def test_list_primitives_filters_in_dev_community_items():
+    """In-memory community items with tier='in_dev' are excluded by default."""
+    session = _mock_session()
+    org_id = uuid.uuid4()
+    org_page: PageResult = PageResult(items=[], total=0, page=1, page_size=20)
+
+    native_prim = _fake_primitive()
+    native_prim.tier = "native"
+    in_dev_prim = _fake_primitive()
+    in_dev_prim.tier = "in_dev"
+    community_with_in_dev = [native_prim, in_dev_prim]
+
+    with (
+        patch("modulo.core.library_service.set_rls_org", new_callable=AsyncMock),
+        patch("modulo.core.library_service.list_library_primitives", new_callable=AsyncMock, return_value=org_page),
+        patch("modulo.core.library_service._filter_modulo", return_value=[]),
+        patch("modulo.core.library_service._filter_community", return_value=community_with_in_dev),
+    ):
+        result = await list_primitives(session, org_id)
+
+    assert native_prim in result.items
+    assert in_dev_prim not in result.items
+
+
+async def test_list_primitives_custom_excluded_tiers_filters_modulo():
+    """Passing excluded_tiers=["preview"] filters preview items from modulo."""
+    session = _mock_session()
+    org_id = uuid.uuid4()
+    org_page: PageResult = PageResult(items=[], total=0, page=1, page_size=20)
+
+    native_prim = _fake_primitive()
+    native_prim.tier = "native"
+    preview_prim = _fake_primitive()
+    preview_prim.tier = "preview"
+    modulo_with_preview = [native_prim, preview_prim]
+
+    with (
+        patch("modulo.core.library_service.set_rls_org", new_callable=AsyncMock),
+        patch("modulo.core.library_service.list_library_primitives", new_callable=AsyncMock, return_value=org_page),
+        patch("modulo.core.library_service._filter_modulo", return_value=modulo_with_preview),
+        patch("modulo.core.library_service._filter_community", return_value=[]),
+    ):
+        result = await list_primitives(session, org_id, excluded_tiers=["preview"])
+
+    assert native_prim in result.items
+    assert preview_prim not in result.items
 
 
 # ---------------------------------------------------------------------------
