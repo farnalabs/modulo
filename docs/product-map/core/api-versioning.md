@@ -13,6 +13,7 @@ code:
 depends-on: []
 unit-tests:
   - backend/tests/unit/api/test_deprecation_headers.py
+  - backend/tests/unit/api/test_changelog.py
 status: partial
 ---
 
@@ -41,16 +42,39 @@ URL-path versioning (`/api/v1/`, `/api/v2/`, etc.). Policy document at `backend/
 - [x] Breaking change definition is documented (field removals, type changes, semantic changes, auth changes, endpoint removal, required field additions)
 - [x] Adding new fields, new endpoints, bug fixes, performance improvements do NOT require version bump
 - [ ] Major version deprecation is announced in the changelog and via admin UI notification
-- [ ] `/api/v1/changelog` endpoint has unit tests
+- [x] `/api/v1/changelog` endpoint has unit tests
 - [x] `DeprecationHeaderMiddleware` has unit tests
 - [ ] BDD feature files exist for versioning/deprecation behaviour
 
-## Known Gaps - No dedicated PRD section for API versioning — policy lives in `backend/docs/operations/api-versioning.md` only
+## Known Gaps
+
+- No dedicated PRD section for API versioning — policy lives in `backend/docs/operations/api-versioning.md` only
 - `DeprecationHeaderMiddleware.deprecate()` is never called — no real endpoint is registered as deprecated
 - No version routing mechanism exists — `/api/v1/` is hardcoded in every router's `APIRouter(prefix="/api/v1/...")`, making parallel version support impossible without significant refactoring
 - No migration guides exist at `docs/operations/migrations/`
 - Changelog has only a single seed entry (`"1.0"`) — no mechanism for programmatic entry addition
-- No unit tests for the changelog endpoint (`DeprecationHeaderMiddleware` tests exist at `backend/tests/unit/api/test_deprecation_headers.py`)
 - No BDD feature files for API versioning behaviour
 - `410 Gone` grace period behaviour is documented policy but not implemented
-- The "at most two major versions supported" policy cannot currently be enforced without a version routing mechanism 
+- The "at most two major versions supported" policy cannot currently be enforced without a version routing mechanism
+
+## Error Handling
+
+- [x] `GET /api/v1/changelog` returns empty list when no entries exist (no crash)
+- [x] `GET /api/v1/changelog/latest` returns 404 when no entries exist
+- [x] Frontend shows inline error on fetch failure with retry button
+- [x] Frontend shows empty state when no changelog entries exist
+
+## Edge Cases
+
+- [x] Single changelog entry renders correctly
+- [ ] No changelog entries — `_SEED_ENTRIES` is statically seeded but has no programmatic API to add entries
+- [ ] Changelog entries are lost on server restart (in-memory only)
+
+## Resilience & Integration Robustness
+
+- [x] Middleware prefix matching handles sub-paths correctly
+- [x] Unknown path requests get no deprecation headers (no false positives)
+
+## QA History
+
+- 2026-07-05: cross-cutting QA (index 157): Fixed MAJOR — added 5 unit tests for changelog endpoints (list, latest, empty 404, model fields, migration_url). Fixed MAJOR — replaced 2 hardcoded error strings in ApiChangelogView.vue with $t() wrappers, added 2 i18n keys to en-US. Added Error Handling, Edge Cases, Resilience sections to product map. Created website docs stub.
