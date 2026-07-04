@@ -49,7 +49,7 @@ class CompositeBinding(BaseModel):
     """
 
     composite_template_id: uuid.UUID
-    composite_version: str
+    composite_version: str = Field(min_length=1)
     parameter_values: dict[str, Any] = Field(default_factory=dict)
     input_mapping: dict[str, Any] | None = None
     output_mapping: dict[str, Any] | None = None
