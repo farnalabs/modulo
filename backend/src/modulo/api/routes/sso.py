@@ -6,6 +6,7 @@ from typing import Any
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from fastapi.responses import PlainTextResponse, RedirectResponse
 from pydantic import BaseModel
+from sqlalchemy.exc import ProgrammingError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.api.dependencies import get_db_session, require_feature
@@ -134,6 +135,7 @@ async def saml_login(
     request: Request,
     _: None = require_feature("sso"),
     settings: Settings = Depends(get_settings),
+    session: AsyncSession = Depends(get_db_session),
 ) -> Any:
     """Redirect the user to the SAML IdP for authentication."""
 
@@ -144,6 +146,12 @@ async def saml_login(
         auth_url, _ = await saml_get_auth_url(settings, acs_url)
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from None
+    except ProgrammingError as exc:
+        _log.warning("SAML login failed — DB table missing: %s", exc)
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="Feature is not available. Run database migrations to enable it.",
+        ) from exc
 
     return Response(status_code=status.HTTP_307_TEMPORARY_REDIRECT, headers={"Location": auth_url})
 
@@ -177,6 +185,12 @@ async def saml_acs(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail=str(exc),
         ) from None
+    except ProgrammingError as exc:
+        _log.warning("SAML ACS failed — DB table missing: %s", exc)
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="Feature is not available. Run database migrations to enable it.",
+        ) from exc
 
     await session.commit()
     return _redirect_to_frontend(tokens, settings)

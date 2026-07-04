@@ -863,7 +863,10 @@ class TestSamlFetchIdpMetadata:
 
             result = await _saml_fetch_idp_metadata(settings)
             assert result == "<md>remote</md>"
-            mock_client.get.assert_awaited_once_with("https://idp.example.com/metadata", timeout=15)
+            mock_client.get.assert_awaited_once()
+            call_args, call_kwargs = mock_client.get.await_args
+            assert call_args[0] == "https://idp.example.com/metadata"
+            assert call_kwargs["timeout"].connect == 5.0
 
     async def test_raises_when_not_configured(self) -> None:
         from modulo.auth.sso import _saml_fetch_idp_metadata
