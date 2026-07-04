@@ -142,3 +142,12 @@ WebSocket auth tokens, algorithm pinning, and SECRET_KEY entropy enforcement (PR
 - Added `test_ws_token_jwt_expiry_matches_settings` unit test
 - Enriched product map entry with full behaviour list (was a stub)
 - Status changed from `gap` to `partial`
+
+### 2026-07-05 — Cross-cutting QA (improve-architecture index 149)
+- Fixed CRITICAL: added ProgrammingError→501 catches to all 4 DB-accessing auth routes (login, refresh, logout, me)
+- Fixed MAJOR: logout() now checks blacklist_family result and logs warning if family not found
+- Created test_auth_programming_error.py (5 test cases: 4 ProgrammingError→501 + 1 idempotent logout)
+- Added Error Handling section (4 behaviour checkboxes) to product map
+- Added 2 new edge cases (blacklisted family idempotent, login DB failure 501)
+- Added unit-tests frontmatter ref to new test file
+- Status: partial (9 known gaps remain)
