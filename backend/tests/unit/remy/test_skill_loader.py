@@ -1,12 +1,31 @@
 """Unit tests for SkillLoader — YAML frontmatter parsing and system prompt assembly."""
 
 import uuid
+from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
 from modulo.core.remy.skill_loader import SkillEntry, SkillLoader
+from modulo.core.remy.config_service import RemyConfig
 from modulo.db.models.remy_skill import RemySkill
+
+
+def _mock_skill(
+    name: str,
+    body: str = "Body",
+    source_mode: str | None = None,
+    **kwargs: Any,
+) -> MagicMock:
+    skill = MagicMock(spec=RemySkill)
+    skill.id = uuid.uuid4()
+    skill.name = name
+    skill.description = kwargs.get("description")
+    skill.triggers = kwargs.get("triggers")
+    skill.body = body
+    skill.active = True
+    skill.source_mode = source_mode
+    return skill
 
 
 class TestParseSkillMarkdown:
@@ -115,13 +134,7 @@ class TestSkillLoaderGetSkills:
         return SkillLoader(mock_session)
 
     async def test_get_org_skills_returns_skill_entries(self, loader: SkillLoader, mock_session: AsyncMock) -> None:
-        mock_skill = MagicMock(spec=RemySkill)
-        mock_skill.id = uuid.uuid4()
-        mock_skill.name = "code-review"
-        mock_skill.description = "Review code changes"
-        mock_skill.triggers = ["on_pr"]
-        mock_skill.body = "Check for security issues"
-        mock_skill.active = True
+        mock_skill = _mock_skill("code-review", source_mode=None, description="Review code changes")
 
         scalars_mock = MagicMock()
         scalars_mock.all = MagicMock(return_value=[mock_skill])
@@ -133,6 +146,7 @@ class TestSkillLoaderGetSkills:
         assert len(skills) == 1
         assert isinstance(skills[0], SkillEntry)
         assert skills[0].name == "code-review"
+        assert skills[0].source_mode is None
 
     async def test_get_org_skills_empty(self, loader: SkillLoader, mock_session: AsyncMock) -> None:
         scalars_mock = MagicMock()
@@ -145,13 +159,7 @@ class TestSkillLoaderGetSkills:
         assert skills == []
 
     async def test_get_user_skills_returns_skill_entries(self, loader: SkillLoader, mock_session: AsyncMock) -> None:
-        mock_skill = MagicMock(spec=RemySkill)
-        mock_skill.id = uuid.uuid4()
-        mock_skill.name = "my-prompt"
-        mock_skill.description = None
-        mock_skill.triggers = None
-        mock_skill.body = "Be concise"
-        mock_skill.active = True
+        mock_skill = _mock_skill("my-prompt", source_mode=None, description=None)
 
         scalars_mock = MagicMock()
         scalars_mock.all = MagicMock(return_value=[mock_skill])
@@ -174,6 +182,39 @@ class TestSkillLoaderGetSkills:
         assert skills == []
 
 
+class _CtxSourceStub:
+    """Stub that returns a config with context source modes, overridable per key."""
+
+    def __init__(self, overrides: dict[str, str] | None = None) -> None:
+        self._overrides = overrides or {}
+
+    async def get_effective_config(self, org_id: uuid.UUID, user_id: uuid.UUID) -> RemyConfig:
+        builtins: dict[str, str] = {
+            "page_context": "always_on",
+            "user_profile": "always_on",
+            "product_primer": "always_on",
+            "product_docs": "tool",
+            "integration_status": "tool",
+            "org_config": "tool",
+            "feature_overview": "tool",
+        }
+        merged = dict(builtins)
+        merged.update(self._overrides)
+        cfg = RemyConfig()
+        cfg.context_sources = merged
+        return cfg
+
+
+class _ConfigServiceStub:
+    """Stub that returns a canned RemyConfig."""
+
+    def __init__(self, **attrs: Any) -> None:
+        self._config = RemyConfig(**attrs)
+
+    async def get_config(self, org_id: uuid.UUID) -> RemyConfig:
+        return self._config
+
+
 class TestSkillLoaderBuildSystemPrompt:
     """Tests for SkillLoader.build_system_prompt."""
 
@@ -181,195 +222,262 @@ class TestSkillLoaderBuildSystemPrompt:
     def loader(self, mock_session: AsyncMock) -> SkillLoader:
         return SkillLoader(mock_session)
 
+    async def _run(
+        self,
+        loader: SkillLoader,
+        org_id: uuid.UUID,
+        user_id: uuid.UUID,
+        config_kwargs: dict[str, Any] | None = None,
+        ctx_overrides: dict[str, str] | None = None,
+        page_context: str | None = None,
+        system_prompt_override: str | None = None,
+        include_ui_tools_text: bool = False,
+    ) -> str:
+        cfg_stub = _ConfigServiceStub(**(config_kwargs or {}))
+        ctx_stub = _CtxSourceStub(overrides=ctx_overrides)
+        with (
+            patch.object(loader, "_config_service", cfg_stub),
+            patch("modulo.core.remy.skill_loader.RemyContextSourceService", return_value=ctx_stub),
+        ):
+            return await loader.build_system_prompt(
+                org_id=org_id,
+                user_id=user_id,
+                page_context=page_context,
+                system_prompt_override=system_prompt_override,
+                include_ui_tools_text=include_ui_tools_text,
+            )
+
+    # ── Existing tests (adapted to new architecture) ──────────────────
+
     async def test_with_config_system_prompt_only(
         self, loader: SkillLoader, mock_session: AsyncMock, org_id: uuid.UUID, user_id: uuid.UUID,
     ) -> None:
-        with (
-            patch("modulo.core.remy.config_service.RemyConfigService") as mock_cfg_svc,
-        ):
-            mock_config = MagicMock()
-            mock_config.system_prompt = "You are a helpful assistant."
-            mock_config.additional_guidance = ""
-            mock_instance = AsyncMock()
-            mock_instance.get_config = AsyncMock(return_value=mock_config)
-            mock_cfg_svc.return_value = mock_instance
-
-            # Empty queries for skills
-            scalars_mock = MagicMock()
-            scalars_mock.all = MagicMock(return_value=[])
-            mock_result = MagicMock()
-            mock_result.scalars = MagicMock(return_value=scalars_mock)
-            mock_session.execute = AsyncMock(return_value=mock_result)
-
-            prompt = await loader.build_system_prompt(org_id, user_id)
-            assert "You are a helpful assistant." in prompt
-            assert "Organisation Skills" not in prompt
-            assert "User Skills" not in prompt
+        prompt = await self._run(loader, org_id, user_id,
+                                 config_kwargs={"system_prompt": "You are a helpful assistant."})
+        assert "You are a helpful assistant." in prompt
+        assert "Organisation Skills" not in prompt
+        assert "User Skills" not in prompt
 
     async def test_with_page_context(
         self, loader: SkillLoader, mock_session: AsyncMock, org_id: uuid.UUID, user_id: uuid.UUID,
     ) -> None:
-        with (
-            patch("modulo.core.remy.config_service.RemyConfigService") as mock_cfg_svc,
-        ):
-            mock_config = MagicMock()
-            mock_config.system_prompt = "System prompt."
-            mock_config.additional_guidance = ""
-            mock_instance = AsyncMock()
-            mock_instance.get_config = AsyncMock(return_value=mock_config)
-            mock_cfg_svc.return_value = mock_instance
-
-            scalars_mock = MagicMock()
-            scalars_mock.all = MagicMock(return_value=[])
-            mock_result = MagicMock()
-            mock_result.scalars = MagicMock(return_value=scalars_mock)
-            mock_session.execute = AsyncMock(return_value=mock_result)
-
-            prompt = await loader.build_system_prompt(org_id, user_id, page_context="User is on the Reports page")
-            assert "Page Context" in prompt
-            assert "User is on the Reports page" in prompt
+        prompt = await self._run(loader, org_id, user_id,
+                                 config_kwargs={"system_prompt": "System prompt."},
+                                 page_context="User is on the Reports page")
+        assert "Page Context" in prompt
+        assert "User is on the Reports page" in prompt
 
     async def test_with_org_and_user_skills(
         self, loader: SkillLoader, mock_session: AsyncMock, org_id: uuid.UUID, user_id: uuid.UUID,
     ) -> None:
-        with (
-            patch("modulo.core.remy.config_service.RemyConfigService") as mock_cfg_svc,
-        ):
-            mock_config = MagicMock()
-            mock_config.system_prompt = ""
-            mock_config.additional_guidance = ""
-            mock_instance = AsyncMock()
-            mock_instance.get_config = AsyncMock(return_value=mock_config)
-            mock_cfg_svc.return_value = mock_instance
+        org_skill = _mock_skill("org-skill", body="Org skill body", source_mode=None)
+        user_skill = _mock_skill("user-skill", body="User skill body", source_mode=None)
 
-            org_skill = MagicMock(spec=RemySkill)
-            org_skill.id = uuid.uuid4()
-            org_skill.name = "org-skill"
-            org_skill.body = "Org skill body"
-            org_skill.description = None
-            org_skill.triggers = None
-            org_skill.active = True
+        org_scalars = MagicMock()
+        org_scalars.all = MagicMock(return_value=[org_skill])
+        user_scalars = MagicMock()
+        user_scalars.all = MagicMock(return_value=[user_skill])
 
-            user_skill = MagicMock(spec=RemySkill)
-            user_skill.id = uuid.uuid4()
-            user_skill.name = "user-skill"
-            user_skill.body = "User skill body"
-            user_skill.description = None
-            user_skill.triggers = None
-            user_skill.active = True
+        org_result = MagicMock()
+        org_result.scalars = MagicMock(return_value=org_scalars)
+        user_result = MagicMock()
+        user_result.scalars = MagicMock(return_value=user_scalars)
 
-            # First execute call = org skills, second = user skills
-            org_scalars = MagicMock()
-            org_scalars.all = MagicMock(return_value=[org_skill])
-            user_scalars = MagicMock()
-            user_scalars.all = MagicMock(return_value=[user_skill])
+        mock_session.execute = AsyncMock(
+            side_effect=[org_result, user_result],
+        )
 
-            mock_session.execute = AsyncMock(
-                side_effect=[
-                    MagicMock(scalars=MagicMock(return_value=org_scalars)),
-                    MagicMock(scalars=MagicMock(return_value=user_scalars)),
-                ],
-            )
-
-            prompt = await loader.build_system_prompt(org_id, user_id)
-            assert "Organisation Skills" in prompt
-            assert "org-skill" in prompt
-            assert "Org skill body" in prompt
-            assert "User Skills" in prompt
-            assert "user-skill" in prompt
-            assert "User skill body" in prompt
+        prompt = await self._run(loader, org_id, user_id,
+                                 config_kwargs={"system_prompt": "", "additional_guidance": ""},
+                                 ctx_overrides={"user_profile": "off", "product_docs": "off",
+                                                "integration_status": "off", "org_config": "off",
+                                                "feature_overview": "off", "product_primer": "off"})
+        assert "Organisation Skills" in prompt
+        assert "org-skill" in prompt
+        assert "Org skill body" in prompt
+        assert "User Skills" in prompt
+        assert "user-skill" in prompt
+        assert "User skill body" in prompt
 
     async def test_with_additional_guidance(
         self, loader: SkillLoader, mock_session: AsyncMock, org_id: uuid.UUID, user_id: uuid.UUID,
     ) -> None:
-        with (
-            patch("modulo.core.remy.config_service.RemyConfigService") as mock_cfg_svc,
-        ):
-            mock_config = MagicMock()
-            mock_config.system_prompt = "You are helpful."
-            mock_config.additional_guidance = "Always be concise."
-            mock_instance = AsyncMock()
-            mock_instance.get_config = AsyncMock(return_value=mock_config)
-            mock_cfg_svc.return_value = mock_instance
-
-            scalars_mock = MagicMock()
-            scalars_mock.all = MagicMock(return_value=[])
-            mock_result = MagicMock()
-            mock_result.scalars = MagicMock(return_value=scalars_mock)
-            mock_session.execute = AsyncMock(return_value=mock_result)
-
-            prompt = await loader.build_system_prompt(org_id, user_id)
-            assert "You are helpful." in prompt
-            assert "Always be concise." in prompt
+        prompt = await self._run(loader, org_id, user_id,
+                                 config_kwargs={"system_prompt": "You are helpful.",
+                                                "additional_guidance": "Always be concise."})
+        assert "You are helpful." in prompt
+        assert "Always be concise." in prompt
 
     async def test_with_no_config_or_skills(
         self, loader: SkillLoader, mock_session: AsyncMock, org_id: uuid.UUID, user_id: uuid.UUID,
     ) -> None:
-        with (
-            patch("modulo.core.remy.config_service.RemyConfigService") as mock_cfg_svc,
-        ):
-            mock_config = MagicMock()
-            mock_config.system_prompt = ""
-            mock_config.additional_guidance = ""
-            mock_instance = AsyncMock()
-            mock_instance.get_config = AsyncMock(return_value=mock_config)
-            mock_cfg_svc.return_value = mock_instance
-
-            scalars_mock = MagicMock()
-            scalars_mock.all = MagicMock(return_value=[])
-            mock_result = MagicMock()
-            mock_result.scalars = MagicMock(return_value=scalars_mock)
-            mock_session.execute = AsyncMock(return_value=mock_result)
-
-            prompt = await loader.build_system_prompt(org_id, user_id)
-            assert prompt == ""
+        prompt = await self._run(loader, org_id, user_id,
+                                 config_kwargs={"system_prompt": "", "additional_guidance": ""},
+                                 ctx_overrides={"product_docs": "off", "integration_status": "off",
+                                                "org_config": "off", "feature_overview": "off",
+                                                "user_profile": "off", "product_primer": "off"})
+        assert prompt == ""
 
     async def test_with_include_ui_tools_text_false_excludes_tools(
         self, loader: SkillLoader, mock_session: AsyncMock, org_id: uuid.UUID, user_id: uuid.UUID,
     ) -> None:
-        with (
-            patch("modulo.core.remy.config_service.RemyConfigService") as mock_cfg_svc,
-        ):
-            mock_config = MagicMock()
-            mock_config.system_prompt = "You are helpful."
-            mock_config.additional_guidance = ""
-            mock_instance = AsyncMock()
-            mock_instance.get_config = AsyncMock(return_value=mock_config)
-            mock_cfg_svc.return_value = mock_instance
-
-            scalars_mock = MagicMock()
-            scalars_mock.all = MagicMock(return_value=[])
-            mock_result = MagicMock()
-            mock_result.scalars = MagicMock(return_value=scalars_mock)
-            mock_session.execute = AsyncMock(return_value=mock_result)
-
-            prompt = await loader.build_system_prompt(org_id, user_id, include_ui_tools_text=False)
-            assert "Browser Tools Available (Text Mode)" not in prompt
-            assert "**navigate**" not in prompt
+        prompt = await self._run(loader, org_id, user_id,
+                                 config_kwargs={"system_prompt": "You are helpful."})
+        assert "Browser Tools Available (Text Mode)" not in prompt
 
     async def test_with_include_ui_tools_text_true_includes_tools(
         self, loader: SkillLoader, mock_session: AsyncMock, org_id: uuid.UUID, user_id: uuid.UUID,
     ) -> None:
-        with (
-            patch("modulo.core.remy.config_service.RemyConfigService") as mock_cfg_svc,
-        ):
-            mock_config = MagicMock()
-            mock_config.system_prompt = "You are helpful."
-            mock_config.additional_guidance = ""
-            mock_instance = AsyncMock()
-            mock_instance.get_config = AsyncMock(return_value=mock_config)
-            mock_cfg_svc.return_value = mock_instance
+        prompt = await self._run(loader, org_id, user_id,
+                                 config_kwargs={"system_prompt": "You are helpful."},
+                                 include_ui_tools_text=True)
+        assert "Browser Tools Available (Text Mode)" in prompt
+        assert "**navigate**(path:" in prompt
 
-            scalars_mock = MagicMock()
-            scalars_mock.all = MagicMock(return_value=[])
-            mock_result = MagicMock()
-            mock_result.scalars = MagicMock(return_value=scalars_mock)
-            mock_session.execute = AsyncMock(return_value=mock_result)
+    # ── New tests for context source filtering ────────────────────────
 
-            prompt = await loader.build_system_prompt(org_id, user_id, include_ui_tools_text=True)
-            assert "Browser Tools Available (Text Mode)" in prompt
-            assert "**navigate**(path:" in prompt
-            assert "**click**(selector:" in prompt
+    async def test_product_primer_included_when_always_on(
+        self, loader: SkillLoader, mock_session: AsyncMock, org_id: uuid.UUID, user_id: uuid.UUID,
+    ) -> None:
+        prompt = await self._run(loader, org_id, user_id,
+                                 config_kwargs={"system_prompt": "Base.",
+                                                "product_primer": "We build Modulo."})
+        assert "Product Overview" in prompt
+        assert "We build Modulo." in prompt
+
+    async def test_product_primer_skipped_when_off(
+        self, loader: SkillLoader, mock_session: AsyncMock, org_id: uuid.UUID, user_id: uuid.UUID,
+    ) -> None:
+        prompt = await self._run(loader, org_id, user_id,
+                                 config_kwargs={"system_prompt": "Base.",
+                                                "product_primer": "We build Modulo."},
+                                 ctx_overrides={"product_primer": "off"})
+        assert "Product Overview" not in prompt
+
+    async def test_product_primer_skipped_when_empty(
+        self, loader: SkillLoader, mock_session: AsyncMock, org_id: uuid.UUID, user_id: uuid.UUID,
+    ) -> None:
+        prompt = await self._run(loader, org_id, user_id,
+                                 config_kwargs={"system_prompt": "Base.", "product_primer": ""})
+        assert "Product Overview" not in prompt
+
+    async def test_knowledge_tools_section_includes_tool_sources(
+        self, loader: SkillLoader, mock_session: AsyncMock, org_id: uuid.UUID, user_id: uuid.UUID,
+    ) -> None:
+        prompt = await self._run(loader, org_id, user_id,
+                                 config_kwargs={"system_prompt": "Base."})
+        assert "Available Knowledge Tools" in prompt
+        assert "get_documentation" in prompt
+        assert "get_integration_status" in prompt
+        assert "get_org_config" in prompt
+        assert "get_available_features" in prompt
+
+    async def test_knowledge_tools_skipped_when_no_tool_sources(
+        self, loader: SkillLoader, mock_session: AsyncMock, org_id: uuid.UUID, user_id: uuid.UUID,
+    ) -> None:
+        prompt = await self._run(loader, org_id, user_id,
+                                 config_kwargs={"system_prompt": "Base."},
+                                 ctx_overrides={"product_docs": "off", "integration_status": "off",
+                                                "org_config": "off", "feature_overview": "off"})
+        assert "Available Knowledge Tools" not in prompt
+
+    async def test_user_profile_included_when_always_on(
+        self, loader: SkillLoader, mock_session: AsyncMock, org_id: uuid.UUID, user_id: uuid.UUID,
+    ) -> None:
+        prompt = await self._run(loader, org_id, user_id,
+                                 config_kwargs={"system_prompt": "Base."},
+                                 ctx_overrides={"user_profile": "always_on", "product_docs": "off",
+                                                "integration_status": "off", "org_config": "off",
+                                                "feature_overview": "off"})
+        # No DB match => no profile block, but method is called
+        assert "User Profile" not in prompt
+
+    async def test_user_profile_skipped_when_off(
+        self, loader: SkillLoader, mock_session: AsyncMock, org_id: uuid.UUID, user_id: uuid.UUID,
+    ) -> None:
+        prompt = await self._run(loader, org_id, user_id,
+                                 config_kwargs={"system_prompt": "Base."},
+                                 ctx_overrides={"user_profile": "off", "product_docs": "off",
+                                                "integration_status": "off", "org_config": "off",
+                                                "feature_overview": "off"})
+        assert "User Profile" not in prompt
+
+    async def test_skills_filtered_by_source_mode(
+        self, loader: SkillLoader, mock_session: AsyncMock, org_id: uuid.UUID, user_id: uuid.UUID,
+    ) -> None:
+        always_on = _mock_skill("always-on-skill", source_mode="always_on", body="Always")
+        tool_mode = _mock_skill("tool-skill", source_mode="tool", body="Tool")
+        off_mode = _mock_skill("off-skill", source_mode="off", body="Off")
+        null_mode = _mock_skill("null-skill", source_mode=None, body="Null")
+
+        scalars = MagicMock()
+        scalars.all = MagicMock(return_value=[always_on, tool_mode, off_mode, null_mode])
+        mock_result = MagicMock()
+        mock_result.scalars = MagicMock(return_value=scalars)
+
+        # user_profile is off → only 2 execute calls (org_skills, user_skills)
+        mock_session.execute = AsyncMock(
+            side_effect=[mock_result, mock_result],
+        )
+
+        prompt = await self._run(loader, org_id, user_id,
+                                 config_kwargs={"system_prompt": "Base."},
+                                 ctx_overrides={"product_docs": "off", "integration_status": "off",
+                                                "org_config": "off", "feature_overview": "off",
+                                                "user_profile": "off", "product_primer": "off"})
+        # always-on and null skills appear in the skills block
+        assert "always-on-skill" in prompt
+        assert "Always" in prompt
+        assert "null-skill" in prompt
+        assert "Null" in prompt
+
+        # tool-mode skill is NOT injected directly
+        assert "tool-skill" not in prompt
+
+        # off-mode skill is absent entirely
+        assert "off-skill" not in prompt
+
+    async def test_tool_skills_listed_in_knowledge_tools(
+        self, loader: SkillLoader, mock_session: AsyncMock, org_id: uuid.UUID, user_id: uuid.UUID,
+    ) -> None:
+        tool_skill = _mock_skill("qa-review", source_mode="tool", description="Review quality")
+        always_on_skill = _mock_skill("auto-fix", source_mode="always_on", body="Auto")
+
+        scalars = MagicMock()
+        scalars.all = MagicMock(return_value=[tool_skill, always_on_skill])
+        mock_result = MagicMock()
+        mock_result.scalars = MagicMock(return_value=scalars)
+
+        mock_session.execute = AsyncMock(
+            side_effect=[mock_result, mock_result],
+        )
+
+        prompt = await self._run(loader, org_id, user_id,
+                                 config_kwargs={"system_prompt": "Base."},
+                                 ctx_overrides={"product_docs": "off", "integration_status": "off",
+                                                "org_config": "off", "feature_overview": "off",
+                                                "user_profile": "off", "product_primer": "off"})
+        # get_skill tool appears when tool-mode skills exist
+        assert "Available Knowledge Tools" in prompt
+        assert "get_skill(name)" in prompt
+
+    async def test_prompt_composition_order(
+        self, loader: SkillLoader, mock_session: AsyncMock, org_id: uuid.UUID, user_id: uuid.UUID,
+    ) -> None:
+        prompt = await self._run(loader, org_id, user_id,
+                                 config_kwargs={"system_prompt": "System prompt.",
+                                                "additional_guidance": "Additional guidance.",
+                                                "product_primer": "Product overview."},
+                                 page_context="Page context.",
+                                 ctx_overrides={"user_profile": "off"})
+        # Check sections appear in order
+        sys_idx = prompt.index("System prompt.")
+        add_idx = prompt.index("Additional guidance.")
+        prod_idx = prompt.index("Product Overview")
+        page_idx = prompt.index("Page Context")
+        tools_idx = prompt.index("Available Knowledge Tools")
+
+        assert sys_idx < add_idx < prod_idx < page_idx < tools_idx
 
 
 class TestSkillLoaderToEntry:
@@ -384,11 +492,13 @@ class TestSkillLoaderToEntry:
         mock_skill.triggers = ["trigger"]
         mock_skill.body = "---\nversion: 1\n---\nBody content"
         mock_skill.active = True
+        mock_skill.source_mode = "tool"
 
         entry = loader._to_entry(mock_skill)
         assert entry.name == "test"
         assert entry.frontmatter == {"version": "1"}
         assert entry.body == "Body content"
+        assert entry.source_mode == "tool"
 
     def test_converts_orm_to_entry_without_frontmatter(self) -> None:
         loader = SkillLoader.__new__(SkillLoader)
@@ -398,7 +508,10 @@ class TestSkillLoaderToEntry:
         mock_skill.description = None
         mock_skill.triggers = None
         mock_skill.body = "Plain body text"
+        mock_skill.active = True
+        mock_skill.source_mode = None
 
         entry = loader._to_entry(mock_skill)
         assert entry.frontmatter is None
         assert entry.body == "Plain body text"
+        assert entry.source_mode is None
