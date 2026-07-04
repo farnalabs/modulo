@@ -8,6 +8,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from fastapi.responses import JSONResponse
 from jose import JWTError
 from pydantic import BaseModel, Field
+from sqlalchemy.exc import ProgrammingError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.api.dependencies import get_db_session
@@ -91,34 +92,41 @@ async def login(
     ip = _client_ip(request)
     limiter = get_auth_rate_limiter(settings)
 
-    async with session.begin():
-        account = await get_account_by_email(session, body.email)
-        if not account or not authenticate_db_user(body.password, account):
-            await limiter.record_failure(ip)
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="Incorrect email or password",
-            )
+    try:
+        async with session.begin():
+            account = await get_account_by_email(session, body.email)
+            if not account or not authenticate_db_user(body.password, account):
+                await limiter.record_failure(ip)
+                raise HTTPException(
+                    status_code=status.HTTP_401_UNAUTHORIZED,
+                    detail="Incorrect email or password",
+                )
 
-        await limiter.record_success(ip)
-        await update_last_login(session, account.id)
+            await limiter.record_success(ip)
+            await update_last_login(session, account.id)
 
-        memberships = await list_memberships_for_account(session, account.id)
-        if not memberships and not account.is_system_admin:
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="Account has no org memberships",
-            )
+            memberships = await list_memberships_for_account(session, account.id)
+            if not memberships and not account.is_system_admin:
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail="Account has no org memberships",
+                )
 
-        if memberships:
-            membership = memberships[0]
-            org_id = membership.organisation_id
-            org_role = membership.role
-        else:
-            org_id = None
-            org_role = None
+            if memberships:
+                membership = memberships[0]
+                org_id = membership.organisation_id
+                org_role = membership.role
+            else:
+                org_id = None
+                org_role = None
 
-        family = await create_family(session, account.id, org_id)
+            family = await create_family(session, account.id, org_id)
+    except ProgrammingError:
+        _log.warning("login.programming_error")
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="Feature is not available. Run database migrations to enable it.",
+        )
 
     access_token = create_access_token(
         account.email,
@@ -181,7 +189,14 @@ async def refresh(
             detail="Invalid refresh token family",
         ) from exc
 
-    new_sequence, theft_detected = await advance_sequence(session, family_uuid, sequence)
+    try:
+        new_sequence, theft_detected = await advance_sequence(session, family_uuid, sequence)
+    except ProgrammingError:
+        _log.warning("refresh.programming_error")
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="Feature is not available. Run database migrations to enable it.",
+        )
     if theft_detected:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
@@ -238,7 +253,16 @@ async def logout(
     if isinstance(family_id_val, str):
         try:
             family_uuid = uuid.UUID(family_id_val)
-            await blacklist_family(session, family_uuid)
+            try:
+                blacklisted = await blacklist_family(session, family_uuid)
+                if not blacklisted:
+                    _log.warning("logout.family_not_found", extra={"family_id": family_id_val})
+            except ProgrammingError:
+                _log.warning("logout.programming_error")
+                raise HTTPException(
+                    status_code=status.HTTP_501_NOT_IMPLEMENTED,
+                    detail="Feature is not available. Run database migrations to enable it.",
+                )
         except ValueError:
             pass
 
@@ -300,7 +324,14 @@ async def me(
     current_user: AuthenticatedPrincipal = Depends(get_current_user),
     session: AsyncSession = Depends(get_db_session),
 ) -> MeResponse:
-    account = await get_account_by_id(session, current_user.account_id)
+    try:
+        account = await get_account_by_id(session, current_user.account_id)
+    except ProgrammingError:
+        _log.warning("me.programming_error")
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="Feature is not available. Run database migrations to enable it.",
+        )
     if account is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Account not found")
     return MeResponse(
