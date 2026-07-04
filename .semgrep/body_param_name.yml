@@ -1,0 +1,13 @@
+rules:
+  - id: body-parameter-name-collision
+    patterns:
+      - pattern-inside: |
+          @$ROUTER.$METHOD(...)
+          async def $HANDLER(...):
+            ...
+      - pattern-regex: '^\s+body\s*:\s*\w+'
+    message: "FastAPI can collide with parameters named 'body' — rename to 'req' or another non-reserved name"
+    languages: [python]
+    severity: WARNING
+    paths:
+      include: ["**/backend/src/**"]
