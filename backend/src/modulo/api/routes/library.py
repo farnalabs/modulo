@@ -311,6 +311,11 @@ async def list_library_primitives_endpoint(
     )
 
 
+@router.get("/ping")
+async def ping():
+    return {"pong": True}
+
+
 @router.get("/{primitive_id}", response_model=LibraryPrimitiveResponse)
 async def get_library_primitive_endpoint(
     primitive_id: uuid.UUID,
@@ -951,10 +956,6 @@ def _build_pipeline_from_template(
 
     return name, description, pipeline_nodes, pipeline_edges, len(agents), len(edges)
 
-
-@router.get("/ping")
-async def ping():
-    return {"pong": True}
 
 @router.post(
     "/{primitive_id}/create-pipeline",
