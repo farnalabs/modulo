@@ -10,6 +10,7 @@ unit-tests:
   - backend/tests/unit/core/cost_controller/test_cost_controller.py
   - backend/tests/unit/api/test_costs.py
   - backend/tests/unit/api/test_cost_controls_bdd.py
+  - backend/tests/unit/api/test_costs_programming_error.py
   - backend/tests/integration/crud/test_cost_attribution.py
 bdd:
   - backend/tests/bdd/features/costs/cost_controls.feature
@@ -105,18 +106,18 @@ Discovered from 1 completed delivery tasks.
 
 ### Error Handling
 
-- [ ] ProgrammingError on GET /api/v1/admin/costs returns 501
-- [ ] ProgrammingError on GET /api/v1/admin/costs/limits returns 501
-- [ ] ProgrammingError on PUT /api/v1/admin/costs/limits/org returns 501
-- [ ] ProgrammingError on PUT /api/v1/admin/costs/limits/teams/{id} returns 501
-- [ ] ProgrammingError on GET /api/v1/admin/costs/controls returns 501
-- [ ] ProgrammingError on PUT /api/v1/admin/costs/controls returns 501
-- [ ] ProgrammingError on GET /api/v1/admin/costs/export returns 501
-- [ ] ProgrammingError on POST /api/v1/admin/costs/reports returns 501
-- [ ] ProgrammingError on GET /api/v1/admin/costs/reports returns 501
-- [ ] ProgrammingError on DELETE /api/v1/admin/costs/reports/{id} returns 501
-- [ ] ProgrammingError on GET /api/v1/admin/costs/anomalies returns 501
-- [ ] ProgrammingError on GET /api/v1/admin/costs/anomalies/dismiss/{id} returns 501
+- [x] ProgrammingError on GET /api/v1/admin/costs returns 501
+- [x] ProgrammingError on GET /api/v1/admin/costs/limits returns 501
+- [x] ProgrammingError on PUT /api/v1/admin/costs/limits/org returns 501
+- [x] ProgrammingError on PUT /api/v1/admin/costs/limits/teams/{id} returns 501
+- [x] ProgrammingError on GET /api/v1/admin/costs/controls returns 501
+- [x] ProgrammingError on PUT /api/v1/admin/costs/controls returns 501
+- [x] ProgrammingError on GET /api/v1/admin/costs/export returns 501
+- [x] ProgrammingError on POST /api/v1/admin/costs/reports returns 501
+- [x] ProgrammingError on GET /api/v1/admin/costs/reports returns 501
+- [x] ProgrammingError on DELETE /api/v1/admin/costs/reports/{id} returns 501
+- [x] ProgrammingError on GET /api/v1/admin/costs/anomalies returns 501
+- [x] ProgrammingError on GET /api/v1/admin/costs/anomalies/dismiss/{id} returns 501
 
 ### PRD — Missing from code (future scope)
 
@@ -136,6 +137,4 @@ Discovered from 1 completed delivery tasks.
 - `config/model_pricing.yaml` does not exist yet
 - Token-level accumulation via LLM callback not wired up
 - Anomalies route uses GET for dismiss action (should be POST/PATCH per REST conventions)
-- `_index.md` references `core/cost-controls.md` but file is named `core/cost-breakdown.md`
-- No website docs page for cost management
 - Integration tests skipped (awaiting fixture repair) 
