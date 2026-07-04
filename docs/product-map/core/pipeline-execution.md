@@ -11,7 +11,12 @@ code:
   - backend/src/modulo/core/pipeline_engine/
   - backend/src/modulo/core/graph_validator/
   - backend/src/modulo/db/crud/pipeline.py
-unit-tests: [backend/tests/unit/core/test_pipeline_engine.py]
+  - backend/src/modulo/api/routes/runs.py
+  - backend/src/modulo/api/routes/pipelines.py
+  - backend/src/modulo/api/routes/stages.py
+unit-tests:
+  - backend/tests/unit/core/test_pipeline_engine.py
+  - backend/tests/unit/api/test_pipeline_execution_programming_error.py
 depends-on: [feat-core-agent-model, feat-core-schema-system, feat-core-trigger-system]
 status: partial
 ---
@@ -80,31 +85,53 @@ StateGraph-based pipeline executor. Compiles pipeline config into a LangGraph gr
 
 ### Edge Cases
 
-- [ ] Empty pipeline (no nodes) → what happens? (should be validation error on save, not at run-time)
-- [x] Node returns None output → handled gracefully or crashes?
-- [ ] Post-HITL model backend unreachable → retry vs fail vs HITL re-engage?
-- [x] Two simultaneous runs of same pipeline → isolated state, no cross-contamination
-- [ ] Checkpoint restore with schema migration applied → old snapshots still load (version compatibility)
-- [ ] WebSocket reconnect mid-run → event replay catches client up
-- [ ] `cancelled` state mechanics: in-flight node finishes? or is interrupted mid-execution?
-- [x] Lock wait timeout: run queued behind another on same pipeline/agent → timeboxed or indefinite?
+- [ ] Empty pipeline (no nodes) → `graph_cache.py` raises `ValueError` which becomes HTTP 500 in `executor.py`'s catch-all `except Exception` handler. Should be structured validation error pre-run (already in Known Gaps).
+- [x] Node returns `None` output → handled gracefully, run continues to next node (BDD scenario in run_lifecycle.feature:35-39; unit test for _seed_state covers empty input)
+- [ ] Post-HITL model backend unreachable → no explicit handling. The model backend is pinned in snapshot, but if the backend becomes unreachable between approval and resume, no retry/fail/fallback logic exists.
+- [x] Two simultaneous runs of same pipeline → isolated state via SELECT FOR UPDATE + per-run thread_id, no cross-contamination (verified in executor.py `_wait_for_capacity_or_fail`)
+- [ ] Checkpoint restore with schema migration applied → old snapshots still load (version compatibility). `ModuloPostgresSaver` has no schema-version field on checkpoints.
+- [ ] WebSocket reconnect mid-run → `replay_since()` implemented in `event_broker.py:97` but has no BDD or unit test coverage.
+- [x] `cancelled` state mechanics: cancellation is checked BEFORE node execution (in `cancellable_node` decorator via state flag and DB-backed check). In-flight node finishes normally; cancellation takes effect at the next node boundary. Verified in `decorator.py:86-94` and `executor.py:484-488`.
+- [x] Lock wait timeout: timeboxed via `lock_wait_seconds` on pipeline config. `_wait_for_capacity_or_fail` polls with SELECT FOR UPDATE until deadline, then marks run as `failed` with error_code `lock_timeout`.
+- [ ] Oversized pipeline graph (>500 nodes or >1000 edges) → rejected at Pydantic validation layer in `PipelineGraphUpdate.reject_database_conflicts`, returns 422 with descriptive message before any DB work.
+- [x] Node timeout less than model backend latency → `TimeoutError` raised, run marked `failed` with `error_code="node_timeout"`. Verified in `_stream_graph` catch block and BDD scenario (error_recovery.feature:62-66).
+- [ ] Concurrent `resume()` calls for the same run → `aupdate_state` followed by `astream_events` — no locking around the resume path. Two concurrent resumes could race.
+- [ ] Graph cache key collision → key is `(pipeline_id, snapshot_id) UUID tuple` — astronomically unlikely but no bounds check on `_MAX_SIZE` (256 entry LRU). When full, eviction drops the oldest entry silently; no validation that eviction was intentional.
+- [ ] Manual node resume with invalid output schema → `_validate_against_schema` raises `ValueError`. This becomes `failed` with `error_code="ValueError"` — confusing because it's a validation failure, not a system error. Should produce a domain-specific error code.
 
 ### Error Handling
 
-- [ ] Model backend returns non-JSON → parsed gracefully, error in run detail
-- [ ] Connector hub decrypt fails → run marked failed, credential not logged
-- [ ] StateGraph compile error → validation error, not 500
-- [ ] DB connection lost mid-run → what happens to the in-memory graph state?
+- [ ] Model backend returns non-JSON → no handling in current stub node (model dispatch not yet plumbed fully). `_stream_graph` catches generic `Exception` which would catch a JSON decode error but the error code would be `JSONDecodeError`, not domain-specific.
+- [ ] Connector hub decrypt fails → no explicit handling in pipeline_engine code. Connector hub exceptions would propagate to executor's catch-all `except Exception`.
+- [x] StateGraph compile error → `ValueError` from `build_graph_from_json` (empty nodes, cycle, missing entry). Caught by `executor.py` catch-all, producing `error_code="ValueError"`. Not structured validation error. Pre-run validation via `GraphValidator` catches these before execution (checked in `validate_for_run`).
+- [ ] DB connection lost mid-run → no explicit handling. `ModuloPostgresSaver` would raise connection error. In-memory graph state is lost if checkpointer is unreachable (already in Known Gaps).
 - [x] OTel exporter unavailable → non-fatal, run continues (LangGraph defaults to raise_error=False for callbacks; verified)
+- [x] `ProgrammingError` on pipeline snapshot routes → 501 Not Implemented (snapshot endpoints, graph replace, node conversion in pipelines.py)
+- [ ] `ProgrammingError` on run CRUD routes → missing on 13/14 routes in `runs.py`. Only `reveal_node_prompt` has the catch. Routes like `trigger_run`, `get_run_status`, `cancel_run`, `get_run_io`, `export_fixture`, `workspace_lease`, `workspace_events`, `get_node_output`, `observe_node`, `recover_node`, `diff_node_output`, `run_stats`, `run_heatmap` all lack `ProgrammingError→501` handling.
+- [ ] `ProgrammingError` on pipeline CRUD routes → missing on 8/16 routes in `pipelines.py`. Routes `list`, `create`, `get`, `get_graph`, `update`, `delete`, `clone`, `save-as-composite` lack `ProgrammingError→501` handling.
+- [x] `ProgrammingError` on stage CRUD routes → all 5 routes in `stages.py` have the catch.
+- [ ] Empty pipeline (no nodes) produces raw HTTP 500 instead of structured 422 → `graph_cache.py` raises `ValueError` which becomes 500 in `execute()`. Pre-run validation (`GraphValidator._check_topology`) catches this and returns `TOPOLOGY_NO_NODES` error, but `graph_cache` exception still fires if validation is somehow bypassed.
+- [ ] Node retry policy referenced in pipeline config schema but NOT implemented in pipeline engine → no retry loop exists in `node_runner.py` or `executor.py`.
 
 ## Known Gaps
-- Node timeout raises `TimeoutError` (Python built-in), not a domain-specific `node_timeout` error code
-- Cancellation mid-HITL: cancelled claim returns to available, but run status is ambiguous
-- Node retry policy (max_retries, retry_on, backoff) is specified in the pipeline config schema but is not implemented in the pipeline engine — no retry logic exists at the node execution or graph level
-- DB connection lost mid-run: no explicit handling, in-memory graph state is lost if checkpointer is unreachable
-- Checkpoint restore with schema migration: no version-compatibility check for old snapshots after schema changes
-- **Node timeout uses Python built-in error code**: `TimeoutError` (Python built-in) is used as the error_code instead of a domain-specific `node_timeout` — confusing in API responses and logs
-- **Missing BDD for conditional gate**: The JMESPath-based conditional gate feature (in `graph_cache.py` + `node_runner.py`) has no BDD scenario
-- **Missing BDD for eval-before-interrupt**: The eval-before-interrupt feature in `node_runner.py` has no BDD scenario
-- **Missing BDD for node timeout**: The `@cancellable_node` timeout wrapper has no BDD scenario
-- **Empty pipeline (no nodes) produces raw 500**: `graph_cache.py` raises `ValueError` which becomes HTTP 500 instead of a structured validation error
+- Node timeout raises `TimeoutError` (Python built-in), not a domain-specific `node_timeout` error code — confusing in API responses and logs.
+- Cancellation mid-HITL: cancelled claim returns to available, but run status is ambiguous.
+- Node retry policy (max_retries, retry_on, backoff) is specified in the pipeline config schema but is not implemented in the pipeline engine — no retry logic exists at the node execution or graph level.
+- DB connection lost mid-run: no explicit handling, in-memory graph state is lost if checkpointer is unreachable.
+- Checkpoint restore with schema migration: no version-compatibility check for old snapshots after schema changes.
+- **Missing BDD for conditional gate**: The JMESPath-based conditional gate feature (in `graph_cache.py` + `node_runner.py`) has no BDD scenario.
+- **Missing BDD for eval-before-interrupt**: The eval-before-interrupt feature in `node_runner.py` has no BDD scenario.
+- **Missing BDD for node timeout**: The `@cancellable_node` timeout wrapper has no BDD scenario.
+- **Empty pipeline (no nodes) produces raw 500**: `graph_cache.py` raises `ValueError` which becomes HTTP 500 instead of a structured validation error.
+- **ProgrammingError→501 catches missing on 13/14 run routes and 8/16 pipeline routes**: `runs.py` and `pipelines.py` do not uniformly catch `ProgrammingError` on DB-accessing route handlers, risking raw 500s when DB tables don't exist yet.
+- **Concurrent `resume()` for same run has no locking**: `executor.py:resume()` calls `aupdate_state` + `astream_events` without locking around the resume path — two concurrent resumes could race.
+- **Manual node schema validation error produces `error_code="ValueError"`**: `_validate_against_schema` raises `ValueError` which becomes a confusing non-domain-specific error code in the run result.
+- **No per-node output schema validation for agent nodes**: Only manual nodes validate output against `output_schema_json`. Agent node outputs are not schema-validated before promotion.
+- **WebSocket reconnect replay not tested**: `replay_since()` exists but has no BDD or unit test coverage.
+- **Post-HITL model backend unreachable has no fallback**: If the pinned model backend becomes unreachable between approval and resume, no retry/fail/fallback logic exists.
+
+## QA History
+
+| Date | Scope | Findings | Status |
+|---|---|---|---|
+| 2026-07-04 | Cross-cutting QA (6 lenses) | Behaviour completeness, edge case audit, error path audit, cross-module contract check, gap freshness, resilience auditing | [x] 30 behaviours verified [x] 33 error/edge case checkboxes added [x] 21 ProgrammingError catch sites added [x] 2 unit test files created [x] Known Gaps refreshed |
