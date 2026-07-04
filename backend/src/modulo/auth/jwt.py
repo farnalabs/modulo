@@ -38,10 +38,6 @@ class AuthenticatedPrincipal:
         return self.account_id
 
 
-def _resolve_account_id(*, account_id: str = "", user_id: str = "") -> str:
-    return account_id or user_id
-
-
 def create_access_token(
     subject: str,
     secret_key: str,
@@ -53,7 +49,7 @@ def create_access_token(
     user_id: str = "",
 ) -> str:
     """15-minute access token."""
-    resolved_account_id = _resolve_account_id(account_id=account_id, user_id=user_id)
+    resolved_account_id = account_id or user_id
     now = datetime.now(UTC)
     claims = {
         "sub": subject,
@@ -80,7 +76,7 @@ def create_refresh_token(
     user_id: str = "",
 ) -> str:
     """7-day refresh token with family+sequence for rotation detection."""
-    resolved_account_id = _resolve_account_id(account_id=account_id, user_id=user_id)
+    resolved_account_id = account_id or user_id
     now = datetime.now(UTC)
     claims = {
         "sub": subject,
@@ -140,8 +136,8 @@ def decode_principal(token: str, secret_key: str, allowed_purposes: list[str] | 
         except ValueError:
             pass
     parsed_org_role: str | None = org_role if isinstance(org_role, str) and org_role else None
-    if org_id is not None and parsed_org_id is None and isinstance(org_id, str):
-        _log.warning("jwt.malformed_org_id", extra={"org_id": org_id})
+    if org_id is not None and parsed_org_id is None:
+        _log.warning("jwt.malformed_org_id", extra={"org_id": str(org_id)})
     return AuthenticatedPrincipal(
         username=sub,
         organisation_id=parsed_org_id,
@@ -163,7 +159,7 @@ def create_ws_token(
     ttl_minutes: int | None = None,
 ) -> str:
     """Short-lived JWT for WebSocket authentication (15 minute TTL by default)."""
-    resolved_account_id = _resolve_account_id(account_id=account_id, user_id=user_id)
+    resolved_account_id = account_id or user_id
     now = datetime.now(UTC)
     claims = {
         "sub": subject,
@@ -224,13 +220,14 @@ def decode_claim_token(
     *,
     run_id: str,
     gate_id: str,
+    expected_client_id: str | None = None,
 ) -> dict[str, object]:
     """Validate a claim-token JWT and return its payload.
 
     Checks:
     * Signature + expiry (via ``jwt.decode``).
     * ``purpose == "claim_token"``.
-    * ``run_id`` and ``gate_id`` match the expected values.
+    * ``run_id``, ``gate_id``, and optionally ``client_id`` match the expected values.
 
     Returns the full payload dict on success.
     """
@@ -244,4 +241,8 @@ def decode_claim_token(
     actual_gate = payload.get("gate_id")
     if actual_gate != gate_id:
         raise JWTError("claim_token gate_id mismatch")
+    if expected_client_id is not None:
+        actual_client = payload.get("client_id")
+        if actual_client != expected_client_id:
+            raise JWTError("claim_token client_id mismatch")
     return payload

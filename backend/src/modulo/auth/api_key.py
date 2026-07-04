@@ -18,6 +18,7 @@ Team-scoped enforcement:
 
 import hashlib
 import hmac
+import logging
 import secrets
 import uuid
 from datetime import UTC, datetime
@@ -28,10 +29,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.db.models.api_key import OrgApiKey
 
+_log = logging.getLogger(__name__)
+
 
 class ApiKeyInvalidError(PermissionError):
-    def __init__(self) -> None:
-        super().__init__("API key is invalid or revoked")
+    def __init__(self, detail: str = "API key is invalid or revoked") -> None:
+        super().__init__(detail)
 
 
 class ApiKeyNotFoundError(KeyError):
@@ -68,7 +71,7 @@ def _validate_team_key_role(key: OrgApiKey) -> None:
     is reserved for org-wide keys without team_id.
     """
     if key.team_id is not None and key.role == "admin":
-        raise ValueError("team-scoped API keys cannot have admin role")
+        raise ApiKeyInvalidError("team-scoped API keys cannot have admin role")
 
 
 async def create_api_key(
@@ -93,9 +96,9 @@ async def create_api_key(
         team_id=team_id,
         expires_at=expires_at,
     )
-    session.add(key)
     if team_id is not None:
         _validate_team_key_role(key)
+    session.add(key)
     await session.flush()
     return key, full_key
 
@@ -129,8 +132,10 @@ async def validate_api_key(
     )
     key = result.scalar_one_or_none()
     if key is None:
+        _log.info("api_key.not_found", extra={"prefix": prefix, "org_id": str(org_id) if org_id else None})
         raise ApiKeyInvalidError()
     if key.expires_at is not None and key.expires_at < now:
+        _log.info("api_key.expired", extra={"key_id": str(key.id)})
         raise ApiKeyInvalidError()
 
     # Constant-time compare to prevent timing attacks
@@ -159,9 +164,11 @@ async def revoke_api_key(
     )
     key = result.scalar_one_or_none()
     if key is None:
+        _log.info("api_key.revoke_not_found", extra={"key_id": str(key_id), "org_id": str(org_id)})
         return False
     key.revoked_at = datetime.now(UTC)
     await session.flush()
+    _log.info("api_key.revoked", extra={"key_id": str(key.id)})
     return True
 
 
@@ -173,7 +180,7 @@ def _serialize_key(k: OrgApiKey) -> dict[str, Any]:
         "name": k.name,
         "role": k.role,
         "team_id": str(k.team_id) if k.team_id else None,
-        "lookup_prefix": f"mk_{k.lookup_prefix}****",
+        "lookup_prefix": f"{_MK_PREFIX}{k.lookup_prefix}****",
         "last_used_at": k.last_used_at.isoformat() if k.last_used_at else None,
         "created_at": k.created_at.isoformat(),
         "expires_at": k.expires_at.isoformat() if k.expires_at else None,
@@ -215,6 +222,7 @@ async def update_api_key(
     result = await session.execute(stmt)
     key = result.scalar_one_or_none()
     if key is None:
+        _log.info("api_key.update_not_found", extra={"key_id": str(key_id), "org_id": str(org_id)})
         return None
     if name is not None:
         key.name = name
