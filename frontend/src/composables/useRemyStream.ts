@@ -2,6 +2,7 @@ import { ref, onUnmounted } from 'vue'
 import { useRemyStore } from './useRemyStore'
 import { getAccessToken } from '@/lib/api/client'
 import { executeCommandBatch } from './useUiCommandExecutor'
+import type { UiCommandResult } from './useUiCommandExecutor'
 
 const MAX_BUFFER_SIZE = 1024 * 1024
 
@@ -118,7 +119,14 @@ export function useRemyStream() {
               } else if (currentEvent === 'ui_command_batch') {
                 const commands = parsed.commands ?? parsed
                 store.isExecutingUi = true
-                const results = await executeCommandBatch(commands)
+                let results: UiCommandResult[]
+                try {
+                  results = await executeCommandBatch(commands)
+                } catch (e) {
+                  store.error = e instanceof Error ? e.message : 'UI command execution failed'
+                  results = []
+                  streaming = false
+                }
                 store.isExecutingUi = false
                 try {
                   await fetch(`/api/v1/remy/sessions/${sessionId}/ui-command-results`, {
@@ -133,6 +141,7 @@ export function useRemyStream() {
                   store.error = 'Failed to submit UI command results'
                   streaming = false
                 }
+                store.isExecutingUi = false
                 store.isStreaming = true
               } else if (currentEvent === 'turn_separator') {
                 store.appendTurnSeparator(parsed.label ?? '---')
