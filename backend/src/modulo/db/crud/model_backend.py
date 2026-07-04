@@ -58,14 +58,21 @@ async def list_model_backends(
     *,
     page: int = 1,
     page_size: int = 20,
+    excluded_tiers: list[str] | None = None,
 ) -> PageResult[ModelBackend]:
+    if excluded_tiers is None:
+        excluded_tiers = ["in_dev"]
     offset = (page - 1) * page_size
-    total = (await session.execute(select(func.count()).select_from(ModelBackend))).scalar_one()
+    total_query = select(func.count()).select_from(ModelBackend)
+    if excluded_tiers:
+        total_query = total_query.where(~ModelBackend.tier.in_(excluded_tiers))
+    total = (await session.execute(total_query)).scalar_one()
+    items_stmt = select(ModelBackend).order_by(ModelBackend.created_at.desc()).offset(offset).limit(page_size)
+    if excluded_tiers:
+        items_stmt = items_stmt.where(~ModelBackend.tier.in_(excluded_tiers))
     items = list(
         (
-            await session.execute(
-                select(ModelBackend).order_by(ModelBackend.created_at.desc()).offset(offset).limit(page_size)
-            )
+            await session.execute(items_stmt)
         ).scalars()
     )
     return PageResult(items=items, total=total, page=page, page_size=page_size)
