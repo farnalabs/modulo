@@ -7,8 +7,7 @@ from __future__ import annotations
 import uuid
 from typing import TYPE_CHECKING
 
-from sqlalchemy import CheckConstraint, ForeignKey, Integer, String, Uuid
-from sqlalchemy.dialects.postgresql import TEXT
+from sqlalchemy import CheckConstraint, ForeignKey, Integer, String, Text, Uuid
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from modulo.db.models.base import OrgScoped
@@ -36,7 +35,7 @@ class Node(OrgScoped):
         index=True,
     )
     name: Mapped[str] = mapped_column(String(255), nullable=False)
-    description: Mapped[str | None] = mapped_column(TEXT, nullable=True)
+    description: Mapped[str | None] = mapped_column(Text, nullable=True)
     parent_node_id: Mapped[uuid.UUID | None] = mapped_column(
         Uuid(),
         ForeignKey("nodes.id", ondelete="SET NULL"),
