@@ -47,6 +47,7 @@ from modulo.core.hitl_manager import (
     HITLManager,
     NotTeamMemberError,
 )
+from modulo.core.documentation_indexer import DocumentationIndex
 from modulo.core.library_service import (
     CommunityPrimitiveReadOnlyError,
     get_primitive_by_slug,
@@ -989,6 +990,220 @@ async def create_model_backend(
     except Exception:
         _log.exception("create_model_backend failed")
         return _tool_error("Failed to create model backend")
+
+
+# ---------------------------------------------------------------------------
+# Context retrieval tools
+# ---------------------------------------------------------------------------
+
+
+_DOC_INDEX: DocumentationIndex | None = None
+
+
+def _get_doc_index() -> DocumentationIndex:
+    global _DOC_INDEX
+    if _DOC_INDEX is None:
+        _DOC_INDEX = DocumentationIndex.build()
+    return _DOC_INDEX
+
+
+SENSITIVE_CONFIG_KEYS: set[str] = {
+    "fernet_key",
+    "secret_key",
+    "database_url",
+    "db_url",
+    "postgres_url",
+    "redis_url",
+    "api_key",
+    "api_keys",
+    "modulo_license_key",
+    "modulo_secret_key",
+    "modulo_fernet_key",
+}
+
+
+def _is_sensitive_key(key: str) -> bool:
+    lower = key.lower()
+    if lower in SENSITIVE_CONFIG_KEYS:
+        return True
+    for prefix in SENSITIVE_CONFIG_KEYS:
+        if lower.startswith(prefix):
+            return True
+    return False
+
+
+@mcp.tool(
+    description=(
+        "Search product documentation for relevant sections. Supports free-text "
+        "keyword search against PRD sections and FAQ entries. Returns Markdown-formatted results."
+    ),
+)
+async def get_documentation(query: str, section: str | None = None) -> dict[str, Any]:
+    try:
+        if not await validate_current_auth():
+            return _tool_error("Token revoked or expired — re-authenticate")
+        index = _get_doc_index()
+        results = index.search(query, section=section)
+        if not results:
+            return {"results": "No documentation found for query.", "count": 0}
+        formatted = index.format_results(results)
+        return {"results": formatted, "count": len(results)}
+    except Exception:
+        _log.exception("get_documentation failed")
+        return _tool_error("Failed to search documentation")
+
+
+@mcp.tool(
+    description=(
+        "Get current health status of all connectors, model backends, and triggers. "
+        "Returns a Markdown table."
+    ),
+)
+async def get_integration_status() -> dict[str, Any]:
+    try:
+        if not await validate_current_auth():
+            return _tool_error("Token revoked or expired — re-authenticate")
+        from sqlalchemy import func, select
+
+        from modulo.db.models.connector_instance import ConnectorInstance
+        from modulo.db.models.model_backend import ModelBackend
+        from modulo.db.models.trigger import Trigger
+
+        org_id = _ctx_org_id.get(_PLACEHOLDER_ORG_ID)
+        async with _session(org_id) as s:
+            connector_rows = (
+                (await s.execute(
+                    select(ConnectorInstance).where(ConnectorInstance.organisation_id == org_id)
+                ))
+                .scalars()
+                .all()
+            )
+            backend_rows = (
+                (await s.execute(
+                    select(ModelBackend).where(ModelBackend.organisation_id == org_id)
+                ))
+                .scalars()
+                .all()
+            )
+            trigger_count_result = await s.execute(
+                select(func.count()).select_from(Trigger).where(Trigger.organisation_id == org_id)
+            )
+            trigger_count = trigger_count_result.scalar_one()
+
+        connector_lines = ["| Name | Type | Status | Last Check | Error |",
+                           "|------|------|--------|------------|-------|"]
+        for c in connector_rows:
+            last_check = c.last_health_check_at.isoformat() if c.last_health_check_at else "never"
+            error = c.last_health_check_error or ""
+            connector_lines.append(f"| {c.name} | {c.connector_type_id} | {c.status} | {last_check} | {error} |")
+
+        backend_lines = ["| Name | Provider | Model | Has Credentials | Status |",
+                         "|------|----------|-------|-----------------|--------|"]
+        for b in backend_rows:
+            has_creds = "yes" if b.credentials_ciphertext else "no"
+            backend_lines.append(f"| {b.name} | {b.provider} | {b.model_id} | {has_creds} | {b.status} |")
+
+        parts = [
+            f"## Connectors ({len(connector_rows)})",
+            "\n".join(connector_lines) if connector_rows else "No connectors configured.",
+            "",
+            f"## Model Backends ({len(backend_rows)})",
+            "\n".join(backend_lines) if backend_rows else "No model backends configured.",
+            "",
+            f"## Triggers\n\nTotal triggers: {trigger_count}",
+        ]
+        return {"results": "\n".join(parts)}
+    except Exception:
+        _log.exception("get_integration_status failed")
+        return _tool_error("Failed to get integration status")
+
+
+@mcp.tool(
+    description=(
+        "Get org-level configuration. Optionally filter to a specific section "
+        "(remy, plan, rate_limits). Never exposes secrets."
+    ),
+)
+async def get_org_config(section: str | None = None) -> dict[str, Any]:
+    try:
+        if not await validate_current_auth():
+            return _tool_error("Token revoked or expired — re-authenticate")
+        from modulo.db.crud.system_config import list_config
+
+        org_id = _ctx_org_id.get(_PLACEHOLDER_ORG_ID)
+        async with _session(org_id) as s:
+            configs = await list_config(s)
+
+        org_ctx = f"{org_id}"
+        key_prefixes: list[str] | None = None
+        if section == "remy":
+            key_prefixes = [f"remy_config:{org_ctx}", "remy_config"]
+        elif section == "plan" or section == "rate_limits":
+            key_prefixes = ["feature_flags", "default_plan", "rate_limits"]
+
+        filtered = []
+        for cfg in configs:
+            if key_prefixes is not None:
+                if not any(cfg.key.startswith(p) for p in key_prefixes):
+                    continue
+            if _is_sensitive_key(cfg.key):
+                continue
+            filtered.append(cfg)
+
+        if not filtered:
+            section_label = section or "org"
+            return {"results": f"No configuration found for section '{section_label}'.", "count": 0}
+
+        lines = ["| Key | Value |", "|-----|-------|"]
+        for cfg in filtered:
+            val = cfg.value
+            if isinstance(val, dict):
+                val_str = json.dumps(val, default=str)
+            else:
+                val_str = str(val)
+            if len(val_str) > 200:
+                val_str = val_str[:200] + "..."
+            lines.append(f"| {cfg.key} | {val_str} |")
+
+        return {"results": "\n".join(lines), "count": len(filtered)}
+    except Exception:
+        _log.exception("get_org_config failed")
+        return _tool_error("Failed to get org configuration")
+
+
+@mcp.tool(
+    description="List product features enabled on the current plan tier.",
+)
+async def get_available_features() -> dict[str, Any]:
+    try:
+        if not await validate_current_auth():
+            return _tool_error("Token revoked or expired — re-authenticate")
+        from modulo.core.feature_flags import resolve_plan_context
+
+        org_id = _ctx_org_id.get(_PLACEHOLDER_ORG_ID)
+        settings = get_settings()
+
+        from modulo.db.crud.organisation import get_organisation
+
+        async with _session(org_id) as s:
+            org = await get_organisation(s, org_id)
+
+        async with _session(org_id) as s:
+            plan_ctx = await resolve_plan_context(settings, s, org)
+
+        current_tier = plan_ctx.tier()
+        all_flags = plan_ctx.list_enabled_features()
+
+        lines = ["| Feature | Required Tier | Available |",
+                 "|---------|---------------|-----------|"]
+        for flag in all_flags:
+            available = "yes" if flag.currently_active else "no"
+            lines.append(f"| {flag.name} | {flag.tier} | {available} |")
+
+        return {"results": "\n".join(lines), "tier": current_tier, "feature_count": len(all_flags)}
+    except Exception:
+        _log.exception("get_available_features failed")
+        return _tool_error("Failed to get available features")
 
 
 # ---------------------------------------------------------------------------
