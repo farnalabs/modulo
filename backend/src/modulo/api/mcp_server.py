@@ -68,12 +68,20 @@ from modulo.settings import get_settings
 _log = logging.getLogger(__name__)
 
 # ContextVars populated by McpAuthMiddleware before each request.
+# NOTE: FastMCP's stateless HTTP handler runs tool handlers in a child anyio task,
+# which does NOT inherit contextvars.  A module-level fallback store is used
+# so validate_current_auth can find the auth data even when contextvars are empty.
 _ctx_org_id: contextvars.ContextVar[uuid.UUID] = contextvars.ContextVar("mcp_org_id")
 _ctx_role: contextvars.ContextVar[str] = contextvars.ContextVar("mcp_role")
 _ctx_key_id: contextvars.ContextVar[uuid.UUID] = contextvars.ContextVar("mcp_key_id")
 _ctx_auth_token: contextvars.ContextVar[str] = contextvars.ContextVar("mcp_auth_token")
 _ctx_user_id: contextvars.ContextVar[uuid.UUID] = contextvars.ContextVar("mcp_user_id")
 _ctx_auth_type: contextvars.ContextVar[str] = contextvars.ContextVar("mcp_auth_type")
+
+# Fallback store for auth data when contextvars are unavailable (child tasks).
+# Written by McpAuthMiddleware, read by validate_current_auth.
+_auth_token_fallback: str | None = None
+_auth_org_id_fallback: uuid.UUID | None = None
 
 # Fallback sentinel — replaced by the real org_id from the API key record or OAuth claims.
 _PLACEHOLDER_ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
@@ -111,10 +119,23 @@ async def validate_current_auth() -> bool:
     Checks the stored credential against the DB/issuer to detect mid-session
     revocation, expiry, or OAuth token family blacklisting.
     Returns True if the credential is still valid, False otherwise.
+
+    Fallback: FastMCP runs tool handlers in a child anyio task that does not
+    inherit contextvars, so we fall back to module-level globals set by
+    ``McpAuthMiddleware``.
     """
     auth_type = _ctx_auth_type.get(None)
     token = _ctx_auth_token.get(None)
     org_id = _ctx_org_id.get(None)
+
+    # FastMCP child tasks lose contextvars — fall back to module-level store.
+    if token is None or org_id is None:
+        global _auth_token_fallback, _auth_org_id_fallback
+        token = token or _auth_token_fallback
+        org_id = org_id or _auth_org_id_fallback
+
+    if auth_type is None:
+        auth_type = "api_key" if token and token.startswith("mk_") else None
 
     if auth_type is None or token is None or org_id is None:
         return False
@@ -218,6 +239,10 @@ class McpAuthMiddleware(BaseHTTPMiddleware):
                 _ctx_user_id.set(key.account_id)
                 _ctx_auth_token.set(token)
                 _ctx_auth_type.set("api_key")
+                # Also set fallbacks for FastMCP child tasks (contextvars don't propagate).
+                global _auth_token_fallback, _auth_org_id_fallback
+                _auth_token_fallback = token
+                _auth_org_id_fallback = org_id
                 request.scope["auth_principal"] = {
                     "type": "api_key",
                     "org_id": str(org_id),
