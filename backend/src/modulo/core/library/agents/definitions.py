@@ -199,7 +199,7 @@ DEPENDENCY_ANALYZER: dict[str, Any] = {
                     "required": ["package", "severity", "advisory"],
                     "properties": {
                         "package": {"type": "string"},
-                        "severity": {"type": "string"},
+                        "severity": {"type": "string", "enum": ["low", "medium", "high", "critical"]},
                         "advisory": {"type": "string"},
                     },
                 },
@@ -361,6 +361,7 @@ TEST_GENERATOR: dict[str, Any] = {
                 "type": "array",
                 "items": {
                     "type": "object",
+                    "required": ["name", "type", "description"],
                     "properties": {
                         "name": {"type": "string"},
                         "type": {"type": "string"},
@@ -691,6 +692,8 @@ PROMPT_IMPROVER: dict[str, Any] = {
             "actual_output": {"type": "string", "description": "Actual output produced"},
             "eval_score": {
                 "type": "number",
+                "minimum": 0,
+                "maximum": 100,
                 "description": "Evaluation score (0-1 or percentage)",
             },
         },
@@ -818,7 +821,7 @@ FEEDBACK_ANALYZER: dict[str, Any] = {
                     "type": "object",
                     "required": ["comment"],
                     "properties": {
-                        "rating": {"type": "number"},
+                        "rating": {"type": "number", "minimum": 0, "maximum": 5},
                         "comment": {"type": "string", "minLength": 1},
                         "category": {"type": "string"},
                     },
@@ -838,7 +841,7 @@ FEEDBACK_ANALYZER: dict[str, Any] = {
                     "required": ["pattern", "frequency"],
                     "properties": {
                         "pattern": {"type": "string"},
-                        "frequency": {"type": "number"},
+                        "frequency": {"type": "number", "minimum": 0},
                     },
                 },
             },
@@ -887,16 +890,15 @@ CHANGELOG_AGGREGATOR: dict[str, Any] = {
                     "type": "object",
                     "required": ["type", "description"],
                     "properties": {
-                        "type": {"type": "string"},
-                        "description": {"type": "string"},
-                        "references": {
-                            "type": "array",
-                            "items": {"type": "string"},
-                        },
+                    "type": {"type": "string", "enum": ["added", "changed", "fixed", "deprecated", "removed", "security"]},
+                    "description": {"type": "string"},
+                    "references": {
+                        "type": "array",
+                        "items": {"type": "string"},
                     },
                 },
-                "description": "Array of changelog entries",
             },
+            "description": "Array of changelog entries",
         },
     },
     "output_schema": {
