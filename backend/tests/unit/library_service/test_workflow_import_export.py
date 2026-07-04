@@ -72,7 +72,7 @@ class TestExtractBundleJson:
         buf = io.BytesIO()
         with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
             zf.writestr(MANIFEST_FILENAME, "not json")
-        with pytest.raises(json.JSONDecodeError):
+        with pytest.raises(ValueError, match="malformed JSON"):
             extract_bundle_json_from_zip(buf.getvalue())
 
 
