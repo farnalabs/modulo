@@ -4,6 +4,7 @@ import uuid
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field
+from sqlalchemy.exc import ProgrammingError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.api.dependencies import get_db_session
@@ -57,28 +58,34 @@ async def admin_create_org(
             detail="System admin role required",
         )
 
-    async with session.begin():
-        existing = await get_organisation_by_slug(session, body.slug)
-        if existing is not None:
-            raise HTTPException(
-                status_code=status.HTTP_409_CONFLICT,
-                detail=f"An organisation with slug '{body.slug}' already exists",
+    try:
+        async with session.begin():
+            existing = await get_organisation_by_slug(session, body.slug)
+            if existing is not None:
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail=f"An organisation with slug '{body.slug}' already exists",
+                )
+
+            org = await create_organisation(
+                session,
+                name=body.name,
+                slug=body.slug,
+                plan_id=body.plan_id,
+                created_by=current_user.account_id,
             )
 
-        org = await create_organisation(
-            session,
-            name=body.name,
-            slug=body.slug,
-            plan_id=body.plan_id,
-            created_by=current_user.account_id,
-        )
-
-        return CreateOrgResponse(
-            id=str(org.id),
-            name=org.name,
-            slug=org.slug,
-            status=org.status,
-            created_at=org.created_at.isoformat(),
+            return CreateOrgResponse(
+                id=str(org.id),
+                name=org.name,
+                slug=org.slug,
+                status=org.status,
+                created_at=org.created_at.isoformat(),
+            )
+    except ProgrammingError:
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="Feature is not available. Run database migrations to enable it.",
         )
 
 
@@ -102,8 +109,14 @@ async def admin_list_orgs(
     if not current_user.is_system_admin:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="System admin role required")
 
-    async with session.begin():
-        orgs = await list_organisations(session)
+    try:
+        async with session.begin():
+            orgs = await list_organisations(session)
+    except ProgrammingError:
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="Feature is not available. Run database migrations to enable it.",
+        )
     return [
         ListOrgItem(
             id=str(o.id),
@@ -163,52 +176,58 @@ async def admin_create_org_user(
             detail=str(exc),
         ) from exc
 
-    async with session.begin():
-        org = await get_organisation(session, org_id)
-        if org is None:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail="Organisation not found",
-            )
-
-        existing = await get_account_by_email(session, body.email)
-        if existing is not None:
-            from modulo.db.crud.org_membership import get_membership_by_account_and_org
-
-            membership = await get_membership_by_account_and_org(session, existing.id, org_id)
-            if membership is not None:
+    try:
+        async with session.begin():
+            org = await get_organisation(session, org_id)
+            if org is None:
                 raise HTTPException(
-                    status_code=status.HTTP_409_CONFLICT,
-                    detail="A user with this email already exists in this organisation",
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail="Organisation not found",
                 )
 
-        pw_hash = hash_password(body.password)
+            existing = await get_account_by_email(session, body.email)
+            if existing is not None:
+                from modulo.db.crud.org_membership import get_membership_by_account_and_org
 
-        if existing is not None:
-            account = existing
-            account.password_hash = pw_hash
-        else:
-            account = await create_account(
+                membership = await get_membership_by_account_and_org(session, existing.id, org_id)
+                if membership is not None:
+                    raise HTTPException(
+                        status_code=status.HTTP_409_CONFLICT,
+                        detail="A user with this email already exists in this organisation",
+                    )
+
+            pw_hash = hash_password(body.password)
+
+            if existing is not None:
+                account = existing
+                account.password_hash = pw_hash
+            else:
+                account = await create_account(
+                    session,
+                    email=body.email,
+                    display_name=body.display_name,
+                    password_hash=pw_hash,
+                )
+
+            membership = await create_membership(
                 session,
-                email=body.email,
-                display_name=body.display_name,
-                password_hash=pw_hash,
+                account_id=account.id,
+                org_id=org_id,
+                role=body.org_role,
             )
 
-        membership = await create_membership(
-            session,
-            account_id=account.id,
-            org_id=org_id,
-            role=body.org_role,
-        )
-
-        return CreateOrgUserResponse(
-            id=str(account.id),
-            email=account.email,
-            display_name=account.display_name,
-            org_role=membership.role,
-            auth_provider=account.auth_provider,
-            created_at=account.created_at.isoformat(),
+            return CreateOrgUserResponse(
+                id=str(account.id),
+                email=account.email,
+                display_name=account.display_name,
+                org_role=membership.role,
+                auth_provider=account.auth_provider,
+                created_at=account.created_at.isoformat(),
+            )
+    except ProgrammingError:
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="Feature is not available. Run database migrations to enable it.",
         )
 
 
@@ -224,14 +243,20 @@ async def admin_delete_org(
     if not current_user.is_system_admin:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="System admin role required")
 
-    async with session.begin():
-        org = await get_organisation(session, org_id)
-        if org is None:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Organisation not found")
+    try:
+        async with session.begin():
+            org = await get_organisation(session, org_id)
+            if org is None:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Organisation not found")
 
-        deleted = await delete_organisation(session, org_id)
-        if not deleted:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Organisation not found")
+            deleted = await delete_organisation(session, org_id)
+            if not deleted:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Organisation not found")
+    except ProgrammingError:
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="Feature is not available. Run database migrations to enable it.",
+        )
 
 
 # ── Org License Management ──────────────────────────────────────────────
@@ -258,7 +283,13 @@ async def admin_get_org_license(
     if not current_user.is_system_admin and current_user.organisation_id != org_id:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
 
-    org = await get_organisation(session, org_id)
+    try:
+        org = await get_organisation(session, org_id)
+    except ProgrammingError:
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="Feature is not available. Run database migrations to enable it.",
+        )
     if org is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Organisation not found")
 
@@ -300,7 +331,13 @@ async def admin_set_org_license(
     if not current_user.is_system_admin and current_user.organisation_id != org_id:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
 
-    org = await get_organisation(session, org_id)
+    try:
+        org = await get_organisation(session, org_id)
+    except ProgrammingError:
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="Feature is not available. Run database migrations to enable it.",
+        )
     if org is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Organisation not found")
 
@@ -319,7 +356,14 @@ async def admin_set_org_license(
 
     settings_json = dict(org.settings_json or {})
     settings_json["license_key"] = body.license_key
-    await update_organisation(session, org_id, {"settings_json": settings_json})
+
+    try:
+        await update_organisation(session, org_id, {"settings_json": settings_json})
+    except ProgrammingError:
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="Feature is not available. Run database migrations to enable it.",
+        )
 
     d = validation.license_data
     return OrgLicenseResponse(
@@ -340,13 +384,26 @@ async def admin_remove_org_license(
     if not current_user.is_system_admin and current_user.organisation_id != org_id:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
 
-    org = await get_organisation(session, org_id)
+    try:
+        org = await get_organisation(session, org_id)
+    except ProgrammingError:
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="Feature is not available. Run database migrations to enable it.",
+        )
     if org is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Organisation not found")
 
     settings_json = dict(org.settings_json or {})
     had_key = "license_key" in settings_json
     settings_json.pop("license_key", None)
-    await update_organisation(session, org_id, {"settings_json": settings_json})
+
+    try:
+        await update_organisation(session, org_id, {"settings_json": settings_json})
+    except ProgrammingError:
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="Feature is not available. Run database migrations to enable it.",
+        )
 
     return OrgLicenseResponse(has_license=False)
