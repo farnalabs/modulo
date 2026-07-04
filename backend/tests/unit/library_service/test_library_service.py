@@ -4,11 +4,14 @@ import uuid
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-
-import pytest
 from sqlalchemy.exc import ProgrammingError
 
 from modulo.core.library_service import (
+    _COMMUNITY_BY_ID,
+    _COMMUNITY_BY_SLUG,
+    _COMMUNITY_PRIMITIVES,
+    _MODULO_BY_ID,
+    _MODULO_PRIMITIVES,
     CONTRIBUTION_DRAFT,
     CONTRIBUTION_PUBLISHED,
     CONTRIBUTION_REVIEW_QUEUE,
@@ -16,11 +19,6 @@ from modulo.core.library_service import (
     CommunityPrimitiveReadOnlyError,
     ContributionInvalidTransitionError,
     ContributionNotFoundError,
-    _COMMUNITY_BY_ID,
-    _COMMUNITY_BY_SLUG,
-    _COMMUNITY_PRIMITIVES,
-    _MODULO_BY_ID,
-    _MODULO_PRIMITIVES,
     _fetch_published_community_from_db,
     _filter_community,
     _filter_modulo,
@@ -810,7 +808,9 @@ async def test_list_org_contributions_passes_page_params():
 
     with (
         patch("modulo.core.library_service.set_rls_org", new_callable=AsyncMock),
-        patch("modulo.core.library_service.list_library_primitives", new_callable=AsyncMock, return_value=page) as mock_list,
+        patch(
+            "modulo.core.library_service.list_library_primitives", new_callable=AsyncMock, return_value=page,
+        ) as mock_list,
     ):
         await list_org_contributions(session, org_id, page=2, page_size=10)
 
@@ -981,9 +981,6 @@ async def test_publish_contribution_updates_in_memory_cache():
     updated.visibility = "community"
     updated.slug = "test-prim"
     updated.primitive_type = "schema"
-
-    # Snapshot in-memory cache sizes before
-    before_community_len = len(_COMMUNITY_PRIMITIVES)
 
     with (
         patch("modulo.core.library_service.set_rls_org", new_callable=AsyncMock),

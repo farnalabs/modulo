@@ -13,8 +13,6 @@ from sqlalchemy import select
 from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-_log = logging.getLogger(__name__)
-
 from modulo.api.dependencies import get_db_session
 from modulo.auth.dependencies import get_current_user, require_system_admin
 from modulo.auth.jwt import AuthenticatedPrincipal
@@ -309,7 +307,11 @@ async def list_library_primitives_endpoint(
         except Exception:
             _log.exception("LibraryPrimitiveResponse.model_validate failed on %d items", len(result.items))
             if result.items:
-                _log.error("first item type=%s id=%s", type(result.items[0]).__name__, getattr(result.items[0], "id", "?"))
+                _log.error(
+                    "first item type=%s id=%s",
+                    type(result.items[0]).__name__,
+                    getattr(result.items[0], "id", "?"),
+                )
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail="Failed to parse library primitives. The schema may be out of sync with the database.",
@@ -491,7 +493,7 @@ async def copy_to_adapt_endpoint(
             principal.organisation_id,
             primitive_id,
             target_team_id=req.target_team_id,
-            account_id=principal.account_id,
+            created_by=principal.account_id,
             org_role=principal.org_role,
             via_mcp=False,
         )
@@ -1010,7 +1012,9 @@ async def create_pipeline_from_template_endpoint(
             detail=f"Primitive {primitive_id} not found",
         )
 
-    name, description, graph_nodes, edges, agent_count, edge_count = _build_pipeline_from_template(primitive, req.name, req.description)
+    name, description, graph_nodes, edges, agent_count, edge_count = _build_pipeline_from_template(
+        primitive, req.name, req.description,
+    )
 
     try:
         async with session.begin():
