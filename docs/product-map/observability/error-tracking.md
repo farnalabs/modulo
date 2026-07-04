@@ -213,6 +213,9 @@ Datadog, PagerDuty, Rollbar, OpsGenie, Loki) sources.
 - [x] Dashboard list/detail/update/events routes wrap DB in ProgrammingError→501
 - [x] Notification rule CRUD routes wrap DB in ProgrammingError→501
 - [x] Forwarder config CRUD + test routes wrap DB in ProgrammingError→501
+- [x] All 16 error-tracking route handlers also catch SQLAlchemyError→503 (connection failures, deadlocks)
+- [x] `resolved_at` set on error group when `update_error_group` sets status to `"resolved"`
+- [x] All error-tracking error paths tested with 26 unit tests (ProgrammingError→501 + SQLAlchemyError→503 for all 3 router files)
 
 ### Known Gaps
 
@@ -238,6 +241,24 @@ Datadog, PagerDuty, Rollbar, OpsGenie, Loki) sources.
   FK conflicts with append-only trigger on `error_events`
 
 ## QA History
+
+### Cross-cutting QA (2026-07-05) — index 170 — feat-qa-error-tracking-170
+
+**Critical fix — SQLAlchemyError catch → 503 on all 16 route handlers:**
+All 16 error-tracking API route handlers across `errors.py` (10 handlers), `error_notification_rules.py` (4 handlers), and `error_forwarder_config.py` (4 handlers) previously only caught `ProgrammingError` → 501. Connection failures, deadlocks, and other `SQLAlchemyError` subclasses propagated as raw 500. Now each handler has a dual catch: `ProgrammingError` → 501 (missing migrations) and `SQLAlchemyError` → 503 (transient DB failure).
+
+**Major fix — `resolved_at` now set on resolve:**
+`update_error_group()` in `crud/error_tracking.py` previously never set `resolved_at` when status changed to `"resolved"`, despite the column existing on the `ErrorEvent` model. Now sets `group.resolved_at = datetime.now(UTC)` when `status == "resolved"`.
+
+**Test coverage added:**
+Created `test_error_programming_error.py` with 26 tests covering:
+- 12 ProgrammingError→501 tests (6 errors endpoints, 4 rules endpoints, 3 forwarder endpoints — some tested twice for different routes)
+- 12 SQLAlchemyError→503 tests (same coverage as above)
+- 2 additional passes for ingest endpoints with HMAC verification mocked
+
+**Product map updated:**
+- Added 3 new [x] checkboxes to Error Handling (SQLAlchemyError→503, resolved_at, test coverage)
+- Added this QA History section
 
 ### Cross-cutting QA (2026-07-03) — feat-qa-error-tracking-90
 
