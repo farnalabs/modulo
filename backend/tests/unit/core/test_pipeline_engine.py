@@ -5,7 +5,7 @@ from datetime import UTC, datetime
 
 import pytest
 
-from modulo.core.pipeline_engine.executor import _graph_json_hash, _map_lg_event, _seed_state, _strip_asyncpg
+from modulo.core.pipeline_engine.executor import _graph_json_hash, _map_lg_event, _seed_state
 from modulo.core.pipeline_engine.runaway_protection import RunawayGuard, RunawayRunError
 
 
@@ -89,16 +89,6 @@ class TestSeedState:
         state = _seed_state(snapshot, {})
         assert "_pipeline_default_autonomy" not in state["run_context"]
 
-
-class TestStripAsyncpg:
-    def test_asyncpg_url(self) -> None:
-        assert _strip_asyncpg("postgresql+asyncpg://user:pass@localhost/db") == "postgresql://user:pass@localhost/db"
-
-    def test_psycopg_url(self) -> None:
-        assert _strip_asyncpg("postgresql+psycopg://user:pass@localhost/db") == "postgresql://user:pass@localhost/db"
-
-    def test_plain_url_unchanged(self) -> None:
-        assert _strip_asyncpg("postgresql://user:pass@localhost/db") == "postgresql://user:pass@localhost/db"
 
 
 class TestRunawayGuard:
