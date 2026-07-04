@@ -165,14 +165,21 @@ class ShellConnector(ConnectorBase):
         cwd: str | None = None,
         env: dict[str, str] | None = None,
     ) -> list[str]:
-        """Build the exec_command arg list, wrapping with cd/env as needed."""
-        if not cwd and not env:
-            return shlex.split(command_str)
+        """Build the exec_command arg list, wrapping with cd/env as needed.
 
-        parts: list[str] = []
+        When cwd or env is set, we invoke ``sh -c`` with each token individually
+        quoted so that shell metacharacters (``;``, ``&&``, ``|``, etc.) in
+        ``command_str`` cannot bypass the allowlist.
+        """
+        command_parts = shlex.split(command_str)
+        if not cwd and not env:
+            return command_parts
+
+        shell_parts: list[str] = []
         if cwd:
-            parts.append(f"cd {shlex.quote(cwd)}")
+            shell_parts.append(f"cd {shlex.quote(cwd)}")
         if env:
-            parts.append(" ".join(f"{shlex.quote(k)}={shlex.quote(v)}" for k, v in env.items()))
-        parts.append(command_str)
-        return ["sh", "-c", " && ".join(parts)]
+            shell_parts.append(" ".join(f"{shlex.quote(k)}={shlex.quote(v)}" for k, v in env.items()))
+        quoted_cmd = " ".join(shlex.quote(p) for p in command_parts)
+        shell_parts.append(quoted_cmd)
+        return ["sh", "-c", " && ".join(shell_parts)]
