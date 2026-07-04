@@ -11,7 +11,7 @@ For each event, the notifier:
   2. Builds an HMAC-SHA256 signature over the JSON payload.
   3. POSTs to the endpoint URL with ``X-Modulo-Signature`` header.
   4. Records delivery outcome in ``notification_delivery_log``.
-  5. On HTTP failure: retries up to ``MAX_RETRIES`` with exponential backoff.
+  5. On HTTP failure: retries up to 3 times with exponential backoff.
   6. On final failure: marks dead_lettered, increments endpoint's dead-letter counter.
   7. On success: resets endpoint's consecutive-dead-letter counter to 0.
   8. Auto-disables endpoint after ``MAX_DEAD_LETTERS`` consecutive failures.
@@ -38,8 +38,8 @@ from modulo.db.models.notification_delivery import NotificationDeliveryLog
 from modulo.db.models.notification_endpoint import NotificationEndpoint
 
 __all__ = [
+    "MAX_ATTEMPTS",
     "MAX_DEAD_LETTERS",
-    "MAX_RETRIES",
     "RETRY_DELAYS",
     "DispatchResult",
     "Notifier",
@@ -47,7 +47,7 @@ __all__ = [
 
 _log = logging.getLogger(__name__)
 
-MAX_RETRIES = 3
+MAX_ATTEMPTS = 4  # 1 initial + 3 retries
 MAX_DEAD_LETTERS = 10
 RETRY_DELAYS = [5.0, 30.0, 120.0]
 
@@ -74,13 +74,11 @@ class Notifier:
         self._session_factory = async_sessionmaker(db_engine, expire_on_commit=False)
         self._fernet = Fernet(fernet_key.encode())
         self._http_client: httpx.AsyncClient | None = None
-        self._client_lock = asyncio.Lock()
         self._use_celery = use_celery
 
     async def _get_client(self) -> httpx.AsyncClient:
-        async with self._client_lock:
-            if self._http_client is None or self._http_client.is_closed:
-                self._http_client = httpx.AsyncClient(timeout=30.0)
+        if self._http_client is None or self._http_client.is_closed:
+            self._http_client = httpx.AsyncClient(timeout=httpx.Timeout(connect=10.0, read=25.0, pool=30.0))
         return self._http_client
 
     async def dispatch_event(
@@ -114,6 +112,8 @@ class Notifier:
                 )
 
             return await self._dispatch_inline(org_id, event_type, payload, run_id, retain_payload, team_id)
+        except asyncio.CancelledError:
+            raise
         except Exception:
             _log.exception("notifier.dispatch_failed", extra={"event_type": event_type, "org_id": str(org_id)})
             return []
@@ -129,9 +129,9 @@ class Notifier:
         team_id: uuid.UUID | None = None,
     ) -> list[DispatchResult]:
         """Enqueue dispatch to Celery; fall back to inline on failure."""
-        from modulo.core.notifier.celery_tasks import enqueue_dispatch
-
         try:
+            from modulo.core.notifier.celery_tasks import enqueue_dispatch
+
             results = await enqueue_dispatch(
                 org_id,
                 event_type,
@@ -203,6 +203,10 @@ class Notifier:
             try:
                 events_list = json.loads(ep.events)
             except (json.JSONDecodeError, TypeError):
+                _log.warning(
+                    "notifier.unparseable_events_json",
+                    extra={"endpoint_id": str(ep.id), "org_id": str(org_id)},
+                )
                 continue
             if event_type in events_list:
                 subscribed.append(ep)
@@ -244,6 +248,7 @@ class Notifier:
                 "timestamp": datetime.now(UTC).isoformat(),
                 "payload": payload,
             },
+            default=str,
             separators=(",", ":"),
         ).encode()
 
@@ -251,9 +256,10 @@ class Notifier:
 
         last_error: str | None = None
         response_code: int | None = None
+        succeeded = False
         attempt_count = 0
 
-        for attempt in range(1, MAX_RETRIES + 1):
+        for attempt in range(1, MAX_ATTEMPTS + 1):
             attempt_count = attempt
             try:
                 resp = await client.post(
@@ -267,18 +273,19 @@ class Notifier:
                 )
                 response_code = resp.status_code
                 if resp.is_success:
+                    succeeded = True
                     break
                 last_error = f"HTTP {resp.status_code}: {resp.text[:200]}"
             except httpx.RequestError as exc:
                 last_error = f"RequestError: {exc}"
                 response_code = None
 
-            if attempt < MAX_RETRIES:
+            if attempt < MAX_ATTEMPTS:
                 _log.warning(
                     "notifier.delivery_attempt_failed",
                     extra={
                         "attempt": attempt,
-                        "max_retries": MAX_RETRIES,
+                        "max_attempts": MAX_ATTEMPTS,
                         "endpoint_id": str(endpoint.id),
                         "last_error": last_error,
                     },
@@ -286,11 +293,7 @@ class Notifier:
                 delay_idx = min(attempt - 1, len(RETRY_DELAYS) - 1)
                 await asyncio.sleep(RETRY_DELAYS[delay_idx])
 
-        status: str
-        if response_code is not None and 200 <= response_code < 300:
-            status = "delivered"
-        else:
-            status = "dead_lettered"
+        status = "delivered" if succeeded else "dead_lettered"
 
         payload_ciphertext: bytes | None = None
         if retain_payload:
@@ -324,13 +327,18 @@ class Notifier:
         )
 
     async def _sign_payload(self, body: bytes, endpoint: NotificationEndpoint) -> str:
-        """Build HMAC-SHA256 signature over the JSON body."""
+        """Build HMAC-SHA256 signature over the JSON body.
+        Returns empty string if the endpoint has no secret configured.
+        """
         if endpoint.secret_ciphertext is None:
             return ""
         try:
             raw_secret = self._fernet.decrypt(endpoint.secret_ciphertext)
         except InvalidToken:
-            _log.error("notifier.decrypt_failed", extra={"endpoint_id": str(endpoint.id)})
+            _log.error(
+                "notifier.decrypt_failed",
+                extra={"endpoint_id": str(endpoint.id), "org_id": str(endpoint.organisation_id)},
+            )
             return ""
         sig = hmac.new(raw_secret, body, hashlib.sha256).hexdigest()
         return f"sha256={sig}"
@@ -427,7 +435,12 @@ class Notifier:
 
     async def close(self) -> None:
         """Close the underlying HTTP client, if one was created."""
-        if self._http_client is not None and not self._http_client.is_closed:
-            await self._http_client.aclose()
+        client = self._http_client
+        if client is not None and not client.is_closed:
             self._http_client = None
-            _log.debug("notifier.http_client_closed")
+            try:
+                await client.aclose()
+            except Exception:
+                _log.exception("notifier.http_client_close_failed")
+            else:
+                _log.debug("notifier.http_client_closed")
