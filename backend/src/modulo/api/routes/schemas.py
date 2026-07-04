@@ -12,7 +12,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from jsonschema import Draft202012Validator, ValidationError  # type: ignore[import-untyped]
 from jsonschema.exceptions import SchemaError as JsSchemaError
 from pydantic import BaseModel, Field
-from sqlalchemy.exc import ProgrammingError
+from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.api.dependencies import get_db_session
@@ -146,6 +146,12 @@ async def list_schemas_endpoint(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Schema management is not available. Run database migrations to enable it.",
         ) from None
+    except SQLAlchemyError:
+        logger.exception("schemas.list_schemas")
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Schema management is temporarily unavailable.",
+        ) from None
     return SchemaListResponse(
         items=[SchemaResponse.model_validate(s) for s in result.items],
         total=result.total,
@@ -177,6 +183,12 @@ async def create_schema_endpoint(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Schema management is not available. Run database migrations to enable it.",
         ) from None
+    except SQLAlchemyError:
+        logger.exception("schemas.create_schema")
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Schema management is temporarily unavailable.",
+        ) from None
     return SchemaResponse.model_validate(schema)
 
 
@@ -195,6 +207,12 @@ async def get_schema_endpoint(
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Schema management is not available. Run database migrations to enable it.",
+        ) from None
+    except SQLAlchemyError:
+        logger.exception("schemas.get_schema")
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Schema management is temporarily unavailable.",
         ) from None
     if schema is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Schema not found")
@@ -219,6 +237,12 @@ async def update_schema_endpoint(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Schema management is not available. Run database migrations to enable it.",
         ) from None
+    except SQLAlchemyError:
+        logger.exception("schemas.update_schema")
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Schema management is temporarily unavailable.",
+        ) from None
     if schema is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Schema not found")
     return SchemaResponse.model_validate(schema)
@@ -240,6 +264,12 @@ async def deprecate_schema_endpoint(
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Schema management is not available. Run database migrations to enable it.",
+        ) from None
+    except SQLAlchemyError:
+        logger.exception("schemas.deprecate_schema")
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Schema management is temporarily unavailable.",
         ) from None
     if schema is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Schema not found")
@@ -268,6 +298,12 @@ async def delete_schema_endpoint(
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Schema management is not available. Run database migrations to enable it.",
+        ) from None
+    except SQLAlchemyError:
+        logger.exception("schemas.delete_schema")
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Schema management is temporarily unavailable.",
         ) from None
     if not deleted:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Schema not found")
@@ -298,6 +334,12 @@ async def list_schema_versions_endpoint(
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Schema management is not available. Run database migrations to enable it.",
+        ) from None
+    except SQLAlchemyError:
+        logger.exception("schemas.list_schema_versions")
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Schema management is temporarily unavailable.",
         ) from None
     return SchemaVersionListResponse(
         items=[SchemaVersionResponse.model_validate(sv) for sv in result.items],
@@ -340,6 +382,12 @@ async def create_schema_version_endpoint(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Schema management is not available. Run database migrations to enable it.",
         ) from None
+    except SQLAlchemyError:
+        logger.exception("schemas.create_schema_version")
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Schema management is temporarily unavailable.",
+        ) from None
     return SchemaVersionResponse.model_validate(sv)
 
 
@@ -359,6 +407,12 @@ async def get_schema_version_endpoint(
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Schema management is not available. Run database migrations to enable it.",
+        ) from None
+    except SQLAlchemyError:
+        logger.exception("schemas.get_schema_version")
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Schema management is temporarily unavailable.",
         ) from None
     if sv is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Schema version not found")
@@ -409,6 +463,12 @@ async def list_schema_fields_endpoint(
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Schema management is not available. Run database migrations to enable it.",
+        ) from None
+    except SQLAlchemyError:
+        logger.exception("schemas.list_schema_fields")
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Schema management is temporarily unavailable.",
         ) from None
 
     definition = sv.definition_json
@@ -504,6 +564,12 @@ async def infer_schema_endpoint(
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Schema inference is not available. Run database migrations to enable it.",
+        ) from None
+    except SQLAlchemyError:
+        logger.exception("schemas.infer_schema")
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Schema management is temporarily unavailable.",
         ) from None
 
     secrets_backend = create_secrets_backend(fernet_key=settings.fernet_key)
@@ -644,6 +710,12 @@ async def generate_schema_endpoint(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Schema management is not available. Run database migrations to enable it.",
         ) from None
+    except SQLAlchemyError:
+        logger.exception("schemas.generate_schema")
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Schema management is temporarily unavailable.",
+        ) from None
 
     secrets_backend = create_secrets_backend(fernet_key=settings.fernet_key)
 
@@ -763,6 +835,12 @@ async def migrate_data_endpoint(
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Schema management is not available. Run database migrations to enable it.",
+        ) from None
+    except SQLAlchemyError:
+        logger.exception("schemas.migrate_data")
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Schema management is temporarily unavailable.",
         ) from None
 
     plan = create_migration(from_sv.definition_json, to_sv.definition_json)
