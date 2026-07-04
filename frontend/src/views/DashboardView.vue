@@ -108,8 +108,8 @@
           <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="5 3 19 12 5 21 5 3"/></svg>
         </div>
         <div>
-          <p class="text-sm font-medium text-foreground">Run a Pipeline</p>
-          <p class="text-xs text-muted-foreground">Select a pipeline and run it with a prompt</p>
+          <p class="text-sm font-medium text-foreground">{{ $t('views.DashboardView.run_a_pipeline') }}</p>
+          <p class="text-xs text-muted-foreground">{{ $t('views.DashboardView.select_a_pipeline_and_run_it_with_a_prompt') }}</p>
         </div>
         <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="ml-auto text-muted-foreground"><polyline points="9 18 15 12 9 6"/></svg>
       </router-link>
