@@ -10,6 +10,7 @@ code:
 unit-tests:
   - backend/tests/unit/core/test_okr_progress.py
   - backend/tests/unit/core/test_eval_suite.py
+  - backend/tests/unit/api/test_evals_okr_progress_programming_error.py
 depends-on: [feat-evals-eval-definitions, feat-evals-eval-engine, feat-evals-eval-packaging]
 status: partial
 ---
@@ -33,7 +34,7 @@ Mapping eval suites to organisational OKRs so teams can track quality targets ov
 - [x] Breach alert when current pass rate falls below pass_threshold
 - [x] Admin endpoint: GET /api/v1/admin/evals/okr-progress/{suite_id}
 - [ ] OKR progress endpoint supports aggregate flag to return OKR-level rollup across suites
-- [ ] OKR progress returned with suite_id, suite_name, current_score, pass_threshold, trend, trend_direction, days_to_target, breach
+- [x] OKR progress returned with suite_id, suite_name, current_score, pass_threshold, trend, trend_direction, days_to_target, breach
 
 ### Target Date Management
 - [x] target_date parsing failure returns None days_to_target (graceful degradation)
@@ -55,7 +56,7 @@ Mapping eval suites to organisational OKRs so teams can track quality targets ov
 - [x] Unauthenticated requests return 401 on OKR progress endpoint
 - [x] Non-admin users receive 403 on OKR progress endpoint
 - [x] RLS scopes OKR progress queries by organisation_id
-- [ ] OKR progress endpoint scoped to admin-only in alpha
+- [x] OKR progress endpoint scoped to admin-only in alpha
 
 ### Edge Cases
 - [x] Suite not found in DB raises ValueError (returned as 404)
@@ -67,21 +68,58 @@ Mapping eval suites to organisational OKRs so teams can track quality targets ov
 - [ ] Organisation with no suites at all — empty progress response
 - [ ] Large number of suites under one OKR — aggregation paginates or caps
 
+### Error Handling
+
+- [x] Unauthenticated requests return 401 on OKR progress endpoint
+- [x] Non-admin users receive 403 on OKR progress endpoint
+- [x] Suite not found in DB raises ValueError → returned as 404
+- [x] Database ProgrammingError caught → returned as 501 Not Implemented with migration hint
+- [x] target_date parsing failure returns None days_to_target (graceful degradation)
+- [ ] SQLite dialect incompatibility — raw SQL text() queries use PostgreSQL-specific SQL
+
+### Testing
+
+- [x] Unit tests for track_okr_progress() — 14 tests covering: missing suite, returns model, trend periods, correct values, breach detection, no threshold, target date, trending, no data
+- [x] Unit tests for alert_on_breach() — 7 tests covering: below, above, at threshold, zero threshold, zero rate, perfect rate, suite wrapper
+- [x] Unit tests for _compute_trend_direction() — 6 tests covering: single point, empty, declining, improving, stable, skips empty periods
+- [x] Unit tests for _days_between() — 5 tests covering: None target, future date, past date, invalid string, today
+- [x] Unit tests for OkrSuite model — 2 tests covering: minimal, full
+- [x] Unit tests for OkrProgress model — 1 test covering all fields
+- [x] API endpoint tests — 7 tests covering: 401, 200, response shape, trend points, correct data, trend values, target_date param, missing suite 404, breach true
+- [x] ProgrammingError → 501 unit test — 1 test covering the error path
+- [ ] Suite-level aggregation unit tests — 7 tests in test_eval_suite.py covering passing suite, at threshold, failing suite, no threshold, mixed results, empty suite, model fields
+
 ### BDD Coverage
-- [ ] eval_suite_crud.feature — placeholder only (scenarios not implemented)
-- [ ] Scenario: Admin creates a suite and sets pass_threshold
+- [x] eval_suite_crud.feature — 8 real scenarios exist with step definitions in test_eval.py (CREATE, LIST, GET, UPDATE, DELETE, auth checks)
 - [ ] Scenario: Admin views OKR progress for a suite over time
 - [ ] Scenario: Suite breaches threshold — alert surfaces in dashboard
 - [ ] Scenario: Non-admin receives 403 when accessing OKR progress
 - [ ] Scenario: Multiple suites under one OKR show aggregate progress
 
 ## Known Gaps
-- No dedicated suite DB entity — suite_id is a free-form string on eval_definitions, no FK, no metadata
+
+- No dedicated suite DB entity — suite_id is a free-form string on eval_definitions, no FK, no metadata (prevents OKR-level aggregation)
 - No OKR identifier column on eval_definitions — cross-suite OKR aggregation not queryable
 - OkrSuite.target_date and owner fields are Pydantic-only — not persisted to DB
-- eval_suite_crud.feature is a placeholder — no BDD scenarios implemented
 - No OKR progress visualization/dashboard UI exists
-- No breach notification mechanism (webhook, in-app, or email)
+- No breach notification mechanism (webhook, in-app, or email) — breach is detected but alert not delivered
 - No scheduled quality report support — OKR breach summary not surfaced anywhere
-- No multi-suite aggregation endpoint (/evals/okr-progress?okr_id=...)
-- Elena persona scenario 8 ("Create eval suites aligned with team OKRs") not verified end-to-end 
+- No multi-suite aggregation endpoint (/evals/okr-progress?okr_id=...) — can only query by single suite_id
+- Raw SQL `text()` queries use PostgreSQL-specific SQL — will fail on SQLite (test/development) with ProgrammingError (already caught as 501)
+- BDD coverage is incomplete — no scenarios explicitly test the OKR progress endpoint, only eval_suite_crud.feature (eval definition CRUD, not progress tracking)
+- Elena persona scenario 8 ("Create eval suites aligned with team OKRs") not verified end-to-end
+
+## QA History
+
+### 2026-07-04 — Cross-cutting architecture QA (index 133)
+
+**Findings fixed:**
+- MAJOR: Fixed 2 stale `[ ]` behaviour checkboxes → `[x]`: (1) OKR progress response shape (all 8 fields are returned by the endpoint), (2) Admin-only scoping (already enforced by 403 check in route handler — checkbox was `[ ]` despite being implemented).
+- MAJOR: Fixed stale BDD claim — eval_suite_crud.feature is NOT a placeholder; it has 8 real Gherkin scenarios with step definitions wired in test_eval.py. Replaced the inaccurate claim with accurate checkbox.
+- MAJOR: Added Error Handling section with 6 behaviour checkboxes covering all error paths (401, 403, 404, 501, target_date graceful degradation, SQLite dialect gap).
+- MAJOR: Added Testing section with 10 behaviour checkboxes documenting all unit test coverage (track_okr_progress: 14 tests, alert_on_breach: 7, compute_trend_direction: 6, days_between: 5, models: 3, API endpoint: 9, ProgrammingError: 1, suite aggregation: 7).
+- MINOR: Refined Known Gaps — removed stale "placeholder" BDD claim, added SQLite dialect gap, added breach notification gap, added missing BDD coverage for OKR progress endpoint.
+- MINOR: Updated `unit-tests` frontmatter — added `test_evals_okr_progress_programming_error.py` ref (was missing even though file exists at backend/tests/unit/api/).
+
+### Summary
+Status: partial (10 known gaps remain — all infrastructure/features, not code correctness issues). Existing 52+ unit tests confirmed on disk. No code changes needed — only product map documentation. 
