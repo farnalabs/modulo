@@ -585,7 +585,7 @@ const modelBackendName = computed(() => {
 
 function agentSchemaName(agent: any, dir: 'input' | 'output') {
   const s = schemas.value.find(s => s.id === agent[`${dir}_schema_id`])
-  return s ? s.name : `${dir}_schema_id}`
+  return s ? s.name : `${dir}_schema_id`
 }
 
 const canConvert = computed(() => pickerAgentId.value && pickerConnectorId.value)

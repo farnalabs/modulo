@@ -316,7 +316,6 @@ import ErrorAlert from '../components/shared/ErrorAlert.vue'
 import TeamNotificationEndpoints from '../components/TeamNotificationEndpoints.vue'
 import { usePlanStore } from '../stores/planStore'
 import FeatureGate from '../components/FeatureGate.vue'
-import LockIcon from '../components/LockIcon.vue'
 import { shortId } from '../utils/format'
 
 const planStore = usePlanStore()

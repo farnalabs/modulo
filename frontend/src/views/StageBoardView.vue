@@ -437,7 +437,7 @@ const filteredStages = computed(() => {
 
 const filteredPipelines = computed(() => {
   return allPipelines.value.filter(p => {
-    if (teamFilter.value && p.team_name !== teamFilter.value && p.owner_team_id !== teamFilter.value) return false
+    if (teamFilter.value && p.owner_team_id !== teamFilter.value) return false
     if (statusFilter.value && p.status !== statusFilter.value) return false
     if (dateFrom.value && p.created_at && new Date(p.created_at) < new Date(dateFrom.value)) return false
     if (dateTo.value && p.created_at && new Date(p.created_at) > new Date(dateTo.value + 'T23:59:59')) return false
