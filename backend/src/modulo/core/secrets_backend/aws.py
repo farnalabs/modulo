@@ -20,20 +20,16 @@ from typing import Any
 from modulo.core.secrets_backend import SecretsBackend
 
 _TIMEOUT: float = 30.0
-_RETRY_ATTEMPTS: int = 3
 
 _MODULE_AVAILABLE: bool = True
 _boto3: Any = None
 
 try:
     import boto3  # type: ignore[import-untyped]
-    from botocore.config import Config as BotoCoreConfig  # type: ignore[import-untyped]
 
     _boto3 = boto3
-    _BotoCoreConfig = BotoCoreConfig
 except ImportError:
     _MODULE_AVAILABLE = False
-    _BotoCoreConfig = None
 
 
 class AWSSecretsManagerBackend(SecretsBackend):
@@ -80,14 +76,12 @@ class AWSSecretsManagerBackend(SecretsBackend):
                 session_kwargs["aws_access_key_id"] = self._access_key
                 session_kwargs["aws_secret_access_key"] = self._secret_key
 
-            config = _BotoCoreConfig(retries={"max_attempts": _RETRY_ATTEMPTS, "mode": "adaptive"})
-            session = await asyncio.to_thread(_boto3.Session, **session_kwargs)
-            self._client = await asyncio.to_thread(session.client, "secretsmanager", config=config)
+            session = _boto3.Session(**session_kwargs)
+            self._client = session.client("secretsmanager")
             return self._client
 
     async def get_secret(self, key: str) -> str:
         client = await self._ensure_client()
-        response: Any = None
 
         try:
             response = await asyncio.wait_for(
@@ -100,8 +94,8 @@ class AWSSecretsManagerBackend(SecretsBackend):
             raise PermissionError("AWSSecretsManagerBackend: access denied reading secret") from exc
         except TimeoutError:
             raise RuntimeError("AWSSecretsManagerBackend: timeout reading secret") from None
-        except Exception:
-            raise RuntimeError("AWSSecretsManagerBackend: unexpected error reading secret") from None
+        except Exception as exc:
+            raise RuntimeError(f"AWSSecretsManagerBackend: unexpected error reading secret: {exc}") from exc
 
         secret_string = response.get("SecretString")
         if isinstance(secret_string, str):
@@ -127,29 +121,18 @@ class AWSSecretsManagerBackend(SecretsBackend):
                 timeout=_TIMEOUT,
             )
         except client.exceptions.ResourceExistsException:
-            try:
-                await asyncio.wait_for(
-                    asyncio.to_thread(
-                        client.update_secret,
-                        SecretId=key,
-                        SecretString=value,
-                    ),
-                    timeout=_TIMEOUT,
-                )
-            except client.exceptions.ResourceNotFoundException as exc:
-                raise RuntimeError("AWSSecretsManagerBackend: secret was deleted during update") from exc
-            except client.exceptions.AccessDeniedException as exc:
-                raise PermissionError("AWSSecretsManagerBackend: access denied writing secret") from exc
-            except TimeoutError:
-                raise RuntimeError("AWSSecretsManagerBackend: timeout writing secret") from None
-            except Exception:
-                raise RuntimeError("AWSSecretsManagerBackend: unexpected error writing secret") from None
-        except client.exceptions.AccessDeniedException as exc:
-            raise PermissionError("AWSSecretsManagerBackend: access denied writing secret") from exc
+            await asyncio.wait_for(
+                asyncio.to_thread(
+                    client.update_secret,
+                    SecretId=key,
+                    SecretString=value,
+                ),
+                timeout=_TIMEOUT,
+            )
         except TimeoutError:
             raise RuntimeError("AWSSecretsManagerBackend: timeout writing secret") from None
-        except Exception:
-            raise RuntimeError("AWSSecretsManagerBackend: unexpected error writing secret") from None
+        except Exception as exc:
+            raise RuntimeError(f"AWSSecretsManagerBackend: unexpected error writing secret: {exc}") from exc
 
     async def delete_secret(self, key: str) -> None:
         client = await self._ensure_client()
@@ -166,11 +149,7 @@ class AWSSecretsManagerBackend(SecretsBackend):
             )
         except client.exceptions.ResourceNotFoundException:
             pass
-        except client.exceptions.InvalidRequestException:
-            pass
-        except client.exceptions.AccessDeniedException as exc:
-            raise PermissionError("AWSSecretsManagerBackend: access denied deleting secret") from exc
         except TimeoutError:
             raise RuntimeError("AWSSecretsManagerBackend: timeout deleting secret") from None
-        except Exception:
-            raise RuntimeError("AWSSecretsManagerBackend: unexpected error deleting secret") from None
+        except Exception as exc:
+            raise RuntimeError(f"AWSSecretsManagerBackend: unexpected error deleting secret: {exc}") from exc

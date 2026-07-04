@@ -7,21 +7,18 @@ table.
 
 from __future__ import annotations
 
-import asyncio
 import uuid
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 
 from cryptography.fernet import Fernet, InvalidToken
 from sqlalchemy import delete, select, text
-from sqlalchemy.exc import SQLAlchemyError
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 
 from modulo.core.secrets_backend import SecretsBackend
 from modulo.db.models.secret import Secret
 
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession
-
-_DB_TIMEOUT: float = 10.0
 
 
 class FernetSecretsBackend(SecretsBackend):
@@ -51,7 +48,6 @@ class FernetSecretsBackend(SecretsBackend):
     def set_session(self, session: AsyncSession) -> None:
         """Set or replace the DB session used for persistence."""
         self._session = session
-        self._org_id = None
 
     async def get_secret(self, key: str) -> str:
         """Retrieve and decrypt a secret.
@@ -65,17 +61,9 @@ class FernetSecretsBackend(SecretsBackend):
             raise RuntimeError("FernetSecretsBackend: no DB session set")
 
         org_id = await self._read_org_id_from_session()
-        try:
-            result = await asyncio.wait_for(
-                self._session.execute(
-                    select(Secret).where(Secret.key == key, Secret.organisation_id == org_id).limit(1)
-                ),
-                timeout=_DB_TIMEOUT,
-            )
-        except TimeoutError:
-            raise RuntimeError("FernetSecretsBackend: timeout reading secret") from None
-        except SQLAlchemyError as exc:
-            raise RuntimeError(f"FernetSecretsBackend: database error reading secret: {exc}") from exc
+        result = await self._session.execute(
+            select(Secret).where(Secret.key == key, Secret.organisation_id == org_id).limit(1)
+        )
         row = result.scalar_one_or_none()
         if row is None:
             raise KeyError(key)
@@ -105,15 +93,7 @@ class FernetSecretsBackend(SecretsBackend):
             return self._org_id
         if self._session is None:
             raise RuntimeError("FernetSecretsBackend: no DB session set")
-        try:
-            result = await asyncio.wait_for(
-                self._session.execute(text("SELECT current_setting('app.organisation_id', true)")),
-                timeout=_DB_TIMEOUT,
-            )
-        except TimeoutError:
-            raise RuntimeError("FernetSecretsBackend: timeout reading org context") from None
-        except SQLAlchemyError as exc:
-            raise RuntimeError(f"FernetSecretsBackend: database error reading org context: {exc}") from exc
+        result = await self._session.execute(text("SELECT current_setting('app.organisation_id', true)"))
         org_id_str: str | None = result.scalar()
         if not org_id_str:
             raise RuntimeError(
@@ -131,67 +111,17 @@ class FernetSecretsBackend(SecretsBackend):
         encrypted = self._fernet.encrypt(value.encode())
         org_id = await self._read_org_id_from_session()
 
-        try:
-            await asyncio.wait_for(
-                self._dialect_upsert(org_id, key, encrypted),
-                timeout=_DB_TIMEOUT,
-            )
-        except TimeoutError:
-            raise RuntimeError("FernetSecretsBackend: timeout writing secret") from None
-        except SQLAlchemyError as exc:
-            raise RuntimeError(f"FernetSecretsBackend: database error writing secret: {exc}") from exc
-
-    async def _dialect_upsert(self, org_id: uuid.UUID, key: str, encrypted: bytes) -> None:
-        if self._session is None:
-            return
-        stmt: Any
-        dialect = self._session.bind.dialect.name if self._session.bind else "postgresql"
-        if dialect == "postgresql":
-            from sqlalchemy.dialects.postgresql import insert as pg_insert
-
-            stmt = pg_insert(Secret).values(
-                id=uuid.uuid4(),
-                organisation_id=org_id,
-                key=key,
-                encrypted_value=encrypted,
-            )
-            stmt = stmt.on_conflict_do_update(
-                index_elements=["organisation_id", "key"],
-                set_={"encrypted_value": encrypted},
-            )
-            await self._session.execute(stmt)
-        elif dialect in ("sqlite", "sqlite3"):
-            from sqlalchemy.dialects.sqlite import insert as sqlite_insert
-
-            stmt = sqlite_insert(Secret).values(
-                id=uuid.uuid4(),
-                organisation_id=org_id,
-                key=key,
-                encrypted_value=encrypted,
-            )
-            stmt = stmt.on_conflict_do_update(
-                index_elements=["organisation_id", "key"],
-                set_={"encrypted_value": encrypted},
-            )
-            await self._session.execute(stmt)
-        else:
-            from sqlalchemy import insert as sa_insert
-
-            existing_result = await self._session.execute(
-                select(Secret).where(Secret.key == key, Secret.organisation_id == org_id).limit(1)
-            )
-            existing = existing_result.scalar_one_or_none()
-            if existing is not None:
-                del_stmt = delete(Secret).where(Secret.key == key, Secret.organisation_id == org_id)
-                await self._session.execute(del_stmt)
-                await self._session.flush()
-            stmt = sa_insert(Secret).values(
-                id=uuid.uuid4(),
-                organisation_id=org_id,
-                key=key,
-                encrypted_value=encrypted,
-            )
-            await self._session.execute(stmt)
+        stmt = pg_insert(Secret).values(
+            id=uuid.uuid4(),
+            organisation_id=org_id,
+            key=key,
+            encrypted_value=encrypted,
+        )
+        stmt = stmt.on_conflict_do_update(
+            index_elements=["organisation_id", "key"],
+            set_={"encrypted_value": encrypted},
+        )
+        await self._session.execute(stmt)
         await self._session.flush()
 
     async def delete_secret(self, key: str) -> None:
@@ -200,15 +130,6 @@ class FernetSecretsBackend(SecretsBackend):
             raise RuntimeError("FernetSecretsBackend: no DB session set")
 
         org_id = await self._read_org_id_from_session()
-        try:
-            await asyncio.wait_for(
-                self._session.execute(
-                    delete(Secret).where(Secret.key == key, Secret.organisation_id == org_id)
-                ),
-                timeout=_DB_TIMEOUT,
-            )
-            await self._session.flush()
-        except TimeoutError:
-            raise RuntimeError("FernetSecretsBackend: timeout deleting secret") from None
-        except SQLAlchemyError as exc:
-            raise RuntimeError(f"FernetSecretsBackend: database error deleting secret: {exc}") from exc
+        stmt = delete(Secret).where(Secret.key == key, Secret.organisation_id == org_id)
+        await self._session.execute(stmt)
+        await self._session.flush()
