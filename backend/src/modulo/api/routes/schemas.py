@@ -232,7 +232,7 @@ async def update_schema_endpoint(
     session: AsyncSession = Depends(get_db_session),
     principal: AuthenticatedPrincipal = Depends(get_current_user),
 ) -> SchemaResponse:
-    updates = {k: v for k, v in req.model_dump().items() if v is not None}
+    updates = req.model_dump(exclude_unset=True)
     try:
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
@@ -650,7 +650,7 @@ async def infer_schema_endpoint(
 
     suggestion_name = f"Inferred from {ci.name}"
     suggestion_description = (
-        f"Auto-inferred schema from {ci.name} ({body.sample_query.resource}, {len(records)} samples)"
+        f"Auto-inferred schema from {ci.name} ({req.sample_query.resource}, {len(records)} samples)"
     )
 
     try:

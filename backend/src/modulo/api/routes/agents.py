@@ -371,7 +371,7 @@ async def update_agent_endpoint(
         library_id=agent.library_id,
     )
 
-    updates = {k: v for k, v in req.model_dump().items() if v is not None}
+    updates = req.model_dump(exclude_unset=True)
     try:
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)

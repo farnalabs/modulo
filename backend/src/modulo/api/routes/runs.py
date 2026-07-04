@@ -124,7 +124,7 @@ async def _validate_run_input_basics(
             detail="Pipeline graph has no nodes",
         )
 
-    target_ids = {str(e.get("source_node_id", e.get("target"))) for e in edges}
+    target_ids = {str(e.get("target_node_id", e.get("target"))) for e in edges}
     entry_candidates = [n for n in nodes if str(n.get("id")) not in target_ids]
     if not entry_candidates:
         raise HTTPException(

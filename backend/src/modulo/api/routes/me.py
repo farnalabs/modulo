@@ -8,8 +8,6 @@ from pydantic import BaseModel, Field
 from sqlalchemy.exc import ProgrammingError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from pydantic import BaseModel, Field
-
 from modulo.api.dependencies import get_db_session
 from modulo.api.routes.admin_remy import (
     SkillCreate,
@@ -56,7 +54,8 @@ async def get_user_settings(
     session: AsyncSession = Depends(get_db_session),
 ) -> dict[str, Any]:
     try:
-        account = await get_account_by_id(session, current_user.account_id)
+        async with session.begin():
+            account = await get_account_by_id(session, current_user.account_id)
     except ProgrammingError:
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
@@ -82,7 +81,8 @@ async def update_user_settings(
     if req.locale is not None:
         prefs["locale"] = req.locale
     try:
-        return await update_account_preferences(session, current_user.account_id, prefs)
+        async with session.begin():
+            return await update_account_preferences(session, current_user.account_id, prefs)
     except ProgrammingError:
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
