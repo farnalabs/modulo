@@ -24,9 +24,10 @@ def _normalize_uuids(items: list[Any]) -> list[uuid.UUID]:
 
 
 class RemyConfig(BaseModel):
-    schema_version: int = 2
+    schema_version: int = 3
     system_prompt: str = ""
     additional_guidance: str = ""
+    product_primer: str = ""
     access_rules: dict[str, list[Any]] = Field(
         default_factory=lambda: {"user_ids": [], "team_ids": [], "org_roles": ["admin"]}
     )
@@ -37,6 +38,17 @@ class RemyConfig(BaseModel):
     allowed_models: list[str] = []  # empty = all models for allowed providers
     tool_permissions: dict[str, str] = Field(default_factory=dict)
     permission_mode: str = "safe"
+    context_sources: dict[str, str] = Field(
+        default_factory=lambda: {
+            "page_context": "always_on",
+            "user_profile": "always_on",
+            "product_primer": "always_on",
+            "product_docs": "tool",
+            "integration_status": "tool",
+            "org_config": "tool",
+            "feature_overview": "tool",
+        }
+    )
 
 
 _CONFIG_KEY_PREFIX = "remy_config:"
