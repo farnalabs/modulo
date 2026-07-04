@@ -91,12 +91,12 @@ configuration at every layer.
 - [x] `backend/tests/bdd/features/observability/otel_traces.feature` — 4 scenarios with step definitions in test_observability.py
 - [x] `backend/tests/bdd/features/observability/metrics.feature` — 4 scenarios with step definitions in test_observability.py
 - [x] `backend/tests/bdd/features/observability/run_logs.feature` — 4 scenarios with step definitions in test_observability.py
-- [ ] `backend/tests/unit/otel_bridge/test_telemetry_toggle.py` — telemetry disabled by default; enabled configures exporters
-- [ ] `backend/tests/unit/otel_bridge/test_export.py` — exporter configuration
-- [ ] `backend/tests/unit/otel_bridge/test_handler.py` — OTel span creation
-- [ ] `backend/tests/unit/connector_hub/test_traced_connector.py` — connector OTel tracing
-- [ ] `backend/tests/unit/api/test_environments.py` — egress_policy API validation (invalid values return 422)
-- [ ] `backend/tests/integration/crud/test_environment_profiles.py` — egress_policy CRUD roundtrip
+- [x] `backend/tests/unit/otel_bridge/test_telemetry_toggle.py` — telemetry disabled by default; enabled configures exporters (10 tests in 3 classes)
+- [x] `backend/tests/unit/otel_bridge/test_export.py` — exporter configuration (7 tests)
+- [x] `backend/tests/unit/otel_bridge/test_handler.py` — OTel span creation (16 tests)
+- [x] `backend/tests/unit/connector_hub/test_traced_connector.py` — connector OTel tracing (9 tests)
+- [x] `backend/tests/unit/api/test_environments.py` — egress_policy API validation (invalid values return 422) (18 tests)
+- [x] `backend/tests/integration/crud/test_environment_profiles.py` — egress_policy CRUD roundtrip (5 tests)
 
 ## Known Gaps
 
