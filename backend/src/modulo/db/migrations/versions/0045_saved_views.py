@@ -13,7 +13,7 @@ from alembic import op
 revision: str = "0045_saved_views"
 down_revision: str | None = "0044_library_auto_update"
 branch_labels: str | Sequence[str] | None = None
-depends_on: str | Sequence[str] | None = "0045_account_org_membership"
+depends_on: str | Sequence[str] | None = "0074_account_org_membership"
 
 
 def upgrade() -> None:
