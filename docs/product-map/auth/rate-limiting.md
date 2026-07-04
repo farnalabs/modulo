@@ -19,6 +19,8 @@ status: partial
 ---
 # API Rate Limiting
 
+Redis-backed sliding window and in-memory token bucket rate limiting for POST/PUT/PATCH endpoints, MCP tools, and login auth, with per-endpoint configurable rules and bypass token support.
+
 ## Behaviours
 
 ### POST /api/v1/runs
@@ -121,7 +123,6 @@ status: partial
 - MCP-specific rate limit rules (`trigger_pipeline` vs general MCP calls) are not differentiated in middleware — all `/mcp` paths share 200 req/min rule (trigger_pipeline has a separate 60/min limit at the application level in `mcp_server.py`)
 - HITL review rate limit (20/min per PRD §7.18) is not enforced as a separate rule — `/api/v1/runs` catch-all covers HITL paths at 60/min instead of the specified 20/min
 - Auth rate limiting (§6.10) has no unit tests for AuthRateLimiter or AuthRateLimitMiddleware classes directly.
-- **In-memory TokenBucket fallback — FIXED**: `TokenBucket` now computes `rate`/`burst` from `max_requests`/`window_s` instead of hardcoded defaults. `RateLimiterRegistry` creates buckets from the rule's configured params.
-
 ## QA History
 - 2026-07-04: Cross-cutting QA (index 153). Fixed 2 pre-existing test bugs (response format mismatch with ProblemDetail RFC 9457). Fixed BDD step definitions path. Marked 9 stale [ ]→[x] behaviour checkboxes. Added Error Handling section (7 checkboxes). Added Auth Rate Limiting section (5 checkboxes). Consolidated duplicate Known Gaps. All 59 tests pass.
+- 2026-07-05: QA-iterate (prodmap auth). Fixed TokenBucket `rate`/`burst` computation to use configured params instead of hardcoded defaults. Moved FIXED item from Known Gaps to QA History.

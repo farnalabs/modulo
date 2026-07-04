@@ -15,6 +15,8 @@ status: partial
 ---
 # MCP OAuth 2.0 Authorization Code Flow
 
+OAuth 2.0 authorization code grant for MCP client authentication, with client registration, token family rotation, theft detection, and dual-layer scope enforcement.
+
 ## Behaviours
 
 ### OAuth Client Management (CRUD)

@@ -91,7 +91,6 @@ Per-org, role-scoped API keys for CI/CD pipelines and external agents, with opti
 ## Known Gaps
 
 - **MCP middleware does not propagate `team_id` to request context.** The `_ctx_team_id` ContextVar does not exist — tool handlers have no way to know which team scope an API key was issued for. Team-scoped enforcement at the MCP layer is incomplete.
-- **`_validate_team_key_role` was previously dead code but is now called** on both create and update in `api_key.py`. Team-scoped keys with admin role are now caught both at the route level (422) and by this dedicated validation function.
 - **BDD coverage is incomplete.** Feature file at `backend/tests/bdd/features/auth/api_keys.feature` has 5 real scenarios (happy path, create, list, revoke, invalid, reject) but is missing scenarios for: admin role rejection, team-scoped key creation, MCP auth validation, role-scope enforcement, MCP config endpoint, not-found handling, unauthenticated access, soft-delete revocation.
 - **No team-scoped enforcement unit tests.** `test_api_key.py` does not test validation of team-scoped keys — no tests verify that a team-scoped key cannot access resources outside its team boundary.
 - **No RLS policy on `org_api_keys` table for team isolation.** When querying API keys via MCP, a team-scoped key could theoretically enumerate org-wide keys via the list endpoint — the list endpoint filters by `organisation_id` only, not by the requesting key's `team_id`.
@@ -103,3 +102,7 @@ Per-org, role-scoped API keys for CI/CD pipelines and external agents, with opti
 - Fixed CRITICAL: `test_create_api_key_accepts_expires_at` passed `created_by=user_id` instead of `account_id=user_id` — would raise TypeError
 - Added `test_api_keys_programming_error.py` with 4 unit tests covering all DB-accessing route handlers (create, list, update, revoke → 501)
 - Stale `expires_at` gap corrected: PUT route DOES parse and propagate `expires_at`, but lacks dedicated test
+- `_validate_team_key_role` wired to both create and update routes — team-scoped keys with admin role now caught at route level (422) and by validation function
+
+### 2026-07-05 — QA-iterate (prodmap auth)
+- Moved `_validate_team_key_role` fix note from Known Gaps to QA History
