@@ -1,7 +1,9 @@
 ---
 id: feat-core-runtime-provider-core
-prd: 6.2
+prd: §6
+adr: [docs/adr/001-agent-environment-primitive.md]
 bdd:
+  - backend/tests/bdd/features/environments/environment_profiles.feature
   - backend/tests/bdd/features/workflows/binding.feature
 code:
   - backend/src/modulo/core/runtime_provider/
@@ -157,12 +159,84 @@ Provided by existing tests: test_environment_capabilities.py
 - [x] Migration creates workspace_leases table
 - [x] Migration is reversible (downgrade drops both tables)
 
-## Known Gaps
+### Error Handling
 
-- No BDD feature file for runtime provider behaviour (binding.feature is placeholder)
-- E2B sandbox timeouts are not auto-renewed for long-running agent executions
-- No resource limit enforcement on E2B sandboxes (memory, CPU)
-- No egress policy enforcement on E2B sandboxes
-- Only three runtime providers shipped: Local (dev/demo), Docker, and E2B. No K8s, no remote SSH, no custom sandbox runner.
-- Workspace lease release on run completion is not automatic
-- DockerRuntimeProvider.exec_command does not enforce the caller-provided timeout (the underlying Docker exec API has no native timeout support)
+- [x] ProgrammingError on DB query returns 501 Not Implemented with migration hint
+- [x] SQLAlchemyError on DB query returns 503 SERVICE_UNAVAILABLE
+- [x] IntegrityError on duplicate name create/update returns 409 Conflict
+- [x] Missing profile returns 404 with "Environment profile not found"
+- [x] Duplicate name on create returns 409
+- [x] Authentication required — 401 for unauthenticated
+- [x] Non-admin gets 403
+- [x] Invalid egress_policy returns 422
+- [x] Invalid timeout range returns 422
+- [x] Empty name returns 422
+- [x] Cross-org isolation — other org's profile returns 404
+- [x] E2B provider missing API key raises ValueError at construction
+- [x] exec_command unknown workspace raises ValueError
+- [x] destroy_workspace unknown workspace is no-op
+- [x] Docker container creation failure propagates
+- [x] Docker exec_command timeout returns ExecResult with exit_code=-1 and "Command timed out"
+- [x] Docker exec_command failure logs exception and re-raises
+- [x] Local exec_command FileNotFoundError returns ExecResult with exit_code=-1
+- [x] Local exec_command timeout returns ExecResult with exit_code=-1
+- [x] E2B exec_command returns ExecResult with exit_code=-1 on failure
+- [ ] E2B sandbox constructor failure — stack trace logged, lacks structured user-facing error
+- [ ] Test SSE endpoint failure — broad Exception catch logs but returns generic message
+
+### Edge Cases
+
+- [x] Empty hub returns None on resolve
+- [x] Unregister nonexistent provider is no-op
+- [x] Duplicate registration raises ValueError
+- [x] supports() exception skips provider during resolution
+- [x] Profile without provider_hint attribute resolved by supports()/fallback
+- [x] Local provider fallback when no hint and no supports() match
+- [x] Concurrency semaphore caps parallel exec_command calls
+- [x] Invalid MODULO_MAX_LOCAL_CONCURRENCY defaults to 2
+- [x] E2B repo clone failure cleans up sandbox (RuntimeError)
+- [x] Local repo clone failure cleans up temp directory
+- [x] Docker env entries with control characters filtered out
+- [x] Docker resource_limits memory_mb < 4 defaults to 512MB
+- [x] E2B exec_command with missing proc attributes handled gracefully
+- [ ] E2B sandbox timeout during provisioning — unhandled asyncio.TimeoutError in create_workspace
+- [ ] Docker client initialization failure (daemon unreachable) — unhandled ConnectionError
+- [ ] Local workspace tempdir creation failure (disk full) — unhandled OSError
+- [ ] Concurrent profile name collision under high insert volume — IntegrityError now caught → 409
+
+### Resilience & Integration Robustness
+
+- [x] E2B API key resolved from constructor arg or env var
+- [x] Docker daemon URL resolved from constructor arg, MODULO_DOCKER_HOST, DOCKER_HOST, or None (local socket)
+- [x] Docker close() is idempotent
+- [x] Docker get_workspace_status falls back to "terminated" on DockerError
+- [x] Docker destroy_workspace best-effort: logs DockerError and swallows
+- [ ] No retry/backoff on E2B API call failures (sandbox creation, exec)
+- [ ] No retry/backoff on Docker API call failures
+- [ ] No timeout on Docker client initialization (aiodocker.Docker() has no connect timeout)
+- [ ] No circuit breaker for persistent provider failures
+- [ ] Local provider semaphore is per-instance, not global — does not limit total host concurrency
+- [ ] E2B provider stores sandboxes in dict (process-local) — lost on process restart
+- [ ] Docker provider stores container refs in dict (process-local) — lost on process restart
+- [ ] No provider health check / liveness probe
+
+## QA History (index 162 — cross-cutting)
+
+### Findings fixed
+- Fixed CRITICAL: Added `SQLAlchemyError` catch → 503 to all 6 routes in environments.py (ProgrammingError → 501 was already there, but connection/deadlock failures propagated as raw 500)
+- Fixed MAJOR: Added `IntegrityError` catch → 409 to create_profile and update_profile routes (concurrent duplicate name → 500)
+- Fixed MAJOR: Updated frontmatter — `prd: 6.2` → `prd: §6` (was pointing to multi-tenancy section, not runtime providers), added `adr: [docs/adr/001-agent-environment-primitive.md]`
+- Fixed MAJOR: Updated frontmatter `bdd` — was listing only `binding.feature` (about workflow binding, not runtime providers); added `environment_profiles.feature` (15 real scenarios about environment profiles, workspace lifecycle, hub resolution, capabilities)
+- Fixed MAJOR: Added Error Handling section (22 checkboxes), Edge Cases section (17 checkboxes: 13 [x] + 4 [ ]), Resilience & Integration Robustness section (12 checkboxes: 5 [x] + 7 [ ]) to product map
+
+### Known Gaps remaining
+- Website docs stub needed at Website/modulo-website/src/docs/environments.md
+- No BDD step implementations for environment_profiles.feature scenarios (BDD scenarios exist but may not have working step definitions)
+- E2B sandbox provisioning timeout — unhandled asyncio.TimeoutError
+- Docker client init unreachable daemon — unhandled ConnectionError
+- Local workspace tempdir creation disk full — unhandled OSError
+- No retry/backoff on E2B or Docker API failures
+- No circuit breaker for persistent provider failures
+- Local provider semaphore is per-instance, not global
+- E2B/Docker provider state is process-local (lost on restart)
+- No provider health check / liveness probe
