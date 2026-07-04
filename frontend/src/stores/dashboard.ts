@@ -106,7 +106,7 @@ export const useDashboardStore = defineStore("dashboard", () => {
     try {
       const { data: result, error: err } = await Promise.race([
         api.GET("/api/v1/dashboard/summary"),
-        new Promise<never>((_, reject) => setTimeout(() => reject(new Error('Dashboard data request timed out after 30s')), 30000)),
+        new Promise<never>((_, reject) => setTimeout(() => reject(new Error('Dashboard data request timed out after 15s')), 15000)),
       ]);
       if (err) {
         error.value = err;

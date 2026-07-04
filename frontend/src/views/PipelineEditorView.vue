@@ -7,6 +7,9 @@
     <div v-else-if="pageError" class="flex flex-1 items-center justify-center">
       <div class="rounded-lg border border-destructive/50 bg-destructive/10 p-4 text-destructive">{{ pageError }}</div>
     </div>
+    <div v-else-if="flowNodes.length === 0" class="flex flex-1 items-center justify-center">
+      <p class="text-sm italic text-muted-foreground/60 select-none">no components in pipeline</p>
+    </div>
     <template v-else>
       <div class="relative flex-1">
         <!-- Toolbar -->

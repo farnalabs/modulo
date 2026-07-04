@@ -193,8 +193,19 @@
             <Sparkline class="h-12 w-full" :data="trendSpendData" color="var(--color-warning)" />
           </div>
         </div>
-        <div v-else class="flex items-center justify-center py-8 text-sm text-muted-foreground">
-          {{ $t('views.DashboardView.not_enough_trend_data') }}
+        <div v-else class="space-y-4 opacity-50">
+          <div>
+            <p class="text-xs font-medium text-muted-foreground mb-1">{{ $t('views.DashboardView.run_count') }}</p>
+            <Sparkline class="h-12 w-full" :data="[0]" color="var(--color-muted)" />
+          </div>
+          <div>
+            <p class="text-xs font-medium text-muted-foreground mb-1">{{ $t('views.DashboardView.eval_pass_rate_label') }}</p>
+            <Sparkline class="h-12 w-full" :data="[0]" color="var(--color-muted)" />
+          </div>
+          <div>
+            <p class="text-xs font-medium text-muted-foreground mb-1">{{ $t('views.DashboardView.token_spend') }}</p>
+            <Sparkline class="h-12 w-full" :data="[0]" color="var(--color-muted)" />
+          </div>
         </div>
       </div>
 
@@ -402,7 +413,10 @@ function formatTimestamp(iso: string): string {
 }
 
 onMounted(async () => {
-  const promises: Promise<unknown>[] = [dashboardStore.fetchSummary()];
+  const promises: Promise<unknown>[] = [
+    dashboardStore.fetchSummary(),
+    dashboardStore.fetchTrends(7),
+  ];
   if (!planStore.currentTier || planStore.currentTier === 'community') {
     promises.push(planStore.fetchPlan());
   }

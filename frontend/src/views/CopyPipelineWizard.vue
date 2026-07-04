@@ -2,13 +2,7 @@
   <div class="min-h-screen bg-background">
     <header class="bg-card border-b border-border px-6 py-4">
       <div class="max-w-3xl mx-auto">
-        <button
-          class="text-sm text-muted-foreground hover:text-foreground mb-2 inline-flex items-center gap-1"
-          @click="onBack"
-          data-testid="copy-wizard-back"
-        >
-          &larr; {{ step === 1 ? 'Back to Pipelines' : 'Back' }}
-        </button>
+        <BackLink to="/pipelines" label="Back to Pipelines" class="mb-2" />
         <h1 class="text-xl font-semibold text-foreground">{{ $t('views.CopyPipelineWizard.copy_pipeline') }}</h1>
         <p class="text-sm text-muted-foreground mt-1">{{ $t('views.CopyPipelineWizard.duplicate_an_existing_pipeline_and_adapt_it_for_a_new_purpos') }}</p>
       </div>
@@ -378,6 +372,7 @@
 import { ref, computed, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { useApi } from '../composables/useApi'
+import BackLink from '../components/BackLink.vue'
 import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
 import OwnershipPicker from '../components/OwnershipPicker.vue'
