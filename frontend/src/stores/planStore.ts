@@ -16,12 +16,15 @@ export const usePlanStore = defineStore("plan", () => {
   const tierRanks = ref<Record<string, number>>({});
   const syncingIds = ref(new Set<string>());
   const unsubHandlers: (() => void)[] = [];
+  let hasLoadedOnce = false;
 
-  const isTeam = computed(() => currentTier.value === "team");
+  const isTeam = computed(() => isAtMinimumTier("team"));
 
   function featureEnabled(name: string): boolean {
-    // If no feature data loaded, don't gate — assume available
-    if (Object.keys(features.value).length === 0) return true;
+    if (Object.keys(features.value).length === 0) {
+      if (hasLoadedOnce) return true;
+      return false;
+    }
     return features.value[name] ?? false;
   }
 
@@ -45,45 +48,78 @@ export const usePlanStore = defineStore("plan", () => {
     error.value = null;
     const apiErrors: string[] = [];
     try {
-      const [flagsRes, licenseRes, tiersRes] = await Promise.all([
-        api.GET("/api/v1/admin/feature-flags"),
-        api.GET("/api/v1/admin/license"),
-        api.GET("/api/v1/admin/tiers"),
+      const results = await Promise.allSettled([
+        Promise.race([
+          api.GET("/api/v1/admin/feature-flags"),
+          new Promise<never>((_, reject) =>
+            setTimeout(() => reject(new Error("Feature flags request timed out after 15s")), 15000),
+          ),
+        ]),
+        Promise.race([
+          api.GET("/api/v1/admin/license"),
+          new Promise<never>((_, reject) =>
+            setTimeout(() => reject(new Error("License request timed out after 15s")), 15000),
+          ),
+        ]),
+        Promise.race([
+          api.GET("/api/v1/admin/tiers"),
+          new Promise<never>((_, reject) =>
+            setTimeout(() => reject(new Error("Tiers request timed out after 15s")), 15000),
+          ),
+        ]),
       ]);
 
-      if (flagsRes.error) {
-        apiErrors.push(`Feature flags: ${formatApiError(flagsRes.error)}`);
-      } else if (flagsRes.data) {
-        currentTier.value = flagsRes.data.license.tier;
-        const map: Record<string, boolean> = {};
-        for (const flag of flagsRes.data.flags) {
-          map[flag.name] = flag.currently_active;
+      const [flagsSettled, licenseSettled, tiersSettled] = results;
+
+      if (flagsSettled.status === "fulfilled") {
+        const flagsRes = flagsSettled.value;
+        if (flagsRes.error) {
+          apiErrors.push(`Feature flags: ${formatApiError(flagsRes.error)}`);
+        } else if (flagsRes.data) {
+          currentTier.value = flagsRes.data.license.tier;
+          const map: Record<string, boolean> = {};
+          for (const flag of flagsRes.data.flags) {
+            map[flag.name] = flag.currently_active;
+          }
+          features.value = map;
         }
-        features.value = map;
+      } else {
+        apiErrors.push(`Feature flags: ${flagsSettled.reason?.message ?? String(flagsSettled.reason)}`);
       }
 
-      if (licenseRes.error) {
-        apiErrors.push(`License: ${formatApiError(licenseRes.error)}`);
-      } else if (licenseRes.data) {
-        expiresAt.value = licenseRes.data.expires_at ?? null;
-        orgName.value = licenseRes.data.org_id ?? null;
-        if (licenseRes.data.tier) currentTier.value = licenseRes.data.tier;
+      if (licenseSettled.status === "fulfilled") {
+        const licenseRes = licenseSettled.value;
+        if (licenseRes.error) {
+          apiErrors.push(`License: ${formatApiError(licenseRes.error)}`);
+        } else if (licenseRes.data) {
+          expiresAt.value = licenseRes.data.expires_at ?? null;
+          orgName.value = licenseRes.data.org_id ?? null;
+          if (licenseRes.data.tier) currentTier.value = licenseRes.data.tier;
+        }
+      } else {
+        apiErrors.push(`License: ${licenseSettled.reason?.message ?? String(licenseSettled.reason)}`);
       }
 
-      if (tiersRes.error) {
-        apiErrors.push(`Tiers: ${formatApiError(tiersRes.error)}`);
-      } else if (tiersRes.data) {
-        const labels: Record<string, string> = {};
-        const ranks: Record<string, number> = {};
-        for (const t of tiersRes.data.tiers) {
-          labels[t.tier_id] = t.label;
-          ranks[t.tier_id] = t.rank;
+      if (tiersSettled.status === "fulfilled") {
+        const tiersRes = tiersSettled.value;
+        if (tiersRes.error) {
+          apiErrors.push(`Tiers: ${formatApiError(tiersRes.error)}`);
+        } else if (tiersRes.data) {
+          const labels: Record<string, string> = {};
+          const ranks: Record<string, number> = {};
+          for (const t of tiersRes.data.tiers) {
+            labels[t.tier_id] = t.label;
+            ranks[t.tier_id] = t.rank;
+          }
+          tierLabels.value = labels;
+          tierRanks.value = ranks;
         }
-        tierLabels.value = labels;
-        tierRanks.value = ranks;
+      } else {
+        apiErrors.push(`Tiers: ${tiersSettled.reason?.message ?? String(tiersSettled.reason)}`);
       }
 
       error.value = apiErrors.length > 0 ? apiErrors.join("; ") : null;
+      if (!error.value) hasLoadedOnce = true;
     } catch (e: unknown) {
       apiErrors.push(e instanceof Error ? e.message : String(e));
       error.value = apiErrors.join("; ");
