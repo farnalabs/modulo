@@ -16,7 +16,7 @@ from typing import Any
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request, status
 from sqlalchemy import select
-from sqlalchemy.exc import ProgrammingError
+from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
 
 from modulo.api.dependencies import _get_engine, get_db_session
@@ -129,6 +129,11 @@ async def receive_webhook(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
         ) from None
+    except SQLAlchemyError:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Database operation failed. Please try again later.",
+        ) from None
 
     run_id = run.id
     executor = PipelineExecutor(engine)
@@ -195,6 +200,11 @@ async def replay_webhook(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
         ) from None
+    except SQLAlchemyError:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Database operation failed. Please try again later.",
+        ) from None
 
     run_id = run.id
     executor = PipelineExecutor(engine)
@@ -226,6 +236,11 @@ async def cleanup_expired(
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
+        ) from None
+    except SQLAlchemyError:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Database operation failed. Please try again later.",
         ) from None
     except Exception:
         _log.exception("Cleanup job failed")

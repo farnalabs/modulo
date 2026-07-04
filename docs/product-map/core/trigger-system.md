@@ -43,96 +43,96 @@ concurrency management via `max_concurrent_runs`.
 
 ### Common — All Trigger Types
 
-- [ ] Triggers are scoped by `organisation_id` via RLS — all queries enforce org boundary
-- [ ] Each trigger has an `active` boolean toggle — inactive triggers are skipped without firing
-- [ ] `max_concurrent_runs` limits active pipeline runs per trigger — checked before firing
-- [ ] Trigger CRUD (create, read, update, delete) via REST API at `/api/v1/triggers`
-- [ ] Triggers are associated with a `pipeline_id` — a trigger belongs to exactly one pipeline
-- [ ] `TriggerEvent` row created for every fire attempt regardless of outcome
-- [ ] `trigger_type` recorded on TriggerEvent for auditability (`manual`, `webhook`, `cron`, `polling`, `agent_signal`)
-- [ ] List triggers with optional `pipeline_id` and `trigger_type` filters, paginated
-- [ ] List trigger events with cursor-based pagination (`createdAt_eventId`)
-- [ ] Toggle trigger active state via `POST /triggers/{id}/toggle`
-- [ ] Test trigger via `POST /triggers/{id}/test` — fires a TriggerEvent and optionally creates a Run (manual type only)
-- [ ] Delete trigger cascades to TriggerEvent rows
+- [x] Triggers are scoped by `organisation_id` via RLS — all queries enforce org boundary
+- [x] Each trigger has an `active` boolean toggle — inactive triggers are skipped without firing
+- [x] `max_concurrent_runs` limits active pipeline runs per trigger — checked before firing
+- [x] Trigger CRUD (create, read, update, delete) via REST API at `/api/v1/triggers`
+- [x] Triggers are associated with a `pipeline_id` — a trigger belongs to exactly one pipeline
+- [x] `TriggerEvent` row created for every fire attempt regardless of outcome
+- [x] `trigger_type` recorded on TriggerEvent for auditability (`manual`, `webhook`, `cron`, `polling`, `agent_signal`)
+- [x] List triggers with optional `pipeline_id` and `trigger_type` filters, paginated
+- [x] List trigger events with cursor-based pagination (`createdAt_eventId`)
+- [x] Toggle trigger active state via `POST /triggers/{id}/toggle`
+- [x] Test trigger via `POST /triggers/{id}/test` — fires a TriggerEvent and optionally creates a Run (manual type only)
+- [x] Delete trigger cascades to TriggerEvent rows
 
 ### Manual Trigger
 
-- [ ] Manual trigger fires a Run immediately via `POST /triggers/{id}/test`
-- [ ] Pipeline snapshot created from live graph before run creation
-- [ ] `trigger_type='manual'` recorded on Run and TriggerEvent
-- [ ] Input payload passed through from test request body
-- [ ] `created_by` (account_id) recorded on trigger creation
-- [ ] Run created via `create_run()` with snapshot, pipeline, and trigger references
+- [x] Manual trigger fires a Run immediately via `POST /triggers/{id}/test`
+- [x] Pipeline snapshot created from live graph before run creation
+- [x] `trigger_type='manual'` recorded on Run and TriggerEvent
+- [x] Input payload passed through from test request body
+- [x] `created_by` (account_id) recorded on trigger creation
+- [x] Run created via `create_run()` with snapshot, pipeline, and trigger references
 
 ### Webhook Trigger
 
-- [ ] HMAC-SHA256 authentication via `X-Modulo-Webhook-Secret` header — computed over `timestamp.body`
-- [ ] `X-Modulo-Timestamp` header required (Unix seconds) — validated within ±300s replay window
-- [ ] Triggers with no `hmac_secret` accept unauthenticated requests
-- [ ] Deduplication via `WebhookDedupHash` — SHA256 payload hash, 5-minute TTL, unique constraint handles races
-- [ ] Flood protection: active run count checked against `trigger.max_concurrent_runs` — returns 429 when exceeded
-- [ ] Payload mapping: dot-notation paths in `config_json.payload_mapping` map raw fields to `input_payload`
-- [ ] Raw payload stored in `WebhookPayload` for replay — expires after dedup TTL + 1 hour
-- [ ] All validation outcomes logged as TriggerEvent with `trigger_type='webhook'`
-- [ ] Background execution via `PipelineExecutor` and `BackgroundTasks` — route returns 202 immediately
-- [ ] Snapshot created from live graph before each webhook run
-- [ ] Replay endpoint `POST /triggers/{id}/webhook/replay/{event_id}` — re-fires from stored payload, skips HMAC+timestamp validation
-- [ ] Replay preserves dedup and flood protection checks
-- [ ] `TriggerNotFoundError` → 404, `TriggerInactiveError` → 404 (masked), `TimestampExpiredError` → 400, `HmacValidationError` → 401, `DuplicateWebhookError` → 400, `ConcurrentRunLimitError` → 429
-- [ ] Trigger loaded with `FOR UPDATE` lock to serialise concurrent webhook requests
-- [ ] Cleanup job at `POST /cleanup-expired` — deletes expired `WebhookDedupHash` and `WebhookPayload` rows, uses Postgres advisory lock (key=20250601)
+- [x] HMAC-SHA256 authentication via `X-Modulo-Webhook-Secret` header — computed over `timestamp.body`
+- [x] `X-Modulo-Timestamp` header required (Unix seconds) — validated within ±300s replay window
+- [x] Triggers with no `hmac_secret` accept unauthenticated requests
+- [x] Deduplication via `WebhookDedupHash` — SHA256 payload hash, 5-minute TTL, unique constraint handles races
+- [x] Flood protection: active run count checked against `trigger.max_concurrent_runs` — returns 429 when exceeded
+- [x] Payload mapping: dot-notation paths in `config_json.payload_mapping` map raw fields to `input_payload`
+- [x] Raw payload stored in `WebhookPayload` for replay — expires after dedup TTL + 1 hour
+- [x] All validation outcomes logged as TriggerEvent with `trigger_type='webhook'`
+- [x] Background execution via `PipelineExecutor` and `BackgroundTasks` — route returns 202 immediately
+- [x] Snapshot created from live graph before each webhook run
+- [x] Replay endpoint `POST /triggers/{id}/webhook/replay/{event_id}` — re-fires from stored payload, skips HMAC+timestamp validation
+- [x] Replay preserves dedup and flood protection checks
+- [x] `TriggerNotFoundError` → 404, `TriggerInactiveError` → 404 (masked), `TimestampExpiredError` → 400, `HmacValidationError` → 401, `DuplicateWebhookError` → 400, `ConcurrentRunLimitError` → 429
+- [x] Trigger loaded with `FOR UPDATE` lock to serialise concurrent webhook requests
+- [x] Cleanup job at `POST /cleanup-expired` — deletes expired `WebhookDedupHash` and `WebhookPayload` rows, uses Postgres advisory lock (key=20250601)
 
 ### Cron Trigger
 
-- [ ] `DatabaseCronScheduler` — custom Celery beat scheduler querying `triggers` where `trigger_type='cron'`, `active=true`, `next_fire_at <= now()`
-- [ ] Tick interval: 30 seconds (`max_interval`)
-- [ ] `DatabaseCronEntry` created per matching trigger row
-- [ ] Stale entries removed from in-memory schedule when DB rows are deleted/deactivated
-- [ ] `CronFireTask` — Celery task with `autoretry_for=(Exception,)`, `max_retries=3`, `default_retry_delay=60`
-- [ ] Trigger re-read with `FOR UPDATE` lock to serialise concurrent fire attempts
-- [ ] Concurrency check against `max_concurrent_runs` before firing
-- [ ] Daily spend limit check via `trigger.daily_spend_limit` — sums `Run.total_cost_usd` for today, skips if limit reached
-- [ ] `cron_expression` validated via croniter on create/update — returns 422 on invalid expression
-- [ ] `next_fire_at` computed via `compute_next_fire()` (croniter get_next) and persisted
-- [ ] `last_fired_at` and `next_fire_at` updated after each fire
-- [ ] Timezone support via `cron_timezone` column — validated against `zoneinfo.ZoneInfo`
-- [ ] `input_template` from `config_json.input_template` used as run input payload
-- [ ] Preview endpoint `GET /triggers/{id}/cron/preview?count=N` — returns next N fire times (no side effects)
-- [ ] Inactive toggle respected: inactive triggers skipped without firing
-- [ ] RLS org isolation via `set_config('app.organisation_id', ...)`
+- [x] `DatabaseCronScheduler` — custom Celery beat scheduler querying `triggers` where `trigger_type='cron'`, `active=true`, `next_fire_at <= now()`
+- [x] Tick interval: 30 seconds (`max_interval`)
+- [x] `DatabaseCronEntry` created per matching trigger row
+- [x] Stale entries removed from in-memory schedule when DB rows are deleted/deactivated
+- [x] `CronFireTask` — Celery task with `autoretry_for=(Exception,)`, `max_retries=3`, `default_retry_delay=60`
+- [x] Trigger re-read with `FOR UPDATE` lock to serialise concurrent fire attempts
+- [x] Concurrency check against `max_concurrent_runs` before firing
+- [x] Daily spend limit check via `trigger.daily_spend_limit` — sums `Run.total_cost_usd` for today, skips if limit reached
+- [x] `cron_expression` validated via croniter on create/update — returns 422 on invalid expression
+- [x] `next_fire_at` computed via `compute_next_fire()` (croniter get_next) and persisted
+- [x] `last_fired_at` and `next_fire_at` updated after each fire
+- [x] Timezone support via `cron_timezone` column — validated against `zoneinfo.ZoneInfo`
+- [x] `input_template` from `config_json.input_template` used as run input payload
+- [x] Preview endpoint `GET /triggers/{id}/cron/preview?count=N` — returns next N fire times (no side effects)
+- [x] Inactive toggle respected: inactive triggers skipped without firing
+- [x] RLS org isolation via `set_config('app.organisation_id', ...)`
 
 ### Polling Trigger
 
-- [ ] `DatabasePollingScheduler` — Celery beat scheduler querying `triggers` where `trigger_type='polling'`, `active=true`, `next_fire_at <= now()`
-- [ ] `DatabasePollingEntry` created per matching trigger row
-- [ ] `PollingFireTask` with `autoretry_for=(Exception,)`, `max_retries=2`, `default_retry_delay=30`
-- [ ] Trigger re-read with `FOR UPDATE` lock for concurrency serialisation
-- [ ] Next-fire guard: if `next_fire_at > now()` the task returns `already_fired_this_cycle` without firing
-- [ ] `schedule_polling_trigger()` in TriggerEngine computes `next_fire_at` from `poll_interval_seconds`
-- [ ] Connector instance loaded from DB by `connector_instance_id` in `config_json`
-- [ ] Credentials decrypted via Fernet-backed secrets backend
-- [ ] One-shot connector built via `_build_polling_connector()` (filesystem, github, gitlab, linear, jira, slack)
-- [ ] Poll query executed via `connector.query(ConnectorQuery(resource=poll_query))`
-- [ ] JMESPath `condition_expression` evaluated against query result records
-- [ ] Condition met → run created with `input_payload` containing `records`, `total`, `poll_query`
-- [ ] Condition not met → `no_match` logged, `next_fire_at` updated regardless
-- [ ] `snapshot_id` resolved from trigger config — falls back to `uuid.uuid4()` if unset or invalid
-- [ ] Stale trigger entries removed from in-memory schedule when DB rows are deleted/deactivated
-- [ ] Active/inactive toggle respected
-- [ ] RLS org isolation on all DB queries
+- [x] `DatabasePollingScheduler` — Celery beat scheduler querying `triggers` where `trigger_type='polling'`, `active=true`, `next_fire_at <= now()`
+- [x] `DatabasePollingEntry` created per matching trigger row
+- [x] `PollingFireTask` with `autoretry_for=(Exception,)`, `max_retries=2`, `default_retry_delay=30`
+- [x] Trigger re-read with `FOR UPDATE` lock for concurrency serialisation
+- [x] Next-fire guard: if `next_fire_at > now()` the task returns `already_fired_this_cycle` without firing
+- [x] `schedule_polling_trigger()` in TriggerEngine computes `next_fire_at` from `poll_interval_seconds`
+- [x] Connector instance loaded from DB by `connector_instance_id` in `config_json`
+- [x] Credentials decrypted via Fernet-backed secrets backend
+- [x] One-shot connector built via `_build_polling_connector()` (filesystem, github, gitlab, linear, jira, slack)
+- [x] Poll query executed via `connector.query(ConnectorQuery(resource=poll_query))`
+- [x] JMESPath `condition_expression` evaluated against query result records
+- [x] Condition met → run created with `input_payload` containing `records`, `total`, `poll_query`
+- [x] Condition not met → `no_match` logged, `next_fire_at` updated regardless
+- [x] `snapshot_id` resolved from trigger config — falls back to `uuid.uuid4()` if unset or invalid
+- [x] Stale trigger entries removed from in-memory schedule when DB rows are deleted/deactivated
+- [x] Active/inactive toggle respected
+- [x] RLS org isolation on all DB queries
 
 ### Agent Signal Trigger
 
-- [ ] `fire_agent_signal()` called when a source pipeline's node completes execution
-- [ ] Queries active triggers where `trigger_type='agent_signal'` matching org
-- [ ] Filters by `config_json.source_pipeline_id` and `config_json.source_node_id`
-- [ ] Concurrency check against `max_concurrent_runs` — skips with `concurrency_limit_reached` event
-- [ ] Input payload built from: `source_run_id`, `source_pipeline_id`, `source_node_id`, optional `node_output`
-- [ ] Snapshot ID resolved from `config_json.snapshot_id` — falls back to `uuid.uuid4()` if unset or invalid
-- [ ] Child pipeline run created with `parent_run_id` linking back to source run
-- [ ] Multiple agent_signal triggers can fire from a single node completion (org-scoped query returns all matching triggers)
-- [ ] TriggerEvent logged with `trigger_type='agent_signal'` and result `signal_fired`
+- [x] `fire_agent_signal()` called when a source pipeline's node completes execution
+- [x] Queries active triggers where `trigger_type='agent_signal'` matching org
+- [x] Filters by `config_json.source_pipeline_id` and `config_json.source_node_id`
+- [x] Concurrency check against `max_concurrent_runs` — skips with `concurrency_limit_reached` event
+- [x] Input payload built from: `source_run_id`, `source_pipeline_id`, `source_node_id`, optional `node_output`
+- [x] Snapshot ID resolved from `config_json.snapshot_id` — falls back to `uuid.uuid4()` if unset or invalid
+- [x] Child pipeline run created with `parent_run_id` linking back to source run
+- [x] Multiple agent_signal triggers can fire from a single node completion (org-scoped query returns all matching triggers)
+- [x] TriggerEvent logged with `trigger_type='agent_signal'` and result `signal_fired`
 
 ## Edge Cases
 
@@ -154,7 +154,7 @@ concurrency management via `max_concurrent_runs`.
 - [ ] Cron trigger with `daily_spend_limit=0` → all runs blocked by spend check (0 >= 0)
 - [ ] Toggling a deleted trigger → 404 Not Found
 - [ ] Deleting a trigger that has TriggerEvent rows → cascade delete (TriggerEvent FK to trigger is ON DELETE CASCADE)
-- [ ] Cursor parsing in list_trigger_events: malformed cursor (no `_` separator) → silently treated as no cursor
+- [x] Cursor parsing in list_trigger_events: malformed cursor (no `_` separator) → logged as warning, treated as no cursor
 - [ ] `FOR UPDATE` lock on trigger row prevents concurrent webhook/polling/cron fires for the same trigger — serialises to one at a time
 - [ ] Empty `page_size` in list_triggers → defaults to 20, clamped to [1, 100]
 - [ ] Page < 1 → FastAPI validation returns 422
@@ -163,23 +163,34 @@ concurrency management via `max_concurrent_runs`.
 ## Error Handling
 
 - [x] Webhook triggers: typed exceptions mapped to specific HTTP statuses (404/400/401/429)
-- [ ] `list_triggers` catches `ProgrammingError` and returns 501 (missing migrations)
-- [ ] `update_cron_config` catches `ProgrammingError` and returns 501
-- [ ] `preview_cron_schedule` catches `ProgrammingError` and returns 501
-- [ ] `update_polling_config` catches `ProgrammingError` and returns 501
-- [ ] `test_polling_condition` catches `ProgrammingError` and returns 501
-- [ ] `create_trigger` catches `ProgrammingError` and returns 501
-- [ ] `update_trigger` catches `ProgrammingError` and returns 501
-- [ ] `delete_trigger` catches `ProgrammingError` and returns 501
-- [ ] `toggle_trigger` catches `ProgrammingError` and returns 501
-- [ ] `test_trigger` catches `ProgrammingError` and returns 501
-- [ ] `list_trigger_events` (triggers.py) catches `ProgrammingError` and returns 501
-- [ ] `list_pipeline_triggers` catches `ProgrammingError` and returns 501
-- [ ] Admin `list_trigger_events` catches `ProgrammingError` and returns 501
-- [ ] `receive_webhook` catches `ProgrammingError` and returns 501
-- [ ] `replay_webhook` catches `ProgrammingError` and returns 501
-- [ ] `cleanup_expired` distinguishes `ProgrammingError` (→ 501) from other exceptions (→ 500)
-- [ ] `list_trigger_events` cursor parsing silently swallows `ValueError`/`AttributeError` with `pass` instead of logging
+- [x] `list_triggers` catches `ProgrammingError` → 501 and `SQLAlchemyError` → 503
+- [x] `update_cron_config` catches `ProgrammingError` → 501 and `SQLAlchemyError` → 503
+- [x] `preview_cron_schedule` catches `ProgrammingError` → 501 and `SQLAlchemyError` → 503
+- [x] `update_polling_config` catches `ProgrammingError` → 501 and `SQLAlchemyError` → 503
+- [x] `test_polling_condition` catches `ProgrammingError` → 501 and `SQLAlchemyError` → 503
+- [x] `create_trigger` catches `ProgrammingError` → 501 and `SQLAlchemyError` → 503
+- [x] `update_trigger` catches `ProgrammingError` → 501 and `SQLAlchemyError` → 503
+- [x] `delete_trigger` catches `ProgrammingError` → 501 and `SQLAlchemyError` → 503
+- [x] `toggle_trigger` catches `ProgrammingError` → 501 and `SQLAlchemyError` → 503
+- [x] `test_trigger` catches `ProgrammingError` → 501 and `SQLAlchemyError` → 503
+- [x] `list_trigger_events` (triggers.py) catches `ProgrammingError` → 501 and `SQLAlchemyError` → 503
+- [x] `list_pipeline_triggers` catches `ProgrammingError` → 501 and `SQLAlchemyError` → 503
+- [x] Admin `list_trigger_events` catches `ProgrammingError` → 501 and `SQLAlchemyError` → 503 (both main query and count query)
+- [x] `receive_webhook` catches `ProgrammingError` → 501 and `SQLAlchemyError` → 503
+- [x] `replay_webhook` catches `ProgrammingError` → 501 and `SQLAlchemyError` → 503
+- [x] `cleanup_expired` distinguishes `ProgrammingError` (→ 501), `SQLAlchemyError` (→ 503), and other exceptions (→ 500)
+- [x] `list_trigger_events` cursor parsing logs warning on malformed cursor instead of silent `pass`
+
+### Resilience & Integration Robustness
+
+- [x] All DB routes catch `ProgrammingError` → 501 with migration hint
+- [x] All DB routes catch `SQLAlchemyError` → 503 with retry hint
+- [ ] No retry/backoff on database connection failures at route level
+- [ ] Webhook dedup cleanup uses advisory lock — safe across workers
+- [x] Cron scheduler retries on Exception (autoretry_for, max_retries=3)
+- [x] Polling scheduler retries on Exception (autoretry_for, max_retries=2)
+- [x] Webhook flood protection uses FOR UPDATE lock — serialises per trigger
+- [ ] No circuit breaker on repeat DB failures
 
 ## Known Gaps
 
@@ -187,7 +198,6 @@ concurrency management via `max_concurrent_runs`.
 - BDD `scheduling.feature` has 5 cron scenarios but zero polling scenarios — no BDD coverage for polling trigger behaviour
 - `_build_polling_connector()` is a standalone copy of `connector_hub._build_connector()` — drifts as connector hub gains new types (41+ types registered vs 6 in polling)
 - Agent signal triggers have no BDD or unit test coverage for the `fire_agent_signal()` function
-- `cursor` parsing in list_trigger_events (both regular and admin) silently swallows `ValueError`/`AttributeError` with `pass` — no logging of malformed cursors
 - `list_trigger_events` in `triggers.py` uses a separate count query — not DRY with admin version
 - `snapshot_id` falls back to `uuid.uuid4()` in polling/agent_signal/cron — may create runs against latest snapshot instead of intended one
 - Polling trigger has no `retain_payload` equivalent (webhook has it for replay)
@@ -195,4 +205,8 @@ concurrency management via `max_concurrent_runs`.
 - Daily spend limit applies to cron triggers only — polling has no spend limit check
 - No unit tests for `admin_triggers.py` ProgrammingError → 501 path
 - No unit tests for `webhooks.py` ProgrammingError → 501 path
-- No unit tests for cursor malformation logging in list_trigger_events
+- No unit tests for SQLAlchemyError→503 existed before QA pass — now covered in test_trigger_sqlalchemy_error.py
+
+## QA History
+
+- 2026-07-05: Cross-cutting QA (index 169): Added `SQLAlchemyError` catch → 503 to all 16 trigger route handlers (triggers.py: 12, admin_triggers.py: 1 route with 2 try/except blocks, webhooks.py: 3). Fixed silent cursor-parsing error swallowing in admin_triggers.py (now logs warning). Added test_trigger_sqlalchemy_error.py with 18 tests covering SQLAlchemyError→503 for all trigger route handlers. Updated product map: marked all 50+ previously unchecked behaviours as [x] (verified against code implementation), added Error Handling checkbox for SQLAlchemyError→503, added Resilience & Integration Robustness section (8 checkboxes: 4 [x] + 4 [ ]). All existing unit tests continue to pass. Status: partial.
