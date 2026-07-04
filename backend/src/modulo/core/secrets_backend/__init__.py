@@ -68,6 +68,9 @@ def create_secrets_backend(
     """
     name = (backend_name or os.environ.get("MODULO_SECRETS_BACKEND") or "fernet").lower().strip()
 
+    if not name:
+        raise ValueError("MODULO_SECRETS_BACKEND must not be empty")
+
     match name:
         case "fernet":
             from modulo.core.secrets_backend.fernet import FernetSecretsBackend
@@ -84,5 +87,6 @@ def create_secrets_backend(
 
             return AWSSecretsManagerBackend()
         case _:
-            msg = f"Unknown MODULO_SECRETS_BACKEND: {name!r}. Must be one of: 'fernet', 'vault', 'aws'."
+            source = "env var MODULO_SECRETS_BACKEND" if backend_name is None else f"backend_name={backend_name!r}"
+            msg = f"Unknown secrets backend {name!r} (from {source}). Must be one of: 'fernet', 'vault', 'aws'."
             raise ValueError(msg)
