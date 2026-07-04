@@ -8,7 +8,7 @@ from datetime import UTC, datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import func, select
-from sqlalchemy.exc import ProgrammingError
+from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.api.dependencies import get_db_session
@@ -90,6 +90,12 @@ async def list_notification_rules(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Error tracking is not available. Run database migrations to enable it.",
         )
+    except SQLAlchemyError:
+        _log.warning("error_tracking.list_rules_db_error")
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Error tracking is temporarily unavailable. Please try again.",
+        )
 
     return {
         "items": [_serialize_rule(r) for r in rules],
@@ -148,6 +154,12 @@ async def create_notification_rule(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Error tracking is not available. Run database migrations to enable it.",
         )
+    except SQLAlchemyError:
+        _log.warning("error_tracking.create_rule_db_error")
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Error tracking is temporarily unavailable. Please try again.",
+        )
 
     return _serialize_rule(rule)
 
@@ -204,6 +216,12 @@ async def update_notification_rule(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Error tracking is not available. Run database migrations to enable it.",
         )
+    except SQLAlchemyError:
+        _log.warning("error_tracking.update_rule_db_error")
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Error tracking is temporarily unavailable. Please try again.",
+        )
 
     return _serialize_rule(rule)
 
@@ -240,4 +258,10 @@ async def delete_notification_rule(
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Error tracking is not available. Run database migrations to enable it.",
+        )
+    except SQLAlchemyError:
+        _log.warning("error_tracking.delete_rule_db_error")
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Error tracking is temporarily unavailable. Please try again.",
         )
