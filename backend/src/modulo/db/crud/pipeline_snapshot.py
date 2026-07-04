@@ -45,7 +45,7 @@ async def create_snapshot_from_live_graph(
         .order_by(PipelineEdge.created_at, PipelineEdge.id)
     )
     edges = list(edge_result.scalars())
-    nodes = copy.deepcopy(list(pipeline.graph_nodes_json))
+    nodes = copy.deepcopy(list(pipeline.graph_nodes_json or []))
 
     agent_ids = _ids(node.get("agent_id") for node in nodes)
     agents: list[Agent] = []

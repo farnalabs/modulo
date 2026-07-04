@@ -10,15 +10,15 @@ Usage::
 """
 
 import base64
+import binascii
 import uuid
 from datetime import datetime
-from typing import TYPE_CHECKING, Any, Generic, TypeVar
+from typing import Any, Generic, TypeVar
 
 from pydantic import BaseModel
 from sqlalchemy import Select, func, literal, select
 from sqlalchemy import tuple_ as sa_tuple
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm import DeclarativeBase
 
 T = TypeVar("T")
 _ModelT = TypeVar("_ModelT")  # bound=DeclarativeBase — omitted for pydantic compatibility
@@ -56,9 +56,13 @@ class CursorPaginator:
 
     @staticmethod
     def decode_cursor(cursor: str) -> tuple[Any, uuid.UUID]:
-        decoded = base64.urlsafe_b64decode(cursor.encode()).decode()
-        sort_val_str, id_str = decoded.rsplit(":", 1)
-        return sort_val_str, uuid.UUID(id_str)
+        try:
+            padded = cursor + "=" * (-len(cursor) % 4)
+            decoded = base64.urlsafe_b64decode(padded.encode()).decode()
+            sort_val_str, id_str = decoded.rsplit(":", 1)
+            return sort_val_str, uuid.UUID(id_str)
+        except (ValueError, TypeError, binascii.Error) as exc:
+            raise ValueError("Invalid cursor value") from exc
 
     def _parse_cursor_value(self, raw: str) -> Any:
         try:
@@ -125,9 +129,10 @@ class CursorPaginator:
 
         order_col = sort_col.desc() if sd == "desc" else sort_col.asc()
         id_order = id_col.desc() if sd == "desc" else id_col.asc()
-        stmt = stmt.order_by(order_col, id_order).limit(limit + 1)
+        stmt = stmt.order_by(order_col, id_order)
+        paginated = stmt.limit(limit + 1)
 
-        rows = list((await session.execute(stmt)).scalars().all())
+        rows = list((await session.execute(paginated)).scalars().all())
 
         has_more = len(rows) > limit
         items = rows[:limit]
@@ -139,8 +144,8 @@ class CursorPaginator:
 
         total_count: int | None = None
         if compute_total:
-            count_stmt = select(func.count()).select_from(stmt.order_by(None).subquery())
-            total_count = (await session.execute(count_stmt)).scalar_one()
+            count_q = select(func.count()).select_from(stmt.order_by(None).subquery())
+            total_count = (await session.execute(count_q)).scalar_one()
 
         return CursorPage(
             items=items,

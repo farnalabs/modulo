@@ -268,8 +268,8 @@ async def dismiss_notification(
     session.add(dismissal)
     try:
         await session.flush()
-    except IntegrityError:
-        raise ValueError("Notification already dismissed by this user (concurrent)") from None
+    except IntegrityError as exc:
+        raise ValueError("Notification already dismissed by this user (concurrent)") from exc
     return dismissal
 
 

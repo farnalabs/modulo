@@ -4,6 +4,7 @@ import uuid
 from typing import Any
 
 from sqlalchemy import func, select
+from sqlalchemy.exc import ProgrammingError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.db.crud.base import PageResult, apply_updates
@@ -54,8 +55,11 @@ async def list_environment_profiles(
     page_size: int = 20,
 ) -> PageResult[EnvironmentProfile]:
     offset = (page - 1) * page_size
-    count_q = select(func.count()).select_from(EnvironmentProfile)
-    total = (await session.execute(count_q)).scalar_one()
+    try:
+        count_q = select(func.count()).select_from(EnvironmentProfile)
+        total = (await session.execute(count_q)).scalar_one()
+    except ProgrammingError:
+        return PageResult(items=[], total=0, page=page, page_size=page_size)
 
     q = select(EnvironmentProfile).order_by(EnvironmentProfile.created_at.desc()).offset(offset).limit(page_size)
     rows = (await session.execute(q)).scalars().all()
