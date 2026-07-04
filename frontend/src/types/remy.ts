@@ -48,3 +48,17 @@ export interface UserSkill {
   created_at: string
   updated_at: string
 }
+
+export type ContextSourceMode = 'always_on' | 'tool' | 'off'
+
+export interface ContextSourceItem {
+  key: string
+  name: string
+  description: string
+  source_mode: ContextSourceMode
+  is_overridden: boolean
+}
+
+export interface ContextSourceUpdate {
+  source_mode: ContextSourceMode
+}

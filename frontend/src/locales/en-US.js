@@ -896,6 +896,21 @@ export default {
         "failed_to_save_skill": "Failed to save skill",
         "skill_body_markdown": "Skill body (Markdown)",
         "failed_to_delete_skill_1": "Failed to delete skill"
+      },
+      "RemyContextSources": {
+        "knowledge_sources": "Knowledge Sources",
+        "description": "Customise what Remy knows about your organisation. Changes apply to new conversations only.",
+        "source": "Source",
+        "mode": "Mode",
+        "always_on": "Always On",
+        "tool": "Tool",
+        "off": "Off",
+        "org_default": "org default",
+        "overridden": "overridden",
+        "reset_to_defaults": "Reset to org defaults",
+        "legend_always_on": "Always-on = injected into every conversation",
+        "legend_tool": "Tool = Remy loads on demand",
+        "legend_off": "Off = disabled"
       }
     },
     "SsoProviderForm": {
