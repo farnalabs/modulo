@@ -794,37 +794,55 @@ async def admin_deactivate_user(
             detail="Cannot deactivate yourself",
         )
 
-    async with session.begin():
-        await set_rls_org(session, current_user.organisation_id)
-        await set_rls_user_context(session, current_user.account_id, current_user.org_role)
-        account = await get_account_by_id(session, user_id)
-        if account is None:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail="User not found",
-            )
-        account.active = False
-
-        families = await list_families_for_account(session, user_id)
-        for family in families:
-            await blacklist_family(session, family.family_id)
-
-        active_keys = (
-            await session.execute(
-                select(OrgApiKey).where(
-                    OrgApiKey.account_id == user_id,
-                    OrgApiKey.revoked_at.is_(None),
+    try:
+        async with session.begin():
+            await set_rls_org(session, current_user.organisation_id)
+            await set_rls_user_context(session, current_user.account_id, current_user.org_role)
+            account = await get_account_by_id(session, user_id)
+            if account is None:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail="User not found",
                 )
+            account.active = False
+
+            families = await list_families_for_account(session, user_id)
+            for family in families:
+                await blacklist_family(session, family.family_id)
+
+            active_keys = (
+                await session.execute(
+                    select(OrgApiKey).where(
+                        OrgApiKey.account_id == user_id,
+                        OrgApiKey.revoked_at.is_(None),
+                    )
+                )
+            ).scalars().all()
+            for key in active_keys:
+                await revoke_api_key(session, key.id, current_user.organisation_id)
+
+            team_memberships = await list_team_memberships_for_account(session, user_id)
+            for tm in team_memberships:
+                await remove_team_member(session, tm.id)
+
+            from modulo.core.audit_logger import append_audit_event
+
+            await append_audit_event(
+                session,
+                org_id=current_user.organisation_id,
+                event_type="user_deactivated",
+                actor_user_id=current_user.account_id,
+                resource_type="user",
+                resource_id=user_id,
+                payload_json={"target_user_id": str(user_id)},
             )
-        ).scalars().all()
-        for key in active_keys:
-            await revoke_api_key(session, key.id, current_user.organisation_id)
 
-        team_memberships = await list_team_memberships_for_account(session, user_id)
-        for tm in team_memberships:
-            await remove_team_member(session, tm.id)
-
-        await session.flush()
+            await session.flush()
+    except ProgrammingError:
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="Feature is not available. Run database migrations to enable it.",
+        ) from None
 
     org_role = await _get_org_role(session, user_id, current_user.organisation_id)
     return UserListItem(
@@ -851,13 +869,32 @@ async def admin_reactivate_user(
             detail="Only admin users can reactivate users",
         )
 
-    async with session.begin():
-        await set_rls_org(session, current_user.organisation_id)
-        account = await get_account_by_id(session, user_id)
-        if account is None:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
-        account.active = True
-        await session.flush()
+    try:
+        async with session.begin():
+            await set_rls_org(session, current_user.organisation_id)
+            account = await get_account_by_id(session, user_id)
+            if account is None:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
+            account.active = True
+
+            from modulo.core.audit_logger import append_audit_event
+
+            await append_audit_event(
+                session,
+                org_id=current_user.organisation_id,
+                event_type="user_reactivated",
+                actor_user_id=current_user.account_id,
+                resource_type="user",
+                resource_id=user_id,
+                payload_json={"target_user_id": str(user_id)},
+            )
+
+            await session.flush()
+    except ProgrammingError:
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="Feature is not available. Run database migrations to enable it.",
+        ) from None
 
     org_role = await _get_org_role(session, user_id, current_user.organisation_id)
     return UserListItem(
