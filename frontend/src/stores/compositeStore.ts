@@ -7,6 +7,7 @@ export const useCompositeStore = defineStore("composite", () => {
   const composites = ref<CompositeDefinition[]>([]);
   const loading = ref(false);
   const error = ref<string | null>(null);
+  let hasLoadedOnce = false;
 
   const { get } = useApi();
 
@@ -19,17 +20,22 @@ export const useCompositeStore = defineStore("composite", () => {
   });
 
   async function loadComposites() {
-    if (composites.value.length > 0 && !loading.value) return;
+    if (loading.value) return;
+    if (hasLoadedOnce) return;
     loading.value = true;
     error.value = null;
     try {
-      const result = await get<{ items: CompositeDefinition[] }>(
-        "/api/v1/composites",
-      );
+      const result = await Promise.race([
+        get<{ items: CompositeDefinition[] }>("/api/v1/composites"),
+        new Promise<never>((_, reject) =>
+          setTimeout(() => reject(new Error("Composites request timed out after 15s")), 15000),
+        ),
+      ]);
       composites.value = result.items || [];
+      hasLoadedOnce = true;
     } catch (e: unknown) {
       error.value = e instanceof Error ? e.message : String(e);
-      composites.value = [];
+      if (!hasLoadedOnce) composites.value = [];
     } finally {
       loading.value = false;
     }
@@ -39,15 +45,10 @@ export const useCompositeStore = defineStore("composite", () => {
     return compositeMap.value.get(id);
   }
 
-  if (import.meta.hot) {
-    import.meta.hot.dispose(() => {
-      disposeHandlers();
-    });
-  }
-
   function disposeHandlers() {
     composites.value = [];
     error.value = null;
+    hasLoadedOnce = false;
   }
 
   return {
