@@ -4,6 +4,7 @@ import uuid
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, Field
+from sqlalchemy.exc import ProgrammingError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.api.dependencies import get_db_session
@@ -63,21 +64,27 @@ async def create_contribution(
     for StubModelBackend.  The contribution starts in 'draft' status and can
     be moved to review_queue and then published.
     """
-    async with session.begin():
-        await set_rls_org(session, principal.organisation_id)
-        prim = await contribute_fixture(
-            session,
-            org_id=principal.organisation_id,
-            account_id=principal.account_id,
-            name=body.name,
-            slug=body.slug,
-            description=body.description,
-            tags=body.tags,
-            fixture_map=body.fixture_map,
-            source_run_id=(uuid.UUID(body.source_run_id) if body.source_run_id else None),
-            source_pipeline_id=(uuid.UUID(body.source_pipeline_id) if body.source_pipeline_id else None),
-            owner_team_id=(uuid.UUID(body.owner_team_id) if body.owner_team_id else None),
-        )
+    try:
+        async with session.begin():
+            await set_rls_org(session, principal.organisation_id)
+            prim = await contribute_fixture(
+                session,
+                org_id=principal.organisation_id,
+                account_id=principal.account_id,
+                name=body.name,
+                slug=body.slug,
+                description=body.description,
+                tags=body.tags,
+                fixture_map=body.fixture_map,
+                source_run_id=(uuid.UUID(body.source_run_id) if body.source_run_id else None),
+                source_pipeline_id=(uuid.UUID(body.source_pipeline_id) if body.source_pipeline_id else None),
+                owner_team_id=(uuid.UUID(body.owner_team_id) if body.owner_team_id else None),
+            )
+    except ProgrammingError:
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="Feature is not available. Run database migrations to enable it.",
+        ) from None
     return ContributeFixtureResponse(
         id=prim.id,
         contribution_status=prim.contribution_status,
@@ -100,6 +107,11 @@ async def submit_for_review(
             primitive_id,
             account_id=principal.account_id,
         )
+    except ProgrammingError:
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="Feature is not available. Run database migrations to enable it.",
+        ) from None
     except ContributionNotFoundError:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Contribution not found") from None
     except ContributionInvalidTransitionError as e:
@@ -137,6 +149,11 @@ async def publish_contribution_endpoint(
             primitive_id,
             approved_by=principal.account_id,
         )
+    except ProgrammingError:
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="Feature is not available. Run database migrations to enable it.",
+        ) from None
     except ContributionNotFoundError:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Contribution not found") from None
     except ContributionInvalidTransitionError as e:
@@ -194,6 +211,11 @@ async def submit_contribution_version_endpoint(
                 source_pipeline_id=(uuid.UUID(body.source_pipeline_id) if body.source_pipeline_id else None),
                 owner_team_id=(uuid.UUID(body.owner_team_id) if body.owner_team_id else None),
             )
+    except ProgrammingError:
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="Feature is not available. Run database migrations to enable it.",
+        ) from None
     except ContributionNotFoundError:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Contribution not found") from None
     except ContributionInvalidTransitionError as e:
@@ -219,6 +241,11 @@ async def list_contribution_versions_endpoint(
             principal.organisation_id,
             primitive_id,
         )
+    except ProgrammingError:
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="Feature is not available. Run database migrations to enable it.",
+        ) from None
     except ContributionNotFoundError:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Contribution not found") from None
     return VersionListResponse(
@@ -246,15 +273,21 @@ async def list_contributions_endpoint(
     principal: AuthenticatedPrincipal = Depends(get_current_user),
 ) -> dict[str, object]:
     """List fixture contributions visible to the current org."""
-    async with session.begin():
-        await set_rls_org(session, principal.organisation_id)
-        result = await list_contributions(
-            session,
-            principal.organisation_id,
-            contribution_status=contribution_status,
-            page=page,
-            page_size=page_size,
-        )
+    try:
+        async with session.begin():
+            await set_rls_org(session, principal.organisation_id)
+            result = await list_contributions(
+                session,
+                principal.organisation_id,
+                contribution_status=contribution_status,
+                page=page,
+                page_size=page_size,
+            )
+    except ProgrammingError:
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="Feature is not available. Run database migrations to enable it.",
+        ) from None
     return {
         "items": [LibraryPrimitiveResponse.model_validate(p) for p in result.items],
         "total": result.total,
