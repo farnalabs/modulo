@@ -174,7 +174,7 @@ class TestAcsNewUser:
             user_mock.id = uuid.uuid4()
             user_mock.organisation_id = _ORG_ID
             user_mock.org_role = "runner"
-            mock_jit.return_value = user_mock
+            mock_jit.return_value = (user_mock, _ORG_ID, "runner")
 
             mock_tok.return_value = {
                 "access_token": "at-saml",
@@ -225,7 +225,7 @@ class TestAcsExistingUser:
             existing.org_role = "admin"
             existing.sso_subject = "saml:https://idp.example.com:alice@example.com"
             existing.auth_provider = "saml"
-            mock_jit.return_value = existing
+            mock_jit.return_value = (existing, _ORG_ID, "admin")
 
             mock_tok.return_value = {
                 "access_token": "at-existing",
@@ -248,7 +248,7 @@ class TestAcsExistingUser:
         assert call is not None
         assert call[0][2] == "alice@example.com"
 
-        user = mock_jit.return_value
+        user = existing
         assert user.email == "alice@example.com"
         assert user.sso_subject == "saml:https://idp.example.com:alice@example.com"
         assert user.auth_provider == "saml"
@@ -314,7 +314,7 @@ class TestAcsGroupMapping:
             user_mock.id = uuid.uuid4()
             user_mock.organisation_id = _ORG_ID
             user_mock.org_role = "runner"
-            mock_jit.return_value = user_mock
+            mock_jit.return_value = (user_mock, _ORG_ID, "runner")
 
             provider_mock = MagicMock()
             provider_mock.group_mappings = [
@@ -341,7 +341,7 @@ class TestAcsGroupMapping:
         mock_apply.assert_awaited_once()
         call = mock_apply.await_args
         assert call is not None
-        assert call[0][2] == ["admins", "developers"]
+        assert call[0][3] == ["admins", "developers"]
 
     def test_group_mapping_skipped_when_no_provider(self, client: TestClient) -> None:
         encoded = _make_saml_response("noprov@example.com", "No Prov", groups=["admins"])
@@ -354,7 +354,7 @@ class TestAcsGroupMapping:
             patch("modulo.auth.sso.issue_sso_tokens", new_callable=AsyncMock) as mock_tok,
         ):
             mock_fetch.return_value = _SAMPLE_IDP_METADATA
-            mock_jit.return_value = MagicMock()
+            mock_jit.return_value = (MagicMock(), _ORG_ID, "runner")
             mock_lookup.return_value = None
             mock_tok.return_value = {"access_token": "at", "refresh_token": "rt", "token_type": "bearer"}
 
@@ -378,7 +378,7 @@ class TestAcsGroupMapping:
             patch("modulo.auth.sso.issue_sso_tokens", new_callable=AsyncMock) as mock_tok,
         ):
             mock_fetch.return_value = _SAMPLE_IDP_METADATA
-            mock_jit.return_value = MagicMock()
+            mock_jit.return_value = (MagicMock(), _ORG_ID, "runner")
             mock_tok.return_value = {"access_token": "at", "refresh_token": "rt", "token_type": "bearer"}
 
             resp = client.post(
