@@ -13,6 +13,7 @@ from modulo.db.crud.schema import (
     create_schema,
     create_schema_version,
     delete_schema,
+    deprecate_schema,
     get_schema,
     get_schema_version,
     list_schema_versions,

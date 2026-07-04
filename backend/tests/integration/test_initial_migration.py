@@ -47,23 +47,23 @@ async def test_migrated_schema_matches_orm_metadata(db_engine: AsyncEngine) -> N
 
 async def test_persisted_factories_insert_valid_relationships(db_engine: AsyncEngine) -> None:
     def insert_graph(connection: Any) -> tuple[object, object]:
-        session = Session(bind=connection)
-        factories = (
-            OrganisationFactory,
-            UserFactory,
-            PipelineFactory,
-            PipelineSnapshotFactory,
-            RunFactory,
-        )
-        for factory_class in factories:
-            factory_class._meta.sqlalchemy_session = session
-        run = RunFactory()
-        session.flush()
-        persisted = session.scalar(select(Run).where(Run.id == run.id))
-        assert persisted is not None
-        result = persisted.organisation_id, persisted.pipeline_id
-        session.rollback()
-        return result
+        with Session(bind=connection) as session:
+            factories = (
+                OrganisationFactory,
+                UserFactory,
+                PipelineFactory,
+                PipelineSnapshotFactory,
+                RunFactory,
+            )
+            for factory_class in factories:
+                factory_class._meta.sqlalchemy_session = session
+            run = RunFactory()
+            session.flush()
+            persisted = session.scalar(select(Run).where(Run.id == run.id))
+            assert persisted is not None
+            result = persisted.organisation_id, persisted.pipeline_id
+            session.rollback()
+            return result
 
     async with db_engine.connect() as connection:
         organisation_id, pipeline_id = await connection.run_sync(insert_graph)

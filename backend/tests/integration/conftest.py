@@ -19,15 +19,17 @@ BACKEND_ROOT = Path(__file__).parents[2]
 
 async def _domain_table_names(database_url: str) -> set[str]:
     engine = create_async_engine(database_url)
-    async with engine.connect() as connection:
-        names = await connection.run_sync(lambda sync_connection: set(inspect(sync_connection).get_table_names()))
-    await engine.dispose()
-    return names - {"alembic_version"}
+    try:
+        async with engine.connect() as connection:
+            names = await connection.run_sync(lambda sync_connection: set(inspect(sync_connection).get_table_names()))
+        return names - {"alembic_version"}
+    finally:
+        await engine.dispose()
 
 
 @pytest.fixture(scope="session")
 def postgres_container() -> Generator[PostgresContainer, None, None]:
-    with PostgresContainer("postgres:16-alpine") as pg:
+    with PostgresContainer("postgres:16-alpine", startup_timeout=120) as pg:
         yield pg
 
 
