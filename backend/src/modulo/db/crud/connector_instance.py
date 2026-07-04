@@ -26,6 +26,7 @@ async def create_connector_instance(
     allowed_operations: list[str] | None = None,
     visibility: str = "org",
     owner_team_id: uuid.UUID | None = None,
+    tier: str = "native",
 ) -> ConnectorInstance:
     ci = ConnectorInstance(
         organisation_id=org_id,
@@ -37,6 +38,7 @@ async def create_connector_instance(
         allowed_operations=allowed_operations or [],
         visibility=visibility,
         owner_team_id=owner_team_id,
+        tier=tier,
     )
     session.add(ci)
     await session.flush()

@@ -28,7 +28,9 @@ export default {
       "failed_to_toggle_autoupdate": "Failed to toggle auto-update",
       "pipeline_templates": "Pipeline Templates",
       "search_primitives": "Search modules...",
-      "no_primitives_found": "No modules found"
+      "no_primitives_found": "No modules found",
+      "preview_integrations_count": "{count} preview integration | {count} preview integrations",
+      "preview_badge": "Preview"
     },
     "AdminRemyView": {
       "configure_remy_ai_assistant_behaviour_access_and_skills": "Configure Remy AI assistant behaviour, access, and skills",
@@ -198,6 +200,8 @@ export default {
       "password_must_be_at_least_8_characters": "Password must be at least 8 characters"
     },
     "AdminModelBackendsView": {
+      "preview_model_backends_count": "{count} preview model backend | {count} preview model backends",
+      "preview_badge": "Preview",
       "my_llm_backend": "My LLM Backend",
       "api_key_leave_blank_to_keep_existing": "API Key (leave blank to keep existing)",
       "model_id": "Model ID",
@@ -608,7 +612,9 @@ export default {
     },
     "AdminConnectorsView": {
       "failed_to_load_connectors": "Failed to load connectors:",
-      "plugin_management_is_not_available_on_your_current_plan": "Plugin management is not available on your current plan."
+      "plugin_management_is_not_available_on_your_current_plan": "Plugin management is not available on your current plan.",
+      "preview_connectors_count": "{count} preview connector | {count} preview connectors",
+      "preview_badge": "Preview"
     },
     "SettingsErrorForwardersView": {
       "error_forwarders": "Error Forwarders",

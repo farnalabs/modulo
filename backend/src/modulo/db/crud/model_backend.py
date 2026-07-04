@@ -27,6 +27,7 @@ async def create_model_backend(
     visibility: str = "org",
     owner_team_id: uuid.UUID | None = None,
     fallback_backend_ids: list[str] | None = None,
+    tier: str = "native",
 ) -> ModelBackend:
     mb = ModelBackend(
         organisation_id=org_id,
@@ -40,6 +41,7 @@ async def create_model_backend(
         visibility=visibility,
         owner_team_id=owner_team_id,
         fallback_backend_ids=fallback_backend_ids,
+        tier=tier,
     )
     session.add(mb)
     await session.flush()

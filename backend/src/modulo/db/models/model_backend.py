@@ -22,6 +22,10 @@ class ModelBackend(OrgScoped):
             "visibility = 'org' OR owner_team_id IS NOT NULL",
             name="ck_model_backends_team_owner",
         ),
+        CheckConstraint(
+            "tier IN ('native', 'preview', 'in_dev')",
+            name="ck_model_backends_tier",
+        ),
     )
 
     name: Mapped[str] = mapped_column(String(255), nullable=False)
@@ -41,3 +45,4 @@ class ModelBackend(OrgScoped):
     account_id: Mapped[uuid.UUID] = mapped_column(
         Uuid(), ForeignKey("accounts.id", ondelete="RESTRICT"), nullable=False
     )
+    tier: Mapped[str] = mapped_column(String(20), nullable=False, server_default="native")
