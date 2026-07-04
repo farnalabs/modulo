@@ -36,6 +36,8 @@ class FilesystemConnector(ConnectorBase):
     """
 
     def __init__(self, base_path: str) -> None:
+        if not base_path:
+            raise ValueError("base_path must be a non-empty directory path")
         self._base_path = Path(base_path).resolve()
 
     @property
@@ -60,8 +62,14 @@ class FilesystemConnector(ConnectorBase):
     async def query(self, q: ConnectorQuery) -> ConnectorResult:
         match q.resource:
             case "file":
-                path = self._safe_path(q.filters["path"])
-                content = await asyncio.to_thread(path.read_text, encoding="utf-8")
+                rel_path = q.filters.get("path")
+                if not rel_path:
+                    raise ValueError("Filesystem file query requires 'path' filter")
+                path = self._safe_path(rel_path)
+                try:
+                    content = await asyncio.to_thread(path.read_text, encoding="utf-8")
+                except FileNotFoundError:
+                    raise ValueError(f"File not found: {rel_path!r}")
                 return ConnectorResult(records=[{"path": str(path), "content": content}])
             case "directory":
                 dir_path = self._safe_path(q.filters.get("path", "."))
@@ -80,8 +88,13 @@ class FilesystemConnector(ConnectorBase):
     async def write(self, payload: ConnectorPayload) -> dict[str, Any]:
         match payload.resource:
             case "file":
-                path = self._safe_path(payload.data["path"])
-                content: str = payload.data["content"]
+                rel_path = payload.data.get("path")
+                if not rel_path:
+                    raise ValueError("Filesystem file write requires 'path' in data")
+                content = payload.data.get("content")
+                if content is None:
+                    raise ValueError("Filesystem file write requires 'content' in data")
+                path = self._safe_path(rel_path)
 
                 def _write() -> None:
                     path.parent.mkdir(parents=True, exist_ok=True)

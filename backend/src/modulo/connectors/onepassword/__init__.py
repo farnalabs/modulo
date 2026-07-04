@@ -215,9 +215,10 @@ class OnePasswordConnector(ConnectorBase):
         item_id = data.get("item_id", "")
         if not item_id:
             raise ValueError("1Password item_archive write requires 'item_id' in data")
-        resp = await c.delete(f"/v1/vaults/{vault_id}/items/{item_id}")
-        if resp.status_code == 204:
-            return {"status": "archived", "vault_id": vault_id, "item_id": item_id}
+        resp = await c.patch(f"/v1/vaults/{vault_id}/items/{item_id}", json={"state": "archived"})
+        if resp.status_code == 200:
+            result = resp.json()
+            return {"status": "archived", "vault_id": vault_id, "item_id": item_id, "result": result}
         resp.raise_for_status()
         result: dict[str, Any] = resp.json()
         return result

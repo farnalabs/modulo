@@ -80,13 +80,20 @@ class CircleCIConnector(CIRunnerBase):
         )
 
     async def health_check(self) -> HealthResult:
-        async with self._client() as client:
-            r = await client.get("/me")
-        if r.status_code == 200:
-            return HealthResult(ok=True)
-        if r.status_code in (401, 403):
-            return HealthResult(ok=False, detail="Authentication failed: invalid or expired token")
-        return HealthResult(ok=False, detail=f"HTTP {r.status_code}: {r.text[:200]}")
+        try:
+            async with self._client() as client:
+                r = await client.get("/me")
+            if r.status_code == 200:
+                return HealthResult(ok=True)
+            if r.status_code in (401, 403):
+                return HealthResult(ok=False, detail="Authentication failed: invalid or expired token")
+            return HealthResult(ok=False, detail=f"HTTP {r.status_code}: {r.text[:200]}")
+        except httpx.HTTPStatusError as exc:
+            return HealthResult(ok=False, detail=f"CircleCI API HTTP {exc.response.status_code}: {exc.response.text[:200]}")
+        except httpx.TimeoutException:
+            return HealthResult(ok=False, detail="CircleCI API timeout")
+        except httpx.ConnectError:
+            return HealthResult(ok=False, detail="CircleCI API connection error")
 
     async def trigger_run(
         self,

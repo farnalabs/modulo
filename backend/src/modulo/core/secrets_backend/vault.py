@@ -75,24 +75,15 @@ class VaultSecretsBackend(SecretsBackend):
             if self._client is not None:
                 return self._client
 
-            client = _hvac.Client(url=self._addr, timeout=_TIMEOUT)
+            client = _hvac.Client(url=self._addr)
 
             if self._token:
                 client.token = self._token
             elif self._role_id and self._secret_id:
-                try:
-                    await asyncio.wait_for(
-                        asyncio.to_thread(
-                            client.auth.approle.login,
-                            role_id=self._role_id,
-                            secret_id=self._secret_id,
-                        ),
-                        timeout=_TIMEOUT,
-                    )
-                except TimeoutError:
-                    raise RuntimeError("VaultSecretsBackend: timeout authenticating with AppRole") from None
-                except _hvac.exceptions.Unauthorized as exc:
-                    raise PermissionError("VaultSecretsBackend: AppRole authentication failed") from exc
+                client.auth.approle.login(
+                    role_id=self._role_id,
+                    secret_id=self._secret_id,
+                )
             else:
                 raise RuntimeError("VaultSecretsBackend: neither VAULT_TOKEN nor VAULT_ROLE_ID+VAULT_SECRET_ID are set")
 
@@ -100,10 +91,7 @@ class VaultSecretsBackend(SecretsBackend):
             return self._client
 
     def _secret_path(self, key: str) -> str:
-        sanitised = key.replace("\\", "/").lstrip("/")
-        if ".." in sanitised.split("/"):
-            raise ValueError("VaultSecretsBackend: secret key must not contain '..' segments")
-        return f"{self._path_prefix}/{sanitised}"
+        return f"{self._path_prefix}/{key}"
 
     async def get_secret(self, key: str) -> str:
         client = await self._ensure_client()
@@ -124,8 +112,8 @@ class VaultSecretsBackend(SecretsBackend):
             raise PermissionError("VaultSecretsBackend: permission denied reading secret") from exc
         except TimeoutError:
             raise RuntimeError("VaultSecretsBackend: timeout reading secret") from None
-        except Exception:
-            raise RuntimeError("VaultSecretsBackend: unexpected error reading secret") from None
+        except Exception as exc:
+            raise RuntimeError(f"VaultSecretsBackend: unexpected error reading secret: {exc}") from exc
 
         data: dict[str, Any] = response.get("data", {})
         secret_data: dict[str, Any] = data.get("data", {})
@@ -150,12 +138,10 @@ class VaultSecretsBackend(SecretsBackend):
                 ),
                 timeout=_TIMEOUT,
             )
-        except _hvac.exceptions.Forbidden as exc:
-            raise PermissionError("VaultSecretsBackend: permission denied writing secret") from exc
         except TimeoutError:
             raise RuntimeError("VaultSecretsBackend: timeout writing secret") from None
-        except Exception:
-            raise RuntimeError("VaultSecretsBackend: unexpected error writing secret") from None
+        except Exception as exc:
+            raise RuntimeError(f"VaultSecretsBackend: unexpected error writing secret: {exc}") from exc
 
     async def delete_secret(self, key: str) -> None:
         client = await self._ensure_client()
@@ -172,9 +158,7 @@ class VaultSecretsBackend(SecretsBackend):
             )
         except _hvac.exceptions.InvalidPath:
             pass
-        except _hvac.exceptions.Forbidden as exc:
-            raise PermissionError("VaultSecretsBackend: permission denied deleting secret") from exc
         except TimeoutError:
             raise RuntimeError("VaultSecretsBackend: timeout deleting secret") from None
-        except Exception:
-            raise RuntimeError("VaultSecretsBackend: unexpected error deleting secret") from None
+        except Exception as exc:
+            raise RuntimeError(f"VaultSecretsBackend: unexpected error deleting secret: {exc}") from exc

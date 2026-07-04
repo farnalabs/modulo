@@ -131,7 +131,9 @@ class LinearConnector(ConnectorBase):
                 raise ValueError(f"Linear API invalid response: {exc}") from exc
             if "errors" in body:
                 raise ValueError(f"Linear API error: {body['errors']}")
-            data: dict[str, Any] = body.get("data") or {}
+            data: dict[str, Any] = body.get("data")
+            if data is None:
+                data = {}
             return data
 
     async def health_check(self) -> HealthResult:

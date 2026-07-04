@@ -65,27 +65,41 @@ class GiteaConnector(ConnectorBase):
         Gitea's /api/v1/user endpoint doesn't return scope info in headers,
         so we infer missing scopes by testing specific endpoints.
         """
-        async with self._client() as client:
-            r = await client.get("/repos", params={"limit": 1})
+        try:
+            async with self._client() as client:
+                r = await client.get("/repos", params={"limit": 1})
 
-        if r.status_code == 401:
+            if r.status_code == 401:
+                return REQUIRED_SCOPES
+
+            if r.status_code == 403:
+                return REQUIRED_SCOPES - {"read:repository"}
+
+            return frozenset()
+        except httpx.HTTPStatusError:
             return REQUIRED_SCOPES
-
-        if r.status_code == 403:
-            return REQUIRED_SCOPES - {"read:repository"}
-
-        return frozenset()
+        except (httpx.TimeoutException, httpx.ConnectError):
+            return REQUIRED_SCOPES
 
     async def health_check(self) -> HealthResult:
         """Check API access by fetching the authenticated user."""
-        async with self._client() as client:
-            r = await client.get("/user")
+        try:
+            async with self._client() as client:
+                r = await client.get("/user")
 
-        if r.status_code != 200:
-            return HealthResult(ok=False, detail=f"HTTP {r.status_code}: {r.text[:200]}")
+            if r.status_code != 200:
+                return HealthResult(ok=False, detail=f"HTTP {r.status_code}: {r.text[:200]}")
 
-        user_info = r.json()
-        username = user_info.get("login", "")
+            user_info = r.json()
+            username = user_info.get("login", "")
+        except httpx.HTTPStatusError as exc:
+            return HealthResult(ok=False, detail=f"Gitea API HTTP {exc.response.status_code}: {exc.response.text[:200]}")
+        except httpx.TimeoutException:
+            return HealthResult(ok=False, detail="Gitea API timeout")
+        except httpx.ConnectError:
+            return HealthResult(ok=False, detail="Gitea API connection error")
+        except ValueError as exc:
+            return HealthResult(ok=False, detail=str(exc)[:200])
 
         missing = await self._get_missing_scopes()
         if missing:

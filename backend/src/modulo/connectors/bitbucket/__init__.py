@@ -70,15 +70,24 @@ class BitbucketConnector(ConnectorBase):
 
     async def health_check(self) -> HealthResult:
         """Verify API access by fetching the authenticated user."""
-        async with self._client() as client:
-            r = await client.get("/user")
+        try:
+            async with self._client() as client:
+                r = await client.get("/user")
 
-        if r.status_code != 200:
-            return HealthResult(ok=False, detail=f"HTTP {r.status_code}: {r.text[:200]}")
+            if r.status_code != 200:
+                return HealthResult(ok=False, detail=f"HTTP {r.status_code}: {r.text[:200]}")
 
-        user_info = r.json()
-        username = user_info.get("username", "") or user_info.get("display_name", "")
-        return HealthResult(ok=True, detail=username)
+            user_info = r.json()
+            username = user_info.get("username", "") or user_info.get("display_name", "")
+            return HealthResult(ok=True, detail=username)
+        except httpx.HTTPStatusError as exc:
+            return HealthResult(ok=False, detail=f"Bitbucket API HTTP {exc.response.status_code}: {exc.response.text[:200]}")
+        except httpx.TimeoutException:
+            return HealthResult(ok=False, detail="Bitbucket API timeout")
+        except httpx.ConnectError:
+            return HealthResult(ok=False, detail="Bitbucket API connection error")
+        except ValueError as exc:
+            return HealthResult(ok=False, detail=str(exc)[:200])
 
     async def query(self, q: ConnectorQuery) -> ConnectorResult:
         async with self._client() as client:

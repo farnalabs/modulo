@@ -53,15 +53,24 @@ class DropboxPaperConnector(ConnectorBase):
 
     async def health_check(self) -> HealthResult:
         """Verify connectivity by fetching the current account."""
-        async with self._client() as client:
-            r = await client.post("/users/get_current_account", json=None)
+        try:
+            async with self._client() as client:
+                r = await client.post("/users/get_current_account", json=None)
 
-        if r.status_code != 200:
-            return HealthResult(ok=False, detail=f"HTTP {r.status_code}: {r.text[:200]}")
+            if r.status_code != 200:
+                return HealthResult(ok=False, detail=f"HTTP {r.status_code}: {r.text[:200]}")
 
-        body: dict[str, Any] = r.json()
-        email = body.get("email", "unknown")
-        return HealthResult(ok=True, detail=f"Authenticated as {email}")
+            body: dict[str, Any] = r.json()
+            email = body.get("email", "unknown")
+            return HealthResult(ok=True, detail=f"Authenticated as {email}")
+        except httpx.HTTPStatusError as exc:
+            return HealthResult(ok=False, detail=f"Dropbox API HTTP {exc.response.status_code}: {exc.response.text[:200]}")
+        except httpx.TimeoutException:
+            return HealthResult(ok=False, detail="Dropbox API timeout")
+        except httpx.ConnectError:
+            return HealthResult(ok=False, detail="Dropbox API connection error")
+        except ValueError as exc:
+            return HealthResult(ok=False, detail=str(exc)[:200])
 
     async def query(self, q: ConnectorQuery) -> ConnectorResult:
         async with self._client() as client:
