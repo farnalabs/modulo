@@ -150,18 +150,21 @@ class ClaimExpiryJob:
 
                     # 5. Log audit events for each expired claim
                     for entry in expired:
-                        await append_audit_event(
-                            session,
-                            org_id=org_id,
-                            event_type="hitl.claim_expired",
-                            resource_type="hitl_claim",
-                            resource_id=entry["claim_id"],
-                            payload_json={
-                                "pipeline_run_id": str(entry["run_id"]),
-                                "node_id": entry["gate_id"],
-                                "claimed_by": str(entry["claimed_by"]) if entry["claimed_by"] else None,
-                            },
-                        )
+                        try:
+                            await append_audit_event(
+                                session,
+                                org_id=org_id,
+                                event_type="hitl.claim_expired",
+                                resource_type="hitl_claim",
+                                resource_id=entry["claim_id"],
+                                payload_json={
+                                    "pipeline_run_id": str(entry["run_id"]),
+                                    "node_id": entry["gate_id"],
+                                    "claimed_by": str(entry["claimed_by"]) if entry["claimed_by"] else None,
+                                },
+                            )
+                        except Exception:
+                            _log.exception("Failed to record claim_expired audit event for claim %s", entry["claim_id"])
 
             # 6. Dispatch notifications outside the transaction
             if self._notifier is not None:
