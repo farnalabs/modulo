@@ -82,6 +82,7 @@ async def scim_update_user(
     session: AsyncSession,
     account: Account,
     *,
+    org_id: uuid.UUID,
     email: str | None = None,
     display_name: str | None = None,
     active: bool | None = None,
@@ -96,7 +97,10 @@ async def scim_update_user(
     if org_role is not None:
         await session.execute(
             sa_update(OrgMembership)
-            .where(OrgMembership.account_id == account.id)
+            .where(
+                OrgMembership.account_id == account.id,
+                OrgMembership.organisation_id == org_id,
+            )
             .values(role=org_role)
         )
     await session.flush()
@@ -107,8 +111,10 @@ async def scim_delete_user_by_id(session: AsyncSession, org_id: uuid.UUID, user_
     account = await scim_get_user(session, org_id, user_id)
     if account is None:
         return False
-    await session.delete(account)
-    await session.flush()
+    membership = await get_membership_by_account_and_org(session, user_id, org_id)
+    if membership is not None:
+        await session.delete(membership)
+        await session.flush()
     return True
 
 
@@ -138,7 +144,7 @@ async def scim_list_users(
         .join(OrgMembership, Account.id == OrgMembership.account_id)
         .where(*conditions)
         .order_by(Account.created_at)
-        .offset(start_index - 1)
+        .offset(max(0, start_index - 1))
         .limit(count)
     )
     result = await session.execute(query)
@@ -147,6 +153,9 @@ async def scim_list_users(
 
 
 # ── Group (Team) provisioning ────────────────────────────────────────
+
+
+_NIL_UUID = uuid.UUID(int=0)
 
 
 async def scim_create_group(
@@ -158,7 +167,7 @@ async def scim_create_group(
     description: str | None = None,
 ) -> Team:
     if account_id is None:
-        account_id = uuid.UUID(int=0)
+        account_id = _NIL_UUID
     return await create_team(
         session,
         org_id=org_id,

@@ -4,14 +4,18 @@ All functions assume the caller has set the RLS org context via set_rls_org()
 before calling. The session must be within an active transaction.
 """
 
+import logging
 import uuid
 from typing import Any
 
 from sqlalchemy import func, select
+from sqlalchemy.exc import ProgrammingError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.db.crud.base import PageResult, apply_updates
 from modulo.db.models.node_category import NodeCategory
+
+_log = logging.getLogger(__name__)
 
 
 async def create_node_category(
@@ -51,7 +55,10 @@ async def list_node_categories(
     page_size: int = 20,
 ) -> PageResult[NodeCategory]:
     offset = (page - 1) * page_size
-    total = (await session.execute(select(func.count()).select_from(NodeCategory))).scalar_one()
+    try:
+        total = (await session.execute(select(func.count()).select_from(NodeCategory))).scalar_one()
+    except ProgrammingError:
+        return PageResult(items=[], total=0, page=page, page_size=page_size)
     stmt = (
         select(NodeCategory)
         .order_by(NodeCategory.sort_order, NodeCategory.name)
