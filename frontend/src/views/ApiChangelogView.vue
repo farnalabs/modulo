@@ -73,9 +73,12 @@
 
 <script setup lang="ts">
 import { ref, onMounted } from 'vue'
+import { useI18n } from 'vue-i18n'
 import { api } from '../lib/api/client'
 import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
+
+const { t } = useI18n()
 
 interface ChangelogEntry {
   version: string
@@ -96,12 +99,12 @@ async function loadChangelog() {
   try {
     const { data, error: err } = await api.GET('/api/v1/changelog')
     if (err) {
-      error.value = `Unable to load the changelog right now. Please try again later. (${err})`
+      error.value = t('views.ApiChangelogView.load_error_with_detail', { detail: String(err) })
     } else if (data) {
       entries.value = data as unknown as ChangelogEntry[]
     }
   } catch (e: unknown) {
-    error.value = `Unable to load the changelog right now. Please try again later.`
+    error.value = t('views.ApiChangelogView.load_error')
   } finally {
     loading.value = false
   }

@@ -1,10 +1,6 @@
 {
     "name":  "modulo-frontend",
-<<<<<<< HEAD
     "version": "0.1.85",
-=======
-    "version": "0.1.85",
->>>>>>> task-nv38-primer-generator
     "private":  true,
     "scripts":  {
                     "generate:api":  "powershell -ExecutionPolicy Bypass -File scripts/generate-api-types.ps1",

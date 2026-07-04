@@ -532,11 +532,11 @@ export default {
     },
     "ApiChangelogView": {
       "no_api_version_history_is_available_yet": "No API version history is available yet.",
-      "unable_to_load_the_changelog_right_now_please_try_again_late_1": "Unable to load the changelog right now. Please try again later.",
       "api_changelog": "API Changelog",
       "version_history_and_deprecation_notices_for_the_modulo_api": "Version history and deprecation notices for the Modulo API",
-      "unable_to_load_the_changelog_right_now_please_try_again_late": "Unable to load the changelog right now. Please try again later. (",
-      "no_changelog_entries": "No changelog entries"
+      "no_changelog_entries": "No changelog entries",
+      "load_error": "Unable to load the changelog right now. Please try again later.",
+      "load_error_with_detail": "Unable to load the changelog right now. Please try again later. ({detail})"
     },
     "OnboardingWizard": {
       "wire_pipeline": "Wire Pipeline",
