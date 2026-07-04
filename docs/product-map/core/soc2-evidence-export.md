@@ -66,20 +66,44 @@ Paginated JSON export of audit events for SOC 2 compliance evidence. Builds on t
 
 ### States
 
-- [x] Empty org (no events) → total=0, items=[]
-- [x] Page beyond available data → empty items, total still accurate
-- [x] Large org (100k+ events) → paginated, page_size capped at 1000
-- [x] Export with active filters returning zero results → items=[], total=0
-
 ### Error Handling
 
-- [x] 501 on missing DB table (list, batch-detail, verify, export all have ProgrammingError→501)
+- [x] ProgrammingError → 501 on all 4 audit routes (list, batch-detail, verify, export)
+- [x] SQLAlchemyError → 503 on all 4 routes
 - [x] 401/403 on no auth (all endpoints)
 - [x] Admin role required (all endpoints)
 - [x] 402 when feature not in license (require_feature("audit_viewer") on list, batch-detail, export)
 - [x] Invalid page/page_size → 422 validation error
-- [x] Event count mismatch between backend and frontend (fixed in Fix 1)
+- [x] Malformed UUID in user_id query param → 422
+- [x] Cursor decode failure logged in list_audit_events
 - [x] Export failure surfaces user-facing error in frontend
+- [ ] No non-admin BDD scenario for 403 on export
+- [ ] No integration test for export flow end-to-end
+
+### Edge Cases
+
+- [x] Empty org (no events) → total=0, items=[]
+- [x] Page beyond available data → empty items, total still accurate
+- [x] Large org (100k+ events) → paginated, page_size capped at 1000
+- [x] Export with active filters returning zero results → items=[], total=0
+- [x] Malformed user_id UUID string → 422
+- [x] Malformed cursor JSON → 501 (ProgrammingError) or logged warning
+
+### Resilience & Integration Robustness
+
+- [x] SQLAlchemyError → 503 (connection failure, deadlock) on all 4 routes
+- [ ] No retry/backoff on DB connection failure
+- [ ] No circuit breaker for export of very large orgs (100k+)
+
+### QA History
+
+#### 2026-07-04 — Cross-cutting QA (improve-architecture index 165)
+- Fixed CRITICAL: Added SQLAlchemyError → 503 catch to all 4 audit routes (previously only caught ProgrammingError, allowing connection/deadlock failures to propagate as 500)
+- Fixed CRITICAL: Added logging to cursor decode failure in list_audit_events (previously silently swallowed)
+- Fixed MAJOR: Added ValueError catch → 422 for malformed UUID in actor_user_id query param on list and export routes
+- Fixed MAJOR: Added unit tests for export programming error (501), SQLAlchemyError (503), and non-admin (403) paths
+- Updated Error Handling section (12 checkboxes), Edge Cases section (7 checkboxes), Resilience section (3 checkboxes)
+- Status: partial (13 known gaps remain)
 
 ### Security
 
@@ -94,7 +118,7 @@ Paginated JSON export of audit events for SOC 2 compliance evidence. Builds on t
 - No chain verification data bundled with export (auditor must call /verify separately)
 - Export uses offset-based pagination which may skip/duplicate events if new events created during export
 - No BDD feature files for audit export flow
-- No unit tests for the `/export` endpoint specifically (covered by general audit route tests)
+- No unit tests for the `/verify` endpoint ProgrammingError path (not covered)
 - No integration test verifying full export flow (API → DB → paginated response)
 - No CLI export command for offline/automated evidence collection (e.g., monthly audit bundle)
 - No retention-aware export — deleted/expired events are invisible to export (no gap marking)
