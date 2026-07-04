@@ -36,7 +36,7 @@ Two implementations exist: `modulo-migrate` (click-based, JSONL format with auth
 - [x] `--on-conflict overwrite` replaces existing records fully
 - [x] `--on-conflict merge` only fills null/empty fields on existing records
 - [x] `--pipelines-only` / `--users-only` flags available on import
-- [ ] Progress bars via tqdm on all long-running operations
+- [x] Progress bars via tqdm on all long-running operations
 - [x] Summary output: created/skipped/overwritten/errors counts
 - [x] Org not found returns error with "not found" message
 - [x] UUID columns serialised as strings
@@ -45,6 +45,13 @@ Two implementations exist: `modulo-migrate` (click-based, JSONL format with auth
 - [x] Output directory created if missing
 - [x] Empty database tables handled without crash
 - [x] Non-existent input file returns error
+
+### Error handling
+
+- [ ] FileNotFoundError on import file → graceful SystemExit (migrate.py missing; migrate_org.py handled)
+- [ ] DB connection failure → clear error message (both CLIs missing)
+- [ ] session.rollback() inside import loop → risk of nested transaction errors (both CLIs)
+- [ ] Auth check before file read (both CLIs read file before verifying auth)
 
 ### modulo export-org / import-org (argparse-based, JSON, unauthenticated)
 
@@ -65,12 +72,19 @@ Two implementations exist: `modulo-migrate` (click-based, JSONL format with auth
 - [x] Network/auth failure during modulo-migrate export produces non-zero exit
 - [x] Binary/blob data in table columns serialized as hex strings
 - [x] Empty output directory creates it before writing
+- [ ] Large orgs >500 rows: migrate.py loads all in memory (OOM risk); migrate_org.py paginates safely
+- [ ] Slow DB: no timeout on DB operations (both CLIs)
+- [ ] Interrupted export: partial output file left on disk (both CLIs)
+- [ ] Hash collision during import (both CLIs)
 
 ## Known Gaps
 
-- No unit tests for migrate_org.py (argparse-based modulo CLI) — migrate.py (modulo-migrate) has 26 tests
+- No unit tests for migrate_org.py (argparse-based modulo CLI) — migrate.py (modulo-migrate) has 26 tests; migrate_org.py has zero
 - No BDD feature files for migration/export behaviour
 - modulo-migrate requires auth token or admin secret — no interactive login
 - modulo (argparse) has no auth — runs with direct DB access
 - No import conflict resolution for audit events (append-only constraint)
 - No data validation before import — corrupt JSONL/JSON is accepted
+- No integration tests for full export→verify→import cycle
+- No concurrency tests (parallel export/import, partial failure during import)
+- No tests for orgs with 500+ records (pagination boundary for migrate_org.py)
