@@ -367,6 +367,58 @@ async def test_initialise_missing_api_key_raises():
 
 
 async def test_get_with_rotation_raises_for_unregistered_id():
+    """get_with_rotation raises BackendUnavailableError (not BackendNotFoundError)
+    for unregistered IDs, consistent with the product map spec."""
     hub = ModelBackendHub()
-    with pytest.raises(BackendNotFoundError):
+    with pytest.raises(BackendUnavailableError):
         hub.get_with_rotation(uuid.uuid4())
+
+
+async def test_get_with_rotation_empty_hub_raises():
+    """get_with_rotation on empty hub raises BackendUnavailableError."""
+    hub = ModelBackendHub()
+    with pytest.raises(BackendUnavailableError):
+        hub.get_with_rotation(uuid.uuid4())
+
+
+async def test_initialise_self_referencing_fallback_does_not_crash():
+    """Self-referencing fallback ID should not crash; the inner _fallbacks entry
+    matches the backend's own ID, which get() skips because the self is unhealthy."""
+    primary_id = uuid.uuid4()
+    row = _FakeMB(
+        id=primary_id,
+        provider="ollama",
+        model_id="llama3",
+        credentials_ciphertext=_encrypt({"api_key": ""}),
+    )
+    secrets_backend = create_secrets_backend(fernet_key=_KEY, backend_name="fernet")
+    with (
+        patch.object(secrets_backend, "get_secret", return_value='{"api_key": ""}'),
+        patch("modulo.model_backends.ollama.ChatOpenAI"),
+    ):
+        hub = ModelBackendHub()
+        hub._fallbacks[primary_id] = [primary_id]
+        await hub.initialise([row], secrets_backend=secrets_backend)
+    assert primary_id in hub.backend_ids
+    assert hub._fallbacks.get(primary_id) == [primary_id]
+
+
+async def test_initialise_plugin_build_failure_propagates():
+    """When registry.build_model_backend raises, the error propagates from
+    initialise rather than silently failing."""
+    mb = _FakeMB(
+        id=uuid.uuid4(),
+        provider="my_custom_provider",
+        model_id="custom-model",
+        credentials_ciphertext=_encrypt({"api_key": "ck-test"}),
+    )
+    secrets_backend = create_secrets_backend(fernet_key=_KEY, backend_name="fernet")
+    with (
+        patch.object(secrets_backend, "get_secret", return_value='{"api_key": "ck-test"}'),
+        patch("modulo.core.model_backend_hub.get_plugin_registry") as mock_reg,
+    ):
+        mock_reg.return_value.has_model_backend.return_value = True
+        mock_reg.return_value.build_model_backend.side_effect = RuntimeError("Plugin crash")
+        hub = ModelBackendHub()
+        with pytest.raises(RuntimeError, match="Plugin crash"):
+            await hub.initialise([mb], secrets_backend=secrets_backend)

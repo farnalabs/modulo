@@ -28,7 +28,7 @@ from modulo.db.rls import set_rls_org, set_rls_user_context
 from modulo.core.plugin_registry import get_plugin_registry
 from modulo.settings import Settings, get_settings
 from sqlalchemy import select
-from sqlalchemy.exc import ProgrammingError
+from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
 
 router = APIRouter(prefix="/api/v1/model-backends", tags=["model-backends"])
 
@@ -126,6 +126,11 @@ async def list_model_backends_endpoint(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Model backends are not available. Run database migrations to enable this feature.",
         ) from None
+    except SQLAlchemyError:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Database error while listing model backends.",
+        ) from None
     return ModelBackendListResponse(
         items=[_to_response(mb) for mb in result.items],
         total=result.total,
@@ -214,6 +219,11 @@ async def create_model_backend_endpoint(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Model backends are not available. Run database migrations to enable this feature.",
         ) from None
+    except SQLAlchemyError:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Database error while creating model backend.",
+        ) from None
     return _to_response(mb)
 
 
@@ -232,6 +242,11 @@ async def get_model_backend_endpoint(
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Model backends are not available. Run database migrations to enable this feature.",
+        ) from None
+    except SQLAlchemyError:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Database error while fetching model backend.",
         ) from None
     if mb is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Model backend not found")
@@ -260,6 +275,11 @@ async def update_model_backend_endpoint(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Model backends are not available. Run database migrations to enable this feature.",
         ) from None
+    except SQLAlchemyError:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Database error while updating model backend.",
+        ) from None
     if mb is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Model backend not found")
     return _to_response(mb)
@@ -280,6 +300,11 @@ async def delete_model_backend_endpoint(
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Model backends are not available. Run database migrations to enable this feature.",
+        ) from None
+    except SQLAlchemyError:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Database error while deleting model backend.",
         ) from None
     if not deleted:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Model backend not found")
