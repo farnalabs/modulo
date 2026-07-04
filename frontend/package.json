@@ -1,9 +1,9 @@
 {
     "name":  "modulo-frontend",
 <<<<<<< HEAD
-    "version": "0.1.102",
+    "version": "0.1.103",
 =======
-    "version": "0.1.102",
+    "version": "0.1.103",
 >>>>>>> qa-phase-nv38
     "private":  true,
     "scripts":  {
