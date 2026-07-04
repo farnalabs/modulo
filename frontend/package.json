@@ -1,6 +1,8 @@
 {
     "name":  "modulo-frontend",
-"version": "0.3.31",
+<<<<<<< HEAD
+    "version": "0.3.32",
+>>>>>>> qa/db-root
     "private":  true,
     "scripts":  {
                     "generate:api":  "powershell -ExecutionPolicy Bypass -File scripts/generate-api-types.ps1",

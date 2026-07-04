@@ -4,13 +4,13 @@ import json
 import logging
 import uuid
 
-logger = logging.getLogger(__name__)
-
 from sqlalchemy import exists, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.core.audit_logger import append_audit_event
 from modulo.db.models.sso_provider import SsoProvider
+
+logger = logging.getLogger(__name__)
 
 _UPDATABLE_SSO_FIELDS = frozenset({
     "client_id",
@@ -74,6 +74,7 @@ async def create_provider(
         enabled=enabled,
         auto_provision=auto_provision,
         default_role=default_role,
+        organisation_id=org_id,
     )
     session.add(provider)
     await session.flush()
@@ -105,7 +106,7 @@ async def update_provider(
     if provider is None:
         return None
 
-    if "scopes" in updates and updates["scopes"] is not None:
+    if "scopes" in updates and updates["scopes"] is not None and not isinstance(updates["scopes"], str):
         updates["scopes"] = json.dumps(updates["scopes"])
 
     for key, value in updates.items():

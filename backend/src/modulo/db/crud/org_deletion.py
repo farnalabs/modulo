@@ -14,11 +14,13 @@ Run retention:
 import secrets
 import uuid
 from datetime import UTC, datetime, timedelta
+from decimal import Decimal
 from typing import Any
 
 from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from modulo.db.crud.run import batch_delete_old_terminal_runs
 from modulo.db.models.audit_event import AuditEvent
 from modulo.db.models.connector_instance import ConnectorInstance
 from modulo.db.models.library_primitive import LibraryPrimitive
@@ -79,6 +81,8 @@ async def _collect_org_export(session: AsyncSession, org: Organisation) -> dict[
                     val = str(val)
                 elif isinstance(val, datetime):
                     val = val.isoformat()
+                elif isinstance(val, Decimal):
+                    val = str(val)
                 row[c.name] = val
             result.append(row)
         return result
@@ -175,8 +179,6 @@ async def confirm_org_deletion(
             raise ValueError("Deletion token has expired")
 
     # Hard-delete terminal runs past retention window
-    from modulo.db.crud.run import batch_delete_old_terminal_runs
-
     deleted_runs = await batch_delete_old_terminal_runs(session, max_age_days=RUN_RETENTION_DAYS, batch_size=500)
 
     # Hard-delete the organisation — FK cascade removes all remaining scoped rows

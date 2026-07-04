@@ -11,6 +11,7 @@ Usage::
 
 import base64
 import binascii
+import logging
 import uuid
 from datetime import datetime
 from typing import Any, Generic, TypeVar
@@ -19,6 +20,8 @@ from pydantic import BaseModel
 from sqlalchemy import Select, func, literal, select
 from sqlalchemy import tuple_ as sa_tuple
 from sqlalchemy.ext.asyncio import AsyncSession
+
+logger = logging.getLogger(__name__)
 
 T = TypeVar("T")
 _ModelT = TypeVar("_ModelT")  # bound=DeclarativeBase — omitted for pydantic compatibility
@@ -68,6 +71,7 @@ class CursorPaginator:
         try:
             return datetime.fromisoformat(raw)
         except (ValueError, TypeError):
+            logger.warning("Failed to parse cursor value as datetime, falling back to raw string: %s", raw)
             return raw
 
     async def paginate(
@@ -145,7 +149,7 @@ class CursorPaginator:
         total_count: int | None = None
         if compute_total:
             count_q = select(func.count()).select_from(stmt.order_by(None).subquery())
-            total_count = (await session.execute(count_q)).scalar_one()
+            total_count = (await session.execute(count_q)).scalar_one_or_none() or 0
 
         return CursorPage(
             items=items,
