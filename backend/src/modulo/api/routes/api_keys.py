@@ -128,10 +128,16 @@ async def list_api_keys_endpoint(
     session: AsyncSession = Depends(get_db_session),
     principal: AuthenticatedPrincipal = Depends(get_current_user),
 ) -> list[dict[str, Any]]:
-    async with session.begin():
-        await set_rls_org(session, principal.organisation_id)
-        await set_rls_user_context(session, principal.account_id, principal.org_role)
-        return await list_api_keys(session, principal.organisation_id)
+    try:
+        async with session.begin():
+            await set_rls_org(session, principal.organisation_id)
+            await set_rls_user_context(session, principal.account_id, principal.org_role)
+            return await list_api_keys(session, principal.organisation_id)
+    except ProgrammingError:
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="API keys are not available. Run database migrations to enable this feature.",
+        ) from None
 
 
 @router.put("/{key_id}")
@@ -155,18 +161,24 @@ async def update_api_key_endpoint(
     expires_at: datetime | None = None
     if body.expires_at:
         expires_at = datetime.fromisoformat(body.expires_at)
-    async with session.begin():
-        await set_rls_org(session, principal.organisation_id)
-        await set_rls_user_context(session, principal.account_id, principal.org_role)
-        key = await update_api_key(
-            session,
-            key_id,
-            principal.organisation_id,
-            name=body.name,
-            role=body.role,
-            team_id=team_id,
-            expires_at=expires_at,
-        )
+    try:
+        async with session.begin():
+            await set_rls_org(session, principal.organisation_id)
+            await set_rls_user_context(session, principal.account_id, principal.org_role)
+            key = await update_api_key(
+                session,
+                key_id,
+                principal.organisation_id,
+                name=body.name,
+                role=body.role,
+                team_id=team_id,
+                expires_at=expires_at,
+            )
+    except ProgrammingError:
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="API keys are not available. Run database migrations to enable this feature.",
+        ) from None
     if key is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="API key not found")
     return {
@@ -184,10 +196,16 @@ async def revoke_api_key_endpoint(
     session: AsyncSession = Depends(get_db_session),
     principal: AuthenticatedPrincipal = Depends(get_current_user),
 ) -> ApiKeyRevokeResponse:
-    async with session.begin():
-        await set_rls_org(session, principal.organisation_id)
-        await set_rls_user_context(session, principal.account_id, principal.org_role)
-        revoked = await revoke_api_key(session, key_id, principal.organisation_id)
+    try:
+        async with session.begin():
+            await set_rls_org(session, principal.organisation_id)
+            await set_rls_user_context(session, principal.account_id, principal.org_role)
+            revoked = await revoke_api_key(session, key_id, principal.organisation_id)
+    except ProgrammingError:
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="API keys are not available. Run database migrations to enable this feature.",
+        ) from None
     if not revoked:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="API key not found")
     return ApiKeyRevokeResponse(id=key_id, revoked=True)
