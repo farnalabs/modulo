@@ -9,8 +9,8 @@ code:
   - frontend/src/lib/api/schema.ts
 unit-tests:
   - frontend/src/__tests__/FeedbackInboxView.spec.ts
-  - tests/unit/api/test_feedback_endpoint.py
-  - tests/unit/core/feedback_manager/test_feedback_manager.py
+  - backend/tests/unit/api/test_feedback_endpoint.py
+  - backend/tests/unit/core/feedback_manager/test_feedback_manager.py
 depends-on: [feat-evals-feedback-records]
 status: partial
 ---
