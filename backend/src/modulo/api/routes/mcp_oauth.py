@@ -12,6 +12,7 @@ import logging
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field
+from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.api.dependencies import get_db_session
@@ -88,15 +89,28 @@ async def register_oauth_client(
     redirect_uris_str = " ".join(body.redirect_uris)
     scopes_str = " ".join(body.scopes)
 
-    async with session.begin():
-        await set_rls_org(session, principal.organisation_id)
-        client, raw_secret = await create_oauth_client(
-            session,
-            org_id=principal.organisation_id,
-            name=body.name,
-            scopes=scopes_str,
-            redirect_uris=redirect_uris_str,
-            account_id=principal.account_id,
+    try:
+        async with session.begin():
+            await set_rls_org(session, principal.organisation_id)
+            client, raw_secret = await create_oauth_client(
+                session,
+                org_id=principal.organisation_id,
+                name=body.name,
+                scopes=scopes_str,
+                redirect_uris=redirect_uris_str,
+                account_id=principal.account_id,
+            )
+    except ProgrammingError:
+        _log.warning("mcp_oauth.register_oauth_client.programming_error", extra={"org_id": str(principal.organisation_id)})
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="Feature is not available. Run database migrations to enable it.",
+        )
+    except SQLAlchemyError:
+        _log.warning("mcp_oauth.register_oauth_client.sqlalchemy_error", extra={"org_id": str(principal.organisation_id)})
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Database error occurred. Please try again.",
         )
 
     return CreateOAuthClientResponse(
@@ -112,9 +126,22 @@ async def list_oauth_clients_endpoint(
     session: AsyncSession = Depends(get_db_session),
     principal: AuthenticatedPrincipal = Depends(get_current_user),
 ) -> list[OAuthClientItem]:
-    async with session.begin():
-        await set_rls_org(session, principal.organisation_id)
-        clients = await list_oauth_clients(session, principal.organisation_id)
+    try:
+        async with session.begin():
+            await set_rls_org(session, principal.organisation_id)
+            clients = await list_oauth_clients(session, principal.organisation_id)
+    except ProgrammingError:
+        _log.warning("mcp_oauth.list_oauth_clients.programming_error", extra={"org_id": str(principal.organisation_id)})
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="Feature is not available. Run database migrations to enable it.",
+        )
+    except SQLAlchemyError:
+        _log.warning("mcp_oauth.list_oauth_clients.sqlalchemy_error", extra={"org_id": str(principal.organisation_id)})
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Database error occurred. Please try again.",
+        )
     return [OAuthClientItem(**c) for c in clients]
 
 
@@ -130,9 +157,22 @@ async def remove_oauth_client(
             detail="Only admin or operator users can delete OAuth clients",
         )
 
-    async with session.begin():
-        await set_rls_org(session, principal.organisation_id)
-        deleted = await delete_oauth_client(session, client_id=client_id, org_id=principal.organisation_id)
+    try:
+        async with session.begin():
+            await set_rls_org(session, principal.organisation_id)
+            deleted = await delete_oauth_client(session, client_id=client_id, org_id=principal.organisation_id)
+    except ProgrammingError:
+        _log.warning("mcp_oauth.remove_oauth_client.programming_error", extra={"client_id": client_id, "org_id": str(principal.organisation_id)})
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="Feature is not available. Run database migrations to enable it.",
+        )
+    except SQLAlchemyError:
+        _log.warning("mcp_oauth.remove_oauth_client.sqlalchemy_error", extra={"client_id": client_id, "org_id": str(principal.organisation_id)})
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Database error occurred. Please try again.",
+        )
 
     if not deleted:
         raise HTTPException(
