@@ -955,49 +955,31 @@ async def create_pipeline_from_template_endpoint(
     session: AsyncSession = Depends(get_db_session),
     principal: AuthenticatedPrincipal = Depends(get_current_user),
 ) -> PipelineFromTemplateResponse:
-    import sys; sys.stderr.write(f"FULL_IMPL {primitive_id}\n"); sys.stderr.flush()
-    try:
-        async with session.begin():
-            await set_rls_org(session, principal.organisation_id)
-            await set_rls_user_context(session, principal.account_id, principal.org_role)
-            primitive = await get_primitive(session, principal.organisation_id, primitive_id)
-    except ProgrammingError:
-        raise HTTPException(status_code=status.HTTP_501_NOT_IMPLEMENTED, detail="Feature is not available. Run database migrations to enable it.") from None
-    if primitive is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Primitive {primitive_id} not found")
-    if primitive.primitive_type != "pipeline_template":
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Primitive type must be 'pipeline_template', got '{primitive.primitive_type}'")
-
+    import sys; sys.stderr.write(f"MINIMAL_START primitive_id={primitive_id}\n"); sys.stderr.flush()
+    primitive = await get_primitive(session, principal.organisation_id, primitive_id)
+    sys.stderr.write(f"MINIMAL_DB_OK primitive={primitive is not None}\n"); sys.stderr.flush()
     name, description, graph_nodes, edges, agent_count, edge_count = _build_pipeline_from_template(primitive, req.name, req.description)
+    sys.stderr.write(f"MINIMAL_BUILD_OK nodes={len(graph_nodes)}\n"); sys.stderr.flush()
 
-    try:
-        async with session.begin():
-            await set_rls_org(session, principal.organisation_id)
-            await set_rls_user_context(session, principal.account_id, principal.org_role)
-            pipeline = await create_pipeline(
-                session, org_id=principal.organisation_id, name=name, account_id=principal.account_id,
-                description=description,
-                run_context_defaults={"library_source_id": str(primitive_id), "library_template_name": primitive.name},
-            )
-            pipeline.graph_nodes_json = graph_nodes
-            for edge_data in edges:
-                edge_id = edge_data.get("id", "")
-                edge = PipelineEdge(
-                    id=uuid.UUID(edge_id) if isinstance(edge_id, str) and edge_id else uuid.uuid4(),
-                    organisation_id=principal.organisation_id, pipeline_id=pipeline.id,
-                    source_node_id=uuid.UUID(edge_data["source_node_id"]) if isinstance(edge_data["source_node_id"], str) else edge_data["source_node_id"],
-                    target_node_id=uuid.UUID(edge_data["target_node_id"]) if isinstance(edge_data["target_node_id"], str) else edge_data["target_node_id"],
-                    edge_type=edge_data["edge_type"], hitl_gate_config=edge_data.get("hitl_gate_config"),
-                )
-                session.add(edge)
-            await session.flush()
-    except (ProgrammingError, DBAPIError):
-        _log.exception("create_pipeline_from_template — DB error")
-        raise HTTPException(status_code=status.HTTP_501_NOT_IMPLEMENTED, detail="Feature is not available. Run database migrations to enable it.") from None
-    except Exception:
-        _log.exception("create_pipeline_from_template — unexpected error")
-        raise
+    async with session.begin():
+        await set_rls_org(session, principal.organisation_id)
+        await set_rls_user_context(session, principal.account_id, principal.org_role)
+        pipeline = await create_pipeline(
+            session, org_id=principal.organisation_id, name=name, account_id=principal.account_id,
+            description=description,
+            run_context_defaults={"library_source_id": str(primitive_id), "library_template_name": primitive.name},
+        )
+        pipeline.graph_nodes_json = graph_nodes
+        for edge_data in edges:
+            session.add(PipelineEdge(
+                id=uuid.uuid4(), organisation_id=principal.organisation_id, pipeline_id=pipeline.id,
+                source_node_id=uuid.UUID(edge_data["source_node_id"]),
+                target_node_id=uuid.UUID(edge_data["target_node_id"]),
+                edge_type=edge_data["edge_type"], hitl_gate_config=edge_data.get("hitl_gate_config"),
+            ))
+        await session.flush()
 
+    sys.stderr.write(f"MINIMAL_DONE pipeline_id={pipeline.id}\n"); sys.stderr.flush()
     return PipelineFromTemplateResponse(
         id=pipeline.id, organisation_id=pipeline.organisation_id, name=pipeline.name,
         description=pipeline.description, visibility=pipeline.visibility,
