@@ -18,7 +18,7 @@ import hashlib
 import json
 import logging
 import uuid
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 from decimal import Decimal
@@ -100,8 +100,9 @@ def _seed_state(snapshot: PipelineSnapshot, input_payload: dict[str, Any]) -> di
     and removed from the input dict so the pipeline agents never see it
     as part of their normal input.
     """
+    run_context_defaults: dict[str, Any] = snapshot.run_context_defaults or {}
     run_context: dict[str, Any] = {
-        **snapshot.run_context_defaults,
+        **run_context_defaults,
         "cancelled": False,
         "input": input_payload,
     }
@@ -141,9 +142,7 @@ def _map_lg_event(
     return None
 
 
-def _strip_asyncpg(url: str) -> str:
-    """Convert an asyncpg SQLAlchemy URL to a psycopg-compatible URL."""
-    return url.replace("postgresql+asyncpg://", "postgresql://").replace("postgresql+psycopg://", "postgresql://")
+
 
 
 @asynccontextmanager
@@ -184,6 +183,9 @@ class PipelineExecutor:
 
     # Override in tests to avoid real delays.
     _capacity_poll_interval: float = 15.0
+    # Token pricing constants
+    _INPUT_TOKEN_RATE = Decimal("0.00001")
+    _OUTPUT_TOKEN_RATE = Decimal("0.00003")
 
     async def _wait_for_capacity_or_fail(
         self,
@@ -238,6 +240,79 @@ class PipelineExecutor:
                     raise RunNotFoundError(run_id)
                 return run
 
+    async def _load_eval_defs_for_pipeline(
+        self,
+        session: Any,
+        pipeline_id: uuid.UUID,
+    ) -> list[Any]:
+        """Load eval definitions for a pipeline that are scoped to a node."""
+        eval_stmt = select(EvalDefinition).where(
+            EvalDefinition.pipeline_id == pipeline_id,
+            EvalDefinition.node_id.isnot(None),
+        )
+        eval_rows = (await session.execute(eval_stmt)).scalars().all()
+        return eval_rows
+
+    @staticmethod
+    def _build_eval_defs_by_node(
+        eval_rows: list[Any],
+        org_id: uuid.UUID,
+        pipeline_id: uuid.UUID,
+    ) -> dict[str, list[EvalDefDTO]]:
+        """Convert eval definition ORM rows to a dict keyed by node id."""
+        eval_defs_by_node: dict[str, list[EvalDefDTO]] = {}
+        for e in eval_rows:
+            node_key = str(e.node_id) if e.node_id else ""
+            if node_key:
+                eval_defs_by_node.setdefault(node_key, []).append(
+                    EvalDefDTO(
+                        id=e.id,
+                        org_id=org_id,
+                        pipeline_id=e.pipeline_id,
+                        node_id=node_key,
+                        name=e.name,
+                        eval_type=e.eval_type,
+                        config=e.config_json,
+                        failure_behaviour=e.failure_behaviour,
+                        pass_threshold=e.pass_threshold,
+                        suite_id=e.suite_id,
+                    )
+                )
+        return eval_defs_by_node
+
+    def _check_db_cancellation(
+        self,
+        org_id: uuid.UUID,
+        run_id: uuid.UUID,
+    ) -> Callable[[], Awaitable[bool]]:
+        """Build a DB-backed cancellation check closure for a run."""
+        async def _check() -> bool:
+            async with self._session_factory() as session:
+                await set_rls_org(session, org_id)
+                run = await get_run(session, run_id)
+                return run is not None and run.cancellation_requested
+        return _check
+
+    @staticmethod
+    def _compute_token_costs(
+        node_token_usage: dict[str, dict[str, int]] | None,
+        input_rate: Decimal,
+        output_rate: Decimal,
+    ) -> tuple[int | None, Decimal | None, dict[str, Any] | None]:
+        """Compute total tokens, total cost, and per-node cost from node token usage."""
+        if not node_token_usage:
+            return None, None, None
+
+        total_tokens = sum(n["total_tokens"] for n in node_token_usage.values())
+        total_cost = Decimal("0")
+        for n_data in node_token_usage.values():
+            n_cost = Decimal(str(n_data.get("input_tokens", 0))) * input_rate
+            n_cost += Decimal(str(n_data.get("output_tokens", 0))) * output_rate
+            n_data["cost_usd"] = float(n_cost)
+            total_cost += n_cost
+
+        return total_tokens, total_cost, node_token_usage
+
     async def resume(
         self,
         *,
@@ -271,6 +346,10 @@ class PipelineExecutor:
                 if not validation.is_valid:
                     raise GraphValidationError(validation.issues, run_id)
 
+                # Load eval definitions while session is active.
+                eval_rows = await self._load_eval_defs_for_pipeline(session, run.pipeline_id)
+                resume_eval_defs_by_node = self._build_eval_defs_by_node(eval_rows, org_id, run.pipeline_id)
+
         pipeline_id = run.pipeline_id
         snapshot_id = run.snapshot_id
         thread_id = run.langgraph_thread_id
@@ -289,31 +368,6 @@ class PipelineExecutor:
                     max_duration_seconds=pipeline.max_duration_seconds,
                     max_steps=pipeline.max_steps,
                     token_budget=pipeline.token_budget,
-                )
-
-                # Load eval definitions for eval-before-interrupt (resume path).
-                eval_stmt = select(EvalDefinition).where(
-                    EvalDefinition.pipeline_id == pipeline_id,
-                    EvalDefinition.node_id.isnot(None),
-                )
-                eval_rows = (await session.execute(eval_stmt)).scalars().all()
-                resume_eval_defs_by_node: dict[str, list[EvalDefDTO]] = {}
-        for e in eval_rows:
-            node_key = str(e.node_id) if e.node_id else ""
-            if node_key:
-                resume_eval_defs_by_node.setdefault(node_key, []).append(
-                    EvalDefDTO(
-                        id=e.id,
-                        org_id=org_id,
-                        pipeline_id=e.pipeline_id,
-                        node_id=node_key,
-                        name=e.name,
-                        eval_type=e.eval_type,
-                        config=e.config_json,
-                        failure_behaviour=e.failure_behaviour,
-                        pass_threshold=e.pass_threshold,
-                        suite_id=e.suite_id,
-                    )
                 )
 
         compiled = get_or_compile(
@@ -340,6 +394,7 @@ class PipelineExecutor:
         error_code: str | None = None
         node_token_usage: dict[str, Any] | None = None
         broker = get_registry().get_or_create(run_id)
+        set_cancellation_check(self._check_db_cancellation(org_id, run_id))
         self._otel_bridge.set_run_context(str(org_id), str(pipeline_id))
         try:
             from modulo.settings import get_settings
@@ -367,20 +422,13 @@ class PipelineExecutor:
             final_status = "failed"
             error_code = type(exc).__name__
         finally:
+            set_cancellation_check(None)
             if final_status != "awaiting_human":
                 get_registry().close(run_id)
 
-        total_tokens: int | None = None
-        if node_token_usage:
-            total_tokens = sum(n["total_tokens"] for n in node_token_usage.values())
-            input_rate = Decimal("0.00001")
-            output_rate = Decimal("0.00003")
-            total_cost = Decimal("0")
-            for n_data in node_token_usage.values():
-                n_cost = Decimal(str(n_data.get("input_tokens", 0))) * input_rate
-                n_cost += Decimal(str(n_data.get("output_tokens", 0))) * output_rate
-                n_data["cost_usd"] = float(n_cost)
-                total_cost += n_cost
+        total_tokens, total_cost, _ = self._compute_token_costs(
+            node_token_usage, self._INPUT_TOKEN_RATE, self._OUTPUT_TOKEN_RATE,
+        )
 
         async with self._session_factory() as session:
             async with session.begin():
@@ -442,32 +490,12 @@ class PipelineExecutor:
         thread_id = run.langgraph_thread_id
 
         # Load eval definitions for conditional HITL gating (eval-before-interrupt).
+        eval_defs_by_node: dict[str, list[EvalDefDTO]] = {}
         async with self._session_factory() as session:
             async with session.begin():
                 await set_rls_org(session, org_id)
-                eval_stmt = select(EvalDefinition).where(
-                    EvalDefinition.pipeline_id == pipeline_id,
-                    EvalDefinition.node_id.isnot(None),
-                )
-                eval_rows = (await session.execute(eval_stmt)).scalars().all()
-        eval_defs_by_node: dict[str, list[EvalDefDTO]] = {}
-        for e in eval_rows:
-            node_key = str(e.node_id) if e.node_id else ""
-            if node_key:
-                eval_defs_by_node.setdefault(node_key, []).append(
-                    EvalDefDTO(
-                        id=e.id,
-                        org_id=org_id,
-                        pipeline_id=e.pipeline_id,
-                        node_id=node_key,
-                        name=e.name,
-                        eval_type=e.eval_type,
-                        config=e.config_json,
-                        failure_behaviour=e.failure_behaviour,
-                        pass_threshold=e.pass_threshold,
-                        suite_id=e.suite_id,
-                    )
-                )
+                eval_rows = await self._load_eval_defs_for_pipeline(session, pipeline_id)
+        eval_defs_by_node = self._build_eval_defs_by_node(eval_rows, org_id, pipeline_id)
 
         # Wait for capacity slot (or return cancelled/timed out).
         capacity_run = await self._wait_for_capacity_or_fail(
@@ -480,20 +508,13 @@ class PipelineExecutor:
         if capacity_run.status != "running":
             return capacity_run
 
-        # Build DB-backed cancellation check closure for this run.
-        async def _check_db_cancellation() -> bool:
-            async with self._session_factory() as session:
-                await set_rls_org(session, org_id)
-                run = await get_run(session, run_id)
-                return run is not None and run.cancellation_requested
-
         final_status: str = "failed"
         error_code: str | None = None
         error_detail: str | None = None
         node_token_usage: dict[str, Any] | None = None
         completed_node_outputs: dict[str, Any] = {}
         broker = get_registry().get_or_create(run_id)
-        set_cancellation_check(_check_db_cancellation)
+        set_cancellation_check(self._check_db_cancellation(org_id, run_id))
         self._otel_bridge.set_run_context(str(org_id), str(pipeline_id))
         try:
             # Compile (or retrieve from cache) the StateGraph.
@@ -542,10 +563,6 @@ class PipelineExecutor:
             _log.exception("pipeline.execution_error", extra={"run_id": str(run_id)})
             final_status = "failed"
             error_code = type(exc).__name__
-        finally:
-            set_cancellation_check(None)
-            if final_status != "awaiting_human":
-                get_registry().close(run_id)
 
         # If the run completed, check for eval suite thresholds.
         if final_status == "complete":
@@ -558,6 +575,7 @@ class PipelineExecutor:
                         final_status = "failed"
                         error_code = "eval_suite_blocked"
                         error_detail = str(exc)
+                        broker.publish("run_failed", {"error": "eval_suite_blocked", "detail": str(exc)})
                         _log.warning(
                             "eval.suite_blocked",
                             extra={
@@ -573,37 +591,40 @@ class PipelineExecutor:
                     async with session.begin():
                         await set_rls_org(session, org_id)
                         for node_id, node_output in completed_node_outputs.items():
-                            signal_results = await fire_agent_signal(
-                                session,
-                                org_id=org_id,
-                                source_run_id=run_id,
-                                source_pipeline_id=pipeline_id,
-                                completed_node_id=node_id,
-                                node_output=node_output,
-                            )
-                            for sr in signal_results:
-                                _log.info(
-                                    "agent_signal.%s trigger=%s run=%s",
-                                    sr["status"],
-                                    sr.get("trigger_id", "?"),
-                                    sr.get("run_id", "?"),
+                            try:
+                                signal_results = await fire_agent_signal(
+                                    session,
+                                    org_id=org_id,
+                                    source_run_id=run_id,
+                                    source_pipeline_id=pipeline_id,
+                                    completed_node_id=node_id,
+                                    node_output=node_output,
+                                )
+                                for sr in signal_results:
+                                    _log.info(
+                                        "agent_signal.%s trigger=%s run=%s",
+                                        sr["status"],
+                                        sr.get("trigger_id", "?"),
+                                        sr.get("run_id", "?"),
+                                    )
+                            except Exception:
+                                _log.exception(
+                                    "agent_signal.failed",
+                                    extra={
+                                        "run_id": str(run_id),
+                                        "node_id": node_id,
+                                    },
                                 )
 
-        # Compute aggregate token/cost data from per-node usage.
-        total_tokens: int | None = None
-        total_cost_usd_val: Decimal | None = None
-        if node_token_usage:
-            total_tokens = sum(n["total_tokens"] for n in node_token_usage.values())
+        # Close broker after all post-stream work (suite checks, signals).
+        set_cancellation_check(None)
+        if final_status != "awaiting_human":
+            get_registry().close(run_id)
 
-            input_rate = Decimal("0.00001")
-            output_rate = Decimal("0.00003")
-            total_cost = Decimal("0")
-            for n_data in node_token_usage.values():
-                n_cost = Decimal(str(n_data.get("input_tokens", 0))) * input_rate
-                n_cost += Decimal(str(n_data.get("output_tokens", 0))) * output_rate
-                n_data["cost_usd"] = float(n_cost)
-                total_cost += n_cost
-            total_cost_usd_val = total_cost
+        # Compute aggregate token/cost data from per-node usage.
+        total_tokens, total_cost_usd_val, node_token_usage = self._compute_token_costs(
+            node_token_usage, self._INPUT_TOKEN_RATE, self._OUTPUT_TOKEN_RATE,
+        )
 
         # Mark complete/failed/cancelled/awaiting_human.
         async with self._session_factory() as session:
@@ -644,6 +665,7 @@ class PipelineExecutor:
                 EvalDefinition.pass_threshold.isnot(None),
             )
             .distinct(EvalDefinition.suite_id)
+            .order_by(EvalDefinition.suite_id)
         )
         result = await session.execute(stmt)
         suite_defs = result.scalars().all()
@@ -660,6 +682,8 @@ class PipelineExecutor:
             )
             eval_result = await session.execute(eval_stmt)
             defs_in_suite = eval_result.scalars().all()
+            if not defs_in_suite:
+                continue
             eval_ids = [d.id for d in defs_in_suite]
 
             result_stmt = select(EvalResult).where(

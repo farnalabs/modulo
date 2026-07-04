@@ -59,19 +59,7 @@ from modulo.core.run_context.autonomy import (
 _log = logging.getLogger(__name__)
 
 
-def _is_truthy(value: Any) -> bool:
-    """Match the truthiness semantics used elsewhere (graph_cache, polling)."""
-    if value is None:
-        return False
-    if isinstance(value, bool):
-        return value
-    if isinstance(value, (int, float)):
-        return value != 0
-    if isinstance(value, (list, dict)):
-        return len(value) > 0
-    if isinstance(value, str):
-        return len(value) > 0
-    return True
+_is_truthy = bool
 
 
 def _evaluate_eval_condition(score: float, threshold: float, operator: str) -> bool:
@@ -210,7 +198,7 @@ def make_hitl_gate_fn(
                 compiled = jmespath.compile(condition_expr)
             except Exception:
                 _log.exception("hitl_gate.invalid_condition", extra={"condition": condition_expr})
-                raise ValueError(f"Invalid HITL gate condition expression: {condition_expr}")
+                raise ValueError(f"Invalid HITL gate condition expression: {condition_expr}") from None
             result = compiled.search(state)
             if not _is_truthy(result):
                 # Condition falsy — skip the gate entirely.
