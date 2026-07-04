@@ -23,11 +23,12 @@ export default {
       "passed_count": "{count} passed"
     },
     "LibraryView": {
-      "failed_to_load_primitives": "Failed to load primitives",
+      "failed_to_load_primitives": "Failed to load modules",
       "test_fixtures": "Test Fixtures",
       "failed_to_toggle_autoupdate": "Failed to toggle auto-update",
       "pipeline_templates": "Pipeline Templates",
-      "search_primitives": "Search primitives..."
+      "search_primitives": "Search modules...",
+      "no_primitives_found": "No modules found"
     },
     "AdminRemyView": {
       "configure_remy_ai_assistant_behaviour_access_and_skills": "Configure Remy AI assistant behaviour, access, and skills",
