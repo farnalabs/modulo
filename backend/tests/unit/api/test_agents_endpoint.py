@@ -49,6 +49,7 @@ def _make_agent() -> MagicMock:
     a.token_budget = None
     a.library_id = None
     a.account_id = uuid.uuid4()
+    a.required_environment_capabilities = []
     a.created_at = _NOW
     a.updated_at = _NOW
     return a

@@ -11,11 +11,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "modulo"
-<<<<<<< HEAD
-version = "0.1.95"
-=======
-version = "0.1.95"
->>>>>>> qa-phase-nv38
+version = "0.1.96"
 description = "Governed orchestration for your agentic SDLC"
 license = "MIT"
 authors = [
