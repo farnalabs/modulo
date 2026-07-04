@@ -1,6 +1,10 @@
 {
     "name":  "modulo-frontend",
-    "version": "0.1.94",
+<<<<<<< HEAD
+    "version": "0.1.95",
+=======
+    "version": "0.1.95",
+>>>>>>> qa-phase-nv38
     "private":  true,
     "scripts":  {
                     "generate:api":  "powershell -ExecutionPolicy Bypass -File scripts/generate-api-types.ps1",

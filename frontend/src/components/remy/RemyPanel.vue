@@ -238,7 +238,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, watch, onMounted } from "vue";
+import { ref, computed, watch, onMounted, onUnmounted } from "vue";
 import { shortId } from "@/utils/format";
 import { useRemyStore } from "@/composables/useRemyStore";
 import { useRemyContext } from "@/composables/useRemyContext";
@@ -281,9 +281,9 @@ const panelStyle = computed(() => {
 });
 
 let dragging = false;
-let dragStart = { x: 0, y: 0, posX: 0, posY: 0 };
+const dragStart = { x: 0, y: 0, posX: 0, posY: 0 };
 let resizing = false;
-let resizeStart = { x: 0, y: 0, w: 0, h: 0 };
+const resizeStart = { x: 0, y: 0, w: 0, h: 0 };
 
 function startDrag(e: MouseEvent) {
   if (store.panelState !== "floating") return;
@@ -348,6 +348,13 @@ async function handleNewSession() {
 
 onMounted(() => {
   store.fetchSessions();
+});
+
+onUnmounted(() => {
+  document.removeEventListener("mousemove", onDrag);
+  document.removeEventListener("mouseup", stopDrag);
+  document.removeEventListener("mousemove", onResize);
+  document.removeEventListener("mouseup", stopResize);
 });
 </script>
 

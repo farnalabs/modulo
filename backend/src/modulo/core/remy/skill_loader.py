@@ -55,8 +55,15 @@ class SkillLoader:
 
     async def _get_skills(self, **filters: Any) -> list[SkillEntry]:
         try:
+            conditions = []
+            for k, v in filters.items():
+                col = getattr(RemySkill, k, None)
+                if col is None:
+                    logger.warning("Unknown skill filter column: %s", k)
+                    continue
+                conditions.append(col == v)
             stmt = select(RemySkill).where(
-                *[getattr(RemySkill, k) == v for k, v in filters.items()],
+                *conditions,
                 RemySkill.active.is_(True),
             )
             result = await self._session.execute(stmt)

@@ -131,7 +131,7 @@ def cancellable_node(
                 result = await coro
 
             # 3. Context-setter guard and write log
-            if result and "run_context" in result:
+            if result and "run_context" in result and result["run_context"] is not None:
                 if role == "context_setter":
                     # Strip reserved keys that context-setters may not modify.
                     result_rc: dict[str, Any] = result["run_context"]

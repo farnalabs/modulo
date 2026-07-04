@@ -998,12 +998,17 @@ async def create_model_backend(
 
 
 _DOC_INDEX: DocumentationIndex | None = None
+_DOC_INDEX_TS: float = 0.0
+_DOC_INDEX_TTL: float = 300.0  # 5 minutes
 
 
 def _get_doc_index() -> DocumentationIndex:
-    global _DOC_INDEX
-    if _DOC_INDEX is None:
+    global _DOC_INDEX, _DOC_INDEX_TS
+    import time as _time
+    now = _time.time()
+    if _DOC_INDEX is None or (now - _DOC_INDEX_TS) > _DOC_INDEX_TTL:
         _DOC_INDEX = DocumentationIndex.build()
+        _DOC_INDEX_TS = now
     return _DOC_INDEX
 
 
@@ -1024,12 +1029,7 @@ SENSITIVE_CONFIG_KEYS: set[str] = {
 
 def _is_sensitive_key(key: str) -> bool:
     lower = key.lower()
-    if lower in SENSITIVE_CONFIG_KEYS:
-        return True
-    for prefix in SENSITIVE_CONFIG_KEYS:
-        if lower.startswith(prefix):
-            return True
-    return False
+    return any(lower.startswith(prefix) for prefix in SENSITIVE_CONFIG_KEYS)
 
 
 @mcp.tool(

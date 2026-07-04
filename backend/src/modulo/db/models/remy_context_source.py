@@ -1,7 +1,7 @@
 import uuid
 from datetime import datetime
 
-from sqlalchemy import CheckConstraint, DateTime, ForeignKey, String, Uuid, func
+from sqlalchemy import CheckConstraint, DateTime, ForeignKey, String, Uuid, UniqueConstraint, func
 from sqlalchemy.orm import Mapped, mapped_column
 
 from modulo.db.models.base import Base
@@ -17,6 +17,10 @@ class RemyContextSource(Base):
         CheckConstraint(
             "source_mode IN ('always_on', 'tool', 'off')",
             name="ck_remy_context_sources_mode",
+        ),
+        UniqueConstraint(
+            "organisation_id", "user_id", "source_key",
+            name="uq_remy_context_sources_key",
         ),
     )
 
