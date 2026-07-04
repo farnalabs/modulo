@@ -28,6 +28,9 @@ async def cleanup_old_runs(
 
     Returns the number of deleted runs.
     """
+    if retention_days < 1:
+        raise ValueError(f"retention_days must be >= 1, got {retention_days}")
+
     cutoff = datetime.now(UTC) - timedelta(days=retention_days)
     total = 0
 
