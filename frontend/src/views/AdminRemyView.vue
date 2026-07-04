@@ -597,7 +597,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, reactive, computed, onMounted } from 'vue'
+import { ref, reactive, computed, onMounted, onUnmounted } from 'vue'
 import { api } from '../lib/api/client'
 import { formatApiError } from '../lib/api/formatError'
 import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
@@ -640,6 +640,7 @@ const skillModes = ref<Record<string, string>>({})
 const skillModeSaving = ref<Record<string, boolean>>({})
 const primerSaving = ref(false)
 const primerMessage = ref<string | null>(null)
+let primerTimer: ReturnType<typeof setTimeout> | null = null
 
 const providerStatus = ref<ProviderStatus[]>([])
 const customProviderStatus = ref<ProviderStatus[]>([])
@@ -692,8 +693,8 @@ async function saveAccessList() {
   configSaving.value = true
   accessSaving.value = true
   accessError.value = null
-  const userIds = accessList.userIds.split(/[\n,]+/).map(s => s.trim()).filter(Boolean)
-  const teamIds = accessList.teamIds.split(/[\n,]+/).map(s => s.trim()).filter(Boolean)
+  const userIds = accessList.userIds.filter(Boolean)
+  const teamIds = accessList.teamIds.filter(Boolean)
   const err = await putConfig({
     access_list: { user_ids: userIds, team_ids: teamIds, org_roles: accessList.selectedRoles },
   })
@@ -868,7 +869,7 @@ async function saveContextSource(sourceKey: string) {
     const mode = contextSources.value[sourceKey]
     const { error: err } = await (api as any).PUT('/api/v1/admin/remy/context-sources/{source_key}', {
       params: { path: { source_key: sourceKey } },
-      body: { mode },
+      body: { source_mode: mode },
     })
     if (err) {
       contextError.value = `Failed to save source: ${formatApiError(err)}`
@@ -888,7 +889,7 @@ async function saveSkillSourceMode(skill: SkillItem) {
     const mode = skillModes.value[skill.id] || 'tool'
     const { error: err } = await (api as any).PUT('/api/v1/admin/remy/context-sources/{source_key}', {
       params: { path: { source_key: skill.id } },
-      body: { mode },
+      body: { source_mode: mode },
     })
     if (err) {
       contextError.value = `Failed to save skill source mode: ${formatApiError(err)}`
@@ -914,7 +915,8 @@ async function regeneratePrimer() {
     primerMessage.value = `Failed: ${formatApiError(e)}`
   } finally {
     primerSaving.value = false
-    setTimeout(() => { primerMessage.value = null }, 4000)
+    if (primerTimer) clearTimeout(primerTimer)
+    primerTimer = setTimeout(() => { primerMessage.value = null }, 4000)
   }
 }
 
@@ -1000,7 +1002,7 @@ async function loadSkills() {
 function initSkillModes() {
   const modes: Record<string, string> = {}
   for (const skill of skills.value) {
-    modes[skill.id] = (contextSources.value[skill.id] as string) || 'tool'
+    modes[skill.id] = (skill as any).source_mode || 'tool'
   }
   skillModes.value = modes
 }
@@ -1097,4 +1099,8 @@ async function loadAll() {
 }
 
 onMounted(() => { loadAll() })
+
+onUnmounted(() => {
+  if (primerTimer) clearTimeout(primerTimer)
+})
 </script>

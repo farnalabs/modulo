@@ -2,7 +2,7 @@
 
 import uuid
 from typing import Any
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import MagicMock
 
 import pytest
 from pytest_bdd import given, parsers, scenarios, then, when
@@ -232,6 +232,7 @@ def prompt_contains_in_section(text: str, section: str, ctx) -> None:
 
 
 @then(parsers.parse('the prompt does NOT mention "{text}"'))
+@then(parsers.parse("the prompt does not mention {text}"))
 def prompt_not_mention(text: str, ctx) -> None:
     prompt = ctx.get("built_prompt", "")
     assert text not in prompt, f"Text '{text}' should not appear in prompt:\n{prompt}"
@@ -241,12 +242,6 @@ def prompt_not_mention(text: str, ctx) -> None:
 def prompt_contains_docs_inline(ctx) -> None:
     prompt = ctx.get("built_prompt", "")
     assert "product_primer" in prompt or "Modulo" in prompt or "## Product Overview" in prompt
-
-
-@then(parsers.parse("the prompt does not mention {text}"))
-def prompt_not_mention_skill(text: str, ctx) -> None:
-    prompt = ctx.get("built_prompt", "")
-    assert text not in prompt, f"Skill '{text}' should not appear in prompt:\n{prompt}"
 
 
 @then(parsers.parse("results include sections matching the query"))
