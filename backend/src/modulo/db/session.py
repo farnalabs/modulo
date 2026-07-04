@@ -30,9 +30,10 @@ def _build_engine() -> AsyncEngine:
     kw: dict[str, Any] = {"url": settings.database_url}
     if db_type != "sqlite":
         kw["pool_pre_ping"] = True
-        kw["pool_size"] = 10
-        kw["max_overflow"] = 5
-        kw["pool_timeout"] = 10
+        kw["pool_size"] = 20
+        kw["max_overflow"] = 10
+        kw["pool_recycle"] = 3600
+        kw["pool_timeout"] = 30
 
     engine = create_async_engine(**kw)
 
