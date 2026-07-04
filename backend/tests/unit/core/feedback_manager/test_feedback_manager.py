@@ -5,7 +5,11 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from modulo.core.feedback_manager import FeedbackManager
+from modulo.core.feedback_manager import (
+    FeedbackManager,
+    FeedbackRecordNotFoundError,
+    InvalidTransitionError,
+)
 from modulo.db.models.feedback_record import FeedbackRecord
 
 _ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
@@ -255,14 +259,14 @@ class TestUpdateStatus:
     ) -> None:
         mock_session.get = AsyncMock(return_value=sample_record)
 
-        with pytest.raises(ValueError, match="Cannot transition"):
+        with pytest.raises(InvalidTransitionError, match="Cannot transition"):
             await mgr.update_status(sample_record.id, "nonexistent")
 
-    async def test_returns_none_when_not_found(self, mock_session: AsyncMock, mgr: FeedbackManager) -> None:
+    async def test_raises_when_not_found(self, mock_session: AsyncMock, mgr: FeedbackManager) -> None:
         mock_session.get = AsyncMock(return_value=None)
 
-        record = await mgr.update_status(uuid.uuid4(), "routing")
-        assert record is None
+        with pytest.raises(FeedbackRecordNotFoundError, match="not found"):
+            await mgr.update_status(uuid.uuid4(), "routing")
 
 
 class TestLinkCorrectionRun:
@@ -378,7 +382,7 @@ class TestSpawnCorrectionRun:
         mgr: FeedbackManager,
     ) -> None:
         with patch.object(mgr, "get_feedback_record", return_value=None):
-            with pytest.raises(ValueError, match=r"FeedbackRecord .* not found"):
+            with pytest.raises(FeedbackRecordNotFoundError, match=r"FeedbackRecord .* not found"):
                 await mgr.spawn_correction_run(uuid.uuid4())
 
     async def test_raises_when_original_run_not_found(
@@ -392,7 +396,7 @@ class TestSpawnCorrectionRun:
             patch.object(mgr, "get_feedback_record", return_value=sample_record),
             patch("modulo.core.feedback_manager.get_run", return_value=None),
         ):
-            with pytest.raises(ValueError, match=r"Original run .* not found"):
+            with pytest.raises(FeedbackRecordNotFoundError, match=r"Original run .* not found"):
                 await mgr.spawn_correction_run(sample_record.id)
 
     async def test_copies_input_payload(
@@ -534,14 +538,14 @@ class TestRunPostCorrectionEval:
 
     async def test_raises_when_record_not_found(self, mock_session: AsyncMock, mgr: FeedbackManager) -> None:
         with patch.object(mgr, "get_feedback_record", return_value=None):
-            with pytest.raises(ValueError, match=r"FeedbackRecord .* not found"):
+            with pytest.raises(FeedbackRecordNotFoundError, match=r"FeedbackRecord .* not found"):
                 await mgr.run_post_correction_eval(uuid.uuid4())
 
     async def test_raises_when_not_in_correcting_status(
         self, mock_session: AsyncMock, mgr: FeedbackManager, sample_record: FeedbackRecord
     ) -> None:
         with patch.object(mgr, "get_feedback_record", return_value=sample_record):
-            with pytest.raises(ValueError, match="expected 'correcting'"):
+            with pytest.raises(InvalidTransitionError, match="expected 'correcting'"):
                 await mgr.run_post_correction_eval(sample_record.id)
 
     async def test_raises_when_no_correction_run_linked(
@@ -549,7 +553,7 @@ class TestRunPostCorrectionEval:
     ) -> None:
         correcting_record.correction_run_id = None
         with patch.object(mgr, "get_feedback_record", return_value=correcting_record):
-            with pytest.raises(ValueError, match="no correction run linked"):
+            with pytest.raises(InvalidTransitionError, match="no correction run linked"):
                 await mgr.run_post_correction_eval(correcting_record.id)
 
     async def test_raises_when_correction_run_not_found(
@@ -559,7 +563,7 @@ class TestRunPostCorrectionEval:
             patch.object(mgr, "get_feedback_record", return_value=correcting_record),
             patch("modulo.core.feedback_manager.get_run", return_value=None),
         ):
-            with pytest.raises(ValueError, match=r"Correction run .* not found"):
+            with pytest.raises(FeedbackRecordNotFoundError, match=r"Correction run .* not found"):
                 await mgr.run_post_correction_eval(correcting_record.id)
 
     async def test_auto_resolves_ai_correction_on_pass(
@@ -578,13 +582,13 @@ class TestRunPostCorrectionEval:
         mock_eval_result.score = 1.0
         mock_eval_engine.standalone_evaluate = MagicMock(return_value=mock_eval_result)
 
-        mock_update_result = MagicMock(spec=FeedbackRecord)
-        mock_update_result.feedback_status = "resolved"
+        mock_exec_result = MagicMock()
+        mock_exec_result.scalar_one_or_none.return_value = correcting_record
+        mock_session.execute = AsyncMock(return_value=mock_exec_result)
 
         with (
             patch.object(mgr, "get_feedback_record", return_value=correcting_record),
             patch("modulo.core.feedback_manager.get_run", return_value=completed_correction_run),
-            patch.object(mgr, "update_status", AsyncMock(return_value=mock_update_result)) as mock_update,
         ):
             outcome = await mgr.run_post_correction_eval(
                 correcting_record.id,
@@ -594,7 +598,6 @@ class TestRunPostCorrectionEval:
         assert outcome["passed"] is True
         assert outcome["detail"] == "All checks passed"
         assert outcome["needs_human_review"] is False
-        mock_update.assert_called_once_with(correcting_record.id, "resolved")
 
     async def test_marks_needs_review_for_human_review_handler(
         self,
@@ -612,16 +615,13 @@ class TestRunPostCorrectionEval:
         mock_eval_result.score = 0.95
         mock_eval_engine.standalone_evaluate = MagicMock(return_value=mock_eval_result)
 
-        mock_update_result = MagicMock(spec=FeedbackRecord)
-        mock_update_result.feedback_status = "resolved"
-
         mock_exec_result = MagicMock()
-        mock_exec_result.scalar_one_or_none.return_value = mock_update_result
+        mock_exec_result.scalar_one_or_none.return_value = correcting_record
+        mock_session.execute = AsyncMock(return_value=mock_exec_result)
 
         with (
             patch.object(mgr, "get_feedback_record", return_value=correcting_record),
             patch("modulo.core.feedback_manager.get_run", return_value=completed_correction_run),
-            patch.object(mgr, "update_status", AsyncMock(return_value=mock_update_result)) as mock_update,
         ):
             outcome = await mgr.run_post_correction_eval(
                 correcting_record.id,
@@ -630,7 +630,6 @@ class TestRunPostCorrectionEval:
 
         assert outcome["passed"] is True
         assert outcome["needs_human_review"] is True
-        mock_update.assert_called_once_with(correcting_record.id, "resolved")
 
     async def test_does_not_resolve_when_eval_fails(
         self,
@@ -646,10 +645,11 @@ class TestRunPostCorrectionEval:
         mock_eval_result.score = 0.0
         mock_eval_engine.standalone_evaluate = MagicMock(return_value=mock_eval_result)
 
+        mock_session.execute = AsyncMock()
+
         with (
             patch.object(mgr, "get_feedback_record", return_value=correcting_record),
             patch("modulo.core.feedback_manager.get_run", return_value=completed_correction_run),
-            patch.object(mgr, "update_status") as mock_update,
         ):
             outcome = await mgr.run_post_correction_eval(
                 correcting_record.id,
@@ -658,4 +658,3 @@ class TestRunPostCorrectionEval:
 
         assert outcome["passed"] is False
         assert outcome["needs_human_review"] is False
-        mock_update.assert_not_called()

@@ -3019,11 +3019,7 @@ wheels = [
 
 [[package]]
 name = "modulo"
-<<<<<<< HEAD
-version = "0.3.13"
-=======
-version = "0.3.9"
->>>>>>> accf0fae (feat(community-library): add API endpoint for community contribution submission)
+version = "0.3.17"
 source = { editable = "." }
 dependencies = [
     { name = "aiosqlite" },
