@@ -163,7 +163,7 @@ class ModelBackendHub:
         """
         if backend_id not in self._backends:
             raise BackendNotFoundError(backend_id)
-        if self._healthy.get(backend_id, False) and backend_id in self._backends:
+        if self._healthy.get(backend_id, False):
             return RotatedResult(
                 backend=self._backends[backend_id],
                 rotated=False,

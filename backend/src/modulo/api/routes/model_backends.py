@@ -23,8 +23,11 @@ from modulo.db.crud.model_backend import (
     list_model_backends,
     update_model_backend,
 )
+from modulo.db.models.model_backend import ModelBackend
 from modulo.db.rls import set_rls_org, set_rls_user_context
+from modulo.core.plugin_registry import get_plugin_registry
 from modulo.settings import Settings, get_settings
+from sqlalchemy import select
 from sqlalchemy.exc import ProgrammingError
 
 router = APIRouter(prefix="/api/v1/model-backends", tags=["model-backends"])
@@ -127,6 +130,36 @@ async def list_model_backends_endpoint(
     )
 
 
+_VALID_PROVIDERS = {
+    "ai21", "anthropic", "azure_openai", "bedrock", "cohere", "deepseek",
+    "fireworks", "gemini", "grok", "groq", "jan", "llamacpp", "lm_studio",
+    "localai", "mistral", "ollama", "openai", "openrouter", "perplexity",
+    "qwen", "tgi", "togetherai", "vertexai", "vllm", "watsonx",
+}
+
+
+def _validate_provider(provider: str) -> None:
+    """Raise 422 if provider is not a known built-in or plugin backend."""
+    if provider in _VALID_PROVIDERS:
+        return
+    try:
+        registry = get_plugin_registry()
+        if registry.has_model_backend(provider):
+            return
+    except Exception:
+        pass
+    raise HTTPException(
+        status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+        detail=[
+            {
+                "type": "value_error",
+                "loc": ["body", "provider"],
+                "msg": f"Unknown model backend provider: {provider!r}",
+            }
+        ],
+    )
+
+
 @router.post("", response_model=ModelBackendResponse, status_code=status.HTTP_201_CREATED)
 async def create_model_backend_endpoint(
     body: ModelBackendCreate,
@@ -134,27 +167,43 @@ async def create_model_backend_endpoint(
     principal: AuthenticatedPrincipal = Depends(get_current_user),
     settings: Settings = Depends(get_settings),
 ) -> ModelBackendResponse:
+    _validate_provider(body.provider)
     ciphertext = _encrypt(body.api_key, settings.fernet_key)
     try:
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
             await set_rls_user_context(session, principal.account_id, principal.org_role)
+
+            existing = (
+                await session.execute(
+                    select(ModelBackend).where(
+                        ModelBackend.organisation_id == principal.organisation_id,
+                        ModelBackend.name == body.name,
+                    )
+                )
+            ).scalar_one_or_none()
+            if existing is not None:
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail=f"A model backend with name {body.name!r} already exists in this organisation",
+                )
+
             fallback_ids: list[str] | None = None
             if body.fallback_backend_ids:
                 fallback_ids = [str(fid) for fid in body.fallback_backend_ids]
             mb = await create_model_backend(
-            session,
-            org_id=principal.organisation_id,
-            name=body.name,
-            display_name=body.display_name,
-            provider=body.provider,
-            model_id=body.model_id,
-            credentials_ciphertext=ciphertext,
-            account_id=principal.account_id,
-            default_params=body.default_params,
-            visibility=body.visibility,
-            fallback_backend_ids=fallback_ids,
-        )
+                session,
+                org_id=principal.organisation_id,
+                name=body.name,
+                display_name=body.display_name,
+                provider=body.provider,
+                model_id=body.model_id,
+                credentials_ciphertext=ciphertext,
+                account_id=principal.account_id,
+                default_params=body.default_params,
+                visibility=body.visibility,
+                fallback_backend_ids=fallback_ids,
+            )
     except ProgrammingError:
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,

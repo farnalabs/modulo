@@ -59,6 +59,10 @@ def _make_mock_session() -> AsyncMock:
     begin_cm.__aenter__ = AsyncMock(return_value=None)
     begin_cm.__aexit__ = AsyncMock(return_value=False)
     session.begin = MagicMock(return_value=begin_cm)
+    # Default: no duplicate found for name check
+    mock_result = MagicMock()
+    mock_result.scalar_one_or_none.return_value = None
+    session.execute = AsyncMock(return_value=mock_result)
     return session
 
 
@@ -325,6 +329,54 @@ def test_delete_model_backend_programming_error_returns_501(client: TestClient) 
     ):
         resp = client.delete(f"/api/v1/model-backends/{uuid.uuid4()}")
     assert resp.status_code == 501
+
+
+def test_create_model_backend_duplicate_name_returns_409(client: TestClient) -> None:
+    """Duplicate backend name within same org should return 409."""
+    mock_session = _make_mock_session()
+    mock_result = MagicMock()
+    mock_result.scalar_one_or_none.return_value = MagicMock()  # existing row found
+    mock_session.execute = AsyncMock(return_value=mock_result)
+
+    async def override_session() -> AsyncGenerator[AsyncMock, None]:
+        yield mock_session
+
+    client.app.dependency_overrides[get_db_session] = override_session
+
+    with (
+        patch("modulo.api.routes.model_backends.create_model_backend"),
+        patch("modulo.api.routes.model_backends.set_rls_org"),
+        patch("modulo.api.routes.model_backends.set_rls_user_context"),
+    ):
+        body = {**_CREATE_BODY, "name": "duplicate"}
+        resp = client.post("/api/v1/model-backends", json=body)
+
+    assert resp.status_code == 409
+    assert "already exists" in resp.json()["detail"]
+
+
+def test_create_model_backend_invalid_provider_returns_422(client: TestClient) -> None:
+    """Creating a backend with an unsupported provider returns 422."""
+    body = {**_CREATE_BODY, "provider": "nonexistent_provider"}
+    resp = client.post("/api/v1/model-backends", json=body)
+    assert resp.status_code == 422
+    detail_str = resp.text
+    assert "nonexistent_provider" in detail_str
+
+
+def test_create_model_backend_invalid_provider_returns_422_via_plugins(client: TestClient) -> None:
+    """Provider that fails plugin registry check also returns 422."""
+    from modulo.api.routes.model_backends import _VALID_PROVIDERS
+    saved = dict.fromkeys(_VALID_PROVIDERS, True)
+    try:
+        _VALID_PROVIDERS.clear()
+        with patch("modulo.api.routes.model_backends.get_plugin_registry") as mock_reg:
+            mock_reg.return_value.has_model_backend.return_value = False
+            body = {**_CREATE_BODY, "provider": "unknown"}
+            resp = client.post("/api/v1/model-backends", json=body)
+        assert resp.status_code == 422
+    finally:
+        _VALID_PROVIDERS.update(saved)
 
 
 def test_create_azure_openai_model_backend_round_trips(client: TestClient) -> None:
