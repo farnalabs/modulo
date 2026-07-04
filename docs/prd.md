@@ -1,9 +1,10 @@
 # Modulo — Product Requirements Document
 
-**Version**: 0.31  
-**Date**: 2026-07-03  
+**Version**: 0.32  
+**Date**: 2026-07-04  
 **Status**: Pre-development  
 **Changelog**:  
+- v0.32 — §8.29 Remy Context Sources: configurable knowledge domains with always-on/tool/off modes, per-skill source_mode, `source_contexts` field on RemyConfig, 4 new MCP retrieval tools (get_documentation, get_integration_status, get_org_config, get_available_features). §8.30 Remy Product Primer: auto-generated always-on product overview in system prompt, primer generator script reading PRD + product map + manifest + live counts. ADR 011.
 - v0.31 — §8.25.1 Frontend Monitor Backend Abstraction: plugable MonitorBackend interface (builtin/sentry/datadog-rum/grafana-faro), dual-layer config (build-time VITE_* + runtime MODULO_MONITOR_CONFIG), ErrorTracker refactor with MonitorBackendRegistry dispatch, CSP superset strategy, per-backend privacy data sheets, unauthenticated error ingest endpoint, i18n missing-key capture, 2 existing pipeline bugfixes. ADR 009.
 - v0.30 — §8.28 Core Shared Manifest: single YAML source of truth for routes, elements, sidebar, permissions, tiers, product map refs, i18n keys. Binary consumption (frontend Vite import + backend startup load). `get_manifest(path?)` Remy tool. 7-rule pre-commit + CI validator. ADR 008.
 - v0.29 — §8.27 Remy UI Commands: frontend-mediated browser automation for Remy, 11 UI commands (navigate, click, fill, select, extract, extract_all, get_page_interactables, wait, go_back, get_url, press), permission system with 3 modes + destructive selector detection, agentic loop (multi-turn LLM within single SSE stream), shadcn/vue component support, visual feedback (highlighting, toast, overlay, turn separators), 3 new endpoints, ADR 007.
@@ -2533,6 +2534,322 @@ This replaces the trial-and-error pattern (navigate → `get_page_interactables(
 | Breadcrumb migration to manifest | Community |
 
 The manifest is a developer tooling improvement and Remy capability. No tier gate.
+
+---
+
+### 8.29 Remy Context Sources — Configurable Knowledge Domains
+
+Remy's knowledge of the product is organised into **context sources** — named domains of information that can be independently configured for always-on injection, on-demand retrieval via tool calls, or complete exclusion. This replaces the binary "all skills always injected" model with a graduated system that balances context window budget against Remy's awareness.
+
+#### 8.29.1 Source Modes
+
+Each context source has exactly one mode, configurable at the org level (admin default) and overridable at the user level:
+
+| Mode | Behaviour | Token cost | Example use case |
+|---|---|---|---|
+| `always_on` | Injected into the system prompt on every session | Per-turn (reconstructed each session) | User profile, current page context |
+| `tool` | Exposed as an MCP tool Remy calls on demand | Zero until called | Product docs, FAQ, org config details |
+| `off` | Not loaded into system prompt or tool registry | Zero | Unused or deprecated sources |
+
+#### 8.29.2 Default Context Sources
+
+The following sources are pre-defined and seeded on org creation:
+
+| Source key | Contents | Suggested mode | Token estimate |
+|---|---|---|---|
+| `page_context` | Current route name, params, loaded entity IDs (route.watch → computed → sent in stream request body) | `always_on` | ~100 |
+| `user_profile` | User display name, role, org name, plan tier name | `always_on` | ~150 |
+| `product_primer` | Auto-generated product overview (§8.30) — key concepts, page navigation, active context summary | `always_on` | ~600–800 |
+| `product_docs` | PRD sections, FAQ entries, user-facing docs pages — retrieved via `get_documentation(query)` | `tool` | N/A |
+| `integration_status` | Connector health, model backend status, trigger status — via `get_integration_status()` | `tool` | N/A |
+| `org_config` | Org settings, feature flags, plan limits, runtime config — via `get_org_config()` | `tool` | N/A |
+| `feature_overview` | Feature-to-tier mapping, which features are enabled on the current plan — via `get_available_features()` | `tool` | N/A |
+
+#### 8.29.3 Per-Skill Source Mode
+
+Existing org-level and user-level skills (§8.23.5) gain a `source_mode` field (values: `always_on` | `tool` | `off`, default: `always_on` for backward compatibility).
+
+- Skills with `source_mode = always_on` are injected into the system prompt under `## Organisation Skills` / `## User Skills` (current behaviour).
+- Skills with `source_mode = tool` are **not** injected into the prompt. Instead, Remy discovers them via a `get_skill(skill_name)` tool that loads the skill body on demand. The skill's `name` and `description` are listed in a "Skills Available as Tools" section so Remy knows which skills exist and when to call them.
+- Skills with `source_mode = off` are excluded entirely — not injected, not listed, no tool.
+
+Migration: existing skills default to `source_mode = always_on`. Admins can bulk-convert large reference skills to `tool` mode via the admin UI.
+
+#### 8.29.4 System Prompt Composition
+
+The system prompt is built in this order:
+
+```
+1. [Base admin system prompt]             — from RemyConfig.system_prompt
+2. [Additional guidance]                   — from RemyConfig.additional_guidance
+3. ## Product Overview                     — always-on primer (§8.30)
+4. ## Page Context                         — current page info
+5. ## Available Knowledge Tools            — descriptions of tool-mode sources + skills
+   - get_documentation — Search product docs and FAQ
+   - get_integration_status — Connector and model backend health
+   - get_org_config — Org settings and feature flags
+   - get_available_features — Feature availability by plan
+   - get_skill(name) — Load an organisation or personal skill on demand
+6. ## Organisation Skills                  — skills with source_mode = always_on
+7. ## User Skills                          — skills with source_mode = always_on
+```
+
+The tool descriptions in section 5 are generated dynamically based on which sources and skills are configured as `tool` mode. If a source is `off`, it does not appear. This keeps the prompt tailored to the user's configuration.
+
+#### 8.29.5 MCP Retrieval Tools
+
+Four new MCP tool handlers registered in `mcp_server.py`:
+
+| Tool | Parameters | Returns |
+|---|---|---|
+| `get_documentation` | `query: str` — free-text search; `section: str \| None` — specific PRD/doc section | Markdown-formatted relevant sections with page titles, up to ~4000 tokens per call |
+| `get_integration_status` | None | List of all connectors (name, type, health status, last_ok), model backends (provider, model, configured), trigger counts |
+| `get_org_config` | `section: str \| None` — filter to specific config area (e.g. "remy", "rate_limits", "plan") | Org settings relevant to the request, feature flags, plan tier, run limits |
+| `get_available_features` | None | Feature-to-tier mapping showing which product features are enabled on the current plan |
+
+**Backend implementation:**
+
+`get_documentation` reads from a documentation index built at startup:
+- PRD sections (from `docs/prd.md` — split by `##` / `###` headings, stored with heading path as key)
+- FAQ entries (from `frontend/src/faq.yaml` or equivalent)
+- User-facing docs pages (from `Development/Website/modulo-website/src/docs/` — indexed at org creation, cached)
+- Search: simple case-insensitive keyword match against heading + first paragraph of each section. No vector search in v0.32. Upgraded to embeddings in v1 if retrieval quality demands it.
+
+`get_integration_status` queries live DB:
+```sql
+SELECT name, connector_type_id, health_status, last_health_check_ok
+FROM connector_instances WHERE organisation_id = :org_id
+```
+plus model backends and trigger counts. Returns a Markdown table.
+
+`get_org_config` reads from `SystemConfig` table for the org, filtered to relevant keys. Never exposes secrets (fernet keys, API keys, database URLs).
+
+`get_available_features` returns the `PlanContext` feature map for the org's current tier.
+
+**Token budget for tool responses:** All retrieval tools return results up to 4000 tokens. Results appear as `ToolMessage`s in the conversation. They are pruned by the context window management (§8.23.7) like any other old message.
+
+#### 8.29.6 Data Model
+
+**`remy_context_sources` table** (new):
+
+| Column | Type | Notes |
+|---|---|---|
+| `id` | UUID | PK |
+| `organisation_id` | UUID | FK → organisations (nullable for built-in defaults) |
+| `user_id` | UUID | FK → accounts (nullable for org-level defaults) |
+| `source_key` | text | One of the pre-defined keys from §8.29.2 |
+| `source_mode` | text | `always_on` \| `tool` \| `off` |
+| `created_at` | timestamptz | |
+| `updated_at` | timestamptz | |
+
+CHECK constraint: only one of `organisation_id` or `user_id` is set (same pattern as `remy_skills`). Org-level rows set the default for all users; user-level rows override the org default for that individual.
+
+**`remy_skills.source_mode` column** (new, nullable):
+
+| Column | Type | Notes |
+|---|---|---|
+| `source_mode` | text | `always_on` \| `tool` \| `off`; defaults to `always_on` |
+
+**`RemyConfig.context_sources`** field (new on the existing config model):
+
+```python
+class RemyConfig(BaseModel):
+    schema_version: int = 3  # bumped from 2
+    # ... existing fields ...
+    context_sources: dict[str, str] = Field(
+        default_factory=lambda: {
+            "page_context": "always_on",
+            "user_profile": "always_on",
+            "product_primer": "always_on",
+            "product_docs": "tool",
+            "integration_status": "tool",
+            "org_config": "tool",
+            "feature_overview": "tool",
+        }
+    )
+```
+
+#### 8.29.7 UI: Admin Configuration
+
+The admin Remy page (`/admin/remy`, `AdminRemyView.vue`) gains a **"Knowledge Sources"** section:
+
+```
+## Knowledge Sources
+
+Control what Remy knows and how it loads that knowledge.
+
+Always-on sources are injected into every conversation.
+Tool-based sources are available on demand — Remy calls them when needed.
+Disabled sources are invisible to Remy.
+
+Source                    Mode          Tokens
+───────────────────────────────────────────────────
+◉ Product Primer          [always-on]   ~700
+◉ Page Context            [always-on]   ~100
+◉ User Profile            [always-on]   ~150
+○ Product Docs            [tool]        get_documentation()
+○ Integration Status      [tool]        get_integration_status()
+○ Org Config              [tool]        get_org_config()
+○ Feature Overview        [tool]        get_available_features()
+```
+
+Each row has a mode dropdown (always_on / tool / off). Org skills listed below with individual source_mode toggles.
+
+**Skill-level overrides:**
+
+```
+Skills as Knowledge Sources
+Skill                    Current Mode    Override
+────────────────────────────────────────────────────
+Pipeline Reference Guide  always_on       [tool] ▼
+Deployment Checklist      tool            [always_on] ▼
+SQL Reference             off             [off] ▼
+```
+
+Admins see estimated token count for always-on sources so they can budget context usage.
+
+#### 8.29.8 UI: User Preferences
+
+The Remy panel settings tab gains a **"Knowledge Sources"** subtab (accessible from `RemyPanel.vue`):
+
+```
+Knowledge Sources
+
+You can customise what Remy knows about your organisation.
+Changes apply to new conversations only.
+
+Source                    Mode
+────────────────────────────────
+Product Primer            [always-on] ▼    (org default)
+Page Context              [always-on] ▼    (org default)
+User Profile              [always-on] ▼    (org default)
+Product Docs              [tool] ▼         (org default)
+...
+```
+
+Users can override org defaults for themselves. "Reset to org defaults" button restores admin-configured modes.
+
+#### 8.29.9 Delivery Dependencies
+
+- `remy_context_sources` DB migration must run before the feature deploys
+- `remy_skills.source_mode` column migration runs alongside
+- `get_documentation` requires the documentation indexer (reads PRD + FAQ + website docs at startup or on first call)
+- All four MCP tools must be registered before any source is set to `tool` mode
+
+#### 8.29.10 Flag / Gating
+
+| Component | Tier |
+|---|---|
+| Context source framework (modes, system prompt filtering) | Community |
+| `get_org_config` tool | Community |
+| `get_available_features` tool | Community |
+| `get_documentation` tool | Team |
+| `get_integration_status` tool | Team |
+| Per-user source overrides | Team |
+| Per-skill source_mode toggles | Team |
+
+The base framework (modes, filtering, prompt composition) is Community so all self-hosters benefit. The retrieval tools that query live org data or documentation indexes are Team-tier to incentivise adoption.
+
+---
+
+### 8.30 Remy Product Primer — Always-On Product Understanding
+
+Remy needs a baseline understanding of what Modulo is and how it works, present in every conversation. The **product primer** is a compact, auto-generated `## Product Overview` section in the system prompt (~600–800 tokens) that covers core concepts, pages, and active context.
+
+#### 8.30.1 Primer Content
+
+The primer is a Markdown block injected before page context:
+
+```
+## Product Overview
+
+### What is Modulo
+Governed orchestration for AI-powered SDLC pipelines — automated workflows that
+connect tools like GitHub, Linear, Notion, Jira, and Slack. Pipelines are built
+from composable AI agents, run with human-in-the-loop gates, evaluated,
+and improved continuously.
+
+### Key Concepts
+- **Pipeline** — Directed graph of agents (nodes) + edges (data flow, HITL gates)
+- **Run** — A single execution of a pipeline with a specific input payload
+- **Agent** — An LLM-powered node with a prompt template, schema, and model backend
+- **Schema** — Typed JSON structure defining input/output contracts between nodes
+- **Connector** — Integration with external tools (GitHub, Linear, Slack, etc.)
+- **Trigger** — Event source that starts a pipeline run (webhook, schedule, manual)
+- **HITL Gate** — Human-in-the-loop approval point between nodes
+- **Eval** — Quality check on agent output (llm_judge, regex, JSON schema, custom)
+- **Variant** — A/B test comparing different model backends or prompts on the same input
+- **Library** — Reusable primitives: schemas, agents, workflows, pipeline templates
+- **Remy** — This AI assistant — embedded in every page, drives the product via tools
+
+### Pages & Navigation
+11 sidebar groups: Core (Dashboard, Notifications), Pipelines (Library, Templates,
+Stages), Runs & Eval (Output Diff, Evals, Variants, A/B Test), Schemas (Browse,
+Editor, Infer), Remy (My Skills, Admin Config), Settings (Teams, SSO, License, MCP,
+Triggers, Runtime Config, Rate Limits, HITL Review, Observability, Error Forwarders),
+Access Control (Users, Org Settings, Audit Log), Cost Management (Overview, Spend
+Limits, Cost Controls), System (Connectors, Model Backends, Node Categories,
+Feature Flags, Environments, Run Retention, Saved Views), Monitoring (Error Dashboard,
+Notification Log, API Changelog, Team Comparison), Extensions (Plugins, Feedback Inbox).
+
+### Active Context
+- **User**: {display_name} ({role}) — {org_name} ({plan_name})
+- **Org**: {pipeline_count} pipelines, {connector_count} connectors, {backend_count} model backends
+- **Current page**: {route_name} — {page_description}
+```
+
+#### 8.30.2 Auto-Generation
+
+The primer is regenerated on a schedule, not handwritten:
+
+```python
+# backend/scripts/generate_remy_primer.py
+#
+# Reads:
+#   - docs/prd.md §5 (glossary) — key concepts and definitions
+#   - docs/product-map/*.md — feature descriptions and statuses
+#   - frontend/src/manifest.yaml — sidebar groups, route names, page descriptions
+#   - Live DB counts — pipelines, connectors, model backends
+#
+# Outputs:
+#   - Markdown string written to RemyConfig.product_primer (stored in SystemConfig)
+#
+# Called:
+#   - On deploy (as part of the deploy script)
+#   - On housekeeping schedule (nightly)
+#   - On demand via `trigger primer regeneration` in admin UI
+```
+
+The generator:
+1. Reads PRD glossary entries and extracts one-line definitions
+2. Reads manifest.yaml sidebar groups and generates the navigation section
+3. Queries the live DB for entity counts (pipelines, connectors, model backends)
+4. Formats everything into a compact Markdown string
+5. Writes it to the org's `RemyConfig.product_primer` field (stored in `SystemConfig`)
+
+**Token budget:** The generator targets 600–800 tokens. If the generated primer exceeds 800 tokens, it truncates from the bottom (navigation section first, then key concepts). The overview section ("What is Modulo") is never truncated.
+
+#### 8.30.3 Admin Override
+
+The admin Remy config page gains a read-only "Product Primer" section showing the current primer text with a "Regenerate" button that calls the generator. Admins can manually edit the primer via the existing system prompt override mechanism if they want custom content.
+
+#### 8.30.4 Delivery Dependencies
+
+- `RemyConfig.product_primer` field added to the config model (part of the context source migration)
+- `generate_remy_primer.py` script created and wired into deploy/housekeeping
+- The script must handle DB unavailability gracefully (returns the existing primer text)
+- The manifest.yaml must exist and be readable (it is loaded at backend startup anyway)
+
+#### 8.30.5 Flag / Gating
+
+| Component | Tier |
+|---|---|
+| Primer generator script | Community |
+| Primer injection in system prompt | Community |
+| Admin "Regenerate" button | Community |
+| Manual primer editing via admin UI | Team |
+
+The product primer is a core usability improvement for all Remy users. No tier gate on the feature itself.
 
 ---
 
