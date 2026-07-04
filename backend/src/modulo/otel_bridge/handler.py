@@ -56,8 +56,9 @@ class LangGraphOtelBridge(BaseCallbackHandler):
         self._pipeline_id: str | None = pipeline_id
 
     def set_run_context(self, org_id: str, pipeline_id: str) -> None:
-        self._org_id = org_id
-        self._pipeline_id = pipeline_id
+        with self._lock:
+            self._org_id = org_id
+            self._pipeline_id = pipeline_id
 
     # ------------------------------------------------------------------
     # Internal helpers
@@ -80,6 +81,19 @@ class LangGraphOtelBridge(BaseCallbackHandler):
         attributes: dict[str, str | int | float | bool] | None = None,
         tags: list[str] | None = None,
     ) -> None:
+        # End any existing span for this run_id before creating a new one
+        with self._lock:
+            existing = self._spans.pop(str(run_id), None)
+        if existing is not None:
+            try:
+                existing.set_status(Status(StatusCode.OK))
+            except Exception:  # noqa: S110
+                pass  # orphaned span; nothing useful to log
+            try:
+                existing.end()
+            except Exception:  # noqa: S110
+                pass  # orphaned span; nothing useful to log
+
         ctx = self._parent_context(parent_run_id)
         attrs = dict(attributes or {})
         if self._org_id is not None:
@@ -89,19 +103,36 @@ class LangGraphOtelBridge(BaseCallbackHandler):
         span = self._tracer.start_span(name, context=ctx, attributes=attrs)
         self._set_tags(span, tags)
         with self._lock:
+            if existing is not None:
+                try:
+                    existing.set_status(Status(StatusCode.OK))
+                except Exception:  # noqa: S110
+                    pass  # orphaned span; nothing useful to log
+                try:
+                    existing.end()
+                except Exception:  # noqa: S110
+                    pass  # orphaned span; nothing useful to log
             self._spans[str(run_id)] = span
 
     def _end_span(self, run_id: UUID, *, error: BaseException | None = None) -> None:
         with self._lock:
             span = self._spans.pop(str(run_id), None)
         if span is None:
+            _log.warning("No active span found for run_id %s", run_id)
             return
-        if error is not None:
-            span.set_status(Status(StatusCode.ERROR, str(error)))
-            span.record_exception(error)
-        else:
-            span.set_status(Status(StatusCode.OK))
-        span.end()
+        try:
+            if error is not None:
+                span.set_status(Status(StatusCode.ERROR, str(error)))
+                span.record_exception(error)
+            else:
+                span.set_status(Status(StatusCode.OK))
+        except Exception:
+            _log.exception("Failed to finalize span %s", run_id)
+        finally:
+            try:
+                span.end()
+            except Exception:
+                _log.exception("Failed to end span %s", run_id)
 
     @staticmethod
     def _serialized_name(serialized: dict[str, Any] | None) -> str:
@@ -109,7 +140,7 @@ class LangGraphOtelBridge(BaseCallbackHandler):
             return "unknown"
         # LangChain serialized dicts may use "name" or the last element of "id"
         name = serialized.get("name")
-        if name:
+        if name is not None and name != "":
             return str(name)
         id_path = serialized.get("id")
         if id_path and isinstance(id_path, list):
@@ -120,6 +151,22 @@ class LangGraphOtelBridge(BaseCallbackHandler):
     def _set_tags(span: Span, tags: list[str] | None) -> None:
         if tags:
             span.set_attribute("langgraph.tags", list(tags))
+
+    @staticmethod
+    def _record_token_usage(span: Span, llm_output: dict[str, Any] | None) -> None:
+        if not llm_output:
+            return
+        usage = llm_output.get("token_usage") or {}
+        if not isinstance(usage, dict):
+            return
+        for attr, key in (
+            ("langgraph.llm.prompt_tokens", "prompt_tokens"),
+            ("langgraph.llm.completion_tokens", "completion_tokens"),
+            ("langgraph.llm.total_tokens", "total_tokens"),
+        ):
+            val = usage.get(key)
+            if isinstance(val, int):
+                span.set_attribute(attr, val)
 
     # ------------------------------------------------------------------
     # Chain (graph / node) callbacks
@@ -202,17 +249,8 @@ class LangGraphOtelBridge(BaseCallbackHandler):
     ) -> None:
         with self._lock:
             span = self._spans.get(str(run_id))
-        if span is not None and response.llm_output:
-            usage = response.llm_output.get("token_usage") or {}
-            if isinstance(usage, dict):
-                for attr, key in (
-                    ("langgraph.llm.prompt_tokens", "prompt_tokens"),
-                    ("langgraph.llm.completion_tokens", "completion_tokens"),
-                    ("langgraph.llm.total_tokens", "total_tokens"),
-                ):
-                    val = usage.get(key)
-                    if isinstance(val, int):
-                        span.set_attribute(attr, val)
+        if span is not None:
+            self._record_token_usage(span, response.llm_output)
         self._end_span(run_id)
 
     def on_llm_error(
@@ -266,17 +304,8 @@ class LangGraphOtelBridge(BaseCallbackHandler):
     ) -> None:
         with self._lock:
             span = self._spans.get(str(run_id))
-        if span is not None and response.llm_output:
-            usage = response.llm_output.get("token_usage") or {}
-            if isinstance(usage, dict):
-                for attr, key in (
-                    ("langgraph.llm.prompt_tokens", "prompt_tokens"),
-                    ("langgraph.llm.completion_tokens", "completion_tokens"),
-                    ("langgraph.llm.total_tokens", "total_tokens"),
-                ):
-                    val = usage.get(key)
-                    if isinstance(val, int):
-                        span.set_attribute(attr, val)
+        if span is not None:
+            self._record_token_usage(span, response.llm_output)
         self._end_span(run_id)
 
     def on_chat_model_error(
@@ -300,6 +329,7 @@ class LangGraphOtelBridge(BaseCallbackHandler):
         *,
         run_id: UUID,
         parent_run_id: UUID | None = None,
+        tags: list[str] | None = None,
         **kwargs: Any,
     ) -> None:
         name = self._serialized_name(serialized)
@@ -308,6 +338,7 @@ class LangGraphOtelBridge(BaseCallbackHandler):
             run_id,
             parent_run_id,
             {"langgraph.tool.name": name},
+            tags=tags,
         )
 
     def on_tool_end(

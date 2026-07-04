@@ -15,7 +15,7 @@ from opentelemetry import trace
 from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
 from opentelemetry.sdk.resources import Resource
 from opentelemetry.sdk.trace import TracerProvider
-from opentelemetry.sdk.trace.export import ConsoleSpanExporter, SimpleSpanProcessor
+from opentelemetry.sdk.trace.export import BatchSpanProcessor, ConsoleSpanExporter, SimpleSpanProcessor
 
 _log = logging.getLogger(__name__)
 
@@ -46,6 +46,9 @@ def setup_otel(
         trace.set_tracer_provider(provider)
         return
 
+    # Shut down any previously configured provider before replacing
+    shutdown_otel()
+
     resource = Resource.create({"service.name": service_name})
     provider = TracerProvider(resource=resource)
 
@@ -60,7 +63,7 @@ def setup_otel(
     if otlp_endpoint:
         try:
             otlp_exporter = OTLPSpanExporter(endpoint=otlp_endpoint)
-            provider.add_span_processor(SimpleSpanProcessor(otlp_exporter))
+            provider.add_span_processor(BatchSpanProcessor(otlp_exporter))
             _log.info("OTel OTLP exporter configured: endpoint=%s", otlp_endpoint)
         except Exception:
             _log.exception("Failed to configure OTLP exporter; continuing without it")
@@ -76,5 +79,9 @@ def shutdown_otel() -> None:
     are no-ops once the provider is shut down.
     """
     provider = trace.get_tracer_provider()
-    if isinstance(provider, TracerProvider):
-        provider.shutdown()
+    shutdown = getattr(provider, "shutdown", None)
+    if callable(shutdown):
+        try:
+            shutdown()
+        except Exception:
+            _log.exception("Failed to shut down OTel provider")
