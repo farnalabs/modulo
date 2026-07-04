@@ -15,8 +15,8 @@ unit-tests:
   - backend/tests/unit/core/feedback_manager/test_feedback_manager.py
   - backend/tests/integration/feedback_manager/test_feedback_flow.py
 depends-on:
-  - feat-eval-engine
-  - feat-pipeline-runs
+  - feat-evals-eval-engine
+  - feat-pipelines-core
 status: partial
 ---
 
@@ -43,7 +43,7 @@ human-in-the-loop resolution.
 - [x] `GET /feedback/proposals` lists records with `eval_gap=True` and status in `pending`/`routing`
 - [x] Paginated response with `page`, `page_size`, `total`
 - [x] Returns producing node name resolved from pipeline snapshot graph JSON
-- [ ] No frontend UI for reviewing/publishing eval proposals
+- [ ] No frontend UI for reviewing/publishing eval proposals — API-only
 - [ ] No mechanism to promote a detected gap into an active eval definition
 
 ## Post-Correction Eval
@@ -126,7 +126,7 @@ human-in-the-loop resolution.
 - [x] Fields: `organisation_id`, `run_id`, `gate_id`, `account_id`, `rejection_reason`, `rejected_output`
 - [x] Fields: `producing_node_id`, `producing_agent_id`, `feedback_status`, `feedback_handler_type`
 - [x] Fields: `correction_run_id`, `eval_gap`, `needs_human_review`
-- [x] CHECK constraint on `feedback_status`: `pending`, `routing`, `correcting`, `resolved`, `escalated`
+- [x] CHECK constraint on `feedback_status`: `pending`, `routing`, `correcting`, `resolved`, `escalated`, `dismissed`
 - [x] CHECK constraint on `feedback_handler_type`: `human`, `ai_correction`, `ai_correction_with_human_review`
 - [x] Foreign keys: `run_id` → runs.id (CASCADE), `account_id` → accounts.id (RESTRICT), `correction_run_id` → runs.id (SET NULL), `producing_agent_id` → agents.id (SET NULL)
 
@@ -137,6 +137,6 @@ human-in-the-loop resolution.
 - **`reject_routing_conflict` validation** — no gate-level validation catches the case where both `reject_target` and `feedback_handler` are set on the same gate.
 - **Proposed eval generation** — `eval_gap` triggers detection but no AI agent drafts proposed eval cases. The proposals queue exists but has no mechanism to promote a gap into an active eval definition.
 - **Eval proposals inbox UI** — only API endpoint exists, no frontend for reviewing, editing, or publishing proposals.
-- **Frontend views** — no frontend exists for any feedback system views (inbox, detail, review). The system is backend-only (API + tests).
+- **Frontend views** — Feedback inbox view exists (FeedbackInboxView.vue), but no detail/review/proposals curation UI exists.
 - **Auto-trigger detection gap** — eval gap detection is not automatically triggered on feedback creation; it requires an explicit API call to `POST /feedback/{record_id}/detect-gap`.
 - **Post-correction eval auto-trigger** — no hook calls `run_post_correction_eval()` automatically when a correction run completes.

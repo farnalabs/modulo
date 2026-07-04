@@ -4,14 +4,18 @@ prd: 8.20
 delivery-tasks: [task-nv4-eval-proposals-queue]
 bdd: [backend/tests/bdd/features/eval/feedback_system.feature]
 code: [backend/src/modulo/core/feedback_manager/, backend/src/modulo/api/routes/feedback.py]
-unit-tests: []
+unit-tests:
+  - backend/tests/unit/core/feedback_manager/test_feedback_manager.py
+  - backend/tests/unit/api/test_feedback_endpoint.py
+  - backend/tests/unit/api/test_feedback_programming_error.py
+  - backend/tests/integration/feedback_manager/test_feedback_flow.py
 depends-on: [feat-evals-eval-definitions, feat-evals-feedback-routing]
 status: partial
 ---
 
 # Feedback Proposals — Eval Suite Growth
 
-Discovered from 1 completed delivery tasks.
+Discovered from 1 completed delivery task.
 
 ## Behaviours
 
@@ -41,14 +45,14 @@ Discovered from 1 completed delivery tasks.
 - [ ] Published evals become immediately active for future pipeline runs — Not implemented
 
 ### BDD Scenarios
-- [ ] BDD feature file exists for feedback system — Placeholder only (7 lines, no scenarios)
+- [ ] BDD feature file exists for feedback system — 7 real scenarios exist (not a placeholder), but eval proposal scenarios are not covered
 
 ### Library Contribution (8.20 ¶Eval suite growth #4, v2)
 - [ ] Curated evals can be contributed back to community library — v2, not implemented
 
 ## Known Gaps
-- **`detect_eval_gap()` now works** — iterates eval suite and returns True if all pass (gap) or False if any fails. Still blocked: the API endpoint hardcodes `eval_suite=[]` so no evals are ever passed to it.
+- **`detect_eval_gap()` now works** — iterates eval suite and returns True if all pass (gap) or False if any fails. The API endpoint now fetches eval definitions from the pipeline instead of passing `eval_suite=[]`.
 - **No AI correction agent** — PRD 8.20 describes an agent that produces diagnosis + correction proposal + proposed eval case, but no code exists for it.
 - **No eval proposal model** — proposals are currently just FeedbackRecords with `eval_gap=True`. No dedicated `EvalProposal` entity with draft fields (negative example, rubric, suggested eval type, publication status).
 - **No draft eval editor UI** — PRD 8.20 mentions "Eval proposals queue with draft eval editor" in the feedback inbox UI, but there's no frontend or backend for editing/publishing draft evals.
-- **BDD feature is a placeholder** — `feedback_system.feature` has no scenarios. 
+- **BDD feature** — `feedback_system.feature` has 7 real scenarios (create, status transitions, invalid transitions, eval gap detection, correction run spawning) but none cover eval proposal generation or publication.
