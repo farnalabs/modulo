@@ -1,14 +1,17 @@
 """Unit tests for the admin feature-flags API endpoint."""
 
 from collections.abc import Generator
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 from fastapi.testclient import TestClient
+from sqlalchemy.exc import ProgrammingError
 
+from modulo.api.dependencies import _get_engine, get_db_session
 from modulo.api.main import app
 from modulo.auth.dependencies import get_current_user
 from modulo.auth.jwt import AuthenticatedPrincipal
+from modulo.core.feature_flags import FeatureFlagRegistry
 from modulo.settings import Settings, get_settings
 
 _VALID_32 = "a" * 32
@@ -26,6 +29,8 @@ def _make_settings() -> Settings:
 @pytest.fixture()
 def client() -> Generator[TestClient, None, None]:
     app.dependency_overrides[get_settings] = _make_settings
+    app.dependency_overrides[get_db_session] = lambda: MagicMock()
+    app.dependency_overrides[_get_engine] = lambda: MagicMock()
     app.dependency_overrides[get_current_user] = lambda: AuthenticatedPrincipal(
         username="testuser",
         organisation_id="00000000-0000-0000-0000-000000000001",
@@ -43,6 +48,11 @@ def unauth_client() -> Generator[TestClient, None, None]:
     app.dependency_overrides.clear()
 
 
+def _mock_registry() -> FeatureFlagRegistry:
+    """Return a FeatureFlagRegistry with hardcoded flags (no DB)."""
+    return FeatureFlagRegistry(current_tier="community", has_license_key=False)
+
+
 # ---------------------------------------------------------------------------
 # GET /api/v1/admin/feature-flags
 # ---------------------------------------------------------------------------
@@ -50,11 +60,19 @@ def unauth_client() -> Generator[TestClient, None, None]:
 
 class TestListFeatureFlags:
     def test_returns_200(self, client: TestClient) -> None:
-        resp = client.get("/api/v1/admin/feature-flags")
+        with patch(
+            "modulo.api.routes.admin_feature_flags._build_registry",
+            return_value=_mock_registry(),
+        ):
+            resp = client.get("/api/v1/admin/feature-flags")
         assert resp.status_code == 200
 
     def test_returns_license_block(self, client: TestClient) -> None:
-        resp = client.get("/api/v1/admin/feature-flags")
+        with patch(
+            "modulo.api.routes.admin_feature_flags._build_registry",
+            return_value=_mock_registry(),
+        ):
+            resp = client.get("/api/v1/admin/feature-flags")
         body = resp.json()
         assert "license" in body
         assert body["license"]["tier"] in ("community", "team")
@@ -62,7 +80,11 @@ class TestListFeatureFlags:
         assert body["license"]["is_valid"] is True
 
     def test_returns_flags_list(self, client: TestClient) -> None:
-        resp = client.get("/api/v1/admin/feature-flags")
+        with patch(
+            "modulo.api.routes.admin_feature_flags._build_registry",
+            return_value=_mock_registry(),
+        ):
+            resp = client.get("/api/v1/admin/feature-flags")
         body = resp.json()
         assert "flags" in body
         assert len(body["flags"]) > 0
@@ -73,12 +95,20 @@ class TestListFeatureFlags:
             assert "currently_active" in flag
 
     def test_returns_would_activate(self, client: TestClient) -> None:
-        resp = client.get("/api/v1/admin/feature-flags")
+        with patch(
+            "modulo.api.routes.admin_feature_flags._build_registry",
+            return_value=_mock_registry(),
+        ):
+            resp = client.get("/api/v1/admin/feature-flags")
         body = resp.json()
         assert "would_activate" in body
 
     def test_community_tier_has_team_flags_in_would_activate(self, client: TestClient) -> None:
-        resp = client.get("/api/v1/admin/feature-flags")
+        with patch(
+            "modulo.api.routes.admin_feature_flags._build_registry",
+            return_value=_mock_registry(),
+        ):
+            resp = client.get("/api/v1/admin/feature-flags")
         body = resp.json()
         if body["license"]["tier"] == "community":
             assert len(body["would_activate"]) > 0
@@ -108,14 +138,22 @@ class TestListFeatureFlags:
 
 class TestGetFeatureFlag:
     def test_returns_200_for_known_flag(self, client: TestClient) -> None:
-        resp = client.get("/api/v1/admin/feature-flags/sso")
+        with patch(
+            "modulo.api.routes.admin_feature_flags._build_registry",
+            return_value=_mock_registry(),
+        ):
+            resp = client.get("/api/v1/admin/feature-flags/sso")
         assert resp.status_code == 200
         body = resp.json()
         assert body["name"] == "sso"
         assert body["tier"] == "team"
 
     def test_returns_404_for_unknown_flag(self, client: TestClient) -> None:
-        resp = client.get("/api/v1/admin/feature-flags/nonexistent_flag")
+        with patch(
+            "modulo.api.routes.admin_feature_flags._build_registry",
+            return_value=_mock_registry(),
+        ):
+            resp = client.get("/api/v1/admin/feature-flags/nonexistent_flag")
         assert resp.status_code == 404
         body = resp.json()
         assert "detail" in body
@@ -137,6 +175,94 @@ class TestGetFeatureFlag:
 
 
 # ---------------------------------------------------------------------------
+# ProgrammingError → 501
+# ---------------------------------------------------------------------------
+
+
+class TestProgrammingError:
+    def test_list_returns_501_on_programming_error(self, client: TestClient) -> None:
+        with patch(
+            "modulo.api.routes.admin_feature_flags._build_registry",
+            side_effect=ProgrammingError("mock", "mock", "mock"),
+        ):
+            resp = client.get("/api/v1/admin/feature-flags")
+        assert resp.status_code == 501
+        body = resp.json()
+        assert body["error"]["code"] == "NOT_IMPLEMENTED"
+
+    def test_get_returns_501_on_programming_error(self, client: TestClient) -> None:
+        with patch(
+            "modulo.api.routes.admin_feature_flags._build_registry",
+            side_effect=ProgrammingError("mock", "mock", "mock"),
+        ):
+            resp = client.get("/api/v1/admin/feature-flags/sso")
+        assert resp.status_code == 501
+        body = resp.json()
+        assert body["error"]["code"] == "NOT_IMPLEMENTED"
+
+    def test_toggle_returns_501_on_programming_error(self, client: TestClient) -> None:
+        with patch(
+            "modulo.api.routes.admin_feature_flags._build_registry",
+            side_effect=ProgrammingError("mock", "mock", "mock"),
+        ):
+            resp = client.put("/api/v1/admin/feature-flags/sso", json={"enabled": True})
+        assert resp.status_code == 501
+        body = resp.json()
+        assert body["error"]["code"] == "NOT_IMPLEMENTED"
+
+
+# ---------------------------------------------------------------------------
+# PUT /api/v1/admin/feature-flags/{flag_name} — toggle
+# ---------------------------------------------------------------------------
+
+
+class TestToggleFeatureFlag:
+    def test_toggle_known_flag_returns_200(self, client: TestClient) -> None:
+        with patch(
+            "modulo.api.routes.admin_feature_flags._build_registry",
+            return_value=_mock_registry(),
+        ):
+            resp = client.put("/api/v1/admin/feature-flags/sso", json={"enabled": True})
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["name"] == "sso"
+        assert "overridden" in body
+
+    def test_toggle_unknown_flag_returns_404(self, client: TestClient) -> None:
+        with patch(
+            "modulo.api.routes.admin_feature_flags._build_registry",
+            return_value=_mock_registry(),
+        ):
+            resp = client.put(
+                "/api/v1/admin/feature-flags/nonexistent",
+                json={"enabled": True},
+            )
+        assert resp.status_code == 404
+        body = resp.json()
+        assert "detail" in body
+
+    def test_toggle_unauthenticated_returns_4xx(self, unauth_client: TestClient) -> None:
+        resp = unauth_client.put(
+            "/api/v1/admin/feature-flags/sso",
+            json={"enabled": True},
+        )
+        assert resp.status_code in (401, 403)
+
+    def test_toggle_error_returns_500(self, client: TestClient) -> None:
+        with patch(
+            "modulo.api.routes.admin_feature_flags._build_registry",
+            side_effect=RuntimeError("boom"),
+        ):
+            resp = client.put(
+                "/api/v1/admin/feature-flags/sso",
+                json={"enabled": True},
+            )
+        assert resp.status_code == 500
+        body = resp.json()
+        assert body["error"]["code"] == "INTERNAL_ERROR"
+
+
+# ---------------------------------------------------------------------------
 # Middleware-level error handling
 # ---------------------------------------------------------------------------
 
@@ -150,5 +276,6 @@ class TestCatchAllMiddlewareFallback:
         body = resp.body
         import json
         parsed = json.loads(body)
-        assert parsed["error"]["code"] == "INTERNAL_ERROR"
-        assert parsed["error"]["message"] == "An unexpected error occurred"
+        assert parsed["detail"] == "An unexpected error occurred"
+        assert parsed["type"] == "urn:problem:modulo:internal_error"
+        assert parsed["status"] == 500
