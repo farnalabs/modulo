@@ -62,12 +62,17 @@ class DocumentationIndex:
 
     @classmethod
     def build(cls, prd_path: str | Path | None = None) -> DocumentationIndex:
-        path = Path(prd_path) if prd_path else Path(__file__).parents[3] / "docs" / "prd.md"
+        path = Path(prd_path) if prd_path else Path(__file__).resolve().parents[4] / "docs" / "prd.md"
         if not path.exists():
             _log.warning("PRD not found at %s — returning empty index", path)
             return cls()
 
-        text = path.read_text(encoding="utf-8")
+        try:
+            text = path.read_text(encoding="utf-8")
+        except (UnicodeDecodeError, OSError) as exc:
+            _log.error("Failed to read PRD at %s: %s", path, exc)
+            return cls()
+
         return cls._parse(text)
 
     @classmethod
@@ -107,15 +112,13 @@ class DocumentationIndex:
 
 
 def _extract_first_paragraph(lines: list[str], start: int) -> str:
-    paragraphs: list[str] = []
     current: list[str] = []
 
     for line in lines[start:]:
         stripped = line.strip()
         if not stripped:
             if current:
-                paragraphs.append(" ".join(current))
-                current = []
+                return " ".join(current)
             continue
         if re.match(r"^#", stripped):
             break
@@ -125,7 +128,4 @@ def _extract_first_paragraph(lines: list[str], start: int) -> str:
         text = text.strip("*_")
         current.append(text)
 
-    if current:
-        paragraphs.append(" ".join(current))
-
-    return paragraphs[0] if paragraphs else ""
+    return " ".join(current) if current else ""

@@ -77,7 +77,7 @@
 import { ref, onMounted } from "vue";
 import { api } from "@/lib/api/client";
 import Button from "@/components/ui/button/Button.vue";
-import type { ContextSourceItem, ContextSourceMode } from "@/types/remy";
+import type { ContextSourceItem, ContextSourceMode, ContextSourceUpdate } from "@/types/remy";
 
 const sources = ref<ContextSourceItem[]>([]);
 const loading = ref(false);
