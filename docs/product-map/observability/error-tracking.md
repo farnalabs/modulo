@@ -225,8 +225,8 @@ Datadog, PagerDuty, Rollbar, OpsGenie, Loki) sources.
   alert evaluation never applies a time-window filter
 - **`modulo_error_groups_active` gauge never updated:** Metric function exists but
   is never called
-- **`resolved_at` never set:** Column exists on `ErrorEvent` but no code populates
-  it when a group is resolved
+- **`ErrorEvent.resolved_at` never set when group resolved:** The column exists but no code populates
+  it when a group's status changes to `"resolved"`. Only `ErrorGroup.resolved_at` is set.
 - **Breadcrumbs not persisted:** Frontend sends breadcrumbs (validated max 50) but
   backend strips them before DB insert
 - **No notification rules UI:** API exists but no frontend views for managing rules
@@ -235,8 +235,6 @@ Datadog, PagerDuty, Rollbar, OpsGenie, Loki) sources.
   in-memory only, not shared across processes
 - **In-memory session keys non-persistent:** Without Redis, session keys are lost
   on restart
-- **Rate-limiting on ingest not enforced:** API docs mention rate limiting but no
-  middleware implements it
 - **Append-only trigger conflicts with CASCADE delete:** On org deletion, cascade
   FK conflicts with append-only trigger on `error_events`
 
@@ -282,7 +280,7 @@ Created `test_error_programming_error.py` with 26 tests covering:
 | Email dispatch placeholder | Needs email provider integration — out of scope for this QA pass |
 | `condition_window_seconds` unused | Would change alert engine logic — needs deliberate design |
 | `modulo_error_groups_active` gauge never updated | Needs a scheduled job or hook after group mutations |
-| `resolved_at` never set | Would require CRUD change + migration — out of scope |
+| `ErrorEvent.resolved_at` never set (ErrorGroup.resolved_at fixed in 2026-07-05 QA) | ErrorEvent requires model change + migration — partial fix done |
 | Breadcrumbs not persisted | Backend strips them — requires model change + migration |
 | No notification rules UI | Needs frontend views — new feature scope |
 | No forwarder configuration UI | Needs frontend views — new feature scope |
