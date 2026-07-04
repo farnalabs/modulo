@@ -18,7 +18,7 @@
       </div>
 
       <div v-if="profile.created_at" class="text-sm text-muted-foreground">
-        Member since {{ new Date(profile.created_at).toLocaleDateString() }}
+        Member since {{ formatMemberSince(profile.created_at) }}
       </div>
     </div>
 
@@ -103,6 +103,12 @@ const userInitial = computed(() => {
   if (!email) return '?'
   return email.charAt(0).toUpperCase()
 })
+
+function formatMemberSince(dateStr: string): string {
+  const d = new Date(dateStr)
+  if (isNaN(d.getTime())) return '—'
+  return d.toLocaleDateString()
+}
 
 async function loadProfile() {
   try {

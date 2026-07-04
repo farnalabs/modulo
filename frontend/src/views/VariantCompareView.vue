@@ -520,8 +520,8 @@ async function pollRunStatus(runId: string, variantName: string) {
           break
         }
       }
-    } catch {
-      // Retry on next poll interval
+    } catch (err) {
+      console.warn('pollRunStatus error:', err)
     }
   }
 
@@ -550,8 +550,8 @@ async function fetchRunIO(runId: string, variantName: string) {
         }
       }
     }
-  } catch {
-    // Non-critical; diff viewer will be unavailable for this variant
+  } catch (err) {
+    console.warn('fetchRunIO error:', err)
   }
 }
 
@@ -570,8 +570,8 @@ async function fetchRunEvals(runId: string, variantName: string) {
         })
       }
     }
-  } catch {
-    // Non-critical; comparison cells will show no data
+  } catch (err) {
+    console.warn('fetchRunEvals error:', err)
   }
 }
 

@@ -381,8 +381,8 @@ function resetForm() {
 
 async function loadPipelines() {
   try {
-    const data = await get<PipelineItem[]>('/api/v1/pipelines')
-    pipelines.value = data
+    const data = await get<{ items: PipelineItem[]; total: number; page: number; page_size: number }>('/api/v1/pipelines')
+    pipelines.value = data.items ?? []
   } catch (e: unknown) {
     pageError.value = `${t('views.EvalEditorView.failed_to_load_pipelines')} ${e instanceof Error ? e.message : String(e)}`
   }
