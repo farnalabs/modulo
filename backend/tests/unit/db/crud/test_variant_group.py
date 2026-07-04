@@ -1,11 +1,16 @@
 """Unit tests for variant group CRUD — pure functions only (no DB)."""
 
 import uuid
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from modulo.db.crud.variant_group import increment_run_count, pick_variant_weighted
+from modulo.db.crud.variant_group import (
+    get_prompt_diffs,
+    increment_run_count,
+    pick_variant_weighted,
+    run_variant_weighted,
+)
 
 
 class TestPickVariantWeighted:
@@ -102,3 +107,238 @@ class TestIncrementRunCount:
         assert returned is None
         session.execute.assert_awaited_once()
         session.flush.assert_not_called()
+
+
+@pytest.mark.asyncio
+class TestRunVariantWeighted:
+    async def test_creates_run_successfully(self) -> None:
+        session = AsyncMock()
+        org_id = uuid.uuid4()
+        group = MagicMock()
+        group.id = uuid.uuid4()
+        group.pipeline_id = uuid.uuid4()
+        group.variants = [
+            {
+                "name": "test",
+                "snapshot_id": str(uuid.uuid4()),
+                "weight": 1.0,
+                "run_context_overrides": {"key": "val"},
+            }
+        ]
+        group.degraded_evals = False
+        group.max_concurrent_runs = 5
+
+        locked = MagicMock()
+        locked.id = group.id
+        locked.pipeline_id = group.pipeline_id
+        locked.variants = group.variants
+        locked.degraded_evals = False
+        locked.max_concurrent_runs = 5
+        exec_result = MagicMock()
+        exec_result.scalar_one_or_none.return_value = locked
+        session.execute.return_value = exec_result
+
+        mock_run = MagicMock()
+        mock_run.id = uuid.uuid4()
+
+        with (
+            patch("modulo.db.crud.variant_group.check_pipeline_run_quota", new_callable=AsyncMock, return_value=True),
+            patch("modulo.db.crud.variant_group.pick_variant_weighted", return_value=group.variants[0]),
+            patch("modulo.db.crud.variant_group.create_run", new_callable=AsyncMock, return_value=mock_run),
+            patch("modulo.db.crud.variant_group.increment_run_count", new_callable=AsyncMock),
+        ):
+            result = await run_variant_weighted(
+                session, org_id=org_id, group=group, input_payload={"existing": "data"}
+            )
+
+        assert result is not None
+        assert result["run_id"] == mock_run.id
+        assert result["variant"] == group.variants[0]
+        assert result["merged_payload"]["existing"] == "data"
+        assert result["merged_payload"]["key"] == "val"
+
+    async def test_returns_none_when_quota_exceeded(self) -> None:
+        session = AsyncMock()
+        org_id = uuid.uuid4()
+        group = MagicMock()
+        group.id = uuid.uuid4()
+        group.pipeline_id = uuid.uuid4()
+        group.variants = [{"name": "test", "snapshot_id": str(uuid.uuid4()), "weight": 1.0}]
+        group.degraded_evals = False
+        group.max_concurrent_runs = 5
+
+        locked = MagicMock()
+        locked.id = group.id
+        locked.pipeline_id = group.pipeline_id
+        locked.variants = group.variants
+        locked.degraded_evals = False
+        locked.max_concurrent_runs = 5
+        exec_result = MagicMock()
+        exec_result.scalar_one_or_none.return_value = locked
+        session.execute.return_value = exec_result
+
+        with patch("modulo.db.crud.variant_group.check_pipeline_run_quota", new_callable=AsyncMock, return_value=False):
+            result = await run_variant_weighted(session, org_id=org_id, group=group)
+
+        assert result is None
+
+    async def test_returns_none_when_group_deleted(self) -> None:
+        session = AsyncMock()
+        org_id = uuid.uuid4()
+        group = MagicMock()
+        group.id = uuid.uuid4()
+
+        exec_result = MagicMock()
+        exec_result.scalar_one_or_none.return_value = None
+        session.execute.return_value = exec_result
+
+        result = await run_variant_weighted(session, org_id=org_id, group=group)
+
+        assert result is None
+
+    async def test_returns_none_when_no_variant_selected(self) -> None:
+        session = AsyncMock()
+        org_id = uuid.uuid4()
+        group = MagicMock()
+        group.id = uuid.uuid4()
+        group.pipeline_id = uuid.uuid4()
+        group.variants = []
+        group.degraded_evals = False
+        group.max_concurrent_runs = 5
+
+        locked = MagicMock()
+        locked.id = group.id
+        locked.pipeline_id = group.pipeline_id
+        locked.variants = []
+        locked.degraded_evals = False
+        locked.max_concurrent_runs = 5
+        exec_result = MagicMock()
+        exec_result.scalar_one_or_none.return_value = locked
+        session.execute.return_value = exec_result
+
+        with (
+            patch("modulo.db.crud.variant_group.check_pipeline_run_quota", new_callable=AsyncMock, return_value=True),
+            patch("modulo.db.crud.variant_group.pick_variant_weighted", return_value=None),
+        ):
+            result = await run_variant_weighted(session, org_id=org_id, group=group)
+
+        assert result is None
+
+    async def test_injects_degraded_evals_flag(self) -> None:
+        session = AsyncMock()
+        org_id = uuid.uuid4()
+        group = MagicMock()
+        group.id = uuid.uuid4()
+        group.pipeline_id = uuid.uuid4()
+        group.variants = [{"name": "test", "snapshot_id": str(uuid.uuid4()), "weight": 1.0}]
+        group.degraded_evals = True
+        group.max_concurrent_runs = 5
+
+        locked = MagicMock()
+        locked.id = group.id
+        locked.pipeline_id = group.pipeline_id
+        locked.variants = group.variants
+        locked.degraded_evals = True
+        locked.max_concurrent_runs = 5
+        exec_result = MagicMock()
+        exec_result.scalar_one_or_none.return_value = locked
+        session.execute.return_value = exec_result
+
+        mock_run = MagicMock()
+        mock_run.id = uuid.uuid4()
+
+        with (
+            patch("modulo.db.crud.variant_group.check_pipeline_run_quota", new_callable=AsyncMock, return_value=True),
+            patch("modulo.db.crud.variant_group.pick_variant_weighted", return_value=group.variants[0]),
+            patch("modulo.db.crud.variant_group.create_run", new_callable=AsyncMock, return_value=mock_run),
+            patch("modulo.db.crud.variant_group.increment_run_count", new_callable=AsyncMock),
+        ):
+            result = await run_variant_weighted(session, org_id=org_id, group=group)
+
+        assert result is not None
+        assert result["merged_payload"]["_degraded_evals"] is True
+
+
+@pytest.mark.asyncio
+class TestGetPromptDiffs:
+    async def test_returns_empty_when_no_snapshots(self) -> None:
+        session = AsyncMock()
+        group = MagicMock()
+        group.variants = []
+
+        result = await get_prompt_diffs(session, group)
+
+        assert result == []
+
+    @patch("modulo.db.crud.variant_group.PipelineSnapshot", create=True)
+    async def test_detects_hash_differences(self, _mock_pipeline_snapshot: MagicMock) -> None:
+        session = AsyncMock()
+        snap1 = MagicMock()
+        snap1.id = uuid.uuid4()
+        snap1.prompt_pins_json = [{"agent_id": "agent_a", "prompt_version_hash": "hash_v1"}]
+        snap2 = MagicMock()
+        snap2.id = uuid.uuid4()
+        snap2.prompt_pins_json = [{"agent_id": "agent_a", "prompt_version_hash": "hash_v2"}]
+
+        group = MagicMock()
+        group.variants = [
+            {"name": "base", "snapshot_id": str(snap1.id)},
+            {"name": "variant", "snapshot_id": str(snap2.id)},
+        ]
+
+        exec_result = MagicMock()
+        exec_result.scalars.return_value = [snap1, snap2]
+        session.execute.return_value = exec_result
+
+        result = await get_prompt_diffs(session, group, base_snapshot_ids=[snap1.id])
+
+        assert len(result) == 1
+        assert result[0]["agent_diffs"][0]["agent_id"] == "agent_a"
+        assert result[0]["agent_diffs"][0]["base_hash"] == "hash_v1"
+        assert result[0]["agent_diffs"][0]["variant_hash"] == "hash_v2"
+
+    @patch("modulo.db.crud.variant_group.PipelineSnapshot", create=True)
+    async def test_skips_missing_snapshots(self, _mock_pipeline_snapshot: MagicMock) -> None:
+        session = AsyncMock()
+        snap1 = MagicMock()
+        snap1.id = uuid.uuid4()
+        snap1.prompt_pins_json = [{"agent_id": "agent_a", "prompt_version_hash": "hash_v1"}]
+        snap2_id = uuid.uuid4()
+
+        group = MagicMock()
+        group.variants = [
+            {"name": "base", "snapshot_id": str(snap1.id)},
+            {"name": "variant", "snapshot_id": str(snap2_id)},
+        ]
+
+        exec_result = MagicMock()
+        exec_result.scalars.return_value = [snap1]
+        session.execute.return_value = exec_result
+
+        result = await get_prompt_diffs(session, group, base_snapshot_ids=[snap1.id])
+
+        assert result == []
+
+    @patch("modulo.db.crud.variant_group.PipelineSnapshot", create=True)
+    async def test_no_diffs_when_hashes_match(self, _mock_pipeline_snapshot: MagicMock) -> None:
+        session = AsyncMock()
+        snap1 = MagicMock()
+        snap1.id = uuid.uuid4()
+        snap1.prompt_pins_json = [{"agent_id": "agent_a", "prompt_version_hash": "same_hash"}]
+        snap2 = MagicMock()
+        snap2.id = uuid.uuid4()
+        snap2.prompt_pins_json = [{"agent_id": "agent_a", "prompt_version_hash": "same_hash"}]
+
+        group = MagicMock()
+        group.variants = [
+            {"name": "base", "snapshot_id": str(snap1.id)},
+            {"name": "variant", "snapshot_id": str(snap2.id)},
+        ]
+
+        exec_result = MagicMock()
+        exec_result.scalars.return_value = [snap1, snap2]
+        session.execute.return_value = exec_result
+
+        result = await get_prompt_diffs(session, group, base_snapshot_ids=[snap1.id])
+
+        assert result == []
