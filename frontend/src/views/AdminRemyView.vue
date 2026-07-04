@@ -491,6 +491,106 @@
         edit-description="Update the skill configuration."
         @saved="loadSkills"
       />
+
+      <!-- Knowledge Sources -->
+      <div class="card p-4">
+        <h2 class="mb-3 text-lg font-semibold">{{ $t('views.AdminRemyView.knowledge_sources') }}</h2>
+        <p class="mb-4 text-sm text-muted-foreground">{{ $t('views.AdminRemyView.control_what_remy_knows') }}</p>
+
+        <div v-if="contextLoading" class="py-4 text-center text-sm text-muted-foreground">Loading sources...</div>
+        <div v-else class="overflow-hidden rounded-lg border">
+          <table class="w-full text-left text-sm">
+            <thead class="bg-muted/50">
+              <tr>
+                <th class="px-4 py-3 font-medium">{{ $t('views.AdminRemyView.source') }}</th>
+                <th class="px-4 py-3 font-medium">{{ $t('views.AdminRemyView.mode') }}</th>
+                <th class="px-4 py-3 font-medium">{{ $t('views.AdminRemyView.tokens') }}</th>
+              </tr>
+            </thead>
+            <tbody class="divide-y">
+              <tr v-for="src in contextSourceDefs" :key="src.key" class="hover:bg-muted/30 transition-colors">
+                <td class="px-4 py-3">
+                  <Tooltip :delay-duration="300">
+                    <TooltipTrigger as-child>
+                      <span class="font-medium cursor-help">{{ src.label }}</span>
+                    </TooltipTrigger>
+                    <TooltipContent side="top" class="max-w-xs">
+                      <p>{{ $t('views.AdminRemyView.' + src.descKey) }}</p>
+                    </TooltipContent>
+                  </Tooltip>
+                </td>
+                <td class="px-4 py-3">
+                  <select
+                    v-model="contextSources[src.key]"
+                    class="rounded border border-input bg-background px-2 py-1 text-xs"
+                    :disabled="contextSaving"
+                    @change="saveContextSource(src.key)"
+                  >
+                    <option value="always_on">{{ $t('views.AdminRemyView.always_on') }}</option>
+                    <option value="tool">{{ $t('views.AdminRemyView.tool') }}</option>
+                    <option value="off">{{ $t('views.AdminRemyView.off') }}</option>
+                  </select>
+                </td>
+                <td class="px-4 py-3 text-xs text-muted-foreground">
+                  <span v-if="src.tokens">{{ src.tokens }}</span>
+                  <code v-else-if="src.toolCall" class="text-[10px]">{{ src.toolCall }}</code>
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+        <div v-if="contextError" class="mt-2 text-sm text-destructive">{{ contextError }}</div>
+      </div>
+
+      <!-- Skills as Knowledge Sources -->
+      <div v-if="skills.length > 0" class="card p-4">
+        <h2 class="mb-3 text-lg font-semibold">{{ $t('views.AdminRemyView.skills_as_knowledge') }}</h2>
+        <p class="mb-4 text-sm text-muted-foreground">{{ $t('views.AdminRemyView.control_what_remy_knows') }}</p>
+        <div class="overflow-hidden rounded-lg border">
+          <table class="w-full text-left text-sm">
+            <thead class="bg-muted/50">
+              <tr>
+                <th class="px-4 py-3 font-medium">{{ $t('views.AdminRemyView.skill_name') }}</th>
+                <th class="px-4 py-3 font-medium">{{ $t('views.AdminRemyView.mode') }}</th>
+              </tr>
+            </thead>
+            <tbody class="divide-y">
+              <tr v-for="skill in skills" :key="skill.id" class="hover:bg-muted/30 transition-colors">
+                <td class="px-4 py-3 font-medium">{{ skill.name }}</td>
+                <td class="px-4 py-3">
+                  <select
+                    v-model="skillModes[skill.id]"
+                    class="rounded border border-input bg-background px-2 py-1 text-xs"
+                    :disabled="skillModeSaving[skill.id]"
+                    @change="saveSkillSourceMode(skill)"
+                  >
+                    <option value="always_on">{{ $t('views.AdminRemyView.always_on') }}</option>
+                    <option value="tool">{{ $t('views.AdminRemyView.tool') }}</option>
+                    <option value="off">{{ $t('views.AdminRemyView.off') }}</option>
+                  </select>
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <!-- Product Primer -->
+      <div class="card p-4">
+        <h2 class="mb-3 text-lg font-semibold">{{ $t('views.AdminRemyView.product_primer') }}</h2>
+        <p class="mb-4 text-sm text-muted-foreground">{{ $t('views.AdminRemyView.product_primer_description') }}</p>
+        <div class="flex items-center gap-3">
+          <button
+            :disabled="primerSaving"
+            class="rounded-lg bg-primary px-4 py-2 text-sm font-semibold text-primary-foreground hover:brightness-110 disabled:opacity-50 transition-all"
+            @click="regeneratePrimer"
+          >
+            {{ primerSaving ? 'Regenerating...' : $t('views.AdminRemyView.regenerate_primer') }}
+          </button>
+          <span v-if="primerMessage" class="text-sm text-success">{{ primerMessage }}</span>
+        </div>
+      </div>
+
       </TooltipProvider>
     </template>
   </div>
@@ -521,6 +621,25 @@ interface ProviderStatus {
 const loading = ref(true)
 const loadError = ref<string | null>(null)
 const configSaving = ref(false)
+
+const contextSourceDefs = [
+  { key: 'product_primer', label: 'Product Primer', descKey: 'product_primer_description', tokens: '~700' },
+  { key: 'page_context', label: 'Page Context', descKey: 'page_context_description', tokens: '~100' },
+  { key: 'user_profile', label: 'User Profile', descKey: 'user_profile_description', tokens: '~150' },
+  { key: 'product_docs', label: 'Product Docs', descKey: 'product_docs_description', toolCall: 'get_documentation()' },
+  { key: 'integration_status', label: 'Integration Status', descKey: 'integration_status_description', toolCall: 'get_integration_status()' },
+  { key: 'org_config', label: 'Org Config', descKey: 'org_config_description', toolCall: 'get_org_config()' },
+  { key: 'feature_overview', label: 'Feature Overview', descKey: 'feature_overview_description', toolCall: 'get_available_features()' },
+]
+
+const contextSources = ref<Record<string, string>>({})
+const contextLoading = ref(true)
+const contextSaving = ref(false)
+const contextError = ref<string | null>(null)
+const skillModes = ref<Record<string, string>>({})
+const skillModeSaving = ref<Record<string, boolean>>({})
+const primerSaving = ref(false)
+const primerMessage = ref<string | null>(null)
 
 const providerStatus = ref<ProviderStatus[]>([])
 const customProviderStatus = ref<ProviderStatus[]>([])
@@ -719,6 +838,86 @@ async function saveGuidance() {
   }
 }
 
+async function loadContextSources() {
+  contextLoading.value = true
+  contextError.value = null
+  try {
+    const { data, error: err } = await (api as any).GET('/api/v1/admin/remy/context-sources')
+    if (err) {
+      contextError.value = `Failed to load context sources: ${formatApiError(err)}`
+    } else if (data) {
+      contextSources.value = (data as Record<string, string>)
+      const modes = contextSources.value
+      for (const src of contextSourceDefs) {
+        if (!modes[src.key]) {
+          modes[src.key] = 'always_on'
+        }
+      }
+    }
+  } catch (e: unknown) {
+    contextError.value = `Failed to load context sources: ${formatApiError(e)}`
+  } finally {
+    contextLoading.value = false
+  }
+}
+
+async function saveContextSource(sourceKey: string) {
+  contextSaving.value = true
+  contextError.value = null
+  try {
+    const mode = contextSources.value[sourceKey]
+    const { error: err } = await (api as any).PUT('/api/v1/admin/remy/context-sources/{source_key}', {
+      params: { path: { source_key: sourceKey } },
+      body: { mode },
+    })
+    if (err) {
+      contextError.value = `Failed to save source: ${formatApiError(err)}`
+      await loadContextSources()
+    }
+  } catch (e: unknown) {
+    contextError.value = `Failed to save source: ${formatApiError(e)}`
+    await loadContextSources()
+  } finally {
+    contextSaving.value = false
+  }
+}
+
+async function saveSkillSourceMode(skill: SkillItem) {
+  skillModeSaving.value[skill.id] = true
+  try {
+    const mode = skillModes.value[skill.id] || 'tool'
+    const { error: err } = await (api as any).PUT('/api/v1/admin/remy/context-sources/{source_key}', {
+      params: { path: { source_key: skill.id } },
+      body: { mode },
+    })
+    if (err) {
+      contextError.value = `Failed to save skill source mode: ${formatApiError(err)}`
+    }
+  } catch (e: unknown) {
+    contextError.value = `Failed to save skill source mode: ${formatApiError(e)}`
+  } finally {
+    skillModeSaving.value[skill.id] = false
+  }
+}
+
+async function regeneratePrimer() {
+  primerSaving.value = true
+  primerMessage.value = null
+  try {
+    const { error: err } = await (api as any).POST('/api/v1/admin/remy/primer/regenerate')
+    if (err) {
+      primerMessage.value = `Failed: ${formatApiError(err)}`
+    } else {
+      primerMessage.value = 'Primer regenerated.'
+    }
+  } catch (e: unknown) {
+    primerMessage.value = `Failed: ${formatApiError(e)}`
+  } finally {
+    primerSaving.value = false
+    setTimeout(() => { primerMessage.value = null }, 4000)
+  }
+}
+
 async function loadUsers() {
   try {
     const { data, error: err } = await (api as any).GET('/api/v1/admin/users', {
@@ -795,6 +994,15 @@ async function loadSkills() {
   } catch (e: unknown) {
     skillError.value = `Failed to load skills: ${formatApiError(e)}`
   }
+  initSkillModes()
+}
+
+function initSkillModes() {
+  const modes: Record<string, string> = {}
+  for (const skill of skills.value) {
+    modes[skill.id] = (contextSources.value[skill.id] as string) || 'tool'
+  }
+  skillModes.value = modes
 }
 
 async function loadConfig() {
@@ -879,8 +1087,10 @@ async function loadAll() {
       loadUsers(),
       loadTeams(),
       loadSkills(),
+      loadContextSources(),
     ])
     await loadProviders()
+    initSkillModes()
   } finally {
     loading.value = false
   }
