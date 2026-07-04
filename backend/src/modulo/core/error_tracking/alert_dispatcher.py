@@ -48,6 +48,11 @@ async def dispatch_alert(
         await _dispatch_email(org_id, alert, sample_message, admin_url)
     elif alert.action_type == "webhook":
         await _dispatch_webhook(alert, sample_message, admin_url)
+    else:
+        _log.warning(
+            "alert.unknown_action_type",
+            extra={"action_type": alert.action_type, "rule_id": str(alert.rule_id)},
+        )
 
 
 async def _dispatch_in_app(

@@ -10,9 +10,10 @@ _log = logging.getLogger(__name__)
 # Module-level metric handles — initialised once by _init_metrics().
 _errors_total: Any = None
 _error_groups_active: Any = None
+_error_alerts_total: Any = None
 
 
-def _get_meter():
+def _get_meter() -> Any:
     try:
         from opentelemetry import metrics
 
@@ -68,19 +69,25 @@ def set_active_groups(count: int, level: str) -> None:
         _error_groups_active.set(count, attributes={"level": level})
 
 
-def record_error_alert(level: str, action_type: str) -> None:
+def _init_alert_counter() -> None:
+    global _error_alerts_total
+    if _error_alerts_total is not None:
+        return
     try:
-        from opentelemetry import metrics
-
-        provider = metrics.get_meter_provider()
-        if provider is None:
+        meter = _get_meter()
+        if meter is None:
             return
-        meter = provider.get_meter("modulo.error_tracking", version="0.1.0")
-        alert_counter = meter.create_counter(
+        _error_alerts_total = meter.create_counter(
             name="modulo_error_alerts_total",
             description="Total number of error alerts dispatched",
             unit="1",
         )
-        alert_counter.add(1, attributes={"level": level, "action_type": action_type})
-    except Exception as exc:
-        _log.warning("metrics.alert_counter_failed", extra={"error": str(exc)})
+    except Exception:
+        _log.warning("metrics.alert_counter_failed")
+
+
+def record_error_alert(level: str, action_type: str) -> None:
+    if _error_alerts_total is None:
+        _init_alert_counter()
+    if _error_alerts_total is not None:
+        _error_alerts_total.add(1, attributes={"level": level, "action_type": action_type})
