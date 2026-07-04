@@ -431,11 +431,12 @@ class TestPublish:
             with pytest.raises(ContributionNotFoundError, match=str(prim_id)):
                 await publish_contribution(session, org_id, prim_id, approved_by=uuid.uuid4())
 
-    async def test_publish_draft_raises_invalid_transition(self):
+    async def test_publish_from_draft_succeeds(self):
         session = _mock_session()
         org_id = uuid.uuid4()
         prim_id = uuid.uuid4()
         prim = _fake_primitive(pid=prim_id, contribution_status=CONTRIBUTION_DRAFT)
+        updated = _fake_primitive(pid=prim_id, contribution_status=CONTRIBUTION_PUBLISHED, visibility="community")
 
         with (
             patch("modulo.core.library_service.set_rls_org", new_callable=AsyncMock),
@@ -444,9 +445,16 @@ class TestPublish:
                 new_callable=AsyncMock,
                 return_value=prim,
             ),
+            patch(
+                "modulo.core.library_service.update_library_primitive",
+                new_callable=AsyncMock,
+                return_value=updated,
+            ),
+            patch("modulo.core.library_service.notify_importers_of_update", new_callable=AsyncMock),
         ):
-            with pytest.raises(ContributionInvalidTransitionError, match=str(prim_id)):
-                await publish_contribution(session, org_id, prim_id, approved_by=uuid.uuid4())
+            result = await publish_contribution(session, org_id, prim_id, approved_by=uuid.uuid4())
+            assert result.contribution_status == CONTRIBUTION_PUBLISHED
+            assert result.visibility == "community"
 
     async def test_publish_already_published_raises(self):
         session = _mock_session()
