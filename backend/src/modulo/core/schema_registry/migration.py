@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Callable
 from copy import deepcopy
 from dataclasses import dataclass, field
 from typing import Any
+
+_log = logging.getLogger(__name__)
 
 
 @dataclass
@@ -56,6 +59,7 @@ def _extract_properties(schema: dict[str, Any]) -> dict[str, dict[str, Any]]:
             if isinstance(prop, dict):
                 props[name] = prop
             else:
+                _log.warning("Property %s is not a schema object (got %s)", name, type(prop).__name__)
                 props[name] = {"type": str(type(prop).__name__)}
     return props
 
@@ -89,35 +93,41 @@ def create_migration(from_schema: dict[str, Any], to_schema: dict[str, Any]) -> 
                 new_type=new_type,
             )
 
-    _detect_renames(plan, from_props, to_props, added, removed)
+    renames = _detect_renames(from_props, to_props, list(removed), list(added))
+    for old, new in renames:
+        plan.renames[old] = new
+        plan.field_removals.remove(old)
+        plan.field_additions.pop(new, None)
 
     return plan
 
 
 def _detect_renames(
-    plan: MigrationPlan,
     from_props: dict[str, dict[str, Any]],
     to_props: dict[str, dict[str, Any]],
-    added: set[str],
-    removed: set[str],
-) -> None:
-    for removed_name in list(removed):
+    removed_names: list[str],
+    added_names: list[str],
+) -> list[tuple[str, str]]:
+    renames: list[tuple[str, str]] = []
+    for removed_name in removed_names:
         old_type = _extract_type(from_props[removed_name])
-        for added_name in list(added):
+        if old_type in ("unknown",):
+            continue
+        for added_name in added_names:
             new_type = _extract_type(to_props[added_name])
-            if old_type == new_type and old_type not in ("unknown",):
-                plan.renames[removed_name] = added_name
-                plan.field_removals.remove(removed_name)
-                plan.field_additions.pop(added_name, None)
-                added.discard(added_name)
-                removed.discard(removed_name)
+            if old_type == new_type:
+                renames.append((removed_name, added_name))
+                added_names.remove(added_name)
                 break
+    return renames
 
 
 def apply_migration(data: dict[str, Any], plan: MigrationPlan) -> dict[str, Any]:
     result = deepcopy(data)
 
     for old_name, new_name in plan.renames.items():
+        if old_name in result and new_name in result:
+            _log.warning("Rename %s -> %s: target field already exists, overwriting", old_name, new_name)
         if old_name in result:
             result[new_name] = result.pop(old_name)
 

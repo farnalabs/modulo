@@ -79,7 +79,7 @@ class SchemaGenerationService:
         examples: list[dict[str, Any]] | None = None,
     ) -> dict[str, Any]:
         if not description or not description.strip():
-            raise ValueError("description must be a non-empty string")
+            raise SchemaGenerationError("description must be a non-empty string")
 
         try:
             messages = _build_generate_prompt(description, examples, self._system_prompt, self._max_example_records)
