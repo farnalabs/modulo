@@ -2,7 +2,7 @@
   <div class="card p-8 text-center">
     <component
       :is="iconComponent"
-      v-if="icon"
+      v-if="iconComponent"
       class="mx-auto mb-3 h-12 w-12 text-muted-foreground"
     />
     <p class="text-lg font-medium">{{ title }}</p>

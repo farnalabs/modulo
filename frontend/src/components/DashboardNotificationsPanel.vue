@@ -31,6 +31,7 @@
         No notifications
       </div>
       <template v-else>
+        <div v-if="reviewLaterError" class="px-4 py-1 text-xs text-destructive">{{ reviewLaterError }}</div>
         <div class="space-y-2 max-h-[400px] overflow-y-auto">
           <NotificationCard
             v-for="n in notifications"
@@ -62,7 +63,15 @@ import NotificationCard from "./NotificationCard.vue";
 import LoadingSpinner from "./shared/LoadingSpinner.vue";
 
 const DASHBOARD_LIMIT = 5;
-const collapsed = ref(localStorage.getItem("notif-panel-collapsed") !== "false");
+const collapsed = ref(getCollapsedPref());
+
+function getCollapsedPref(): boolean {
+  try {
+    return localStorage.getItem("notif-panel-collapsed") !== "false";
+  } catch {
+    return false;
+  }
+}
 const notifications = ref<NotificationResponse[]>([]);
 const loading = ref(false);
 const error = ref<string | null>(null);
@@ -72,7 +81,11 @@ const hasMore = ref(false);
 
 function toggleCollapsed() {
   collapsed.value = !collapsed.value;
-  localStorage.setItem("notif-panel-collapsed", String(collapsed.value));
+  try {
+    localStorage.setItem("notif-panel-collapsed", String(collapsed.value));
+  } catch {
+    // storage unavailable - preference not persisted
+  }
 }
 
 function onDismissed(id: string) {
@@ -88,6 +101,7 @@ async function onReviewLater(id: string) {
     if (unreadCount.value > 0) unreadCount.value--;
   } catch (e: unknown) {
     reviewLaterError.value = e instanceof Error ? e.message : "Failed to dismiss notification";
+    console.warn("reviewLater failed:", e);
   }
 }
 
@@ -111,7 +125,7 @@ async function loadDashboard() {
     const result = await fetchDashboardNotifications();
     notifications.value = result.notifications;
     unreadCount.value = result.total_unread;
-    hasMore.value = result.notifications.length >= DASHBOARD_LIMIT && result.total_unread > result.notifications.length;
+    hasMore.value = result.notifications.length >= DASHBOARD_LIMIT;
   } catch (e: unknown) {
     error.value = e instanceof Error ? e.message : String(e);
   } finally {
