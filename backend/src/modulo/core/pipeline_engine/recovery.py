@@ -162,19 +162,22 @@ async def recover_node(
     run.outputs_json = outputs
     await session.flush()
 
-    await append_audit_event(
-        session,
-        org_id=org_id,
-        event_type="node.recovery",
-        actor_user_id=actor_id,
-        resource_type="run",
-        resource_id=run_id,
-        payload_json={
-            "node_id": node_id,
-            "node_type": node_type,
-            "recovery_action": "skip" if input_data is None else "replay",
-        },
-    )
+    try:
+        await append_audit_event(
+            session,
+            org_id=org_id,
+            event_type="node.recovery",
+            actor_user_id=actor_id,
+            resource_type="run",
+            resource_id=run_id,
+            payload_json={
+                "node_id": node_id,
+                "node_type": node_type,
+                "recovery_action": "skip" if input_data is None else "replay",
+            },
+        )
+    except Exception:
+        _log.exception("Failed to record recovery audit event for run %s", run_id)
 
     _log.info(
         "node.recovery.applied",

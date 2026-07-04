@@ -87,21 +87,25 @@ async def rotate_key(
             detail="A key rotation is already in progress",
         )
 
-    _rotation_in_progress = True
+    # Log the rotation start to audit log FIRST
+    try:
+        await append_audit_event(
+            session,
+            org_id=current_user.organisation_id,
+            event_type="fernet_key_rotation_started",
+            actor_user_id=current_user.account_id,
+            resource_type="encryption",
+            resource_id=current_user.organisation_id,
+            payload_json={
+                "initiated_by": str(current_user.account_id),
+                "old_key_provided": bool(body.old_fernet_key),
+            },
+        )
+    except Exception:
+        _log.exception("Failed to record fernet_key_rotation_started audit event")
+        raise
 
-    # Log the rotation start to audit log
-    await append_audit_event(
-        session,
-        org_id=current_user.organisation_id,
-        event_type="fernet_key_rotation_started",
-        actor_user_id=current_user.account_id,
-        resource_type="encryption",
-        resource_id=current_user.organisation_id,
-        payload_json={
-            "initiated_by": str(current_user.account_id),
-            "old_key_provided": bool(body.old_fernet_key),
-        },
-    )
+    _rotation_in_progress = True
 
     # Launch background rotation task.
     # We use the global engine/session factory to avoid re-creating connections.

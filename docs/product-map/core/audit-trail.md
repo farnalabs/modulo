@@ -141,6 +141,7 @@ Immutable SHA-256-linked audit event chain per organisation. Each event records 
 - [x] Large payload_json → stored (JSON column), no explicit size limit
 - [x] Chain head deleted (SET NULL FK) → AuditChainHead.last_event_id is null, chain still verifiable
 - [x] Org migration → events stay in source org (no cross-org visibility, enforced by RLS)
+- [x] Rotation started audit failure does not deadlock `_rotation_in_progress` flag
 
 ### Error Handling
 
@@ -150,6 +151,12 @@ Immutable SHA-256-linked audit event chain per organisation. Each event records 
 - [x] Invalid cursor in list endpoint → silently ignored, shows first page
 - [x] Invalid UUID in batch-detail → silently skipped
 - [x] Missing event_type → model validation error before DB write (event_type is NOT nullable in DB — String(100), no default, but SQLAlchemy model has no explicit nullable=False)
+- [x] `hitl_manager/expiry_job.py` — `hitl.claim_expired` audit dispatch wrapped in try/except
+- [x] `pipeline_engine/recovery.py` — `node.recovery` audit dispatch wrapped in try/except
+- [x] `db/crud/sso_provider.py` — all 4 SSO provider audit dispatches wrapped in try/except (failure logged, not re-raised)
+- [x] `api/routes/admin.py` — team deletion audit dispatch wrapped in try/except (ProgrammingError catch only)
+- [x] `api/routes/admin.py` — `run_purge` audit dispatch moved inside session transaction (now atomic with purge)
+- [x] `api/routes/admin_rotation.py` — `fernet_key_rotation_started` flag only set AFTER successful audit write
 
 ### Security
 
@@ -184,3 +191,19 @@ Immutable SHA-256-linked audit event chain per organisation. Each event records 
 - **No auth event audit**: login, logout, and failed auth attempts not recorded.
 - **BDD placeholder steps**: Scenarios 'Audit events have cryptographic chaining', 'Claim expiry is audited', 'HITL output delivery is audited', 'Org deletion request is audited' have @then step implementations at `backend/tests/bdd/steps/test_alpha_audit.py` that were placeholders (pass). Not a functional bug (the scenarios verify existence at code level) but serve as regression safety net. **[Now fixed: assertions added for event_type matching and gate metadata.]**
 - **BDD feature file uses wrong event types** (resolved): `event_recording.feature` previously referenced `pipeline.created`, `pipeline.deleted`, `run.created`, `hitl.approved` — none of which match either the PRD table or the actual dispatched event types. **[RESOLVED]** — Feature file now uses correct event types matching actual dispatched events (`pipeline.autonomy_level_changed`, `hitl.output_delivered`, `hitl.claim_expired`, `org_deletion_requested`).
+- **No `hitl.rejected` audit event**: HITL `reject()` records decision in DB but does not dispatch any audit event (unlike `approve()` which dispatches `hitl.output_delivered`)
+- **No API key audit events**: `api_keys.py` has zero audit dispatches — PRD specifies `api_key_created` and `api_key_revoked`
+- **No `run_started` audit event**: Pipeline runs start without an audit event
+- **8 unguarded audit dispatch calls fixed**: All previously uncovered dispatch calls now have error handling protection (expiry_job, recovery, sso_provider, admin team deletion, run_purge transaction scoping, rotation deadlock)
+
+## QA History
+
+### Cross-cutting QA (index 142)
+**Findings discovered and fixed:**
+- CRITICAL: 8 audit dispatch calls had no error handling — wrapped in try/except (expiry_job, recovery, sso_provider x4, admin team delete, rotation started deadlock)
+- CRITICAL: `run_purge` audit event written outside `session.begin()` — purge committed before audit; moved inside transaction for atomicity
+- CRITICAL: `fernet_key_rotation_started` audit failure deadlocked `_rotation_in_progress` flag — flag now set after successful audit write
+- All 21 implemented event types verified against code (19 unique dispatched + 2 paths)
+- Confirmed all 4 API routes have ProgrammingError→501 catches
+- All BDD feature files have real step implementations (not placeholders)
+- Status: partial (PRD event type divergence remains, team CRUD audit missing, API key audit missing, run_started missing, HITL reject not audited)

@@ -1095,17 +1095,20 @@ async def admin_delete_team(
 
     from modulo.core.audit_logger import append_audit_event
 
-    async with session.begin():
-        await set_rls_org(session, current_user.organisation_id)
-        await append_audit_event(
-            session,
-            org_id=current_user.organisation_id,
-            event_type="team_deleted",
-            actor_user_id=current_user.account_id,
-            resource_type="team",
-            resource_id=team_id,
-            payload_json={"team_id": str(team_id)},
-        )
+    try:
+        async with session.begin():
+            await set_rls_org(session, current_user.organisation_id)
+            await append_audit_event(
+                session,
+                org_id=current_user.organisation_id,
+                event_type="team_deleted",
+                actor_user_id=current_user.account_id,
+                resource_type="team",
+                resource_id=team_id,
+                payload_json={"team_id": str(team_id)},
+            )
+    except ProgrammingError:
+        logger.warning("Failed to record team_deleted audit event for team %s", team_id)
 
 
 # ── Billing Overview ─────────────────────────────────────────
@@ -2125,18 +2128,23 @@ async def admin_manual_purge(
 
     from modulo.core.audit_logger import append_audit_event
 
-    async with session.begin():
-        await set_rls_org(session, current_user.organisation_id)
-        result = await purge_runs(session, older_than=body.older_than)
-
-    await append_audit_event(
-        session,
-        org_id=current_user.organisation_id,
-        event_type="run_purge",
-        actor_user_id=current_user.account_id,
-        resource_type="run",
-        payload_json={"older_than": body.older_than},
-    )
+    try:
+        async with session.begin():
+            await set_rls_org(session, current_user.organisation_id)
+            result = await purge_runs(session, older_than=body.older_than)
+            await append_audit_event(
+                session,
+                org_id=current_user.organisation_id,
+                event_type="run_purge",
+                actor_user_id=current_user.account_id,
+                resource_type="run",
+                payload_json={"older_than": body.older_than},
+            )
+    except ProgrammingError:
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="Feature is not available. Run database migrations to enable it.",
+        )
 
     return result
 
