@@ -117,7 +117,7 @@ async def _check_migrations() -> CheckResult:
             result = await conn.execute(text("SELECT version_num FROM alembic_version"))
             applied = {row[0] for row in result.fetchall()}
 
-        if applied == heads:
+        if heads.issubset(applied):
             return CheckResult(status="ok", detail="migrations up to date")
         missing = heads - applied
         return CheckResult(
