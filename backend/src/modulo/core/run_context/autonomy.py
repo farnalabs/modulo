@@ -34,7 +34,7 @@ class AutonomyLevel(enum.StrEnum):
     def _missing_(cls, value: object) -> AutonomyLevel:
         if isinstance(value, str):
             for member in cls:
-                if member.value == value.lower().replace("-", "_"):
+                if member.value == value.lower():
                     return member
         msg = f"Invalid autonomy level: {value!r}"
         raise ValueError(msg)
@@ -43,6 +43,16 @@ class AutonomyLevel(enum.StrEnum):
     def default(cls) -> AutonomyLevel:
         """Return the safest autonomy level (manual_approval)."""
         return cls.MANUAL_APPROVAL
+
+
+def _try_autonomy(value: str | None, label: str) -> AutonomyLevel | None:
+    if value is None:
+        return None
+    try:
+        return AutonomyLevel(value)
+    except ValueError:
+        _log.warning("Invalid %s %r — falling back", label, value)
+        return None
 
 
 def effective_autonomy_level(
@@ -57,24 +67,16 @@ def effective_autonomy_level(
       2. ``pipeline_default`` (the pipeline's default_autonomy_level column).
       3. ``manual_approval`` (safest fallback).
     """
-    if run_context:
-        rec = run_context.get("autonomy_recommendation")
-        if rec is not None:
-            try:
-                return AutonomyLevel(rec)
-            except ValueError:
-                _log.warning(
-                    "Invalid run_context autonomy_recommendation %r — falling back to pipeline default",
-                    rec,
-                )
-    if pipeline_default:
-        try:
-            return AutonomyLevel(pipeline_default)
-        except ValueError:
-            _log.warning(
-                "Invalid pipeline_default_autonomy_level %r — falling back to manual_approval",
-                pipeline_default,
-            )
+    if isinstance(run_context, dict):
+        result = _try_autonomy(
+            run_context.get("autonomy_recommendation"),
+            "run_context autonomy_recommendation",
+        )
+        if result is not None:
+            return result
+    result = _try_autonomy(pipeline_default, "pipeline_default_autonomy_level")
+    if result is not None:
+        return result
     return AutonomyLevel.default()
 
 
