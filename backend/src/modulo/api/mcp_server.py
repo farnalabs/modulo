@@ -1514,9 +1514,34 @@ async def _oauth_token(request: Request) -> JSONResponse:
 # ---------------------------------------------------------------------------
 
 
+def _ensure_task_group(mgr: Any) -> None:
+    """Ensure the FastMCP session manager has a running task group.
+
+    FastMCP's ``streamable_http_app()`` returns a Starlette that would
+    normally manage this via its lifespan, but Starlette does not invoke
+    sub-app lifespans when mounted via ``app.mount()``.  We compensate by
+    creating a task group eagerly and patching it in.
+    """
+    if mgr._task_group is None:
+        import asyncio
+
+        import anyio
+
+        async def _run_tg() -> None:
+            async with anyio.create_task_group() as tg:
+                mgr._task_group = tg
+                try:
+                    await asyncio.Event().wait()
+                finally:
+                    mgr._task_group = None
+
+        _mcp_bg_task = asyncio.ensure_future(_run_tg())  # noqa: RUF006
+
+
 def build_mcp_asgi_app() -> Starlette:
     """Return the MCP Starlette app wrapped with auth middleware."""
     inner = mcp.streamable_http_app()
+    _ensure_task_group(mcp.session_manager)
 
     # Mount an in-sub-app health check for orchestrators / load balancers.
     health_route = Route("/healthz", _mcp_healthz, methods=["GET"])
