@@ -1,23 +1,6 @@
 {
     "name":  "modulo-frontend",
-<<<<<<< HEAD
-<<<<<<< HEAD
-<<<<<<< HEAD
-    "version": "0.1.91",
-=======
-"version": "0.1.91",
->>>>>>> task-nv38-skill-loader
-=======
-"version": "0.1.91",
-=======
-    "version": "0.1.91",
-=======
-"version": "0.1.91",
->>>>>>> task-nv38-skill-loader
-=======
-"version": "0.1.91",
->>>>>>> task-nv38-tests
->>>>>>> task-nv38-frontend-user
+    "version": "0.1.92",
     "private":  true,
     "scripts":  {
                     "generate:api":  "powershell -ExecutionPolicy Bypass -File scripts/generate-api-types.ps1",
