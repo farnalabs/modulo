@@ -3,8 +3,10 @@ import type { paths } from './schema'
 import { toProblemDetail } from './formatError'
 
 const TOKEN_KEY = 'modulo_access_token'
+const REFRESH_TOKEN_KEY = 'modulo_refresh_token'
 
 let _authListeners: Array<(token: string | null) => void> = []
+let _refreshingPromise: Promise<boolean> | null = null
 
 function notifyListeners(): void {
   const token = localStorage.getItem(TOKEN_KEY)
@@ -28,11 +30,54 @@ export function setAccessToken(token: string): void {
 
 export function clearAccessToken(): void {
   localStorage.removeItem(TOKEN_KEY)
+  clearRefreshToken()
   notifyListeners()
 }
 
 export function getAccessToken(): string | null {
   return localStorage.getItem(TOKEN_KEY)
+}
+
+export function setRefreshToken(token: string): void {
+  localStorage.setItem(REFRESH_TOKEN_KEY, token)
+}
+
+export function getRefreshToken(): string | null {
+  return localStorage.getItem(REFRESH_TOKEN_KEY)
+}
+
+function clearRefreshToken(): void {
+  localStorage.removeItem(REFRESH_TOKEN_KEY)
+}
+
+async function attemptTokenRefresh(): Promise<boolean> {
+  if (_refreshingPromise) return _refreshingPromise
+
+  _refreshingPromise = (async () => {
+    const refreshToken = getRefreshToken()
+    if (!refreshToken) return false
+
+    try {
+      const resp = await fetch('/api/v1/auth/refresh', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ refresh_token: refreshToken }),
+      })
+      if (!resp.ok) return false
+      const data = await resp.json()
+      setAccessToken(data.access_token)
+      if (data.refresh_token) setRefreshToken(data.refresh_token)
+      return true
+    } catch {
+      return false
+    }
+  })()
+
+  try {
+    return await _refreshingPromise
+  } finally {
+    _refreshingPromise = null
+  }
 }
 
 function getAuthHeaders(): Record<string, string> {
@@ -60,11 +105,19 @@ function withAuth(fn: (...args: any[]) => any) {
   return async (...args: any[]) => {
     const [url, options] = args
     const headers = { ...getAuthHeaders(), ...options?.headers }
-    const resp = await fn(url, { ...options, headers })
+    let resp = await fn(url, { ...options, headers })
     if (resp.response?.status === 401) {
-      clearAccessToken()
-      if (!window.location.pathname.startsWith('/login')) {
-        window.location.href = '/login'
+      const refreshed = await attemptTokenRefresh()
+      if (refreshed) {
+        const newHeaders = { ...getAuthHeaders(), ...options?.headers }
+        resp = await fn(url, { ...options, headers: newHeaders })
+      }
+      if (!refreshed || resp.response?.status === 401) {
+        clearAccessToken()
+        if (!window.location.pathname.startsWith('/login')) {
+          window.location.href = '/login'
+        }
+        return resp
       }
     }
     // Normalize API errors to ProblemDetail so views and ErrorAlert
