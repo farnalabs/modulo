@@ -84,7 +84,7 @@ class MeResponse(BaseModel):
 
 @router.post("/login")
 async def login(
-    body: LoginRequest,
+    req: LoginRequest,
     request: Request,
     settings: Settings = Depends(get_settings),
     session: AsyncSession = Depends(get_db_session),
@@ -94,8 +94,8 @@ async def login(
 
     try:
         async with session.begin():
-            account = await get_account_by_email(session, body.email)
-            if not account or not authenticate_db_user(body.password, account):
+            account = await get_account_by_email(session, req.email)
+            if not account or not authenticate_db_user(req.password, account):
                 await limiter.record_failure(ip)
                 raise HTTPException(
                     status_code=status.HTTP_401_UNAUTHORIZED,
@@ -159,12 +159,12 @@ async def login(
 
 @router.post("/refresh")
 async def refresh(
-    body: RefreshRequest,
+    req: RefreshRequest,
     settings: Settings = Depends(get_settings),
     session: AsyncSession = Depends(get_db_session),
 ) -> JSONResponse:
     try:
-        claims = decode_refresh_token_claims(body.refresh_token, settings.secret_key)
+        claims = decode_refresh_token_claims(req.refresh_token, settings.secret_key)
     except JWTError as exc:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
@@ -237,12 +237,12 @@ async def refresh(
 
 @router.post("/logout")
 async def logout(
-    body: RefreshRequest,
+    req: RefreshRequest,
     settings: Settings = Depends(get_settings),
     session: AsyncSession = Depends(get_db_session),
 ) -> JSONResponse:
     try:
-        claims = decode_refresh_token_claims(body.refresh_token, settings.secret_key)
+        claims = decode_refresh_token_claims(req.refresh_token, settings.secret_key)
     except JWTError as exc:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,

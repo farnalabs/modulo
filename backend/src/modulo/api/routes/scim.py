@@ -252,7 +252,7 @@ async def list_users(
 
 @router.post("/Users", status_code=status.HTTP_201_CREATED)
 async def create_user(
-    body: ScimUserRequest,
+    req: ScimUserRequest,
     settings: Settings = Depends(_require_team),
     principal: ScimPrincipal = Depends(get_scim_principal),
     session: AsyncSession = Depends(get_db_session),
@@ -263,7 +263,7 @@ async def create_user(
 
             from modulo.db.crud.account import get_account_by_email
 
-            existing = await get_account_by_email(session, body.userName)
+            existing = await get_account_by_email(session, req.userName)
             if existing is not None:
                 from modulo.db.crud.org_membership import get_membership_by_account_and_org
 
@@ -271,22 +271,22 @@ async def create_user(
                 if membership is not None:
                     raise _scim_error(
                         status.HTTP_409_CONFLICT,
-                        f"User with userName {body.userName} already exists in this org",
+                        f"User with userName {req.userName} already exists in this org",
                     )
 
-            display_name = body.userName
-            if body.name and body.name.formatted:
-                display_name = body.name.formatted
-            elif body.name and (body.name.givenName or body.name.familyName):
-                parts = [p for p in (body.name.givenName, body.name.familyName) if p]
+            display_name = req.userName
+            if req.name and req.name.formatted:
+                display_name = req.name.formatted
+            elif req.name and (req.name.givenName or req.name.familyName):
+                parts = [p for p in (req.name.givenName, req.name.familyName) if p]
                 display_name = " ".join(parts)
 
             account = await scim_create_user(
                 session,
                 org_id=principal.organisation_id,
-                email=body.userName,
+                email=req.userName,
                 display_name=display_name,
-                active=body.active,
+                active=req.active,
             )
     except ProgrammingError:
         _log.warning("SCIM endpoint failed: database migration required")
@@ -325,7 +325,7 @@ async def get_user(
 @router.put("/Users/{user_id}")
 async def replace_user(
     user_id: uuid.UUID,
-    body: ScimUserRequest,
+    req: ScimUserRequest,
     settings: Settings = Depends(_require_team),
     principal: ScimPrincipal = Depends(get_scim_principal),
     session: AsyncSession = Depends(get_db_session),
@@ -337,13 +337,13 @@ async def replace_user(
             if account is None:
                 raise _scim_error(status.HTTP_404_NOT_FOUND, f"User {user_id} not found")
 
-            display_name = body.name.formatted if body.name and body.name.formatted else body.userName
+            display_name = req.name.formatted if req.name and req.name.formatted else req.userName
             account = await scim_update_user(
                 session,
                 account,
-                email=body.userName,
+                email=req.userName,
                 display_name=display_name,
-                active=body.active,
+                active=req.active,
             )
     except ProgrammingError:
         _log.warning("SCIM endpoint failed: database migration required")
@@ -358,7 +358,7 @@ async def replace_user(
 @router.patch("/Users/{user_id}")
 async def patch_user(
     user_id: uuid.UUID,
-    body: ScimPatchRequest,
+    req: ScimPatchRequest,
     settings: Settings = Depends(_require_team),
     principal: ScimPrincipal = Depends(get_scim_principal),
     session: AsyncSession = Depends(get_db_session),
@@ -370,7 +370,7 @@ async def patch_user(
             if account is None:
                 raise _scim_error(status.HTTP_404_NOT_FOUND, f"User {user_id} not found")
 
-            for op in body.Operations:
+            for op in req.Operations:
                 if op.op not in ("replace", "remove", "add"):
                     raise _scim_error(
                         status.HTTP_400_BAD_REQUEST,
@@ -487,7 +487,7 @@ async def list_groups(
 
 @router.post("/Groups", status_code=status.HTTP_201_CREATED)
 async def create_group(
-    body: ScimGroupRequest,
+    req: ScimGroupRequest,
     settings: Settings = Depends(_require_team),
     principal: ScimPrincipal = Depends(get_scim_principal),
     session: AsyncSession = Depends(get_db_session),
@@ -498,11 +498,11 @@ async def create_group(
 
             from modulo.db.crud.team import get_team_by_name
 
-            existing = await get_team_by_name(session, principal.organisation_id, body.displayName)
+            existing = await get_team_by_name(session, principal.organisation_id, req.displayName)
             if existing is not None:
                 raise _scim_error(
                     status.HTTP_409_CONFLICT,
-                    f"Group with displayName {body.displayName} already exists",
+                    f"Group with displayName {req.displayName} already exists",
                 )
 
             # Use the first member's ID as created_by, or a fallback.
@@ -521,11 +521,11 @@ async def create_group(
             team = await scim_create_group(
                 session,
                 org_id=principal.organisation_id,
-                display_name=body.displayName,
+                display_name=req.displayName,
                 account_id=creator_id,
             )
 
-            for member_ref in body.members:
+            for member_ref in req.members:
                 try:
                     uid = uuid.UUID(member_ref.value)
                 except ValueError:
@@ -552,7 +552,7 @@ async def create_group(
             "$ref": f"{base_url}/scim/v2/Users/{m.value}",
             "type": "User",
         }
-        for m in body.members
+        for m in req.members
     ]
     return _group_to_scim(team, members, base_url)
 
@@ -594,7 +594,7 @@ async def get_group(
 @router.put("/Groups/{group_id}")
 async def replace_group(
     group_id: uuid.UUID,
-    body: ScimGroupRequest,
+    req: ScimGroupRequest,
     settings: Settings = Depends(_require_team),
     principal: ScimPrincipal = Depends(get_scim_principal),
     session: AsyncSession = Depends(get_db_session),
@@ -606,14 +606,14 @@ async def replace_group(
             if group is None:
                 raise _scim_error(status.HTTP_404_NOT_FOUND, f"Group {group_id} not found")
 
-            await scim_update_group(session, group, name=body.displayName)
+            await scim_update_group(session, group, name=req.displayName)
 
             # Replace all members: remove existing, add new
             existing_members = await scim_list_group_members(session, group.id)
             for em in existing_members:
                 await scim_remove_group_member(session, group.id, em.user_id)
 
-            for member_ref in body.members:
+            for member_ref in req.members:
                 try:
                     uid = uuid.UUID(member_ref.value)
                 except ValueError:
@@ -640,7 +640,7 @@ async def replace_group(
             "$ref": f"{base_url}/scim/v2/Users/{m.value}",
             "type": "User",
         }
-        for m in body.members
+        for m in req.members
     ]
     return _group_to_scim(group, members, base_url)
 
@@ -648,7 +648,7 @@ async def replace_group(
 @router.patch("/Groups/{group_id}")
 async def patch_group(
     group_id: uuid.UUID,
-    body: ScimPatchRequest,
+    req: ScimPatchRequest,
     settings: Settings = Depends(_require_team),
     principal: ScimPrincipal = Depends(get_scim_principal),
     session: AsyncSession = Depends(get_db_session),
@@ -660,7 +660,7 @@ async def patch_group(
             if group is None:
                 raise _scim_error(status.HTTP_404_NOT_FOUND, f"Group {group_id} not found")
 
-            for op in body.Operations:
+            for op in req.Operations:
                 if op.op not in ("replace", "remove", "add"):
                     raise _scim_error(
                         status.HTTP_400_BAD_REQUEST,

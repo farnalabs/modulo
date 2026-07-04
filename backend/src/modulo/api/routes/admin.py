@@ -324,7 +324,7 @@ class CreateUserResponse(BaseModel):
 
 @router.post("/users", response_model=CreateUserResponse, status_code=status.HTTP_201_CREATED)
 async def admin_create_user(
-    body: CreateUserRequest,
+    req: CreateUserRequest,
     current_user: AuthenticatedPrincipal = Depends(get_current_user),
     session: AsyncSession = Depends(get_db_session),
 ) -> CreateUserResponse:
@@ -334,13 +334,13 @@ async def admin_create_user(
             detail="Only admin users can create users",
         )
 
-    if body.org_role not in ("admin", "operator", "runner", "viewer"):
+    if req.org_role not in ("admin", "operator", "runner", "viewer"):
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail=(f"Invalid role: {body.org_role}. Must be one of: admin, operator, runner, viewer"),
+            detail=(f"Invalid role: {req.org_role}. Must be one of: admin, operator, runner, viewer"),
         )
 
-    existing = await get_account_by_email(session, body.email)
+    existing = await get_account_by_email(session, req.email)
     if existing is not None:
         from modulo.db.crud.org_membership import get_membership_by_account_and_org
 
@@ -352,14 +352,14 @@ async def admin_create_user(
             )
 
     try:
-        validate_password_strength(body.password)
+        validate_password_strength(req.password)
     except ValueError as exc:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail=str(exc),
         ) from exc
 
-    pw_hash = hash_password(body.password)
+    pw_hash = hash_password(req.password)
 
     if existing is not None:
         account = existing
@@ -369,8 +369,8 @@ async def admin_create_user(
 
         account = await create_account(
             session,
-            email=body.email,
-            display_name=body.display_name,
+            email=req.email,
+            display_name=req.display_name,
             password_hash=pw_hash,
         )
 
@@ -378,7 +378,7 @@ async def admin_create_user(
         session,
         account_id=account.id,
         org_id=current_user.organisation_id,
-        role=body.org_role,
+        role=req.org_role,
     )
 
     return CreateUserResponse(
@@ -414,7 +414,7 @@ class AdminCreateTeamResponse(BaseModel):
     dependencies=[require_feature("team_rbac")],
 )
 async def admin_create_team(
-    body: AdminCreateTeamRequest,
+    req: AdminCreateTeamRequest,
     current_user: AuthenticatedPrincipal = Depends(get_current_user),
     session: AsyncSession = Depends(get_db_session),
 ) -> AdminCreateTeamResponse:
@@ -429,9 +429,9 @@ async def admin_create_team(
         team = await create_team(
             session,
             org_id=current_user.organisation_id,
-            name=body.name,
+            name=req.name,
             account_id=current_user.account_id,
-            description=body.description,
+            description=req.description,
         )
 
     return AdminCreateTeamResponse(
@@ -499,7 +499,7 @@ async def admin_get_org(
 
 @router.put("/org", response_model=OrgProfileResponse)
 async def admin_update_org(
-    body: UpdateOrgRequest,
+    req: UpdateOrgRequest,
     current_user: AuthenticatedPrincipal = Depends(get_current_user),
     session: AsyncSession = Depends(get_db_session),
 ) -> OrgProfileResponse:
@@ -520,11 +520,11 @@ async def admin_update_org(
                 )
 
             updates: dict[str, object] = {}
-            if body.name is not None:
-                updates["name"] = body.name
-            if body.logo_url is not None:
+            if req.name is not None:
+                updates["name"] = req.name
+            if req.logo_url is not None:
                 existing_settings = dict(org.settings_json or {})
-                existing_settings["logo_url"] = body.logo_url
+                existing_settings["logo_url"] = req.logo_url
                 updates["settings_json"] = existing_settings
 
             if updates:
@@ -718,7 +718,7 @@ async def _prevent_last_admin_lockout(
 @router.put("/users/{user_id}", response_model=UserListItem)
 async def admin_update_user(
     user_id: uuid.UUID,
-    body: UpdateUserRequest,
+    req: UpdateUserRequest,
     current_user: AuthenticatedPrincipal = Depends(get_current_user),
     session: AsyncSession = Depends(get_db_session),
 ) -> UserListItem:
@@ -734,7 +734,7 @@ async def admin_update_user(
             current_account_id=current_user.account_id,
             target_account_id=user_id,
             org_id=current_user.organisation_id,
-            new_role=body.org_role,
+            new_role=req.org_role,
             db_session=session,
         )
 
@@ -742,9 +742,9 @@ async def admin_update_user(
         if account is None:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
 
-        if body.is_active is not None:
-            account.active = body.is_active
-        if body.org_role is not None:
+        if req.is_active is not None:
+            account.active = req.is_active
+        if req.org_role is not None:
             from sqlalchemy import update as sa_update
 
             await session.execute(
@@ -753,10 +753,10 @@ async def admin_update_user(
                     OrgMembership.account_id == user_id,
                     OrgMembership.organisation_id == current_user.organisation_id,
                 )
-                .values(role=body.org_role)
+                .values(role=req.org_role)
             )
 
-    org_role = body.org_role or (await _get_org_role(session, user_id, current_user.organisation_id))
+    org_role = req.org_role or (await _get_org_role(session, user_id, current_user.organisation_id))
     return UserListItem(
         id=str(account.id),
         email=account.email,
@@ -1019,7 +1019,7 @@ async def admin_list_teams(
 @router.put("/teams/{team_id}", response_model=AdminTeamItem, dependencies=[require_feature("team_rbac")])
 async def admin_update_team(
     team_id: uuid.UUID,
-    body: AdminUpdateTeamRequest,
+    req: AdminUpdateTeamRequest,
     current_user: AuthenticatedPrincipal = Depends(get_current_user),
     session: AsyncSession = Depends(get_db_session),
 ) -> AdminTeamItem:
@@ -1030,10 +1030,10 @@ async def admin_update_team(
         )
 
     updates: dict[str, object] = {}
-    if body.name is not None:
-        updates["name"] = body.name
-    if body.description is not None:
-        updates["description"] = body.description
+    if req.name is not None:
+        updates["name"] = req.name
+    if req.description is not None:
+        updates["description"] = req.description
 
     async with session.begin():
         await set_rls_org(session, current_user.organisation_id)
@@ -1298,7 +1298,7 @@ class ConfirmDeletionResponse(BaseModel):
 
 @router.post("/org/deletion-confirm", response_model=ConfirmDeletionResponse)
 async def confirm_org_deletion(
-    body: ConfirmDeletionRequest,
+    req: ConfirmDeletionRequest,
     current_user: AuthenticatedPrincipal = Depends(get_current_user),
     session: AsyncSession = Depends(get_db_session),
 ) -> ConfirmDeletionResponse:
@@ -1314,7 +1314,7 @@ async def confirm_org_deletion(
                 result = await _confirm_deletion(
                     session,
                     org_id=current_user.organisation_id,
-                    token=body.token,
+                    token=req.token,
                     immediate=False,
                 )
             except ValueError as exc:
@@ -1921,7 +1921,7 @@ async def admin_list_publishers(
 
 @router.post("/publishers", response_model=PublisherResponse, status_code=status.HTTP_201_CREATED)
 async def admin_create_publisher(
-    body: PublisherCreateRequest,
+    req: PublisherCreateRequest,
     current_user: AuthenticatedPrincipal = Depends(get_current_user),
     session: AsyncSession = Depends(get_db_session),
 ) -> PublisherResponse:
@@ -1935,14 +1935,14 @@ async def admin_create_publisher(
         async with session.begin():
             await set_rls_org(session, current_user.organisation_id)
 
-            existing = await get_publisher_by_name(session, current_user.organisation_id, body.name)
+            existing = await get_publisher_by_name(session, current_user.organisation_id, req.name)
             if existing is not None:
                 raise HTTPException(
                     status_code=status.HTTP_409_CONFLICT,
                     detail="A publisher with this name already exists",
                 )
 
-            existing_key = await get_publisher_by_key(session, current_user.organisation_id, body.public_key_hex)
+            existing_key = await get_publisher_by_key(session, current_user.organisation_id, req.public_key_hex)
             if existing_key is not None:
                 raise HTTPException(
                     status_code=status.HTTP_409_CONFLICT,
@@ -1953,11 +1953,11 @@ async def admin_create_publisher(
                 publisher = await create_publisher(
                     session,
                     org_id=current_user.organisation_id,
-                    name=body.name,
-                    contact_email=body.contact_email,
-                    public_key_hex=body.public_key_hex,
-                    trust_tier=body.trust_tier,
-                    website_url=body.website_url,
+                    name=req.name,
+                    contact_email=req.contact_email,
+                    public_key_hex=req.public_key_hex,
+                    trust_tier=req.trust_tier,
+                    website_url=req.website_url,
                 )
             except ValueError as exc:
                 raise HTTPException(
@@ -1986,7 +1986,7 @@ async def admin_create_publisher(
 @router.put("/publishers/{publisher_id}", response_model=PublisherResponse)
 async def admin_update_publisher(
     publisher_id: uuid.UUID,
-    body: PublisherUpdateRequest,
+    req: PublisherUpdateRequest,
     current_user: AuthenticatedPrincipal = Depends(get_current_user),
     session: AsyncSession = Depends(get_db_session),
 ) -> PublisherResponse:
@@ -1996,7 +1996,7 @@ async def admin_update_publisher(
             detail="Only admin users can update publishers",
         )
 
-    updates: dict[str, object] = {k: v for k, v in body.model_dump().items() if v is not None}
+    updates: dict[str, object] = {k: v for k, v in req.model_dump().items() if v is not None}
 
     try:
         async with session.begin():
@@ -2100,7 +2100,7 @@ class RetentionPurgeRequest(BaseModel):
 
 @router.post("/purge/runs", status_code=status.HTTP_200_OK)
 async def admin_retention_purge_runs(
-    body: RetentionPurgeRequest,
+    req: RetentionPurgeRequest,
     current_user: AuthenticatedPrincipal = Depends(get_current_user),
     session: AsyncSession = Depends(get_db_session),
 ) -> dict[str, int]:
@@ -2112,7 +2112,7 @@ async def admin_retention_purge_runs(
 
     async with session.begin():
         await set_rls_org(session, current_user.organisation_id)
-        deleted = await batch_delete_old_terminal_runs(session, max_age_days=body.max_age_days)
+        deleted = await batch_delete_old_terminal_runs(session, max_age_days=req.max_age_days)
 
     return {"deleted_run_count": deleted}
 
@@ -2123,7 +2123,7 @@ class ManualPurgeRequest(BaseModel):
 
 @router.post("/purge", status_code=status.HTTP_200_OK)
 async def admin_manual_purge(
-    body: ManualPurgeRequest,
+    req: ManualPurgeRequest,
     current_user: AuthenticatedPrincipal = Depends(get_current_user),
     session: AsyncSession = Depends(get_db_session),
 ) -> dict[str, int]:
@@ -2138,14 +2138,14 @@ async def admin_manual_purge(
     try:
         async with session.begin():
             await set_rls_org(session, current_user.organisation_id)
-            result = await purge_runs(session, older_than=body.older_than)
+            result = await purge_runs(session, older_than=req.older_than)
             await append_audit_event(
                 session,
                 org_id=current_user.organisation_id,
                 event_type="run_purge",
                 actor_user_id=current_user.account_id,
                 resource_type="run",
-                payload_json={"older_than": body.older_than},
+                payload_json={"older_than": req.older_than},
             )
     except ProgrammingError:
         raise HTTPException(
@@ -2236,7 +2236,7 @@ async def admin_get_retention(
 
 @router.put("/runs/retention", status_code=status.HTTP_200_OK)
 async def admin_update_retention(
-    body: UpdateRetentionRequest,
+    req: UpdateRetentionRequest,
     current_user: AuthenticatedPrincipal = Depends(get_current_user),
     session: AsyncSession = Depends(get_db_session),
 ) -> RetentionConfigResponse:
@@ -2246,10 +2246,10 @@ async def admin_update_retention(
         "run_retention.updated",
         extra={
             "org_id": str(current_user.organisation_id),
-            "retention_days": body.retention_days,
+            "retention_days": req.retention_days,
         },
     )
-    return RetentionConfigResponse(retention_days=body.retention_days)
+    return RetentionConfigResponse(retention_days=req.retention_days)
 
 
 @router.get("/runs/storage", response_model=StorageInfoResponse)

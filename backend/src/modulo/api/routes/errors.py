@@ -419,7 +419,7 @@ async def get_error_group_detail(
 @router.patch("/{error_id}", response_model=ErrorGroupDetail)
 async def patch_error_group(
     error_id: uuid.UUID,
-    body: ErrorGroupUpdate,
+    req: ErrorGroupUpdate,
     session: AsyncSession = Depends(get_db_session),
     principal: AuthenticatedPrincipal = Depends(get_current_user),
 ) -> dict[str, Any]:
@@ -435,8 +435,8 @@ async def patch_error_group(
                     session=session,
                     org_id=org_id,
                     group_id=error_id,
-                    status=body.status,
-                    assigned_to=uuid.UUID(body.assigned_to) if body.assigned_to else None,
+                    status=req.status,
+                    assigned_to=uuid.UUID(req.assigned_to) if req.assigned_to else None,
                 )
             except ValueError as exc:
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc

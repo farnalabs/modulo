@@ -77,7 +77,7 @@ def _serialise_record(r: Any, pipeline_name: str | None = None, producing_node_n
 @router.post("/runs/{run_id}/feedback", status_code=status.HTTP_201_CREATED)
 async def create_feedback(
     run_id: uuid.UUID,
-    body: CreateFeedbackRequest,
+    req: CreateFeedbackRequest,
     session: AsyncSession = Depends(get_db_session),
     principal: AuthenticatedPrincipal = Depends(get_current_user),
 ) -> dict[str, Any]:
@@ -94,13 +94,13 @@ async def create_feedback(
             mgr = FeedbackManager(session, principal.organisation_id)
             record = await mgr.create_feedback_record(
                 run_id=run_id,
-                gate_id=body.gate_id,
+                gate_id=req.gate_id,
                 account_id=principal.account_id,
-                rejection_reason=body.rejection_reason,
-                rejected_output=body.rejected_output,
-                producing_node_id=body.producing_node_id,
-                producing_agent_id=body.producing_agent_id,
-                feedback_handler_type=body.feedback_handler_type,
+                rejection_reason=req.rejection_reason,
+                rejected_output=req.rejected_output,
+                producing_node_id=req.producing_node_id,
+                producing_agent_id=req.producing_agent_id,
+                feedback_handler_type=req.feedback_handler_type,
             )
     except ProgrammingError:
         raise HTTPException(
@@ -273,12 +273,12 @@ async def get_feedback(
 @router.patch("/feedback/{record_id}/status", status_code=status.HTTP_200_OK)
 async def update_feedback_status(
     record_id: uuid.UUID,
-    body: UpdateStatusRequest,
+    req: UpdateStatusRequest,
     session: AsyncSession = Depends(get_db_session),
     principal: AuthenticatedPrincipal = Depends(get_current_user),
 ) -> dict[str, Any]:
     valid_statuses = {"pending", "routing", "correcting", "resolved", "escalated"}
-    if body.status not in valid_statuses:
+    if req.status not in valid_statuses:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail=f"Invalid status. Must be one of: {', '.join(sorted(valid_statuses))}",
@@ -288,7 +288,7 @@ async def update_feedback_status(
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
             mgr = FeedbackManager(session, principal.organisation_id)
-            record = await mgr.update_status(record_id, body.status)
+            record = await mgr.update_status(record_id, req.status)
     except ProgrammingError:
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
@@ -391,12 +391,12 @@ async def get_inbox_item(
 @router.post("/feedback/inbox/{record_id}/review", status_code=status.HTTP_200_OK)
 async def review_feedback(
     record_id: uuid.UUID,
-    body: ReviewFeedbackRequest,
+    req: ReviewFeedbackRequest,
     session: AsyncSession = Depends(get_db_session),
     principal: AuthenticatedPrincipal = Depends(get_current_user),
 ) -> dict[str, Any]:
     valid_actions = {"mark_reviewed", "dismiss", "create_correction_run"}
-    if body.action not in valid_actions:
+    if req.action not in valid_actions:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail=f"Invalid action. Must be one of: {', '.join(sorted(valid_actions))}",
@@ -413,7 +413,7 @@ async def review_feedback(
             if record is None:
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Feedback record not found")
 
-            if body.action == "mark_reviewed":
+            if req.action == "mark_reviewed":
                 record = await mgr.update_status(record_id, "resolved")
                 if record is None:
                     raise HTTPException(
@@ -421,7 +421,7 @@ async def review_feedback(
                         detail="Cannot transition feedback to resolved",
                     )
 
-            elif body.action == "dismiss":
+            elif req.action == "dismiss":
                 record = await mgr.update_status(record_id, "dismissed")
                 if record is None:
                     raise HTTPException(
@@ -429,7 +429,7 @@ async def review_feedback(
                         detail="Cannot dismiss feedback",
                     )
 
-            elif body.action == "create_correction_run":
+            elif req.action == "create_correction_run":
                 if not record.run_id:
                     raise HTTPException(
                         status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
@@ -446,14 +446,14 @@ async def review_feedback(
 
                 correction_run_id = str(new_run_id)
 
-            if body.annotation is not None:
+            if req.annotation is not None:
                 from sqlalchemy import update as sa_update
                 from modulo.db.models.feedback_record import FeedbackRecord
 
                 await session.execute(
                     sa_update(FeedbackRecord)
                     .where(FeedbackRecord.id == record_id)
-                    .values(annotation=body.annotation)
+                    .values(annotation=req.annotation)
                 )
 
     except ProgrammingError:

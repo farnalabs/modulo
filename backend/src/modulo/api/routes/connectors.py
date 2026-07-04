@@ -119,13 +119,13 @@ async def list_connectors_endpoint(
 
 @router.post("", response_model=ConnectorResponse, status_code=status.HTTP_201_CREATED)
 async def create_connector_endpoint(
-    body: ConnectorCreate,
+    req: ConnectorCreate,
     session: AsyncSession = Depends(get_db_session),
     principal: AuthenticatedPrincipal = Depends(get_current_user),
     settings: Settings = Depends(get_settings),
 ) -> ConnectorResponse:
-    if body.connector_type_id == "github":
-        temp = GitHubConnector(token=body.credentials)
+    if req.connector_type_id == "github":
+        temp = GitHubConnector(token=req.credentials)
         try:
             missing = await temp.verify_scopes()
         except (HTTPStatusError, RequestError, ValueError):
@@ -143,20 +143,20 @@ async def create_connector_endpoint(
                 ),
             )
 
-    ciphertext = _encrypt(body.credentials, settings.fernet_key)
+    ciphertext = _encrypt(req.credentials, settings.fernet_key)
     async with session.begin():
         await set_rls_org(session, principal.organisation_id)
         await set_rls_user_context(session, principal.account_id, principal.org_role)
         ci = await create_connector_instance(
             session,
             org_id=principal.organisation_id,
-            name=body.name,
-            connector_type_id=body.connector_type_id,
+            name=req.name,
+            connector_type_id=req.connector_type_id,
             owner_id=principal.account_id,
             credentials_ciphertext=ciphertext,
-            config_json=body.config_json,
-            allowed_operations=body.allowed_operations,
-            visibility=body.visibility,
+            config_json=req.config_json,
+            allowed_operations=req.allowed_operations,
+            visibility=req.visibility,
         )
     return _to_response(ci)
 
@@ -179,12 +179,12 @@ async def get_connector_endpoint(
 @router.patch("/{connector_id}", response_model=ConnectorResponse)
 async def update_connector_endpoint(
     connector_id: uuid.UUID,
-    body: ConnectorUpdate,
+    req: ConnectorUpdate,
     session: AsyncSession = Depends(get_db_session),
     principal: AuthenticatedPrincipal = Depends(get_current_user),
     settings: Settings = Depends(get_settings),
 ) -> ConnectorResponse:
-    updates: dict[str, Any] = {k: v for k, v in body.model_dump().items() if v is not None}
+    updates: dict[str, Any] = {k: v for k, v in req.model_dump().items() if v is not None}
     if "credentials" in updates:
         new_credentials = updates.pop("credentials")
         # Fetch current connector to check type

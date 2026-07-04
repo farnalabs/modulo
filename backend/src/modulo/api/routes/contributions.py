@@ -54,7 +54,7 @@ class ContributionStatusResponse(BaseModel):
 
 @router.post("", response_model=ContributeFixtureResponse, status_code=status.HTTP_201_CREATED)
 async def create_contribution(
-    body: ContributeFixtureRequest,
+    req: ContributeFixtureRequest,
     session: AsyncSession = Depends(get_db_session),
     principal: AuthenticatedPrincipal = Depends(get_current_user),
 ) -> ContributeFixtureResponse:
@@ -71,14 +71,14 @@ async def create_contribution(
                 session,
                 org_id=principal.organisation_id,
                 account_id=principal.account_id,
-                name=body.name,
-                slug=body.slug,
-                description=body.description,
-                tags=body.tags,
-                fixture_map=body.fixture_map,
-                source_run_id=(uuid.UUID(body.source_run_id) if body.source_run_id else None),
-                source_pipeline_id=(uuid.UUID(body.source_pipeline_id) if body.source_pipeline_id else None),
-                owner_team_id=(uuid.UUID(body.owner_team_id) if body.owner_team_id else None),
+                name=req.name,
+                slug=req.slug,
+                description=req.description,
+                tags=req.tags,
+                fixture_map=req.fixture_map,
+                source_run_id=(uuid.UUID(req.source_run_id) if req.source_run_id else None),
+                source_pipeline_id=(uuid.UUID(req.source_pipeline_id) if req.source_pipeline_id else None),
+                owner_team_id=(uuid.UUID(req.owner_team_id) if req.owner_team_id else None),
             )
     except ProgrammingError:
         raise HTTPException(
@@ -184,7 +184,7 @@ class VersionListResponse(BaseModel):
 @router.post("/{primitive_id}/versions", response_model=ContributeFixtureResponse, status_code=status.HTTP_201_CREATED)
 async def submit_contribution_version_endpoint(
     primitive_id: uuid.UUID,
-    body: ContributeFixtureRequest,
+    req: ContributeFixtureRequest,
     session: AsyncSession = Depends(get_db_session),
     principal: AuthenticatedPrincipal = Depends(get_current_user),
 ) -> ContributeFixtureResponse:
@@ -202,14 +202,14 @@ async def submit_contribution_version_endpoint(
                 principal.organisation_id,
                 primitive_id,
                 account_id=principal.account_id,
-                name=body.name,
-                slug=body.slug,
-                description=body.description,
-                tags=body.tags,
-                fixture_map=body.fixture_map,
-                source_run_id=(uuid.UUID(body.source_run_id) if body.source_run_id else None),
-                source_pipeline_id=(uuid.UUID(body.source_pipeline_id) if body.source_pipeline_id else None),
-                owner_team_id=(uuid.UUID(body.owner_team_id) if body.owner_team_id else None),
+                name=req.name,
+                slug=req.slug,
+                description=req.description,
+                tags=req.tags,
+                fixture_map=req.fixture_map,
+                source_run_id=(uuid.UUID(req.source_run_id) if req.source_run_id else None),
+                source_pipeline_id=(uuid.UUID(req.source_pipeline_id) if req.source_pipeline_id else None),
+                owner_team_id=(uuid.UUID(req.owner_team_id) if req.owner_team_id else None),
             )
     except ProgrammingError:
         raise HTTPException(

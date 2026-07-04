@@ -162,13 +162,13 @@ def _validate_provider(provider: str) -> None:
 
 @router.post("", response_model=ModelBackendResponse, status_code=status.HTTP_201_CREATED)
 async def create_model_backend_endpoint(
-    body: ModelBackendCreate,
+    req: ModelBackendCreate,
     session: AsyncSession = Depends(get_db_session),
     principal: AuthenticatedPrincipal = Depends(get_current_user),
     settings: Settings = Depends(get_settings),
 ) -> ModelBackendResponse:
-    _validate_provider(body.provider)
-    ciphertext = _encrypt(body.api_key, settings.fernet_key)
+    _validate_provider(req.provider)
+    ciphertext = _encrypt(req.api_key, settings.fernet_key)
     try:
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
@@ -178,30 +178,30 @@ async def create_model_backend_endpoint(
                 await session.execute(
                     select(ModelBackend).where(
                         ModelBackend.organisation_id == principal.organisation_id,
-                        ModelBackend.name == body.name,
+                        ModelBackend.name == req.name,
                     )
                 )
             ).scalar_one_or_none()
             if existing is not None:
                 raise HTTPException(
                     status_code=status.HTTP_409_CONFLICT,
-                    detail=f"A model backend with name {body.name!r} already exists in this organisation",
+                    detail=f"A model backend with name {req.name!r} already exists in this organisation",
                 )
 
             fallback_ids: list[str] | None = None
-            if body.fallback_backend_ids:
-                fallback_ids = [str(fid) for fid in body.fallback_backend_ids]
+            if req.fallback_backend_ids:
+                fallback_ids = [str(fid) for fid in req.fallback_backend_ids]
             mb = await create_model_backend(
                 session,
                 org_id=principal.organisation_id,
-                name=body.name,
-                display_name=body.display_name,
-                provider=body.provider,
-                model_id=body.model_id,
+                name=req.name,
+                display_name=req.display_name,
+                provider=req.provider,
+                model_id=req.model_id,
                 credentials_ciphertext=ciphertext,
                 account_id=principal.account_id,
-                default_params=body.default_params,
-                visibility=body.visibility,
+                default_params=req.default_params,
+                visibility=req.visibility,
                 fallback_backend_ids=fallback_ids,
             )
     except ProgrammingError:
@@ -236,12 +236,12 @@ async def get_model_backend_endpoint(
 @router.patch("/{backend_id}", response_model=ModelBackendResponse)
 async def update_model_backend_endpoint(
     backend_id: uuid.UUID,
-    body: ModelBackendUpdate,
+    req: ModelBackendUpdate,
     session: AsyncSession = Depends(get_db_session),
     principal: AuthenticatedPrincipal = Depends(get_current_user),
     settings: Settings = Depends(get_settings),
 ) -> ModelBackendResponse:
-    updates: dict[str, Any] = {k: v for k, v in body.model_dump().items() if v is not None}
+    updates: dict[str, Any] = {k: v for k, v in req.model_dump().items() if v is not None}
     if "api_key" in updates:
         _ct = _encrypt(updates.pop("api_key"), settings.fernet_key)
         updates["credentials_ciphertext"] = _ct  # nosemgrep: credential-not-in-state

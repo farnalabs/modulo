@@ -72,15 +72,15 @@ SUPPORTED_LOCALES = {"en-US"}
 
 @router.put("/me/settings")
 async def update_user_settings(
-    body: SettingsUpdate,
+    req: SettingsUpdate,
     current_user: AuthenticatedPrincipal = Depends(get_current_user),
     session: AsyncSession = Depends(get_db_session),
 ) -> dict[str, Any]:
     prefs = {}
-    if body.theme is not None:
-        prefs["theme"] = body.theme
-    if body.locale is not None:
-        prefs["locale"] = body.locale
+    if req.theme is not None:
+        prefs["theme"] = req.theme
+    if req.locale is not None:
+        prefs["locale"] = req.locale
     try:
         return await update_account_preferences(session, current_user.account_id, prefs)
     except ProgrammingError:
@@ -97,7 +97,7 @@ class PasswordChangeRequest(BaseModel):
 
 @router.put("/me/password", status_code=status.HTTP_200_OK)
 async def change_password(
-    body: PasswordChangeRequest,
+    req: PasswordChangeRequest,
     current_user: AuthenticatedPrincipal = Depends(get_current_user),
     session: AsyncSession = Depends(get_db_session),
 ) -> dict[str, str]:
@@ -108,15 +108,15 @@ async def change_password(
         if account is None:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Account not found")
 
-        if not account.password_hash or not verify_password(body.current_password, account.password_hash):
+        if not account.password_hash or not verify_password(req.current_password, account.password_hash):
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Current password is incorrect")
 
         try:
-            validate_password_strength(body.new_password)
+            validate_password_strength(req.new_password)
         except ValueError as exc:
             raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
 
-        account.password_hash = hash_password(body.new_password)
+        account.password_hash = hash_password(req.new_password)
         session.add(account)
 
         families = await list_families_for_account(session, current_user.account_id)
@@ -147,7 +147,7 @@ async def list_user_skills(
 
 @router.post("/me/remy/skills", response_model=SkillResponse, status_code=status.HTTP_201_CREATED)
 async def create_user_skill(
-    body: SkillCreate,
+    req: SkillCreate,
     current_user: AuthenticatedPrincipal = Depends(get_current_user),
     session: AsyncSession = Depends(get_db_session),
 ) -> SkillResponse:
@@ -157,11 +157,11 @@ async def create_user_skill(
                 id=uuid.uuid4(),
                 organisation_id=None,
                 user_id=current_user.account_id,
-                name=body.name,
-                description=body.description,
-                triggers=body.triggers,
-                body=body.body,
-                active=body.active,
+                name=req.name,
+                description=req.description,
+                triggers=req.triggers,
+                body=req.body,
+                active=req.active,
             )
             session.add(skill)
             await session.flush()
@@ -176,23 +176,23 @@ async def create_user_skill(
 @router.put("/me/remy/skills/{skill_id}", response_model=SkillResponse)
 async def update_user_skill(
     skill_id: uuid.UUID,
-    body: SkillUpdate,
+    req: SkillUpdate,
     current_user: AuthenticatedPrincipal = Depends(get_current_user),
     session: AsyncSession = Depends(get_db_session),
 ) -> SkillResponse:
     try:
         async with session.begin():
             skill = await get_user_skill_or_404(session, current_user.account_id, skill_id)
-            if body.name is not None:
-                skill.name = body.name
-            if body.description is not None:
-                skill.description = body.description
-            if body.triggers is not None:
-                skill.triggers = body.triggers
-            if body.body is not None:
-                skill.body = body.body
-            if body.active is not None:
-                skill.active = body.active
+            if req.name is not None:
+                skill.name = req.name
+            if req.description is not None:
+                skill.description = req.description
+            if req.triggers is not None:
+                skill.triggers = req.triggers
+            if req.body is not None:
+                skill.body = req.body
+            if req.active is not None:
+                skill.active = req.active
             await session.flush()
         return _skill_to_response(skill)
     except ProgrammingError:
@@ -248,7 +248,7 @@ async def get_user_context_sources(
 @router.put("/me/remy/context-sources/{source_key}")
 async def set_user_context_source(
     source_key: str,
-    body: ContextSourceModeUpdate,
+    req: ContextSourceModeUpdate,
     current_user: AuthenticatedPrincipal = Depends(get_current_user),
     session: AsyncSession = Depends(get_db_session),
 ) -> dict[str, str]:
@@ -259,7 +259,7 @@ async def set_user_context_source(
                 current_user.organisation_id,
                 current_user.account_id,
                 source_key,
-                body.source_mode,
+                req.source_mode,
             )
             config = await service.get_effective_config(
                 current_user.organisation_id, current_user.account_id
