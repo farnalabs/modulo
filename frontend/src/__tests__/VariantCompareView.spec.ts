@@ -3,6 +3,10 @@ import { mount } from '@vue/test-utils'
 import { createPinia, setActivePinia } from 'pinia'
 import { nextTick } from 'vue'
 
+vi.mock('vue-i18n', () => ({
+  useI18n: () => ({ t: (key: string) => key }),
+}))
+
 vi.mock('../lib/api/client', () => ({
   api: {
     GET: vi.fn().mockImplementation((url: string) => {
@@ -24,11 +28,14 @@ describe('VariantCompareView', () => {
 
   it('renders without crashing', async () => {
     const wrapper = mount(VariantCompareView, {
-      global: { stubs: { FeatureGate: { template: '<div><slot /></div>' } } },
+      global: {
+        stubs: { FeatureGate: { template: '<div><slot /></div>' } },
+        mocks: { $t: (key: string) => key },
+      },
     })
     await nextTick()
     await nextTick()
     expect(wrapper.exists()).toBe(true)
-    expect(wrapper.text()).toContain('Variant Comparison')
+    expect(wrapper.text()).toContain('views.variantCompare.title')
   })
 })
