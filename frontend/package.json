@@ -2,12 +2,21 @@
     "name":  "modulo-frontend",
 <<<<<<< HEAD
 <<<<<<< HEAD
-    "version": "0.1.89",
+<<<<<<< HEAD
+    "version": "0.1.90",
 =======
-"version": "0.1.89",
+"version": "0.1.90",
 >>>>>>> task-nv38-skill-loader
 =======
-"version": "0.1.89",
+"version": "0.1.90",
+=======
+    "version": "0.1.90",
+=======
+"version": "0.1.90",
+>>>>>>> task-nv38-skill-loader
+=======
+"version": "0.1.90",
+>>>>>>> task-nv38-tests
 >>>>>>> task-nv38-frontend-user
     "private":  true,
     "scripts":  {
