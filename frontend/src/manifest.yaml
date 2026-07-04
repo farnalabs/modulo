@@ -450,7 +450,7 @@ routes:
     product_map: null
     i18n_key: nav.browser_monitoring
     sidebar_group: monitoring
-    sidebar_order: 5
+    sidebar_order: 6
     type: form_page
     <<: *community
 
