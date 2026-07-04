@@ -136,48 +136,50 @@ def _users_table_exists() -> bool:
 
 
 def upgrade() -> None:
-    # 1. Create accounts table
-    op.create_table(
-        "accounts",
-        sa.Column("id", sa.Uuid(), nullable=False),
-        sa.Column("email", sa.String(320), nullable=False),
-        sa.Column("display_name", sa.String(255), nullable=False),
-        sa.Column("password_hash", sa.String(255), nullable=True),
-        sa.Column("auth_provider", sa.String(20), nullable=False, server_default="local"),
-        sa.Column("sso_subject", sa.String(512), nullable=True),
-        sa.Column("active", sa.Boolean(), nullable=False, server_default="true"),
-        sa.Column("last_login", sa.DateTime(timezone=True), nullable=True),
-        sa.Column("preferences", sa.JSON(), nullable=False, server_default=sa.text("'{}'")),
-        sa.Column("is_system_admin", sa.Boolean(), nullable=False, server_default="false"),
-        sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.text("now()"), nullable=False),
-        sa.Column("updated_at", sa.DateTime(timezone=True), server_default=sa.text("now()"), nullable=False),
-        sa.PrimaryKeyConstraint("id"),
-        sa.UniqueConstraint("email", name="uq_accounts_email"),
-        sa.CheckConstraint("auth_provider IN ('local', 'oidc', 'saml', 'scim')", name="ck_accounts_auth_provider"),
+    # 1. Create accounts table (IF NOT EXISTS for idempotency — a previous
+    #    partial run may have created it before crashing).
+    op.execute(
+        """
+        CREATE TABLE IF NOT EXISTS accounts (
+            id UUID NOT NULL,
+            email VARCHAR(320) NOT NULL,
+            display_name VARCHAR(255) NOT NULL,
+            password_hash VARCHAR(255),
+            auth_provider VARCHAR(20) NOT NULL DEFAULT 'local',
+            sso_subject VARCHAR(512),
+            active BOOLEAN NOT NULL DEFAULT true,
+            last_login TIMESTAMP WITH TIME ZONE,
+            preferences JSON NOT NULL DEFAULT '{}',
+            is_system_admin BOOLEAN NOT NULL DEFAULT false,
+            created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT now(),
+            updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT now(),
+            PRIMARY KEY (id),
+            CONSTRAINT uq_accounts_email UNIQUE (email),
+            CONSTRAINT ck_accounts_auth_provider CHECK (auth_provider IN ('local', 'oidc', 'saml', 'scim'))
+        )
+        """
     )
 
     # 2. Create org_memberships table
-    op.create_table(
-        "org_memberships",
-        sa.Column("id", sa.Uuid(), nullable=False),
-        sa.Column("account_id", sa.Uuid(), nullable=False),
-        sa.Column("organisation_id", sa.Uuid(), nullable=False),
-        sa.Column("role", sa.String(20), nullable=False, server_default="runner"),
-        sa.Column("joined_at", sa.DateTime(timezone=True), server_default=sa.text("now()"), nullable=False),
-        sa.Column("deactivated_at", sa.DateTime(timezone=True), nullable=True),
-        sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.text("now()"), nullable=False),
-        sa.Column("updated_at", sa.DateTime(timezone=True), server_default=sa.text("now()"), nullable=False),
-        sa.PrimaryKeyConstraint("id"),
-        sa.ForeignKeyConstraint(["account_id"], ["accounts.id"], ondelete="CASCADE"),
-        sa.ForeignKeyConstraint(["organisation_id"], ["organisations.id"], ondelete="CASCADE"),
-        sa.UniqueConstraint("account_id", "organisation_id", name="uq_org_memberships_account_org"),
-        sa.CheckConstraint(
-            "role IN ('owner', 'admin', 'operator', 'runner', 'viewer')",
-            name="ck_org_memberships_role",
-        ),
+    op.execute(
+        """
+        CREATE TABLE IF NOT EXISTS org_memberships (
+            id UUID NOT NULL,
+            account_id UUID NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+            organisation_id UUID NOT NULL REFERENCES organisations(id) ON DELETE CASCADE,
+            role VARCHAR(20) NOT NULL DEFAULT 'runner',
+            joined_at TIMESTAMP WITH TIME ZONE DEFAULT now(),
+            deactivated_at TIMESTAMP WITH TIME ZONE,
+            created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT now(),
+            updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT now(),
+            PRIMARY KEY (id),
+            CONSTRAINT uq_org_memberships_account_org UNIQUE (account_id, organisation_id),
+            CONSTRAINT ck_org_memberships_role CHECK (role IN ('owner', 'admin', 'operator', 'runner', 'viewer'))
+        )
+        """
     )
-    op.create_index(op.f("ix_org_memberships_account_id"), "org_memberships", ["account_id"], unique=False)
-    op.create_index(op.f("ix_org_memberships_organisation_id"), "org_memberships", ["organisation_id"], unique=False)
+    op.execute("CREATE INDEX IF NOT EXISTS ix_org_memberships_account_id ON org_memberships (account_id)")
+    op.execute("CREATE INDEX IF NOT EXISTS ix_org_memberships_organisation_id ON org_memberships (organisation_id)")
 
     # Steps 3-9 only apply when migrating from the old `users` table schema.
     # On a fresh database the `users` table doesn't exist — just create the
