@@ -46,7 +46,7 @@
       </div>
 
       <div v-else-if="primitives.length === 0" class="text-center py-12 text-muted-foreground">
-        No primitives found.
+        {{ $t('views.LibraryView.no_primitives_found') }}
       </div>
 
       <div v-else class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
@@ -150,6 +150,7 @@
 <script setup lang="ts">
 import { ref, onMounted, onBeforeUnmount } from 'vue'
 import { useRouter } from 'vue-router'
+import { useI18n } from 'vue-i18n'
 import { useApi } from '../composables/useApi'
 
 let searchTimer: ReturnType<typeof setTimeout> | null = null
@@ -179,6 +180,7 @@ interface ListResponse {
   page_size: number
 }
 
+const { t } = useI18n()
 const router = useRouter()
 const { get, patch } = useApi()
 
@@ -206,7 +208,7 @@ async function loadPrimitives() {
     primitives.value = data.items
     total.value = data.total
   } catch (e) {
-    error.value = e instanceof Error ? e.message : 'Failed to load primitives'
+    error.value = e instanceof Error ? e.message : t('views.LibraryView.failed_to_load_primitives')
   } finally {
     loading.value = false
   }
