@@ -1,5 +1,5 @@
 <template>
-  <div class="border-t pt-4 mt-4 space-y-3">
+  <div class="border-t pt-4 mt-auto space-y-3">
     <div class="flex items-center gap-2">
       <div class="avatar-ring">
         <div

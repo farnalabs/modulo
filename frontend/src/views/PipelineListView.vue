@@ -81,7 +81,7 @@
           <p v-if="p.description" class="text-sm text-muted-foreground mb-4 line-clamp-2">
             {{ p.description }}
           </p>
-          <div v-else class="mb-4" />
+          <div v-else class="mb-10" />
 
           <div class="flex items-center gap-3 text-xs text-muted-foreground">
             <span class="flex items-center gap-1">
