@@ -353,7 +353,10 @@ async def list_audit_events(
                 | ((AuditEvent.created_at == cursor_ts) & (AuditEvent.id < cursor_id))
             )
         except (ValueError, KeyError, TypeError):
-            pass
+            _log.warning(
+                "list_audit_events: failed to decode cursor %r — falling back to unfiltered query",
+                cursor,
+            )
 
     query = query.order_by(AuditEvent.created_at.desc(), AuditEvent.id.desc()).limit(limit + 1)
 

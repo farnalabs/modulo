@@ -7,6 +7,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi.testclient import TestClient
+from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
 
 from modulo.api.dependencies import _get_engine, get_db_session, get_plan_context
 from modulo.api.main import app
@@ -78,6 +79,27 @@ def client() -> Generator[TestClient, None, None]:
 @pytest.fixture()
 def unauth_client() -> Generator[TestClient, None, None]:
     app.dependency_overrides[get_settings] = _make_settings
+    yield TestClient(app)
+    app.dependency_overrides.clear()
+
+
+@pytest.fixture()
+def non_admin_client() -> Generator[TestClient, None, None]:
+    mock_session = _make_mock_session()
+
+    async def override_session() -> AsyncGenerator[AsyncMock, None]:
+        yield mock_session
+
+    app.dependency_overrides[get_settings] = _make_settings
+    app.dependency_overrides[get_db_session] = override_session
+    app.dependency_overrides[_get_engine] = lambda: MagicMock()
+    app.dependency_overrides[get_current_user] = lambda: AuthenticatedPrincipal(
+        username="member",
+        organisation_id=_ORG_ID,
+        account_id=_USER_ID,
+        org_role="member",
+    )
+    app.dependency_overrides[get_plan_context] = lambda: _MockPlanContext()
     yield TestClient(app)
     app.dependency_overrides.clear()
 
@@ -283,6 +305,26 @@ class TestBatchDetail:
 
 class TestExportChain:
     URL = "/api/v1/admin/audit/export"
+
+    def test_export_programming_error_returns_501(self, client: TestClient) -> None:
+        with (
+            patch("modulo.api.routes.audit.export_chain", side_effect=ProgrammingError("stmt", {}, "table not found")),
+            patch("modulo.api.routes.audit.set_rls_org"),
+        ):
+            resp = client.get(self.URL)
+        assert resp.status_code == 501
+
+    def test_export_sqlalchemy_error_returns_503(self, client: TestClient) -> None:
+        with (
+            patch("modulo.api.routes.audit.export_chain", side_effect=SQLAlchemyError("connection failed")),
+            patch("modulo.api.routes.audit.set_rls_org"),
+        ):
+            resp = client.get(self.URL)
+        assert resp.status_code == 503
+
+    def test_export_non_admin_returns_403(self, client: TestClient, non_admin_client: TestClient) -> None:
+        resp = non_admin_client.get(self.URL)
+        assert resp.status_code == 403
 
     def test_export_returns_paginated_events(self, client: TestClient) -> None:
         with (
