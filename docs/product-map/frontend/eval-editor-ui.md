@@ -9,13 +9,13 @@ code:
   - frontend/src/router/index.ts
 unit-tests:
   - frontend/src/__tests__/EvalEditorView.spec.ts
-  - tests/unit/api/test_evals_endpoint.py
-  - tests/unit/api/test_evals_compare.py
-  - tests/unit/api/test_evals_dashboard.py
-  - tests/unit/core/test_eval_engine.py
-  - tests/unit/core/test_eval_judge_injection.py
-  - tests/unit/core/test_eval_regressions.py
-  - tests/unit/core/test_eval_suite.py
+  - backend/tests/unit/api/test_evals_endpoint.py
+  - backend/tests/unit/api/test_evals_compare.py
+  - backend/tests/unit/api/test_evals_dashboard.py
+  - backend/tests/unit/core/test_eval_engine.py
+  - backend/tests/unit/core/test_eval_judge_injection.py
+  - backend/tests/unit/core/test_eval_regressions.py
+  - backend/tests/unit/core/test_eval_suite.py
 depends-on: [feat-evals-eval-definitions]
 status: partial
 ---
