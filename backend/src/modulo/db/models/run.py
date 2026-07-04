@@ -68,7 +68,7 @@ class Run(OrgScoped):
     total_tokens: Mapped[int | None] = mapped_column(Integer)
     total_cost_usd: Mapped[Decimal | None] = mapped_column(Numeric(14, 6))
     node_token_usage: Mapped[dict[str, Any] | None] = mapped_column(JSON)
-    error_detail: Mapped[str | None] = mapped_column(String)
+    error_detail: Mapped[str | None] = mapped_column(String(5000))
     error_code: Mapped[str | None] = mapped_column(String(255))
     langgraph_thread_id: Mapped[str] = mapped_column(String(512), nullable=False, unique=True)
     input_payload: Mapped[dict[str, Any] | None] = mapped_column(JSON)

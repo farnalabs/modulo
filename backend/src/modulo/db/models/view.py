@@ -2,8 +2,7 @@
 
 import uuid
 
-from sqlalchemy import JSON, CheckConstraint, ForeignKey, String, Text
-from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy import JSON, CheckConstraint, ForeignKey, String, Text, Uuid
 from sqlalchemy.orm import Mapped, mapped_column
 
 from modulo.db.models.base import OrgScoped
@@ -24,4 +23,4 @@ class SavedView(OrgScoped):
     columns: Mapped[list[str] | None] = mapped_column(JSON, nullable=True)
     sort_by: Mapped[str | None] = mapped_column(String(100), nullable=True)
     sort_order: Mapped[str] = mapped_column(String(10), nullable=False, default="desc")
-    account_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("accounts.id"), nullable=False)
+    account_id: Mapped[uuid.UUID] = mapped_column(Uuid(), ForeignKey("accounts.id"), nullable=False)
