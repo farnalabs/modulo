@@ -12,10 +12,14 @@ def truncate_input(text: str, max_length: int | None) -> str:
     ``[Input truncated to {max_length} characters]``
 
     If *max_length* is ``None``, *text* is returned unchanged (backward
-    compatible default).
+    compatible default). If *max_length* is less than 1, the entire text
+    is truncated and the notification is returned.
     """
     if max_length is None:
         return text
+
+    if max_length < 1:
+        return "[Input truncated to 0 characters]"
 
     if len(text) <= max_length:
         return text

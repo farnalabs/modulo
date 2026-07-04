@@ -16,6 +16,7 @@ from stale subscriptions.
 """
 
 import asyncio
+import logging
 import time
 import uuid
 import weakref
@@ -25,6 +26,8 @@ from datetime import UTC, datetime
 from typing import Any
 
 from modulo.core.events.redis_broker import RedisEventBroker
+
+_log = logging.getLogger(__name__)
 
 
 @dataclass
@@ -46,6 +49,16 @@ class RunEvent:
 
 
 _RING_BUFFER_SIZE = 100
+
+
+def _log_redis_error(task: asyncio.Task[Any]) -> None:
+    """Log any exception from a fire-and-forget Redis task."""
+    try:
+        exc = task.exception()
+        if exc is not None:
+            _log.warning("redis.publish_failed", exc_info=exc)
+    except asyncio.CancelledError:
+        pass
 
 
 class RunEventBroker:
@@ -82,11 +95,14 @@ class RunEventBroker:
         for q in self._subscribers:
             q.put_nowait(event)
         if self._redis_broker is not None:
-            asyncio.create_task(self._redis_broker.publish(str(self._run_id), event.to_json()))  # noqa: RUF006
+            task = asyncio.create_task(self._redis_broker.publish(str(self._run_id), event.to_json()))
+            task.add_done_callback(_log_redis_error)
         return event
 
     def subscribe(self) -> asyncio.Queue[RunEvent | None]:
         """Return a Queue that receives future events. Caller must unsubscribe."""
+        if self._closed:
+            raise RuntimeError(f"Broker for run {self._run_id} is closed")
         q: asyncio.Queue[RunEvent | None] = asyncio.Queue()
         self._subscribers.add(q)
         return q
@@ -114,7 +130,8 @@ class RunEventBroker:
             q.put_nowait(None)
         self._subscribers.clear()
         if self._redis_broker is not None:
-            asyncio.create_task(self._redis_broker.close())  # noqa: RUF006
+            task = asyncio.create_task(self._redis_broker.close())
+            task.add_done_callback(_log_redis_error)
 
     @property
     def is_closed(self) -> bool:
