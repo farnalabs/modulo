@@ -11,7 +11,7 @@ code:
   - backend/src/modulo/db/models/oauth_client.py
   - backend/src/modulo/db/models/oauth_token.py
 depends-on: [feat-core-oidc-integration]
-status: covered
+status: partial
 ---
 # MCP OAuth 2.0 Authorization Code Flow
 
@@ -115,7 +115,21 @@ status: covered
 - [x] Token exchange: used code returns error
 - [x] Token exchange: expired code returns error — unit test exists but no BDD scenario (needs precise datetime mocking for expiry)
 
-### Edge Cases
+## Error Handling
+- [ ] POST /api/v1/mcp/oauth/clients returns 501 if DB migration not run (ProgrammingError)
+- [ ] GET /api/v1/mcp/oauth/clients returns 501 if DB migration not run (ProgrammingError)
+- [ ] DELETE /api/v1/mcp/oauth/clients/{id} returns 501 if DB migration not run (ProgrammingError)
+- [ ] POST /api/v1/mcp/oauth/clients returns 503 on SQLAlchemyError (DB connection failure)
+- [ ] GET /api/v1/mcp/oauth/clients returns 503 on SQLAlchemyError
+- [ ] DELETE /api/v1/mcp/oauth/clients/{id} returns 503 on SQLAlchemyError
+- [ ] _oauth_authorize catches JSON decode error → 400 invalid_request
+- [ ] _oauth_token catches JSON decode error → 400 invalid_request
+- [ ] _oauth_authorize broad except Exception → 400 with error detail
+- [ ] _oauth_token broad except Exception → 400 invalid_grant
+- [ ] McpAuthMiddleware OAuth path catches JWTError → 401
+- [ ] McpAuthMiddleware OAuth path catches Exception on family check → 401
+
+## Additional Edge Cases
 - [x] client_secret never stored in plaintext — only SHA-256 hash persisted
 - [x] OAuthAuthorizationCode.used flag prevents replay attacks
 - [x] RLS scoped to organisation for all OAuth data access
@@ -124,19 +138,35 @@ status: covered
 - [x] Invalid/expired authorization codes handled in consume_authorization_code
 - [x] Code-to-client binding prevents cross-client consumption
 - [x] redirect_uri consistency enforced between authorize and token exchange
+- [ ] Client deletion cascades to auth codes and token families — verified in test
+- [ ] MODULO_PUBLIC_URL checked in both authorize and CRUD routes
+- [ ] State parameter echoed but not validated server-side — potential CSRF gap
+- [ ] Code challenge_method accepted but not stored or validated (PKCE unimplemented)
+
+## Resilience & Integration Robustness
+- [ ] Database session management: all CRUD routes use `async with session.begin()` for atomicity
+- [ ] Broad except Exception in protocol endpoints prevents crash but may mask errors
+- [ ] No timeout on authorization code expiry enforcement (10-min TTL inherent, not externally configurable)
+- [ ] Rate limiting via RateLimiterMiddleware applied to token exchange endpoint
+- [ ] OAuth token family blacklist checked on every middleware validation
+- [ ] Session factory failure in _oauth_authorize/_oauth_token would propagate as 500
+- [ ] McpAuthMiddleware OAuth path has no unit test coverage
+
+## QA History
+- 2026-07-05: Cross-cutting QA (index 159): Fixed status covered→partial. Added ProgrammingError→501 and SQLAlchemyError→503 catches to all 3 CRUD routes with _log.warning calls. Added Error Handling section (12 checkboxes), Additional Edge Cases section (12 checkboxes), Resilience & Integration Robustness section (7 checkboxes). Added QA History section. Documented PKCE gap: BDD scenarios pass via mocked step definitions, not real implementation. Documented refresh_token gap: grant_type unimplemented, BDD scenarios marked xfail. Created website docs stub at Website/modulo-website/src/docs/mcp-oauth.md. Status: partial.
 
 ## Remaining Gaps
 
-- **Scope naming mismatch**: PRD 6.4 specifies scopes `pipelines:read`, `pipelines:run`, `hitl:approve`, `library:read`, `library:write`, `hitl:approve:pipeline:{id}`. Code implements `trigger:run`, `hitl:review`, `library:browse` in VALID_SCOPES. Neither side has been reconciled — this is a spec-vs-implementation drift that blocks v1 readiness.
-- **PKCE not implemented**: PRD mandates PKCE with `code_challenge_method=S256` as required for all clients. The `OAuthAuthorizationCode.code_challenge` column exists but no code verifies it — neither in the authorize endpoint (doesn't accept `code_challenge`) nor in the token exchange endpoint (doesn't validate `code_verifier`).
-- **`state` parameter accepted but not validated**: The authorize endpoint reads `state` from the body and returns it in the response, but there is no server-side verification that the state parameter was provided or matches expected values.
+- **Scope naming mismatch with PRD**: PRD §6.4 specifies `pipelines:read`, `pipelines:run`, `hitl:approve`, `library:read`, `library:write`. Code implements `trigger:run`, `hitl:review`, `library:browse` in VALID_SCOPES.
+- **PKCE unimplemented but BDD claims it works**: BDD scenarios "Authorization request with PKCE" and "PKCE code verifier required" pass only because step definitions (test_mcp_oauth.py) mock the PKCE behavior. The _oauth_authorize handler receives code_challenge but never stores it on OAuthAuthorizationCode. The _oauth_token handler never validates code_verifier against a stored code_challenge.
+- **BDD refresh_token scenarios are xfail**: 2 BDD scenarios and 2 unit tests for refresh token rotation are marked @pytest.mark.xfail because the _oauth_token handler only supports authorization_code grant_type. The refresh_token grant type and refresh token issuance are not implemented.
+- **No middleware OAuth path tests**: McpAuthMiddleware's OAuth token validation path (JWT decode → family blacklist check → scope-to-role mapping) has zero unit or integration tests.
+- **state parameter not validated**: The authorize endpoint accepts state and echoes it back but performs no server-side validation or CSRF binding.
 - **No `authlib` usage**: PRD mandates `authlib` (not hand-rolled). Current implementation uses `python-jose` directly for JWT encoding/decoding. OAuth logic is hand-rolled in `modulo/auth/oauth.py`.
 - **No per-pipeline scopes**: `hitl:approve:pipeline:{id}` scope pattern from PRD is not implemented at any layer.
 - **`library:write` scope not implemented**: Only `library:browse` exists in code; no write scope for library primitives exists.
 - **No BDD feature files exist for MCP tools**: The `features/mcp/` directory exists but only contains `mcp_oauth.feature`. Step definitions in `test_alpha_mcp.py` reference `../../features/mcp/trigger.feature`, `review_hitl.feature`, `human_only.feature`, `library_browse.feature`, `onboarding.feature` — none of these files exist. This means 5 BDD feature files are missing alongside the OAuth-specific one.
 - **SSE per-event org validation**: Code comment asserts org context is validated per-event for streaming connections, but the current implementation validates only at tool/resource call time via `validate_current_auth()`. No server-push SSE event validation path exists.
 - **`MODULO_PUBLIC_URL` hardening**: Localhost check (`settings.modulo_public_url == "http://localhost:8000"`) is fragile — any local dev server on a different port or 127.0.0.1 will bypass the guard.
-- **MCP middleware OAuth integration not tested**: McpAuthMiddleware OAuth token path (JWT validation, family blacklist check, scope-to-role mapping) has no unit or integration tests. These require refactoring the middleware for testability (currently uses ContextVar and direct session factory).
-- **refresh_token grant_type not implemented**: The `_oauth_token` handler only supports `authorization_code`. BDD scenario `Refresh token rotation` and unit tests are marked `xfail`.
 - **BDD authorize steps previously used GET instead of POST**: The handler expects POST+JSON, but BDD steps used GET+params. Fixed in this QA pass.
-- **Token exchange response does not include refresh_token**: PRD mentions refresh tokens but they are not emitted in the current token exchange response. 
+- **Token exchange response does not include refresh_token**: PRD mentions refresh tokens but they are not emitted in the current token exchange response.
