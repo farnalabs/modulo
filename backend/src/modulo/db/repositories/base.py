@@ -85,7 +85,7 @@ class BaseRepository(ABC):
         offset = (page - 1) * page_size
 
         count_stmt = sa_select(func.count()).select_from(stmt.order_by(None).subquery())
-        total: int = (await session.execute(count_stmt)).scalar_one()
+        total: int = (await session.execute(count_stmt)).scalar_one_or_none() or 0
 
         result = await session.execute(stmt.offset(offset).limit(page_size))
         items = result.scalars().all()
