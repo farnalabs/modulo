@@ -329,7 +329,6 @@ import ErrorAlert from '../components/shared/ErrorAlert.vue'
 import { formatError } from '../lib/utils'
 import { usePlanStore } from '../stores/planStore'
 import FeatureGate from '../components/FeatureGate.vue'
-import LockIcon from '../components/LockIcon.vue'
 import { shortId } from '../utils/format'
 import {
   Tooltip,

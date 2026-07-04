@@ -417,11 +417,17 @@ const runTimestamps = computed(() => {
   const r = run.value
   if (!r) return null
   return {
-    created: '—',
-    started: '—',
-    completed: '—',
+    created: r.created_at ? formatTimestamp(r.created_at) : '—',
+    started: r.started_at ? formatTimestamp(r.started_at) : '—',
+    completed: r.completed_at ? formatTimestamp(r.completed_at) : '—',
   }
 })
+
+function formatTimestamp(dateStr: string): string {
+  return new Date(dateStr).toLocaleString('en-US', {
+    month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit',
+  })
+}
 
 const totalTokens = computed(() => {
   if (!run.value?.node_token_usage) return null
@@ -501,14 +507,18 @@ const nodeEntries = computed<NodeEntry[]>(() => {
 })
 
 async function fetchRunData(runId: string) {
-  const { data: runData } = await api.GET('/api/v1/runs/{run_id}', {
-    params: { path: { run_id: runId } },
-  })
-  if (runData) run.value = runData as unknown as RunResponse
-  const { data: ioData } = await api.GET('/api/v1/runs/{run_id}/io', {
-    params: { path: { run_id: runId } },
-  })
-  if (ioData) runIO.value = ioData as unknown as RunIOResponse
+  try {
+    const { data: runData } = await api.GET('/api/v1/runs/{run_id}', {
+      params: { path: { run_id: runId } },
+    })
+    if (runData) run.value = runData as unknown as RunResponse
+    const { data: ioData } = await api.GET('/api/v1/runs/{run_id}/io', {
+      params: { path: { run_id: runId } },
+    })
+    if (ioData) runIO.value = ioData as unknown as RunIOResponse
+  } catch (e: unknown) {
+    console.warn('fetchRunData failed:', e)
+  }
 }
 
 function startPolling(runId: string) {

@@ -76,11 +76,14 @@
 
 <script setup lang="ts">
 import { ref, reactive, onMounted, onBeforeUnmount } from 'vue'
+import { useI18n } from 'vue-i18n'
 import { api } from '../lib/api/client'
 import { getErrorTracker } from '../lib/error-tracking'
 import { loadBackends } from '../monitor'
 import type { MonitorConfig } from '../monitor/types'
 import { Button } from '../components/ui/button'
+
+const { t } = useI18n()
 
 interface BackendField {
   key: string
@@ -232,7 +235,7 @@ async function load() {
       fromApiPayload(res.data as Record<string, any>)
     }
   } catch (e) {
-    showFlash(`${$t('common.failed_to_load')}: ${e}`, 'error')
+    showFlash(`${t('common.failed_to_load')}: ${e}`, 'error')
   } finally {
     loading.value = false
   }
@@ -244,7 +247,7 @@ async function save() {
     const apiPayload = toApiPayload()
     const res = await api.PUT('/api/v1/admin/monitor-config', { body: apiPayload as any })
     if (res.error) {
-      showFlash(`${$t('common.failed_to_save')}: ${(res.error as any).detail}`, 'error')
+      showFlash(`${t('common.failed_to_save')}: ${(res.error as any).detail}`, 'error')
       return
     }
 
@@ -256,9 +259,9 @@ async function save() {
     }
 
     fromApiPayload(res.data as Record<string, any>)
-    showFlash($t('common.configuration_saved'), 'success')
+    showFlash(t('common.configuration_saved'), 'success')
   } catch (e) {
-    showFlash(`${$t('common.failed_to_save')}: ${e}`, 'error')
+    showFlash(`${t('common.failed_to_save')}: ${e}`, 'error')
   } finally {
     saving.value = false
   }
