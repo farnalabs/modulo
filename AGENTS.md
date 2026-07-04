@@ -7,7 +7,7 @@ Full PRD: `docs/prd.md`. This file covers how to build. Conflicts between files 
 **Always use `git worktree` when branching.** Never check out branches in the main working tree — it must stay on `main`. Worktrees live under `.agents/worktrees/<branch-name>/`.
 
 ```powershell
-# From Development/Product/
+# From Product/
 git fetch origin <branch>
 git worktree add .agents/worktrees/<branch-name> <branch>
 # Work in .agents/worktrees/<branch-name>/
@@ -63,11 +63,11 @@ The root `AGENTS.md` has the full non-negotiable rule under **Agent Isolation: A
 The authoritative task list lives at `../Dev-Harness/delivery/delivery-plan.json`. Do not edit it directly — use the task script:
 
 ```powershell
-../Dev-Harness/tools/task.ps1 list                          # show all tasks and current status
-../Dev-Harness/tools/task.ps1 show <id>                     # full detail + history for one task
-../Dev-Harness/tools/task.ps1 start <id>                    # begin a task (rejects if deps unmet)
-../Dev-Harness/tools/task.ps1 complete <id> -Evidence "..."  # mark done with test evidence
-../Dev-Harness/tools/task.ps1 block <id> -Evidence "..."    # record a concrete external blocker
+../devtools/Dev-Harness/tools/task.ps1 list                          # show all tasks and current status
+../devtools/Dev-Harness/tools/task.ps1 show <id>                     # full detail + history for one task
+../devtools/Dev-Harness/tools/task.ps1 start <id>                    # begin a task (rejects if deps unmet)
+../devtools/Dev-Harness/tools/task.ps1 complete <id> -Evidence "..."  # mark done with test evidence
+../devtools/Dev-Harness/tools/task.ps1 block <id> -Evidence "..."    # record a concrete external blocker
 ```
 
 The conductor picks the first `pending` task whose entire `dependsOn` array is `completed`. Tasks span phases 0–9 (alpha through v2). Run `/deliver` from the project root to start an autonomous delivery sprint — this invokes the `deliver` skill at `.agents/skills/deliver/SKILL.md`.
@@ -304,10 +304,10 @@ tests/features/
 ### First-time spin up (Docker Desktop)
 
 ```powershell
-# From Development/Product/
+# From Product/
 docker compose -f docker-compose.local.yml up -d
 
-# From Development/Product/backend/
+# From Product/backend/
 # alembic.ini has port 5434 for local Docker (not 5432)
 # Create .env with these values:
 #   DATABASE_URL=postgresql+asyncpg://modulo:modulo@localhost:5434/modulo
@@ -323,10 +323,10 @@ docker compose -f docker-compose.local.yml up -d
 docker compose -f ../docker-compose.local.yml exec db-local psql -U modulo -c "CREATE TABLE alembic_version (version_num VARCHAR(255) NOT NULL PRIMARY KEY);"
 uv run alembic upgrade heads
 
-# Start backend (from Development/Product/backend/)
+# Start backend (from Product/backend/)
 uv run uvicorn modulo.api.main:app --reload --port 8000
 
-# Start frontend (from Development/Product/frontend/)
+# Start frontend (from Product/frontend/)
 npm run dev
 ```
 
@@ -336,15 +336,15 @@ npm run dev
 - **Migration 0014_fixture_contribution bug**: CHECK constraint on `contribution_status` is created before the column is added. The `add_column` call must precede the `create_check_constraint` call.
 - **Frontend router missing import**: `PluginsSettingsView` is used as a route component in `src/router/index.ts` but was missing from the top-level imports. Always verify named imports match the import list.
 - **Seed org/user (fixed)**: On startup, `main.py` now runs Alembic migrations, creates a default organisation if none exists, and seeds users from `MODULO_USERS`. Plaintext passwords in `MODULO_USERS` (e.g. `admin:admin`) are auto-hashed with bcrypt. Set `MODULO_DEMO_MODE=true` to also create a `demo:demo` read-only user.
-- **Backend Settings reads `.env`**: The `.env` file must be in `backend/`, not `Development/Product/`. The `Settings` model uses `env_file=".env"` relative to the cwd.
+- **Backend Settings reads `.env`**: The `.env` file must be in `backend/`, not `Product/`. The `Settings` model uses `env_file=".env"` relative to the cwd.
 
 ### Pre-merge smoke test (MANDATORY)
 
 Before merging any worktree branch to `main`, run the smoke test:
 
 ```powershell
-../Dev-Harness/tools/smoke-test.ps1          # full check (vitest + file existence + type-check)
-../Dev-Harness/tools/smoke-test.ps1 -Fast    # skip type-check
+../devtools/Dev-Harness/tools/smoke-test.ps1          # full check (vitest + file existence + type-check)
+../devtools/Dev-Harness/tools/smoke-test.ps1 -Fast    # skip type-check
 ```
 
 This checks:
@@ -436,13 +436,13 @@ updated `schema.ts` and retry.
 Use these to launch services without getting blocked:
 
 ```powershell
-# Start Postgres + Redis (from Development/Product/)
+# Start Postgres + Redis (from Product/)
 docker compose -f docker-compose.local.yml up -d
 
-# Start backend (from Development/Product/backend/)
+# Start backend (from Product/backend/)
 Start-Process -NoNewWindow -FilePath "uv" -ArgumentList "run uvicorn modulo.api.main:app --reload --port 8000"
 
-# Start frontend with --host for network access (from Development/Product/frontend/)
+# Start frontend with --host for network access (from Product/frontend/)
 Start-Process -NoNewWindow -FilePath "cmd.exe" -ArgumentList "/c npm run dev -- --host 0.0.0.0"
 
 # Check health
