@@ -22,6 +22,7 @@ from modulo.db.crud.team import (
 from modulo.db.crud.team_membership import (
     add_team_member,
     get_membership,
+    get_membership_by_team_and_account,
     list_team_members,
     remove_team_member,
     update_member_role,
@@ -153,22 +154,28 @@ async def create_team_endpoint(
 ) -> TeamResponse:
     _require_admin(current_user)
 
-    async with session.begin():
-        await set_rls_org(session, current_user.organisation_id)
-        await set_rls_user_context(session, current_user.account_id, current_user.org_role)
-        existing = await get_team_by_name(session, current_user.organisation_id, body.name)
-        if existing is not None:
-            raise HTTPException(
-                status_code=status.HTTP_409_CONFLICT,
-                detail="A team with this name already exists in your organisation",
+    try:
+        async with session.begin():
+            await set_rls_org(session, current_user.organisation_id)
+            await set_rls_user_context(session, current_user.account_id, current_user.org_role)
+            existing = await get_team_by_name(session, current_user.organisation_id, body.name)
+            if existing is not None:
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail="A team with this name already exists in your organisation",
+                )
+            team = await create_team(
+                session,
+                org_id=current_user.organisation_id,
+                name=body.name,
+                account_id=current_user.account_id,
+                description=body.description,
             )
-        team = await create_team(
-            session,
-            org_id=current_user.organisation_id,
-            name=body.name,
-            account_id=current_user.account_id,
-            description=body.description,
-        )
+    except ProgrammingError:
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="Feature is not available. Run database migrations to enable it.",
+        ) from None
 
     return TeamResponse(
         id=str(team.id),
@@ -185,10 +192,16 @@ async def get_team_endpoint(
     current_user: AuthenticatedPrincipal = Depends(get_current_user),
     session: AsyncSession = Depends(get_db_session),
 ) -> TeamResponse:
-    async with session.begin():
-        await set_rls_org(session, current_user.organisation_id)
-        await set_rls_user_context(session, current_user.account_id, current_user.org_role)
-        team = await get_team(session, team_id)
+    try:
+        async with session.begin():
+            await set_rls_org(session, current_user.organisation_id)
+            await set_rls_user_context(session, current_user.account_id, current_user.org_role)
+            team = await get_team(session, team_id)
+    except ProgrammingError:
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="Feature is not available. Run database migrations to enable it.",
+        ) from None
 
     if team is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Team not found")
@@ -213,19 +226,25 @@ async def update_team_endpoint(
 
     updates = {k: v for k, v in body.model_dump(exclude_unset=True).items() if v is not None}
 
-    async with session.begin():
-        await set_rls_org(session, current_user.organisation_id)
-        await set_rls_user_context(session, current_user.account_id, current_user.org_role)
+    try:
+        async with session.begin():
+            await set_rls_org(session, current_user.organisation_id)
+            await set_rls_user_context(session, current_user.account_id, current_user.org_role)
 
-        if "name" in updates:
-            existing = await get_team_by_name(session, current_user.organisation_id, updates["name"])
-            if existing is not None and existing.id != team_id:
-                raise HTTPException(
-                    status_code=status.HTTP_409_CONFLICT,
-                    detail="A team with this name already exists in your organisation",
-                )
+            if "name" in updates:
+                existing = await get_team_by_name(session, current_user.organisation_id, updates["name"])
+                if existing is not None and existing.id != team_id:
+                    raise HTTPException(
+                        status_code=status.HTTP_409_CONFLICT,
+                        detail="A team with this name already exists in your organisation",
+                    )
 
-        team = await update_team(session, team_id, updates)
+            team = await update_team(session, team_id, updates)
+    except ProgrammingError:
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="Feature is not available. Run database migrations to enable it.",
+        ) from None
 
     if team is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Team not found")
@@ -247,57 +266,63 @@ async def delete_team_endpoint(
 ) -> None:
     _require_admin(current_user)
 
-    async with session.begin():
-        await set_rls_org(session, current_user.organisation_id)
-        await set_rls_user_context(session, current_user.account_id, current_user.org_role)
+    try:
+        async with session.begin():
+            await set_rls_org(session, current_user.organisation_id)
+            await set_rls_user_context(session, current_user.account_id, current_user.org_role)
 
-        from sqlalchemy import func, select
+            from sqlalchemy import func, select
 
-        from modulo.db.models.connector_instance import ConnectorInstance
-        from modulo.db.models.model_backend import ModelBackend
-        from modulo.db.models.pipeline import Pipeline
-        from modulo.db.models.stage import Stage
+            from modulo.db.models.connector_instance import ConnectorInstance
+            from modulo.db.models.model_backend import ModelBackend
+            from modulo.db.models.pipeline import Pipeline
+            from modulo.db.models.stage import Stage
 
-        resource_checks: list[tuple[str, int]] = []
-        for model_cls, label in [
-            (Pipeline, "pipeline"),
-            (Stage, "stage"),
-            (ConnectorInstance, "connector"),
-            (ModelBackend, "model backend"),
-        ]:
-            count = (
-                await session.execute(
-                    select(func.count()).select_from(model_cls).where(model_cls.owner_team_id == team_id)
+            resource_checks: list[tuple[str, int]] = []
+            for model_cls, label in [
+                (Pipeline, "pipeline"),
+                (Stage, "stage"),
+                (ConnectorInstance, "connector"),
+                (ModelBackend, "model backend"),
+            ]:
+                count = (
+                    await session.execute(
+                        select(func.count()).select_from(model_cls).where(model_cls.owner_team_id == team_id)
+                    )
+                ).scalar() or 0
+                if count > 0:
+                    resource_checks.append((label, count))
+
+            if resource_checks:
+                details = "; ".join(f"{count} {label}(s)" for label, count in resource_checks)
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail=f"Cannot delete team: still has resources — {details}",
                 )
-            ).scalar() or 0
-            if count > 0:
-                resource_checks.append((label, count))
 
-        if resource_checks:
-            details = "; ".join(f"{count} {label}(s)" for label, count in resource_checks)
-            raise HTTPException(
-                status_code=status.HTTP_409_CONFLICT,
-                detail=f"Cannot delete team: still has resources — {details}",
+            deleted = await delete_team(session, team_id)
+
+        if not deleted:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Team not found")
+
+        from modulo.core.audit_logger import append_audit_event
+
+        async with session.begin():
+            await set_rls_org(session, current_user.organisation_id)
+            await append_audit_event(
+                session,
+                org_id=current_user.organisation_id,
+                event_type="team_deleted",
+                actor_user_id=current_user.account_id,
+                resource_type="team",
+                resource_id=team_id,
+                payload_json={"team_id": str(team_id)},
             )
-
-        deleted = await delete_team(session, team_id)
-
-    if not deleted:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Team not found")
-
-    from modulo.core.audit_logger import append_audit_event
-
-    async with session.begin():
-        await set_rls_org(session, current_user.organisation_id)
-        await append_audit_event(
-            session,
-            org_id=current_user.organisation_id,
-            event_type="team_deleted",
-            actor_user_id=current_user.account_id,
-            resource_type="team",
-            resource_id=team_id,
-            payload_json={"team_id": str(team_id)},
-        )
+    except ProgrammingError:
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="Feature is not available. Run database migrations to enable it.",
+        ) from None
 
 
 @router.get("/{team_id}/members", response_model=MembershipListResponse)
@@ -308,10 +333,16 @@ async def list_members_endpoint(
     current_user: AuthenticatedPrincipal = Depends(get_current_user),
     session: AsyncSession = Depends(get_db_session),
 ) -> MembershipListResponse:
-    async with session.begin():
-        await set_rls_org(session, current_user.organisation_id)
-        await set_rls_user_context(session, current_user.account_id, current_user.org_role)
-        result = await list_team_members(session, team_id=team_id, page=page, page_size=page_size)
+    try:
+        async with session.begin():
+            await set_rls_org(session, current_user.organisation_id)
+            await set_rls_user_context(session, current_user.account_id, current_user.org_role)
+            result = await list_team_members(session, team_id=team_id, page=page, page_size=page_size)
+    except ProgrammingError:
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="Feature is not available. Run database migrations to enable it.",
+        ) from None
 
     return MembershipListResponse(
         items=[
@@ -343,50 +374,56 @@ async def add_member_endpoint(
 ) -> MembershipResponse:
     user_id = uuid.UUID(body.user_id)
 
-    async with session.begin():
-        await set_rls_org(session, current_user.organisation_id)
-        await set_rls_user_context(session, current_user.account_id, current_user.org_role)
+    try:
+        async with session.begin():
+            await set_rls_org(session, current_user.organisation_id)
+            await set_rls_user_context(session, current_user.account_id, current_user.org_role)
 
-        from modulo.db.crud.account import get_account_by_id
-        from modulo.db.crud.org_membership import get_membership_by_account_and_org
+            from modulo.db.crud.account import get_account_by_id
+            from modulo.db.crud.org_membership import get_membership_by_account_and_org
 
-        team = await get_team(session, team_id)
-        if team is None:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Team not found")
+            team = await get_team(session, team_id)
+            if team is None:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Team not found")
 
-        # Authorise: admin (all-powerful) OR team operator of this team
-        is_admin = ORG_ROLE_HIERARCHY.get(current_user.org_role, -1) >= ORG_ROLE_HIERARCHY["admin"]
-        if not is_admin:
-            caller_membership = await get_membership_by_team_and_account(session, team_id, current_user.account_id)
-            if caller_membership is None or caller_membership.role != "operator":
-                raise HTTPException(
-                    status_code=status.HTTP_403_FORBIDDEN,
-                    detail="Only admin users or team operators can add members",
-                )
-            if TEAM_ROLE_HIERARCHY.get(body.role, -1) > TEAM_ROLE_HIERARCHY.get(caller_membership.role, -1):
+            # Authorise: admin (all-powerful) OR team operator of this team
+            is_admin = ORG_ROLE_HIERARCHY.get(current_user.org_role, -1) >= ORG_ROLE_HIERARCHY["admin"]
+            if not is_admin:
+                caller_membership = await get_membership_by_team_and_account(session, team_id, current_user.account_id)
+                if caller_membership is None or caller_membership.role != "operator":
+                    raise HTTPException(
+                        status_code=status.HTTP_403_FORBIDDEN,
+                        detail="Only admin users or team operators can add members",
+                    )
+                if TEAM_ROLE_HIERARCHY.get(body.role, -1) > TEAM_ROLE_HIERARCHY.get(caller_membership.role, -1):
+                    raise HTTPException(
+                        status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                        detail=f"Cannot grant role '{body.role}' above your own team role '{caller_membership.role}'",
+                    )
+
+            target_account = await get_account_by_id(session, user_id)
+            target_membership = await get_membership_by_account_and_org(session, user_id, current_user.organisation_id)
+            if target_account is None or target_membership is None:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found in organisation")
+
+            if TEAM_ROLE_HIERARCHY.get(body.role, -1) > ORG_ROLE_HIERARCHY.get(target_membership.role, -1):
                 raise HTTPException(
                     status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-                    detail=f"Cannot grant role '{body.role}' above your own team role '{caller_membership.role}'",
+                    detail=f"Team role '{body.role}' exceeds user's org role '{target_membership.role}'",
                 )
 
-        target_account = await get_account_by_id(session, user_id)
-        target_membership = await get_membership_by_account_and_org(session, user_id, current_user.organisation_id)
-        if target_account is None or target_membership is None:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found in organisation")
-
-        if TEAM_ROLE_HIERARCHY.get(body.role, -1) > ORG_ROLE_HIERARCHY.get(target_membership.role, -1):
-            raise HTTPException(
-                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-                detail=f"Team role '{body.role}' exceeds user's org role '{target_membership.role}'",
+            membership = await add_team_member(
+                session,
+                org_id=current_user.organisation_id,
+                team_id=team_id,
+                account_id=user_id,
+                role=body.role,
             )
-
-        membership = await add_team_member(
-            session,
-            org_id=current_user.organisation_id,
-            team_id=team_id,
-            account_id=user_id,
-            role=body.role,
-        )
+    except ProgrammingError:
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="Feature is not available. Run database migrations to enable it.",
+        ) from None
 
     return MembershipResponse(
         id=str(membership.id),
@@ -409,13 +446,19 @@ async def remove_member_endpoint(
 ) -> None:
     _require_admin(current_user)
 
-    async with session.begin():
-        await set_rls_org(session, current_user.organisation_id)
-        await set_rls_user_context(session, current_user.account_id, current_user.org_role)
-        membership = await get_membership(session, membership_id)
-        if membership is None or membership.team_id != team_id:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Membership not found")
-        await remove_team_member(session, membership_id)
+    try:
+        async with session.begin():
+            await set_rls_org(session, current_user.organisation_id)
+            await set_rls_user_context(session, current_user.account_id, current_user.org_role)
+            membership = await get_membership(session, membership_id)
+            if membership is None or membership.team_id != team_id:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Membership not found")
+            await remove_team_member(session, membership_id)
+    except ProgrammingError:
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="Feature is not available. Run database migrations to enable it.",
+        ) from None
 
 
 @router.patch(
@@ -429,31 +472,37 @@ async def change_member_role_endpoint(
     current_user: AuthenticatedPrincipal = Depends(get_current_user),
     session: AsyncSession = Depends(get_db_session),
 ) -> MembershipResponse:
-    async with session.begin():
-        await set_rls_org(session, current_user.organisation_id)
-        await set_rls_user_context(session, current_user.account_id, current_user.org_role)
+    try:
+        async with session.begin():
+            await set_rls_org(session, current_user.organisation_id)
+            await set_rls_user_context(session, current_user.account_id, current_user.org_role)
 
-        team = await get_team(session, team_id)
-        if team is None:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Team not found")
+            team = await get_team(session, team_id)
+            if team is None:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Team not found")
 
-        is_admin = ORG_ROLE_HIERARCHY.get(current_user.org_role, -1) >= ORG_ROLE_HIERARCHY["admin"]
-        if not is_admin:
-            caller_membership = await get_membership_by_team_and_account(session, team_id, current_user.account_id)
-            if caller_membership is None or caller_membership.role != "operator":
-                raise HTTPException(
-                    status_code=status.HTTP_403_FORBIDDEN,
-                    detail="Only admin users or team operators can change member roles",
-                )
-            if TEAM_ROLE_HIERARCHY.get(body.role, -1) > TEAM_ROLE_HIERARCHY.get(caller_membership.role, -1):
-                raise HTTPException(
-                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-                    detail=f"Cannot grant role '{body.role}' above your own team role '{caller_membership.role}'",
-                )
+            is_admin = ORG_ROLE_HIERARCHY.get(current_user.org_role, -1) >= ORG_ROLE_HIERARCHY["admin"]
+            if not is_admin:
+                caller_membership = await get_membership_by_team_and_account(session, team_id, current_user.account_id)
+                if caller_membership is None or caller_membership.role != "operator":
+                    raise HTTPException(
+                        status_code=status.HTTP_403_FORBIDDEN,
+                        detail="Only admin users or team operators can change member roles",
+                    )
+                if TEAM_ROLE_HIERARCHY.get(body.role, -1) > TEAM_ROLE_HIERARCHY.get(caller_membership.role, -1):
+                    raise HTTPException(
+                        status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                        detail=f"Cannot grant role '{body.role}' above your own team role '{caller_membership.role}'",
+                    )
 
-        membership = await update_member_role(session, membership_id, body.role)
-        if membership is None or membership.team_id != team_id:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Membership not found")
+            membership = await update_member_role(session, membership_id, body.role)
+            if membership is None or membership.team_id != team_id:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Membership not found")
+    except ProgrammingError:
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="Feature is not available. Run database migrations to enable it.",
+        ) from None
 
     return MembershipResponse(
         id=str(membership.id),
