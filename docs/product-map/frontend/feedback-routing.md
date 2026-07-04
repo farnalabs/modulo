@@ -13,9 +13,9 @@ code:
   - backend/src/modulo/core/feedback_manager/__init__.py
   - backend/src/modulo/db/models/feedback_record.py
 unit-tests:
-  - tests/unit/api/test_feedback_endpoint.py
-  - tests/unit/core/feedback_manager/test_feedback_manager.py
-  - tests/integration/feedback_manager/test_feedback_flow.py
+  - backend/tests/unit/api/test_feedback_endpoint.py
+  - backend/tests/unit/core/feedback_manager/test_feedback_manager.py
+  - backend/tests/integration/feedback_manager/test_feedback_flow.py
 depends-on: [feat-evals-feedback-records]
 status: partial
 ---
@@ -51,7 +51,7 @@ status: partial
 - [x] Correction run uses same PipelineSnapshot as original run
 - [x] `parent_run_id` links correction run to original run
 - [x] Correction run goes through full eval suite before reaching HITL gate again
-- [x] Eval failure during correction run → status set to `escalated`
+- [ ] Eval failure during correction run → status set to `escalated` (known gap — currently stays in `correcting`)
 - [x] `ai_correction` auto-resolves on eval pass
 - [x] `ai_correction_with_human_review` marks `needs_human_review=True` on eval pass
 

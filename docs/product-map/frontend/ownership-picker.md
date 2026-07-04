@@ -10,8 +10,8 @@ code:
   - frontend/src/components/OwnershipPicker.vue
   - frontend/src/views/LibraryPipelineWizard.vue
 unit-tests:
-  - tests/unit/api/test_ownership_picker_bdd.py
-  - tests/bdd/steps/test_ownership_picker.py
+  - backend/tests/unit/api/test_ownership_picker_bdd.py
+  - backend/tests/bdd/steps/test_ownership_picker.py
 depends-on: [feat-teams-team-ownership]
 status: partial
 ---
@@ -119,3 +119,9 @@ from the admin API.
 ### UX
 - Picker relies on `GET /api/v1/admin/teams` — non-admin users see an error rather than a read-only view
 - No i18n for `label="Owner"` prop passed from parent views (LibraryPipelineWizard, PipelineTemplateGallery, CopyPipelineWizard)
+
+## QA History
+
+### 2026-07-05 — Cross-cutting QA (prodmap-frontend)
+- **Fixed**: `unit-tests:` paths missing `backend/` prefix — all 3 paths corrected to match actual file locations on disk
+- **Added**: QA History section for consistency with other frontend product map entries
