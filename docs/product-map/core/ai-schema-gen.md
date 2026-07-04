@@ -34,7 +34,8 @@ Schema Inference (8.16) samples records from a connected tool and uses an LLM to
 - [x] Nested object/array structures in samples inferred correctly
 - [x] Mixed field presence across records handled (required vs optional based on appearance)
 - [x] All-null-value fields omitted from draft schema
-- [x] Prompt truncates sample set to `_MAX_SAMPLE_RECORDS` (50) #### Schema Generation — service (`generation.py`, `SchemaGenerationService.generate`)
+- [x] Prompt truncates sample set to `_MAX_SAMPLE_RECORDS` (50)
+#### Schema Generation — service (`generation.py`, `SchemaGenerationService.generate`)
 - [x] LLM generates JSON Schema from natural-language description
 - [x] Optional example records shape the generated schema
 - [x] Handles markdown-fenced and plain-JSON LLM responses
@@ -101,7 +102,8 @@ Schema Inference (8.16) samples records from a connected tool and uses an LLM to
 - **No `abstract_name` inference:** `abstract_name` field exists on `SchemaCreate`/`SchemaUpdate`/`SchemaResponse` models (CRUD layer supports it), but `/infer` endpoint (`SchemaInferResponse`) does NOT include `abstract_name`. `suggestion_name` is hardcoded `"Inferred from {ci.name}"`, not AI-inferred.
 - **No SandboxedEnvironment:** LLM prompt doesn't isolate untrusted record values per 8.16 security requirement
 - **No data lifecycle enforcement:** No mechanism to ensure sampled data is not persisted after inference
-### Resilience & Integration Robustness
+
+## Resilience & Integration Robustness
 
 - [x] ConnectorHub sampling has 30s timeout → 504 Gateway Timeout
 - [x] ConnectorHub.initialise() wrapped in try/except → 502
@@ -116,7 +118,7 @@ Schema Inference (8.16) samples records from a connected tool and uses an LLM to
 - [x] Example data truncated to max_example_records (default 50) for generation
 - [x] Raw exception text not leaked in 502/504 responses
 
-### Edge Cases
+## Edge Cases
 
 - [x] Empty sample list (0 records) — returns LLM backend response
 - [x] Single record — inferred schema from single datapoint

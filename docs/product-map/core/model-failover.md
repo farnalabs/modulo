@@ -15,7 +15,6 @@ code:
   - backend/src/modulo/db/crud/model_backend.py
   - backend/src/modulo/db/migrations/versions/0035_model_fallback.py
 unit-tests:
-  - backend/tests/unit/core/model_backend_hub/test_hub.py
   - backend/tests/unit/core/model_backend_hub/test_failover.py
   - backend/tests/unit/api/test_model_backends_endpoint.py
   - backend/tests/integration/crud/test_model_backend.py
