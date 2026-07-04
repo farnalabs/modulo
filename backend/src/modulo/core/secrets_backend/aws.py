@@ -19,6 +19,8 @@ from typing import Any
 
 from modulo.core.secrets_backend import SecretsBackend
 
+_TIMEOUT: float = 30.0
+
 _MODULE_AVAILABLE: bool = True
 _boto3: Any = None
 
@@ -82,11 +84,18 @@ class AWSSecretsManagerBackend(SecretsBackend):
         client = await self._ensure_client()
 
         try:
-            response = await asyncio.to_thread(client.get_secret_value, SecretId=key)
+            response = await asyncio.wait_for(
+                asyncio.to_thread(client.get_secret_value, SecretId=key),
+                timeout=_TIMEOUT,
+            )
         except client.exceptions.ResourceNotFoundException:
             raise KeyError(key) from None
         except client.exceptions.AccessDeniedException as exc:
             raise PermissionError("AWSSecretsManagerBackend: access denied reading secret") from exc
+        except TimeoutError:
+            raise RuntimeError("AWSSecretsManagerBackend: timeout reading secret") from None
+        except Exception as exc:
+            raise RuntimeError(f"AWSSecretsManagerBackend: unexpected error reading secret: {exc}") from exc
 
         secret_string = response.get("SecretString")
         if isinstance(secret_string, str):
@@ -102,28 +111,45 @@ class AWSSecretsManagerBackend(SecretsBackend):
         client = await self._ensure_client()
 
         try:
-            await asyncio.to_thread(
-                client.create_secret,
-                Name=key,
-                SecretString=value,
-                Description="Modulo secret",
+            await asyncio.wait_for(
+                asyncio.to_thread(
+                    client.create_secret,
+                    Name=key,
+                    SecretString=value,
+                    Description="Modulo secret",
+                ),
+                timeout=_TIMEOUT,
             )
         except client.exceptions.ResourceExistsException:
-            await asyncio.to_thread(
-                client.update_secret,
-                SecretId=key,
-                SecretString=value,
+            await asyncio.wait_for(
+                asyncio.to_thread(
+                    client.update_secret,
+                    SecretId=key,
+                    SecretString=value,
+                ),
+                timeout=_TIMEOUT,
             )
+        except TimeoutError:
+            raise RuntimeError("AWSSecretsManagerBackend: timeout writing secret") from None
+        except Exception as exc:
+            raise RuntimeError(f"AWSSecretsManagerBackend: unexpected error writing secret: {exc}") from exc
 
     async def delete_secret(self, key: str) -> None:
         client = await self._ensure_client()
 
         try:
-            await asyncio.to_thread(
-                client.delete_secret,
-                SecretId=key,
-                RecoveryWindowInDays=7,
-                ForceDeleteWithoutRecovery=False,
+            await asyncio.wait_for(
+                asyncio.to_thread(
+                    client.delete_secret,
+                    SecretId=key,
+                    RecoveryWindowInDays=7,
+                    ForceDeleteWithoutRecovery=False,
+                ),
+                timeout=_TIMEOUT,
             )
         except client.exceptions.ResourceNotFoundException:
             pass
+        except TimeoutError:
+            raise RuntimeError("AWSSecretsManagerBackend: timeout deleting secret") from None
+        except Exception as exc:
+            raise RuntimeError(f"AWSSecretsManagerBackend: unexpected error deleting secret: {exc}") from exc

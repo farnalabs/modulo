@@ -11,7 +11,7 @@ import uuid
 from typing import TYPE_CHECKING
 
 from cryptography.fernet import Fernet, InvalidToken
-from sqlalchemy import select, text
+from sqlalchemy import delete, select, text
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 
 from modulo.core.secrets_backend import SecretsBackend
@@ -60,7 +60,10 @@ class FernetSecretsBackend(SecretsBackend):
         if self._session is None:
             raise RuntimeError("FernetSecretsBackend: no DB session set")
 
-        result = await self._session.execute(select(Secret).where(Secret.key == key).limit(1))
+        org_id = await self._read_org_id_from_session()
+        result = await self._session.execute(
+            select(Secret).where(Secret.key == key, Secret.organisation_id == org_id).limit(1)
+        )
         row = result.scalar_one_or_none()
         if row is None:
             raise KeyError(key)
@@ -126,6 +129,7 @@ class FernetSecretsBackend(SecretsBackend):
         if self._session is None:
             raise RuntimeError("FernetSecretsBackend: no DB session set")
 
-        stmt = text("DELETE FROM secrets WHERE key = :key")
-        await self._session.execute(stmt, {"key": key})
+        org_id = await self._read_org_id_from_session()
+        stmt = delete(Secret).where(Secret.key == key, Secret.organisation_id == org_id)
+        await self._session.execute(stmt)
         await self._session.flush()

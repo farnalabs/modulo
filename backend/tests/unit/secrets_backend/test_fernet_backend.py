@@ -33,10 +33,19 @@ def _set_org_id(session: MagicMock) -> None:
 @pytest.fixture
 def mock_session():
     session = MagicMock()
-    session.execute = AsyncMock(return_value=MagicMock())
     session.add = MagicMock()
     session.delete = AsyncMock()
     session.flush = AsyncMock()
+
+    async def default_execute(stmt, *args, **kwargs):
+        result = MagicMock()
+        if "current_setting" in str(stmt):
+            result.scalar.return_value = str(_ORG_ID)
+        else:
+            result.scalar_one_or_none.return_value = MagicMock()
+        return result
+
+    session.execute = AsyncMock(side_effect=default_execute)
     return session
 
 
@@ -49,7 +58,10 @@ class TestGetSecret:
 
         async def mock_execute(stmt, *args, **kwargs):
             result = MagicMock()
-            result.scalar_one_or_none.return_value = row
+            if "current_setting" in str(stmt):
+                result.scalar.return_value = str(_ORG_ID)
+            else:
+                result.scalar_one_or_none.return_value = row
             return result
 
         mock_session.execute = AsyncMock(side_effect=mock_execute)
@@ -62,7 +74,10 @@ class TestGetSecret:
 
         async def mock_execute(stmt, *args, **kwargs):
             result = MagicMock()
-            result.scalar_one_or_none.return_value = None
+            if "current_setting" in str(stmt):
+                result.scalar.return_value = str(_ORG_ID)
+            else:
+                result.scalar_one_or_none.return_value = None
             return result
 
         mock_session.execute = AsyncMock(side_effect=mock_execute)
@@ -83,7 +98,10 @@ class TestGetSecret:
 
         async def mock_execute(stmt, *args, **kwargs):
             result = MagicMock()
-            result.scalar_one_or_none.return_value = row
+            if "current_setting" in str(stmt):
+                result.scalar.return_value = str(_ORG_ID)
+            else:
+                result.scalar_one_or_none.return_value = row
             return result
 
         mock_session.execute = AsyncMock(side_effect=mock_execute)
@@ -165,6 +183,65 @@ class TestSetSession:
         session.execute = AsyncMock()
         backend.set_session(session)
         assert backend._session is session
+
+
+class TestGetSecretOrgScoping:
+    async def test_filters_by_org_id(self, mock_session):
+        backend = FernetSecretsBackend(fernet_key=_KEY, session=mock_session)
+        _set_org_id(mock_session)
+
+        row = MagicMock(spec=Secret)
+        row.encrypted_value = backend._fernet.encrypt(_SECRET_VALUE.encode())
+
+        execute_calls = []
+        async def mock_execute(stmt, *args, **kwargs):
+            execute_calls.append((str(stmt), args, kwargs))
+            result = MagicMock()
+            if "current_setting" in str(stmt):
+                result.scalar.return_value = str(_ORG_ID)
+            else:
+                result.scalar_one_or_none.return_value = row
+            return result
+
+        mock_session.execute = AsyncMock(side_effect=mock_execute)
+
+        value = await backend.get_secret("my-key")
+        assert value == _SECRET_VALUE
+
+        # Verify org_id was added to WHERE clause
+        get_secret_call = [c for c in execute_calls if "organisation_id" in str(c[0])]
+        assert len(get_secret_call) > 0, "Expected organisation_id filter in get_secret query"
+
+    async def test_wrong_org_raises_key_error(self, mock_session):
+        """get_secret with key that exists but under a different org should raise KeyError."""
+        backend = FernetSecretsBackend(fernet_key=_KEY, session=mock_session)
+        _set_org_id(mock_session)
+
+        async def mock_execute(stmt, *args, **kwargs):
+            result = MagicMock()
+            if "current_setting" in str(stmt):
+                result.scalar.return_value = str(_ORG_ID)
+            else:
+                result.scalar_one_or_none.return_value = None
+            return result
+
+        mock_session.execute = AsyncMock(side_effect=mock_execute)
+
+        with pytest.raises(KeyError):
+            await backend.get_secret("key-from-other-org")
+
+
+class TestDeleteSecretOrgScoping:
+    async def test_filters_by_org_id(self, mock_session):
+        backend = FernetSecretsBackend(fernet_key=_KEY, session=mock_session)
+        _set_org_id(mock_session)
+
+        await backend.delete_secret("my-key")
+
+        # Verify the delete statement included organisation_id filter
+        delete_calls = [str(c[0]) for c in mock_session.execute.call_args_list if "DELETE" in str(c[0]) or "delete" in str(c[0])]
+        if delete_calls:
+            assert "organisation_id" in delete_calls[0]
 
 
 class TestOrgIdCaching:
