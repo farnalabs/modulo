@@ -18,14 +18,6 @@ async function main() {
   const monitorConfig = loadMonitorConfig()
   const backends = await loadBackends(monitorConfig)
 
-const errorTracker = createErrorTracker({
-  appName: 'modulo',
-  environment: import.meta.env.MODE === 'development' ? 'development' : 'production',
-  version: import.meta.env.VITE_APP_VERSION ?? '',
-  monitorBackends: backends,
-})
->>>>>>> 7ac4a50 (refactor: ErrorTracker uses MonitorBackendRegistry, instance methods replace module-level handlers)
-
   const errorTracker = createErrorTracker({
     appName: 'modulo',
     environment: import.meta.env.MODE === 'development' ? 'development' : 'production',
