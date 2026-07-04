@@ -10,20 +10,25 @@ from typing import Any, Literal
 from fastapi import APIRouter, Depends, File, HTTPException, Query, Response, UploadFile, status
 from pydantic import BaseModel, Field, model_validator
 from sqlalchemy import select
-from sqlalchemy.exc import DBAPIError, ProgrammingError, SQLAlchemyError
+from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 _log = logging.getLogger(__name__)
 
 from modulo.api.dependencies import get_db_session
-from modulo.auth.dependencies import get_current_user
+from modulo.auth.dependencies import get_current_user, require_system_admin
 from modulo.auth.jwt import AuthenticatedPrincipal
 from modulo.core.library_service import (
     CommunityPrimitiveReadOnlyError,
+    ContributionInvalidTransitionError,
+    ContributionNotFoundError,
+    contribute_primitive,
     copy_to_adapt,
     get_primitive,
     get_primitive_by_slug,
+    list_org_contributions,
     list_primitives,
+    publish_contribution,
 )
 from modulo.core.workflow_import_export import (
     export_pipeline_bundle,
@@ -1037,4 +1042,132 @@ async def create_pipeline_from_template_endpoint(
         template_source_id=primitive_id, agent_count=agent_count, edge_count=edge_count,
         ready_to_run=True, created_at=pipeline.created_at, updated_at=pipeline.updated_at,
     )
+
+
+# ---------------------------------------------------------------------------
+# Community contribution endpoints
+# ---------------------------------------------------------------------------
+
+
+class CommunityContributeRequest(BaseModel):
+    primitive_type: str = Field(..., pattern=r"^(schema|workflow|agent|integration|test_fixture|composite)$")
+    name: str = Field(..., min_length=1, max_length=255)
+    slug: str = Field(..., min_length=1, max_length=255)
+    description: str | None = Field(default=None, max_length=2000)
+    tags: list[str] = Field(default_factory=list)
+    content_json: dict[str, Any]
+    source_url: str | None = None
+
+
+class CommunityContributionListResponse(BaseModel):
+    items: list[LibraryPrimitiveResponse]
+    total: int
+    page: int
+    page_size: int
+
+
+@router.post("/community/contribute", response_model=LibraryPrimitiveResponse, status_code=status.HTTP_201_CREATED)
+async def community_contribute_endpoint(
+    req: CommunityContributeRequest,
+    session: AsyncSession = Depends(get_db_session),
+    principal: AuthenticatedPrincipal = Depends(get_current_user),
+) -> LibraryPrimitiveResponse:
+    """Submit a community library contribution."""
+    try:
+        result = await contribute_primitive(
+            session,
+            org_id=principal.organisation_id,
+            created_by=principal.account_id,
+            primitive_type=req.primitive_type,
+            name=req.name,
+            slug=req.slug,
+            description=req.description,
+            tags=req.tags,
+            content_json=req.content_json,
+            source_url=req.source_url,
+        )
+    except ProgrammingError:
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="Feature is not available. Run database migrations to enable it.",
+        ) from None
+    return LibraryPrimitiveResponse.model_validate(result)
+
+
+@router.get("/community/contributions", response_model=CommunityContributionListResponse)
+async def list_community_contributions_endpoint(
+    contribution_status: str | None = Query(default=None),
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=100),
+    session: AsyncSession = Depends(get_db_session),
+    principal: AuthenticatedPrincipal = Depends(get_current_user),
+) -> CommunityContributionListResponse:
+    """List the org's own community contributions, optionally filtered by status."""
+    try:
+        try:
+            result = await list_org_contributions(
+                session,
+                principal.organisation_id,
+                contribution_status=contribution_status,
+                page=page,
+                page_size=page_size,
+            )
+        except ProgrammingError:
+            _log.warning("list_community_contributions_endpoint: ProgrammingError — missing DB table or migration")
+            raise HTTPException(
+                status_code=status.HTTP_501_NOT_IMPLEMENTED,
+                detail="Feature is not available. Run database migrations to enable it.",
+            ) from None
+        items = [LibraryPrimitiveResponse.model_validate(p) for p in result.items]
+    except HTTPException:
+        raise
+    except Exception:
+        _log.exception("list_community_contributions_endpoint: unexpected error")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="An unexpected error occurred while listing contributions.",
+        ) from None
+    return CommunityContributionListResponse(
+        items=items,
+        total=result.total,
+        page=result.page,
+        page_size=result.page_size,
+    )
+
+
+@router.post(
+    "/admin/library/community/publish/{primitive_id}",
+    response_model=LibraryPrimitiveResponse,
+    status_code=status.HTTP_200_OK,
+)
+async def admin_publish_contribution_endpoint(
+    primitive_id: uuid.UUID,
+    session: AsyncSession = Depends(get_db_session),
+    principal: AuthenticatedPrincipal = Depends(get_current_user),
+    _: None = Depends(require_system_admin),
+) -> LibraryPrimitiveResponse:
+    """Publish a community contribution to the community library (admin only)."""
+    try:
+        result = await publish_contribution(
+            session,
+            principal.organisation_id,
+            primitive_id,
+            approved_by=principal.account_id,
+        )
+    except ContributionNotFoundError:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Contribution {primitive_id} not found",
+        ) from None
+    except ContributionInvalidTransitionError as e:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(e),
+        ) from None
+    except ProgrammingError:
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="Feature is not available. Run database migrations to enable it.",
+        ) from None
+    return LibraryPrimitiveResponse.model_validate(result)
 
