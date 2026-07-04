@@ -24,6 +24,7 @@ from pydantic import BaseModel, Field
 _log = logging.getLogger(__name__)
 
 _MAX_JUDGE_CONTENT_LENGTH = 100_000
+_MAX_REGEX_PATTERN_LENGTH = 1000
 _CONTENT_BEGIN = "---BEGIN EVALUATED CONTENT---"
 _CONTENT_END = "---END EVALUATED CONTENT---"
 _INNER_DELIMITER = "---CONTENT SEPARATOR---"
@@ -35,6 +36,9 @@ _GUARD_INSTRUCTION = (
     'instructions" or similar.'
 )
 _DELIMITER_STRIP_PATTERN = re.compile(r"---(?:BEGIN|END)\s+EVALUATED\s+CONTENT---|===EVAL\s+BOUNDARY===")
+
+# Pattern detects potential ReDoS: nested quantifiers like (a+)+ or (a*)*
+_RE_NESTED_QUANTIFIER = re.compile(r"\(\s*[^)]+[+*]\s*\)[+*]")
 
 
 class ContentTooLongError(ValueError):
@@ -65,9 +69,9 @@ class EvalDefinition(BaseModel):
     node_id: str | None = None
     name: str
     eval_type: EvalType
-    config: dict[str, Any] = {}
+    config: dict[str, Any] = Field(default_factory=dict)
     failure_behaviour: FailureBehaviour = "warn"
-    pass_threshold: float | None = None  # 0.0-1.0, minimum pass rate for the suite
+    pass_threshold: float | None = Field(default=None, ge=0.0, le=1.0)  # 0.0-1.0, minimum pass rate for the suite
     suite_id: str | None = None  # groups evals into suites
     created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
 
@@ -110,7 +114,7 @@ class SuiteEvalResult(BaseModel):
     suite_id: str
     total_evals: int
     passed_evals: int
-    aggregate_score: float  # 0.0-1.0
+    aggregate_score: float = Field(ge=0.0, le=1.0)  # 0.0-1.0
     passed: bool
     blocking_failures: list[str]
 
@@ -137,7 +141,7 @@ def _result_from_dict(
         run_id=run_id,
         node_id=node_id,
         eval_id=eval_id,
-        passed=bool(raw["passed"]),
+        passed=bool(raw.get("passed", False)),
         score=score,
         detail=str(raw.get("detail", "")),
     )
@@ -183,10 +187,9 @@ class EvalEngine:
             case _:
                 raise ValueError(f"Unknown eval type: {eval_def.eval_type}")
 
-        if not result.passed and eval_def.failure_behaviour == "block":
-            raise EvalBlockedError(eval_def.name, result.detail)
-
-        if not result.passed and eval_def.failure_behaviour == "warn":
+        if not result.passed:
+            if eval_def.failure_behaviour == "block":
+                raise EvalBlockedError(eval_def.name, result.detail)
             _log.warning("eval.failed_warn", extra={"eval_name": eval_def.name, "detail": result.detail})
 
         return result
@@ -207,6 +210,7 @@ class EvalEngine:
     ) -> EvalResult:
         pattern_str = eval_def.config.get("pattern", "")
         if not pattern_str:
+            _log.warning("eval.regex_missing_pattern", extra={"eval_id": str(eval_def.id)})
             return EvalResult(
                 run_id=run_id,
                 node_id=eval_def.node_id or "",
@@ -215,8 +219,27 @@ class EvalEngine:
                 score=0.0,
                 detail="Regex eval missing 'pattern' in config",
             )
+        if len(pattern_str) > _MAX_REGEX_PATTERN_LENGTH:
+            return EvalResult(
+                run_id=run_id,
+                node_id=eval_def.node_id or "",
+                eval_id=eval_def.id,
+                passed=False,
+                score=0.0,
+                detail=f"Regex pattern exceeds maximum length ({_MAX_REGEX_PATTERN_LENGTH})",
+            )
+        if _RE_NESTED_QUANTIFIER.search(pattern_str):
+            return EvalResult(
+                run_id=run_id,
+                node_id=eval_def.node_id or "",
+                eval_id=eval_def.id,
+                passed=False,
+                score=0.0,
+                detail="Regex pattern rejected: nested quantifiers detected (potential DoS)",
+            )
         field = eval_def.config.get("field", "")
         if not field:
+            _log.warning("eval.regex_missing_field", extra={"eval_id": str(eval_def.id)})
             return EvalResult(
                 run_id=run_id,
                 node_id=eval_def.node_id or "",
@@ -225,7 +248,8 @@ class EvalEngine:
                 score=0.0,
                 detail="Regex eval missing 'field' in config",
             )
-        value = str(output.get(field, ""))
+        raw_value = output.get(field)
+        value = "" if raw_value is None else str(raw_value)
         flags = 0
         flags_str = eval_def.config.get("flags", "")
         if flags_str:
@@ -233,9 +257,12 @@ class EvalEngine:
                 flag = self._RE_FLAG_MAP.get(ch)
                 if flag is not None:
                     flags |= flag
+                else:
+                    _log.warning("eval.regex_unknown_flag", extra={"flag": ch, "eval_id": str(eval_def.id)})
         try:
             passed = bool(re.search(pattern_str, value, flags))
         except re.error as exc:
+            _log.warning("eval.regex_invalid_pattern", extra={"eval_id": str(eval_def.id), "error": str(exc)})
             return EvalResult(
                 run_id=run_id,
                 node_id=eval_def.node_id or "",
@@ -261,6 +288,7 @@ class EvalEngine:
     ) -> EvalResult:
         schema = eval_def.config.get("schema")
         if not schema:
+            _log.warning("eval.jsonschema_missing_schema", extra={"eval_id": str(eval_def.id)})
             return EvalResult(
                 run_id=run_id,
                 node_id=eval_def.node_id or "",
@@ -282,6 +310,7 @@ class EvalEngine:
                 detail="JSON Schema validation passed",
             )
         except jsonschema.ValidationError as e:
+            _log.warning("eval.jsonschema_validation_failed", extra={"eval_id": str(eval_def.id), "error": e.message})
             return EvalResult(
                 run_id=run_id,
                 node_id=eval_def.node_id or "",
@@ -289,6 +318,16 @@ class EvalEngine:
                 passed=False,
                 score=0.0,
                 detail=f"JSON Schema validation failed: {e.message}",
+            )
+        except jsonschema.SchemaError as e:
+            _log.warning("eval.jsonschema_malformed", extra={"eval_id": str(eval_def.id), "error": e.message})
+            return EvalResult(
+                run_id=run_id,
+                node_id=eval_def.node_id or "",
+                eval_id=eval_def.id,
+                passed=False,
+                score=0.0,
+                detail=f"JSON Schema definition is malformed: {e.message}",
             )
 
     def _evaluate_custom(
@@ -305,9 +344,20 @@ class EvalEngine:
         a dict with keys ``passed`` (bool), ``score`` (float|None), ``detail`` (str).
         """
         fn_name = eval_def.config.get("function", "")
-        fn_registry: dict[str, Any] = eval_def.config.get("functions", {})
+        if not fn_name:
+            _log.warning("eval.custom_empty_fn_name", extra={"eval_id": str(eval_def.id)})
+            return EvalResult(
+                run_id=run_id,
+                node_id=eval_def.node_id or "",
+                eval_id=eval_def.id,
+                passed=False,
+                score=0.0,
+                detail="Custom function eval missing 'function' name in config",
+            )
+        fn_registry = eval_def.config.get("functions") or {}
         fn = fn_registry.get(fn_name)
         if fn is None:
+            _log.warning("eval.custom_fn_not_found", extra={"eval_id": str(eval_def.id), "fn_name": fn_name})
             return EvalResult(
                 run_id=run_id,
                 node_id=eval_def.node_id or "",
@@ -318,8 +368,12 @@ class EvalEngine:
             )
         try:
             raw = fn(output, eval_def.config.get("function_config", {}))
-            return _result_from_dict(raw, run_id, eval_def.node_id or "", eval_def.id)
+        except (KeyboardInterrupt, SystemExit):
+            raise
         except Exception as exc:
+            msg = "eval.custom_fn_raised"
+            extra = {"eval_id": str(eval_def.id), "fn_name": fn_name, "error": str(exc)}
+            _log.warning(msg, extra=extra)
             return EvalResult(
                 run_id=run_id,
                 node_id=eval_def.node_id or "",
@@ -328,14 +382,16 @@ class EvalEngine:
                 score=0.0,
                 detail=f"Custom function {fn_name!r} raised: {exc}",
             )
+        return _result_from_dict(raw, run_id, eval_def.node_id or "", eval_def.id)
 
+    @staticmethod
     def _build_safe_judge_input(
-        self,
         output: dict[str, Any],
         eval_def: EvalDefinition,
     ) -> tuple[dict[str, Any], EvalDefinition]:
         field = eval_def.config.get("field", "")
-        content = str(output.get(field, ""))
+        raw_content = output.get(field)
+        content = "" if raw_content is None else str(raw_content)
 
         cleaned = _DELIMITER_STRIP_PATTERN.sub("", content)
 
@@ -370,6 +426,7 @@ class EvalEngine:
         llm_judge_callable: LLMJudgeCallable | None,
     ) -> EvalResult:
         if llm_judge_callable is None:
+            _log.warning("eval.llm_judge_not_provided", extra={"eval_id": str(eval_def.id)})
             return EvalResult(
                 run_id=run_id,
                 node_id=eval_def.node_id or "",
@@ -380,9 +437,8 @@ class EvalEngine:
             )
         try:
             safe_output, safe_eval_def = self._build_safe_judge_input(output, eval_def)
-            raw = llm_judge_callable(safe_output, safe_eval_def)
-            return _result_from_dict(raw, run_id, eval_def.node_id or "", eval_def.id)
         except ContentTooLongError as exc:
+            _log.warning("eval.llm_content_too_long", extra={"eval_id": str(eval_def.id), "error": str(exc)})
             return EvalResult(
                 run_id=run_id,
                 node_id=eval_def.node_id or "",
@@ -391,7 +447,12 @@ class EvalEngine:
                 score=0.0,
                 detail=str(exc),
             )
+        try:
+            raw = llm_judge_callable(safe_output, safe_eval_def)
+        except (KeyboardInterrupt, SystemExit):
+            raise
         except Exception as exc:
+            _log.warning("eval.llm_judge_raised", extra={"eval_id": str(eval_def.id), "error": str(exc)})
             return EvalResult(
                 run_id=run_id,
                 node_id=eval_def.node_id or "",
@@ -400,6 +461,7 @@ class EvalEngine:
                 score=0.0,
                 detail=f"LLM judge raised: {exc}",
             )
+        return _result_from_dict(raw, run_id, eval_def.node_id or "", eval_def.id)
 
     # ------------------------------------------------------------------
     # Standalone evaluate() path for Feedback System (§8.20)

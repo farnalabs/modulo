@@ -12,6 +12,7 @@ from datetime import UTC, datetime, timedelta
 from uuid import UUID
 
 from sqlalchemy import text
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 _log = logging.getLogger(__name__)
@@ -57,41 +58,45 @@ async def detect_regressions(
     recent_window_days = max(days // 4, 1)
     recent_start = now - timedelta(days=recent_window_days)
 
-    q = text("""
-        SELECT
-            er.eval_id,
-            ed.name               AS eval_name,
-            COUNT(*) FILTER (WHERE er.evaluated_at >= :recent_start)
-                                   AS recent_total,
-            COUNT(*) FILTER (WHERE er.evaluated_at >= :recent_start AND er.passed)
-                                   AS recent_passed,
-            COUNT(*) FILTER (WHERE er.evaluated_at < :recent_start)
-                                   AS baseline_total,
-            COUNT(*) FILTER (WHERE er.evaluated_at < :recent_start AND er.passed)
-                                   AS baseline_passed,
-            COALESCE(
-                array_agg(DISTINCT er.run_id) FILTER (
-                    WHERE er.evaluated_at >= :recent_start AND NOT er.passed
-                ),
-                ARRAY[]::uuid[]
-            )                      AS affected_run_ids
-        FROM eval_results er
-        JOIN eval_definitions ed ON ed.id = er.eval_id
-        WHERE er.organisation_id = :org_id
-          AND er.evaluated_at >= :baseline_start
-        GROUP BY er.eval_id, ed.name
-    """)
+    try:
+        q = text("""
+            SELECT
+                er.eval_id,
+                ed.name               AS eval_name,
+                COUNT(*) FILTER (WHERE er.evaluated_at >= :recent_start)
+                                       AS recent_total,
+                COUNT(*) FILTER (WHERE er.evaluated_at >= :recent_start AND er.passed)
+                                       AS recent_passed,
+                COUNT(*) FILTER (WHERE er.evaluated_at < :recent_start)
+                                       AS baseline_total,
+                COUNT(*) FILTER (WHERE er.evaluated_at < :recent_start AND er.passed)
+                                       AS baseline_passed,
+                COALESCE(
+                    array_agg(DISTINCT er.run_id) FILTER (
+                        WHERE er.evaluated_at >= :recent_start AND NOT er.passed
+                    ),
+                    ARRAY[]::uuid[]
+                )                      AS affected_run_ids
+            FROM eval_results er
+            JOIN eval_definitions ed ON ed.id = er.eval_id
+            WHERE er.organisation_id = :org_id
+              AND er.evaluated_at >= :baseline_start
+            GROUP BY er.eval_id, ed.name
+        """)
 
-    rows = (
-        await session.execute(
-            q,
-            {
-                "org_id": org_id,
-                "baseline_start": baseline_start,
-                "recent_start": recent_start,
-            },
-        )
-    ).all()
+        rows = (
+            await session.execute(
+                q,
+                {
+                    "org_id": org_id,
+                    "baseline_start": baseline_start,
+                    "recent_start": recent_start,
+                },
+            )
+        ).all()
+    except SQLAlchemyError:
+        _log.exception("regression.detect_db_error", extra={"org_id": str(org_id), "days": days})
+        raise
 
     alerts: list[RegressionAlert] = []
     for row in rows:
@@ -101,6 +106,8 @@ async def detect_regressions(
         baseline_passed: int = row.baseline_passed or 0
 
         if recent_total == 0 or baseline_total == 0:
+            _log.info("regression.skip_insufficient_data",
+                       extra={"eval_id": str(row.eval_id), "eval_name": row.eval_name})
             continue
 
         current_pass_rate = recent_passed / recent_total
@@ -108,22 +115,16 @@ async def detect_regressions(
         drop = prev_pass_rate - current_pass_rate
 
         if drop >= threshold:
-            trend = "declining"
-        elif drop <= -threshold:
-            trend = "improving"
-        else:
-            trend = "stable"
-
-        alerts.append(
-            RegressionAlert(
-                eval_id=row.eval_id,
-                eval_name=row.eval_name,
-                prev_pass_rate=round(prev_pass_rate, 4),
-                current_pass_rate=round(current_pass_rate, 4),
-                drop_pct=round(drop, 4),
-                trend=trend,
-                affected_run_ids=list(row.affected_run_ids),
+            alerts.append(
+                RegressionAlert(
+                    eval_id=row.eval_id,
+                    eval_name=row.eval_name,
+                    prev_pass_rate=round(prev_pass_rate, 4),
+                    current_pass_rate=round(current_pass_rate, 4),
+                    drop_pct=round(drop, 4),
+                    trend="declining",
+                    affected_run_ids=list(row.affected_run_ids),
+                )
             )
-        )
 
     return alerts
