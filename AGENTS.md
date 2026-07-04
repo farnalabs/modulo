@@ -16,9 +16,9 @@ git worktree remove .agents/worktrees/<branch-name>
 git branch -d <branch-name>
 ```
 
-**Gate script:** `..\..\Dev-Harness\tools\gate.ps1` runs all CI checks (ruff, mypy, bandit, pytest, frontend build) and merges the worktree branch to local main on success — does NOT push to remote. From the worktree root:
+**Gate script:** `..\..\harness\tools\gate.ps1` runs all CI checks (ruff, mypy, bandit, pytest, frontend build) and merges the worktree branch to local main on success — does NOT push to remote. From the worktree root:
 ```powershell
-..\..\Dev-Harness\tools\gate.ps1
+..\..\harness\tools\gate.ps1
 ```
 Use `-Fast` to skip mypy + frontend build, `-Yes` to skip confirmation.
 
@@ -60,14 +60,14 @@ The root `AGENTS.md` has the full non-negotiable rule under **Agent Isolation: A
 
 ## Task Tracker
 
-The authoritative task list lives at `../Dev-Harness/delivery/delivery-plan.json`. Do not edit it directly — use the task script:
+The authoritative task list lives at `../harness/delivery/delivery-plan.json`. Do not edit it directly — use the task script:
 
 ```powershell
-../devtools/Dev-Harness/tools/task.ps1 list                          # show all tasks and current status
-../devtools/Dev-Harness/tools/task.ps1 show <id>                     # full detail + history for one task
-../devtools/Dev-Harness/tools/task.ps1 start <id>                    # begin a task (rejects if deps unmet)
-../devtools/Dev-Harness/tools/task.ps1 complete <id> -Evidence "..."  # mark done with test evidence
-../devtools/Dev-Harness/tools/task.ps1 block <id> -Evidence "..."    # record a concrete external blocker
+../devtools/harness/tools/task.ps1 list                          # show all tasks and current status
+../devtools/harness/tools/task.ps1 show <id>                     # full detail + history for one task
+../devtools/harness/tools/task.ps1 start <id>                    # begin a task (rejects if deps unmet)
+../devtools/harness/tools/task.ps1 complete <id> -Evidence "..."  # mark done with test evidence
+../devtools/harness/tools/task.ps1 block <id> -Evidence "..."    # record a concrete external blocker
 ```
 
 The conductor picks the first `pending` task whose entire `dependsOn` array is `completed`. Tasks span phases 0–9 (alpha through v2). Run `/deliver` from the project root to start an autonomous delivery sprint — this invokes the `deliver` skill at `.agents/skills/deliver/SKILL.md`.
@@ -343,8 +343,8 @@ npm run dev
 Before merging any worktree branch to `main`, run the smoke test:
 
 ```powershell
-../devtools/Dev-Harness/tools/smoke-test.ps1          # full check (vitest + file existence + type-check)
-../devtools/Dev-Harness/tools/smoke-test.ps1 -Fast    # skip type-check
+../devtools/harness/tools/smoke-test.ps1          # full check (vitest + file existence + type-check)
+../devtools/harness/tools/smoke-test.ps1 -Fast    # skip type-check
 ```
 
 This checks:
