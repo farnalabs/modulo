@@ -132,7 +132,11 @@ async def apply_group_mappings(
         idp_group = mapping.get("idp_group", "")
         if idp_group not in idp_groups:
             continue
-        team_id = uuid.UUID(mapping["team_id"])
+        try:
+            team_id = uuid.UUID(mapping["team_id"])
+        except (ValueError, KeyError) as exc:
+            _log.warning("sso.invalid_team_mapping", extra={"error": str(exc), "mapping": str(mapping)})
+            continue
         team_role = mapping.get("team_role", "viewer")
 
         existing = await get_membership_by_team_and_account(session, team_id, account.id)
@@ -278,6 +282,8 @@ async def oidc_process_callback(
         raise ValueError(str(exc)) from None
 
     email = claims.get("email", "") or claims.get("sub", "")
+    if not email:
+        raise ValueError("OIDC provider did not return an email or sub claim — cannot provision account")
     name = claims.get("name", "") or claims.get("preferred_username", "") or email.split("@")[0]
     sso_subject = f"{provider_id}:{claims.get('sub', email)}"
 
@@ -286,18 +292,16 @@ async def oidc_process_callback(
     except RuntimeError as exc:
         raise ValueError(str(exc)) from None
 
-    idp_groups: list[str] = claims.get("groups", []) or []
+    raw_groups = claims.get("groups", [])
+    if not isinstance(raw_groups, list):
+        raw_groups = []
+    idp_groups: list[str] = raw_groups
     if idp_groups:
         db_provider = await _lookup_provider_by_client_id(session, provider["client_id"])
         if db_provider is not None and db_provider.group_mappings:
             await apply_group_mappings(session, account, org_id, idp_groups, db_provider.group_mappings)
 
     return await issue_sso_tokens(account, org_id, org_role, session, settings)
-
-
-def parse_oidc_providers(settings: Settings) -> list[dict[str, str]]:
-    """Parse MODULO_OIDC_PROVIDERS JSON to a list of provider dicts."""
-    return _parse_oidc_providers(settings)
 
 
 def _parse_oidc_providers(settings: Settings) -> list[dict[str, str]]:
@@ -308,6 +312,9 @@ def _parse_oidc_providers(settings: Settings) -> list[dict[str, str]]:
     except (json.JSONDecodeError, TypeError):
         _log.warning("sso.oidc_invalid_json")
         return []
+    if not isinstance(entries, list):
+        _log.warning("sso.oidc_not_array", extra={"type": type(entries).__name__})
+        return []
     valid = []
     for entry in entries:
         if all(k in entry for k in ("provider_id", "client_id", "client_secret", "discovery_url")):
@@ -315,6 +322,10 @@ def _parse_oidc_providers(settings: Settings) -> list[dict[str, str]]:
         else:
             _log.warning("sso.oidc_entry_missing_fields", extra={"entry": str(entry)})
     return valid
+
+
+# public alias for backwards compatibility
+parse_oidc_providers = _parse_oidc_providers
 
 
 async def _fetch_discovery(discovery_url: str) -> dict[str, Any]:
@@ -345,7 +356,7 @@ async def _exchange_code(
                 "client_secret": client_secret,
             },
             headers={"Accept": "application/json"},
-            timeout=15,
+            timeout=httpx.Timeout(15.0, connect=5.0),
         )
         resp.raise_for_status()
         return resp.json()
@@ -502,6 +513,8 @@ async def saml_process_response(
                 attrs[attr_name] = ",".join(values)
 
         email = attrs.get("email", "") or attrs.get("Email", "") or name_id or ""
+        if not email:
+            raise ValueError("SAML provider did not return an email attribute — cannot provision account")
         display_name = (
             attrs.get("displayName", "")
             or attrs.get("cn", "")
@@ -511,7 +524,9 @@ async def saml_process_response(
         sso_subject = f"saml:{idp_entity_id}:{name_id}"
 
         try:
-            account, org_id, org_role = await jit_provision_user(session, settings, email, display_name, "saml", sso_subject)
+            account, org_id, org_role = await jit_provision_user(
+                session, settings, email, display_name, "saml", sso_subject
+            )
         except RuntimeError as exc:
             raise ValueError(str(exc)) from None
 

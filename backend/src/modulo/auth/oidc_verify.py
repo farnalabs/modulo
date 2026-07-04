@@ -79,6 +79,8 @@ async def _fetch_jwks_uri(discovery_url: str) -> str:
             disc: dict[str, Any] = resp.json()
     except (httpx.HTTPStatusError, httpx.RequestError, json.JSONDecodeError) as exc:
         raise OidcVerifyError(f"Failed to fetch discovery document: {exc}") from exc
+    if not isinstance(disc, dict):
+        raise OidcVerifyError("Discovery document is not a JSON object")
     jwks_uri = disc.get("jwks_uri")
     if not jwks_uri:
         raise OidcVerifyError("No jwks_uri in discovery document")
@@ -95,11 +97,13 @@ async def _fetch_jwks(jwks_uri: str) -> list[dict[str, Any]]:
         async with httpx.AsyncClient() as client:
             resp = await client.get(jwks_uri, timeout=10)
             resp.raise_for_status()
-            data: dict[str, Any] = resp.json()
+            data = resp.json()
     except (httpx.HTTPStatusError, httpx.RequestError, json.JSONDecodeError) as exc:
         raise OidcVerifyError(f"Failed to fetch JWKS: {exc}") from exc
 
-    raw_keys = data.get("keys", data if isinstance(data, list) else [])
+    if not isinstance(data, dict):
+        raise OidcVerifyError("JWKS response is not a JSON object")
+    raw_keys = data.get("keys", [])
     if not isinstance(raw_keys, list) or not raw_keys:
         raise OidcVerifyError("No keys in JWKS response")
 
@@ -146,7 +150,7 @@ def _decode_jwt_header(token: str) -> dict[str, Any]:
     if len(parts) != 3:
         raise OidcVerifyError("Invalid JWT format: expected 3 dot-separated segments")
     try:
-        padded = parts[0] + "=" * (4 - len(parts[0]) % 4)
+        padded = parts[0] + "=" * (-len(parts[0]) % 4)
         return dict(json.loads(base64.urlsafe_b64decode(padded)))
     except (ValueError, json.JSONDecodeError) as exc:
         raise OidcVerifyError(f"Failed to decode JWT header: {exc}") from exc
@@ -208,12 +212,20 @@ async def verify_id_token_with_discovery(
     issuer. Prefer :func:`verify_id_token` when you already have the JWKS
     URI and issuer from a previously fetched discovery document.
     """
-    jwks_uri = await _fetch_jwks_uri(discovery_url)
+    try:
+        async with httpx.AsyncClient() as client:
+            resp = await client.get(discovery_url, timeout=10)
+            resp.raise_for_status()
+            disc: dict[str, Any] = resp.json()
+    except (httpx.HTTPStatusError, httpx.RequestError, json.JSONDecodeError) as exc:
+        raise OidcVerifyError(f"Failed to fetch discovery document: {exc}") from exc
 
-    async with httpx.AsyncClient() as client:
-        resp = await client.get(discovery_url, timeout=10)
-        resp.raise_for_status()
-        disc: dict[str, Any] = resp.json()
+    if not isinstance(disc, dict):
+        raise OidcVerifyError("Discovery document is not a JSON object")
+
+    jwks_uri = disc.get("jwks_uri")
+    if not jwks_uri:
+        raise OidcVerifyError("No jwks_uri in discovery document")
 
     issuer = disc.get("issuer", "")
     if not issuer:
