@@ -471,14 +471,20 @@ async def admin_get_org(
             detail="Only admin users can view org profile",
         )
 
-    async with session.begin():
-        await set_rls_org(session, current_user.organisation_id)
-        org = await get_organisation(session, current_user.organisation_id)
-        if org is None:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail="Organisation not found",
-            )
+    try:
+        async with session.begin():
+            await set_rls_org(session, current_user.organisation_id)
+            org = await get_organisation(session, current_user.organisation_id)
+            if org is None:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail="Organisation not found",
+                )
+    except ProgrammingError:
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="Feature is not available. Run database migrations to enable it.",
+        )
 
     current_settings = org.settings_json or {}
     return OrgProfileResponse(
@@ -503,27 +509,33 @@ async def admin_update_org(
             detail="Only admin users can update org profile",
         )
 
-    async with session.begin():
-        await set_rls_org(session, current_user.organisation_id)
-        org = await get_organisation(session, current_user.organisation_id)
-        if org is None:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail="Organisation not found",
-            )
+    try:
+        async with session.begin():
+            await set_rls_org(session, current_user.organisation_id)
+            org = await get_organisation(session, current_user.organisation_id)
+            if org is None:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail="Organisation not found",
+                )
 
-        updates: dict[str, object] = {}
-        if body.name is not None:
-            updates["name"] = body.name
-        if body.logo_url is not None:
-            existing_settings = dict(org.settings_json or {})
-            existing_settings["logo_url"] = body.logo_url
-            updates["settings_json"] = existing_settings
+            updates: dict[str, object] = {}
+            if body.name is not None:
+                updates["name"] = body.name
+            if body.logo_url is not None:
+                existing_settings = dict(org.settings_json or {})
+                existing_settings["logo_url"] = body.logo_url
+                updates["settings_json"] = existing_settings
 
-        if updates:
-            updated = await update_organisation(session, current_user.organisation_id, updates)
-            if updated is not None:
-                org = updated
+            if updates:
+                updated = await update_organisation(session, current_user.organisation_id, updates)
+                if updated is not None:
+                    org = updated
+    except ProgrammingError:
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="Feature is not available. Run database migrations to enable it.",
+        )
 
     current_settings = org.settings_json or {}
     return OrgProfileResponse(
@@ -549,15 +561,21 @@ async def admin_regenerate_api_key(
 
     from modulo.auth.api_key import create_api_key
 
-    async with session.begin():
-        await set_rls_org(session, current_user.organisation_id)
+    try:
+        async with session.begin():
+            await set_rls_org(session, current_user.organisation_id)
 
-        _, raw_key = await create_api_key(
-            session,
-            org_id=current_user.organisation_id,
-            account_id=current_user.account_id,
-            name="Default Org API Key",
-            role="operator",
+            _, raw_key = await create_api_key(
+                session,
+                org_id=current_user.organisation_id,
+                account_id=current_user.account_id,
+                name="Default Org API Key",
+                role="operator",
+            )
+    except ProgrammingError:
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="Feature is not available. Run database migrations to enable it.",
         )
 
     return {"api_key": raw_key, "lookup_prefix": raw_key[3:11]}
@@ -1178,30 +1196,36 @@ async def request_org_deletion(
     from modulo.core.audit_logger import append_audit_event
     from modulo.db.crud.org_deletion import request_org_deletion as _request_deletion
 
-    async with session.begin():
-        await set_rls_org(session, current_user.organisation_id)
+    try:
+        async with session.begin():
+            await set_rls_org(session, current_user.organisation_id)
 
-        try:
-            result = await _request_deletion(
+            try:
+                result = await _request_deletion(
+                    session,
+                    org_id=current_user.organisation_id,
+                    actor_user_id=current_user.account_id,
+                )
+            except ValueError as exc:
+                raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+
+            await append_audit_event(
                 session,
                 org_id=current_user.organisation_id,
+                event_type="org_deletion_requested",
                 actor_user_id=current_user.account_id,
+                resource_type="organisation",
+                resource_id=current_user.organisation_id,
+                payload_json={
+                    "deletion_token": result["token"][:12] + "...",
+                    "token_expires_at": result["token_expires_at"],
+                    "exported_entities": list(result["export"].keys()),
+                },
             )
-        except ValueError as exc:
-            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
-
-        await append_audit_event(
-            session,
-            org_id=current_user.organisation_id,
-            event_type="org_deletion_requested",
-            actor_user_id=current_user.account_id,
-            resource_type="organisation",
-            resource_id=current_user.organisation_id,
-            payload_json={
-                "deletion_token": result["token"][:12] + "...",
-                "token_expires_at": result["token_expires_at"],
-                "exported_entities": list(result["export"].keys()),
-            },
+    except ProgrammingError:
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="Feature is not available. Run database migrations to enable it.",
         )
 
     export = result["export"]
@@ -1242,18 +1266,24 @@ async def confirm_org_deletion(
 
     from modulo.db.crud.org_deletion import confirm_org_deletion as _confirm_deletion
 
-    async with session.begin():
-        await set_rls_org(session, current_user.organisation_id)
+    try:
+        async with session.begin():
+            await set_rls_org(session, current_user.organisation_id)
 
-        try:
-            result = await _confirm_deletion(
-                session,
-                org_id=current_user.organisation_id,
-                token=body.token,
-                immediate=False,
-            )
-        except ValueError as exc:
-            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+            try:
+                result = await _confirm_deletion(
+                    session,
+                    org_id=current_user.organisation_id,
+                    token=body.token,
+                    immediate=False,
+                )
+            except ValueError as exc:
+                raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+    except ProgrammingError:
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="Feature is not available. Run database migrations to enable it.",
+        )
 
     return ConfirmDeletionResponse(
         message="Organisation has been permanently deleted.",
@@ -1280,12 +1310,18 @@ async def cancel_org_deletion(
 
     from modulo.db.crud.org_deletion import cancel_org_deletion as _cancel
 
-    async with session.begin():
-        await set_rls_org(session, current_user.organisation_id)
-        try:
-            result = await _cancel(session, org_id=current_user.organisation_id)
-        except ValueError as exc:
-            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+    try:
+        async with session.begin():
+            await set_rls_org(session, current_user.organisation_id)
+            try:
+                result = await _cancel(session, org_id=current_user.organisation_id)
+            except ValueError as exc:
+                raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+    except ProgrammingError:
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="Feature is not available. Run database migrations to enable it.",
+        )
 
     return CancelDeletionResponse(**result)
 
@@ -1299,13 +1335,19 @@ async def export_org_data(
 
     from modulo.db.crud.org_deletion import export_org_data as _export
 
-    async with session.begin():
-        await set_rls_org(session, current_user.organisation_id)
+    try:
+        async with session.begin():
+            await set_rls_org(session, current_user.organisation_id)
 
-        try:
-            bundle = await _export(session, org_id=current_user.organisation_id)
-        except ValueError as exc:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+            try:
+                bundle = await _export(session, org_id=current_user.organisation_id)
+            except ValueError as exc:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    except ProgrammingError:
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="Feature is not available. Run database migrations to enable it.",
+        )
 
     org_info = (bundle.get("organisation") or [{}])[0]
     return OrgExportResponse(
@@ -1331,33 +1373,39 @@ async def delete_org_immediate(
     from modulo.db.crud.org_deletion import confirm_org_deletion as _confirm_deletion
     from modulo.db.crud.org_deletion import request_org_deletion as _request_deletion
 
-    async with session.begin():
-        await set_rls_org(session, current_user.organisation_id)
+    try:
+        async with session.begin():
+            await set_rls_org(session, current_user.organisation_id)
 
-        try:
-            req = await _request_deletion(
+            try:
+                req = await _request_deletion(
+                    session,
+                    org_id=current_user.organisation_id,
+                    actor_user_id=current_user.account_id,
+                )
+            except ValueError as exc:
+                raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+
+            await append_audit_event(
                 session,
                 org_id=current_user.organisation_id,
+                event_type="org_deletion_requested",
                 actor_user_id=current_user.account_id,
+                resource_type="organisation",
+                resource_id=current_user.organisation_id,
+                payload_json={"immediate": True, "exported_entities": list(req["export"].keys())},
             )
-        except ValueError as exc:
-            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
 
-        await append_audit_event(
-            session,
-            org_id=current_user.organisation_id,
-            event_type="org_deletion_requested",
-            actor_user_id=current_user.account_id,
-            resource_type="organisation",
-            resource_id=current_user.organisation_id,
-            payload_json={"immediate": True, "exported_entities": list(req["export"].keys())},
-        )
-
-        result = await _confirm_deletion(
-            session,
-            org_id=current_user.organisation_id,
-            token=req["token"],
-            immediate=True,
+            result = await _confirm_deletion(
+                session,
+                org_id=current_user.organisation_id,
+                token=req["token"],
+                immediate=True,
+            )
+    except ProgrammingError:
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="Feature is not available. Run database migrations to enable it.",
         )
 
     return ConfirmDeletionResponse(
