@@ -8,6 +8,7 @@ bdd:
 unit-tests:
   - backend/tests/unit/connectors/test_gitlab.py
   - backend/tests/unit/connectors/test_gitlab_issues.py
+  - backend/tests/unit/connectors/test_gitlab_resilience.py
 code:
   - backend/src/modulo/connectors/gitlab/__init__.py
   - backend/src/modulo/connectors/base.py
@@ -101,8 +102,12 @@ Async GitLab REST API v4 connector implementing `ConnectorBase`. Provides read/w
 ### Error Handling
 
 - [x] Missing required filter key raises ValueError with descriptive message
-- [ ] API error (non-2xx response) raises httpx.HTTPStatusError via raise_for_status()
-- [ ] Network/socket error propagates as httpx exception during health check
+- [x] HTTP 4xx/5xx API errors wrapped as ValueError with status code and detail (via _call_api)
+- [x] Connection errors (ConnectError) wrapped as ValueError (via _call_api)
+- [x] Timeout errors (TimeoutException) wrapped as ValueError (via _call_api)
+- [x] Invalid JSON response wrapped as ValueError (via _parse_json)
+- [x] Health check catches httpx.RequestError returning HealthResult(ok=False)
+- [x] Health check catches JSON decode errors returning HealthResult(ok=False)
 - [ ] Missing token during construction is not validated until first API call
 - [ ] Project path encoding fails gracefully on malformed project IDs (e.g. None, numbers)
 

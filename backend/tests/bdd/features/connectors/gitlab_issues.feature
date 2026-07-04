@@ -126,3 +126,13 @@ Feature: GitLab Issues Connector
     Given a GitLab connector with valid token
     When I query resource "unsupported_resource"
     Then the result is an error
+
+  Scenario: Error on write returns descriptive error
+    Given a GitLab connector with valid token
+    When the GitLab API returns 500 on issue creation
+    Then the write result is an error with "GitLab API HTTP 500"
+
+  Scenario: Error on query returns descriptive error
+    Given a GitLab connector with valid token
+    When the GitLab API returns 429 on issues query
+    Then the query result is an error with "GitLab API HTTP 429"
