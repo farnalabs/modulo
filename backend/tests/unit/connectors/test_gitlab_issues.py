@@ -548,7 +548,7 @@ async def test_write_missing_iid_issue_label(connector):
 async def test_query_issues_api_error(connector):
     route = respx.get(f"{_API}/projects/group%2Fproject/issues")
     route.mock(return_value=httpx.Response(403, text="Forbidden"))
-    with pytest.raises(httpx.HTTPStatusError):
+    with pytest.raises(ValueError, match="GitLab API HTTP 403"):
         await connector.query(ConnectorQuery(resource="issues", filters={"project": "group/project"}))
 
 
@@ -556,7 +556,7 @@ async def test_query_issues_api_error(connector):
 async def test_write_issue_api_error(connector):
     route = respx.post(f"{_API}/projects/group%2Fproject/issues")
     route.mock(return_value=httpx.Response(422, text="Validation failed"))
-    with pytest.raises(httpx.HTTPStatusError):
+    with pytest.raises(ValueError, match="GitLab API HTTP 422"):
         await connector.write(ConnectorPayload(
             resource="issue",
             data={"project": "group/project", "title": ""},
