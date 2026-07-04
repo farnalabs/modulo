@@ -64,8 +64,6 @@ Paginated JSON export of audit events for SOC 2 compliance evidence. Builds on t
 - [x] Events are immutable — same export at same point-in-time produces same data
 - [x] Export is append-only — new events after export don't invalidate prior export
 
-### States
-
 ### Error Handling
 
 - [x] ProgrammingError → 501 on all 4 audit routes (list, batch-detail, verify, export)

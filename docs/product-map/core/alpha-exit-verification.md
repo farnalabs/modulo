@@ -1,6 +1,6 @@
 ---
 id: feat-core-alpha-exit-verification
-prd: §10.3b
+prd: 10.3b
 delivery-tasks: [task-prd-alpha-exit-verification, task-prd-alpha-exit-verification-mechanism]
 bdd: []
 code:
