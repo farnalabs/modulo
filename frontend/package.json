@@ -13,6 +13,9 @@
     "lint:fix": "npm run lint -- --fix",
     "type-check": "vue-tsc --noEmit"
   },
+  "optionalDependencies": {
+    "@grafana/faro-web-sdk": "^1.10.0"
+  },
   "dependencies": {
     "@lucide/vue": "^1.21.0",
     "@rollup/rollup-win32-x64-msvc": "^4.62.2",
