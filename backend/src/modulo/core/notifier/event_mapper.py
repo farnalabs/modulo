@@ -1,15 +1,15 @@
 """Notification event mapping — maps platform events to in-app Notification records.
 
 Event categories and their notification config:
-  - hitl.awaiting      → level: info,   scope: org,   category: "hitl.awaiting"
-  - run.failed         → level: error,  scope: org,   category: "run.failed"
-  - run.budget_exceeded → level: warning, scope: org,  category: "run.budget_exceeded"
-  - claim.expired      → level: info,   scope: org,   category: "hitl.claim_expired"
-  - hitl.overdue       → level: warning, scope: adm
-  - eval.regression    → level: warning, scope: org
-  - feedback.pending   → level: info,   scope: user (target_user_id assigned)
-  - system.announcement → level: info,  scope: org
-  - eval.blocked       → level: error,  scope: org
+  - hitl_awaiting     → level: info,   scope: org,   category: "hitl.awaiting"
+  - run_failed        → level: error,  scope: org,   category: "run.failed"
+  - budget_exceeded   → level: warning, scope: org,   category: "run.budget_exceeded"
+  - claim_expired     → level: info,   scope: org,   category: "hitl.claim_expired"
+  - hitl_overdue      → level: warning, scope: admin
+  - eval_regression   → level: warning, scope: org
+  - feedback_pending  → level: info,   scope: user (target_user_id assigned)
+  - system_announcement → level: info,  scope: org
+  - eval_blocked      → level: error,  scope: org
 """
 
 from __future__ import annotations
@@ -95,8 +95,8 @@ _EVENT_CONFIG: dict[str, dict[str, Any]] = {
         "level": "info",
         "scope": "org",
         "category": "system.announcement",
-        "dismiss_strategy": "user_only",
-        "dismissible_at_scope": False,
+        "dismiss_strategy": "org_admin",
+        "dismissible_at_scope": True,
         "ttl_hours": None,
     },
 }
@@ -131,6 +131,7 @@ _ACTION_URL_TEMPLATES: dict[str, str] = {
     "budget_exceeded": "/runs/{run_id}",
     "claim_expired": "/runs/{run_id}",
     "hitl_overdue": "/runs/{run_id}",
+    "eval_regression": "/evals",
     "eval_blocked": "/runs/{run_id}",
     "feedback_pending": "/feedback/inbox",
     "system_announcement": None,
@@ -139,12 +140,6 @@ _ACTION_URL_TEMPLATES: dict[str, str] = {
 
 class NotificationEventMapper:
     """Maps platform events to in-app notifications and creates DB records."""
-
-    def __init__(self) -> None:
-        self._event_config = _EVENT_CONFIG
-        self._title_templates = _TITLE_TEMPLATES
-        self._body_templates = _BODY_TEMPLATES
-        self._action_url_templates = _ACTION_URL_TEMPLATES
 
     async def create_from_event(
         self,
@@ -159,26 +154,26 @@ class NotificationEventMapper:
 
         Returns None if the event type is not recognised.
         """
-        config = self._event_config.get(event_type)
+        config = _EVENT_CONFIG.get(event_type)
         if config is None:
             _log.debug("mapper.unknown_event_type", extra={"event_type": event_type})
             return None
 
         title = self._resolve_template(
-            self._title_templates.get(event_type, event_type),
+            _TITLE_TEMPLATES.get(event_type, event_type),
             payload,
         )
         body = self._resolve_template(
-            self._body_templates.get(event_type, ""),
+            _BODY_TEMPLATES.get(event_type, ""),
             payload,
         )
-        action_url = self._action_url_templates.get(event_type)
+        action_url = _ACTION_URL_TEMPLATES.get(event_type)
         if action_url is not None:
             action_url = self._resolve_template(action_url, payload)
 
         ttl_hours = config.get("ttl_hours")
         expires_at = None
-        if ttl_hours is not None:
+        if ttl_hours is not None and ttl_hours > 0:
             expires_at = datetime.now(UTC) + timedelta(hours=ttl_hours)
 
         notification = await create_notification(
@@ -210,4 +205,7 @@ class NotificationEventMapper:
             return template.format(**payload)
         except KeyError as exc:
             _log.warning("mapper.template_key_missing", extra={"template": template, "key": str(exc)})
-            return template.replace(f"{{{exc.args[0]}}}", "[unknown]")
+            return template.replace(f"{{{exc.args[0]}}}", "[unknown]", 1)
+        except (ValueError, IndexError, TypeError):
+            _log.warning("mapper.template_format_error", extra={"template": template})
+            return template
