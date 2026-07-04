@@ -7,7 +7,7 @@ from datetime import UTC, datetime, timedelta
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, Field
-from sqlalchemy import case, delete, func, select, text
+from sqlalchemy import Date, case, cast, delete, func, select, text
 from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -1545,18 +1545,19 @@ async def eval_dashboard(
             )
 
             # ── Trend (daily buckets) ───────────────────────────────────
-            trend_q = text("""
-                SELECT
-                    date_trunc('day', evaluated_at) AS bucket,
-                    COUNT(*) AS total,
-                    SUM(CASE WHEN passed THEN 1 ELSE 0 END) AS passed,
-                    SUM(CASE WHEN NOT passed THEN 1 ELSE 0 END) AS failed
-                FROM eval_results
-                WHERE organisation_id = :org_id
-                GROUP BY bucket
-                ORDER BY bucket
-            """)
-            trend_rows = (await session.execute(trend_q, {"org_id": current_user.organisation_id})).all()
+            trend_q = select(
+                cast(EvalResult.evaluated_at, Date).label("bucket"),
+                func.count().label("total"),
+                func.sum(case((EvalResult.passed, 1), else_=0)).label("passed"),
+                func.sum(case((EvalResult.passed.is_(False), 1), else_=0)).label("failed"),
+            ).where(
+                EvalResult.organisation_id == current_user.organisation_id,
+            ).group_by(
+                cast(EvalResult.evaluated_at, Date),
+            ).order_by(
+                cast(EvalResult.evaluated_at, Date),
+            )
+            trend_rows = (await session.execute(trend_q)).all()
 
             trend = [
                 TrendBucket(
@@ -1569,19 +1570,21 @@ async def eval_dashboard(
             ]
 
             # ── By eval type ────────────────────────────────────────────
-            by_type_q = text("""
-                SELECT
-                    ed.eval_type,
-                    COUNT(er.id) AS total,
-                    SUM(CASE WHEN er.passed THEN 1 ELSE 0 END) AS passed,
-                    SUM(CASE WHEN NOT er.passed THEN 1 ELSE 0 END) AS failed
-                FROM eval_definitions ed
-                LEFT JOIN eval_results er ON er.eval_id = ed.id
-                WHERE ed.organisation_id = :org_id
-                GROUP BY ed.eval_type
-                ORDER BY ed.eval_type
-            """)
-            by_type_rows = (await session.execute(by_type_q, {"org_id": current_user.organisation_id})).all()
+            by_type_q = select(
+                EvalDefinition.eval_type,
+                func.count(EvalResult.id).label("total"),
+                func.sum(case((EvalResult.passed, 1), else_=0)).label("passed"),
+                func.sum(case((EvalResult.passed.is_(False), 1), else_=0)).label("failed"),
+            ).outerjoin(
+                EvalResult, EvalResult.eval_id == EvalDefinition.id
+            ).where(
+                EvalDefinition.organisation_id == current_user.organisation_id,
+            ).group_by(
+                EvalDefinition.eval_type,
+            ).order_by(
+                EvalDefinition.eval_type,
+            )
+            by_type_rows = (await session.execute(by_type_q)).all()
 
             by_type = [
                 TypeBreakdown(

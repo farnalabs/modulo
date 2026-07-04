@@ -384,9 +384,9 @@ async def patch_user(
                             account.active = bool(op.value["active"])
                         if isinstance(op.value.get("name"), dict):
                             name_data = op.value["name"]
-                            formatted = name_data.get("formatted") or name_data.get("givenName", "") + " " + name_data.get(
-                                "familyName", ""
-                            )
+                            given = name_data.get("givenName") or ""
+                            family = name_data.get("familyName") or ""
+                            formatted = name_data.get("formatted") or (given + " " + family).strip()
                             account.display_name = str(formatted).strip()
                     if op.path == "active":
                         account.active = bool(op.value)

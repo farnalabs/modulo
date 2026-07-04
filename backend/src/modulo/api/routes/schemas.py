@@ -650,7 +650,7 @@ async def infer_schema_endpoint(
 
     suggestion_name = f"Inferred from {ci.name}"
     suggestion_description = (
-        f"Auto-inferred schema from {ci.name} ({body.sample_query.resource}, {len(records)} samples)"
+        f"Auto-inferred schema from {ci.name} ({req.sample_query.resource}, {len(records)} samples)"
     )
 
     try:
