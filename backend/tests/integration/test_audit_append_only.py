@@ -9,6 +9,7 @@ import uuid
 import pytest
 import pytest_asyncio
 from sqlalchemy import text
+from sqlalchemy.exc import DBAPIError
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
 from modulo.core.audit_logger.append_only import register_append_only_guard
@@ -44,7 +45,7 @@ class TestAuditAppendOnlyDbTrigger:
 
     async def test_update_trigger_blocks_update(self, db_session: AsyncSession) -> None:
         """UPDATE on audit_events should be rejected by the Postgres trigger."""
-        with pytest.raises(Exception) as exc_info:
+        with pytest.raises(DBAPIError) as exc_info:
             await db_session.execute(
                 text("UPDATE audit_events SET event_type = 'modified' WHERE id = :id"),
                 {"id": self._event_id},
@@ -55,7 +56,7 @@ class TestAuditAppendOnlyDbTrigger:
 
     async def test_delete_trigger_blocks_delete(self, db_session: AsyncSession) -> None:
         """DELETE on audit_events should be rejected by the Postgres trigger."""
-        with pytest.raises(Exception) as exc_info:
+        with pytest.raises(DBAPIError) as exc_info:
             await db_session.execute(
                 text("DELETE FROM audit_events WHERE id = :id"),
                 {"id": self._event_id},
@@ -67,12 +68,15 @@ class TestAuditAppendOnlyDbTrigger:
     async def test_event_still_exists_after_attempted_delete(self, db_session: AsyncSession) -> None:
         """After a failed DELETE attempt, the event should still exist."""
         # Try to delete
-        with pytest.raises(Exception):
+        with pytest.raises(DBAPIError):
             await db_session.execute(
                 text("DELETE FROM audit_events WHERE id = :id"),
                 {"id": self._event_id},
             )
             await db_session.commit()
+
+        # Roll back the aborted transaction before continuing
+        await db_session.rollback()
 
         # Verify event still exists
         result = await db_session.execute(
