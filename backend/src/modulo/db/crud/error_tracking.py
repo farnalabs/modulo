@@ -83,6 +83,8 @@ async def upsert_error_group(
             sample_event_id=sample_event_id,
         )
         session.add(group)
+        await session.flush()
+        group.count = 1
     else:
         group.count = group.count + 1
         group.last_seen = datetime.now(UTC)

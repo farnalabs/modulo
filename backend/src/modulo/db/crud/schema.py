@@ -5,11 +5,13 @@ or LibraryPrimitive references this schema. Use force=True to skip all checks.
 All functions require RLS org context to be set by the caller.
 """
 
+import logging
 import uuid
 from datetime import UTC, datetime
 from typing import Any
 
-from sqlalchemy import cast, func, or_, select, String
+from sqlalchemy import String, cast, func, or_, select
+from sqlalchemy.exc import ProgrammingError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.db.crud.base import PageResult, apply_updates
@@ -17,6 +19,8 @@ from modulo.db.models.agent import Agent
 from modulo.db.models.library_primitive import LibraryPrimitive
 from modulo.db.models.pipeline_snapshot import PipelineSnapshot
 from modulo.db.models.schema import Schema, SchemaVersion
+
+_log = logging.getLogger(__name__)
 
 
 class SchemaDeletionProtectedError(Exception):
@@ -70,7 +74,10 @@ async def list_schemas(
     page_size: int = 20,
 ) -> PageResult[Schema]:
     offset = (page - 1) * page_size
-    total = (await session.execute(select(func.count()).select_from(Schema))).scalar_one()
+    try:
+        total = (await session.execute(select(func.count()).select_from(Schema))).scalar_one()
+    except ProgrammingError:
+        return PageResult(items=[], total=0, page=page, page_size=page_size)
     items = list(
         (
             await session.execute(select(Schema).order_by(Schema.created_at.desc()).offset(offset).limit(page_size))

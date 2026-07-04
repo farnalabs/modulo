@@ -36,7 +36,7 @@ async def upsert_daily_run_count(
         OrgDailyRunCount.organisation_id == org_id,
         OrgDailyRunCount.run_date == run_date,
         OrgDailyRunCount.team_id == team_id,
-    )
+    ).with_for_update()
     result = await session.execute(q)
     row = result.scalar_one_or_none()
 

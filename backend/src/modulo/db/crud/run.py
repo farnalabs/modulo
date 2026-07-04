@@ -21,7 +21,7 @@ from modulo.db.models.run import Run
 
 def _input_hash(payload: dict[str, Any]) -> str:
     """Stable SHA-256 hex digest of a JSON-serialisable payload."""
-    serialised = json.dumps(payload, sort_keys=True, separators=(",", ":"))
+    serialised = json.dumps(payload, sort_keys=True, separators=(",", ":"), default=str)
     return hashlib.sha256(serialised.encode()).hexdigest()
 
 
@@ -261,7 +261,7 @@ async def get_run_stats(
         by_day[day]["count"] += 1
         if r.status == "complete":
             by_day[day]["success"] += 1
-        else:
+        elif r.status == "failed":
             by_day[day]["failed"] += 1
 
     for r in completed_runs:
@@ -327,8 +327,6 @@ async def batch_delete_old_terminal_runs(
     Only affects runs with status in (complete, failed, cancelled).
     Returns total deleted count.
     """
-    from datetime import UTC, datetime, timedelta
-
     cutoff = datetime.now(UTC) - timedelta(days=max_age_days)
     deleted_total = 0
     while True:

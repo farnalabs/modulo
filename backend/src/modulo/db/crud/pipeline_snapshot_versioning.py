@@ -4,11 +4,13 @@ import copy
 import uuid
 from typing import Any
 
+from sqlalchemy import delete as sa_delete
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.db.crud.pipeline_snapshot import create_snapshot_from_live_graph
 from modulo.db.models.pipeline import Pipeline
+from modulo.db.models.pipeline_edge import PipelineEdge
 from modulo.db.models.pipeline_snapshot import PipelineSnapshot
 
 
@@ -122,6 +124,17 @@ async def rollback_to_snapshot(
         return None
 
     pipeline.graph_nodes_json = copy.deepcopy(target.graph_json.get("nodes", []))
+    await session.execute(sa_delete(PipelineEdge).where(PipelineEdge.pipeline_id == pipeline_id))
+    for edge_data in target.graph_json.get("edges", []):
+        new_edge = PipelineEdge(
+            organisation_id=pipeline.organisation_id,
+            pipeline_id=pipeline_id,
+            source_node_id=edge_data.get("source") or edge_data.get("source_node_id", ""),
+            target_node_id=edge_data.get("target") or edge_data.get("target_node_id", ""),
+            edge_type=edge_data.get("edge_type", edge_data.get("type", "normal")),
+            hitl_gate_config=edge_data.get("hitl_gate_config"),
+        )
+        session.add(new_edge)
     await session.flush()
 
     new_snapshot = await create_snapshot_from_live_graph(session, pipeline_id=pipeline_id, account_id=account_id)
