@@ -11,7 +11,7 @@ from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from sqlalchemy import select
-from sqlalchemy.exc import ProgrammingError
+from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.api.dependencies import get_db_session
@@ -149,6 +149,12 @@ async def ingest_errors(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Error tracking is not available. Run database migrations to enable it.",
         )
+    except SQLAlchemyError:
+        _log.warning("error_tracking.db_error", extra={"org_id": str(principal.organisation_id)})
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Error tracking is temporarily unavailable. Please try again.",
+        )
 
     return {"results": [ErrorGroupResult(**r) for r in results]}
 
@@ -236,6 +242,12 @@ async def ingest_errors_public(
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Error tracking is not available. Run database migrations to enable it.",
+        )
+    except SQLAlchemyError:
+        _log.warning("error_tracking.public_ingest_db_error", extra={"ip": client_ip})
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Error tracking is temporarily unavailable. Please try again.",
         )
 
     # Update daily cap count after successful ingest
@@ -352,6 +364,12 @@ async def list_error_groups(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Error tracking is not available. Run database migrations to enable it.",
         )
+    except SQLAlchemyError:
+        _log.warning("error_tracking.list_groups_db_error")
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Error tracking is temporarily unavailable. Please try again.",
+        )
 
     return {"items": items, "total": total, "limit": limit, "offset": offset}
 
@@ -377,6 +395,12 @@ async def get_error_group_detail(
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Error tracking is not available. Run database migrations to enable it.",
+        )
+    except SQLAlchemyError:
+        _log.warning("error_tracking.get_group_detail_db_error")
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Error tracking is temporarily unavailable. Please try again.",
         )
 
     return {
@@ -423,6 +447,12 @@ async def patch_error_group(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Error tracking is not available. Run database migrations to enable it.",
         )
+    except SQLAlchemyError:
+        _log.warning("error_tracking.patch_group_db_error")
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Error tracking is temporarily unavailable. Please try again.",
+        )
 
     return {
         "id": str(group.id),
@@ -464,6 +494,12 @@ async def list_error_events(
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Error tracking is not available. Run database migrations to enable it.",
+        )
+    except SQLAlchemyError:
+        _log.warning("error_tracking.list_events_db_error")
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Error tracking is temporarily unavailable. Please try again.",
         )
 
     items = [_serialize_error_event_detail(e) for e in events]
