@@ -442,6 +442,18 @@ routes:
     <<: *team
     deprecated: false
 
+  /settings/monitoring:
+    name: settings-monitoring
+    testid: page-monitoring
+    breadcrumb: Browser Monitoring
+    parent: /
+    product_map: null
+    i18n_key: nav.browser_monitoring
+    sidebar_group: monitoring
+    sidebar_order: 5
+    type: form_page
+    <<: *community
+
   /admin/users:
     name: admin-users
     testid: page-users
