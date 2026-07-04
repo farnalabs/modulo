@@ -97,6 +97,7 @@ const segments = computed<BreadcrumbSegment[]>(() => {
   align-items: center;
   gap: 0.5rem;
   font-size: 0.875rem;
+  margin-bottom: 4px;
 }
 
 .breadcrumb-link {
