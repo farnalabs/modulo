@@ -15,12 +15,11 @@ code:
   - backend/src/modulo/db/models/run.py
   - backend/src/modulo/db/crud/run.py
   - frontend/src/views/RunDetailView.vue
-  - frontend/src/lib/api/schema.ts
 unit-tests:
   - backend/tests/unit/otel_bridge/test_handler.py
   - backend/tests/unit/otel_bridge/test_export.py
   - backend/tests/unit/otel_bridge/test_telemetry_toggle.py
-depends-on: []
+depends-on: [feat-pipelines-cicd-pipeline]
 status: partial
 ---
 
@@ -128,6 +127,14 @@ configuration API.
 - [x] BDD: log level filtering (INFO and above only)
 - [x] BDD: log entries grouped by node ID
 
+## Error Handling
+
+- [ ] Observability settings CRUD routes catch ProgrammingError → 501
+- [ ] Run detail/trace endpoints catch ProgrammingError → 501
+- [ ] Auth 401/403 documented for observability settings CRUD
+- [ ] 422 validation errors documented for observability API input validation
+- [ ] OTel exporter failure at startup logged and continues without crashing
+
 ## QA History
 
 ### index 58 (2026-07-02)
@@ -139,10 +146,6 @@ configuration API.
 
 ## Known Gaps
 
-- ~~LangGraphOtelBridge is never wired into PipelineExecutor~~ — RESOLVED: bridge is
-  now instantiated (`executor.py:174`) and wired as a LangGraph callback in
-  `astream_events` config (`executor.py:648`).
-- ~~No organisation_id or pipeline_id set on OTel span attributes.~~ — RESOLVED: Bridge now supports `set_run_context()` to attach org_id and pipeline_id. Pipeline executor calls this before run start.
 - No Prometheus /metrics endpoint — metrics BDD features are stubs.
 - No log streaming endpoint — run_logs BDD features are stubs.
 - BDD features exist with real step definitions but use mocks — not end-to-end integration tests.

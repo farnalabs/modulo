@@ -150,6 +150,18 @@ to an intermediate LangGraph gate node at runtime.
 - [x] Bad signature / scope mismatch raises ClaimTokenInvalidError without opaque fallback
 - [x] Expiry job sets RLS per session
 
+## Error Handling
+
+- [x] Gate lifecycle routes claim/approve/reject return typed errors (GateNotFoundError, AlreadyClaimedError, GateAlreadyDecidedError)
+- [x] Claim token validation errors return ClaimTokenExpiredError / ClaimTokenInvalidError
+- [x] Non-team-member claim returns NotTeamMemberError
+- [ ] Missing DB table (ProgrammingError) on HITL claim/approve/reject routes returns 501 Not Implemented
+- [ ] Auth 401/403 documented and tested for HITL claim/approve/reject endpoints
+
+## QA History
+
+- 2026-07-05: Prodmap pipelines QA: Added Error Handling and QA History sections. Initial QA pass.
+
 ## Known Gaps
 
 - [ ] Eval-reference condition format (§8.17) not yet implemented — code uses JMESPath only

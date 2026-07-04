@@ -22,7 +22,7 @@ code:
 unit-tests:
   - backend/tests/unit/api/test_pipelines_endpoint.py
   - backend/tests/unit/api/test_pipeline_copy_errors.py
-depends-on: []
+depends-on: [feat-pipelines-core]
 status: partial
 ---
 
@@ -175,6 +175,18 @@ and checkpoint resume.
 - [x] ContextSetterViolationError — blocked node, error propagated to run state
 - [x] Missing connector capability — hard block with `connector_capability_mismatch`
 - [x] Stale model backend (>5 min health check) — hard block with `model_backend_unavailable`
+
+## Error Handling
+
+- [x] RunNotFoundError returns "failed" with error_code="KeyError"
+- [x] GraphValidationError blocks run start, transitions run to "failed"
+- [x] Capacity timeout (lock_wait_seconds exceeded) — "failed" with error_code="lock_timeout"
+- [x] Node timeout via asyncio.wait_for — "failed" with error_code="node_timeout"
+- [x] Runaway run (max steps/duration) — terminates with error_code
+- [x] Eval suite threshold not met — "failed" with error_code="eval_suite_blocked"
+- [ ] Pipeline CRUD routes catch ProgrammingError → 501 for missing DB tables
+- [ ] Auth 401/403 documented for run lifecycle, cancellation, event-streaming endpoints
+- [ ] 422 validation errors documented for run trigger input validation
 
 ## Known Gaps
 

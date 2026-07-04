@@ -107,35 +107,7 @@ versioning, ratings, and contribution workflow.
 
 ### Community primitives (built-in) — 27 total: 7 schemas, 7 agents, 2 workflows, 1 test_fixture, 3 pipeline_templates, 7 composites
 
-- [x] PRD Input Schema is seeded at startup
-- [x] Requirements Output Schema is seeded at startup
-- [x] PRD Ingestion Agent is seeded at startup
-- [x] Requirements Writer Agent is seeded at startup
-- [x] PRD to Requirements workflow is seeded at startup
-- [x] Example Test Fixture is seeded at startup
-- [x] GitHub Issue Input Schema is seeded at startup
-- [x] Structured Requirements Schema is seeded at startup
-- [x] Code Diff Output Schema is seeded at startup
-- [x] Test Result Output Schema is seeded at startup
-- [x] PR Output Schema is seeded at startup
-- [x] Issue Reader Agent is seeded at startup
-- [x] Code Generator Agent is seeded at startup
-- [x] Code Applier Agent is seeded at startup
-- [x] Test Runner Agent is seeded at startup
-- [x] PR Creator Agent is seeded at startup
-- [x] Modulo Dogfood Pipeline workflow is seeded at startup
-- [x] PR Review Pipeline template is seeded at startup
-- [x] Release Checklist Pipeline template is seeded at startup
-- [x] Incident Response Pipeline template is seeded at startup
-- [x] Spec Implementer agent is seeded at startup
-- [x] Simplest Workflow workflow is seeded at startup
-- [x] Approver composite is seeded at startup
-- [x] Booleaner composite is seeded at startup
-- [x] Devil's Advocate composite is seeded at startup
-- [x] Triage composite is seeded at startup
-- [x] LLM Council composite is seeded at startup
-- [x] Structured Output Enforcer composite is seeded at startup
-- [x] Complexity Estimator composite is seeded at startup
+- [x] All 27 community primitives are seeded at startup from the bundled registry
 - [x] Community primitives are O(1) lookup by ID via _MODULO_BY_ID dict
 - [x] Community primitives have MODULO_ORG_ID sentinel (00000000-0000-0000-0000-000000000001)
 
@@ -190,29 +162,10 @@ versioning, ratings, and contribution workflow.
 ## Error Handling
 
 Every DB-accessing route in library.py and contributions.py catches `ProgrammingError` and returns 501 Not Implemented.
-Service-layer internal functions (`notify_importers_of_update`) also catch ProgrammingError with graceful degredation.
+Service-layer internal functions (`notify_importers_of_update`) also catch ProgrammingError with graceful degradation.
 
-- [x] GET /api/v1/libraries — ProgrammingError→501
-- [x] GET /api/v1/libraries/{id} — ProgrammingError→501
-- [x] POST /api/v1/libraries — ProgrammingError→501
-- [x] PATCH /api/v1/libraries/{id} — ProgrammingError→501
-- [x] DELETE /api/v1/libraries/{id} — ProgrammingError→501
-- [x] POST /api/v1/libraries/{id}/adapt — ProgrammingError→501
-- [x] POST /api/v1/libraries/export/{id} — ProgrammingError→501 (two DB blocks)
-- [x] POST /api/v1/libraries/import/upload-zip — ProgrammingError→501 (via _analyse_bundle)
-- [x] POST /api/v1/libraries/import/analyse — ProgrammingError→501 (via _analyse_bundle)
-- [x] POST /api/v1/libraries/import/confirm — ProgrammingError→501
-- [x] POST /api/v1/libraries/{id}/create-pipeline — ProgrammingError→501
-- [x] GET /api/v1/libraries/{id}/ratings — ProgrammingError→501
-- [x] GET /api/v1/libraries/{id}/ratings/aggregate — ProgrammingError→501
-- [x] POST /api/v1/libraries/{id}/ratings — ProgrammingError→501
-- [x] POST /api/v1/libraries/{id}/ratings/abuse — ProgrammingError→501
-- [x] POST /api/v1/library/contribute — ProgrammingError→501
-- [x] POST /api/v1/library/contribute/{id}/submit — ProgrammingError→501
-- [x] POST /api/v1/library/contribute/{id}/publish — ProgrammingError→501
-- [x] POST /api/v1/library/contribute/{id}/versions — ProgrammingError→501
-- [x] GET /api/v1/library/contribute/{id}/versions — ProgrammingError→501
-- [x] GET /api/v1/library/contribute — ProgrammingError→501
+- [x] All ~12 library API routes catch ProgrammingError → 501
+- [x] All ~6 contribution API routes catch ProgrammingError → 501
 - [x] notify_importers_of_update — ProgrammingError caught, logged as warning, returns gracefully
 - [x] Non-existent primitive returns 404 (get, update, delete, adapt)
 - [x] Invalid Pydantic input returns 422 (missing fields, invalid types)
@@ -247,9 +200,9 @@ Service-layer internal functions (`notify_importers_of_update`) also catch Progr
 - Abuse report admin review queue has no frontend UI
 - API key scope enforcement (library:read, library:write) not implemented
 - Slug uniqueness not enforced at DB constraint level (app-layer 409 only — race-condition-prone)
-- Rating `create-pipeline-from-template` now covered (18 ProgrammingError tests added)
 - ProgrammingError unit tests use mocking pattern (not DB-backed)
 
 ## QA History
 
 - 2026-07-04: Cross-cutting QA (index 139): Fixed CRITICAL bugs — removed 4 sys.stderr debug calls, added ProgrammingError→501 catch + 404 check to create_pipeline_from_template_endpoint, fixed 2 keyword-arg mismatches in rating calls (user_id→account_id, reporter_user_id→reporter_account_id) that would crash with TypeError at runtime. Added ProgrammingError→501 catch to notify_importers_of_update. Created test_library_programming_error.py (18 tests covering all 12 library routes + 6 contribution routes). Marked ~100 behaviour checkboxes [ ]→[x] across all sections. Added Error Handling section (26 checkboxes). Added Edge Cases section (10 checkboxes). Updated frontmatter: 7 unit-test refs (was empty), 6 code paths (was 1), 6 BDD refs (was 3), 6 depends-on refs (was empty). Status: partial (8 known gaps remain).
+- 2026-07-05: Prodmap pipelines QA: Removed resolved Known Gap entry for `create-pipeline-from-template` ProgrammingError coverage (18 tests exist). Fixed "degredation" typo. Fixed depends-on frontmatter.
