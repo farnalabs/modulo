@@ -183,7 +183,21 @@ async def license_info(
 
 
 @router.get("/api/v1/me", response_model=MeResponse)
-async def me(current_user: AuthenticatedPrincipal = Depends(get_current_user)) -> MeResponse:
+async def me(
+    current_user: AuthenticatedPrincipal = Depends(get_current_user),
+    session: AsyncSession = Depends(get_db_session),
+) -> MeResponse:
+    try:
+        async with session.begin():
+            await set_rls_org(session, current_user.organisation_id)
+            await set_rls_user_context(session, current_user.account_id, current_user.org_role)
+            memberships = await list_team_memberships_for_account(session, current_user.account_id)
+    except ProgrammingError:
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="Feature is not available. Run database migrations to enable it.",
+        )
+
     return MeResponse(
         user=UserInfo(username=current_user.username),
         org=OrganisationInfo(
@@ -191,7 +205,10 @@ async def me(current_user: AuthenticatedPrincipal = Depends(get_current_user)) -
             org_name="Modulo",
             settings={},
         ),
-        team_memberships=[],
+        team_memberships=[
+            TeamMembershipInfo(team_id=m.team_id, team_role=m.role)
+            for m in memberships
+        ],
         team_memberships_truncated=False,
         org_role=current_user.org_role,
         is_system_admin=current_user.is_system_admin,
