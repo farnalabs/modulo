@@ -7,7 +7,7 @@ import uuid
 from datetime import UTC, datetime
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy import update as sa_update
 from sqlalchemy.exc import ProgrammingError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -968,18 +968,37 @@ _MODULO_PRIMITIVES: list[LibraryPrimitive] = [
 # ---------------------------------------------------------------------------
 
 
-def _filter_modulo(
+def _bump_version(version: str) -> str:
+    """Increment the minor (last) segment of a semver string."""
+    parts = version.split(".")
+    try:
+        parts[-1] = str(int(parts[-1]) + 1)
+    except (ValueError, IndexError):
+        parts = ["1", "0"]
+    return ".".join(parts)
+
+
+def _filter_primitives(
+    primitives: list[LibraryPrimitive],
     *,
     primitive_type: str | None,
     search: str | None,
 ) -> list[LibraryPrimitive]:
-    results = _MODULO_PRIMITIVES
+    results = primitives
     if primitive_type is not None:
         results = [p for p in results if p.primitive_type == primitive_type]
     if search:
         term = search.strip().lower()
         results = [p for p in results if term in p.name.lower() or term in (p.description or "").lower()]
     return results
+
+
+def _filter_modulo(
+    *,
+    primitive_type: str | None,
+    search: str | None,
+) -> list[LibraryPrimitive]:
+    return _filter_primitives(_MODULO_PRIMITIVES, primitive_type=primitive_type, search=search)
 
 
 # ---------------------------------------------------------------------------
@@ -1012,7 +1031,8 @@ async def list_primitives(
     if excluded_tiers is None:
         excluded_tiers = ["in_dev"]
     await set_rls_org(session, org_id)
-    org_page = await list_library_primitives(
+    try:
+        org_page = await list_library_primitives(
         session,
         org_id=org_id,
         page=page,
@@ -1021,7 +1041,10 @@ async def list_primitives(
         search=search,
         cursor=cursor,
         excluded_tiers=excluded_tiers,
-    )
+        )
+    except Exception:
+        _log.exception("list_primitives — DB query failed for org %s", org_id)
+        raise
 
     org_items = list(org_page.items)
     org_total = org_page.total
@@ -1082,6 +1105,7 @@ async def get_primitive(
                 await set_rls_org(session, org_id)
                 item = await get_library_primitive(session, primitive_id)
     except ProgrammingError:
+        _log.warning("get_primitive — DB not migrated or table missing for %s", primitive_id)
         return None
     except Exception:
         _log.exception("get_primitive — unexpected error for %s", primitive_id)
@@ -1121,6 +1145,10 @@ async def get_primitive_by_slug(
                 result = await session.execute(stmt)
                 item = result.scalar_one_or_none()
     except ProgrammingError:
+        _log.warning("get_primitive_by_slug — DB not migrated for %s/%s", primitive_type, slug)
+        return None
+    except Exception:
+        _log.exception("get_primitive_by_slug — unexpected error for %s/%s", primitive_type, slug)
         return None
     if item is not None:
         return item
@@ -1151,30 +1179,20 @@ async def copy_to_adapt(
             "Community primitives may only be adapted via the browser UI, not via MCP."
         )
 
-    # Increment download count atomically on registry primitives.
-    if source.source == "registry":
-        async with session.begin():
-            await set_rls_org(session, org_id)
-            if created_by is not None:
-                await set_rls_user_context(session, created_by, org_role)
-            await session.execute(
-                sa_update(LibraryPrimitive)
-                .where(LibraryPrimitive.id == source.id)
-                .values(download_count=LibraryPrimitive.download_count + 1)
-            )
-
     # Bump the minor version for the copy.
-    parts = source.version.split(".")
-    try:
-        parts[-1] = str(int(parts[-1]) + 1)
-    except (ValueError, IndexError):
-        parts = ["1", "0"]
-    new_version = ".".join(parts)
+    new_version = _bump_version(source.version)
 
     async with session.begin():
         await set_rls_org(session, org_id)
         if created_by is not None:
             await set_rls_user_context(session, created_by, org_role)
+        # Increment download count atomically on registry primitives.
+        if source.source == "registry":
+            await session.execute(
+                sa_update(LibraryPrimitive)
+                .where(LibraryPrimitive.id == source.id)
+                .values(download_count=func.coalesce(LibraryPrimitive.download_count, 0) + 1)
+            )
         result = await create_library_primitive(
             session,
             org_id=org_id,
@@ -1711,13 +1729,7 @@ def _filter_community(
     primitive_type: str | None,
     search: str | None,
 ) -> list[LibraryPrimitive]:
-    results = _COMMUNITY_PRIMITIVES
-    if primitive_type is not None:
-        results = [p for p in results if p.primitive_type == primitive_type]
-    if search:
-        term = search.strip().lower()
-        results = [p for p in results if term in p.name.lower() or term in (p.description or "").lower()]
-    return results
+    return _filter_primitives(_COMMUNITY_PRIMITIVES, primitive_type=primitive_type, search=search)
 
 async def _fetch_published_community_from_db(
     session: AsyncSession,
@@ -1896,17 +1908,15 @@ async def submit_contribution_for_review(
         await set_rls_org(session, org_id)
         prim = await get_library_primitive(session, primitive_id)
 
-    if prim is None:
-        raise ContributionNotFoundError(f"Contribution {primitive_id} not found")
+        if prim is None:
+            raise ContributionNotFoundError(f"Contribution {primitive_id} not found")
 
-    if prim.contribution_status != CONTRIBUTION_DRAFT:
-        raise ContributionInvalidTransitionError(
-            f"Cannot submit contribution {primitive_id} for review: "
-            f"expected status '{CONTRIBUTION_DRAFT}', got '{prim.contribution_status}'"
-        )
+        if prim.contribution_status != CONTRIBUTION_DRAFT:
+            raise ContributionInvalidTransitionError(
+                f"Cannot submit contribution {primitive_id} for review: "
+                f"expected status '{CONTRIBUTION_DRAFT}', got '{prim.contribution_status}'"
+            )
 
-    async with session.begin():
-        await set_rls_org(session, org_id)
         updated = await update_library_primitive(
             session,
             primitive_id,
@@ -1934,18 +1944,15 @@ async def publish_contribution(
         await set_rls_org(session, org_id)
         prim = await get_library_primitive(session, primitive_id)
 
-    if prim is None:
-        raise ContributionNotFoundError(f"Contribution {primitive_id} not found")
+        if prim is None:
+            raise ContributionNotFoundError(f"Contribution {primitive_id} not found")
 
-    if prim.contribution_status not in (CONTRIBUTION_DRAFT, CONTRIBUTION_REVIEW_QUEUE):
-        raise ContributionInvalidTransitionError(
-            f"Cannot publish contribution {primitive_id}: "
-            f"expected status '{CONTRIBUTION_DRAFT}' or '{CONTRIBUTION_REVIEW_QUEUE}', "
-            f"got '{prim.contribution_status}'"
-        )
+        if prim.contribution_status != CONTRIBUTION_REVIEW_QUEUE:
+            raise ContributionInvalidTransitionError(
+                f"Cannot publish contribution {primitive_id}: "
+                f"expected status '{CONTRIBUTION_REVIEW_QUEUE}', got '{prim.contribution_status}'"
+            )
 
-    async with session.begin():
-        await set_rls_org(session, org_id)
         updated = await update_library_primitive(
             session,
             primitive_id,
@@ -2042,22 +2049,17 @@ async def submit_contribution_version(
         await set_rls_org(session, org_id)
         existing = await get_library_primitive(session, primitive_id)
 
-    if existing is None:
-        raise ContributionNotFoundError(f"Contribution {primitive_id} not found")
+        if existing is None:
+            raise ContributionNotFoundError(f"Contribution {primitive_id} not found")
 
-    if existing.contribution_status != CONTRIBUTION_PUBLISHED:
-        raise ContributionInvalidTransitionError(
-            f"Cannot version contribution {primitive_id}: "
-            f"expected status '{CONTRIBUTION_PUBLISHED}', got '{existing.contribution_status}'"
-        )
+        if existing.contribution_status != CONTRIBUTION_PUBLISHED:
+            raise ContributionInvalidTransitionError(
+                f"Cannot version contribution {primitive_id}: "
+                f"expected status '{CONTRIBUTION_PUBLISHED}', got '{existing.contribution_status}'"
+            )
 
-    # Auto-increment the minor version
-    parts = existing.version.split(".")
-    try:
-        parts[-1] = str(int(parts[-1]) + 1)
-    except (ValueError, IndexError):
-        parts = ["1", "0"]
-    new_version = ".".join(parts)
+        # Auto-increment the minor version
+        new_version = _bump_version(existing.version)
 
     # Establish a version group if this is the first versioned submission
     group_id = existing.version_group_id or existing.id
@@ -2144,7 +2146,7 @@ async def list_contribution_versions(
     if not any(r.id == prim.id for r in results):
         results.append(prim)
 
-    return sorted(results, key=lambda p: p.version, reverse=True)
+    return sorted(results, key=lambda p: [int(x) for x in p.version.split(".")], reverse=True)
 
 
 async def notify_importers_of_update(
@@ -2163,29 +2165,31 @@ async def notify_importers_of_update(
             await set_rls_org(session, org_id)
             prim = await get_library_primitive(session, primitive_id)
 
-        if prim is None:
-            return
+            if prim is None:
+                return
 
-        group_id = prim.version_group_id
-        if group_id is None:
-            return
+            group_id = prim.version_group_id
+            if group_id is None:
+                return
 
-        # Find all primitives forked from any version in this group
-        stmt = select(LibraryPrimitive).where(
-            LibraryPrimitive.forked_from.in_(
-                select(LibraryPrimitive.id).where(LibraryPrimitive.version_group_id == group_id)
+            # Find all primitives forked from any version in this group
+            stmt = select(LibraryPrimitive).where(
+                LibraryPrimitive.forked_from.in_(
+                    select(LibraryPrimitive.id).where(LibraryPrimitive.version_group_id == group_id)
+                )
             )
-        )
-        result = await session.execute(stmt)
-        fork_copies = list(result.scalars())
+            result = await session.execute(stmt)
+            fork_copies = list(result.scalars())
 
-        for copy in fork_copies:
-            if not copy.auto_update:
-                continue
-            await update_library_primitive(
-                session,
-                copy.id,
-                {"update_available_version_id": prim.id},
-            )
+            for copy in fork_copies:
+                if not copy.auto_update:
+                    continue
+                await update_library_primitive(
+                    session,
+                    copy.id,
+                    {"update_available_version_id": prim.id},
+                )
     except ProgrammingError:
         _log.warning("notify_importers_of_update failed (DB not migrated): %s", primitive_id)
+    except Exception:
+        _log.exception("notify_importers_of_update failed for %s", primitive_id)
