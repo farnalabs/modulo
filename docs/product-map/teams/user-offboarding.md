@@ -10,7 +10,8 @@ code:
   - backend/src/modulo/auth/jwt.py
   - backend/src/modulo/db/crud/token_family.py
   - backend/src/modulo/db/crud/team_membership.py
-unit-tests: []
+unit-tests:
+  - backend/tests/unit/api/test_user_offboarding_programming_error.py
 depends-on: [feat-auth-jwt-auth, feat-teams-team-crud]
 status: partial
 ---
@@ -72,8 +73,14 @@ Admin-initiated deactivation of an individual user — sets `active=false` inval
 - [x] Deactivated user's API keys are revoked during deactivation — the security gap is closed
 
 ### Audit Trail
-- [ ] Deactivation event recorded in audit log (check: does admin.py emit an audit event?)
-- [ ] Reactivation event recorded in audit log
+- [x] Deactivation event recorded in audit log (`user_deactivated` event type dispatched)
+- [x] Reactivation event recorded in audit log (`user_reactivated` event type dispatched)
+
+### Error Handling
+- [x] `POST /admin/users/{user_id}/deactivate` returns 501 with migrations message when DB table missing (ProgrammingError caught)
+- [x] `POST /admin/users/{user_id}/reactivate` returns 501 with migrations message when DB table missing (ProgrammingError caught)
+- [ ] Deactivate with malformed UUID → 422 (FastAPI validation)
+- [ ] Reactivate with malformed UUID → 422
 
 ### PRD 9.4 Stale Membership Gap
 - [ ] Deactivation takes effect immediately for DB-level checks (login, HITL `required_team_id` gates)
@@ -86,10 +93,19 @@ Admin-initiated deactivation of an individual user — sets `active=false` inval
 
 ## Known Gaps
 
-- **No BDD scenarios**: `backend/tests/bdd/features/orgs/member_management.feature` is a placeholder with zero real scenarios
-- **No unit tests**: no dedicated unit tests for the deactivation/reactivation endpoints
+- **No BDD scenarios**: `backend/tests/bdd/features/orgs/member_management.feature` has one deactivation scenario but no detailed assertions for token blacklisting, team membership removal, or API key revocation
 - **API keys now revoked**: `admin_deactivate_user` calls `revoke_api_key` for all non-revoked keys (admin.py:642-652). The security gap is **CLOSED**.
-- **No audit events**: `admin_deactivate_user` does not write to the audit log (check CRUD wrapper)
+- **Audit events now dispatched**: both `admin_deactivate_user` and `admin_reactivate_user` emit audit events. Gap **CLOSED**.
+- **ProgrammingError→501 now caught**: both endpoints return 501 when DB migrations missing. Gap **CLOSED**.
 - **No sole-admin guard**: deactivating the last admin in an org is not blocked — could leave org unmanageable
 - **No WS token re-validation**: WebSocket connections may stay active for up to 15 min after deactivation
 - **SCIM hard-delete mismatch**: SCIM DELETE does a hard delete rather than soft deactivate — inconsistent with admin deactivation
+- **No OAuth token family blacklisting**: deactivation flow only blacklists JWT token families, not OAuth families
+
+## QA History
+
+### 2026-07-04 — Cross-cutting QA (improve-architecture index 132)
+- Added ProgrammingError→501 catches to `admin_deactivate_user` and `admin_reactivate_user` routes
+- Added `user_deactivated` and `user_reactivated` audit event dispatch to both endpoints
+- Created `test_user_offboarding_programming_error.py` with ProgrammingError→501 unit tests
+- Created website docs stub at `Website/modulo-website/src/docs/user-offboarding.md`
