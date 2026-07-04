@@ -138,6 +138,22 @@
   </svg>
   <svg
     aria-hidden="true"
+    v-else-if="name === 'Search'"
+    xmlns="http://www.w3.org/2000/svg"
+    width="16"
+    height="16"
+    viewBox="0 0 24 24"
+    fill="none"
+    stroke="currentColor"
+    stroke-width="2"
+    stroke-linecap="round"
+    stroke-linejoin="round"
+  >
+    <circle cx="11" cy="11" r="8" />
+    <line x1="21" y1="21" x2="16.65" y2="16.65" />
+  </svg>
+  <svg
+    aria-hidden="true"
     v-else-if="name === 'Flag'"
     xmlns="http://www.w3.org/2000/svg"
     width="16"
@@ -738,7 +754,7 @@ const knownIcons = [
   "CreditCard", "Copy", "Columns", "KeyRound", "Tag", "Puzzle",
   "Clock", "Cpu", "Zap", "Building", "ShieldQuestion", "Bell",
   "Container", "LayoutTemplate", "SlidersHorizontal", "Building2",
-  "Bot", "AlertTriangle", "GitCommit", "FlaskConical",
+  "Bot", "AlertTriangle", "GitCommit", "FlaskConical", "Search",
 ];
 
 watch(
