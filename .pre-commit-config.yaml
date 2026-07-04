@@ -37,6 +37,12 @@ repos:
         language: system
         files: \.(vue|ts|py|ps1)$
         pass_filenames: false
+      - id: check-migration-heads
+        name: check migration number/revision collisions
+        entry: powershell -NoProfile -File ..\Dev-Harness\tools\check-migration-heads.ps1
+        language: system
+        files: ^backend/src/modulo/db/migrations/versions/.*\.py$
+        pass_filenames: false
       - id: semgrep
         name: semgrep
         entry: bash -c 'cd backend && uv run semgrep --config=../.semgrep/ --error src/'
