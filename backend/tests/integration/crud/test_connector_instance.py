@@ -88,3 +88,67 @@ async def test_delete_connector_instance_unknown_returns_false(
     rls_session: AsyncSession,
 ) -> None:
     assert await delete_connector_instance(rls_session, uuid.uuid4()) is False
+
+
+class TestListConnectorInstancesTierFiltering:
+    """Server-side tier filtering for list_connector_instances."""
+
+    async def _create_with_tier(
+        self,
+        rls_session: AsyncSession,
+        test_org: uuid.UUID,
+        test_user: uuid.UUID,
+        tier: str,
+        suffix: str,
+    ) -> None:
+        await create_connector_instance(
+            rls_session, tier=tier, **_ci_kwargs(test_org, test_user, suffix=suffix),
+        )
+
+    async def test_default_excludes_in_dev(
+        self, rls_session: AsyncSession, test_org: uuid.UUID, test_user: uuid.UUID,
+    ) -> None:
+        await self._create_with_tier(rls_session, test_org, test_user, "in_dev", "-tier-dev")
+        await self._create_with_tier(rls_session, test_org, test_user, "preview", "-tier-prev")
+        await self._create_with_tier(rls_session, test_org, test_user, "native", "-tier-nat")
+        result = await list_connector_instances(rls_session)
+        assert result.total == 2
+        assert all(i.tier != "in_dev" for i in result.items)
+
+    async def test_explicit_excluded_tiers_in_dev(
+        self, rls_session: AsyncSession, test_org: uuid.UUID, test_user: uuid.UUID,
+    ) -> None:
+        await self._create_with_tier(rls_session, test_org, test_user, "in_dev", "-tier2-dev")
+        await self._create_with_tier(rls_session, test_org, test_user, "native", "-tier2-nat")
+        result = await list_connector_instances(rls_session, excluded_tiers=["in_dev"])
+        assert result.total == 1
+        assert result.items[0].tier == "native"
+
+    async def test_excluded_tiers_none_defaults_to_in_dev(
+        self, rls_session: AsyncSession, test_org: uuid.UUID, test_user: uuid.UUID,
+    ) -> None:
+        await self._create_with_tier(rls_session, test_org, test_user, "in_dev", "-tier3-dev")
+        await self._create_with_tier(rls_session, test_org, test_user, "native", "-tier3-nat")
+        result = await list_connector_instances(rls_session, excluded_tiers=None)
+        assert result.total == 1
+        assert result.items[0].tier == "native"
+
+    async def test_excluded_tiers_empty_skips_filter(
+        self, rls_session: AsyncSession, test_org: uuid.UUID, test_user: uuid.UUID,
+    ) -> None:
+        await self._create_with_tier(rls_session, test_org, test_user, "in_dev", "-tier4-dev")
+        await self._create_with_tier(rls_session, test_org, test_user, "native", "-tier4-nat")
+        result = await list_connector_instances(rls_session, excluded_tiers=[])
+        assert result.total == 2
+
+    async def test_excluded_tiers_preview(
+        self, rls_session: AsyncSession, test_org: uuid.UUID, test_user: uuid.UUID,
+    ) -> None:
+        await self._create_with_tier(rls_session, test_org, test_user, "in_dev", "-tier5-dev")
+        await self._create_with_tier(rls_session, test_org, test_user, "preview", "-tier5-prev")
+        await self._create_with_tier(rls_session, test_org, test_user, "native", "-tier5-nat")
+        result = await list_connector_instances(rls_session, excluded_tiers=["preview"])
+        assert result.total == 2
+        assert all(i.tier != "preview" for i in result.items)
+        tiers = {i.tier for i in result.items}
+        assert tiers == {"in_dev", "native"}
