@@ -200,7 +200,8 @@ class TriggerEngine:
 
         # HMAC validation (only if secret is configured)
         # HMAC is computed over timestamp.body for replay protection
-        hmac_secret: str | None = trigger.config_json.get("hmac_secret")
+        cfg = trigger.config_json or {}
+        hmac_secret: str | None = cfg.get("hmac_secret")
         if hmac_secret:
             if not _verify_hmac(raw_body, hmac_secret, hmac_signature, timestamp=ts):
                 await self._log_event(
@@ -237,7 +238,7 @@ class TriggerEngine:
             raise ConcurrentRunLimitError(trigger_id, trigger.max_concurrent_runs)
 
         # Payload mapping → input payload for the run
-        mapping: dict[str, str] = trigger.config_json.get("payload_mapping", {})
+        mapping: dict[str, str] = cfg.get("payload_mapping", {})
         input_payload = _apply_payload_mapping(raw_payload, mapping)
 
         # Create run
@@ -337,7 +338,8 @@ class TriggerEngine:
             raise ConcurrentRunLimitError(trigger.id, trigger.max_concurrent_runs)
 
         # Payload mapping
-        mapping: dict[str, str] = trigger.config_json.get("payload_mapping", {})
+        cfg = trigger.config_json or {}
+        mapping: dict[str, str] = cfg.get("payload_mapping", {})
         input_payload = _apply_payload_mapping(raw_payload, mapping)
 
         # Create run
@@ -466,12 +468,15 @@ class TriggerEngine:
     async def cleanup_expired_dedup_hashes(session: AsyncSession) -> int:
         """Delete expired webhook_dedup_hashes rows.
 
-        Acquires a Postgres advisory lock (key=20250601) to prevent concurrent
-        cleanup across workers. Returns the number of deleted rows.
+        Acquires a Postgres advisory lock (key=20250601) on PostgreSQL to prevent
+        concurrent cleanup across workers. On other backends the lock is skipped.
+        Returns the number of deleted rows.
         """
-        lock_acquired = await session.execute(text("SELECT pg_try_advisory_xact_lock(20250601)"))
-        if not lock_acquired.scalar_one():
-            return 0
+        dialect = session.get_bind().dialect.name
+        if dialect == "postgresql":
+            lock_acquired = await session.execute(text("SELECT pg_try_advisory_xact_lock(20250601)"))
+            if not lock_acquired.scalar_one():
+                return 0
 
         now = datetime.now(UTC)
         result = await session.execute(select(WebhookDedupHash.id).where(WebhookDedupHash.expires_at <= now))
@@ -491,10 +496,7 @@ class TriggerEngine:
         if not expired_ids:
             return 0
 
-        await session.execute(
-            text("DELETE FROM webhook_payloads WHERE id = ANY(:ids)"),
-            {"ids": list(expired_ids)},
-        )
+        await session.execute(delete(WebhookPayload).where(WebhookPayload.id.in_(expired_ids)))
         return len(expired_ids)
 
     # ------------------------------------------------------------------
@@ -530,7 +532,7 @@ class TriggerEngine:
                 Run.status.in_(_ACTIVE_STATUSES),
             )
         )
-        return result.scalar_one()
+        return int(result.scalar_one() or 0)
 
     async def _store_raw_payload(
         self,

@@ -83,12 +83,14 @@ async def fire_agent_signal(
                 result="concurrency_limit_reached",
                 error_detail=f"Active runs: {active_count}, limit: {trigger.max_concurrent_runs}",
             )
-            results.append({
-                "trigger_id": str(trigger.id),
-                "status": "skipped",
-                "reason": "concurrency_limit",
-                "active_runs": active_count,
-            })
+            results.append(
+                {
+                    "trigger_id": str(trigger.id),
+                    "status": "skipped",
+                    "reason": "concurrency_limit",
+                    "active_runs": active_count,
+                }
+            )
             continue
 
         # Build input payload from node output.
@@ -102,22 +104,62 @@ async def fire_agent_signal(
 
         # Resolve snapshot ID from trigger config.
         snapshot_id_str = config.get("snapshot_id")
-        try:
-            snapshot_id = uuid.UUID(snapshot_id_str) if snapshot_id_str else uuid.uuid4()
-        except (ValueError, TypeError):
+        if snapshot_id_str:
+            try:
+                snapshot_id = uuid.UUID(snapshot_id_str)
+            except (ValueError, TypeError):
+                _log.warning(
+                    "Agent signal trigger %s has invalid snapshot_id: %s — skipping",
+                    trigger.id,
+                    snapshot_id_str,
+                )
+                await _log_signal_event(
+                    session,
+                    trigger,
+                    org_id,
+                    result="poll_error",
+                    error_detail=f"Invalid snapshot_id: {snapshot_id_str}",
+                )
+                results.append(
+                    {
+                        "trigger_id": str(trigger.id),
+                        "status": "skipped",
+                        "reason": "invalid_snapshot_id",
+                    }
+                )
+                continue
+        else:
             snapshot_id = uuid.uuid4()
 
         # Create child run linked to source via parent_run_id.
-        child_run = await create_run(
-            session,
-            org_id=org_id,
-            pipeline_id=trigger.pipeline_id,
-            snapshot_id=snapshot_id,
-            trigger_type="agent_signal",
-            trigger_id=trigger.id,
-            input_payload=input_payload,
-            parent_run_id=source_run_id,
-        )
+        try:
+            child_run = await create_run(
+                session,
+                org_id=org_id,
+                pipeline_id=trigger.pipeline_id,
+                snapshot_id=snapshot_id,
+                trigger_type="agent_signal",
+                trigger_id=trigger.id,
+                input_payload=input_payload,
+                parent_run_id=source_run_id,
+            )
+        except Exception as exc:
+            _log.exception("Failed to create child run for agent signal trigger %s", trigger.id)
+            await _log_signal_event(
+                session,
+                trigger,
+                org_id,
+                result="error",
+                error_detail=str(exc)[:200],
+            )
+            results.append(
+                {
+                    "trigger_id": str(trigger.id),
+                    "status": "error",
+                    "reason": "create_run_failed",
+                }
+            )
+            continue
 
         # Log TriggerEvent.
         await _log_signal_event(
@@ -129,19 +171,20 @@ async def fire_agent_signal(
         )
 
         _log.info(
-            "Agent signal trigger %s fired child run %s "
-            "(source pipeline %s, node %s)",
+            "Agent signal trigger %s fired child run %s (source pipeline %s, node %s)",
             trigger.id,
             child_run.id,
             source_pipeline_id,
             completed_node_id,
         )
 
-        results.append({
-            "trigger_id": str(trigger.id),
-            "run_id": str(child_run.id),
-            "status": "fired",
-        })
+        results.append(
+            {
+                "trigger_id": str(trigger.id),
+                "run_id": str(child_run.id),
+                "status": "fired",
+            }
+        )
 
     return results
 
@@ -155,7 +198,7 @@ async def _count_active_runs(session: AsyncSession, pipeline_id: uuid.UUID) -> i
             Run.status.in_(_ACTIVE_STATUSES),
         )
     )
-    return result.scalar_one()
+    return int(result.scalar_one() or 0)
 
 
 async def _log_signal_event(
