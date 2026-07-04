@@ -190,7 +190,10 @@ class ModuloPostgresSaver(AsyncPostgresSaver):
         self._fernet = Fernet(fernet_key.encode()) if fernet_key else None
         self._fernet_old = Fernet(fernet_key_old.encode()) if fernet_key_old else None
         if fernet_key is None:
-            _log.warning("checkpoint.encryption_disabled", extra={"detail": "No Fernet key configured — checkpoint data stored in plaintext"})
+            _log.warning(
+                "checkpoint.encryption_disabled",
+                extra={"detail": "No Fernet key configured — checkpoint data stored in plaintext"},
+            )
 
     # ------------------------------------------------------------------
     # Encryption helpers

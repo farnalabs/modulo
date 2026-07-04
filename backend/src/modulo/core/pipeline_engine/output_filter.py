@@ -93,16 +93,24 @@ def filter_output_for_injection(output: str) -> OutputFilterResult:
 def _string_values(payload: ConnectorPayload) -> list[str]:
     """Extract all string values recursively from a payload's data dict."""
     values: list[str] = []
+    visited: set[int] = set()
 
     def _walk(obj: Any) -> None:
-        if isinstance(obj, str):
-            values.append(obj)
-        elif isinstance(obj, dict):
-            for v in obj.values():
-                _walk(v)
-        elif isinstance(obj, list):
-            for v in obj:
-                _walk(v)
+        obj_id = id(obj)
+        if obj_id in visited:
+            return
+        visited.add(obj_id)
+        try:
+            if isinstance(obj, str):
+                values.append(obj)
+            elif isinstance(obj, dict):
+                for v in obj.values():
+                    _walk(v)
+            elif isinstance(obj, list):
+                for v in obj:
+                    _walk(v)
+        finally:
+            visited.discard(obj_id)
 
     _walk(payload.data)
     return values

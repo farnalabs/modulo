@@ -200,6 +200,9 @@ def build_graph_from_json(
         max_input_length: int | None = node_def.get("max_input_length")
         token_budget: int | None = node_def.get("token_budget")
 
+        if node_type not in ("agent", "manual"):
+            raise ValueError(f"Unknown node_type {node_type!r} for node {node_id!r}")
+
         if node_type == "manual":
             graph.add_node(
                 node_id,
