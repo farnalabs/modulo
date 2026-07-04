@@ -21,6 +21,8 @@ _FORWARDERS: dict[str, type[BaseForwarder]] = {
     "loki": LokiErrorForwarder,
 }
 
+_DEFAULT_REGISTRY: ForwarderRegistry | None = None
+
 
 class ForwarderRegistry:
     """Maps forwarder type names to their implementation classes."""
@@ -38,8 +40,15 @@ class ForwarderRegistry:
         return list(self._forwarders)
 
 
+def get_default_registry() -> ForwarderRegistry:
+    global _DEFAULT_REGISTRY
+    if _DEFAULT_REGISTRY is None:
+        _DEFAULT_REGISTRY = ForwarderRegistry()
+    return _DEFAULT_REGISTRY
+
+
 def get_forwarder(type_name: str) -> BaseForwarder | None:
-    cls = _FORWARDERS.get(type_name)
+    cls = get_default_registry().get(type_name)
     if cls is None:
         return None
     return cls()

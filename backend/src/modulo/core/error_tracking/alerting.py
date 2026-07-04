@@ -18,6 +18,8 @@ from modulo.db.models.error_notification_rule import ErrorNotificationRule
 
 _log = logging.getLogger(__name__)
 
+_COOLDOWN_TTL = 86400  # 24 hours — max safe window for cooldown persistence
+
 
 @dataclass
 class TriggeredAlert:
@@ -35,10 +37,10 @@ class TriggeredAlert:
 @dataclass(frozen=True)
 class _CooldownKey:
     rule_id: uuid.UUID
-    group_id: uuid.UUID
+    fingerprint: str
 
     def __str__(self) -> str:
-        return f"cooldown:{self.rule_id}:{self.group_id}"
+        return f"cooldown:{self.rule_id}:{self.fingerprint}"
 
 
 class AlertEngine:
@@ -87,19 +89,27 @@ class AlertEngine:
         for rule in rules:
             if rule.condition_level != level:
                 continue
-            if count < rule.condition_min_count:
+            min_count = rule.condition_min_count if rule.condition_min_count is not None else 0
+            if count < min_count:
                 continue
 
-            ck = _CooldownKey(rule_id=rule.id, group_id=error_group_id)
-            last_fired = await self._get_last_fired(ck)
+            ck = _CooldownKey(rule_id=rule.id, fingerprint=fingerprint)
+            try:
+                last_fired = await self._get_last_fired(ck)
+            except Exception:
+                _log.exception("alert.cooldown_read_failed", extra={"rule_id": str(rule.id)})
+                last_fired = None
             if last_fired is not None and (now - last_fired) < rule.cooldown_seconds:
                 _log.debug(
                     "alert.cooldown_skip",
-                    extra={"rule_id": str(rule.id), "group_id": str(error_group_id)},
+                    extra={"rule_id": str(rule.id), "fingerprint": fingerprint},
                 )
                 continue
 
-            await self._set_last_fired(ck, now)
+            try:
+                await self._set_last_fired(ck, now)
+            except Exception:
+                _log.exception("alert.cooldown_write_failed", extra={"rule_id": str(rule.id)})
 
             triggered.append(
                 TriggeredAlert(
@@ -144,7 +154,7 @@ class AlertEngine:
             raw = await self._redis.get(str(key))
             if raw:
                 try:
-                    return json.loads(raw)
+                    return float(json.loads(raw))
                 except (ValueError, TypeError):
                     return None
             return None
@@ -152,6 +162,6 @@ class AlertEngine:
 
     async def _set_last_fired(self, key: _CooldownKey, value: float) -> None:
         if self._redis is not None:
-            await self._redis.setex(str(key), 86400, json.dumps(value))
+            await self._redis.setex(str(key), _COOLDOWN_TTL, json.dumps(value))
         else:
             self._cooldowns[key] = value

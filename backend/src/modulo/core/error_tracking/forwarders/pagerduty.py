@@ -49,22 +49,27 @@ class PagerDutyErrorForwarder(BaseForwarder):
 
         try:
             url = "https://events.pagerduty.com/v2/enqueue"
+            message = error_event.message or ""
+            source = error_event.source or ""
+            environment = error_event.environment or "unknown"
+            version = error_event.version or "unknown"
+            stacktrace = error_event.stacktrace or ""
             body = {
                 "routing_key": routing_key,
                 "event_action": "trigger",
                 "payload": {
-                    "summary": error_event.message[:1024],
+                    "summary": message[:1024],
                     "source": str(org_id),
                     "severity": severity,
-                    "component": error_event.source,
+                    "component": source,
                     "group": error_group.fingerprint if error_group else "unknown",
                     "class": "error_event",
                     "custom_details": {
                         "fingerprint": error_group.fingerprint if error_group else "",
                         "count": error_group.count if error_group else 1,
-                        "environment": error_event.environment or "unknown",
-                        "version": error_event.version or "unknown",
-                        "stacktrace": (error_event.stacktrace or "")[:2000],
+                        "environment": environment,
+                        "version": version,
+                        "stacktrace": stacktrace[:2000],
                     },
                 },
                 "dedup_key": f"modulo:{org_id}:{error_group.fingerprint}" if error_group else f"modulo:{org_id}",
