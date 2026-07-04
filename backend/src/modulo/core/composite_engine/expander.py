@@ -2,6 +2,7 @@
 
 import logging
 import re
+import time
 from typing import Any
 
 import jsonschema  # type: ignore[import-untyped]
@@ -62,7 +63,7 @@ def run_output_validation(
                 try:
                     flags = 0
                     flags_str = config.get("flags", "")
-                    if "i" in flags_str:
+                    if isinstance(flags_str, str) and "i" in flags_str:
                         flags |= re.IGNORECASE
                     if not re.search(pattern, value, flags):
                         failures.append(f"Eval '{eval_def.name}': regex /{pattern}/ did not match field '{field}'")
@@ -71,15 +72,20 @@ def run_output_validation(
 
             case "json_schema":
                 schema = config.get("schema", {})
-                if not schema:
-                    failures.append(f"Eval '{eval_def.name}': missing 'schema' in config")
+                if not isinstance(schema, dict) or schema is None:
+                    failures.append(f"Eval '{eval_def.name}': 'schema' must be a dict")
                     continue
                 field = config.get("field", "")
+                if not isinstance(field, str):
+                    failures.append(f"Eval '{eval_def.name}': 'field' must be a string")
+                    continue
                 data = mapped_output.get(field, mapped_output) if field else mapped_output
                 try:
                     jsonschema.validate(data, schema)
                 except jsonschema.ValidationError as exc:
                     failures.append(f"Eval '{eval_def.name}': JSON Schema validation failed: {exc.message}")
+                except jsonschema.SchemaError as exc:
+                    failures.append(f"Eval '{eval_def.name}': JSON Schema definition error: {exc.message}")
 
             case "llm_judge":
                 if llm_judge_callable is None:
@@ -87,6 +93,9 @@ def run_output_validation(
                     continue
                 try:
                     raw = llm_judge_callable(mapped_output, config)
+                    if not isinstance(raw, dict):
+                        failures.append(f"Eval '{eval_def.name}': llm_judge returned non-dict result")
+                        continue
                     if not raw.get("passed"):
                         detail = raw.get("detail", "llm_judge evaluated as failed")
                         failures.append(f"Eval '{eval_def.name}': {detail}")
@@ -155,7 +164,6 @@ def execute_composite_with_retry(
         result = run_output_validation(mapped_output, output_validation, llm_judge_callable)
 
         if result.passed:
-            result.retry_count = retry_count
             return mapped_output
 
         retry_eligible_failures: list[str] = []
@@ -167,7 +175,7 @@ def execute_composite_with_retry(
                     blocking_failures.extend(eval_failures)
                 elif eval_def.failure_behaviour == "retry":
                     retry_eligible_failures.extend(eval_failures)
-                else:
+                elif eval_def.failure_behaviour == "warn":
                     logger.warning(
                         "Composite output validation warn: %s",
                         "; ".join(eval_failures),
@@ -177,7 +185,6 @@ def execute_composite_with_retry(
             raise CompositeValidationError(blocking_failures, retry_count)
 
         if not retry_eligible_failures:
-            result.retry_count = retry_count
             return mapped_output
 
         if retry_count >= max_retries:
@@ -190,6 +197,8 @@ def execute_composite_with_retry(
             max_retries,
             len(result.failures),
         )
+        if retry_count < max_retries:
+            time.sleep(0.5 * retry_count)
 
 
 def expand_composite_node(
@@ -224,7 +233,10 @@ def expand_composite_node(
     if not sub_nodes:
         raise ValueError("Composite template has no sub-pipeline nodes to expand")
 
-    parent_node_id = str(node_def["id"])
+    node_id = node_def.get("id")
+    if node_id is None:
+        raise ValueError("Composite node definition missing required 'id' field")
+    parent_node_id = str(node_id)
     expanded: list[dict[str, Any]] = []
 
     for i, sub_node in enumerate(sub_nodes):
@@ -287,4 +299,4 @@ def _remap_edge_refs(
     nodes produce edges referencing internal node IDs, those IDs need
     prefixing with the parent node ID to avoid collisions after expansion.
     """
-    return edges
+    return list(edges)
