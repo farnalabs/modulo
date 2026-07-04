@@ -11,7 +11,7 @@ code:
   - frontend/src/__tests__/MyProfileView.spec.ts
 depends-on:
   - feat-auth-jwt-auth
-status: covered
+status: partial
 ---
 
 # Password Change
@@ -55,6 +55,14 @@ Logged-in users can change their own password via the My Profile page. Admins ca
 - [x] SSO users without local password cannot change password via this endpoint
 - [ ] Password change logged to audit trail (not yet implemented — audit trail scope gap)
 
+## Error Handling
+- [ ] PUT /api/v1/me/password returns 501 Not Implemented when DB table is missing (ProgrammingError)
+- [ ] Token family blacklist failure during password change logs warning but does not fail the request
+- [ ] Unauthenticated requests return 403 (no JWT)
+
 ## Known Gaps
 
 - Password change is not logged to the audit trail yet — the audit system currently covers admin actions but not user self-service actions
+
+## QA History
+- 2026-07-05: QA-iterate (prodmap auth). Added Error Handling and QA History sections. Fixed status: covered → partial (audit trail gap).
