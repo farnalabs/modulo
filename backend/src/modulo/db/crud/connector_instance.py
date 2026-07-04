@@ -56,12 +56,19 @@ async def list_connector_instances(
     page: int = 1,
     page_size: int = 20,
     cursor: str | None = None,
+    excluded_tiers: list[str] | None = None,
 ) -> PageResult[ConnectorInstance]:
+    if excluded_tiers is None:
+        excluded_tiers = ["in_dev"]
+
     if cursor is not None:
+        stmt = select(ConnectorInstance)
+        if excluded_tiers:
+            stmt = stmt.where(~ConnectorInstance.tier.in_(excluded_tiers))
         paginator = CursorPaginator()
         cp = await paginator.paginate(
             session,
-            select(ConnectorInstance),
+            stmt,
             cursor=cursor,
             limit=page_size,
             model=ConnectorInstance,
@@ -77,12 +84,16 @@ async def list_connector_instances(
         )
 
     offset = (page - 1) * page_size
-    total = (await session.execute(select(func.count()).select_from(ConnectorInstance))).scalar_one()
+    total_query = select(func.count()).select_from(ConnectorInstance)
+    if excluded_tiers:
+        total_query = total_query.where(~ConnectorInstance.tier.in_(excluded_tiers))
+    total = (await session.execute(total_query)).scalar_one()
+    items_stmt = select(ConnectorInstance).order_by(ConnectorInstance.created_at.desc()).offset(offset).limit(page_size)
+    if excluded_tiers:
+        items_stmt = items_stmt.where(~ConnectorInstance.tier.in_(excluded_tiers))
     items = list(
         (
-            await session.execute(
-                select(ConnectorInstance).order_by(ConnectorInstance.created_at.desc()).offset(offset).limit(page_size)
-            )
+            await session.execute(items_stmt)
         ).scalars()
     )
     return PageResult(items=items, total=total, page=page, page_size=page_size)

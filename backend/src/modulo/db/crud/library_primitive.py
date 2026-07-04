@@ -83,7 +83,11 @@ async def list_library_primitives(
     primitive_type: str | None = None,
     search: str | None = None,
     cursor: str | None = None,
+    excluded_tiers: list[str] | None = None,
 ) -> PageResult[LibraryPrimitive]:
+
+    if excluded_tiers is None:
+        excluded_tiers = ["in_dev"]
 
     conditions = []
 
@@ -96,6 +100,9 @@ async def list_library_primitives(
     if search is not None and search.strip():
         term = f"%{search.strip()}%"
         conditions.append(LibraryPrimitive.name.ilike(term))
+
+    if excluded_tiers:
+        conditions.append(~LibraryPrimitive.tier.in_(excluded_tiers))
 
     if cursor is not None:
         paginator = CursorPaginator()
