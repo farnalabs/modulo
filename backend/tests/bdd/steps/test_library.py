@@ -5,10 +5,12 @@ import json
 import uuid
 from datetime import UTC, datetime
 from typing import Any
-from unittest.mock import patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from pytest_bdd import given, parsers, scenarios, then, when
+
+from tests.bdd.conftest import make_mock_session
 
 scenarios("../features/library/browse.feature")
 scenarios("../features/library/copy_to_adapt.feature")
@@ -17,6 +19,21 @@ scenarios("../features/library/tiering.feature")
 
 PRIMITIVE_10 = uuid.UUID("00000000-0000-0000-0000-000000000010")
 FAKE_TEAM_ID = uuid.UUID("00000000-0000-0000-0000-0000000000aa")
+
+
+@pytest.fixture
+def mock_session():
+    """Override the conftest mock_session with library-appropriate defaults.
+
+    The conftest mock returns team_mock for scalar_one_or_none (causing
+    get_primitive to return a wrong object) and count=0 (causing total=0
+    for org primitives). This override returns None for scalar_one_or_none
+    so get_primitive falls through to built-in modulo/community lists.
+    """
+    session = make_mock_session()
+    session.execute.return_value.scalar_one_or_none = MagicMock(return_value=None)
+    session.execute.return_value.scalar_one = MagicMock(return_value=0)
+    return session
 
 
 # ---------------------------------------------------------------------------
@@ -173,7 +190,7 @@ def _at_least_two_schemas(ctx: dict[str, Any]) -> None:
     assert len(items) >= 2, f"Expected at least 2 schemas, got {len(items)}"
 
 
-@given(parsers.parse("the response contains primitives whose name or description matches {term}"))
+@then(parsers.parse("the response contains primitives whose name or description matches {term}"))
 def _response_matches_search(ctx: dict[str, Any], term: str) -> None:
     items = ctx["response"].json()["items"]
     term_lower = term.strip('"').lower()
