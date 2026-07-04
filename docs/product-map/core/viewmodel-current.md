@@ -1,6 +1,6 @@
 ---
 id: feat-core-viewmodel-current
-prd: §6
+prd: 6
 delivery-tasks: [task-prd-viewmodel-current-endpoint]
 code:
   - backend/src/modulo/api/routes/viewmodel.py

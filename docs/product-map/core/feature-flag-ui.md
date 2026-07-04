@@ -7,7 +7,7 @@ code:
   - backend/src/modulo/core/license.py
   - backend/src/modulo/api/routes/admin_feature_flags.py
   - backend/src/modulo/api/routes/admin_license.py
-  - backend/src/modulo/api/routes/viewmodel.py (GET /api/v1/license)
+  - backend/src/modulo/api/routes/viewmodel.py
   - backend/src/modulo/db/crud/tier_catalog.py
   - frontend/src/views/AdminFeatureFlagsView.vue
   - frontend/src/views/SettingsLicenseView.vue

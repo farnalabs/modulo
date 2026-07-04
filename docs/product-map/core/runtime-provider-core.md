@@ -1,6 +1,6 @@
 ---
 id: feat-core-runtime-provider-core
-prd: §6
+prd: 6
 adr: [docs/adr/001-agent-environment-primitive.md]
 bdd:
   - backend/tests/bdd/features/environments/environment_profiles.feature
