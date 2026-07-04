@@ -132,7 +132,7 @@ async def get_spend_limits(
 
 @router.put("/limits/org", response_model=dict[str, Any])
 async def set_org_spend_limit(
-    body: SetSpendLimitRequest,
+    req: SetSpendLimitRequest,
     _: None = require_feature("admin_spend_limits"),
     current_user: AuthenticatedPrincipal = Depends(get_current_user),
     session: AsyncSession = Depends(get_db_session),
@@ -145,7 +145,7 @@ async def set_org_spend_limit(
             org = await get_organisation(session, current_user.organisation_id)
             if org is None:
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Organisation not found")
-            org.daily_spend_limit = Decimal(str(body.daily_spend_limit)) if body.daily_spend_limit is not None else None
+            org.daily_spend_limit = Decimal(str(req.daily_spend_limit)) if req.daily_spend_limit is not None else None
             await session.flush()
     except ProgrammingError:
         raise HTTPException(
@@ -155,14 +155,14 @@ async def set_org_spend_limit(
 
     return {
         "organisation_id": str(org.id),
-        "daily_spend_limit": body.daily_spend_limit,
+        "daily_spend_limit": req.daily_spend_limit,
     }
 
 
 @router.put("/limits/teams/{team_id}", response_model=dict[str, Any])
 async def set_team_spend_limit(
     team_id: uuid.UUID,
-    body: SetSpendLimitRequest,
+    req: SetSpendLimitRequest,
     _: None = require_feature("admin_spend_limits"),
     current_user: AuthenticatedPrincipal = Depends(get_current_user),
     session: AsyncSession = Depends(get_db_session),
@@ -175,7 +175,7 @@ async def set_team_spend_limit(
             team = await get_team(session, team_id)
             if team is None:
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Team not found")
-            team.daily_spend_limit = Decimal(str(body.daily_spend_limit)) if body.daily_spend_limit is not None else None
+            team.daily_spend_limit = Decimal(str(req.daily_spend_limit)) if req.daily_spend_limit is not None else None
             await session.flush()
     except ProgrammingError:
         raise HTTPException(
@@ -185,7 +185,7 @@ async def set_team_spend_limit(
 
     return {
         "team_id": team_id,
-        "daily_spend_limit": body.daily_spend_limit,
+        "daily_spend_limit": req.daily_spend_limit,
     }
 
 
@@ -240,7 +240,7 @@ async def get_cost_controls(
 
 @router.put("/controls", response_model=CostControlsResponse)
 async def update_cost_controls(
-    body: UpdateCostControlsRequest,
+    req: UpdateCostControlsRequest,
     _: None = require_feature("admin_spend_limits"),
     current_user: AuthenticatedPrincipal = Depends(get_current_user),
     session: AsyncSession = Depends(get_db_session),
@@ -249,12 +249,12 @@ async def update_cost_controls(
     try:
         async with session.begin():
             await set_rls_org(session, current_user.organisation_id)
-            if body.budget is not None:
+            if req.budget is not None:
                 org = await get_organisation(session, current_user.organisation_id)
                 if org is None:
                     raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Organisation not found")
                 from decimal import Decimal
-                org.daily_spend_limit = Decimal(str(body.budget))
+                org.daily_spend_limit = Decimal(str(req.budget))
                 await session.flush()
 
             teams_result = await list_teams(session, org_id=current_user.organisation_id, page=1, page_size=1000)
@@ -352,7 +352,7 @@ class ReportResponse(BaseModel):
 
 @router.post("/reports", response_model=ReportResponse, status_code=201)
 async def create_report(
-    body: CreateReportRequest,
+    req: CreateReportRequest,
     _: None = require_feature("admin_spend_limits"),
     current_user: AuthenticatedPrincipal = Depends(get_current_user),
     session: AsyncSession = Depends(get_db_session),
@@ -365,11 +365,11 @@ async def create_report(
             report = await create_scheduled_report(
                 session,
                 organisation_id=current_user.organisation_id,
-                period=body.period,
-                group_by=body.group_by,
-                format=body.format,
-                recipients=body.recipients,
-                schedule_type=body.schedule_type,
+                period=req.period,
+                group_by=req.group_by,
+                format=req.format,
+                recipients=req.recipients,
+                schedule_type=req.schedule_type,
                 account_id=current_user.account_id,
             )
     except ProgrammingError:

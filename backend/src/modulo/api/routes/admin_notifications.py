@@ -466,7 +466,7 @@ async def list_webhooks(
 
 @router.post("", response_model=WebhookResponse, status_code=status.HTTP_201_CREATED)
 async def create_webhook(
-    body: WebhookCreate,
+    req: WebhookCreate,
     session: AsyncSession = Depends(get_db_session),
     principal: AuthenticatedPrincipal = Depends(get_current_user),
     settings: Settings = Depends(get_settings),
@@ -474,8 +474,8 @@ async def create_webhook(
     _require_admin(principal)
     fernet = Fernet(settings.fernet_key.encode())
     secret_ciphertext: bytes | None = None
-    if body.secret:
-        secret_ciphertext = fernet.encrypt(body.secret.encode())
+    if req.secret:
+        secret_ciphertext = fernet.encrypt(req.secret.encode())
 
     try:
         async with session.begin():
@@ -483,10 +483,10 @@ async def create_webhook(
             ep = NotificationEndpoint(
                 id=uuid.uuid4(),
                 organisation_id=principal.organisation_id,
-                url=body.url,
+                url=req.url,
                 secret_ciphertext=secret_ciphertext,
-                events=json.dumps(body.events),
-                description=body.description,
+                events=json.dumps(req.events),
+                description=req.description,
                 account_id=principal.account_id,
             )
             session.add(ep)
@@ -540,7 +540,7 @@ async def get_webhook(
 @router.put("/{webhook_id}", response_model=WebhookResponse)
 async def update_webhook(
     webhook_id: uuid.UUID,
-    body: WebhookUpdate,
+    req: WebhookUpdate,
     session: AsyncSession = Depends(get_db_session),
     principal: AuthenticatedPrincipal = Depends(get_current_user),
     settings: Settings = Depends(get_settings),
@@ -553,15 +553,15 @@ async def update_webhook(
             if ep is None or ep.organisation_id != principal.organisation_id:
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Webhook not found")
 
-            if body.url is not None:
-                ep.url = body.url
-            if body.secret is not None:
+            if req.url is not None:
+                ep.url = req.url
+            if req.secret is not None:
                 fernet = Fernet(settings.fernet_key.encode())
-                ep.secret_ciphertext = fernet.encrypt(body.secret.encode())
-            if body.events is not None:
-                ep.events = json.dumps(body.events)
-            if body.description is not None:
-                ep.description = body.description
+                ep.secret_ciphertext = fernet.encrypt(req.secret.encode())
+            if req.events is not None:
+                ep.events = json.dumps(req.events)
+            if req.description is not None:
+                ep.description = req.description
 
             await session.flush()
     except ProgrammingError:

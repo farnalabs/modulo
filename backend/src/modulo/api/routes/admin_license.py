@@ -114,13 +114,13 @@ async def get_license_status(
 
 @router.post("", response_model=LicenseUploadResponse, status_code=status.HTTP_200_OK)
 async def upload_license(
-    body: LicenseUploadRequest,
+    req: LicenseUploadRequest,
     current_user: AuthenticatedPrincipal = Depends(get_current_user),
 ) -> LicenseUploadResponse:
     _require_admin(current_user)
 
     try:
-        validation = parse_and_verify(body.license_key)
+        validation = parse_and_verify(req.license_key)
     except LicenseError as exc:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
@@ -133,7 +133,7 @@ async def upload_license(
             detail=validation.error or "Invalid license key",
         )
 
-    store_license(body.license_key, validation.license_data)
+    store_license(req.license_key, validation.license_data)
 
     data = validation.license_data
 

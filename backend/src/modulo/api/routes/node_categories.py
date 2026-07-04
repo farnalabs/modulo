@@ -81,7 +81,7 @@ async def list_node_categories_endpoint(
 
 @router.post("", response_model=NodeCategoryResponse, status_code=status.HTTP_201_CREATED)
 async def create_node_category_endpoint(
-    body: NodeCategoryCreate,
+    req: NodeCategoryCreate,
     session: AsyncSession = Depends(get_db_session),
     principal: AuthenticatedPrincipal = Depends(get_current_user),
 ) -> NodeCategoryResponse:
@@ -91,12 +91,12 @@ async def create_node_category_endpoint(
         category = await create_node_category(
             session,
             org_id=principal.organisation_id,
-            name=body.name,
+            name=req.name,
             account_id=principal.account_id,
-            description=body.description,
-            color=body.color,
-            icon=body.icon,
-            sort_order=body.sort_order,
+            description=req.description,
+            color=req.color,
+            icon=req.icon,
+            sort_order=req.sort_order,
         )
     return NodeCategoryResponse.model_validate(category)
 
@@ -119,11 +119,11 @@ async def get_node_category_endpoint(
 @router.patch("/{category_id}", response_model=NodeCategoryResponse)
 async def update_node_category_endpoint(
     category_id: uuid.UUID,
-    body: NodeCategoryUpdate,
+    req: NodeCategoryUpdate,
     session: AsyncSession = Depends(get_db_session),
     principal: AuthenticatedPrincipal = Depends(get_current_user),
 ) -> NodeCategoryResponse:
-    updates = {k: v for k, v in body.model_dump().items() if v is not None}
+    updates = {k: v for k, v in req.model_dump().items() if v is not None}
     async with session.begin():
         await set_rls_org(session, principal.organisation_id)
         await set_rls_user_context(session, principal.account_id, principal.org_role)

@@ -96,14 +96,14 @@ async def list_endpoints(
 
 @router.post("", response_model=NotificationEndpointResponse, status_code=status.HTTP_201_CREATED)
 async def create_endpoint(
-    body: NotificationEndpointCreate,
+    req: NotificationEndpointCreate,
     session: AsyncSession = Depends(get_db_session),
     principal: AuthenticatedPrincipal = Depends(get_current_user),
     settings: Settings = Depends(get_settings),
 ) -> NotificationEndpointResponse:
     from cryptography.fernet import Fernet
 
-    if body.team_id is not None and principal.org_role != "admin":
+    if req.team_id is not None and principal.org_role != "admin":
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Only admins can create team-scoped notification endpoints",
@@ -111,12 +111,12 @@ async def create_endpoint(
 
     fernet = Fernet(settings.fernet_key.encode())
     secret_ciphertext: bytes | None = None
-    if body.secret:
-        secret_ciphertext = fernet.encrypt(body.secret.encode())
+    if req.secret:
+        secret_ciphertext = fernet.encrypt(req.secret.encode())
 
     team_id: uuid.UUID | None = None
-    if body.team_id is not None:
-        team_id = uuid.UUID(body.team_id)
+    if req.team_id is not None:
+        team_id = uuid.UUID(req.team_id)
 
     try:
         async with session.begin():
@@ -125,10 +125,10 @@ async def create_endpoint(
             ep = NotificationEndpoint(
                 id=uuid.uuid4(),
                 organisation_id=principal.organisation_id,
-                url=body.url,
+                url=req.url,
                 secret_ciphertext=secret_ciphertext,
-                events=json.dumps(body.events),
-                description=body.description,
+                events=json.dumps(req.events),
+                description=req.description,
                 account_id=principal.account_id,
                 team_id=team_id,
             )
@@ -169,14 +169,14 @@ async def get_endpoint(
 @router.put("/{endpoint_id}", response_model=NotificationEndpointResponse)
 async def update_endpoint(
     endpoint_id: uuid.UUID,
-    body: NotificationEndpointUpdate,
+    req: NotificationEndpointUpdate,
     session: AsyncSession = Depends(get_db_session),
     principal: AuthenticatedPrincipal = Depends(get_current_user),
     settings: Settings = Depends(get_settings),
 ) -> NotificationEndpointResponse:
     from cryptography.fernet import Fernet
 
-    if body.team_id is not None and principal.org_role != "admin":
+    if req.team_id is not None and principal.org_role != "admin":
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Only admins can assign team-scoped notification endpoints",
@@ -190,17 +190,17 @@ async def update_endpoint(
             if ep is None or ep.organisation_id != principal.organisation_id:
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Endpoint not found")
 
-            if body.url is not None:
-                ep.url = body.url
-            if body.secret is not None:
+            if req.url is not None:
+                ep.url = req.url
+            if req.secret is not None:
                 fernet = Fernet(settings.fernet_key.encode())
-                ep.secret_ciphertext = fernet.encrypt(body.secret.encode())
-            if body.events is not None:
-                ep.events = json.dumps(body.events)
-            if body.description is not None:
-                ep.description = body.description
-            if body.team_id is not None:
-                ep.team_id = uuid.UUID(body.team_id)
+                ep.secret_ciphertext = fernet.encrypt(req.secret.encode())
+            if req.events is not None:
+                ep.events = json.dumps(req.events)
+            if req.description is not None:
+                ep.description = req.description
+            if req.team_id is not None:
+                ep.team_id = uuid.UUID(req.team_id)
 
             await session.flush()
     except ProgrammingError:

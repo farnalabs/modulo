@@ -256,16 +256,16 @@ async def list_agents_endpoint(
 
 @router.post("", response_model=AgentResponse, status_code=status.HTTP_201_CREATED)
 async def create_agent_endpoint(
-    body: AgentCreate,
+    req: AgentCreate,
     session: AsyncSession = Depends(get_db_session),
     principal: AuthenticatedPrincipal = Depends(get_current_user),
 ) -> AgentResponse:
     _validate_generic_agent(
-        name=body.name,
-        is_executable=body.is_executable,
-        description=body.description,
-        evals=body.evals,
-        library_id=body.library_id,
+        name=req.name,
+        is_executable=req.is_executable,
+        description=req.description,
+        evals=req.evals,
+        library_id=req.library_id,
     )
     try:
         async with session.begin():
@@ -273,24 +273,24 @@ async def create_agent_endpoint(
             agent = await create_agent(
                 session,
                 org_id=principal.organisation_id,
-                name=body.name,
+                name=req.name,
                 account_id=principal.account_id,
-                input_schema_id=body.input_schema_id,
-                input_schema_version=body.input_schema_version,
-                output_schema_id=body.output_schema_id,
-                output_schema_version=body.output_schema_version,
-                prompt_template=body.prompt_template,
-                model_backend_id=body.model_backend_id,
-                is_executable=body.is_executable,
-                description=body.description,
-                connector_type_refs=body.connector_type_refs,
-                evals=body.evals,
-                retry_policy=body.retry_policy,
-                token_budget=body.token_budget,
-                max_input_length=body.max_input_length,
-                library_id=body.library_id,
-                prompt_always_visible=body.prompt_always_visible,
-                required_environment_capabilities=body.required_environment_capabilities,
+                input_schema_id=req.input_schema_id,
+                input_schema_version=req.input_schema_version,
+                output_schema_id=req.output_schema_id,
+                output_schema_version=req.output_schema_version,
+                prompt_template=req.prompt_template,
+                model_backend_id=req.model_backend_id,
+                is_executable=req.is_executable,
+                description=req.description,
+                connector_type_refs=req.connector_type_refs,
+                evals=req.evals,
+                retry_policy=req.retry_policy,
+                token_budget=req.token_budget,
+                max_input_length=req.max_input_length,
+                library_id=req.library_id,
+                prompt_always_visible=req.prompt_always_visible,
+                required_environment_capabilities=req.required_environment_capabilities,
             )
     except IntegrityError:
         raise HTTPException(
@@ -338,7 +338,7 @@ async def get_agent_endpoint(
 @router.patch("/{agent_id}", response_model=AgentResponse)
 async def update_agent_endpoint(
     agent_id: uuid.UUID,
-    body: AgentUpdate,
+    req: AgentUpdate,
     session: AsyncSession = Depends(get_db_session),
     principal: AuthenticatedPrincipal = Depends(get_current_user),
 ) -> AgentResponse:
@@ -359,10 +359,10 @@ async def update_agent_endpoint(
     if agent is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Agent not found")
 
-    merged_name = body.name if body.name is not None else agent.name
-    merged_is_executable = body.is_executable if body.is_executable is not None else agent.is_executable
-    merged_description = body.description if body.description is not None else agent.description
-    merged_evals = body.evals if body.evals is not None else (agent.evals or [])
+    merged_name = req.name if req.name is not None else agent.name
+    merged_is_executable = req.is_executable if req.is_executable is not None else agent.is_executable
+    merged_description = req.description if req.description is not None else agent.description
+    merged_evals = req.evals if req.evals is not None else (agent.evals or [])
     _validate_generic_agent(
         name=merged_name,
         is_executable=merged_is_executable,
@@ -371,7 +371,7 @@ async def update_agent_endpoint(
         library_id=agent.library_id,
     )
 
-    updates = {k: v for k, v in body.model_dump().items() if v is not None}
+    updates = {k: v for k, v in req.model_dump().items() if v is not None}
     try:
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
@@ -395,11 +395,11 @@ async def update_agent_endpoint(
 async def optimize_prompt(
     agent_id: uuid.UUID,
     version: str,
-    body: PromptOptimizeRequest,
+    req: PromptOptimizeRequest,
     session: AsyncSession = Depends(get_db_session),
     principal: AuthenticatedPrincipal = Depends(get_current_user),
 ) -> PromptOptimizeResponse:
-    if not body.eval_result_ids:
+    if not req.eval_result_ids:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail="At least one eval_result_id is required",
@@ -425,7 +425,7 @@ async def optimize_prompt(
 
     try:
         eval_results, eval_defs = await get_eval_results_with_defs(
-            session, body.eval_result_ids, principal.organisation_id
+            session, req.eval_result_ids, principal.organisation_id
         )
     except ProgrammingError:
         raise HTTPException(
@@ -444,7 +444,7 @@ async def optimize_prompt(
             detail="No eval results found for the given IDs",
         )
 
-    backend_id = body.model_backend_id or agent.model_backend_id
+    backend_id = req.model_backend_id or agent.model_backend_id
 
     try:
         mb_result = await session.execute(
@@ -511,7 +511,7 @@ async def optimize_prompt(
 async def apply_optimized_prompt(
     agent_id: uuid.UUID,
     version: str,
-    body: ApplyOptimizedPromptRequest,
+    req: ApplyOptimizedPromptRequest,
     session: AsyncSession = Depends(get_db_session),
     principal: AuthenticatedPrincipal = Depends(get_current_user),
 ) -> AgentResponse:
@@ -521,11 +521,11 @@ async def apply_optimized_prompt(
             agent = await add_prompt_version(
                 session,
                 agent_id,
-                new_template=body.suggested_prompt,
-                notes=body.rationale,
+                new_template=req.suggested_prompt,
+                notes=req.rationale,
                 version_label=version,
-                optimized_from=body.optimize_version,
-                eval_result_ids=body.eval_result_ids,
+                optimized_from=req.optimize_version,
+                eval_result_ids=req.eval_result_ids,
             )
     except ProgrammingError:
         raise HTTPException(
@@ -647,7 +647,7 @@ async def rollback_prompt(
 @router.post("/{agent_id}/prompts/diff", response_model=PromptDiffResponse)
 async def diff_prompt_versions(
     agent_id: uuid.UUID,
-    body: PromptDiffRequest,
+    req: PromptDiffRequest,
     session: AsyncSession = Depends(get_db_session),
     principal: AuthenticatedPrincipal = Depends(get_current_user),
 ) -> PromptDiffResponse:
@@ -679,18 +679,18 @@ async def diff_prompt_versions(
                 return tpl or ""
         return None
 
-    template_a = _get_template(body.version_a)
-    template_b = _get_template(body.version_b)
+    template_a = _get_template(req.version_a)
+    template_b = _get_template(req.version_b)
 
     if template_a is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Version {body.version_a} not found",
+            detail=f"Version {req.version_a} not found",
         )
     if template_b is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Version {body.version_b} not found",
+            detail=f"Version {req.version_b} not found",
         )
 
     lines_a = template_a.splitlines(keepends=True)
@@ -763,7 +763,7 @@ async def diff_prompt_versions(
                 line_b += 1
                 j1 += 1
 
-    return PromptDiffResponse(version_a=body.version_a, version_b=body.version_b, lines=diff_lines)
+    return PromptDiffResponse(version_a=req.version_a, version_b=req.version_b, lines=diff_lines)
 
 
 @router.delete("/{agent_id}", status_code=status.HTTP_204_NO_CONTENT)

@@ -116,7 +116,7 @@ async def list_forwarders(
 @router.put("/{forwarder_type}", response_model=ForwarderConfigResponse)
 async def configure_forwarder(
     forwarder_type: str,
-    body: ForwarderConfigUpdate,
+    req: ForwarderConfigUpdate,
     session: AsyncSession = Depends(get_db_session),
     principal: AuthenticatedPrincipal = Depends(get_current_user),
 ) -> ForwarderConfigResponse:
@@ -152,10 +152,10 @@ async def configure_forwarder(
                 )
                 session.add(cfg)
 
-            if body.enabled is not None:
-                cfg.enabled = body.enabled
-            if body.config_json is not None:
-                cfg.config_json = body.config_json
+            if req.enabled is not None:
+                cfg.enabled = req.enabled
+            if req.config_json is not None:
+                cfg.config_json = req.config_json
 
             cfg.updated_at = datetime.now(UTC)
             await session.flush()
@@ -177,7 +177,7 @@ async def configure_forwarder(
 @router.post("/{forwarder_type}/test", response_model=ForwarderTestResult)
 async def test_forwarder(
     forwarder_type: str,
-    body: TestConnectionRequest,
+    req: TestConnectionRequest,
     session: AsyncSession = Depends(get_db_session),
     principal: AuthenticatedPrincipal = Depends(get_current_user),
 ) -> ForwarderTestResult:
@@ -195,7 +195,7 @@ async def test_forwarder(
     if forwarder is None:
         return ForwarderTestResult(ok=False, message=f"Forwarder implementation not found for {forwarder_type}")
 
-    config = body.config_json or {}
+    config = req.config_json or {}
     if _is_configured(forwarder_type, config):
         pass
     else:

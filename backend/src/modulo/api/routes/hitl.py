@@ -110,7 +110,7 @@ class PendingGatesResponse(BaseModel):
 async def claim_gate(
     run_id: uuid.UUID,
     gate_id: str,
-    body: ClaimRequest,
+    req: ClaimRequest,
     session: AsyncSession = Depends(get_db_session),
     principal: AuthenticatedPrincipal = Depends(get_current_user),
 ) -> ClaimResponse:
@@ -126,7 +126,7 @@ async def claim_gate(
                     gate_id=gate_id,
                     org_id=principal.organisation_id,
                     claimant_id=principal.account_id,
-                    expiry_minutes=body.expiry_minutes,
+                    expiry_minutes=req.expiry_minutes,
                 )
             except GateNotFoundError as exc:
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
@@ -166,7 +166,7 @@ async def claim_gate(
 async def approve_gate(
     run_id: uuid.UUID,
     gate_id: str,
-    body: ApproveRequest,
+    req: ApproveRequest,
     session: AsyncSession = Depends(get_db_session),
     engine: AsyncEngine = Depends(_get_engine),
     principal: AuthenticatedPrincipal = Depends(get_current_user),
@@ -182,7 +182,7 @@ async def approve_gate(
                     run_id=run_id,
                     gate_id=gate_id,
                     org_id=principal.organisation_id,
-                    claim_token=body.claim_token,
+                    claim_token=req.claim_token,
                     actor_id=principal.account_id,
                 )
             except GateNotFoundError as exc:
@@ -200,8 +200,8 @@ async def approve_gate(
         ) from exc
 
     resume_data: dict[str, Any] = {"action": "approved"}
-    if body.notes:
-        resume_data["notes"] = body.notes
+    if req.notes:
+        resume_data["notes"] = req.notes
 
     executor = PipelineExecutor(engine)
     await executor.resume(
@@ -225,7 +225,7 @@ async def approve_gate(
 async def approve_gate_with_modification(
     run_id: uuid.UUID,
     gate_id: str,
-    body: ApproveWithModificationRequest,
+    req: ApproveWithModificationRequest,
     session: AsyncSession = Depends(get_db_session),
     engine: AsyncEngine = Depends(_get_engine),
     principal: AuthenticatedPrincipal = Depends(get_current_user),
@@ -246,8 +246,8 @@ async def approve_gate_with_modification(
                     run_id=run_id,
                     gate_id=gate_id,
                     org_id=principal.organisation_id,
-                    claim_token=body.claim_token,
-                    modified_output=body.modified_output,
+                    claim_token=req.claim_token,
+                    modified_output=req.modified_output,
                     actor_id=principal.account_id,
                 )
             except GateNotFoundError as exc:
@@ -266,10 +266,10 @@ async def approve_gate_with_modification(
 
     resume_data: dict[str, Any] = {
         "action": "approved",
-        "modified_output": body.modified_output,
+        "modified_output": req.modified_output,
     }
-    if body.notes:
-        resume_data["notes"] = body.notes
+    if req.notes:
+        resume_data["notes"] = req.notes
 
     executor = PipelineExecutor(engine)
     await executor.resume(
@@ -293,7 +293,7 @@ async def approve_gate_with_modification(
 async def reject_gate(
     run_id: uuid.UUID,
     gate_id: str,
-    body: RejectRequest,
+    req: RejectRequest,
     session: AsyncSession = Depends(get_db_session),
     engine: AsyncEngine = Depends(_get_engine),
     principal: AuthenticatedPrincipal = Depends(get_current_user),
@@ -309,7 +309,7 @@ async def reject_gate(
                     run_id=run_id,
                     gate_id=gate_id,
                     org_id=principal.organisation_id,
-                    claim_token=body.claim_token,
+                    claim_token=req.claim_token,
                 )
             except GateNotFoundError as exc:
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
@@ -327,7 +327,7 @@ async def reject_gate(
 
     # Resume the graph with rejection data so the gate router picks the
     # reject_target branch.
-    resume_data: dict[str, Any] = {"action": "rejected", "reason": body.reason}
+    resume_data: dict[str, Any] = {"action": "rejected", "reason": req.reason}
     executor = PipelineExecutor(engine)
     await executor.resume(
         run_id=run_id,
@@ -350,7 +350,7 @@ async def reject_gate(
 async def deliver_manual_output(
     run_id: uuid.UUID,
     gate_id: str,
-    body: DeliverManualRequest,
+    req: DeliverManualRequest,
     session: AsyncSession = Depends(get_db_session),
     engine: AsyncEngine = Depends(_get_engine),
     principal: AuthenticatedPrincipal = Depends(get_current_user),
@@ -361,7 +361,7 @@ async def deliver_manual_output(
     correction run or back to the agent. The output is validated and the
     run continues past the gate with the manually-supplied value.
     """
-    if not body.output:
+    if not req.output:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail="output must be a non-empty object",
@@ -377,8 +377,8 @@ async def deliver_manual_output(
                     run_id=run_id,
                     gate_id=gate_id,
                     org_id=principal.organisation_id,
-                    claim_token=body.claim_token,
-                    output=body.output,
+                    claim_token=req.claim_token,
+                    output=req.output,
                     actor_id=principal.account_id,
                 )
             except GateNotFoundError as exc:
@@ -395,7 +395,7 @@ async def deliver_manual_output(
             detail="Feature is not available. Run database migrations to enable it.",
         ) from exc
 
-    resume_data: dict[str, Any] = {"action": "deliver_manual", "output": body.output}
+    resume_data: dict[str, Any] = {"action": "deliver_manual", "output": req.output}
     executor = PipelineExecutor(engine)
     await executor.resume(
         run_id=run_id,
@@ -418,7 +418,7 @@ async def deliver_manual_output(
 async def submit_manual_output(
     run_id: uuid.UUID,
     gate_id: str,
-    body: ManualOutputRequest,
+    req: ManualOutputRequest,
     session: AsyncSession = Depends(get_db_session),
     engine: AsyncEngine = Depends(_get_engine),
     principal: AuthenticatedPrincipal = Depends(get_current_user),
@@ -434,7 +434,7 @@ async def submit_manual_output(
                     run_id=run_id,
                     gate_id=gate_id,
                     org_id=principal.organisation_id,
-                    claim_token=body.claim_token,
+                    claim_token=req.claim_token,
                     actor_id=principal.account_id,
                 )
             except GateNotFoundError as exc:
@@ -449,7 +449,7 @@ async def submit_manual_output(
             detail="Feature is not available. Run database migrations to enable it.",
         ) from exc
 
-    resume_data: dict[str, Any] = {"action": "manual_output", "output": body.output}
+    resume_data: dict[str, Any] = {"action": "manual_output", "output": req.output}
     executor = PipelineExecutor(engine)
     await executor.resume(
         run_id=run_id,

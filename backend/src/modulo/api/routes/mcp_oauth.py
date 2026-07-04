@@ -61,7 +61,7 @@ class DeleteOAuthClientResponse(BaseModel):
 
 @router.post("/clients", response_model=CreateOAuthClientResponse, status_code=status.HTTP_201_CREATED)
 async def register_oauth_client(
-    body: CreateOAuthClientRequest,
+    req: CreateOAuthClientRequest,
     session: AsyncSession = Depends(get_db_session),
     principal: AuthenticatedPrincipal = Depends(get_current_user),
     settings: Settings = Depends(get_settings),
@@ -79,15 +79,15 @@ async def register_oauth_client(
         )
 
     try:
-        normalize_scopes(" ".join(body.scopes))
+        normalize_scopes(" ".join(req.scopes))
     except InvalidScopeError as e:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=str(e),
         ) from e
 
-    redirect_uris_str = " ".join(body.redirect_uris)
-    scopes_str = " ".join(body.scopes)
+    redirect_uris_str = " ".join(req.redirect_uris)
+    scopes_str = " ".join(req.scopes)
 
     try:
         async with session.begin():
@@ -95,7 +95,7 @@ async def register_oauth_client(
             client, raw_secret = await create_oauth_client(
                 session,
                 org_id=principal.organisation_id,
-                name=body.name,
+                name=req.name,
                 scopes=scopes_str,
                 redirect_uris=redirect_uris_str,
                 account_id=principal.account_id,
