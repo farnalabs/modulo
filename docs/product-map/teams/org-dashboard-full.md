@@ -2,8 +2,7 @@
 id: feat-teams-org-dashboard-full
 prd: 14
 delivery-tasks: [task-nv7-org-dashboard-full]
-bdd:
-  - backend/tests/bdd/features/ui/dashboard.feature # (does not exist — needs creation)
+bdd: []
 code:
   - backend/src/modulo/api/routes/dashboard.py
   - frontend/src/views/DashboardView.vue
@@ -24,7 +23,7 @@ status: partial
 ---
 # Org Dashboard (Full)
 
-Org-level dashboard with run overview, team breakdown, eval quality metrics, trend data, HITL analytics, and feedback volume. Built on top of the basic dashboard with per-team drill-down. Discovered from 1 completed delivery tasks.
+Org-level dashboard with run overview, team breakdown, eval quality metrics, trend data, HITL analytics, and feedback volume. Built on top of the basic dashboard with per-team drill-down.
 
 ## Behaviours
 
@@ -122,6 +121,16 @@ Org-level dashboard with run overview, team breakdown, eval quality metrics, tre
 - [ ] BDD scenario: eval quality dip visible on dashboard (Elena persona)
 - [ ] BDD scenario: navigate from dashboard to run detail
 
+### Error Handling
+- [ ] ProgrammingError caught → 501 on all DB-accessing dashboard endpoints
+- [ ] API returns 401 for unauthenticated requests (both summary and trends)
+- [ ] API returns 403 for non-admin users on org-level operations
+- [ ] API returns 422 for invalid `days` parameter (0 or 91)
+- [ ] API returns 500/503 — frontend shows graceful error message with retry
+- [ ] Network failure — frontend catches and displays ErrorAlert
+- [ ] Empty org (zero runs, zero pipelines) renders all-zero stat cards (no crash)
+- [ ] Eval_pass_rate is null when no EvalResult rows exist
+
 ### Future / V2 Scope
 - [ ] Full eval dashboard with chart visualisation (14 V2)
 - [ ] Side-by-side run comparison view
@@ -132,7 +141,7 @@ Org-level dashboard with run overview, team breakdown, eval quality metrics, tre
 
 ## Known Gaps
 
-- **No BDD feature exists** for the main org dashboard UI. Only `eval_dashboard.feature` exists, and it is a placeholder.
+- **No BDD feature file exists** for the main org dashboard UI. `backend/tests/bdd/features/ui/dashboard.feature` does not exist and needs creation.
 - **Frontend DashboardView is incomplete**: only shows basic stat cards (Total Runs, Active Pipelines, Running, Awaiting Human, Failed, Idle). Does not render team breakdown, eval pass rate, trend chart, or HITL/feedback metrics.
 - **DashboardView `DashboardSummary` interface is incomplete** — missing `teams`, `eval_pass_rate`, `trend` fields from the API response.
 - **Pinia store (`dashboard.ts`) has incomplete `DashboardSummary` interface** — same missing fields.
@@ -140,4 +149,3 @@ Org-level dashboard with run overview, team breakdown, eval quality metrics, tre
 - **TeamComparisonView calls API directly** instead of consuming the store.
 - **No frontend unit test coverage** for loading state, error state, or data rendering (only a "renders heading" smoke test exists).
 - **`GET /api/v1/dashboard/trends` endpoint is fully implemented** but has no frontend page or component consuming it.
-- **Sibling entry `feat-teams-dashboard`** (`docs/product-map/teams/dashboard.md`) has the same garbage-title bug and should be fixed separately. 

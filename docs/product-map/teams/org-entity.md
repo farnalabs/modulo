@@ -3,10 +3,10 @@ id: feat-teams-org-entity
 prd: 9.1, 6.2
 delivery-tasks: []
 bdd:
-  - tests/features/organisation/rls_isolation.feature
-  - tests/features/organisation/org_deletion.feature
-  - tests/features/organisation/org_scoping.feature
-  - tests/features/organisation/multi_backend.feature
+  - backend/tests/bdd/features/organisation/rls_isolation.feature
+  - backend/tests/bdd/features/organisation/org_deletion.feature
+  - backend/tests/bdd/features/organisation/org_scoping.feature
+  - backend/tests/bdd/features/organisation/multi_backend.feature
 code:
   - backend/src/modulo/db/models/organisation.py
   - backend/src/modulo/db/models/org_membership.py
