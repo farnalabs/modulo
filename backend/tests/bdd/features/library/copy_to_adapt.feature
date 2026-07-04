@@ -7,7 +7,7 @@ Feature: Copy primitive to adapt
     And a community primitive "PRD Input Schema" exists
 
   Scenario: Adapt a community primitive via browser succeeds
-    When the user sends POST /api/v1/libraries/{community_primitive_id}/adapt
+    When the user sends POST /api/v1/libraries/00000000-0000-0000-0000-000000000010/adapt
     Then the response status is 201
     And a new library primitive is created in the org
     And the new primitive has source "local"
@@ -19,7 +19,7 @@ Feature: Copy primitive to adapt
     And the response detail explains the browser UI must be used
 
   Scenario: Adapt with team assignment
-    When the user sends POST /api/v1/libraries/{primitive_id}/adapt with target_team_id
+    When the user sends POST /api/v1/libraries/00000000-0000-0000-0000-000000000010/adapt with target_team_id
     Then the new primitive has owner_team_id set to the requested team
 
   Scenario: Adapt a non-existent primitive returns 404
