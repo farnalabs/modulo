@@ -4,13 +4,13 @@ import json
 import logging
 import uuid
 
-logger = logging.getLogger(__name__)
-
 from sqlalchemy import exists, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.core.audit_logger import append_audit_event
 from modulo.db.models.sso_provider import SsoProvider
+
+logger = logging.getLogger(__name__)
 
 _UPDATABLE_SSO_FIELDS = frozenset({
     "client_id",
