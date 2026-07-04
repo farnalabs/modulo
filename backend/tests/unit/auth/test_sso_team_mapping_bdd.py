@@ -318,16 +318,31 @@ class TestOidcGroupMapping:
         with (
             patch("modulo.auth.sso._fetch_discovery", new_callable=AsyncMock) as mock_disc,
             patch("modulo.auth.sso._exchange_code", new_callable=AsyncMock) as mock_ex,
+            patch("modulo.auth.sso.verify_id_token", new_callable=AsyncMock) as mock_verify,
             patch("modulo.auth.sso.jit_provision_user", new_callable=AsyncMock) as mock_jit,
             patch("modulo.auth.sso._lookup_provider_by_client_id", new_callable=AsyncMock) as mock_lookup,
             patch("modulo.auth.sso.apply_group_mappings", new_callable=AsyncMock) as mock_apply,
             patch("modulo.auth.sso.issue_sso_tokens", new_callable=AsyncMock) as mock_tok,
         ):
-            mock_disc.return_value = {"token_endpoint": "https://oauth2.googleapis.com/token"}
+            mock_disc.return_value = {
+                "token_endpoint": "https://oauth2.googleapis.com/token",
+                "jwks_uri": "https://oauth2.googleapis.com/certs",
+                "issuer": "https://accounts.google.com",
+            }
             mock_ex.return_value = {"id_token": id_token}
-            mock_jit.return_value = MagicMock(
-                email="alice@example.com", id=uuid.uuid4(), organisation_id=_ORG_ID, org_role="runner"
-            )
+            mock_verify.return_value = {
+                "email": "alice@example.com",
+                "name": "Alice",
+                "sub": "abc123",
+                "groups": ["engineering"],
+            }
+
+            user_mock = MagicMock()
+            user_mock.email = "alice@example.com"
+            user_mock.id = uuid.uuid4()
+            user_mock.organisation_id = _ORG_ID
+            user_mock.org_role = "runner"
+            mock_jit.return_value = (user_mock, _ORG_ID, "runner")
 
             provider_mock = MagicMock()
             provider_mock.group_mappings = mappings
@@ -344,7 +359,7 @@ class TestOidcGroupMapping:
         mock_apply.assert_awaited_once()
         call = mock_apply.await_args
         assert call is not None
-        assert call[0][2] == ["engineering"]
+        assert call.args[3] == ["engineering"]
 
     def test_skipped_when_no_idp_groups(self, client: TestClient) -> None:
         signed = _sign_state("google")
@@ -353,13 +368,28 @@ class TestOidcGroupMapping:
         with (
             patch("modulo.auth.sso._fetch_discovery", new_callable=AsyncMock) as mock_disc,
             patch("modulo.auth.sso._exchange_code", new_callable=AsyncMock) as mock_ex,
-            patch("modulo.auth.sso.jit_provision_user", new_callable=AsyncMock),
+            patch("modulo.auth.sso.verify_id_token", new_callable=AsyncMock) as mock_verify,
+            patch("modulo.auth.sso.jit_provision_user", new_callable=AsyncMock) as mock_jit,
             patch("modulo.auth.sso._lookup_provider_by_client_id", new_callable=AsyncMock) as mock_lookup,
             patch("modulo.auth.sso.apply_group_mappings", new_callable=AsyncMock) as mock_apply,
-            patch("modulo.auth.sso.issue_sso_tokens", new_callable=AsyncMock),
+            patch("modulo.auth.sso.issue_sso_tokens", new_callable=AsyncMock) as mock_tok,
         ):
-            mock_disc.return_value = {"token_endpoint": "https://oauth2.googleapis.com/token"}
+            mock_disc.return_value = {
+                "token_endpoint": "https://oauth2.googleapis.com/token",
+                "jwks_uri": "https://oauth2.googleapis.com/certs",
+                "issuer": "https://accounts.google.com",
+            }
             mock_ex.return_value = {"id_token": id_token}
+            mock_verify.return_value = {
+                "email": "bob@example.com", "name": "Bob", "sub": "bob123",
+            }
+            user_mock = MagicMock()
+            user_mock.email = "bob@example.com"
+            user_mock.id = uuid.uuid4()
+            user_mock.organisation_id = _ORG_ID
+            user_mock.org_role = "runner"
+            mock_jit.return_value = (user_mock, _ORG_ID, "runner")
+            mock_tok.return_value = {"access_token": "at", "refresh_token": "rt", "token_type": "bearer"}
             resp = client.get(
                 f"/api/v1/auth/oidc/google/callback?code=authcode123&state={signed}",
                 follow_redirects=False,
@@ -376,13 +406,29 @@ class TestOidcGroupMapping:
         with (
             patch("modulo.auth.sso._fetch_discovery", new_callable=AsyncMock) as mock_disc,
             patch("modulo.auth.sso._exchange_code", new_callable=AsyncMock) as mock_ex,
-            patch("modulo.auth.sso.jit_provision_user", new_callable=AsyncMock),
+            patch("modulo.auth.sso.verify_id_token", new_callable=AsyncMock) as mock_verify,
+            patch("modulo.auth.sso.jit_provision_user", new_callable=AsyncMock) as mock_jit,
             patch("modulo.auth.sso._lookup_provider_by_client_id", new_callable=AsyncMock) as mock_lookup,
             patch("modulo.auth.sso.apply_group_mappings", new_callable=AsyncMock) as mock_apply,
-            patch("modulo.auth.sso.issue_sso_tokens", new_callable=AsyncMock),
+            patch("modulo.auth.sso.issue_sso_tokens", new_callable=AsyncMock) as mock_tok,
         ):
-            mock_disc.return_value = {"token_endpoint": "https://oauth2.googleapis.com/token"}
+            mock_disc.return_value = {
+                "token_endpoint": "https://oauth2.googleapis.com/token",
+                "jwks_uri": "https://oauth2.googleapis.com/certs",
+                "issuer": "https://accounts.google.com",
+            }
             mock_ex.return_value = {"id_token": id_token}
+            mock_verify.return_value = {
+                "email": "carol@example.com", "name": "Carol", "sub": "carol123",
+                "groups": ["engineering"],
+            }
+            user_mock = MagicMock()
+            user_mock.email = "carol@example.com"
+            user_mock.id = uuid.uuid4()
+            user_mock.organisation_id = _ORG_ID
+            user_mock.org_role = "runner"
+            mock_jit.return_value = (user_mock, _ORG_ID, "runner")
+            mock_tok.return_value = {"access_token": "at", "refresh_token": "rt", "token_type": "bearer"}
             mock_lookup.return_value = None
 
             resp = client.get(
@@ -414,9 +460,13 @@ class TestSamlGroupMapping:
             patch("modulo.auth.sso.issue_sso_tokens", new_callable=AsyncMock) as mock_tok,
         ):
             mock_fetch.return_value = _SAMPLE_IDP_METADATA
-            mock_jit.return_value = MagicMock(
-                email="bob@example.com", id=uuid.uuid4(), organisation_id=_ORG_ID, org_role="runner"
-            )
+
+            user_mock = MagicMock()
+            user_mock.email = "bob@example.com"
+            user_mock.id = uuid.uuid4()
+            user_mock.organisation_id = _ORG_ID
+            user_mock.org_role = "runner"
+            mock_jit.return_value = (user_mock, _ORG_ID, "runner")
 
             provider_mock = MagicMock()
             provider_mock.group_mappings = mappings
@@ -434,19 +484,28 @@ class TestSamlGroupMapping:
         mock_apply.assert_awaited_once()
         call = mock_apply.await_args
         assert call is not None
-        assert call[0][2] == ["admins"]
+        assert call.args[3] == ["admins"]
 
     def test_skipped_when_no_group_attr(self, saml_client: TestClient) -> None:
         encoded = _make_saml_response("dave@example.com", "Dave")
 
         with (
             patch("modulo.auth.sso._saml_fetch_idp_metadata", new_callable=AsyncMock) as mock_fetch,
-            patch("modulo.auth.sso.jit_provision_user", new_callable=AsyncMock),
+            patch("modulo.auth.sso.jit_provision_user", new_callable=AsyncMock) as mock_jit,
             patch("modulo.auth.sso._lookup_provider_by_entity_id", new_callable=AsyncMock) as mock_lookup,
             patch("modulo.auth.sso.apply_group_mappings", new_callable=AsyncMock) as mock_apply,
-            patch("modulo.auth.sso.issue_sso_tokens", new_callable=AsyncMock),
+            patch("modulo.auth.sso.issue_sso_tokens", new_callable=AsyncMock) as mock_tok,
         ):
             mock_fetch.return_value = _SAMPLE_IDP_METADATA
+
+            user_mock = MagicMock()
+            user_mock.email = "dave@example.com"
+            user_mock.id = uuid.uuid4()
+            user_mock.organisation_id = _ORG_ID
+            user_mock.org_role = "runner"
+            mock_jit.return_value = (user_mock, _ORG_ID, "runner")
+            mock_tok.return_value = {"access_token": "at", "refresh_token": "rt", "token_type": "bearer"}
+
             resp = saml_client.post(
                 "/api/v1/auth/saml/acs",
                 data={"SAMLResponse": encoded},
@@ -475,13 +534,33 @@ class TestMultipleGroupMappings:
         with (
             patch("modulo.auth.sso._fetch_discovery", new_callable=AsyncMock) as mock_disc,
             patch("modulo.auth.sso._exchange_code", new_callable=AsyncMock) as mock_ex,
-            patch("modulo.auth.sso.jit_provision_user", new_callable=AsyncMock),
+            patch("modulo.auth.sso.verify_id_token", new_callable=AsyncMock) as mock_verify,
+            patch("modulo.auth.sso.jit_provision_user", new_callable=AsyncMock) as mock_jit,
             patch("modulo.auth.sso._lookup_provider_by_client_id", new_callable=AsyncMock) as mock_lookup,
             patch("modulo.auth.sso.apply_group_mappings", new_callable=AsyncMock) as mock_apply,
-            patch("modulo.auth.sso.issue_sso_tokens", new_callable=AsyncMock),
+            patch("modulo.auth.sso.issue_sso_tokens", new_callable=AsyncMock) as mock_tok,
         ):
-            mock_disc.return_value = {"token_endpoint": "https://oauth2.googleapis.com/token"}
+            mock_disc.return_value = {
+                "token_endpoint": "https://oauth2.googleapis.com/token",
+                "jwks_uri": "https://oauth2.googleapis.com/certs",
+                "issuer": "https://accounts.google.com",
+            }
             mock_ex.return_value = {"id_token": id_token}
+            mock_verify.return_value = {
+                "email": "charlie@example.com",
+                "name": "Charlie",
+                "sub": "charlie123",
+                "groups": ["engineering", "design"],
+            }
+
+            user_mock = MagicMock()
+            user_mock.email = "charlie@example.com"
+            user_mock.id = uuid.uuid4()
+            user_mock.organisation_id = _ORG_ID
+            user_mock.org_role = "runner"
+            mock_jit.return_value = (user_mock, _ORG_ID, "runner")
+
+            mock_tok.return_value = {"access_token": "at", "refresh_token": "rt", "token_type": "bearer"}
 
             provider_mock = MagicMock()
             provider_mock.group_mappings = mappings
@@ -496,8 +575,8 @@ class TestMultipleGroupMappings:
         mock_apply.assert_awaited_once()
         call = mock_apply.await_args
         assert call is not None
-        assert call[0][2] == ["engineering", "design"]
-        assert len(call[0][3]) == 2
+        assert call.args[3] == ["engineering", "design"]
+        assert len(call.args[4]) == 2
 
 
 # ---------------------------------------------------------------------------
@@ -516,13 +595,33 @@ class TestRoleFromMapping:
         with (
             patch("modulo.auth.sso._fetch_discovery", new_callable=AsyncMock) as mock_disc,
             patch("modulo.auth.sso._exchange_code", new_callable=AsyncMock) as mock_ex,
-            patch("modulo.auth.sso.jit_provision_user", new_callable=AsyncMock),
+            patch("modulo.auth.sso.verify_id_token", new_callable=AsyncMock) as mock_verify,
+            patch("modulo.auth.sso.jit_provision_user", new_callable=AsyncMock) as mock_jit,
             patch("modulo.auth.sso._lookup_provider_by_client_id", new_callable=AsyncMock) as mock_lookup,
             patch("modulo.auth.sso.apply_group_mappings", new_callable=AsyncMock) as mock_apply,
-            patch("modulo.auth.sso.issue_sso_tokens", new_callable=AsyncMock),
+            patch("modulo.auth.sso.issue_sso_tokens", new_callable=AsyncMock) as mock_tok,
         ):
-            mock_disc.return_value = {"token_endpoint": "https://oauth2.googleapis.com/token"}
+            mock_disc.return_value = {
+                "token_endpoint": "https://oauth2.googleapis.com/token",
+                "jwks_uri": "https://oauth2.googleapis.com/certs",
+                "issuer": "https://accounts.google.com",
+            }
             mock_ex.return_value = {"id_token": id_token}
+            mock_verify.return_value = {
+                "email": "dave@example.com",
+                "name": "Dave",
+                "sub": "dave123",
+                "groups": ["viewers"],
+            }
+
+            user_mock = MagicMock()
+            user_mock.email = "dave@example.com"
+            user_mock.id = uuid.uuid4()
+            user_mock.organisation_id = _ORG_ID
+            user_mock.org_role = "runner"
+            mock_jit.return_value = (user_mock, _ORG_ID, "runner")
+
+            mock_tok.return_value = {"access_token": "at", "refresh_token": "rt", "token_type": "bearer"}
 
             provider_mock = MagicMock()
             provider_mock.group_mappings = mappings
@@ -537,7 +636,7 @@ class TestRoleFromMapping:
         mock_apply.assert_awaited_once()
         call = mock_apply.await_args
         assert call is not None
-        assert call[0][3][0]["team_role"] == "viewer"
+        assert call.args[4][0]["team_role"] == "viewer"
 
 
 # ---------------------------------------------------------------------------
@@ -556,13 +655,33 @@ class TestUnmatchedGroups:
         with (
             patch("modulo.auth.sso._fetch_discovery", new_callable=AsyncMock) as mock_disc,
             patch("modulo.auth.sso._exchange_code", new_callable=AsyncMock) as mock_ex,
-            patch("modulo.auth.sso.jit_provision_user", new_callable=AsyncMock),
+            patch("modulo.auth.sso.verify_id_token", new_callable=AsyncMock) as mock_verify,
+            patch("modulo.auth.sso.jit_provision_user", new_callable=AsyncMock) as mock_jit,
             patch("modulo.auth.sso._lookup_provider_by_client_id", new_callable=AsyncMock) as mock_lookup,
             patch("modulo.auth.sso.apply_group_mappings", new_callable=AsyncMock) as mock_apply,
-            patch("modulo.auth.sso.issue_sso_tokens", new_callable=AsyncMock),
+            patch("modulo.auth.sso.issue_sso_tokens", new_callable=AsyncMock) as mock_tok,
         ):
-            mock_disc.return_value = {"token_endpoint": "https://oauth2.googleapis.com/token"}
+            mock_disc.return_value = {
+                "token_endpoint": "https://oauth2.googleapis.com/token",
+                "jwks_uri": "https://oauth2.googleapis.com/certs",
+                "issuer": "https://accounts.google.com",
+            }
             mock_ex.return_value = {"id_token": id_token}
+            mock_verify.return_value = {
+                "email": "eve@example.com",
+                "name": "Eve",
+                "sub": "eve123",
+                "groups": ["unknown-group"],
+            }
+
+            user_mock = MagicMock()
+            user_mock.email = "eve@example.com"
+            user_mock.id = uuid.uuid4()
+            user_mock.organisation_id = _ORG_ID
+            user_mock.org_role = "runner"
+            mock_jit.return_value = (user_mock, _ORG_ID, "runner")
+
+            mock_tok.return_value = {"access_token": "at", "refresh_token": "rt", "token_type": "bearer"}
 
             provider_mock = MagicMock()
             provider_mock.group_mappings = mappings
@@ -577,7 +696,7 @@ class TestUnmatchedGroups:
         mock_apply.assert_awaited_once()
         call = mock_apply.await_args
         assert call is not None
-        assert call[0][2] == ["unknown-group"]
-        assert call[0][3] == mappings
-        matched = any(m["idp_group"] in call[0][2] for m in call[0][3])
+        assert call.args[3] == ["unknown-group"]
+        assert call.args[4] == mappings
+        matched = any(m["idp_group"] in call.args[3] for m in call.args[4])
         assert not matched, "Expected no matching idp_group in mappings"
