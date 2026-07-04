@@ -1,8 +1,8 @@
-"""Application-layer append-only guard for AuditEvent records.
+"""Application-layer append-only guard for AuditEvent and ErrorEvent records.
 
 Provides defense-in-depth via SQLAlchemy ORM event listeners that prevent
-any UPDATE or DELETE operations on AuditEvent instances at the ORM level.
-This complements the database-level Postgres triggers.
+any UPDATE or DELETE operations on append-only table instances at the ORM
+level. This complements the database-level Postgres triggers.
 
 Usage:
     from modulo.core.audit_logger.append_only import register_append_only_guard
@@ -21,45 +21,46 @@ from modulo.db.models.error_event import ErrorEvent
 
 _log = logging.getLogger(__name__)
 
+_guard_registered = False
+
+
+def _register_blocker(model_class: type, table_name: str) -> None:
+    """Register before_update and before_delete listeners for a model."""
+
+    def _block_update(
+        mapper: Mapper,
+        connection: object,
+        target: object,
+    ) -> None:
+        eid = getattr(target, "id", "?")
+        raise RuntimeError(
+            f"{model_class.__name__} {eid} cannot be updated: {table_name} are append-only"
+        )
+
+    def _block_delete(
+        mapper: Mapper,
+        connection: object,
+        target: object,
+    ) -> None:
+        eid = getattr(target, "id", "?")
+        raise RuntimeError(
+            f"{model_class.__name__} {eid} cannot be deleted: {table_name} are append-only"
+        )
+
+    event.listen(model_class, "before_update", _block_update)
+    event.listen(model_class, "before_delete", _block_delete)
+    _log.info("Registered append-only guard on %s (UPDATE/DELETE blocked)", model_class.__name__)
+
 
 def register_append_only_guard() -> None:
-    """Register ORM event listeners that block UPDATE/DELETE on AuditEvent.
+    """Register ORM event listeners that block UPDATE/DELETE on append-only models.
 
-    Safe to call multiple times — listeners are idempotent.
+    Safe to call multiple times — only the first call registers listeners.
     """
+    global _guard_registered
+    if _guard_registered:
+        return
+    _guard_registered = True
 
-    @event.listens_for(AuditEvent, "before_update")
-    def _block_audit_event_update(
-        mapper: Mapper[AuditEvent],
-        connection: object,
-        target: AuditEvent,
-    ) -> None:
-        raise RuntimeError(f"AuditEvent {target.id} cannot be updated: audit_events are append-only")
-
-    @event.listens_for(AuditEvent, "before_delete")
-    def _block_audit_event_delete(
-        mapper: Mapper[AuditEvent],
-        connection: object,
-        target: AuditEvent,
-    ) -> None:
-        raise RuntimeError(f"AuditEvent {target.id} cannot be deleted: audit_events are append-only")
-
-    _log.info("Registered append-only guard on AuditEvent (UPDATE/DELETE blocked)")
-
-    @event.listens_for(ErrorEvent, "before_update")
-    def _block_error_event_update(
-        mapper: Mapper[ErrorEvent],
-        connection: object,
-        target: ErrorEvent,
-    ) -> None:
-        raise RuntimeError(f"ErrorEvent {target.id} cannot be updated: error_events are append-only")
-
-    @event.listens_for(ErrorEvent, "before_delete")
-    def _block_error_event_delete(
-        mapper: Mapper[ErrorEvent],
-        connection: object,
-        target: ErrorEvent,
-    ) -> None:
-        raise RuntimeError(f"ErrorEvent {target.id} cannot be deleted: error_events are append-only")
-
-    _log.info("Registered append-only guard on ErrorEvent (UPDATE/DELETE blocked)")
+    _register_blocker(AuditEvent, "audit_events")
+    _register_blocker(ErrorEvent, "error_events")
