@@ -1,10 +1,14 @@
 """Opaque 60s single-use WS tokens backed by Redis."""
 
 import json
+import logging
 import secrets
 from typing import Any
 
 from redis.asyncio import Redis
+from redis.exceptions import RedisError
+
+_log = logging.getLogger(__name__)
 
 _KEY_PREFIX = "ws_token:"
 
@@ -21,7 +25,12 @@ async def create_ws_token(
     """
     token = secrets.token_urlsafe(32)
     key = _KEY_PREFIX + token
-    await redis.setex(key, ttl, json.dumps(principal_json))
+    try:
+        payload = json.dumps(principal_json, default=str)
+        await redis.setex(key, ttl, payload)
+    except (TypeError, RedisError) as exc:
+        _log.error("ws_token.create_failed", extra={"error": str(exc)})
+        raise
     return token
 
 
@@ -34,7 +43,11 @@ async def consume_ws_token(
     Returns the stored principal dict if valid, None if expired or already used.
     """
     key = _KEY_PREFIX + token
-    data = await redis.getdel(key)
+    try:
+        data = await redis.getdel(key)
+    except RedisError as exc:
+        _log.error("ws_token.consume_failed", extra={"error": str(exc)})
+        return None
     if data is None:
         return None
     if isinstance(data, bytes):

@@ -353,18 +353,20 @@ def decode_oauth_access_token(token: str, secret_key: str) -> OAuthAccessTokenCl
 # ---------------------------------------------------------------------------
 
 
-async def _get_token_family(session: AsyncSession, family_id: str, client_id: str, org_id: uuid.UUID) -> OAuthTokenFamily | None:
+async def _get_token_family(
+    session: AsyncSession, family_id: str, client_id: str, org_id: uuid.UUID
+) -> OAuthTokenFamily | None:
     """Look up a token family by ID, client, and org."""
     try:
         fid = uuid.UUID(family_id)
     except ValueError:
-        raise InvalidGrantError(f"Invalid token family ID: '{family_id}'")
+        raise InvalidGrantError(f"Invalid token family ID: '{family_id}'") from None
     result = await session.execute(
         select(OAuthTokenFamily).where(
             OAuthTokenFamily.family_id == fid,
             OAuthTokenFamily.client_id == client_id,
             OAuthTokenFamily.organisation_id == org_id,
-        )
+        ).with_for_update()
     )
     return result.scalar_one_or_none()
 
@@ -482,6 +484,8 @@ def validate_client_scopes(client: OAuthClient, requested_scopes: list[str]) -> 
 
     Raises UnauthorizedClientError if no scopes remain after intersection.
     """
+    if client.scopes is None:
+        raise UnauthorizedClientError("Client has no configured scopes")
     allowed = set(client.scopes.split())
     requested = set(requested_scopes)
     valid = sorted(allowed & requested)

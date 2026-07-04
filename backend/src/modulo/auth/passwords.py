@@ -7,6 +7,7 @@ internal wrap-bug probe.
 Password entropy: minimum Shannon entropy threshold enforced on creation.
 """
 
+import logging
 import math
 import re
 
@@ -14,13 +15,16 @@ import bcrypt as _bcrypt_lib
 
 from modulo.db.models.account import Account
 
+_log = logging.getLogger(__name__)
+
+_BCRYPT_MAX_BYTES = 72
 _MIN_ENTROPY_BITS = 30
 
 
 def hash_password(password: str) -> str:
     """Hash a password with bcrypt. Raises ValueError if >72 bytes (bcrypt truncation)."""
-    if len(password.encode("utf-8")) > 72:
-        raise ValueError("Password exceeds 72 bytes — bcrypt would silently truncate")
+    if len(password.encode("utf-8")) > _BCRYPT_MAX_BYTES:
+        raise ValueError(f"Password exceeds {_BCRYPT_MAX_BYTES} bytes — bcrypt would silently truncate")
     return _bcrypt_lib.hashpw(password.encode(), _bcrypt_lib.gensalt()).decode()
 
 
@@ -28,7 +32,8 @@ def verify_password(password: str, password_hash: str) -> bool:
     """Verify a password against its bcrypt hash."""
     try:
         return _bcrypt_lib.checkpw(password.encode(), password_hash.encode())
-    except Exception:
+    except ValueError:
+        _log.warning("passwords.verify_failed", extra={"reason": "bcrypt ValueError"})
         return False
 
 
@@ -76,6 +81,10 @@ def validate_password_strength(password: str) -> None:
         raise ValueError("Password must be at least 8 characters long")
 
     entropy = password_entropy_bits(password)
+    if len(password.encode("utf-8")) > _BCRYPT_MAX_BYTES:
+        raise ValueError(
+            f"Password exceeds {_BCRYPT_MAX_BYTES} UTF-8 bytes — bcrypt limit"
+        )
     if entropy < _MIN_ENTROPY_BITS:
         raise ValueError(
             f"Password too weak: {entropy:.1f} entropy bits "
