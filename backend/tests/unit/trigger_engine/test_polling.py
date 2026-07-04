@@ -1,6 +1,7 @@
 """Unit tests for polling trigger — evaluate_condition, _fire_polling_trigger, scheduler."""
 
 import datetime
+import hashlib
 import uuid
 from typing import Any
 from unittest.mock import ANY, AsyncMock, MagicMock, patch
@@ -14,6 +15,7 @@ from modulo.core.trigger_engine.polling import (
     PollingFireTask,
     _build_polling_connector,
     _fire_polling_trigger,
+    _log_poll_event,
     evaluate_condition,
 )
 from modulo.db.models.trigger import Trigger
@@ -739,3 +741,92 @@ class TestBuildPollingConnectorExtended:
     def test_jira_missing_instance(self) -> None:
         with pytest.raises(ValueError, match="requires 'instance'"):
             _build_polling_connector("jira", {}, {"token": "x"})
+
+
+# ---------------------------------------------------------------------------
+# Logging behaviour tests
+# ---------------------------------------------------------------------------
+
+
+class TestPollingLogging:
+    """Tests for _log.warning() calls in polling trigger error paths."""
+
+    async def test_connector_not_found_logs_warning(
+        self,
+        mock_db_components,
+    ) -> None:
+        """Connector instance missing should log a warning."""
+        session = mock_db_components
+        trigger = _make_trigger()
+        _setup_session_for_polling(session, trigger, connector_instance=None, active_run_count=0)
+
+        with patch("modulo.core.trigger_engine.polling._log.warning") as mock_warning:
+            await _fire_polling_trigger(
+                trigger_id=_TRIGGER_ID,
+                org_id=_ORG_ID,
+                pipeline_id=_PIPELINE_ID,
+                connector_instance_id=_CI_ID,
+                poll_query="query",
+                condition_expression=None,
+            )
+
+        mock_warning.assert_called_once()
+        args, _ = mock_warning.call_args
+        assert "Connector instance" in args[0]
+
+    async def test_invalid_snapshot_id_fallback_logs_warning(
+        self,
+        mock_db_components,
+        mock_secrets_backend,
+        mock_connector,
+    ) -> None:
+        """Invalid snapshot_id in config should log a warning."""
+        session = mock_db_components
+        _, connector = mock_connector
+        connector.query.return_value = ConnectorResult(
+            records=[{"issue": {"number": 1, "title": "Bug"}}],
+            total=1,
+        )
+
+        trigger = _make_trigger(config={"snapshot_id": "not-a-uuid", "poll_interval_seconds": 60})
+        _setup_session_for_polling(session, trigger, connector_instance=MagicMock(), active_run_count=0)
+
+        with (
+            patch("modulo.core.trigger_engine.polling.create_run") as mock_cr,
+            patch("modulo.core.trigger_engine.polling._log.warning") as mock_warning,
+        ):
+            mock_run = MagicMock()
+            mock_run.id = uuid.uuid4()
+            mock_cr.return_value = mock_run
+
+            await _fire_polling_trigger(
+                trigger_id=_TRIGGER_ID,
+                org_id=_ORG_ID,
+                pipeline_id=_PIPELINE_ID,
+                connector_instance_id=_CI_ID,
+                poll_query="select * from issues",
+                condition_expression="[?issue.number > `0`]",
+            )
+
+        mock_warning.assert_any_call("Polling trigger %s has no valid snapshot_id in config", _TRIGGER_ID)
+
+    async def test_poll_event_has_meaningful_hash(self) -> None:
+        """_log_poll_event should compute a hash based on trigger id + result."""
+        session = AsyncMock()
+        session.add = MagicMock()
+        session.flush = AsyncMock()
+
+        trigger = MagicMock()
+        trigger.id = uuid.uuid4()
+        org_id = uuid.uuid4()
+
+        event = await _log_poll_event(
+            session,
+            trigger=trigger,
+            org_id=org_id,
+            result="condition_met",
+        )
+
+        expected_hash = hashlib.sha256(f"polling:{trigger.id}:condition_met".encode()).hexdigest()
+        assert event.raw_payload_hash == expected_hash
+        assert event.raw_payload_hash != hashlib.sha256(b"polling").hexdigest()
