@@ -14,7 +14,13 @@ const SIZE_KEY = 'remy_panel_size'
 function loadPosition(): { x: number; y: number } {
   try {
     const raw = localStorage.getItem(POSITION_KEY)
-    if (raw) return JSON.parse(raw)
+    if (raw) {
+      const parsed = JSON.parse(raw)
+      return {
+        x: Math.max(8, Math.min(parsed.x, window.innerWidth - 340)),
+        y: Math.max(8, Math.min(parsed.y, window.innerHeight - 100)),
+      }
+    }
   } catch { /* ignore */ }
   const defaultX = Math.max(8, window.innerWidth - 460)
   return { x: defaultX, y: 80 }
@@ -168,12 +174,18 @@ export const useRemyStore = defineStore('remy', () => {
   }
 
   function updatePosition(pos: { x: number; y: number }) {
-    panelPosition.value = pos
+    panelPosition.value = {
+      x: Math.max(8, Math.min(pos.x, window.innerWidth - 340)),
+      y: Math.max(8, Math.min(pos.y, window.innerHeight - 100)),
+    }
     persistPosition()
   }
 
   function updateSize(size: { width: number; height: number }) {
-    panelSize.value = size
+    panelSize.value = {
+      width: Math.min(size.width, window.innerWidth - 16),
+      height: Math.min(size.height, window.innerHeight - 40),
+    }
     persistSize()
   }
 
