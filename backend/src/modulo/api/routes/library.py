@@ -390,7 +390,7 @@ async def create_library_primitive_endpoint(
                 owner_team_id=req.owner_team_id,
                 visibility=req.visibility,
                 account_id=principal.account_id,
-                tier=body.tier,
+                tier=req.tier,
             )
     except ProgrammingError:
         raise HTTPException(
