@@ -5,7 +5,13 @@ from httpx import ASGITransport, AsyncClient
 
 from modulo.api.middleware.security_headers import SecurityHeadersMiddleware
 
-EXPECTED_CSP = "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'"
+EXPECTED_CSP = (
+    "default-src 'self'; "
+    "connect-src 'self' *.ingest.sentry.io *.datadoghq.com *.dd.dg *.rum.browserevents.com; "
+    "script-src 'self' 'unsafe-inline'; "
+    "style-src 'self' 'unsafe-inline'; "
+    "frame-ancestors 'none'"
+)
 EXPECTED_HSTS = "max-age=31536000; includeSubDomains"
 EXPECTED_XFO = "DENY"
 EXPECTED_CTO = "nosniff"

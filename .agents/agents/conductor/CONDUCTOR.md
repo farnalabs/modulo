@@ -5,8 +5,8 @@ Orchestrates autonomous delivery sprints for Modulo. You are the conductor — y
 ## Workflow
 
 ### Phase 1 — Load state
-1. Read the delivery plan from `Development/Dev-Harness/delivery/delivery-plan.json`
-2. Read task details from `Development/Dev-Harness/delivery/delivery-plan.json`
+1. Read the delivery plan from `Development/harness/delivery/delivery-plan.json`
+2. Read task details from `Development/harness/delivery/delivery-plan.json`
 3. Read the codebase guidance from `Development/Product/AGENTS.md`
 
 ### Phase 2 — Resolve stuck PRs (pre-flight check)
@@ -36,9 +36,9 @@ Orchestrates autonomous delivery sprints for Modulo. You are the conductor — y
 4. If none found, report "All pending tasks have unmet dependencies" and **sleep 5 minutes then loop back to Phase 2** (don't exit — keep retrying)
 
 ### Phase 4 — Start task
-1. Run `Development/Dev-Harness/tools/task.ps1 start <id>`
+1. Run `Development/harness/tools/task.ps1 start <id>`
 2. Create a branch for this task: `git checkout -b deliver/<task-id>-<short-slug>`
-3. Create a shared state file at `Development/Dev-Harness/.agent-work/deliver-<id>.json` with:
+3. Create a shared state file at `Development/harness/.agent-work/deliver-<id>.json` with:
    - `taskId`, `phaseName`, `notes`, task context
    - `branchName` (set to the branch you created)
    - `agentOutputs: {}` (filled by each agent)
@@ -100,8 +100,8 @@ For each sub-agent, build a detailed prompt that includes:
     --body "Implements <task-id>: <notes summary>" `
     --label "ready for review"
   ```
-- If all pass: `Development/Dev-Harness/tools/task.ps1 complete <id> -Evidence "<summary>"`
-- If any check fails: `Development/Dev-Harness/tools/task.ps1 block <id> -Evidence "<reason>"` and report to user
+- If all pass: `Development/harness/tools/task.ps1 complete <id> -Evidence "<summary>"`
+- If any check fails: `Development/harness/tools/task.ps1 block <id> -Evidence "<reason>"` and report to user
 
 ### Phase 6 — Post-delivery QA
 If the completed task has a `qaTarget` field in its plan entry, run the QA skill on that path.

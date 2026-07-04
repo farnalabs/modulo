@@ -4,7 +4,7 @@
 Idempotent: if the target org exists, skips all seeding and exits cleanly.
 
 Usage:
-    cd codebase/backend
+    cd backend
     uv run ../scripts/seed.py
 """
 
