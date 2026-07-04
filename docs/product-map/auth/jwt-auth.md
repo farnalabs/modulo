@@ -13,6 +13,7 @@ unit-tests:
   - backend/tests/unit/api/test_jwt_security_bdd.py
   - backend/tests/unit/api/test_ws_token.py
   - backend/tests/unit/auth/test_settings.py
+  - backend/tests/unit/api/test_auth_programming_error.py
 depends-on: []
 status: partial
 ---
@@ -101,6 +102,12 @@ WebSocket auth tokens, algorithm pinning, and SECRET_KEY entropy enforcement (PR
 - [x] Claim token without purpose raises JWTError
 - [x] Claim token with wrong purpose raises JWTError
 
+### Error Handling
+- [x] login() DB failure returns 501 Not Implemented with migration hint
+- [x] refresh() DB failure returns 501 Not Implemented with migration hint
+- [x] logout() DB failure returns 501 Not Implemented with migration hint
+- [x] me() DB failure returns 501 Not Implemented with migration hint
+
 ## Edge Cases
 - [x] System admin without memberships can still log in (`requires_bootstrap=true`)
 - [x] User with no org memberships returns 403 on login
@@ -110,6 +117,8 @@ WebSocket auth tokens, algorithm pinning, and SECRET_KEY entropy enforcement (PR
 - [x] Cookie value cleared on logout (`modulo_session` and `XSRF-TOKEN` set to empty, max_age=0)
 - [x] `FERNET_KEY` and `SECRET_KEY` are separate keys with separate purposes
 - [x] CSRF token (`XSRF-TOKEN`) rotated on every login (not just set once)
+- [x] logout() with already-blacklisted family is idempotent (200, warning logged, family unaffected)
+- [x] login() DB failure returns 501 Not Implemented
 
 ## Known Gaps
 - Auth rate limiting has no BDD feature scenario (covered by unit tests only)
@@ -120,6 +129,7 @@ WebSocket auth tokens, algorithm pinning, and SECRET_KEY entropy enforcement (PR
 - No end-to-end test for stale JWT revocation flow through admin UI
 - WS token single-use enforcement (opaque token path) is tested in unit tests but has no BDD coverage
 - SECRET_KEY at-rest encryption validation (that checkpoint blobs remain encrypted after key rotation)
+- No integration test verifying ProgrammingError→501 with real Postgres (unit-tested via mocks only)
 
 ## QA History
 
