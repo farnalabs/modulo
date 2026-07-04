@@ -38,6 +38,7 @@ from modulo.auth.oauth import (
     check_oauth_token_family_valid,
     decode_oauth_access_token,
 )
+from modulo.core.documentation_indexer import DocumentationIndex
 from modulo.core.hitl_manager import (
     AlreadyClaimedError,
     ClaimTokenExpiredError,
@@ -47,7 +48,6 @@ from modulo.core.hitl_manager import (
     HITLManager,
     NotTeamMemberError,
 )
-from modulo.core.documentation_indexer import DocumentationIndex
 from modulo.core.library_service import (
     CommunityPrimitiveReadOnlyError,
     get_primitive_by_slug,
@@ -304,6 +304,7 @@ mcp = FastMCP(
         "and review_hitl to handle human-in-the-loop gates."
     ),
     stateless_http=True,
+    json_response=True,
     streamable_http_path="/",
 )
 
