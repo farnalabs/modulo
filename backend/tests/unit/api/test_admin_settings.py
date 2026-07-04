@@ -316,6 +316,10 @@ class TestUserDeactivate:
                 "modulo.db.crud.org_membership.get_membership_by_account_and_org",
                 AsyncMock(return_value=fake_membership),
             ),
+            patch(
+                "modulo.core.audit_logger.append_audit_event",
+                AsyncMock(),
+            ),
         ):
             resp = client.post(f"{self.URL}/{target_id}/deactivate")
 
@@ -362,6 +366,10 @@ class TestUserReactivate:
             patch(
                 "modulo.db.crud.org_membership.get_membership_by_account_and_org",
                 AsyncMock(return_value=fake_membership),
+            ),
+            patch(
+                "modulo.core.audit_logger.append_audit_event",
+                AsyncMock(),
             ),
         ):
             resp = client.post(f"{self.URL}/{target_id}/reactivate")
