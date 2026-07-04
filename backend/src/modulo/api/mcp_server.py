@@ -1538,5 +1538,6 @@ def build_mcp_asgi_app() -> Starlette:
             Middleware(McpAuthMiddleware),
             Middleware(RateLimiterMiddleware),  # type: ignore[arg-type]
         ],
+        lifespan=lambda app: mcp.session_manager.run(),
     )
     return app
