@@ -7,14 +7,18 @@ bdd:
 code:
   - backend/src/modulo/core/feedback_manager/__init__.py
   - backend/src/modulo/api/routes/feedback.py
-unit-tests: []
+unit-tests:
+  - backend/tests/unit/core/feedback_manager/test_feedback_manager.py
+  - backend/tests/unit/api/test_feedback_endpoint.py
+  - backend/tests/unit/api/test_feedback_programming_error.py
+  - backend/tests/integration/feedback_manager/test_feedback_flow.py
 depends-on: [feat-core-run-context, feat-evals-eval-engine]
 status: partial
 ---
 
 # Feedback Records
 
-Discovered from 1 completed delivery tasks.
+Discovered from 1 completed delivery task.
 
 ## Behaviours
 
@@ -135,7 +139,7 @@ Discovered from 1 completed delivery tasks.
 
 ## Known Gaps
 
-- BDD feature file (backend/tests/bdd/features/eval/feedback_system.feature) has 7 real scenarios (not a placeholder) — covers create, status transitions, invalid transitions, eval gap detection, and correction run spawning. Step defs in test_eval.py and test_hitl.py provide real implementations using FeedbackManager.
+- BDD feature file (backend/tests/bdd/features/eval/feedback_system.feature) has 7 real scenarios (not a placeholder) — covers create, status transitions, invalid transitions, eval gap detection, and correction run spawning. Step defs in test_eval.py and test_hitl.py provide real implementations using FeedbackManager. Other files (feedback-proposals.md, feedback-loop.md) have stale "placeholder" claims that should reference this status.
 - detect_eval_gap now returns True when all evals pass against rejected output (gap detected). The API endpoint still hardcodes eval_suite=[] — real pipeline eval suite population not connected yet.
 - No correction run checkpoint pre-seeding logic implemented (spawn_correction_run creates a new run but doesn't inherit LangGraph checkpoint state)
 - AI correction agent not implemented as a library primitive

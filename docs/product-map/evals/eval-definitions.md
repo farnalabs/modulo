@@ -117,7 +117,7 @@ Eval definitions describe automated quality checks that run as a post-node step 
 ### Failure Behaviour
 - [x] failure_behaviour="block" raises EvalBlockedError when eval fails
 - [x] EvalBlockedError is caught by pipeline executor and run transitions to "eval_failed" with error_code "eval_blocked"
-- [x] Block failure is recorded in AuditEvent with type "eval_blocked"
+- [ ] Block failure is recorded in AuditEvent with type "eval_blocked" — not wired to AuditEvent DB table
 - [x] Multiple evals on one node — first block failure halts evaluation of remaining evals
 - [x] failure_behaviour="warn" logs a warning and pipeline execution continues
 - [x] Warn failure does not transition run to "eval_failed"
@@ -171,7 +171,7 @@ Eval definitions describe automated quality checks that run as a post-node step 
 - [x] Custom function eval errors are caught at the callable boundary and returned as structured results
 - [x] LLM judge callable exceptions are caught and returned as structured results with error detail
 
-### Additional Edge Cases
+### Edge Cases
 - [ ] pass_threshold has no DB CHECK constraint or Pydantic Field range validation (0.0–1.0) on CreateEvalRequest or UpdateEvalRequest — user can set -1.0 or 2.0
 - [ ] No uniqueness constraint on eval definition name per pipeline — duplicate eval names possible
 - [ ] EvalResult DB model has no `created_at` timestamp from base (uses `evaluated_at` instead)

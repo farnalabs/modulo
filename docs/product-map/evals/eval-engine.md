@@ -3,19 +3,19 @@ id: feat-evals-eval-engine
 prd: 8.17
 delivery-tasks: [task-nv2-eval-custom-function, task-nv2-eval-engine, task-nv2-eval-llm-judge, task-nv2-eval-regex-schema]
 bdd:
-  - tests/features/evals/eval_regex.feature
-  - tests/features/evals/eval_llm_judge.feature
-  - tests/features/evals/eval_block.feature
-  - tests/features/evals/conditional_hitl.feature
+  - backend/tests/features/evals/eval_regex.feature
+  - backend/tests/features/evals/eval_llm_judge.feature
+  - backend/tests/features/evals/eval_block.feature
+  - backend/tests/features/evals/conditional_hitl.feature
 code:
   - backend/src/modulo/core/eval_engine/__init__.py
   - backend/src/modulo/core/eval_engine/regression.py
   - backend/src/modulo/core/eval_engine/okr.py
+unit-tests:
   - backend/tests/unit/core/test_eval_suite.py
   - backend/tests/unit/core/test_eval_regressions.py
+  - backend/tests/unit/core/test_eval_engine.py
   - backend/tests/unit/api/test_evals_endpoint.py
-  - backend/tests/bdd/steps/test_eval.py
-unit-tests: []
 depends-on: [feat-evals-eval-definitions]
 status: partial
 ---
@@ -64,7 +64,7 @@ Core eval engine that evaluates node outputs against eval definitions. Supports 
 - [x] Suite not found in DB — track_okr_progress raises ValueError
 - [x] EvalBlockedError includes eval name and detail message
 - [x] EvalSuiteBlockedError raised for suite-level threshold failure
-- [x] Block failure written to AuditEvent with type eval_blocked
+- [ ] Block failure written to AuditEvent with type eval_blocked — not wired to AuditEvent DB table
 
 ### Edge cases
 - [x] Suite with mixed pass/fail — correct counts and blocking_failures list
@@ -100,9 +100,9 @@ Core eval engine that evaluates node outputs against eval definitions. Supports 
 
 ## Known Gaps
 - [ ] Eval definition CRUD UI (eval_dashboard.feature is placeholder)
-- [ ] Eval suite CRUD feature (eval_suite_crud.feature is placeholder)
+- [x] Eval suite CRUD feature (eval_suite_crud.feature has 8 real Gherkin scenarios with step definitions)
 - [ ] Eval scorer dispatch (eval_scorer.feature is placeholder)
-- [ ] Feedback System integration (feedback_system.feature is placeholder)
+- [x] Feedback System integration (feedback_system.feature has 7 real Gherkin scenarios with step definitions)
 - [ ] No eval run lifecycle persistence — standalone_evaluate creates ephemeral EvalDefinition per call
 - [ ] No eval results API endpoint for querying historical results (only regression alerts endpoint exists)
 - [ ] No eval run trigger via API (eval_run.feature scenarios not fully wired to real endpoints)
