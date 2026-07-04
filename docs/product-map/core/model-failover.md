@@ -75,7 +75,7 @@ audit event. API creates/updates/reads `fallback_backend_ids` on the entity.
 - [x] Returns primary unrotated when healthy
 - [x] Rotates to configured fallback when primary unhealthy
 - [x] Scans all registered backends when no fallback list configured
-- [ ] Raises `BackendUnavailableError` for unregistered ID (same exception as unhealthy, not `BackendNotFoundError`)
+- [x] Raises `BackendUnavailableError` for unregistered ID (same exception as unhealthy, not `BackendNotFoundError`)
 - [x] Does not emit audit events (no audit_logger parameter)
 
 ### API — CRUD
@@ -95,6 +95,7 @@ audit event. API creates/updates/reads `fallback_backend_ids` on the entity.
 - [x] Get returns 501 when model_backends table does not exist (ProgrammingError)
 - [x] Update returns 501 when model_backends table does not exist (ProgrammingError)
 - [x] Delete returns 501 when model_backends table does not exist (ProgrammingError)
+- [x] All 5 routes catch SQLAlchemyError → 503 Service Unavailable (non-migration DB errors)
 
 ### Database
 
@@ -153,11 +154,11 @@ BDD step definitions exist in `steps/test_model_backends.py` — all 5 feature f
 
 - [x] Primary unhealthy, fallback list empty — raises `BackendUnavailableError` (test_get_raises_when_unhealthy_no_fallback)
 - [x] Primary unhealthy, fallback list contains unregistered IDs — skipped (test_get_skips_unregistered_fallback)
-- [ ] Primary unhealthy, fallback contains self-referencing ID — skipped (no test)
+- [x] Primary unhealthy, fallback contains self-referencing ID — skipped, does not crash (test_initialise_self_referencing_fallback_does_not_crash)
 - [x] All registered backends unhealthy — falls through both steps, raises (test_get_raises_when_all_fallbacks_unhealthy)
-- [ ] `get_with_rotation` with empty hub raises on healthy check (no test)
+- [x] `get_with_rotation` with empty hub raises `BackendUnavailableError` (test_get_with_rotation_empty_hub_raises)
 - [ ] Concurrent health checks on same backend (not thread-safe — races on `_healthy`)
-- [ ] Plugin provider build failure during initialise — partial initialise state (no test)
+- [x] Plugin provider build failure during initialise — propagates to caller (test_initialise_plugin_build_failure_propagates)
 
 ### Security
 
@@ -167,8 +168,8 @@ BDD step definitions exist in `steps/test_model_backends.py` — all 5 feature f
 
 ## Known Gaps
 - ~~No ProgrammingError/501 catch on any of the 5 API routes (violates established pattern)~~ **RESOLVED** — all 5 routes have ProgrammingError→501 catch with unit tests
-- No duplicate name check — create route accepts duplicate names, BDD `backend_crud.feature` expects 409 but code returns 201
-- No provider validation at API level — create route accepts any provider string; invalid provider only fails at hub.initialise() (ValueError→500), BDD `backend_crud.feature` expects 422 but code returns 201
+- ~~No duplicate name check~~ **RESOLVED** — create route has duplicate name check returning 409 with unit test
+- ~~No provider validation at API level~~ **RESOLVED** — create route has `_validate_provider()` returning 422 with unit tests
 - No unique constraint on `(organisation_id, name)` in DB schema — duplicates silently allowed
 - Fallback ID validation at create time not implemented — API accepts any UUID without verifying it references an existing backend
 - No deletion protection for backends referenced as fallbacks by other backends
@@ -178,7 +179,7 @@ BDD step definitions exist in `steps/test_model_backends.py` — all 5 feature f
 - No concurrent-access guards on `_healthy` dict (documented not thread-safe)
 - 5 BDD scenarios only covered by unit tests, not wired as BDD step definitions (healthy primary, unhealthy+fallback, all unhealthy, fallback order, audit event)
 - 1 BDD scenario has zero coverage: "removing fallback from update removes it from rotation"
-- 3 edge cases lack unit tests: self-referencing fallback ID, empty hub rotation, plugin build failure
+- ~~3 edge cases lack unit tests: self-referencing fallback ID, empty hub rotation, plugin build failure~~ **RESOLVED** — all 3 now tested
 
 ## QA History
 - 2026-07-05: Cross-cutting QA (index 146) — Fixed 5 stale ProgrammingError→501 checkboxes [ ]→[x]; removed stale Known Gap #1; added 3 missing BDD feature files to frontmatter; documented BDD scenarios from all 5 feature files with coverage status; added duplicate name check (409) and provider validation (422) to create route; added 4 unit tests for duplicate name + provider validation; marked stale Edge Case boxes [x] where unit tests exist; added QA History section.
@@ -190,4 +191,6 @@ BDD step definitions exist in `steps/test_model_backends.py` — all 5 feature f
 - 6 DB columns not exposed via API: owner_team_id, status, cost_tracking, currency, last_health_check_at, last_health_check_error
 - `get_with_rotation()` lacks audit logger parameter — scan-all-fallbacks path emits no audit events
 - `_make_backend()` test helper sets `created_by` instead of `account_id` — causes mock attribute mismatch
-- No concurrent-access guards on `_healthy` dict (documented not thread-safe) 
+- No concurrent-access guards on `_healthy` dict (documented not thread-safe)
+- ~~3 edge cases lack unit tests~~ **RESOLVED** (index 174)
+- 2026-07-04: Cross-cutting QA (index 174) — Changed get_with_rotation() to raise BackendUnavailableError for unregistered IDs (matching product map spec); added SQLAlchemyError→503 catch to all 5 CRUD routes (matching established pattern); fixed integration test `created_by`→`account_id` param name (broken since column rename); added unit tests: empty hub rotation, self-referencing fallback, plugin build failure, get_with_rotation unregistered ID, 5 SQLAlchemyError→503 endpoint tests; updated product map checkboxes (5 [ ]→[x]); resolved 3 Known Gaps (unchecked edge cases).

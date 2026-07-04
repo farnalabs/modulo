@@ -162,7 +162,7 @@ class ModelBackendHub:
         Returns a RotatedResult so the caller can detect when a fallback was used.
         """
         if backend_id not in self._backends:
-            raise BackendNotFoundError(backend_id)
+            raise BackendUnavailableError(backend_id)
         if self._healthy.get(backend_id, False):
             return RotatedResult(
                 backend=self._backends[backend_id],
