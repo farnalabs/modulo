@@ -115,13 +115,13 @@ class ClaimExpiryJob:
                         continue
 
                     # 2. Build the list of claim IDs to reset
-                    claim_ids = [r[0] for r in stale_rows]
+                    claim_ids = [r.id for r in stale_rows]
                     expired = [
                         {
-                            "claim_id": r[0],
-                            "run_id": r[1],
-                            "gate_id": r[2],
-                            "claimed_by": r[3],
+                            "claim_id": r.id,
+                            "run_id": r.run_id,
+                            "gate_id": r.gate_id,
+                            "claimed_by": r.account_id,
                             "organisation_id": org_id,
                         }
                         for r in stale_rows
