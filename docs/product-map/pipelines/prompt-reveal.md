@@ -86,6 +86,16 @@ sensitive data.
 - [x] 30-second TTL on revealed prompt DOM value
 - [x] Auto-reveal dialog when prompt_always_visible is true (after API call)
 
+## Error Handling
+
+- [x] Missing DB table (ProgrammingError) returns 501 Not Implemented
+- [x] Run not found returns 404
+- [x] Snapshot not found returns 404
+- [x] Node not found returns 404
+- [x] Agent not found returns 404
+- [x] Auth required (401/403)
+- [ ] 422 validation errors for invalid input parameters
+
 ## Known Gaps
 - No Agent editor UI toggle for prompt_always_visible
 - No website docs page for prompt-reveal API
@@ -107,5 +117,5 @@ sensitive data.
   — Fixed: added `test_reveal_snapshot_not_found_returns_404` and `test_reveal_agent_not_found_returns_404` to test_prompt_reveal.py.
 - **Finding 6 (MAJOR)**: Frontend doesn't auto-reveal when `prompt_always_visible` is true
   — Fixed: added `showPrompt(nodeName)` call in `revealPrompt()` after successful API response when flag is true.
-- **Finding 8 (MINOR)**: No website docs stub for prompt-reveal
+- **Finding 7 (MINOR)**: No website docs stub for prompt-reveal
   — Fixed: created stub at Website/modulo-website/src/docs/pipelines/prompt-reveal.md.
