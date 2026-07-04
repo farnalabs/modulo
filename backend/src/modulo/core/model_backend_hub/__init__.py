@@ -9,7 +9,9 @@ Usage:
     # After __aexit__: all backend references discarded, API keys gone.
 """
 
+import asyncio
 import json
+import logging
 import uuid
 from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass
@@ -35,6 +37,7 @@ from modulo.model_backends.localai import LocalAIBackend
 from modulo.model_backends.mistral import MistralBackend
 from modulo.model_backends.ollama import OllamaBackend
 from modulo.model_backends.openai import OpenAIBackend
+from modulo.model_backends.openrouter import OpenRouterBackend
 from modulo.model_backends.perplexity import PerplexityBackend
 from modulo.model_backends.qwen import QwenBackend
 from modulo.model_backends.tgi import TgiBackend
@@ -42,6 +45,8 @@ from modulo.model_backends.togetherai import TogetherAIBackend
 from modulo.model_backends.vertexai import VertexAIBackend
 from modulo.model_backends.vllm import VllmBackend
 from modulo.model_backends.watsonx import WatsonXBackend
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -52,7 +57,7 @@ class RotatedResult:
     used_fallback_id: uuid.UUID | None = None
 
 
-class BackendNotFoundError(KeyError):
+class BackendNotFoundError(Exception):
     """Raised when hub.get() is called with an unregistered backend ID."""
 
     def __init__(self, backend_id: uuid.UUID) -> None:
@@ -104,20 +109,40 @@ class ModelBackendHub:
         """Decrypt API keys and register backends. Call once at run start.
 
         `instances` must be `ModelBackend` ORM rows (or duck-typed equivalents with
-        `.id`, `.provider`, `.model_id`, `.credentials_ciphertext`, `.default_params`).
+        `.id`, `.provider`, `.model_id`, `.default_params`).
         """
         for mb in instances:
             try:
-                raw_str = await secrets_backend.get_secret(str(mb.id))
-            except KeyError as exc:
-                raise BackendDecryptError(mb.id) from exc
-            creds: dict[str, Any] = json.loads(raw_str)
-            backend = _build_backend(mb.provider, mb.model_id, creds, mb.default_params or {})
-            self.register(mb.id, backend)
-            fallback_ids = getattr(mb, "fallback_backend_ids", None)
-            if fallback_ids:
-                self._fallbacks[mb.id] = [uuid.UUID(fid) if isinstance(fid, str) else fid for fid in fallback_ids]
-            del raw_str, creds
+                try:
+                    raw_str = await asyncio.wait_for(
+                        secrets_backend.get_secret(str(mb.id)),
+                        timeout=10.0,
+                    )
+                except TimeoutError:
+                    logger.warning("Timeout fetching secret for backend %s", mb.id)
+                    continue
+                except KeyError as exc:
+                    raise BackendDecryptError(mb.id) from exc
+                try:
+                    creds: dict[str, Any] = json.loads(raw_str)
+                except json.JSONDecodeError as exc:
+                    logger.warning("Malformed secret JSON for backend %s: %s", mb.id, exc)
+                    continue
+                backend = _build_backend(mb.provider, mb.model_id, creds, mb.default_params or {})
+                self.register(mb.id, backend)
+                fallback_ids = getattr(mb, "fallback_backend_ids", None)
+                if fallback_ids:
+                    self._fallbacks[mb.id] = [uuid.UUID(fid) if isinstance(fid, str) else fid for fid in fallback_ids]
+            except (ValueError, KeyError, BackendDecryptError) as exc:
+                logger.error("Failed to initialise backend %s: %s", mb.id, exc)
+                continue
+
+    def _find_healthy_fallback(self, backend_id: uuid.UUID) -> uuid.UUID | None:
+        """Return the first healthy fallback ID, or None if none are healthy."""
+        for fallback_id in self._fallbacks.get(backend_id, []):
+            if fallback_id in self._backends and self._healthy.get(fallback_id, False):
+                return fallback_id
+        return None
 
     async def get(
         self,
@@ -127,29 +152,27 @@ class ModelBackendHub:
     ) -> ModelBackendBase:
         """Return the backend, trying fallbacks if the primary is unhealthy.
 
+        Raises BackendNotFoundError if the backend is not registered.
         Raises BackendUnavailableError if no backend (primary or fallback) is healthy.
         If *audit_logger* is provided and a fallback is used, the logger is called
-        with a dict containing event_type, primary_id, fallback_id, provider info.
+        with a dict containing event_type, primary_id, fallback_id.
         """
         if backend_id not in self._backends:
             raise BackendNotFoundError(backend_id)
         if self._healthy.get(backend_id, False):
             return self._backends[backend_id]
 
-        fallbacks = self._fallbacks.get(backend_id, [])
-        for fallback_id in fallbacks:
-            if fallback_id not in self._backends:
-                continue
-            if self._healthy.get(fallback_id, False):
-                if audit_logger is not None:
-                    await audit_logger(
-                        {
-                            "event_type": "model_failover",
-                            "primary_id": str(backend_id),
-                            "fallback_id": str(fallback_id),
-                        }
-                    )
-                return self._backends[fallback_id]
+        fallback_id = self._find_healthy_fallback(backend_id)
+        if fallback_id is not None:
+            if audit_logger is not None:
+                await audit_logger(
+                    {
+                        "event_type": "model_failover",
+                        "primary_id": str(backend_id),
+                        "fallback_id": str(fallback_id),
+                    }
+                )
+            return self._backends[fallback_id]
 
         raise BackendUnavailableError(backend_id)
 
@@ -160,26 +183,25 @@ class ModelBackendHub:
         scanning all registered backends if no fallbacks are configured.
 
         Returns a RotatedResult so the caller can detect when a fallback was used.
+        Raises BackendNotFoundError if the backend is not registered.
+        Raises BackendUnavailableError if no backend (primary or fallback) is healthy.
         """
         if backend_id not in self._backends:
-            raise BackendUnavailableError(backend_id)
+            raise BackendNotFoundError(backend_id)
         if self._healthy.get(backend_id, False):
             return RotatedResult(
                 backend=self._backends[backend_id],
                 rotated=False,
                 original_id=backend_id,
             )
-        fallbacks = self._fallbacks.get(backend_id, [])
-        for fallback_id in fallbacks:
-            if fallback_id not in self._backends:
-                continue
-            if self._healthy.get(fallback_id, False):
-                return RotatedResult(
-                    backend=self._backends[fallback_id],
-                    rotated=True,
-                    original_id=backend_id,
-                    used_fallback_id=fallback_id,
-                )
+        fallback_id = self._find_healthy_fallback(backend_id)
+        if fallback_id is not None:
+            return RotatedResult(
+                backend=self._backends[fallback_id],
+                rotated=True,
+                original_id=backend_id,
+                used_fallback_id=fallback_id,
+            )
         for oid, backend in self._backends.items():
             if self._healthy.get(oid, False):
                 return RotatedResult(
@@ -212,6 +234,13 @@ class ModelBackendHub:
         return frozenset(self._backends)
 
 
+_API_KEY_REQUIRED_PROVIDERS: frozenset[str] = frozenset({
+    "ai21", "anthropic", "cohere", "azure_openai", "openai", "openrouter",
+    "mistral", "togetherai", "deepseek", "gemini", "grok", "fireworks",
+    "groq", "perplexity", "qwen", "watsonx",
+})
+
+
 def _build_backend(
     provider: str,
     model_id: str,
@@ -219,6 +248,14 @@ def _build_backend(
     default_params: dict[str, Any],
 ) -> ModelBackendBase:
     if provider == "bedrock":
+        if "aws_access_key_id" not in creds:
+            raise ValueError(
+                f"Missing 'aws_access_key_id' in credentials for provider 'bedrock'. Got keys: {sorted(creds)}"
+            )
+        if "aws_secret_access_key" not in creds:
+            raise ValueError(
+                f"Missing 'aws_secret_access_key' in credentials for provider 'bedrock'. Got keys: {sorted(creds)}"
+            )
         return BedrockBackend(
             aws_access_key_id=creds["aws_access_key_id"],
             aws_secret_access_key=creds["aws_secret_access_key"],
@@ -235,7 +272,7 @@ def _build_backend(
             location=creds.get("location", "us-central-1"),
             **default_params,
         )
-    if "api_key" not in creds:
+    if provider in _API_KEY_REQUIRED_PROVIDERS and "api_key" not in creds:
         raise ValueError(f"Missing 'api_key' in credentials for provider {provider!r}")
     match provider:
         case "ai21":
