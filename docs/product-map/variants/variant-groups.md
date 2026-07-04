@@ -88,6 +88,17 @@ A/B test variant management — named sets of runs against the same pipeline tha
 
 - [x] Concurrent run limit enforced per pipeline per variant group via `check_pipeline_run_quota` (`active < max_concurrent_runs`)
 
+### Error handling (programming error)
+
+- [x] POST create_variant_group → 501 ProgrammingError
+- [x] GET list_variant_groups → 501 ProgrammingError
+- [x] GET get_variant_group → 501 ProgrammingError
+- [x] PUT update_variant_group → 501 ProgrammingError
+- [x] DELETE delete_variant_group → 501 ProgrammingError
+- [x] POST run_variant → 501 ProgrammingError
+- [x] GET coverage_gaps → 501 ProgrammingError
+- [x] GET prompt_diffs → 501 ProgrammingError
+
 ## Missing implementations (gaps relative to PRD 8.19)
 
 - [ ] Batch run: PRD specifies "fires one run per variant" — current code fires only one run per API call, not N variants
@@ -103,7 +114,6 @@ A/B test variant management — named sets of runs against the same pipeline tha
 
 - [ ] No unit tests for `run_variant_weighted`
 - [ ] No unit tests for `get_prompt_diffs`
-- [ ] No unit tests for `increment_run_count`
 
 ## Known Gaps
 
