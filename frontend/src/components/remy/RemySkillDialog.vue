@@ -126,6 +126,7 @@
 <script setup lang="ts">
 import { ref, reactive } from "vue";
 import { api } from "@/lib/api/client";
+import { formatApiError } from "@/lib/api/formatError";
 import {
   Dialog,
   DialogContent,
@@ -240,7 +241,7 @@ async function save() {
         body: payload,
       });
       if (err) {
-        saveError.value = `Failed to update skill: ${err}`;
+        saveError.value = `Failed to update skill: ${formatApiError(err)}`;
         return;
       }
     } else {
@@ -248,7 +249,7 @@ async function save() {
         body: payload,
       });
       if (err) {
-        saveError.value = `Failed to create skill: ${err}`;
+        saveError.value = `Failed to create skill: ${formatApiError(err)}`;
         return;
       }
     }
@@ -269,7 +270,7 @@ async function confirmDelete() {
       params: { path: { skill_id: deletingId.value } },
     });
     if (err) {
-      saveError.value = `Failed to delete skill: ${err}`;
+      saveError.value = `Failed to delete skill: ${formatApiError(err)}`;
       return;
     }
     deleteOpen.value = false;

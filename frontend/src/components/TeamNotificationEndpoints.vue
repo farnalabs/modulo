@@ -359,6 +359,7 @@
 <script setup lang="ts">
 import { ref, computed, onMounted } from "vue";
 import { api } from "../lib/api/client";
+import { formatApiError } from "../lib/api/formatError";
 import type { components } from "../lib/api/client";
 import {
   Tooltip,
@@ -419,7 +420,7 @@ async function loadEndpoints() {
   try {
     const { data, error: err } = await api.GET("/api/v1/notifications");
     if (err) {
-      error.value = `Failed to load endpoints: ${err}`;
+      error.value = `Failed to load endpoints: ${formatApiError(err)}`;
     } else if (data) {
       endpoints.value = data;
     }
@@ -472,7 +473,7 @@ async function saveEdit() {
       },
     );
     if (err) {
-      editError.value = `Save failed: ${err}`;
+      editError.value = `Save failed: ${formatApiError(err)}`;
     } else {
       cancelEdit();
       await loadEndpoints();
@@ -507,7 +508,7 @@ async function addEndpoint() {
       body: body as any,
     });
     if (err) {
-      addError.value = `Create failed: ${err}`;
+      addError.value = `Create failed: ${formatApiError(err)}`;
     } else if (data) {
       cancelAdd();
       await loadEndpoints();
@@ -535,7 +536,7 @@ async function deleteEndpoint(id: string) {
       },
     );
     if (err) {
-      error.value = `Delete failed: ${err}`;
+      error.value = `Delete failed: ${formatApiError(err)}`;
     } else if (response.status === 204 || response.ok) {
       deleteConfirmId.value = null;
       await loadEndpoints();
