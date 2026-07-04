@@ -82,12 +82,7 @@ WebSocket auth tokens, algorithm pinning, and SECRET_KEY entropy enforcement (PR
 - [x] SECRET_KEY longer than 32 bytes passes validation
 
 ### Auth Rate Limiting
-- [x] Login failure counter incremented per IP on failed attempt
-- [x] Login success counter resets per IP
-- [x] 10 failed attempts per 60 seconds per IP triggers lockout
-- [x] Lockout returns 429 with `error_code: rate_limit_exceeded`
-- [x] Exponential backoff computed from failure count
-- [x] Old failures pruned outside the rate limit window
+- See [rate-limiting.md](rate-limiting.md#auth-rate-limiting) for login rate limiting behaviour
 - [ ] Auth rate limiting covered by BDD feature scenario (covered by unit tests only: `test_auth_rate_limiter.py`)
 
 ### Claim Tokens (HITL gates)
@@ -118,7 +113,6 @@ WebSocket auth tokens, algorithm pinning, and SECRET_KEY entropy enforcement (PR
 - [x] `FERNET_KEY` and `SECRET_KEY` are separate keys with separate purposes
 - [x] CSRF token (`XSRF-TOKEN`) rotated on every login (not just set once)
 - [x] logout() with already-blacklisted family is idempotent (200, warning logged, family unaffected)
-- [x] login() DB failure returns 501 Not Implemented
 
 ## Known Gaps
 - Auth rate limiting has no BDD feature scenario (covered by unit tests only)
