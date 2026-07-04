@@ -224,7 +224,7 @@ async def update_team_endpoint(
 ) -> TeamResponse:
     _require_admin(current_user)
 
-    updates = {k: v for k, v in req.model_dump(exclude_unset=True).items() if v is not None}
+    updates = req.model_dump(exclude_unset=True)
 
     try:
         async with session.begin():

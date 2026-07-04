@@ -554,7 +554,7 @@ async def update_pipeline_endpoint(
     session: AsyncSession = Depends(get_db_session),
     principal: AuthenticatedPrincipal = Depends(get_current_user),
 ) -> PipelineResponse:
-    updates = {k: v for k, v in req.model_dump().items() if v is not None}
+    updates = req.model_dump(exclude_unset=True)
     try:
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
@@ -649,26 +649,25 @@ async def clone_pipeline_endpoint(
             # Step 1 — validate source exists
             _log.info("Step 1/4: verifying source pipeline %s exists", pipeline_id)
             source = await get_pipeline(session, pipeline_id)
-        if source is None:
-            _log.warning("Copy aborted: source pipeline %s not found", pipeline_id)
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail=f"pipeline_copy_failed: Source pipeline not found [pipeline_id: {pipeline_id}]",
-            )
+            if source is None:
+                _log.warning("Copy aborted: source pipeline %s not found", pipeline_id)
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail=f"pipeline_copy_failed: Source pipeline not found [pipeline_id: {pipeline_id}]",
+                )
 
-        # Step 2 — validate name availability
-        target_name = req.name or f"Copy of {source.name}"
-        _log.info("Step 2/4: checking name '%s' is available", target_name)
-        if not await check_pipeline_name_available(session, principal.organisation_id, target_name):
-            _log.warning("Copy aborted: name '%s' already exists in org %s", target_name, principal.organisation_id)
-            raise HTTPException(
-                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-                detail=f"pipeline_copy_failed: A pipeline named '{target_name}' already exists in this organisation",
-            )
+            # Step 2 — validate name availability
+            target_name = req.name or f"Copy of {source.name}"
+            _log.info("Step 2/4: checking name '%s' is available", target_name)
+            if not await check_pipeline_name_available(session, principal.organisation_id, target_name):
+                _log.warning("Copy aborted: name '%s' already exists in org %s", target_name, principal.organisation_id)
+                raise HTTPException(
+                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                    detail=f"pipeline_copy_failed: A pipeline named '{target_name}' already exists in this organisation",
+                )
 
-        # Step 3 — execute copy
-        _log.info("Step 3/4: cloning pipeline %s -> '%s'", pipeline_id, target_name)
-        try:
+            # Step 3 — execute copy
+            _log.info("Step 3/4: cloning pipeline %s -> '%s'", pipeline_id, target_name)
             cloned = await clone_pipeline(
                 session,
                 org_id=principal.organisation_id,
@@ -676,22 +675,27 @@ async def clone_pipeline_endpoint(
                 account_id=principal.account_id,
                 new_name=req.name,
             )
-        except Exception:
-            _log.exception("Step 3/4 failed: unexpected error cloning pipeline %s", pipeline_id)
-            raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail="pipeline_copy_failed: Unexpected error during pipeline copy. Check server logs for details.",
-            ) from None
+            if cloned is None:
+                _log.warning("Step 3/4 failed: source pipeline %s disappeared during copy", pipeline_id)
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail=f"pipeline_copy_failed: Source pipeline disappeared during copy [pipeline_id: {pipeline_id}]",
+                )
 
-        if cloned is None:
-            _log.warning("Step 3/4 failed: source pipeline %s disappeared during copy", pipeline_id)
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail=f"pipeline_copy_failed: Source pipeline disappeared during copy [pipeline_id: {pipeline_id}]",
+            # Step 4 — audit event
+            _log.info("Step 4/4: recording audit event for clone %s -> %s", pipeline_id, cloned.id)
+            await append_audit_event(
+                session,
+                org_id=principal.organisation_id,
+                event_type="pipeline.cloned",
+                actor_user_id=principal.account_id,
+                resource_type="pipeline",
+                resource_id=pipeline_id,
+                payload_json={
+                    "cloned_pipeline_id": str(cloned.id),
+                    "target_name": target_name,
+                },
             )
-
-        # Step 4 — audit event
-        _log.info("Step 4/4: recording audit event for clone %s -> %s", pipeline_id, cloned.id)
     except ProgrammingError:
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,

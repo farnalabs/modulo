@@ -261,7 +261,7 @@ async def update_model_backend_endpoint(
     principal: AuthenticatedPrincipal = Depends(get_current_user),
     settings: Settings = Depends(get_settings),
 ) -> ModelBackendResponse:
-    updates: dict[str, Any] = {k: v for k, v in req.model_dump().items() if v is not None}
+    updates: dict[str, Any] = req.model_dump(exclude_unset=True)
     if "api_key" in updates:
         _ct = _encrypt(updates.pop("api_key"), settings.fernet_key)
         updates["credentials_ciphertext"] = _ct  # nosemgrep: credential-not-in-state

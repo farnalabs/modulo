@@ -186,7 +186,7 @@ async def update_provider_endpoint(
     session: AsyncSession = Depends(get_db_session),
 ) -> SsoProviderResponse:
     _require_admin(current_user)
-    updates = {k: v for k, v in req.model_dump(exclude_none=True).items()}
+    updates = req.model_dump(exclude_unset=True)
     if not updates:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No fields to update")
 

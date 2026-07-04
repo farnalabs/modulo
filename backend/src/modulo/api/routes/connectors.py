@@ -189,7 +189,7 @@ async def update_connector_endpoint(
     principal: AuthenticatedPrincipal = Depends(get_current_user),
     settings: Settings = Depends(get_settings),
 ) -> ConnectorResponse:
-    updates: dict[str, Any] = {k: v for k, v in req.model_dump().items() if v is not None}
+    updates: dict[str, Any] = req.model_dump(exclude_unset=True)
     if "credentials" in updates:
         new_credentials = updates.pop("credentials")
         # Fetch current connector to check type

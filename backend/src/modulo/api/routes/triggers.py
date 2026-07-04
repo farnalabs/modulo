@@ -15,7 +15,7 @@ from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, Field
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -54,7 +54,15 @@ async def list_triggers(
             if trigger_type is not None:
                 q = q.where(Trigger.trigger_type == trigger_type)
 
-            total = len((await session.execute(q)).scalars().all())
+            count_q = select(func.count()).select_from(Trigger).where(
+                Trigger.organisation_id == principal.organisation_id
+            )
+            if pipeline_id is not None:
+                count_q = count_q.where(Trigger.pipeline_id == pipeline_id)
+            if trigger_type is not None:
+                count_q = count_q.where(Trigger.trigger_type == trigger_type)
+            total_raw = (await session.execute(count_q)).scalar_one()
+            total = int(total_raw) if total_raw is not None else 0
             offset = (page - 1) * page_size
             q = q.order_by(Trigger.created_at.desc()).offset(offset).limit(page_size)
             rows = (await session.execute(q)).scalars().all()

@@ -241,7 +241,7 @@ async def update_profile(
     session: AsyncSession = Depends(get_db_session),
     principal: AuthenticatedPrincipal = Depends(get_current_user),
 ) -> ProfileResponse:
-    updates = {k: v for k, v in req.model_dump().items() if v is not None}
+    updates = req.model_dump(exclude_unset=True)
     if "resource_limits" in updates:
         updates["resource_limits_json"] = updates.pop("resource_limits")
     try:
