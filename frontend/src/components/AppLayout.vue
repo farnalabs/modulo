@@ -4,12 +4,14 @@
     <!-- Sidebar -->
     <aside class="hidden md:flex w-64 border-r bg-background p-4 flex-col min-h-screen overflow-hidden">
       <div class="mb-6 flex items-center gap-2.5 pl-1">
-        <div
-          class="flex items-center justify-center rounded-lg bg-gradient-to-br from-teal-500/20 to-transparent p-1.5"
-        >
-          <LogoMark :size="24" transparent />
-        </div>
-        <h2 class="text-lg font-bold tracking-tight">Modulo</h2>
+        <router-link to="/" class="flex items-center gap-2.5">
+          <div
+            class="flex items-center justify-center rounded-lg bg-gradient-to-br from-teal-500/20 to-transparent p-1.5"
+          >
+            <LogoMark :size="24" transparent />
+          </div>
+          <h2 class="text-lg font-bold tracking-tight">Modulo</h2>
+        </router-link>
       </div>
 
       <ViewModeToggle
@@ -70,14 +72,14 @@
         </svg>
       </button>
       <NotificationBell class="ml-auto mr-2" />
-      <div class="flex items-center gap-2.5">
+      <router-link to="/" class="flex items-center gap-2.5">
         <div
           class="flex items-center justify-center rounded-lg bg-gradient-to-br from-teal-500/20 to-transparent p-1.5"
         >
           <LogoMark :size="24" transparent />
         </div>
         <h2 class="text-lg font-bold tracking-tight">Modulo</h2>
-      </div>
+      </router-link>
     </header>
 
     <!-- Mobile overlay -->
