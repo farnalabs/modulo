@@ -990,7 +990,8 @@ export default {
       "item_plugins": "Plugins",
       "item_feedback_inbox": "Feedback Inbox",
       "item_organisations": "Organisations",
-      "item_system_config": "System Config"
+      "item_system_config": "System Config",
+      "item_admin_pipelines": "Admin Pipelines"
     },
     "NotificationCard": {
       "hide_from_dashboard_keep_in_notifications_page": "Hide from dashboard, keep in notifications page",
