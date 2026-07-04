@@ -136,6 +136,10 @@ class SkillResponse(BaseModel):
     updated_at: str
 
 
+class ContextSourceModeUpdate(BaseModel):
+    source_mode: str = Field(..., pattern=r"^(always_on|tool|off)$")
+
+
 # ── Config endpoints ──────────────────────────────────────────────────
 
 
@@ -392,6 +396,96 @@ async def delete_org_skill(
             await set_rls_org(session, principal.organisation_id)
             skill = await _get_org_skill(session, skill_id, principal.organisation_id)
             await session.delete(skill)
+    except ProgrammingError:
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="Feature is not available. Run database migrations to enable it.",
+        ) from None
+
+
+# ── Org-level Context Sources ─────────────────────────────────────────
+
+
+@router.get("/context-sources")
+async def get_org_context_sources(
+    session: AsyncSession = Depends(get_db_session),
+    principal: AuthenticatedPrincipal = Depends(get_current_user),
+) -> dict[str, object]:
+    _require_admin(principal)
+    try:
+        async with session.begin():
+            from modulo.core.remy.context_source_service import (
+                RemyContextSourceService,
+            )
+
+            service = RemyContextSourceService(session)
+            org_defaults = await service.get_org_defaults(principal.organisation_id)
+            from modulo.core.remy.config_service import RemyConfig
+
+            builtin_defaults = RemyConfig().context_sources
+        return {
+            "builtin_defaults": builtin_defaults,
+            "org_overrides": org_defaults,
+            "effective": {**builtin_defaults, **org_defaults},
+        }
+    except ProgrammingError:
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="Feature is not available. Run database migrations to enable it.",
+        ) from None
+
+
+@router.put("/context-sources/{source_key}")
+async def set_org_context_source(
+    source_key: str,
+    body: ContextSourceModeUpdate,
+    session: AsyncSession = Depends(get_db_session),
+    principal: AuthenticatedPrincipal = Depends(get_current_user),
+) -> dict[str, str]:
+    _require_admin(principal)
+    try:
+        async with session.begin():
+            from modulo.core.remy.context_source_service import (
+                RemyContextSourceService,
+            )
+
+            service = RemyContextSourceService(session)
+            await service.set_org_default(
+                principal.organisation_id, source_key, body.source_mode
+            )
+            org_defaults = await service.get_org_defaults(principal.organisation_id)
+        return org_defaults
+    except ProgrammingError:
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="Feature is not available. Run database migrations to enable it.",
+        ) from None
+
+
+@router.delete("/context-sources", status_code=status.HTTP_200_OK)
+async def reset_org_context_sources(
+    session: AsyncSession = Depends(get_db_session),
+    principal: AuthenticatedPrincipal = Depends(get_current_user),
+) -> dict[str, str]:
+    _require_admin(principal)
+    try:
+        async with session.begin():
+            from modulo.core.remy.context_source_service import (
+                RemyContextSourceService,
+            )
+            from modulo.db.models.remy_context_source import RemyContextSource
+
+            service = RemyContextSourceService(session)
+            result = await session.execute(
+                select(RemyContextSource).where(
+                    RemyContextSource.organisation_id == principal.organisation_id,
+                    RemyContextSource.user_id.is_(None),
+                )
+            )
+            rows = list(result.scalars())
+            for row in rows:
+                await session.delete(row)
+        return {}
     except ProgrammingError:
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
