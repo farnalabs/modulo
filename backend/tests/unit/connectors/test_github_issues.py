@@ -90,7 +90,7 @@ async def test_query_issues_http_error(connector):
     respx.get("https://api.github.com/repos/owner/repo/issues").mock(
         return_value=httpx.Response(403, text="Forbidden")
     )
-    with pytest.raises(httpx.HTTPStatusError):
+    with pytest.raises(ValueError, match="403"):
         await connector.query(
             ConnectorQuery(resource="issues", filters={"repo": "owner/repo"})
         )
@@ -118,7 +118,7 @@ async def test_query_single_issue_not_found(connector):
     respx.get("https://api.github.com/repos/owner/repo/issues/999").mock(
         return_value=httpx.Response(404, text="Not Found")
     )
-    with pytest.raises(httpx.HTTPStatusError):
+    with pytest.raises(ValueError, match="404"):
         await connector.query(
             ConnectorQuery(resource="issue", filters={"repo": "owner/repo", "issue_number": 999})
         )
@@ -332,7 +332,7 @@ async def test_write_create_issue_http_error(connector):
     respx.post("https://api.github.com/repos/owner/repo/issues").mock(
         return_value=httpx.Response(422, text="Unprocessable")
     )
-    with pytest.raises(httpx.HTTPStatusError):
+    with pytest.raises(ValueError, match="422"):
         await connector.write(
             ConnectorPayload(
                 resource="issue",

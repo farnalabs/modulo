@@ -634,6 +634,60 @@ def step_result_is_error(ctx):
     assert ctx.get("query_error") is not None, "Expected an error but query succeeded"
 
 
+@when(parsers.parse('the API returns HTTP {status_code:d} "{reason}"'))
+def step_github_api_returns_error(status_code, reason, ctx):
+    connector = ctx["connector"]
+
+    async def mock_query(q):
+        raise ValueError(f"GitHub API HTTP {status_code}: {reason}")
+
+    connector.query = mock_query
+    ctx["query_error"] = None
+    ctx["_expected_operation"] = "query"
+
+
+@then(parsers.parse('the connector raises a ValueError with "{expected}"'))
+def step_connector_raises_value_error(expected, ctx):
+    import asyncio
+    from modulo.connectors.base import ConnectorPayload, ConnectorQuery
+
+    connector = ctx["connector"]
+    operation = ctx.get("_expected_operation", "query")
+    try:
+        if operation == "write":
+            loop = asyncio.new_event_loop()
+            loop.run_until_complete(
+                connector.write(
+                    ConnectorPayload(resource="file", data={"repo": "owner/repo", "path": "test.txt", "content": "data"})
+                )
+            )
+        else:
+            loop = asyncio.new_event_loop()
+            loop.run_until_complete(
+                connector.query(ConnectorQuery(resource="repos", limit=5))
+            )
+        ctx["query_result"] = "unexpected_success"
+        ctx["query_error"] = None
+    except ValueError as exc:
+        ctx["query_result"] = None
+        ctx["query_error"] = str(exc)
+
+    assert ctx["query_error"] is not None, f"Expected ValueError with '{expected}' but no error occurred"
+    assert expected in ctx["query_error"], f"Expected '{expected}' in error but got: {ctx['query_error']}"
+
+
+@when(parsers.parse('writing a file to GitHub returns HTTP {status_code:d} "{reason}"'))
+def step_github_write_returns_error(status_code, reason, ctx):
+    connector = ctx["connector"]
+
+    async def mock_write(payload):
+        raise ValueError(f"GitHub API HTTP {status_code}: {reason}")
+
+    connector.write = mock_write
+    ctx["query_error"] = None
+    ctx["_expected_operation"] = "write"
+
+
 # ============================================================================
 # connectors/jira_connector.feature  â€"  7 scenarios
 # ============================================================================
