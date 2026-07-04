@@ -19,7 +19,11 @@ import jmespath.exceptions
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from modulo.core.graph_validator._types import ValidationResult
+from modulo.core.graph_validator._types import (
+    ValidationResult,
+    try_parse_uuid,
+    try_parse_uuids,
+)
 from modulo.core.graph_validator.category_validator import validate_node_categories
 from modulo.db.models.agent import Agent
 from modulo.db.models.composite_template import CompositeTemplate
@@ -112,9 +116,10 @@ class GraphValidator:
             return self._strip_warnings(result)
 
         # Schema compatibility (field-level).
+        schema_pins = snapshot.schema_pins_json or []
         await self._check_schema_compatibility_deep(
             snapshot.graph_json,
-            snapshot.schema_pins_json,
+            schema_pins,
             session,
             result,
         )
@@ -122,10 +127,13 @@ class GraphValidator:
             return self._strip_warnings(result)
 
         # Input payload compatibility with entry node schema.
+        if input_payload is None:
+            result.error("INPUT_NULL_PAYLOAD", "Input payload cannot be None")
+            return self._strip_warnings(result)
         await self._check_input_schema_compatibility(
             snapshot.graph_json,
             input_payload,
-            snapshot.schema_pins_json,
+            schema_pins,
             session,
             result,
         )
@@ -176,10 +184,16 @@ class GraphValidator:
             result.error("TOPOLOGY_NO_NODES", "Graph has no nodes")
             return
 
-        node_ids = {str(n["id"]) for n in nodes}
+        node_ids: set[str] = set()
+        for n in nodes:
+            nid = n.get("id")
+            if nid is None:
+                result.error("TOPOLOGY_NODE_MISSING_ID", "A node is missing its 'id' field")
+                return
+            node_ids.add(str(nid))
 
         for edge in edges:
-            src, tgt = str(edge["source"]), str(edge["target"])
+            src, tgt = str(edge.get("source", "?")), str(edge.get("target", "?"))
             if src not in node_ids:
                 result.error("TOPOLOGY_UNKNOWN_SOURCE", f"Edge source '{src}' is not a node")
             if tgt not in node_ids:
@@ -206,9 +220,9 @@ class GraphValidator:
             src, tgt = str(edge["source"]), str(edge["target"])
             adj[src].append(tgt)
 
-        # Reachability BFS from entry over forwarding edges.
+        # Reachability BFS from all entry candidates over forwarding edges.
         visited: set[str] = set()
-        queue = [entry_candidates[0]]
+        queue = list(entry_candidates)
         while queue:
             nid = queue.pop()
             if nid in visited:
@@ -224,23 +238,25 @@ class GraphValidator:
             )
 
         # Nesting depth: longest path from entry node to any leaf.
-        self._check_nesting_depth(adj, entry_candidates[0], result)
+        self._check_nesting_depth(adj, list(entry_candidates), result)
 
     def _check_nesting_depth(
         self,
         adj: dict[str, list[str]],
-        entry_id: str,
+        entry_ids: list[str],
         result: ValidationResult,
     ) -> None:
-        """Compute longest path from entry to leaf via DFS. Error if > MAX_NESTING_DEPTH."""
+        """Compute longest path from entries to leaf via DFS. Error if > MAX_NESTING_DEPTH."""
 
-        def _max_depth(node: str, visited: frozenset[str]) -> int:
+        def _max_depth(node: str, visited: frozenset[str], _remaining: int = 1000) -> int:
+            if _remaining <= 0:
+                return 0
             children = [c for c in adj.get(node, []) if c not in visited]
             if not children:
                 return 0
-            return 1 + max(_max_depth(c, visited | {node}) for c in children)
+            return 1 + max(_max_depth(c, visited | {node}, _remaining - 1) for c in children)
 
-        depth = _max_depth(entry_id, frozenset())
+        depth = max((_max_depth(eid, frozenset()) for eid in entry_ids), default=0)
         if depth > self.MAX_NESTING_DEPTH:
             result.error(
                 "TOPOLOGY_NESTING_EXCEEDED",
@@ -265,19 +281,19 @@ class GraphValidator:
         Each HITL gate with an ``eval_condition`` must have valid fields.
         """
         for edge in edges:
-            self._validate_jmespath_conditional(edge, result)
-            self._validate_hitl_eval_condition(edge, result)
+            self._check_jmespath_conditional(edge, result)
+            self._check_hitl_eval_condition(edge, result)
 
     @staticmethod
-    def _validate_jmespath_conditional(
+    def _check_jmespath_conditional(
         edge: dict[str, Any],
         result: ValidationResult,
     ) -> None:
         if edge.get("type") != "conditional":
             return
         src: str = str(edge.get("source", edge.get("source_node_id", "?")))
-        expr: str | None = edge.get("condition_expression")
-        if not expr or not expr.strip():
+        expr: object = edge.get("condition_expression")
+        if not isinstance(expr, str) or not expr.strip():
             result.error(
                 "CONDITION_MISSING_EXPRESSION",
                 f"Edge from '{src}': conditional edge requires a condition_expression",
@@ -294,7 +310,7 @@ class GraphValidator:
             )
 
     @staticmethod
-    def _validate_hitl_eval_condition(
+    def _check_hitl_eval_condition(
         edge: dict[str, Any],
         result: ValidationResult,
     ) -> None:
@@ -351,8 +367,12 @@ class GraphValidator:
         # node_id -> direction -> schema_id
         schemas: dict[str, dict[str, str]] = {}
         for pin in schema_pins:
-            nid = str(pin["node_id"])
-            schemas.setdefault(nid, {})[pin["direction"]] = str(pin["schema_id"])
+            nid = str(pin.get("node_id", "?"))
+            direction = pin.get("direction", "?")
+            schema_id = pin.get("schema_id")
+            if schema_id is None:
+                continue
+            schemas.setdefault(nid, {})[direction] = str(schema_id)
 
         for edge in graph_json.get("edges", []):
             if edge.get("type") in _SKIPPED_EDGE_TYPES:
@@ -382,8 +402,12 @@ class GraphValidator:
         # node_id -> direction -> schema_id
         pins: dict[str, dict[str, str]] = {}
         for pin in schema_pins:
-            nid = str(pin["node_id"])
-            pins.setdefault(nid, {})[pin["direction"]] = str(pin["schema_id"])
+            nid = str(pin.get("node_id", "?"))
+            direction = pin.get("direction", "?")
+            schema_id = pin.get("schema_id")
+            if schema_id is None:
+                continue
+            pins.setdefault(nid, {})[direction] = str(schema_id)
 
         all_schema_ids: set[str] = set()
         for mapping in pins.values():
@@ -420,7 +444,9 @@ class GraphValidator:
     ) -> None:
         out_props = out_def.get("properties", {}) if isinstance(out_def, dict) else {}
         in_props = in_def.get("properties", {}) if isinstance(in_def, dict) else {}
+        required_fields: set[str] = set(in_def.get("required", []) if isinstance(in_def, dict) else [])
 
+        # Check every output field exists in input with matching type.
         for field_name, out_field in out_props.items():
             if not isinstance(out_field, dict):
                 continue
@@ -432,7 +458,7 @@ class GraphValidator:
                     node_id=src,
                 )
                 continue
-            if isinstance(in_field, dict) and isinstance(out_field, dict):
+            if isinstance(in_field, dict):
                 out_type = out_field.get("type")
                 in_type = in_field.get("type")
                 if out_type and in_type and out_type != in_type:
@@ -441,6 +467,15 @@ class GraphValidator:
                         f"Edge {src}→{tgt}: field '{field_name}' type '{out_type}' != input type '{in_type}'",
                         node_id=src,
                     )
+
+        # Check every required input field has a corresponding output field.
+        for field_name in required_fields:
+            if field_name not in out_props:
+                result.error(
+                    "SCHEMA_MISSING_OUTPUT_FIELD",
+                    f"Edge {src}→{tgt}: required input field '{field_name}' has no matching output",
+                    node_id=src,
+                )
 
     async def _resolve_schema_definitions(
         self,
@@ -454,7 +489,10 @@ class GraphValidator:
         if not schema_ids:
             return {}
 
-        uuids = {uuid.UUID(s) for s in schema_ids}
+        parsed_uuids, _ = try_parse_uuids(list(schema_ids))
+        if not parsed_uuids:
+            return {}
+        uuids = parsed_uuids
         rows = (
             (
                 await session.execute(
@@ -519,9 +557,15 @@ class GraphValidator:
                 continue
             if field_name not in input_payload:
                 continue
-            expected_type = field_def.get("type")
-            if expected_type and not isinstance(input_payload[field_name], _JSON_TYPE_MAP.get(expected_type, object)):
-                actual_type = type(input_payload[field_name]).__name__
+            expected_type: str | None = field_def.get("type")
+            val = input_payload[field_name]
+            type_map_entry = _JSON_TYPE_MAP.get(expected_type, object) if expected_type else object
+            is_bool = isinstance(val, bool)
+            matches = isinstance(val, type_map_entry) and not (
+                is_bool and expected_type in ("integer", "number")
+            )
+            if expected_type and not matches:
+                actual_type = type(val).__name__
                 result.error(
                     "INPUT_FIELD_TYPE_MISMATCH",
                     f"Input field '{field_name}' expected type '{expected_type}', got '{actual_type}'",
@@ -541,7 +585,11 @@ class GraphValidator:
         if not bindings:
             return
 
-        instance_ids = {uuid.UUID(str(b["connector_instance_id"])) for b in bindings}
+        raw_ids = [b.get("connector_instance_id") for b in bindings]
+        instance_ids, _ = try_parse_uuids(raw_ids)
+        if not instance_ids:
+            return
+
         rows = (
             (await session.execute(select(ConnectorInstance).where(ConnectorInstance.id.in_(instance_ids))))
             .scalars()
@@ -550,8 +598,11 @@ class GraphValidator:
         found: dict[uuid.UUID, ConnectorInstance] = {r.id: r for r in rows}
 
         for binding in bindings:
-            node_id: str | None = str(binding["node_id"]) if binding.get("node_id") else None
-            cid = uuid.UUID(str(binding["connector_instance_id"]))
+            node_id: str | None = str(binding.get("node_id")) if binding.get("node_id") else None
+            cid_obj = try_parse_uuid(binding.get("connector_instance_id"))
+            if cid_obj is None:
+                continue
+            cid = cid_obj
             instance = found.get(cid)
 
             if instance is None:
@@ -588,13 +639,20 @@ class GraphValidator:
         if not pins:
             return
 
-        backend_ids = {uuid.UUID(str(p["model_backend_id"])) for p in pins}
+        raw_ids = [p.get("model_backend_id") for p in pins]
+        backend_ids, _ = try_parse_uuids(raw_ids)
+        if not backend_ids:
+            return
+
         rows = (await session.execute(select(ModelBackend).where(ModelBackend.id.in_(backend_ids)))).scalars().all()
         found: dict[uuid.UUID, ModelBackend] = {r.id: r for r in rows}
 
         for pin in pins:
-            node_id: str | None = str(pin["node_id"]) if pin.get("node_id") else None
-            bid = uuid.UUID(str(pin["model_backend_id"]))
+            node_id: str | None = str(pin.get("node_id")) if pin.get("node_id") else None
+            bid_obj = try_parse_uuid(pin.get("model_backend_id"))
+            if bid_obj is None:
+                continue
+            bid = bid_obj
             backend = found.get(bid)
 
             if backend is None:
@@ -647,10 +705,9 @@ class GraphValidator:
         for node in graph_json.get("nodes", []):
             raw = node.get("agent_id")
             if raw is not None:
-                try:
-                    agent_ids.add(uuid.UUID(str(raw)))
-                except (ValueError, TypeError):
-                    continue
+                parsed = try_parse_uuid(raw)
+                if parsed is not None:
+                    agent_ids.add(parsed)
 
         if not agent_ids:
             return
@@ -720,9 +777,10 @@ class GraphValidator:
         for node in composite_nodes:
             raw = node.get("composite_ref")
             if raw is not None:
-                try:
-                    composite_refs.add(uuid.UUID(str(raw)))
-                except (ValueError, TypeError):
+                parsed = try_parse_uuid(raw)
+                if parsed is not None:
+                    composite_refs.add(parsed)
+                else:
                     node_id = str(node.get("id", "?"))
                     result.error(
                         "COMPOSITE_INVALID_REF",
@@ -791,7 +849,7 @@ class GraphValidator:
         5. failure_behaviour must be valid.
         """
         max_retries = output_validation.get("max_validation_retries", 0)
-        if not isinstance(max_retries, int) or max_retries < 0 or max_retries > 5:
+        if not isinstance(max_retries, (int, float)) or max_retries < 0 or max_retries > 5:
             result.error(
                 "COMPOSITE_VALIDATION_RETRIES_RANGE",
                 f"Node '{node_id}': max_validation_retries must be an integer between 0 and 5 (got {max_retries!r})",
@@ -844,8 +902,8 @@ class GraphValidator:
                 f"Node '{node_id}', eval '{eval_name}': regex eval missing 'field' in config",
                 node_id=node_id,
             )
-        pattern = config.get("pattern", "")
-        if not pattern:
+        pattern = config.get("pattern")
+        if pattern is None or (isinstance(pattern, str) and not pattern):
             result.error(
                 "COMPOSITE_VALIDATION_REGEX_NO_PATTERN",
                 f"Node '{node_id}', eval '{eval_name}': regex eval missing 'pattern' in config",
@@ -860,6 +918,12 @@ class GraphValidator:
                     f"Node '{node_id}', eval '{eval_name}': regex pattern '{pattern}' failed to compile: {exc}",
                     node_id=node_id,
                 )
+        else:
+            result.error(
+                "COMPOSITE_VALIDATION_REGEX_INVALID_TYPE",
+                f"Node '{node_id}', eval '{eval_name}': regex pattern must be a string, got {type(pattern).__name__}",
+                node_id=node_id,
+            )
 
     def _check_json_schema_eval(
         self,
