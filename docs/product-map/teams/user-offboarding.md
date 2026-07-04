@@ -94,9 +94,6 @@ Admin-initiated deactivation of an individual user — sets `active=false` inval
 ## Known Gaps
 
 - **No BDD scenarios**: `backend/tests/bdd/features/orgs/member_management.feature` has one deactivation scenario but no detailed assertions for token blacklisting, team membership removal, or API key revocation
-- **API keys now revoked**: `admin_deactivate_user` calls `revoke_api_key` for all non-revoked keys (admin.py:642-652). The security gap is **CLOSED**.
-- **Audit events now dispatched**: both `admin_deactivate_user` and `admin_reactivate_user` emit audit events. Gap **CLOSED**.
-- **ProgrammingError→501 now caught**: both endpoints return 501 when DB migrations missing. Gap **CLOSED**.
 - **No sole-admin guard**: deactivating the last admin in an org is not blocked — could leave org unmanageable
 - **No WS token re-validation**: WebSocket connections may stay active for up to 15 min after deactivation
 - **SCIM hard-delete mismatch**: SCIM DELETE does a hard delete rather than soft deactivate — inconsistent with admin deactivation

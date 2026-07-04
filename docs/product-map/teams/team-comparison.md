@@ -12,12 +12,12 @@ code:
   - backend/tests/unit/api/test_dashboard.py
 unit-tests:
   - frontend/src/__tests__/TeamComparisonView.spec.ts
-depends-on: [feat-teams-team-crud, feat-evals-eval-engine]
+depends-on: [feat-teams-dashboard, feat-teams-team-crud, feat-evals-eval-engine]
 status: partial
 ---
 # Team Comparison
 
-Side-by-side eval pass rates and pipeline metrics across teams. Built on the org dashboard summary API. Route at `/admin/teams/comparison`. Discovered from 1 completed delivery tasks.
+Side-by-side eval pass rates and pipeline metrics across teams. Built on the org dashboard summary API. Route at `/admin/teams/comparison`.
 
 ## Behaviours
 - [x] Side-by-side eval pass rates across teams with color-coded progress bars (green ≥80%, amber 50–79%, red <50%)
@@ -60,7 +60,6 @@ Side-by-side eval pass rates and pipeline metrics across teams. Built on the org
 
 ## Known Gaps
 
-- ~~**Per-team eval pass rate now computed**~~: Backend (dashboard.py:118-141) computes per-team eval pass rates via `per_team_eval_query` grouping EvalResults by `Run.owner_team_id`. The dashboard summary API returns `teams[].eval_pass_rate` with `total_evals`, `passed_evals`, and `pass_rate` per team. Frontend reads `team.eval_pass_rate?.pass_rate` — each team now displays its own pass rate, not the org-wide average. The drill-down per-pipeline data lives in `eval_pass_rate.per_team_pipeline`. **CLOSED** — removed from gaps; all checkboxes updated to [x].
 - **Standalone BDD missing**: only covered as a persona scenario in `elena-engineering-director.feature` (`@goal-elena-team-comparison`). Step definitions are NOT implemented — the scenario exists as a placeholder only. Need `backend/tests/bdd/features/team-comparison.feature` with standalone scenarios and corresponding step defs in `test_team_comparison.py`.
 - **Frontend test is smoke-only**: `frontend/src/__tests__/TeamComparisonView.spec.ts` only verifies the component renders without crashing and shows "Team Comparison". No tests for: data rendering, error states, empty states, expand/collapse interaction, i18n key resolution.
 - **Snapshot-only view**: this is a point-in-time comparison with no trend or historical comparison. Time-series comparison (e.g. "pass rate this week vs last week per team") is not available.
@@ -72,25 +71,4 @@ Side-by-side eval pass rates and pipeline metrics across teams. Built on the org
 
 ### 2026-07-05 — Cross-cutting QA feat-teams-team-comparison (index 144)
 
-**Scope:** Full feature coverage review.
-
-**Changes:**
-- **i18n compliance**: Replaced 11 hardcoded English strings in `TeamComparisonView.vue` with `$t()` wrappers:
-  - Summary card header "Teams" → `$t('views.TeamComparisonView.teams')`
-  - Table headers "Team" → `$t('views.TeamComparisonView.team')` and "Members" → `$t('views.TeamComparisonView.members')`
-  - Badge `title` attributes: "Running", "Awaiting", "Failed", "Idle" → respective `$t()` calls
-  - Expanded header "... — Pipeline Eval Breakdown" → `$t()` with interpolation
-  - Manual pluralization "pipeline"/"pipelines" → vue-i18n plural `$t()` call
-  - Manual pluralization "eval"/"evals" → vue-i18n plural `$t()` call
-  - "passed" count → `$t('views.TeamComparisonView.passed_count')`
-  - Empty state "No eval data available..." → `$t('views.TeamComparisonView.no_eval_data_available')`
-  - Empty state "No teams found..." → `$t('views.TeamComparisonView.no_teams_found')`
-  - All 11 new keys added to `frontend/src/locales/en-US.js` under `views.TeamComparisonView`
-- **Silent catch logging**: Empty `catch {}` on pipeline names fetch now logs via `console.warn('Failed to fetch pipeline names, falling back to IDs:', e)` — errors are observable without changing the intentional fallback-to-ID behaviour.
-- **Product map enrichment**:
-  - All 15 behaviour checkboxes verified against code and marked [x]
-  - Error Handling section added (8 checkboxes)
-  - Edge Cases section added (7 checkboxes)
-  - Frontmatter updated: `unit-tests` now references `frontend/src/__tests__/TeamComparisonView.spec.ts`; `bdd` path corrected to `backend/tests/bdd/features/`
-  - Known Gaps updated: resolved per-team eval pass rate gap removed, added i18n (fixed), BDD step defs (unimplemented), smoke-only test, missing PRD spec
-  - QA History section added 
+Full feature coverage review. Fixed 11 i18n violations, added silent catch logging, enriched product map with 15 behaviour checkboxes, error handling section, and edge cases section.

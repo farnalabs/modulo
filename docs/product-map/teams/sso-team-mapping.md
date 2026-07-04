@@ -56,6 +56,16 @@ Group-to-team mapping from OIDC/SAML identity provider group claims to Modulo te
 - [ ] Group mapping admin endpoints require admin `org_role`
 - [ ] Group mapping only available when enterprise license key is present
 
+### Error Handling
+- [ ] Admin group mapping endpoints return 401 for unauthenticated requests
+- [ ] Admin group mapping endpoints return 403 for non-admin users
+- [ ] PUT group mappings returns 422 for invalid mapping format
+- [ ] OIDC callback returns 401 when ID token validation fails
+- [ ] SAML ACS returns 401 when SAML response validation fails (signature, expiry, destination)
+- [ ] IdP unreachable during callback — no degraded mode documented
+- [ ] SSO provider lookup by `client_id` returns 404 if provider not found
+- [ ] ProgrammingError caught → 501 on all DB-accessing handlers
+
 ## Known Gaps
 
 - No BDD `.feature` files exist for SSO group-to-team mapping
