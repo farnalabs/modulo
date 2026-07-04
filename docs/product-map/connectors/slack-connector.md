@@ -103,9 +103,6 @@ Async Slack Web API connector implementing `ConnectorBase`. Provides read/write 
 - [ ] **Text-only messages**: no Block Kit support for rich formatting, buttons, or interactive components
 - [ ] **No message search**: `search.messages` API not used; agents cannot search across all channels
 - [ ] **Channel history limited**: only one page of `conversations.history` — full history not accessible
-- [x] **BDD scenarios exist**: `backend/tests/bdd/features/connectors/slack_connector.feature` — 14 BDD scenarios covering happy paths, edge cases, and error paths
-- [x] **Unit tests exist**: `backend/tests/unit/connectors/test_slack.py` — 30+ tests covering health check, query, write, error paths, and rate limiting
-- [x] Rate-limit detection: 429 responses detected, `Retry-After` value surfaced in error messages
 - [ ] **No automatic 429 retry/backoff**: 429 is detected but no automatic retry with exponential backoff
 - [ ] **No scope verification**: health check does not verify token has required scopes
 - [ ] **No specific exception types**: rate-limit, auth, and API errors all raise generic `ValueError` or `httpx.HTTPStatusError` — not domain-specific exception types

@@ -1,6 +1,6 @@
 ---
 id: feat-connectors-hub
-prd: §8.6
+prd: 8.6
 delivery-tasks: []
 bdd:
   - backend/tests/bdd/features/connectors/connector_health.feature
