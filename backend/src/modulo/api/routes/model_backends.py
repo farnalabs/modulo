@@ -207,7 +207,7 @@ async def create_model_backend_endpoint(
                 default_params=req.default_params,
                 visibility=req.visibility,
                 fallback_backend_ids=fallback_ids,
-                tier=body.tier,
+                tier=req.tier,
             )
     except ProgrammingError:
         raise HTTPException(
