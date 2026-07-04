@@ -24,8 +24,8 @@ rules:
       - pattern-not-inside: |
           async with $SESSION.begin():
             ...
-    message: "Route handler with get_db_session — get_db_session now auto-begins a transaction; explicit session.begin() here is redundant but harmless"
+    message: "Route handler with get_db_session must wrap DB ops in async with session.begin(): (autobegin=False)"
     languages: [python]
-    severity: WARNING
+    severity: ERROR
     paths:
       include: ["**/backend/src/**"]
