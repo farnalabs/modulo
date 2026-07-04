@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
+import logging
 from uuid import UUID as _UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel
-from sqlalchemy.exc import ProgrammingError
+from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
+
+_log = logging.getLogger(__name__)
 
 from modulo.api.dependencies import get_db_session, require_feature
 from modulo.auth.dependencies import get_current_user
@@ -59,7 +62,15 @@ async def list_audit_events_endpoint(
     Supports filtering by event_type (action_type), user_id (actor_user_id),
     entity_type (resource_type), from_date, to_date.
     """
-    actor_uid = _UUID(actor_user_id) if actor_user_id else None
+    actor_uid = None
+    if actor_user_id:
+        try:
+            actor_uid = _UUID(actor_user_id)
+        except ValueError:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=f"Invalid user_id format: {actor_user_id!r}. Must be a valid UUID.",
+            )
     _require_admin(principal)
     try:
         async with session.begin():
@@ -79,6 +90,12 @@ async def list_audit_events_endpoint(
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
+        )
+    except SQLAlchemyError:
+        _log.exception("list_audit_events: database error")
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Database connection failed. Please try again.",
         )
     return result
 
@@ -104,6 +121,12 @@ async def batch_detail_endpoint(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
         )
+    except SQLAlchemyError:
+        _log.exception("batch_detail: database error")
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Database connection failed. Please try again.",
+        )
     return result
 
 
@@ -123,6 +146,12 @@ async def verify_chain_endpoint(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
         )
+    except SQLAlchemyError:
+        _log.exception("verify_chain: database error")
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Database connection failed. Please try again.",
+        )
     return result
 
 
@@ -141,7 +170,15 @@ async def export_chain_endpoint(
     principal: AuthenticatedPrincipal = Depends(get_current_user),
 ) -> dict[str, object]:
     """Export audit events as paginated JSON with optional filters."""
-    actor_uid = _UUID(actor_user_id) if actor_user_id else None
+    actor_uid = None
+    if actor_user_id:
+        try:
+            actor_uid = _UUID(actor_user_id)
+        except ValueError:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=f"Invalid user_id format: {actor_user_id!r}. Must be a valid UUID.",
+            )
     try:
         async with session.begin():
             _require_admin(principal)
@@ -161,5 +198,11 @@ async def export_chain_endpoint(
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
+        )
+    except SQLAlchemyError:
+        _log.exception("export_chain: database error")
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Database connection failed. Please try again.",
         )
     return result
