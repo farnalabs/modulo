@@ -14,8 +14,9 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from modulo.api.dependencies import _get_engine, get_db_session
+from modulo.api.dependencies import _get_engine, get_db_session, get_plan_context
 from modulo.api.routes.sso import router as sso_router
+from modulo.core.feature_flags import DbPlanContext, FeatureFlagRegistry
 from modulo.auth.sso import (
     parse_oidc_providers,
     sign_state,
@@ -85,6 +86,7 @@ def client() -> Generator[TestClient, None, None]:
     _app.dependency_overrides[get_settings] = lambda: _override()
     _app.dependency_overrides[get_db_session] = _override_session
     _app.dependency_overrides[_get_engine] = lambda: MagicMock()
+    _app.dependency_overrides[get_plan_context] = lambda: DbPlanContext(FeatureFlagRegistry(current_tier="team"))
     try:
         yield TestClient(_app)
     finally:
@@ -93,6 +95,12 @@ def client() -> Generator[TestClient, None, None]:
 
 def _override_settings(**kwargs: str | bool) -> None:
     _app.dependency_overrides[get_settings] = lambda: _override(**kwargs)
+    settings = _override(**kwargs)
+    _app.dependency_overrides[get_plan_context] = lambda: DbPlanContext(
+        FeatureFlagRegistry(
+            current_tier="team" if settings.modulo_license_key else "community"
+        )
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -170,7 +178,7 @@ class TestJitProvisioning:
         settings = _override()
         session = AsyncMock(spec=AsyncSession)
 
-        with patch("modulo.auth.sso.get_user_by_email", new_callable=AsyncMock) as mock_get:
+        with patch("modulo.auth.sso.get_account_by_email", new_callable=AsyncMock) as mock_get:
             mock_get.return_value = None
 
             exec_mock = MagicMock()
@@ -438,26 +446,26 @@ class TestJitProvisioningExtended:
         org_id = uuid.uuid4()
 
         with (
-            patch("modulo.auth.sso.get_user_by_email", new_callable=AsyncMock) as mock_get,
+            patch("modulo.auth.sso.get_account_by_email", new_callable=AsyncMock) as mock_get,
             patch("modulo.auth.sso.select") as mock_select,
         ):
             mock_get.return_value = None
             mock_org = MagicMock()
             mock_org.id = org_id
-            exec_mock = MagicMock()
-            exec_mock.scalar_one_or_none.return_value = mock_org
+            exec_mock1 = MagicMock()
+            exec_mock1.scalar_one_or_none.return_value = mock_org
+            exec_mock2 = MagicMock()
+            exec_mock2.scalar_one_or_none.return_value = None
+            session.execute.side_effect = [exec_mock1, exec_mock2]
             mock_select.return_value.order_by.return_value.limit.return_value = "query"
-            session.execute.return_value = exec_mock
 
-            user = await jit_provision_user(session, settings, "new@example.com", "New User", "oidc", "google:456")
+            account, actual_org_id, org_role = await jit_provision_user(session, settings, "new@example.com", "New User", "oidc", "google:456")
 
-            assert user.email == "new@example.com"
-            assert user.display_name == "New User"
-            assert user.auth_provider == "oidc"
-            assert user.sso_subject == "google:456"
-            assert user.org_role == "runner"
-            session.add.assert_called_once_with(user)
-            session.flush.assert_called()
+            assert account.email == "new@example.com"
+            assert account.display_name == "New User"
+            assert account.auth_provider == "oidc"
+            assert account.sso_subject == "google:456"
+            assert org_role == "runner"
 
     async def test_finds_existing_user_and_updates_sso(self) -> None:
         from modulo.auth.sso import jit_provision_user
@@ -469,14 +477,21 @@ class TestJitProvisioningExtended:
         existing.sso_subject = None
         existing.auth_provider = "local"
 
-        with patch("modulo.auth.sso.get_user_by_email", new_callable=AsyncMock) as mock_get:
+        org_id = uuid.uuid4()
+        exec_mock = MagicMock()
+        mock_org = MagicMock()
+        mock_org.id = org_id
+        exec_mock.scalar_one_or_none.return_value = mock_org
+        session.execute.return_value = exec_mock
+
+        with patch("modulo.auth.sso.get_account_by_email", new_callable=AsyncMock) as mock_get:
             mock_get.return_value = existing
 
-            user = await jit_provision_user(session, settings, "existing@example.com", "Existing", "oidc", "google:789")
+            account, _, _ = await jit_provision_user(session, settings, "existing@example.com", "Existing", "oidc", "google:789")
 
-            assert user is existing
-            assert user.sso_subject == "google:789"
-            assert user.auth_provider == "oidc"
+            assert account is existing
+            assert account.sso_subject == "google:789"
+            assert account.auth_provider == "oidc"
 
     async def test_uses_default_org_id(self) -> None:
         from modulo.auth.sso import jit_provision_user
@@ -485,10 +500,14 @@ class TestJitProvisioningExtended:
         session = AsyncMock(spec=AsyncSession)
         org_id = uuid.uuid4()
 
-        with patch("modulo.auth.sso.get_user_by_email", new_callable=AsyncMock) as mock_get:
+        exec_mock = MagicMock()
+        exec_mock.scalar_one_or_none.return_value = None
+        session.execute.return_value = exec_mock
+
+        with patch("modulo.auth.sso.get_account_by_email", new_callable=AsyncMock) as mock_get:
             mock_get.return_value = None
 
-            user = await jit_provision_user(
+            account, actual_org_id, _ = await jit_provision_user(
                 session,
                 settings,
                 "user@example.com",
@@ -498,9 +517,11 @@ class TestJitProvisioningExtended:
                 default_org_id=org_id,
             )
 
-            assert user.organisation_id == org_id
-            # session.execute should NOT have been called to look up org
-            session.execute.assert_not_called()
+            assert actual_org_id == org_id
+            # A new account was created — verify fields
+            assert account.email == "user@example.com"
+            assert account.auth_provider == "oidc"
+            assert account.sso_subject == "sub:1"
 
     async def test_raises_if_no_org_and_no_default(self) -> None:
         from modulo.auth.sso import jit_provision_user
@@ -508,7 +529,7 @@ class TestJitProvisioningExtended:
         settings = _override()
         session = AsyncMock(spec=AsyncSession)
 
-        with patch("modulo.auth.sso.get_user_by_email", new_callable=AsyncMock) as mock_get:
+        with patch("modulo.auth.sso.get_account_by_email", new_callable=AsyncMock) as mock_get:
             mock_get.return_value = None
             exec_mock = MagicMock()
             exec_mock.scalar_one_or_none.return_value = None
@@ -546,7 +567,8 @@ class TestIssueSsoTokens:
         ):
             mock_fam.return_value = token_family
 
-            result = await issue_sso_tokens(user, session, settings)
+            org_id = user.organisation_id
+            result = await issue_sso_tokens(user, org_id, user.org_role, session, settings)
 
             mock_upd.assert_awaited_once_with(session, user.id)
             mock_fam.assert_awaited_once_with(session, user.id, user.organisation_id)
@@ -625,14 +647,22 @@ class TestOidcProcessCallback:
         with (
             patch("modulo.auth.sso._fetch_discovery", new_callable=AsyncMock) as mock_disc,
             patch("modulo.auth.sso._exchange_code", new_callable=AsyncMock) as mock_ex,
+            patch("modulo.auth.sso.verify_id_token", new_callable=AsyncMock) as mock_verify,
             patch("modulo.auth.sso.jit_provision_user", new_callable=AsyncMock) as mock_jit,
             patch("modulo.auth.sso.issue_sso_tokens", new_callable=AsyncMock) as mock_tok,
         ):
             mock_disc.return_value = {
                 "token_endpoint": "https://oauth2.googleapis.com/token",
+                "jwks_uri": "https://oauth2.googleapis.com/certs",
+                "issuer": "https://accounts.google.com",
             }
             mock_ex.return_value = {"id_token": id_token}
-            mock_jit.return_value = MagicMock()
+            mock_verify.return_value = {
+                "email": "user@example.com",
+                "name": "Test User",
+                "sub": "abc123",
+            }
+            mock_jit.return_value = (MagicMock(), uuid.uuid4(), "runner")
             mock_tok.return_value = {
                 "access_token": "at",
                 "refresh_token": "rt",
@@ -789,7 +819,7 @@ class TestSamlProcessResponse:
             patch("modulo.auth.sso.issue_sso_tokens", new_callable=AsyncMock) as mock_tok,
         ):
             mock_fetch.return_value = self.SAMPLE_IDP_METADATA
-            mock_jit.return_value = MagicMock()
+            mock_jit.return_value = (MagicMock(), uuid.uuid4(), "runner")
             mock_tok.return_value = {
                 "access_token": "at-saml",
                 "refresh_token": "rt-saml",
@@ -970,7 +1000,7 @@ class TestSamlRoutesExtended:
     <md:SingleSignOnService Location="https://idp.example.com/sso"/>
   </md:IDPSSODescriptor>
 </md:EntityDescriptor>"""
-            m_jit.return_value = MagicMock()
+            m_jit.return_value = (MagicMock(), uuid.uuid4(), "runner")
             m_tok.return_value = {
                 "access_token": "at-saml",
                 "refresh_token": "rt-saml",
@@ -1040,14 +1070,22 @@ class TestOidcCallbackEndpointExtended:
         with (
             patch("modulo.auth.sso._fetch_discovery", new_callable=AsyncMock) as mock_disc,
             patch("modulo.auth.sso._exchange_code", new_callable=AsyncMock) as mock_ex,
+            patch("modulo.auth.sso.verify_id_token", new_callable=AsyncMock) as mock_verify,
             patch("modulo.auth.sso.jit_provision_user", new_callable=AsyncMock) as mock_jit,
             patch("modulo.auth.sso.issue_sso_tokens", new_callable=AsyncMock) as mock_tok,
         ):
             mock_disc.return_value = {
                 "token_endpoint": "https://oauth2.googleapis.com/token",
+                "jwks_uri": "https://oauth2.googleapis.com/certs",
+                "issuer": "https://accounts.google.com",
             }
             mock_ex.return_value = {"id_token": id_token}
-            mock_jit.return_value = MagicMock()
+            mock_verify.return_value = {
+                "email": "user@example.com",
+                "name": "Test User",
+                "sub": "abc",
+            }
+            mock_jit.return_value = (MagicMock(), uuid.uuid4(), "runner")
             mock_tok.return_value = {
                 "access_token": "at-oidc",
                 "refresh_token": "rt-oidc",

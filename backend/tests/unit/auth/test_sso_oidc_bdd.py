@@ -129,11 +129,21 @@ class TestCallbackNewUser:
         with (
             patch("modulo.auth.sso._fetch_discovery", new_callable=AsyncMock) as mock_disc,
             patch("modulo.auth.sso._exchange_code", new_callable=AsyncMock) as mock_ex,
+            patch("modulo.auth.sso.verify_id_token", new_callable=AsyncMock) as mock_verify,
             patch("modulo.auth.sso.jit_provision_user", new_callable=AsyncMock) as mock_jit,
             patch("modulo.auth.sso.issue_sso_tokens", new_callable=AsyncMock) as mock_tok,
         ):
-            mock_disc.return_value = {"token_endpoint": "https://oauth2.googleapis.com/token"}
+            mock_disc.return_value = {
+                "token_endpoint": "https://oauth2.googleapis.com/token",
+                "jwks_uri": "https://oauth2.googleapis.com/certs",
+                "issuer": "https://accounts.google.com",
+            }
             mock_ex.return_value = {"id_token": id_token}
+            mock_verify.return_value = {
+                "email": "newuser@example.com",
+                "name": "New User",
+                "sub": "abc123",
+            }
 
             user_mock = MagicMock()
             user_mock.email = "newuser@example.com"
@@ -180,11 +190,21 @@ class TestCallbackExistingUser:
         with (
             patch("modulo.auth.sso._fetch_discovery", new_callable=AsyncMock) as mock_disc,
             patch("modulo.auth.sso._exchange_code", new_callable=AsyncMock) as mock_ex,
+            patch("modulo.auth.sso.verify_id_token", new_callable=AsyncMock) as mock_verify,
             patch("modulo.auth.sso.jit_provision_user", new_callable=AsyncMock) as mock_jit,
             patch("modulo.auth.sso.issue_sso_tokens", new_callable=AsyncMock) as mock_tok,
         ):
-            mock_disc.return_value = {"token_endpoint": "https://oauth2.googleapis.com/token"}
+            mock_disc.return_value = {
+                "token_endpoint": "https://oauth2.googleapis.com/token",
+                "jwks_uri": "https://oauth2.googleapis.com/certs",
+                "issuer": "https://accounts.google.com",
+            }
             mock_ex.return_value = {"id_token": id_token}
+            mock_verify.return_value = {
+                "email": "alice@example.com",
+                "name": "Alice",
+                "sub": "existing",
+            }
 
             existing = MagicMock()
             existing.email = "alice@example.com"
@@ -274,7 +294,7 @@ class TestEnterpriseGate:
         resp = client.get("/api/v1/auth/oidc/google/login", follow_redirects=False)
         assert resp.status_code == 402
         body = resp.json()
-        assert "sso" in body.get("detail", {}).get("detail", "").lower()
+        assert "sso" in body.get("detail", "").lower()
 
     def test_oidc_callback_blocked_without_license(self, client: TestClient) -> None:
         _app.dependency_overrides[get_settings] = lambda: _oidc_settings(license_key="")
@@ -286,7 +306,7 @@ class TestEnterpriseGate:
         resp = client.get("/api/v1/auth/oidc/google/callback?code=c&state=s", follow_redirects=False)
         assert resp.status_code == 402
         body = resp.json()
-        assert "sso" in body.get("detail", {}).get("detail", "").lower()
+        assert "sso" in body.get("detail", "").lower()
 
     def test_sso_providers_blocked_without_license(self, client: TestClient) -> None:
         _app.dependency_overrides[get_settings] = lambda: _oidc_settings(license_key="")
