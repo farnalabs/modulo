@@ -94,9 +94,13 @@ Schema Inference (8.16) samples records from a connected tool and uses an LLM to
 - [x] `POST /api/v1/schemas/generate` (line 597) — caught, returns 501
 
 ## Known Gaps
-- **Sample cap mismatch:** Code hardcodes 50 max samples; PRD specifies default 200
+- **Sample cap mismatch:** Code hardcodes 50 max samples; PRD specifies default 200.
+  - **Compounding issue:** `SchemaSampleQuery.limit` max is 100 while inference caps at 50. Users can request 100 samples but only 50 reach the LLM — wasted sampling work.
+  - **Misleading API response:** `SchemaInferResponse.sample_count` reports total sampled records, not the count actually sent to the LLM.
 - **No enum/rare-field logic:** Inference prompt doesn't instruct for enum detection or rare-field flagging (8.16)
-- **No `abstract_name` inference:** Required for community library compatibility browsing (8.16 step 4)
+- **No `abstract_name` inference:** `abstract_name` field exists on `SchemaCreate`/`SchemaUpdate`/`SchemaResponse` models (CRUD layer supports it), but `/infer` endpoint (`SchemaInferResponse`) does NOT include `abstract_name`. `suggestion_name` is hardcoded `"Inferred from {ci.name}"`, not AI-inferred.
 - **No SandboxedEnvironment:** LLM prompt doesn't isolate untrusted record values per 8.16 security requirement
 - **No data lifecycle enforcement:** No mechanism to ensure sampled data is not persisted after inference
-- **`depends-on` uses correct feature ID** (`feat-core-schema-inference`, resolved). Stale note removed — refs now use `feat-*` pattern. 
+- **`ch.initialise()` not wrapped in try/except** (line 512): `ConnectorHub.initialise()` can fail on Fernet key mismatch or missing connector credentials. Unlike `determination.py` (which catches `ConnectorDecryptError`), the `/infer` route would propagate an unhandled 500.
+- **`mh.initialise()` not wrapped** (lines 533, 621): ModelBackendHub decryption failure → unhandled 500.
+- **`mh.get()` not wrapped** (lines 535, 623): `StopIteration` possible if `backend_ids` empty. 
