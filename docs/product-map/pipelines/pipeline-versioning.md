@@ -11,7 +11,7 @@ code:
   - backend/src/modulo/db/crud/pipeline_snapshot.py
   - backend/src/modulo/db/crud/pipeline_snapshot_versioning.py
   - backend/src/modulo/db/models/pipeline_snapshot.py
-depends-on: [feat-pipelines-pipeline-diff-rollback]
+depends-on: []
 status: partial
 ---
 
@@ -91,12 +91,15 @@ status: partial
 - [x] Snapshot creation fails if a referenced agent, connector, schema, or model backend is missing
 - [x] Concurrent snapshot creation for the same pipeline is serialised via row lock
 - [x] Missing or null environment_profile_id is handled (field is nullable)
+- [ ] All snapshot CRUD routes (list, detail, tag, delete, rollback, diff) return 501 if pipeline_snapshots table does not exist
+
+## Error Handling
+
 - [ ] Snapshot list returns 501 if pipeline_snapshots table does not exist
 - [ ] Snapshot detail returns 501 if pipeline_snapshots table does not exist
-- [ ] Snapshot tag returns 501 if pipeline_snapshots table does not exist
-- [ ] Snapshot delete returns 501 if pipeline_snapshots table does not exist
-- [ ] Snapshot rollback returns 501 if pipeline_snapshots table does not exist
-- [ ] Snapshot diff returns 501 if pipeline_snapshots table does not exist
+- [ ] Snapshot CRUD (tag, delete, rollback, diff) returns 501 if table does not exist
+- [ ] Auth 401/403 for snapshot endpoints
+- [ ] 422 validation for snapshot input (pagination bounds, invalid UUID)
 
 ## QA History
 

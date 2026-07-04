@@ -14,13 +14,11 @@ unit-tests:
   - backend/tests/unit/pipelines/test_snapshot_versioning.py
   - backend/tests/unit/pipelines/test_snapshot_backward_compat.py
   - backend/tests/unit/pipelines/test_snapshot_crud.py
-depends-on: []
+depends-on: [feat-pipelines-pipeline-versioning]
 status: partial
 ---
 
 # Pipeline Snapshot Diff & Rollback
-
-Discovered from 1 completed delivery tasks.
 
 ## Behaviours
 
@@ -45,10 +43,10 @@ Discovered from 1 completed delivery tasks.
 
 ### Auth & Permissions
 
-- [x] Unauthenticated requests return 401 (UNTESTED)
+- [ ] Unauthenticated requests return 401
 - [x] Delete snapshot requires admin or owner role — operator or runner gets 403
-- [x] Snapshot access is scoped to the authenticated org via RLS (UNTESTED)
-- [x] Cross-org snapshot access returns 404 (not 403) to avoid leaking existence (UNTESTED)
+- [ ] Snapshot access is scoped to the authenticated org via RLS
+- [ ] Cross-org snapshot access returns 404 (not 403) to avoid leaking existence
 
 ### State & Lifecycle
 
@@ -72,9 +70,9 @@ Discovered from 1 completed delivery tasks.
 
 ### Concurrency
 
-- [x] FOR UPDATE lock on pipeline serialises concurrent snapshot creation (UNTESTED)
-- [x] Rollback acquires FOR UPDATE lock, preventing concurrent pipeline edits during restore (UNTESTED)
-- [x] Snapshot version allocation is atomic within the transaction (UNTESTED)
+- [ ] FOR UPDATE lock on pipeline serialises concurrent snapshot creation
+- [ ] Rollback acquires FOR UPDATE lock, preventing concurrent pipeline edits during restore
+- [ ] Snapshot version allocation is atomic within the transaction
 
 ### Error Handling
 
@@ -91,6 +89,13 @@ Discovered from 1 completed delivery tasks.
 - [x] Old-format snapshots with 'role' field instead of 'node_type' compile and execute
 - [x] Old-format snapshots with unexpected fields are tolerated (ignored)
 - [x] Snapshot diff handles node_type appearing or changing between old and new format
+
+## Error Handling
+
+- [ ] Snapshot list/detail/tag/delete/rollback/diff endpoints catch ProgrammingError → 501
+- [ ] Auth 401/403 for snapshot endpoints
+- [ ] 422 for invalid UUID, page parameter bounds
+- [ ] Cross-org snapshot access returns 404 (not 403)
 
 ## Known Gaps
 
