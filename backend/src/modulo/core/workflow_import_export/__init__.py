@@ -29,6 +29,7 @@ from modulo.db.models.model_backend import ModelBackend
 from modulo.db.models.pipeline import Pipeline
 from modulo.db.models.pipeline_edge import PipelineEdge
 from modulo.db.models.schema import Schema, SchemaVersion
+from modulo.db.models.team import Team
 
 logger = logging.getLogger(__name__)
 
@@ -47,16 +48,20 @@ async def _get_latest_published_version(
     session: AsyncSession,
     schema_id: uuid.UUID,
 ) -> SchemaVersion | None:
-    sv_result = await session.execute(
-        select(SchemaVersion)
-        .where(
-            SchemaVersion.schema_id == schema_id,
-            SchemaVersion.published.is_(True),
+    try:
+        sv_result = await session.execute(
+            select(SchemaVersion)
+            .where(
+                SchemaVersion.schema_id == schema_id,
+                SchemaVersion.published.is_(True),
+            )
+            .order_by(SchemaVersion.version_number.desc())
+            .limit(1)
         )
-        .order_by(SchemaVersion.version_number.desc())
-        .limit(1)
-    )
-    return sv_result.scalar_one_or_none()
+        return sv_result.scalar_one_or_none()
+    except SQLAlchemyError:
+        logger.warning("Failed to fetch latest published version for schema %s", schema_id)
+        raise
 
 
 async def _get_existing_names(
@@ -102,118 +107,122 @@ async def export_pipeline_bundle(
 
     Strips owner_team_id and other org-private fields.
     """
-    stmt = select(Pipeline).where(Pipeline.id == pipeline_id)
-    pipeline = (await session.execute(stmt)).scalar_one_or_none()
-    if pipeline is None:
-        raise LookupError(f"Pipeline {pipeline_id} not found")
+    try:
+        stmt = select(Pipeline).where(Pipeline.id == pipeline_id)
+        pipeline = (await session.execute(stmt)).scalar_one_or_none()
+        if pipeline is None:
+            raise LookupError(f"Pipeline {pipeline_id} not found")
 
-    agent_ids: set[uuid.UUID] = set()
-    schema_ids: set[uuid.UUID] = set()
-    model_backend_ids: set[uuid.UUID] = set()
+        agent_ids: set[uuid.UUID] = set()
+        schema_ids: set[uuid.UUID] = set()
+        model_backend_ids: set[uuid.UUID] = set()
 
-    if pipeline.graph_nodes_json:
-        for node in pipeline.graph_nodes_json:
-            agent_id_str = node.get("agent_id")
-            if agent_id_str:
-                try:
-                    agent_id = uuid.UUID(agent_id_str)
-                except (ValueError, AttributeError):
-                    logger.warning("Skipping node with invalid agent_id: %s", agent_id_str)
-                    continue
-                agent_ids.add(agent_id)
+        if pipeline.graph_nodes_json:
+            for node in pipeline.graph_nodes_json:
+                agent_id_str = node.get("agent_id")
+                if agent_id_str:
+                    try:
+                        agent_id = uuid.UUID(agent_id_str)
+                    except (ValueError, AttributeError):
+                        logger.warning("Skipping node with invalid agent_id: %s", agent_id_str)
+                        continue
+                    agent_ids.add(agent_id)
 
-            schema_id_str = node.get("output_schema_id")
-            if schema_id_str:
-                try:
-                    schema_ids.add(uuid.UUID(schema_id_str))
-                except (ValueError, AttributeError):
-                    logger.warning("Skipping node with invalid output_schema_id: %s", schema_id_str)
+                schema_id_str = node.get("output_schema_id")
+                if schema_id_str:
+                    try:
+                        schema_ids.add(uuid.UUID(schema_id_str))
+                    except (ValueError, AttributeError):
+                        logger.warning("Skipping node with invalid output_schema_id: %s", schema_id_str)
 
-    agents_list: list[dict[str, Any]] = []
-    if agent_ids:
-        agent_result = await session.execute(select(Agent).where(Agent.id.in_(agent_ids)))
-        agents = list(agent_result.scalars())
-        for a in agents:
-            agents_list.append(
+        agents_list: list[dict[str, Any]] = []
+        if agent_ids:
+            agent_result = await session.execute(select(Agent).where(Agent.id.in_(agent_ids)))
+            agents = list(agent_result.scalars())
+            for a in agents:
+                agents_list.append(
+                    {
+                        "id": str(a.id),
+                        "name": a.name,
+                        "description": a.description,
+                        "input_schema_id": str(a.input_schema_id) if a.input_schema_id else None,
+                        "input_schema_version": a.input_schema_version or DEFAULT_SCHEMA_VERSION,
+                        "output_schema_id": str(a.output_schema_id) if a.output_schema_id else None,
+                        "output_schema_version": a.output_schema_version or DEFAULT_SCHEMA_VERSION,
+                        "prompt_template": a.prompt_template,
+                        "model_backend_id": str(a.model_backend_id) if a.model_backend_id else None,
+                        "connector_type_refs": list(a.connector_type_refs or []),
+                        "evals": list(a.evals or []),
+                        "retry_policy": dict(a.retry_policy or {}),
+                        "token_budget": a.token_budget,
+                    }
+                )
+                schema_ids.add(a.input_schema_id)
+                schema_ids.add(a.output_schema_id)
+                if a.model_backend_id:
+                    model_backend_ids.add(a.model_backend_id)
+
+        schemas_list: list[dict[str, Any]] = []
+        if schema_ids:
+            schema_result = await session.execute(select(Schema).where(Schema.id.in_(schema_ids)))
+            schemas = list(schema_result.scalars())
+            for s in schemas:
+                latest_version = await _get_latest_published_version(session, s.id)
+                schemas_list.append(
+                    {
+                        "id": str(s.id),
+                        "name": s.name,
+                        "description": s.description,
+                        "abstract_name": s.abstract_name,
+                        "latest_version": latest_version.version if latest_version else None,
+                        "definition_json": latest_version.definition_json if latest_version else None,
+                    }
+                )
+
+        model_backends_list: list[dict[str, Any]] = []
+        if model_backend_ids:
+            mb_result = await session.execute(select(ModelBackend).where(ModelBackend.id.in_(model_backend_ids)))
+            backends = list(mb_result.scalars())
+            model_backends_list = [
                 {
-                    "id": str(a.id),
-                    "name": a.name,
-                    "description": a.description,
-                    "input_schema_id": str(a.input_schema_id) if a.input_schema_id else None,
-                    "input_schema_version": a.input_schema_version or DEFAULT_SCHEMA_VERSION,
-                    "output_schema_id": str(a.output_schema_id) if a.output_schema_id else None,
-                    "output_schema_version": a.output_schema_version or DEFAULT_SCHEMA_VERSION,
-                    "prompt_template": a.prompt_template,
-                    "model_backend_id": str(a.model_backend_id) if a.model_backend_id else None,
-                    "connector_type_refs": list(a.connector_type_refs or []),
-                    "evals": list(a.evals or []),
-                    "retry_policy": dict(a.retry_policy or {}),
-                    "token_budget": a.token_budget,
+                    "id": str(b.id),
+                    "name": b.name,
+                    "provider": b.provider,
+                    "model_id": b.model_id,
                 }
-            )
-            schema_ids.add(a.input_schema_id)
-            schema_ids.add(a.output_schema_id)
-            if a.model_backend_id:
-                model_backend_ids.add(a.model_backend_id)
+                for b in backends
+            ]
 
-    schemas_list: list[dict[str, Any]] = []
-    if schema_ids:
-        schema_result = await session.execute(select(Schema).where(Schema.id.in_(schema_ids)))
-        schemas = list(schema_result.scalars())
-        for s in schemas:
-            latest_version = await _get_latest_published_version(session, s.id)
-            schemas_list.append(
-                {
-                    "id": str(s.id),
-                    "name": s.name,
-                    "description": s.description,
-                    "abstract_name": s.abstract_name,
-                    "latest_version": latest_version.version if latest_version else None,
-                    "definition_json": latest_version.definition_json if latest_version else None,
-                }
-            )
-
-    model_backends_list: list[dict[str, Any]] = []
-    if model_backend_ids:
-        mb_result = await session.execute(select(ModelBackend).where(ModelBackend.id.in_(model_backend_ids)))
-        backends = list(mb_result.scalars())
-        model_backends_list = [
+        # Edges
+        edge_result = await session.execute(select(PipelineEdge).where(PipelineEdge.pipeline_id == pipeline_id))
+        edges = list(edge_result.scalars())
+        edges_list = [
             {
-                "id": str(b.id),
-                "name": b.name,
-                "provider": b.provider,
-                "model_id": b.model_id,
+                "id": str(e.id),
+                "source_node_id": str(e.source_node_id),
+                "target_node_id": str(e.target_node_id),
+                "edge_type": e.edge_type,
             }
-            for b in backends
+            for e in edges
         ]
 
-    # Edges
-    edge_result = await session.execute(select(PipelineEdge).where(PipelineEdge.pipeline_id == pipeline_id))
-    edges = list(edge_result.scalars())
-    edges_list = [
-        {
-            "id": str(e.id),
-            "source_node_id": str(e.source_node_id),
-            "target_node_id": str(e.target_node_id),
-            "edge_type": e.edge_type,
+        bundle: dict[str, Any] = {
+            "format_version": BUNDLE_FORMAT_VERSION,
+            "pipeline": {
+                "name": pipeline.name,
+                "description": pipeline.description,
+                "graph_nodes_json": pipeline.graph_nodes_json or [],
+                "run_context_defaults": dict(pipeline.run_context_defaults or {}),
+                "node_timeout_seconds": pipeline.node_timeout_seconds,
+            },
+            "agents": agents_list,
+            "schemas": schemas_list,
+            "model_backends": model_backends_list,
+            "edges": edges_list,
         }
-        for e in edges
-    ]
-
-    bundle: dict[str, Any] = {
-        "format_version": BUNDLE_FORMAT_VERSION,
-        "pipeline": {
-            "name": pipeline.name,
-            "description": pipeline.description,
-            "graph_nodes_json": pipeline.graph_nodes_json or [],
-            "run_context_defaults": dict(pipeline.run_context_defaults or {}),
-            "node_timeout_seconds": pipeline.node_timeout_seconds,
-        },
-        "agents": agents_list,
-        "schemas": schemas_list,
-        "model_backends": model_backends_list,
-        "edges": edges_list,
-    }
+    except SQLAlchemyError:
+        logger.warning("export_pipeline_bundle: SQLAlchemyError while building bundle for pipeline %s", pipeline_id)
+        raise
 
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
@@ -463,6 +472,13 @@ async def materialize_import(
             "This bundle may have been created by a different version of Modulo."
         )
         raise ValueError(msg)
+
+    if owner_team_id is not None:
+        team_exists = await session.execute(
+            select(Team).where(Team.id == owner_team_id, Team.organisation_id == org_id)
+        )
+        if team_exists.scalar_one_or_none() is None:
+            raise ValueError(f"Team {owner_team_id} not found in this organisation.")
 
     mb_overrides: dict[str, str] = model_backend_overrides or {}
     warnings = warnings or []

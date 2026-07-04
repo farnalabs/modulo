@@ -14,6 +14,7 @@ code:
   - frontend/src/views/LibraryPipelineWizard.vue
 unit-tests:
   - backend/tests/unit/library_service/test_workflow_import_export.py
+  - backend/tests/unit/library_service/test_workflow_import_export_resilience.py
 depends-on: []
 status: partial
 ---
@@ -112,7 +113,7 @@ import it into another organisation with schema/connector/model backend binding.
 - [x] Uploading non-ZIP file to upload-zip returns 400
 - [x] Duplicate agent names within same bundle: rejected pre-import
 - [x] Capability mismatch on connector: hard block with error
-- [ ] Non-existent `owner_team_id` on import: validation error
+- [x] Non-existent `owner_team_id` on import: validation error
 - [x] Missing `bundle.json` manifest in ZIP: `LookupError`
 
 ### Edge Cases
@@ -125,6 +126,27 @@ import it into another organisation with schema/connector/model backend binding.
   responsibility); `author/name` in v2 registry
 - [x] `owner_team_id` stripped on export (org-internal reference, meaningless outside source org)
 - [ ] `visibility` defaults to `org` on import regardless of source value
+
+### Error Handling (added in cross-cutting QA)
+
+- [x] confirm_import endpoint catches ProgrammingError → 501
+- [x] confirm_import endpoint catches SQLAlchemyError → 503
+- [x] _analyse_bundle catches ProgrammingError → 501
+- [x] _analyse_bundle catches SQLAlchemyError → 503
+- [x] materialize_import validates owner_team_id exists before creating entities
+- [x] export_pipeline uses single transaction for pipeline lookup and bundle building
+- [x] _get_latest_published_version catches SQLAlchemyError and logs warning
+- [x] export_pipeline_bundle catches SQLAlchemyError and logs warning
+- [ ] Non-existent owner_team_id on import: 400 validation error (was `[ ]` in original)
+
+### Additional Edge Cases (added in cross-cutting QA)
+
+- [x] Bundle format version mismatch raises ValueError at materialize step
+- [x] Oversized bundle (>100MB in core function, >50MB at API boundary) rejected
+- [x] Edge with missing source/target node IDs raises ValueError → 500
+- [x] Export pipeline race condition fixed (single transaction)
+- [x] Concurrency: non-existent owner_team_id produces validation error, not cryptic FK violation
+- [ ] Import with already-deleted team produces clear validation error
 
 ## Known Gaps
 
@@ -143,5 +165,6 @@ import it into another organisation with schema/connector/model backend binding.
 - No BDD scenarios covering the edge/export-strip interaction for bundles with gates
 - No BDD scenarios for the ownership picker UI presentation before confirm
 - No BDD scenarios for workflow update / re-import flow
-- Non-existent `owner_team_id` on import validation error not verified in code
 - `visibility` defaults to `org` on import regardless of source value not verified in code
+- confirm_import endpoint had `account_id` parameter name bug (fatal TypeError on every call — fixed in this iteration)
+- No BDD scenarios for the import confirm endpoint covering error paths
