@@ -6,7 +6,7 @@ in any response — only a boolean `has_credentials` field indicates presence.
 
 import uuid
 from datetime import datetime
-from typing import Any
+from typing import Any, Literal
 
 from cryptography.fernet import Fernet
 from fastapi import APIRouter, Depends, HTTPException, Query, status
@@ -44,6 +44,7 @@ class ConnectorCreate(BaseModel):
     config_json: dict[str, Any] = {}
     allowed_operations: list[str] = []
     visibility: str = Field(default="org")
+    tier: Literal["native", "preview", "in_dev"] = Field(default="native")
 
 
 class ConnectorUpdate(BaseModel):
@@ -52,6 +53,7 @@ class ConnectorUpdate(BaseModel):
     config_json: dict[str, Any] | None = None
     allowed_operations: list[str] | None = None
     visibility: str | None = None
+    tier: Literal["native", "preview", "in_dev"] | None = None
 
 
 class ConnectorResponse(BaseModel):
@@ -64,6 +66,7 @@ class ConnectorResponse(BaseModel):
     allowed_operations: list[str]
     status: str
     visibility: str
+    tier: str
     created_at: datetime
     updated_at: datetime
 
@@ -90,6 +93,7 @@ def _to_response(ci: Any) -> ConnectorResponse:
         allowed_operations=ci.allowed_operations,
         status=ci.status,
         visibility=ci.visibility,
+        tier=ci.tier,
         created_at=ci.created_at,
         updated_at=ci.updated_at,
     )
@@ -157,6 +161,7 @@ async def create_connector_endpoint(
             config_json=body.config_json,
             allowed_operations=body.allowed_operations,
             visibility=body.visibility,
+            tier=body.tier,
         )
     return _to_response(ci)
 

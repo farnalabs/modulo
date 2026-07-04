@@ -57,6 +57,10 @@ class LibraryPrimitive(OrgScoped):
             "average_rating IS NULL OR average_rating BETWEEN 1 AND 5",
             name="ck_library_primitives_rating",
         ),
+        CheckConstraint(
+            "tier IN ('native', 'preview', 'in_dev')",
+            name="ck_library_primitives_tier",
+        ),
         UniqueConstraint("organisation_id", "source", "slug", "version", name="uq_library_primitive_version"),
     )
 
@@ -94,3 +98,4 @@ class LibraryPrimitive(OrgScoped):
         ForeignKey("library_primitives.id", ondelete="SET NULL"),
         nullable=True,
     )
+    tier: Mapped[str] = mapped_column(String(20), nullable=False, server_default="native")

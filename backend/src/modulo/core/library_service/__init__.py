@@ -94,6 +94,7 @@ def _make_modulo(
     p.updated_at = _EPOCH
     p.auto_update = True
     p.contribution_status = "published" if primitive_type == "test_fixture" else None
+    p.tier = "native"
     return p
 
 

@@ -467,6 +467,7 @@ class TestConnectorEndpointSchemas:
         connector.allowed_operations = []
         connector.status = "connected"
         connector.visibility = "org"
+        connector.tier = "native"
         connector.created_at = _NOW
         connector.updated_at = _NOW
         connector.description = None

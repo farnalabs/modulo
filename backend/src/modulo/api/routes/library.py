@@ -5,7 +5,7 @@ import json
 import logging
 import uuid
 from datetime import datetime
-from typing import Any
+from typing import Any, Literal
 
 from fastapi import APIRouter, Depends, File, HTTPException, Query, Response, UploadFile, status
 from pydantic import BaseModel, Field, model_validator
@@ -84,6 +84,7 @@ class LibraryPrimitiveResponse(BaseModel):
     ed25519_signature: str | None
     verified: bool | None
     trust_tier: str | None = None
+    tier: str = "native"
     download_count: int | None
     average_rating: float | None
     review_count: int | None
@@ -128,6 +129,7 @@ class LibraryPrimitiveCreate(BaseModel):
     content_json: dict[str, Any]
     owner_team_id: uuid.UUID | None = None
     visibility: str = Field(default="org", pattern=r"^(org|team)$")
+    tier: Literal["native", "preview", "in_dev"] = Field(default="native")
 
     @model_validator(mode="after")
     @classmethod
@@ -145,6 +147,7 @@ class LibraryPrimitiveUpdate(BaseModel):
     owner_team_id: uuid.UUID | None = None
     visibility: str | None = Field(default=None, pattern=r"^(org|team)$")
     auto_update: bool | None = None
+    tier: Literal["native", "preview", "in_dev"] | None = None
 
     @model_validator(mode="after")
     @classmethod
@@ -386,6 +389,7 @@ async def create_library_primitive_endpoint(
                 owner_team_id=body.owner_team_id,
                 visibility=body.visibility,
                 account_id=principal.account_id,
+                tier=body.tier,
             )
     except ProgrammingError:
         raise HTTPException(

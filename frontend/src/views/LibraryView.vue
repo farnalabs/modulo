@@ -45,15 +45,16 @@
         {{ error }}
       </div>
 
-      <div v-else-if="primitives.length === 0" class="text-center py-12 text-muted-foreground">
+      <div v-else-if="nativePrimitives.length === 0 && previewPrimitives.length === 0" class="text-center py-12 text-muted-foreground">
         No primitives found.
       </div>
 
-      <div v-else class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+      <div v-else-if="nativePrimitives.length > 0" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
         <div
-          v-for="prim in primitives"
+          v-for="prim in nativePrimitives"
           :key="prim.id"
           class="card card-hover p-5"
+          :data-testid="`library-item-${prim.id}`"
         >
           <div class="flex items-start justify-between mb-3">
             <div>
@@ -122,6 +123,52 @@
         </div>
       </div>
 
+      <details v-if="previewPrimitives.length > 0" class="rounded-lg border bg-card" data-testid="library-preview-section">
+        <summary class="cursor-pointer px-4 py-3 text-sm font-medium text-muted-foreground hover:text-foreground">
+          Preview integrations ({{ previewPrimitives.length }})
+        </summary>
+        <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 border-t p-4">
+          <div
+            v-for="prim in previewPrimitives"
+            :key="prim.id"
+            class="card card-hover p-5"
+            :data-testid="`library-item-${prim.id}`"
+          >
+            <div class="flex items-start justify-between mb-3">
+              <div>
+                <span :class="typeBadgeClass(prim.primitive_type)">
+                  {{ prim.primitive_type }}
+                </span>
+                <h3 class="mt-2 text-base font-medium text-foreground">{{ prim.name }}</h3>
+              </div>
+              <span class="badge badge-context-amber text-xs">Preview</span>
+            </div>
+
+            <p v-if="prim.description" class="text-sm text-muted-foreground mb-4 line-clamp-2">
+              {{ prim.description }}
+            </p>
+
+            <div class="flex items-center gap-2">
+              <button
+                v-if="prim.primitive_type === 'pipeline_template' || prim.primitive_type === 'composite'"
+                class="flex-1 px-3 py-2 bg-primary text-primary-foreground text-sm font-medium rounded-lg border border-primary/30 hover:border-primary/60 hover:brightness-110 transition-all"
+                @click="createPipeline(prim)"
+                data-testid="library-create-pipeline"
+              >
+                Create Pipeline
+              </button>
+              <button
+                class="flex-1 px-3 py-2 border border-border bg-background text-foreground text-sm font-medium rounded-lg hover:bg-accent transition-colors"
+                @click="viewPrimitive(prim)"
+                data-testid="library-view-details"
+              >
+                View Details
+              </button>
+            </div>
+          </div>
+        </div>
+      </details>
+
       <div v-if="total > pageSize" class="flex justify-center items-center gap-2 mt-8">
         <button
           :disabled="page <= 1"
@@ -148,7 +195,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted, onBeforeUnmount } from 'vue'
+import { ref, computed, onMounted, onBeforeUnmount } from 'vue'
 import { useRouter } from 'vue-router'
 import { useApi } from '../composables/useApi'
 
@@ -168,6 +215,7 @@ interface LibraryPrimitive {
   visibility: string
   forked_from: string | null
   auto_update: boolean
+  tier?: 'native' | 'preview' | 'in_dev'
   created_at: string
   updated_at: string
 }
@@ -190,6 +238,11 @@ const typeFilter = ref('')
 const page = ref(1)
 const pageSize = ref(12)
 const total = ref(0)
+
+// In-dev primitives are hidden entirely; native items stay in the primary
+// grid; preview items are segregated into a collapsed disclosure section.
+const nativePrimitives = computed(() => primitives.value.filter(p => (p.tier ?? 'native') !== 'preview' && (p.tier ?? 'native') !== 'in_dev'))
+const previewPrimitives = computed(() => primitives.value.filter(p => p.tier === 'preview'))
 
 async function loadPrimitives() {
   loading.value = true

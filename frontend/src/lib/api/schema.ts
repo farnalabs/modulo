@@ -3293,6 +3293,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/libraries/ping": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Ping */
+        get: operations["ping_api_v1_libraries_ping_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/libraries/{primitive_id}": {
         parameters: {
             query?: never;
@@ -3585,6 +3602,41 @@ export interface paths {
         post?: never;
         /** Delete User Skill */
         delete: operations["delete_user_skill_api_v1_me_remy_skills__skill_id__delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/me/remy/context-sources": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get User Context Sources */
+        get: operations["get_user_context_sources_api_v1_me_remy_context_sources_get"];
+        put?: never;
+        post?: never;
+        /** Reset User Context Sources */
+        delete: operations["reset_user_context_sources_api_v1_me_remy_context_sources_delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/me/remy/context-sources/{source_key}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /** Set User Context Source */
+        put: operations["set_user_context_source_api_v1_me_remy_context_sources__source_key__put"];
+        post?: never;
+        delete?: never;
         options?: never;
         head?: never;
         patch?: never;
@@ -4254,6 +4306,59 @@ export interface paths {
         post?: never;
         /** Delete Org Skill */
         delete: operations["delete_org_skill_api_v1_admin_remy_skills__skill_id__delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/remy/context-sources": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Org Context Sources */
+        get: operations["get_org_context_sources_api_v1_admin_remy_context_sources_get"];
+        put?: never;
+        post?: never;
+        /** Reset Org Context Sources */
+        delete: operations["reset_org_context_sources_api_v1_admin_remy_context_sources_delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/remy/context-sources/{source_key}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /** Set Org Context Source */
+        put: operations["set_org_context_source_api_v1_admin_remy_context_sources__source_key__put"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/monitor-config": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Monitor Config */
+        get: operations["get_monitor_config_api_v1_admin_monitor_config_get"];
+        /** Set Monitor Config */
+        put: operations["set_monitor_config_api_v1_admin_monitor_config_put"];
+        post?: never;
+        delete?: never;
         options?: never;
         head?: never;
         patch?: never;
@@ -5122,6 +5227,34 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/errors/ingest/public": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Ingest Errors Public
+         * @description Unauthenticated error ingest endpoint for frontend events.
+         *
+         *     * No HMAC signing required.
+         *     * Only accepts events with ``source == 'frontend'`` and ``level != 'critical'``.
+         *     * Rate-limited to 1 request per 60 seconds per IP.
+         *     * Daily cap of 100 events per IP.
+         *     * Max request body size 10,000 bytes.
+         *     * Events are stored as orphaned records (no organisation scoping).
+         *     * A future cleanup job will prune events older than 48 hours (TTL).
+         */
+        post: operations["ingest_errors_public_api_v1_errors_ingest_public_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/errors": {
         parameters: {
             query?: never;
@@ -5609,6 +5742,8 @@ export interface components {
              * @default false
              */
             prompt_always_visible: boolean;
+            /** Required Environment Capabilities */
+            required_environment_capabilities?: string[];
         };
         /** AgentListResponse */
         AgentListResponse: {
@@ -5684,6 +5819,8 @@ export interface components {
             library_id: string | null;
             /** Prompt Always Visible */
             prompt_always_visible: boolean;
+            /** Required Environment Capabilities */
+            required_environment_capabilities: string[];
             /**
              * Created By
              * Format: uuid
@@ -5730,6 +5867,8 @@ export interface components {
             max_input_length?: number | null;
             /** Prompt Always Visible */
             prompt_always_visible?: boolean | null;
+            /** Required Environment Capabilities */
+            required_environment_capabilities?: string[] | null;
         };
         /** AnalyseBundleRequest */
         AnalyseBundleRequest: {
@@ -6156,6 +6295,12 @@ export interface components {
              * @default org
              */
             visibility: string;
+            /**
+             * Tier
+             * @default native
+             * @enum {string}
+             */
+            tier: "native" | "preview" | "in_dev";
         };
         /** ConnectorListResponse */
         ConnectorListResponse: {
@@ -6203,6 +6348,8 @@ export interface components {
             status: string;
             /** Visibility */
             visibility: string;
+            /** Tier */
+            tier: string;
             /**
              * Created At
              * Format: date-time
@@ -6228,6 +6375,13 @@ export interface components {
             allowed_operations?: string[] | null;
             /** Visibility */
             visibility?: string | null;
+            /** Tier */
+            tier?: ("native" | "preview" | "in_dev") | null;
+        };
+        /** ContextSourceModeUpdate */
+        ContextSourceModeUpdate: {
+            /** Source Mode */
+            source_mode: string;
         };
         /** ContributeFixtureRequest */
         ContributeFixtureRequest: {
@@ -7405,6 +7559,12 @@ export interface components {
              * @default org
              */
             visibility: string;
+            /**
+             * Tier
+             * @default native
+             * @enum {string}
+             */
+            tier: "native" | "preview" | "in_dev";
         };
         /** LibraryPrimitiveListResponse */
         LibraryPrimitiveListResponse: {
@@ -7468,6 +7628,11 @@ export interface components {
             verified: boolean | null;
             /** Trust Tier */
             trust_tier?: string | null;
+            /**
+             * Tier
+             * @default native
+             */
+            tier: string;
             /** Download Count */
             download_count: number | null;
             /** Average Rating */
@@ -7514,6 +7679,8 @@ export interface components {
             visibility?: string | null;
             /** Auto Update */
             auto_update?: boolean | null;
+            /** Tier */
+            tier?: ("native" | "preview" | "in_dev") | null;
         };
         /** LicenseInfo */
         LicenseInfo: {
@@ -7676,6 +7843,12 @@ export interface components {
             visibility: string;
             /** Fallback Backend Ids */
             fallback_backend_ids?: string[] | null;
+            /**
+             * Tier
+             * @default native
+             * @enum {string}
+             */
+            tier: "native" | "preview" | "in_dev";
         };
         /** ModelBackendListResponse */
         ModelBackendListResponse: {
@@ -7716,6 +7889,8 @@ export interface components {
             };
             /** Visibility */
             visibility: string;
+            /** Tier */
+            tier: string;
             /** Fallback Backend Ids */
             fallback_backend_ids?: string[] | null;
             /**
@@ -7752,6 +7927,42 @@ export interface components {
             visibility?: string | null;
             /** Fallback Backend Ids */
             fallback_backend_ids?: string[] | null;
+            /** Tier */
+            tier?: ("native" | "preview" | "in_dev") | null;
+        };
+        /** MonitorConfigResponse */
+        MonitorConfigResponse: {
+            /** Backends */
+            backends: string[];
+            /** Sentry */
+            sentry?: {
+                [key: string]: unknown;
+            } | null;
+            /** Datadog Rum */
+            datadog_rum?: {
+                [key: string]: unknown;
+            } | null;
+            /** Grafana Faro */
+            grafana_faro?: {
+                [key: string]: unknown;
+            } | null;
+        };
+        /** MonitorConfigUpdate */
+        MonitorConfigUpdate: {
+            /** Backends */
+            backends: string[];
+            /** Sentry */
+            sentry?: {
+                [key: string]: unknown;
+            } | null;
+            /** Datadog Rum */
+            datadog_rum?: {
+                [key: string]: unknown;
+            } | null;
+            /** Grafana Faro */
+            grafana_faro?: {
+                [key: string]: unknown;
+            } | null;
         };
         /** NodeCategoryCreate */
         NodeCategoryCreate: {
@@ -18423,6 +18634,26 @@ export interface operations {
             };
         };
     };
+    ping_api_v1_libraries_ping_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+        };
+    };
     get_library_primitive_endpoint_api_v1_libraries__primitive_id__get: {
         parameters: {
             query?: never;
@@ -19134,6 +19365,87 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_user_context_sources_api_v1_me_remy_context_sources_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: string;
+                    };
+                };
+            };
+        };
+    };
+    reset_user_context_sources_api_v1_me_remy_context_sources_delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: string;
+                    };
+                };
+            };
+        };
+    };
+    set_user_context_source_api_v1_me_remy_context_sources__source_key__put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                source_key: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ContextSourceModeUpdate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: string;
+                    };
+                };
             };
             /** @description Validation Error */
             422: {
@@ -20564,6 +20876,140 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_org_context_sources_api_v1_admin_remy_context_sources_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+        };
+    };
+    reset_org_context_sources_api_v1_admin_remy_context_sources_delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: string;
+                    };
+                };
+            };
+        };
+    };
+    set_org_context_source_api_v1_admin_remy_context_sources__source_key__put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                source_key: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ContextSourceModeUpdate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: string;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_monitor_config_api_v1_admin_monitor_config_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MonitorConfigResponse"];
+                };
+            };
+        };
+    };
+    set_monitor_config_api_v1_admin_monitor_config_put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["MonitorConfigUpdate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MonitorConfigResponse"];
+                };
             };
             /** @description Validation Error */
             422: {
@@ -22728,6 +23174,26 @@ export interface operations {
         };
     };
     ingest_errors_api_v1_errors_ingest_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorIngestResponse"];
+                };
+            };
+        };
+    };
+    ingest_errors_public_api_v1_errors_ingest_public_post: {
         parameters: {
             query?: never;
             header?: never;
