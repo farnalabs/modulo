@@ -29,17 +29,21 @@ class DatadogErrorForwarder(BaseForwarder):
 
         try:
             url = f"https://api.{site}/api/v1/events"
+            message = error_event.message or ""
+            level = error_event.level or "error"
+            source = error_event.source or ""
+            environment = error_event.environment or "unknown"
             body = {
-                "title": f"[{error_event.level.upper()}] {error_event.message[:200]}",
+                "title": f"[{level.upper()}] {message[:200]}",
                 "text": self._build_text(org_id, error_group, error_event),
                 "tags": [
                     "modulo",
                     f"org_id:{org_id}",
-                    f"source:{error_event.source}",
-                    f"level:{error_event.level}",
-                    f"environment:{error_event.environment or 'unknown'}",
+                    f"source:{source}",
+                    f"level:{level}",
+                    f"environment:{environment}",
                 ],
-                "alert_type": "error" if error_event.level in ("error", "critical") else "warning",
+                "alert_type": "error" if level in ("error", "critical") else "warning",
                 "priority": "normal",
             }
 
@@ -65,12 +69,13 @@ class DatadogErrorForwarder(BaseForwarder):
 
     @staticmethod
     def _build_text(_org_id: Any, error_group: Any, error_event: Any) -> str:
+        stacktrace = error_event.stacktrace or ""
         parts = [
             f"Group: {error_group.fingerprint if error_group else 'unknown'}",
             f"Count: {error_group.count if error_group else 1}",
             f"Environment: {error_event.environment or 'unknown'}",
             f"Version: {error_event.version or 'unknown'}",
         ]
-        if error_event.stacktrace:
-            parts.append(f"\nStacktrace:\n{error_event.stacktrace[:1000]}")
+        if stacktrace:
+            parts.append(f"\nStacktrace:\n{stacktrace[:1000]}")
         return "\n".join(parts)

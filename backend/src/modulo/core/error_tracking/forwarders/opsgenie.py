@@ -34,26 +34,35 @@ class OpsGenieErrorForwarder(BaseForwarder):
             _log.warning("opsgenie_forwarder.no_api_key")
             return False
 
-        priority = priority_map.get(error_event.level, "P3")
+        level = error_event.level or "error"
+        priority = priority_map.get(level, "P3")
+        message = error_event.message or ""
+        source = error_event.source or ""
+        environment = error_event.environment or "unknown"
+        version = error_event.version or "unknown"
 
         try:
             url = "https://api.opsgenie.com/v2/alerts"
             body = {
-                "message": error_event.message[:512],
+                "message": message[:512],
                 "alias": f"modulo:{org_id}:{error_group.fingerprint}" if error_group else f"modulo:{org_id}",
                 "description": self._build_description(org_id, error_group, error_event),
                 "source": "Modulo Error Forwarder",
                 "priority": priority,
                 "tags": [
                     f"org_id:{org_id}",
-                    f"source:{error_event.source}",
-                    f"level:{error_event.level}",
-                    f"environment:{error_event.environment or 'unknown'}",
+                    f"source:{source}",
+                    f"level:{level}",
+                    f"environment:{environment}",
                 ],
                 "details": {
                     "fingerprint": error_group.fingerprint if error_group else "",
-                    "count": str(error_group.count) if error_group and error_group.count else "1",
-                    "version": error_event.version or "unknown",
+                    "count": (
+                        str(error_group.count)
+                        if error_group is not None and error_group.count is not None
+                        else "1"
+                    ),
+                    "version": version,
                 },
             }
 
@@ -82,12 +91,13 @@ class OpsGenieErrorForwarder(BaseForwarder):
 
     @staticmethod
     def _build_description(_org_id: Any, error_group: Any, error_event: Any) -> str:
+        stacktrace = error_event.stacktrace or ""
         parts = [
             f"Group fingerprint: {error_group.fingerprint if error_group else 'unknown'}",
             f"Count: {error_group.count if error_group else 1}",
             f"Environment: {error_event.environment or 'unknown'}",
             f"Version: {error_event.version or 'unknown'}",
         ]
-        if error_event.stacktrace:
-            parts.append(f"\nStacktrace:\n{error_event.stacktrace[:2000]}")
+        if stacktrace:
+            parts.append(f"\nStacktrace:\n{stacktrace[:2000]}")
         return "\n".join(parts)
