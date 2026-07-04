@@ -1,7 +1,6 @@
 ---
 id: feat-core-api-versioning
 prd: 6
-
 delivery-tasks: [task-nv12-api-versioning]
 bdd: []
 code:
