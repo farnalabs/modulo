@@ -323,6 +323,33 @@ class TestRegressionAlertsEndpoint:
 
     # ── Auth ──────────────────────────────────────────────────────────
 
+    @pytest.fixture()
+    def operator_client(self) -> Generator[TestClient, None, None]:
+        mock_session = _make_mock_session()
+        mock_session.execute.side_effect = [
+            _make_result(scalar_value=None),
+            _make_result(all_value=[]),
+        ]
+
+        async def override_session() -> AsyncGenerator[AsyncMock, None]:
+            yield mock_session
+
+        app.dependency_overrides[get_settings] = _make_settings
+        app.dependency_overrides[get_db_session] = override_session
+        app.dependency_overrides[_get_engine] = lambda: MagicMock()
+        app.dependency_overrides[get_current_user] = lambda: AuthenticatedPrincipal(
+            username="operator",
+            organisation_id=_ORG_ID,
+            account_id=_USER_ID,
+            org_role="operator",
+        )
+        yield TestClient(app)
+        app.dependency_overrides.clear()
+
+    def test_operator_returns_403(self, operator_client: TestClient) -> None:
+        resp = operator_client.get(self.URL)
+        assert resp.status_code == 403
+
     def test_unauthenticated_returns_401(self, unauth_client: TestClient) -> None:
         resp = unauth_client.get(self.URL)
         assert resp.status_code == 401

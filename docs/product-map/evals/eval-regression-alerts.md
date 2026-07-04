@@ -12,7 +12,8 @@ code:
   - backend/src/modulo/db/models/eval_result.py
   - backend/tests/unit/core/test_eval_regressions.py
   - backend/tests/unit/api/test_evals_endpoint.py
-unit-tests: []
+unit-tests:
+  - backend/tests/unit/core/test_eval_regressions.py
 depends-on: [feat-evals-eval-engine]
 status: partial
 ---
@@ -67,6 +68,28 @@ Detects significant pass-rate drops for eval definitions by comparing a recent w
 - [x] RegressionAlert dataclass shape matches API response contract
 - [x] `detect_regressions` accepts AsyncSession (not coupled to FastAPI)
 - [x] Response envelope (alerts + metadata) unchanged across minor releases
+
+### Error Handling
+- [x] ProgrammingError caught → 501 Not Implemented
+- [x] SQLAlchemyError caught → 503 Service Unavailable
+- [ ] Logged warning on ProgrammingError before returning 501
+- [x] Unauthenticated request returns 401
+- [x] Non-admin user returns 403
+
+### Additional Edge Cases
+- [x] days=1 produces no alerts (baseline window = recent window, evals skipped)
+- [x] threshold=0.0 flags every rate change as declining
+- [x] threshold=1.0 only flags complete 0%↔100% swings
+- [x] Division by zero guarded (recent_total==0 or baseline_total==0 → skip)
+- [x] affected_run_ids COALESCE ensures never NULL
+- [x] UUID serialised as string in API response
+
+### Resilience & Integration Robustness
+- [x] Single SQL query within read transaction — atomic
+- [x] RLS enforced via set_rls_org before query
+- [x] DB connection failure → ProgrammingError→501
+- [x] DB timeout/connection pool exhaustion → SQLAlchemyError→503
+- [x] No retry logic (acceptable for admin-only diagnostic endpoint)
 
 ## Known Gaps
 - [ ] No BDD feature file specific to regression alerts (covered by unit tests only)
