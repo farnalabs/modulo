@@ -90,9 +90,6 @@ LLM-assisted schema draft generation from connected tool data (issue trackers, g
 
 ## Known Gaps
 
-- [x] **No implementation exists**: the core schema inference flow (sample data → LLM → draft) is fully implemented via feat-core-schema-inference; this entry tracks the connector-coupling layer
-- [x] **BDD placeholder**: the file at `connectors/schema_inference.feature` has 5 real scenarios, and `schemas/schema_inference.feature` has 6 more — step definitions exist in `test_schema_inference.py`
-- [x] **No unit tests**: unit tests exist at `backend/tests/unit/core/test_schema_inference.py`, `backend/tests/unit/api/test_schema_infer_endpoint.py`, `backend/tests/unit/core/test_schema_migration.py`, and `backend/tests/unit/core/test_schema_validation.py`
 - [ ] **Connector read interface for inference not defined**: ConnectorHub has `sample()` method but no `infer_schema()` or connector-type-aware sampling
 - [ ] **Data sanitisation rules not defined**: what fields are scrubbed from sample data before LLM inference is unspecified
 - [ ] **No CLI or UI for triggering inference**: endpoint and SchemaInferenceView.vue exist, but no onboarding wizard step or CLI command for triggering per-connector inference
