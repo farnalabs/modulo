@@ -26,7 +26,7 @@ from modulo.core.registry.crypto import verify_signature
 # Ed25519 public key (hex-encoded, 64 hex chars).
 # In production this would be set via environment or mounted secret.
 # This is the dev/test key — replace for production deployments.
-_LICENSE_PUBLIC_KEY_HEX: str = "e94cd572b813f157ee450767ae54d8375adaa1580b279435c45a3fa5a5549dd5"
+_LICENSE_PUBLIC_KEY_HEX: str = "a101dd3f34a806455d25ca247fb84a0a61decff4cf1a467b9456175634b0fc51"
 
 # In-memory store for the current validated license.
 _current_license: LicenseData | None = None
