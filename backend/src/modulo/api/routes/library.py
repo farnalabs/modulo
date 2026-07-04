@@ -289,6 +289,7 @@ async def list_library_primitives_endpoint(
                 page=page,
                 page_size=page_size,
                 include_community=include_community,
+                source=source,
                 cursor=cursor,
             )
     except ProgrammingError:
@@ -389,7 +390,7 @@ async def create_library_primitive_endpoint(
                 owner_team_id=req.owner_team_id,
                 visibility=req.visibility,
                 account_id=principal.account_id,
-                tier=body.tier,
+                tier=req.tier,
             )
     except ProgrammingError:
         raise HTTPException(

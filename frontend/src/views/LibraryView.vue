@@ -39,17 +39,56 @@
     </header>
 
     <main class="max-w-6xl mx-auto px-6 py-8 space-y-6">
+      <div class="flex items-center gap-2 border-b border-border" role="tablist">
+        <button
+          type="button"
+          role="tab"
+          :aria-selected="section === 'native'"
+          class="px-4 py-2 text-sm font-medium border-b-2 transition-colors"
+          :class="section === 'native' ? 'border-primary text-foreground' : 'border-transparent text-muted-foreground hover:text-foreground'"
+          data-testid="library-section-native"
+          @click="switchSection('native')"
+        >
+          Native Library
+        </button>
+        <button
+          type="button"
+          role="tab"
+          :aria-selected="section === 'community'"
+          class="px-4 py-2 text-sm font-medium border-b-2 transition-colors"
+          :class="section === 'community' ? 'border-primary text-foreground' : 'border-transparent text-muted-foreground hover:text-foreground'"
+          data-testid="library-section-community"
+          @click="switchSection('community')"
+        >
+          Community
+        </button>
+      </div>
+
+      <p v-if="section === 'community'" class="text-sm text-muted-foreground" data-testid="library-community-disclaimer">
+        Contributed by users. Not maintained or verified by Modulo — use your judgment.
+      </p>
+
       <div v-if="loading" class="text-center py-12 text-muted-foreground">Loading...</div>
 
       <div v-else-if="error" class="rounded-lg border border-destructive/50 bg-destructive/10 p-4 text-destructive">
         {{ error }}
       </div>
 
-      <div v-else-if="nativePrimitives.length === 0 && previewPrimitives.length === 0" class="text-center py-12 text-muted-foreground">
+      <div
+        v-else-if="section === 'native' && nativePrimitives.length === 0 && previewPrimitives.length === 0"
+        class="text-center py-12 text-muted-foreground"
+      >
         {{ $t('views.LibraryView.no_primitives_found') }}
       </div>
 
-      <div v-else-if="nativePrimitives.length > 0" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+      <div
+        v-else-if="section === 'community' && communityPrimitives.length === 0"
+        class="text-center py-12 text-muted-foreground"
+      >
+        {{ $t('views.LibraryView.no_primitives_found') }}
+      </div>
+
+      <div v-else-if="section === 'native' && nativePrimitives.length > 0" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
         <div
           v-for="prim in nativePrimitives"
           :key="prim.id"
@@ -65,6 +104,13 @@
             </div>
             <div v-if="prim.source === 'modulo'" class="text-xs text-primary font-medium bg-primary/10 px-2 py-0.5 rounded">
               Modulo
+            </div>
+            <div
+              v-else-if="prim.source === 'community'"
+              class="text-xs text-muted-foreground font-medium bg-muted px-2 py-0.5 rounded"
+              data-testid="library-community-badge"
+            >
+              Community — not verified
             </div>
           </div>
 
@@ -123,7 +169,7 @@
         </div>
       </div>
 
-      <details v-if="previewPrimitives.length > 0" class="rounded-lg border bg-card" data-testid="library-preview-section">
+      <details v-if="section === 'native' && previewPrimitives.length > 0" class="rounded-lg border bg-card" data-testid="library-preview-section">
         <summary class="cursor-pointer px-4 py-3 text-sm font-medium text-muted-foreground hover:text-foreground">
           {{ $t('views.LibraryView.preview_integrations_count', { count: previewPrimitives.length }, previewPrimitives.length) }}
         </summary>
@@ -168,6 +214,65 @@
           </div>
         </div>
       </details>
+
+      <div v-if="section === 'community' && communityPrimitives.length > 0" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+        <div
+          v-for="prim in communityPrimitives"
+          :key="prim.id"
+          class="card card-hover p-5"
+          :data-testid="`library-item-${prim.id}`"
+        >
+          <div class="flex items-start justify-between mb-3">
+            <div>
+              <span :class="typeBadgeClass(prim.primitive_type)">
+                {{ prim.primitive_type }}
+              </span>
+              <h3 class="mt-2 text-base font-medium text-foreground">{{ prim.name }}</h3>
+            </div>
+            <div
+              class="text-xs text-muted-foreground font-medium bg-muted px-2 py-0.5 rounded"
+              data-testid="library-community-badge"
+            >
+              Community — not verified
+            </div>
+          </div>
+
+          <p v-if="prim.description" class="text-sm text-muted-foreground mb-4 line-clamp-2">
+            {{ prim.description }}
+          </p>
+
+          <div class="flex items-center gap-2 flex-wrap mb-4">
+            <span
+              v-for="tag in (prim.tags || []).slice(0, 3)"
+              :key="tag"
+              class="text-xs bg-muted text-muted-foreground px-2 py-0.5 rounded"
+            >
+              {{ tag }}
+            </span>
+            <span v-if="(prim.tags || []).length > 3" class="text-xs text-muted-foreground">
+              +{{ prim.tags.length - 3 }}
+            </span>
+          </div>
+
+          <div class="flex items-center gap-2">
+            <button
+              v-if="prim.primitive_type === 'pipeline_template' || prim.primitive_type === 'composite'"
+              class="flex-1 px-3 py-2 bg-primary text-primary-foreground text-sm font-medium rounded-lg border border-primary/30 hover:border-primary/60 hover:brightness-110 transition-all"
+              @click="createPipeline(prim)"
+              data-testid="library-create-pipeline"
+            >
+              Create Pipeline
+            </button>
+            <button
+              class="flex-1 px-3 py-2 border border-border bg-background text-foreground text-sm font-medium rounded-lg hover:bg-accent transition-colors"
+              @click="viewPrimitive(prim)"
+              data-testid="library-view-details"
+            >
+              View Details
+            </button>
+          </div>
+        </div>
+      </div>
 
       <div v-if="total > pageSize" class="flex justify-center items-center gap-2 mt-8">
         <button
@@ -241,10 +346,27 @@ const page = ref(1)
 const pageSize = ref(12)
 const total = ref(0)
 
-// In-dev primitives are hidden entirely; native items stay in the primary
-// grid; preview items are segregated into a collapsed disclosure section.
+// 'native' = Modulo-maintained structural workflows + the org's own saved
+// primitives (existing default library view). 'community' = opinionated,
+// narrower example pipelines contributed by users (ADR 010 §2) — always
+// fetched and rendered as a separate section, never mixed with Native.
+type LibrarySection = 'native' | 'community'
+const section = ref<LibrarySection>('native')
+
+function switchSection(next: LibrarySection) {
+  if (section.value === next) return
+  section.value = next
+  page.value = 1
+  loadPrimitives()
+}
+
+// Within the Native section: in-dev primitives are hidden entirely; native
+// items stay in the primary grid; preview items are segregated into a
+// collapsed disclosure section. The Community section (source === 'community')
+// bypasses this tier split entirely — community items aren't tiered.
 const nativePrimitives = computed(() => primitives.value.filter(p => (p.tier ?? 'native') !== 'preview' && (p.tier ?? 'native') !== 'in_dev'))
 const previewPrimitives = computed(() => primitives.value.filter(p => p.tier === 'preview'))
+const communityPrimitives = computed(() => primitives.value.filter(p => p.source === 'community'))
 
 async function loadPrimitives() {
   loading.value = true
@@ -256,10 +378,14 @@ async function loadPrimitives() {
     })
     if (typeFilter.value) params.set('primitive_type', typeFilter.value)
     if (search.value) params.set('search', search.value)
+    if (section.value === 'community') params.set('source', 'community')
 
     const data = await get<ListResponse>(`/api/v1/libraries?${params}`)
-    primitives.value = data.items
-    total.value = data.total
+    // Community items are never mixed into the Native section, even though
+    // the default (no `source` filter) API response merges all sources.
+    primitives.value =
+      section.value === 'native' ? data.items.filter((p) => p.source !== 'community') : data.items
+    total.value = section.value === 'native' ? primitives.value.length : data.total
   } catch (e) {
     error.value = e instanceof Error ? e.message : t('views.LibraryView.failed_to_load_primitives')
   } finally {
