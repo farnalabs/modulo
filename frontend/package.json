@@ -12,7 +12,7 @@
         "lint": "eslint \"src/**/*.{vue,ts,js}\"",
         "lint:fix": "npm run lint -- --fix",
         "type-check": "vue-tsc --noEmit",
-        "postinstall": "powershell -NoLogo -NoProfile -ExecutionPolicy Bypass -Command \"$r=Join-Path node_modules reka-ui/dist;if((Test-Path (Join-Path $r index.d.cts))-and -not (Test-Path (Join-Path $r index.d.ts))){Copy-Item (Join-Path $r index.d.cts)(Join-Path $r index.d.ts)}else{Write-Host 'reka-ui .d.ts ok'}\""
+        "postinstall": "powershell -NoLogo -NoProfile -ExecutionPolicy Bypass -File scripts/reka-ui-patch.ps1"
     },
     "optionalDependencies": {
         "@sentry/vue": "^8.0.0"

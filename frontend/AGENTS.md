@@ -9,9 +9,21 @@ but its `package.json` `types` field points to the non-existent `dist/index.d.ts
 `@vue/compiler-sfc` to fail with "Unresolvable type reference" when resolving
 `defineProps<RekaUiProps>()` in `.vue` components, breaking both `npm run build` and `npm run test:unit`.
 
-The `postinstall` script in `package.json` copies `index.d.cts` → `index.d.ts` after each `npm install`.
-When upgrading reka-ui, verify the package still ships `.d.cts` only and that the copy succeeds.
-If reka-ui ships proper `.d.ts` in a future version, remove the postinstall script.
+The `postinstall` script in `package.json` (at `scripts/reka-ui-patch.ps1`) copies
+`index.d.cts` → `index.d.ts` after each `npm install`.
+
+**Verification:** After `npm install`, run:
+```powershell
+Test-Path node_modules/reka-ui/dist/index.d.ts
+# Should be True
+```
+
+When upgrading reka-ui, verify the package still ships only `.d.cts` (not `.d.ts`)
+and that `scripts/reka-ui-patch.ps1` still applies. If reka-ui ships proper `.d.ts`
+in a future version, remove `scripts/reka-ui-patch.ps1` and the `postinstall` script.
+
+**Note:** The postinstall only runs on `npm install`. If `scripts/reka-ui-patch.ps1`
+is edited, re-run `npm install` (not just the script) to ensure the hook fires.
 
 ### Permission gating: `canSeeItem()` must check `requiredPermissions`
 
