@@ -1,5 +1,6 @@
 import { defineStore } from "pinia";
 import { ref, computed } from "vue";
+import { useI18n } from "vue-i18n";
 import { api } from "../lib/api/client";
 import { registerHandler } from "./syncRegistry";
 import { type ProblemDetail } from "../lib/api/formatError";
@@ -127,6 +128,7 @@ interface TrendsResponse {
 }
 
 export const useDashboardStore = defineStore("dashboard", () => {
+  const { t } = useI18n();
   const summary = ref<DashboardSummary | null>(null);
   const loading = ref(false);
   const error = ref<string | ProblemDetail | null>(null);
@@ -152,12 +154,12 @@ export const useDashboardStore = defineStore("dashboard", () => {
           ),
         ),
       ]);
-      if (err) {
-        error.value = typeof err === "object" && "detail" in err ? String(err.detail) : String(err);
-      } else {
-        summary.value = validateDashboardSummary(result);
-        if (!summary.value) error.value = "Received invalid dashboard data from server.";
-      }
+        if (err) {
+          error.value = typeof err === "object" && "detail" in err ? String(err.detail) : String(err);
+        } else {
+          summary.value = validateDashboardSummary(result);
+          if (!summary.value) error.value = t("views.DashboardView.invalid_dashboard_data");
+        }
     } catch (e: unknown) {
       error.value = e instanceof Error ? e.message : String(e);
     } finally {
@@ -185,7 +187,7 @@ export const useDashboardStore = defineStore("dashboard", () => {
   async function fetchTrends(days: number) {
     if (trendsLoading.value) return;
     if (!Number.isInteger(days) || days <= 0) {
-      error.value = "Invalid days parameter: must be a positive integer.";
+      error.value = t("views.DashboardView.invalid_days_parameter");
       return;
     }
     trendsLoading.value = true;
@@ -206,7 +208,7 @@ export const useDashboardStore = defineStore("dashboard", () => {
       } else if (validateTrendsResponse(result)) {
         trends.value = result;
       } else {
-        error.value = "Received invalid trends data from server.";
+        error.value = t("views.DashboardView.invalid_trends_data");
       }
     } catch (e: unknown) {
       error.value = e instanceof Error ? e.message : String(e);
