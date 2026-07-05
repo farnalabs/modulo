@@ -107,7 +107,24 @@ Admin settings page for configuring OIDC and SAML 2.0 identity providers. Enterp
 - [ ] OIDC callback exchanges auth code, verifies state, issues JWT
 - [ ] SAML ACS parses `SAMLResponse`, validates assertion, issues JWT
 
+### Error Handling
+- [x] GET /providers returns 503 on SQLAlchemyError
+- [x] POST /providers returns 503 on SQLAlchemyError
+- [x] PUT /providers/{id} returns 503 on SQLAlchemyError
+- [x] DELETE /providers/{id} returns 503 on SQLAlchemyError
+- [x] POST /providers/{id}/test returns 503 on SQLAlchemyError
+- [x] PUT /providers/{id}/toggle returns 503 on SQLAlchemyError
+- [x] PUT /providers/{id}/group-mappings returns 503 on SQLAlchemyError
+- [x] GET /providers/{id}/group-mappings returns 503 on SQLAlchemyError
+- [x] OIDC callback returns 503 on SQLAlchemyError
+- [x] SAML login returns 503 on SQLAlchemyError
+- [x] SAML ACS returns 503 on SQLAlchemyError
+- [x] POST /providers returns 409 on IntegrityError (duplicate name race)
+- [x] DELETE /providers/{id} returns 404 when provider not found
+- [x] All SQLAlchemyError catches log a warning with operation context
+
 ## QA History
+- 2026-07-05: Cross-cutting QA (index 175). Fixed CRITICAL — added SQLAlchemyError→503 catches to all 8 admin SSO routes (get_providers, create, update, delete, toggle, test, set_group_mappings, get_group_mappings) and 3 SSO auth routes (oidc_callback, saml_login, saml_acs) — previously only caught ProgrammingError→501, allowing connection/deadlock failures to propagate as 500. Fixed CRITICAL — TOCTOU race in duplicate name check: `select(exists()...).with_for_update()` didn't lock rows; changed to proper `SELECT ... FOR UPDATE` and added IntegrityError→409 catch. Fixed MAJOR — DELETE endpoint returned 204 instead of 404 when provider not found (ignored `delete_provider` return value). Added 13 tests in test_sso_sqlalchemy_error.py covering all 8+3 routes for SQLAlchemyError→503 + IntegrityError→409 + DELETE 404. Created website docs stub. Status: partial.
 - 2026-07-03: Cross-cutting QA (index 109). Added ProgrammingError→501 catches to 6 routes (create, update, delete, toggle, test, set/get group-mappings) and logging to all 7 catches including existing get_providers. Created test_sso_programming_error.py with 8 unit tests covering all 7 routes (list/create/update/delete/toggle/test/set-group-mappings/get-group-mappings). Updated product map: marked test-connection error-display [ ]→[x] (verified inline display works), added Error Handling section with 17 behaviour checkboxes, added test connection OIDC/SAML sections (12 checkboxes), added edge cases (empty state, loading, error alert, empty list). Updated Known Gaps: refined sidebar nav entry gap, renamed auth flow items to "v1 deferred", added ProgrammingError test coverage and BDD-admin-CRUD gaps. Status: partial (10 known gaps remain).
 
 ## Known Gaps

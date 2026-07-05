@@ -7,7 +7,7 @@ import httpx
 from defusedxml import ElementTree as ET
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field
-from sqlalchemy.exc import ProgrammingError
+from sqlalchemy.exc import IntegrityError, ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.api.dependencies import get_db_session, require_feature
@@ -134,6 +134,12 @@ async def get_providers(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
         ) from exc
+    except SQLAlchemyError as exc:
+        _log.warning("SSO providers DB error on list: %s", exc)
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Database error. Please try again.",
+        ) from exc
     return [SsoProviderResponse.from_orm(p) for p in providers]  # type: ignore[pydantic-orm]
 
 
@@ -165,11 +171,20 @@ async def create_provider_endpoint(
         )
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+    except IntegrityError as exc:
+        _log.warning("SSO provider duplicate name on create: %s", exc)
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="An SSO provider with this name already exists.") from exc
     except ProgrammingError as exc:
         _log.warning("SSO providers table not available on create: %s", exc)
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
+        ) from exc
+    except SQLAlchemyError as exc:
+        _log.warning("SSO providers DB error on create: %s", exc)
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Database error. Please try again.",
         ) from exc
     return SsoProviderResponse.from_orm(provider)  # type: ignore[pydantic-orm]
 
@@ -195,6 +210,12 @@ async def update_provider_endpoint(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
         ) from exc
+    except SQLAlchemyError as exc:
+        _log.warning("SSO providers DB error on update: %s", exc)
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Database error. Please try again.",
+        ) from exc
     if provider is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -219,6 +240,17 @@ async def delete_provider_endpoint(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
         ) from exc
+    except SQLAlchemyError as exc:
+        _log.warning("SSO providers DB error on delete: %s", exc)
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Database error. Please try again.",
+        ) from exc
+    if not deleted:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="SSO provider not found",
+        )
 
 
 @router.post("/providers/{provider_id}/test", response_model=SsoProviderTestResult)
@@ -237,6 +269,12 @@ async def test_provider_connection(
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
+        ) from exc
+    except SQLAlchemyError as exc:
+        _log.warning("SSO providers DB error on test connection: %s", exc)
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Database error. Please try again.",
         ) from exc
     if provider is None:
         raise HTTPException(
@@ -399,6 +437,12 @@ async def toggle_provider_endpoint(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
         ) from exc
+    except SQLAlchemyError as exc:
+        _log.warning("SSO providers DB error on toggle: %s", exc)
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Database error. Please try again.",
+        ) from exc
     if provider is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -439,6 +483,12 @@ async def set_group_mappings_endpoint(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
         ) from exc
+    except SQLAlchemyError as exc:
+        _log.warning("SSO providers DB error on set_group_mappings: %s", exc)
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Database error. Please try again.",
+        ) from exc
     if provider is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -462,6 +512,12 @@ async def get_group_mappings_endpoint(
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
+        ) from exc
+    except SQLAlchemyError as exc:
+        _log.warning("SSO providers DB error on get_group_mappings: %s", exc)
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Database error. Please try again.",
         ) from exc
     if provider is None:
         raise HTTPException(

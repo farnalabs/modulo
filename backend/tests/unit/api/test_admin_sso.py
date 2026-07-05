@@ -9,10 +9,11 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from fastapi.testclient import TestClient
 
-from modulo.api.dependencies import _get_engine, get_db_session
+from modulo.api.dependencies import _get_engine, get_db_session, get_plan_context
 from modulo.api.main import app
 from modulo.auth.dependencies import get_current_user
 from modulo.auth.jwt import AuthenticatedPrincipal
+from modulo.core.feature_flags import PlanContext
 from modulo.settings import Settings, get_settings
 
 _VALID_32 = "a" * 32
@@ -82,6 +83,7 @@ def client() -> Generator[TestClient, None, None]:
     app.dependency_overrides[get_settings] = _make_settings
     app.dependency_overrides[get_db_session] = override_session
     app.dependency_overrides[_get_engine] = lambda: MagicMock()
+    app.dependency_overrides[get_plan_context] = lambda: _make_plan_context()
     app.dependency_overrides[get_current_user] = lambda: AuthenticatedPrincipal(
         username="admin",
         organisation_id=_ORG_ID,
@@ -90,6 +92,12 @@ def client() -> Generator[TestClient, None, None]:
     )
     yield TestClient(app)
     app.dependency_overrides.clear()
+
+
+def _make_plan_context() -> PlanContext:
+    ctx = MagicMock(spec=PlanContext)
+    ctx.feature_enabled.return_value = True
+    return ctx
 
 
 @pytest.fixture()
@@ -109,6 +117,7 @@ def operator_client() -> Generator[TestClient, None, None]:
     app.dependency_overrides[get_settings] = _make_settings
     app.dependency_overrides[get_db_session] = override_session
     app.dependency_overrides[_get_engine] = lambda: MagicMock()
+    app.dependency_overrides[get_plan_context] = lambda: _make_plan_context()
     app.dependency_overrides[get_current_user] = lambda: AuthenticatedPrincipal(
         username="operator",
         organisation_id=_ORG_ID,
