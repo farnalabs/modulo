@@ -3,7 +3,7 @@
     <header>
       <h1 class="text-3xl font-bold tracking-tight">{{ $t('views.SettingsRuntimeConfigView.runtime_configuration') }}</h1>
       <p class="mt-1 text-muted-foreground">
-        View and override configuration without restarting the server.
+        {{ $t('views.SettingsRuntimeConfigView.description') }}
       </p>
     </header>
 
@@ -19,7 +19,7 @@
         :disabled="loading"
         @click="reloadConfig"
       >
-        Reload from env
+        {{ $t('views.SettingsRuntimeConfigView.reload_from_env') }}
       </button>
     </div>
 
@@ -31,12 +31,12 @@
       <table class="w-full">
         <thead>
           <tr class="border-b text-left text-sm font-medium text-muted-foreground">
-            <th class="px-4 py-3">Key</th>
+            <th class="px-4 py-3">{{ $t('views.SettingsRuntimeConfigView.key') }}</th>
             <th class="px-4 py-3">{{ $t('views.SettingsRuntimeConfigView.current_value') }}</th>
             <th class="px-4 py-3">{{ $t('views.SettingsRuntimeConfigView.expected_env') }}</th>
-            <th class="px-4 py-3">Default</th>
-            <th class="px-4 py-3">Provenance</th>
-            <th class="px-4 py-3">Actions</th>
+            <th class="px-4 py-3">{{ $t('views.SettingsRuntimeConfigView.default') }}</th>
+            <th class="px-4 py-3">{{ $t('views.SettingsRuntimeConfigView.provenance') }}</th>
+            <th class="px-4 py-3">{{ $t('views.SettingsRuntimeConfigView.actions') }}</th>
           </tr>
         </thead>
         <tbody>
@@ -54,14 +54,14 @@
                     v-if="entry.hot_reloadable"
                     class="badge badge-status-success"
                   >
-                    hot
+                    {{ $t('views.SettingsRuntimeConfigView.hot') }}
                   </span>
                   <span
                     v-else
                     class="badge badge-status-muted"
                     :title="$t('views.SettingsRuntimeConfigView.requires_server_restart')"
                   >
-                    static
+                    {{ $t('views.SettingsRuntimeConfigView.static') }}
                   </span>
               </div>
             </td>
@@ -74,7 +74,7 @@
                     class="text-xs text-primary hover:underline"
                     @click="revealKey(entry.key)"
                   >
-                    Reveal
+                    {{ $t('views.SettingsRuntimeConfigView.reveal') }}
                   </button>
                 </div>
               </template>
@@ -87,7 +87,7 @@
                   @input="markEdited(entry.key)"
                 />
                 <code v-else class="text-sm font-mono break-all max-w-xs inline-block">
-                  {{ entry.current_value || '(empty)' }}
+                  {{ entry.current_value || $t('views.SettingsRuntimeConfigView.empty_value') }}
                 </code>
               </template>
             </td>
@@ -100,12 +100,12 @@
                     class="text-xs text-primary hover:underline"
                     @click="revealKey(entry.key)"
                   >
-                    Reveal
+                    {{ $t('views.SettingsRuntimeConfigView.reveal') }}
                   </button>
                 </div>
               </template>
               <code v-else class="text-sm font-mono text-muted-foreground break-all max-w-xs inline-block">
-                {{ entry.env_value || '(not set)' }}
+                {{ entry.env_value || $t('views.SettingsRuntimeConfigView.not_set') }}
               </code>
             </td>
 
@@ -117,12 +117,12 @@
                     class="text-xs text-primary hover:underline"
                     @click="revealKey(entry.key)"
                   >
-                    Reveal
+                    {{ $t('views.SettingsRuntimeConfigView.reveal') }}
                   </button>
                 </div>
               </template>
               <code v-else class="text-sm text-muted-foreground break-all max-w-xs inline-block">
-                {{ entry.default_value || '(none)' }}
+                {{ entry.default_value || $t('views.SettingsRuntimeConfigView.none_value') }}
               </code>
             </td>
 
@@ -140,7 +140,7 @@
                 :disabled="saving"
                 @click="applyOverride(entry.key)"
               >
-                Apply
+                {{ $t('views.SettingsRuntimeConfigView.apply') }}
               </button>
               <button
                 v-if="entry.override_value"
@@ -149,7 +149,7 @@
                 :disabled="saving"
                 @click="clearOverride(entry.key)"
               >
-                Reset
+                {{ $t('views.SettingsRuntimeConfigView.reset') }}
               </button>
             </td>
           </tr>
@@ -168,10 +168,13 @@
 
 <script setup lang="ts">
 import { ref, reactive, onMounted, onBeforeUnmount } from 'vue'
+import { useI18n } from 'vue-i18n'
 import { api } from '../lib/api/client'
 import { formatApiError, type ProblemDetail } from '../lib/api/formatError'
 import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
+
+const { t } = useI18n()
 
 interface ConfigEntry {
   key: string
@@ -255,13 +258,13 @@ async function loadConfig() {
     const { data, error: err } = await api.GET('/api/v1/admin/runtime-config')
     if (err) {
       error.value = err && typeof err === 'object' && 'detail' in err
-        ? `Failed to load runtime config: ${(err as ProblemDetail).detail}`
-        : `Failed to load runtime config: ${formatApiError(err)}`
+        ? `${t('views.SettingsRuntimeConfigView.failed_to_load_runtime_config')} ${(err as ProblemDetail).detail}`
+        : `${t('views.SettingsRuntimeConfigView.failed_to_load_runtime_config')} ${formatApiError(err)}`
     } else if (data) {
       applyResponse(data as unknown as ConfigResponse)
     }
   } catch (e: unknown) {
-    error.value = `Failed to load runtime config: ${e instanceof Error ? e.message : String(e)}`
+    error.value = `${t('views.SettingsRuntimeConfigView.failed_to_load_runtime_config')} ${e instanceof Error ? e.message : String(e)}`
   } finally {
     loading.value = false
   }
@@ -274,13 +277,13 @@ async function reloadConfig() {
     const { data, error: err } = await api.POST('/api/v1/admin/runtime-config/reload')
     if (err) {
       error.value = err && typeof err === 'object' && 'detail' in err
-        ? `Failed to reload config: ${(err as ProblemDetail).detail}`
-        : `Failed to reload config: ${formatApiError(err)}`
+        ? `${t('views.SettingsRuntimeConfigView.failed_to_reload_config')} ${(err as ProblemDetail).detail}`
+        : `${t('views.SettingsRuntimeConfigView.failed_to_reload_config')} ${formatApiError(err)}`
     } else if (data) {
       applyResponse(data as unknown as ConfigResponse)
     }
   } catch (e: unknown) {
-    error.value = `Failed to reload config: ${e instanceof Error ? e.message : String(e)}`
+    error.value = `${t('views.SettingsRuntimeConfigView.failed_to_reload_config')} ${e instanceof Error ? e.message : String(e)}`
   } finally {
     loading.value = false
   }
@@ -296,16 +299,16 @@ async function applyOverride(key: string) {
     })
     if (err) {
       formError.value = err && typeof err === 'object' && 'detail' in err
-        ? `Failed to apply override: ${(err as ProblemDetail).detail}`
-        : `Failed to apply override: ${formatApiError(err)}`
+        ? `${t('views.SettingsRuntimeConfigView.failed_to_apply_override')} ${(err as ProblemDetail).detail}`
+        : `${t('views.SettingsRuntimeConfigView.failed_to_apply_override')} ${formatApiError(err)}`
     } else if (data) {
       applyResponse(data as unknown as ConfigResponse)
-      formSuccess.value = `Override applied for ${key}.`
+      formSuccess.value = t('views.SettingsRuntimeConfigView.override_applied_for', { key })
       if (runtimeConfigTimeout) clearTimeout(runtimeConfigTimeout)
       runtimeConfigTimeout = setTimeout(() => { formSuccess.value = null }, 3000)
     }
   } catch (e: unknown) {
-    formError.value = `Failed to apply override: ${e instanceof Error ? e.message : String(e)}`
+    formError.value = `${t('views.SettingsRuntimeConfigView.failed_to_apply_override')} ${e instanceof Error ? e.message : String(e)}`
   } finally {
     saving.value = false
   }
@@ -321,16 +324,16 @@ async function clearOverride(key: string) {
     })
     if (err) {
       formError.value = err && typeof err === 'object' && 'detail' in err
-        ? `Failed to clear override: ${(err as ProblemDetail).detail}`
-        : `Failed to clear override: ${formatApiError(err)}`
+        ? `${t('views.SettingsRuntimeConfigView.failed_to_clear_override')} ${(err as ProblemDetail).detail}`
+        : `${t('views.SettingsRuntimeConfigView.failed_to_clear_override')} ${formatApiError(err)}`
     } else if (data) {
       applyResponse(data as unknown as ConfigResponse)
-      formSuccess.value = `Override cleared for ${key}.`
+      formSuccess.value = t('views.SettingsRuntimeConfigView.override_cleared_for', { key })
       if (runtimeConfigTimeout) clearTimeout(runtimeConfigTimeout)
       runtimeConfigTimeout = setTimeout(() => { formSuccess.value = null }, 3000)
     }
   } catch (e: unknown) {
-    formError.value = `Failed to clear override: ${e instanceof Error ? e.message : String(e)}`
+    formError.value = `${t('views.SettingsRuntimeConfigView.failed_to_clear_override')} ${e instanceof Error ? e.message : String(e)}`
   } finally {
     saving.value = false
   }
