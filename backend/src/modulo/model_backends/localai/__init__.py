@@ -6,7 +6,7 @@ from typing import Any
 from langchain_core.messages import BaseMessage
 from langchain_openai import ChatOpenAI
 
-from modulo.model_backends.base import HealthResult, ModelBackendBase, _openai_compatible_health_check
+from modulo.model_backends.base import HealthResult, ModelBackendBase, openai_compatible_health_check
 
 DEFAULT_LOCALAI_BASE_URL = "http://localhost:8080/v1"
 
@@ -32,8 +32,8 @@ class LocalAIBackend(ModelBackendBase):
             base_url=base_url.rstrip("/"),
             **default_params,
         )
+        self._base_url = base_url.rstrip("/")
         self._backend_id = f"localai/{model_id}"
-        self._base_url = base_url
         self._api_key = api_key or ""
 
     @property
@@ -48,7 +48,7 @@ class LocalAIBackend(ModelBackendBase):
         return f"LocalAIBackend(model_id={self._backend_id!r}, base_url={self._base_url!r})"
 
     async def health_check(self) -> HealthResult:
-        return await _openai_compatible_health_check(
+        return await openai_compatible_health_check(
             base_url=self._base_url,
             api_key=self._api_key,
         )
@@ -59,4 +59,4 @@ class LocalAIBackend(ModelBackendBase):
     def stream(
     self, messages: list[BaseMessage], tools: list[dict] | None = None, **kwargs: Any,
 ) -> AsyncIterator[BaseMessage]:
-        return self._model.astream(messages, **kwargs)
+        return self._model.astream(messages, tools=tools, **kwargs)

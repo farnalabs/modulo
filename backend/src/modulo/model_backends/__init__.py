@@ -1,7 +1,11 @@
 from modulo.model_backends.ai21 import Ai21Backend
 from modulo.model_backends.anthropic import AnthropicBackend
 from modulo.model_backends.azure_openai import AzureOpenAIBackend
-from modulo.model_backends.base import HealthResult, ModelBackendBase
+from modulo.model_backends.base import (
+    HealthResult,
+    ModelBackendBase,
+    openai_compatible_health_check,
+)
 from modulo.model_backends.bedrock import BedrockBackend
 from modulo.model_backends.cohere import CohereBackend
 from modulo.model_backends.deepseek import DeepSeekBackend
@@ -57,4 +61,5 @@ __all__ = [
     "VertexAIBackend",
     "VllmBackend",
     "WatsonXBackend",
+    "openai_compatible_health_check",
 ]
