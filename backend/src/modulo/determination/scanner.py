@@ -40,7 +40,6 @@ def _repo_name(rec: dict[str, Any]) -> str:
     Handles GitHub (full_name or name) and GitLab (path_with_namespace or name) formats.
     """
     name = rec.get("full_name") or rec.get("path_with_namespace") or rec.get("name", "")
-    assert isinstance(name, str)
     return name
 
 
@@ -120,7 +119,7 @@ async def _sample_connector(connector_id: uuid.UUID, connector: ConnectorBase) -
         case ConnectorType.LINEAR:
             try:
                 r = await connector.query(ConnectorQuery(resource="search", filters={"query": ""}))
-                _add(samples, connector_id, ct, "issues", r.records[:_SAMPLE_LIMIT], len(r.records))
+                _add(samples, connector_id, ct, "issues", r.records[:_SAMPLE_LIMIT], min(len(r.records), _SAMPLE_LIMIT))
             except Exception as exc:
                 _add(samples, connector_id, ct, "issues", [], 0, str(exc)[:200])
 
