@@ -12,9 +12,8 @@ from typing import TYPE_CHECKING
 
 from cryptography.fernet import Fernet, InvalidToken
 from sqlalchemy import delete, select, text
-from sqlalchemy.dialects.postgresql import insert as pg_insert
 
-from modulo.core.secrets_backend import SecretsBackend
+from modulo.core.secrets_backend import SecretsBackend, validate_key
 from modulo.db.models.secret import Secret
 
 if TYPE_CHECKING:
@@ -46,8 +45,13 @@ class FernetSecretsBackend(SecretsBackend):
         self._org_id: uuid.UUID | None = None
 
     def set_session(self, session: AsyncSession) -> None:
-        """Set or replace the DB session used for persistence."""
+        """Set or replace the DB session used for persistence.
+
+        Resets the cached organisation ID so it will be re-read from
+        the new session on the next operation.
+        """
         self._session = session
+        self._org_id = None
 
     async def get_secret(self, key: str) -> str:
         """Retrieve and decrypt a secret.
@@ -57,6 +61,7 @@ class FernetSecretsBackend(SecretsBackend):
             ValueError: If the stored value cannot be decrypted (corrupted data
                 or wrong Fernet key).
         """
+        key = validate_key(key)
         if self._session is None:
             raise RuntimeError("FernetSecretsBackend: no DB session set")
 
@@ -75,9 +80,9 @@ class FernetSecretsBackend(SecretsBackend):
                 try:
                     plaintext = self._fernet_old.decrypt(row.encrypted_value)
                 except InvalidToken as exc:
-                    raise ValueError("Failed to decrypt secret") from exc
+                    raise ValueError(f"Failed to decrypt secret: {key}") from exc
             else:
-                raise ValueError("Failed to decrypt secret") from None
+                raise ValueError(f"Failed to decrypt secret: {key}") from None
 
         return plaintext.decode()
 
@@ -105,27 +110,33 @@ class FernetSecretsBackend(SecretsBackend):
 
     async def set_secret(self, key: str, value: str) -> None:
         """Encrypt *value* and upsert it under *key*."""
+        key = validate_key(key)
         if self._session is None:
             raise RuntimeError("FernetSecretsBackend: no DB session set")
 
         encrypted = self._fernet.encrypt(value.encode())
         org_id = await self._read_org_id_from_session()
 
-        stmt = pg_insert(Secret).values(
-            id=uuid.uuid4(),
-            organisation_id=org_id,
-            key=key,
-            encrypted_value=encrypted,
-        )
-        stmt = stmt.on_conflict_do_update(
-            index_elements=["organisation_id", "key"],
-            set_={"encrypted_value": encrypted},
-        )
-        await self._session.execute(stmt)
+        stmt = select(Secret).where(Secret.key == key, Secret.organisation_id == org_id).limit(1).with_for_update()
+        result = await self._session.execute(stmt)
+        existing = result.scalar_one_or_none()
+
+        if existing is not None:
+            existing.encrypted_value = encrypted
+        else:
+            self._session.add(
+                Secret(
+                    id=uuid.uuid4(),
+                    organisation_id=org_id,
+                    key=key,
+                    encrypted_value=encrypted,
+                )
+            )
         await self._session.flush()
 
     async def delete_secret(self, key: str) -> None:
         """Remove the record for *key* from the secrets table."""
+        key = validate_key(key)
         if self._session is None:
             raise RuntimeError("FernetSecretsBackend: no DB session set")
 

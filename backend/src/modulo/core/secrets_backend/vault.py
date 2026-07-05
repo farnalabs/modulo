@@ -18,7 +18,7 @@ import asyncio
 import os
 from typing import Any
 
-from modulo.core.secrets_backend import SecretsBackend
+from modulo.core.secrets_backend import SecretsBackend, validate_key
 
 _TIMEOUT: float = 30.0
 
@@ -94,6 +94,7 @@ class VaultSecretsBackend(SecretsBackend):
         return f"{self._path_prefix}/{key}"
 
     async def get_secret(self, key: str) -> str:
+        key = validate_key(key)
         client = await self._ensure_client()
         path = self._secret_path(key)
 
@@ -125,6 +126,7 @@ class VaultSecretsBackend(SecretsBackend):
         return str(value)
 
     async def set_secret(self, key: str, value: str) -> None:
+        key = validate_key(key)
         client = await self._ensure_client()
         path = self._secret_path(key)
 
@@ -144,6 +146,7 @@ class VaultSecretsBackend(SecretsBackend):
             raise RuntimeError(f"VaultSecretsBackend: unexpected error writing secret: {exc}") from exc
 
     async def delete_secret(self, key: str) -> None:
+        key = validate_key(key)
         client = await self._ensure_client()
         path = self._secret_path(key)
 

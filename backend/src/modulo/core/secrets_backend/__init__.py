@@ -40,6 +40,14 @@ class SecretsBackend(ABC):
         ...
 
 
+def validate_key(key: str) -> str:
+    """Validate and normalise a secret key. Raises ValueError if empty."""
+    stripped = key.strip()
+    if not stripped:
+        raise ValueError("Secret key must be a non-empty string")
+    return stripped
+
+
 def create_secrets_backend(
     *,
     fernet_key: str | None = None,
@@ -54,6 +62,8 @@ def create_secrets_backend(
 
     Args:
         fernet_key: Fernet encryption key (required only by FernetSecretsBackend).
+        old_fernet_key: Optional previous Fernet key for no-downtime rotation.
+            Ignored by ``vault`` and ``aws`` backends.
         session: Optional SQLAlchemy async session (required by FernetSecretsBackend
             when storing secrets in the database).
         backend_name: Override the backend name. If *None* the env var
