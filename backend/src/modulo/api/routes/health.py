@@ -94,7 +94,10 @@ async def _check_checkpointer() -> CheckResult:
                 detail=f"checkpoint_migrations table not accessible: {exc}",
             )
         finally:
-            await conn.close()
+            try:
+                await conn.close()
+            except Exception:
+                pass
         return CheckResult(status="ok", detail="checkpointer schema accessible")
     except Exception as exc:
         return CheckResult(status="unavailable", detail=str(exc))
