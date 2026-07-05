@@ -107,11 +107,19 @@ StateGraph-based pipeline executor. Compiles pipeline config into a LangGraph gr
 - [ ] DB connection lost mid-run → no explicit handling. `ModuloPostgresSaver` would raise connection error. In-memory graph state is lost if checkpointer is unreachable (already in Known Gaps).
 - [x] OTel exporter unavailable → non-fatal, run continues (LangGraph defaults to raise_error=False for callbacks; verified)
 - [x] `ProgrammingError` on pipeline snapshot routes → 501 Not Implemented (snapshot endpoints, graph replace, node conversion in pipelines.py)
-- [ ] `ProgrammingError` on run CRUD routes → missing on 13/14 routes in `runs.py`. Only `reveal_node_prompt` has the catch. Routes like `trigger_run`, `get_run_status`, `cancel_run`, `get_run_io`, `export_fixture`, `workspace_lease`, `workspace_events`, `get_node_output`, `observe_node`, `recover_node`, `diff_node_output`, `run_stats`, `run_heatmap` all lack `ProgrammingError→501` handling.
-- [ ] `ProgrammingError` on pipeline CRUD routes → missing on 8/16 routes in `pipelines.py`. Routes `list`, `create`, `get`, `get_graph`, `update`, `delete`, `clone`, `save-as-composite` lack `ProgrammingError→501` handling.
+- [x] `ProgrammingError` on run CRUD routes → all 14 routes in `runs.py` now have `ProgrammingError→501` handling (verified against code at `backend/src/modulo/api/routes/runs.py`).
+- [x] `ProgrammingError` on pipeline CRUD routes → all 16 routes in `pipelines.py` now have `ProgrammingError→501` handling (verified against code at `backend/src/modulo/api/routes/pipelines.py`).
 - [x] `ProgrammingError` on stage CRUD routes → all 5 routes in `stages.py` have the catch.
 - [ ] Empty pipeline (no nodes) produces raw HTTP 500 instead of structured 422 → `graph_cache.py` raises `ValueError` which becomes 500 in `execute()`. Pre-run validation (`GraphValidator._check_topology`) catches this and returns `TOPOLOGY_NO_NODES` error, but `graph_cache` exception still fires if validation is somehow bypassed.
 - [ ] Node retry policy referenced in pipeline config schema but NOT implemented in pipeline engine → no retry loop exists in `node_runner.py` or `executor.py`.
+
+### Frontend i18n Issues
+
+- [ ] RunDetailView.vue → 19 hardcoded English strings, line 107 node status missing `capitalize` class
+- [ ] PipelineListView.vue → 25 hardcoded English strings
+- [ ] PipelineEditorView.vue → 80+ hardcoded English strings (worst offender, only 1 `$t()` call in 874 lines)
+- [ ] PipelineTemplateGallery.vue → 10 hardcoded English strings, locale keys exist but ignored in favour of inline text
+- [ ] CompositeEditorView.vue → 15 hardcoded English strings, zero i18n usage, no locale section exists
 
 ## Known Gaps
 - Node timeout raises `TimeoutError` (Python built-in), not a domain-specific `node_timeout` error code — confusing in API responses and logs.
@@ -123,7 +131,7 @@ StateGraph-based pipeline executor. Compiles pipeline config into a LangGraph gr
 - **Missing BDD for eval-before-interrupt**: The eval-before-interrupt feature in `node_runner.py` has no BDD scenario.
 - **Missing BDD for node timeout**: The `@cancellable_node` timeout wrapper has no BDD scenario.
 - **Empty pipeline (no nodes) produces raw 500**: `graph_cache.py` raises `ValueError` which becomes HTTP 500 instead of a structured validation error.
-- **ProgrammingError→501 catches missing on 13/14 run routes and 8/16 pipeline routes**: `runs.py` and `pipelines.py` do not uniformly catch `ProgrammingError` on DB-accessing route handlers, risking raw 500s when DB tables don't exist yet.
+- **ProgrammingError→501 catches — FIXED**: All 14 run routes in `runs.py` and all 16 pipeline routes in `pipelines.py` now uniformly catch `ProgrammingError` on DB-accessing route handlers. No longer a gap.
 - **Concurrent `resume()` for same run has no locking**: `executor.py:resume()` calls `aupdate_state` + `astream_events` without locking around the resume path — two concurrent resumes could race.
 - **Manual node schema validation error produces `error_code="ValueError"`**: `_validate_against_schema` raises `ValueError` which becomes a confusing non-domain-specific error code in the run result.
 - **No per-node output schema validation for agent nodes**: Only manual nodes validate output against `output_schema_json`. Agent node outputs are not schema-validated before promotion.
@@ -135,3 +143,4 @@ StateGraph-based pipeline executor. Compiles pipeline config into a LangGraph gr
 | Date | Scope | Findings | Status |
 |---|---|---|---|
 | 2026-07-04 | Cross-cutting QA (6 lenses) | Behaviour completeness, edge case audit, error path audit, cross-module contract check, gap freshness, resilience auditing | [x] 30 behaviours verified [x] 33 error/edge case checkboxes added [x] 21 ProgrammingError catch sites added [x] 2 unit test files created [x] Known Gaps refreshed |
+| 2026-07-05 | Cross-cutting QA — code verification pass | Verify stale product map claims against actual code; check ProgrammingError catches, executor error handling, frontend i18n | [x] All 14 run routes confirmed with ProgrammingError catches (product map was stale — claimed 13/14 missing) [x] All 16 pipeline routes confirmed with ProgrammingError catches (product map was stale — claimed 8/16 missing) [x] Executor error handling verified: NodeInterrupt→awaiting_human, EvalBlockedError→eval_failed, OutputRejectedError→output_rejected, RunCancelledError→cancelled, RunawayRunError→failed/runaway, TimeoutError→failed/node_timeout [x] 5 frontend run views audited for i18n [ ] Frontend i18n gaps documented (5 views, ~149 hardcoded strings) |
