@@ -166,6 +166,7 @@
 
 <script setup lang="ts">
 import { ref, onMounted } from 'vue'
+import { useI18n } from 'vue-i18n'
 import { api } from '../lib/api/client'
 import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
@@ -210,6 +211,8 @@ interface ViewData {
   teams: TeamInfo[]
   orgEvalPassRate: number | null
 }
+
+const { t } = useI18n()
 
 const loading = ref(true)
 const error = ref<string | null>(null)
@@ -259,11 +262,11 @@ async function loadData() {
     ])
 
     if (summaryErr) {
-      error.value = `Failed to load dashboard: ${formatError(summaryErr)}`
+      error.value = t('views.TeamComparisonView.failed_to_load_dashboard') + ' ' + formatError(summaryErr)
       return
     }
     if (teamsErr) {
-      error.value = `Failed to load teams: ${formatError(teamsErr)}`
+      error.value = t('views.TeamComparisonView.failed_to_load_teams') + ' ' + formatError(teamsErr)
       return
     }
 
@@ -316,7 +319,7 @@ async function loadData() {
     // Cache per-pipeline eval data for drill-down
     pipelineEvalCache.value = s.eval_pass_rate?.per_team_pipeline ?? {}
   } catch (e: unknown) {
-    error.value = `Failed to load data: ${e instanceof Error ? e.message : String(e)}`
+    error.value = t('views.TeamComparisonView.failed_to_load_data') + ' ' + (e instanceof Error ? e.message : String(e))
   } finally {
     loading.value = false
   }
