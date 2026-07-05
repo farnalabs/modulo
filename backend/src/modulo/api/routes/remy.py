@@ -128,6 +128,10 @@ class StreamRequest(BaseModel):
         None, ge=1024, le=1_000_000,
         description="Override context window (defaults to session value)",
     )
+    api_key: str | None = Field(None, description="Optional API key override. Auto-resolved from model backends if omitted.")
+    mcp_api_key: str | None = Field(None, description="MCP API key for tool execution.")
+    page_context: str | None = Field(None, description="Current page context for Remy's context-awareness.")
+    system_prompt: str | None = Field(None, description="System prompt override.")
 
 
 class PermissionResponse(BaseModel):
