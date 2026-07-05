@@ -22,10 +22,6 @@ from typing import Any, Self, cast
 from opentelemetry import trace
 from opentelemetry.trace import Status, StatusCode
 
-from modulo.connectors.asana import AsanaConnector
-from modulo.connectors.azure_key_vault import AzureKeyVaultConnector
-from modulo.connectors.azure_pipelines import AzurePipelinesConnector
-from modulo.connectors.azure_repos import AzureReposConnector
 from modulo.connectors.base import (
     ConnectorACL,
     ConnectorBase,
@@ -35,6 +31,12 @@ from modulo.connectors.base import (
     ConnectorType,
     HealthResult,
 )
+from modulo.core.plugin_registry import get_plugin_registry
+from modulo.core.secrets_backend import SecretsBackend
+from modulo.connectors.asana import AsanaConnector
+from modulo.connectors.azure_key_vault import AzureKeyVaultConnector
+from modulo.connectors.azure_pipelines import AzurePipelinesConnector
+from modulo.connectors.azure_repos import AzureReposConnector
 from modulo.connectors.bitbucket import BitbucketConnector
 from modulo.connectors.buildkite import BuildkiteConnector
 from modulo.connectors.ci_runner import GitHubActionsCIRunner, GitLabCIRunner
@@ -62,6 +64,7 @@ from modulo.connectors.opsgenie import OpsgenieConnector
 from modulo.connectors.pagerduty import PagerDutyConnector
 from modulo.connectors.pypi import PyPIConnector
 from modulo.connectors.sentry import SentryConnector
+from modulo.connectors.shell import ShellConnector
 from modulo.connectors.sharepoint import SharePointConnector
 from modulo.connectors.shortcut import ShortcutConnector
 from modulo.connectors.slack import SlackConnector
@@ -72,13 +75,16 @@ from modulo.connectors.trello import TrelloConnector
 from modulo.connectors.trivy import TrivyConnector
 from modulo.connectors.youtrack import YouTrackConnector
 from modulo.core.pipeline_engine.output_filter import filter_payload_for_injection
-from modulo.core.plugin_registry import get_plugin_registry
-from modulo.core.secrets_backend import SecretsBackend
 from modulo.db.models.connector_instance import ConnectorInstance
 
-from .locking import ConnectorLockError as ConnectorLockError
-
 logger = logging.getLogger(__name__)
+
+_SAMPLE_LIMIT: int = 100
+_LOCALHOST_8080: str = "http://localhost:8080"
+_LOCALHOST_3000: str = "http://localhost:3000"
+_LOCALHOST_5678: str = "http://localhost:5678"
+_LOCALHOST_8111: str = "http://localhost:8111"
+_LOCALHOST_9000: str = "http://localhost:9000"
 
 
 class ConnectorNotFoundError(KeyError):
@@ -137,10 +143,15 @@ class ConnectorHub:
         for ci in instances:
             try:
                 raw_str = await self._secrets_backend.get_secret(str(ci.id))
+                if raw_str is None:
+                    raise ConnectorDecryptError(ci.id)
                 try:
-                    creds: dict[str, Any] = json.loads(raw_str)
+                    parsed = json.loads(raw_str)
                 except json.JSONDecodeError as exc:
                     raise ConnectorDecryptError(ci.id) from exc
+                if not isinstance(parsed, dict):
+                    raise ConnectorDecryptError(ci.id)
+                creds: dict[str, Any] = parsed
                 connector = _build_connector(
                     ci.connector_type_id,
                     ci.config_json,
@@ -159,12 +170,11 @@ class ConnectorHub:
                 )
                 self._connectors[ci.id] = traced
                 self._acls[ci.id] = acl
-            except Exception as exc:
+            except Exception:
                 logger.warning(
-                    "Skipping connector %s (%s): %s",
+                    "Skipping connector %s (%s)",
                     ci.id,
                     ci.connector_type_id,
-                    exc,
                     exc_info=True,
                 )
         self._initialised = True
@@ -175,16 +185,13 @@ class ConnectorHub:
         except KeyError:
             raise ConnectorNotFoundError(connector_id) from None
 
-    def _lookup(self, connector_id: uuid.UUID) -> ConnectorBase:
-        return self._get_or_raise(connector_id)
-
     def get(self, connector_id: uuid.UUID, *, operation: str | None = None) -> ConnectorBase:
         """Return the initialised connector. Raises ConnectorNotFoundError if absent.
 
         When *operation* is provided, ACL is checked before returning the connector.
         Callers that already enforce ACL at a higher layer may omit it.
         """
-        connector = self._lookup(connector_id)
+        connector = self._get_or_raise(connector_id)
         if operation is not None:
             self._acls[connector_id].check(operation)
         return connector
@@ -199,7 +206,7 @@ class ConnectorHub:
         connector_id: uuid.UUID,
         resource: str,
         filters: dict[str, Any] | None = None,
-        limit: int = 100,
+        limit: int = _SAMPLE_LIMIT,
     ) -> list[dict[str, Any]]:
         """Sample data from a connector by querying the given resource.
 
@@ -277,11 +284,14 @@ class _TracedConnector(ConnectorBase):
                 result = await method(*args, **kwargs)
                 span.set_status(Status(StatusCode.OK))
                 if post_span:
-                    post_span(span, result)
+                    try:
+                        post_span(span, result)
+                    except Exception as meta_exc:
+                        logger.warning("post_span callback failed: %s", meta_exc)
                 return result
             except Exception as exc:
-                span.set_status(Status(StatusCode.ERROR, f"{operation} failed: {exc}"))
-                span.record_exception(exc)
+                span.set_status(Status(StatusCode.ERROR, f"{operation} failed"))
+                span.set_attribute("connector.error_type", type(exc).__name__)
                 raise
 
     async def health_check(self) -> HealthResult:
@@ -337,9 +347,10 @@ def _get_cred(creds: dict[str, Any], key: str, type_id: str) -> Any:
 
 def _require_config(config: dict[str, Any] | None, key: str, label: str) -> str:
     """Extract and validate a required config value. Raises ValueError if missing."""
-    value = (config or {}).get(key)
-    if not value:
+    cfg = config or {}
+    if key not in cfg:
         raise ValueError(f"{label} requires {key!r} in config_json")
+    value = cfg[key]
     return value
 
 
@@ -373,8 +384,6 @@ def _build_connector(
             return GitLabConnector(token=_get_cred(creds, "token", type_id))
         case "shell":
             allowed = config.get("allowed_commands")
-            from modulo.connectors.shell import ShellConnector
-
             return ShellConnector(runtime_provider=runtime_provider, allowed_commands=allowed)
         case "linear":
             return LinearConnector(api_key=_get_cred(creds, "api_key", type_id))
@@ -419,7 +428,7 @@ def _build_connector(
             return JenkinsConnector(
                 username=_get_cred(creds, "username", type_id),
                 token=_get_cred(creds, "token", type_id),
-                base_url=config.get("base_url", "http://localhost:8080"),
+                base_url=config.get("base_url", _LOCALHOST_8080),
             )
         case "confluence":
             instance = _require_config(config, "instance", "ConfluenceConnector")
@@ -427,7 +436,7 @@ def _build_connector(
         case "teamcity":
             return TeamCityConnector(
                 token=_get_cred(creds, "token", type_id),
-                base_url=config.get("base_url", "http://localhost:8111"),
+                base_url=config.get("base_url", _LOCALHOST_8111),
             )
         case "azure_key_vault":
             vault_url = _require_config(config, "vault_url", "AzureKeyVaultConnector")
@@ -459,7 +468,7 @@ def _build_connector(
             return PagerDutyConnector(token=_get_cred(creds, "token", type_id))
         case "grafana":
             return GrafanaConnector(
-                token=_get_cred(creds, "token", type_id), base_url=config.get("base_url", "http://localhost:3000")
+                token=_get_cred(creds, "token", type_id),                 base_url=config.get("base_url", _LOCALHOST_3000)
             )
         case "microsoft_teams":
             return MicrosoftTeamsConnector(token=_get_cred(creds, "token", type_id))
@@ -468,14 +477,14 @@ def _build_connector(
         case "onepassword":
             return OnePasswordConnector(
                 token=_get_cred(creds, "token", type_id),
-                base_url=config.get("base_url", "http://localhost:8080"),
+                base_url=config.get("base_url", _LOCALHOST_8080),
             )
         case "opsgenie":
             return OpsgenieConnector(api_key=_get_cred(creds, "api_key", type_id))
         case "sonarqube":
             return SonarQubeConnector(
                 token=_get_cred(creds, "token", type_id),
-                base_url=config.get("base_url", "http://localhost:9000"),
+                base_url=config.get("base_url", _LOCALHOST_9000),
             )
         case "codeclimate":
             return CodeClimateConnector(token=_get_cred(creds, "token", type_id))
@@ -484,12 +493,12 @@ def _build_connector(
         case "trivy":
             return TrivyConnector(
                 token=_get_cred(creds, "token", type_id),
-                base_url=config.get("base_url", "http://localhost:8080"),
+                base_url=config.get("base_url", _LOCALHOST_8080),
             )
         case "n8n":
             return N8NConnector(
                 token=_get_cred(creds, "token", type_id),
-                base_url=config.get("base_url", "http://localhost:5678"),
+                base_url=config.get("base_url", _LOCALHOST_5678),
             )
         case _:
             registry = get_plugin_registry()
