@@ -60,16 +60,17 @@ status: partial
 - [x] Admin sends empty name → 422
 - [x] Admin sends name exceeding 255 chars → 422
 - [x] Admin sends description exceeding 2000 chars → 422
-- [x] Admin updates to a name that already exists in the same org → 409 (duplicate name check now implemented)
+- [x] Admin updates to a name that already exists in the same org → 409 (duplicate name check now implemented in admin route too)
 - [x] Admin updates to a name that already exists in a different org → 200 (per-org uniqueness)
 - [x] Admin updates non-existent team → 404
+- [x] Admin can clear description by sending explicit null or empty string
 - [x] Operator updates team → 403
 - [x] Unauthenticated request updates team → 401/403
 - [x] Immutable fields (id, organisation_id, created_at, updated_at) silently ignored in update
 
 ### Delete team
 - [x] Admin deletes team with no owned resources → 204
-- [x] Admin deletes team that owns resources → 409 with pipeline count (pipelines checked; stages, connectors, model backends not yet checked)
+- [x] Admin deletes team that owns resources → 409 with resource counts (pipelines, stages, connectors, model backends, library primitives)
 - [x] Admin deletes non-existent team → 404
 - [x] Operator deletes team → 403
 - [x] Unauthenticated request deletes team → 401/403
@@ -101,12 +102,36 @@ status: partial
 - [x] Unauthenticated request → 401/403
 - [x] Removing last admin from team — allowed (no admin-preservation guard)
 
+### Membership — Change role
+- [x] Admin changes member role via PATCH → 200, updated membership returned
+- [x] Membership not found → 404
+- [x] Team not found → 404
+- [x] Invalid role string → 422
+- [x] Operator changes role → 403 (when not team operator)
+- [x] Unauthenticated request → 401/403
+- [x] Team operator can change roles up to their own role
+- [x] Team operator cannot grant a role above their own
+
+### Audit events
+- [x] team_created audit event written on create (both /api/v1/teams and /api/v1/admin/teams)
+- [x] team_updated audit event written on update (both routes)
+- [x] team_deleted audit event written on delete (both routes)
+- [x] Audit event includes org_id, actor_user_id, resource_type, resource_id, payload_json
+
+### Deletion resource checks
+- [x] Team deletion blocked when team owns pipelines
+- [x] Team deletion blocked when team owns stages
+- [x] Team deletion blocked when team owns connectors
+- [x] Team deletion blocked when team owns model backends
+- [x] Team deletion blocked when team owns library primitives
+- [x] Team deletion proceeds when no resources owned → 204
+
 ### Security & concurrency
 - [x] RLS enforces org isolation on all team and membership queries
 - [x] SET LOCAL app.organisation_id set before every query
 - [x] Team name uniqueness enforced at DB level (UniqueConstraint)
 - [x] Membership role constrained to valid values (CheckConstraint)
-- [x] Membership uniqueness (team_id + user_id) enforced at DB level
+- [x] Membership uniqueness (team_id + account_id) enforced at DB level
 - [x] cascade deletes: team deletion cascades to memberships (ondelete=CASCADE)
 - [x] RESTRICT on account_id FK: prevents deleting user who created teams
 - [x] Concurrent duplicate name creation handled (DB constraint catches)
@@ -121,13 +146,8 @@ status: partial
 
 ## Known Gaps
 
-- Team deletion checks for pipelines, stages, connectors, and model backends (admin.py:1070-1082) but does NOT check for library primitives — partial implementation of PRD 9.3 deletion policy
 - Membership add does not enforce privilege cap for non-admin grantors (PRD 9.3: a team operator can only grant roles up to their own team role — currently requires org admin)
 - Notification endpoints not exposed through REST API (field exists in model, no route)
 - Daily spend limit not exposed through REST API
-- No audit events written for any team CRUD mutation
-- `admin.py` team update route (PUT /api/v1/admin/teams/{team_id}) does NOT check for duplicate name when renaming — only the /api/v1/teams route has the check
-- Cannot clear description via PATCH (None values are filtered out in update endpoint)
-- Membership `update_member_role` CRUD function exists but is NOT exposed via any REST route or admin route
-- Integration tests for team isolation are skipped (marked with `@pytest.mark.skip(reason="awaiting-implementation")`)
-- No integration tests for the duplicate name update fix or the membership privilege cap
+- No integration tests for the membership privilege cap
+- RLS isolation test (`test_teams_isolated_between_orgs`) still skipped — uses SET_CONFIG directly instead of the app-level RLS helpers

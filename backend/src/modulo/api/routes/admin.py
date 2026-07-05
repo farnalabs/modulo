@@ -35,13 +35,14 @@ from modulo.db.crud.publisher import (
     update_publisher as crud_update_publisher,
 )
 from modulo.db.crud.run import batch_delete_old_terminal_runs, purge_runs
-from modulo.db.crud.team import create_team, delete_team, list_teams
+from modulo.db.crud.team import create_team, delete_team, get_team_by_name, list_teams
 from modulo.db.crud.team import update_team as crud_update_team
 from modulo.db.crud.team_membership import list_team_memberships_for_account, remove_team_member
 from modulo.db.crud.token_family import blacklist_family, list_families_for_account
 from modulo.db.models.account import Account
 from modulo.db.models.api_key import OrgApiKey
 from modulo.db.models.connector_instance import ConnectorInstance
+from modulo.db.models.library_primitive import LibraryPrimitive
 from modulo.db.models.eval_definition import EvalDefinition
 from modulo.db.models.eval_result import EvalResult
 from modulo.db.models.model_backend import ModelBackend
@@ -432,6 +433,20 @@ async def admin_create_team(
             name=req.name,
             account_id=current_user.account_id,
             description=req.description,
+        )
+
+    from modulo.core.audit_logger import append_audit_event
+
+    async with session.begin():
+        await set_rls_org(session, current_user.organisation_id)
+        await append_audit_event(
+            session,
+            org_id=current_user.organisation_id,
+            event_type="team_created",
+            actor_user_id=current_user.account_id,
+            resource_type="team",
+            resource_id=team.id,
+            payload_json={"team_id": str(team.id), "name": team.name},
         )
 
     return AdminCreateTeamResponse(
@@ -1032,18 +1047,37 @@ async def admin_update_team(
             detail="Only admin users can update teams",
         )
 
-    updates: dict[str, object] = {}
-    if req.name is not None:
-        updates["name"] = req.name
-    if req.description is not None:
-        updates["description"] = req.description
+    updates = req.model_dump(exclude_unset=True)
 
     async with session.begin():
         await set_rls_org(session, current_user.organisation_id)
+
+        if "name" in updates:
+            existing = await get_team_by_name(session, current_user.organisation_id, updates["name"])
+            if existing is not None and existing.id != team_id:
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail="A team with this name already exists in your organisation",
+                )
+
         team = await crud_update_team(session, team_id, updates)
 
     if team is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Team not found")
+
+    from modulo.core.audit_logger import append_audit_event
+
+    async with session.begin():
+        await set_rls_org(session, current_user.organisation_id)
+        await append_audit_event(
+            session,
+            org_id=current_user.organisation_id,
+            event_type="team_updated",
+            actor_user_id=current_user.account_id,
+            resource_type="team",
+            resource_id=team_id,
+            payload_json={"team_id": str(team_id), "updates": updates},
+        )
 
     return AdminTeamItem(
         id=str(team.id),
@@ -1075,6 +1109,7 @@ async def admin_delete_team(
             (Stage, "stage"),
             (ConnectorInstance, "connector"),
             (ModelBackend, "model backend"),
+            (LibraryPrimitive, "library primitive"),
         ]:
             count = (
                 await session.execute(

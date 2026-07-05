@@ -29,7 +29,7 @@ def _make_membership(**overrides: object) -> MagicMock:
     m.id = overrides.get("id", _MEMBERSHIP_ID)
     m.organisation_id = overrides.get("organisation_id", _ORG_ID)
     m.team_id = overrides.get("team_id", _TEAM_ID)
-    m.user_id = overrides.get("user_id", _USER_ID)
+    m.account_id = overrides.get("account_id", _USER_ID)
     m.role = overrides.get("role", "viewer")
     return m
 
@@ -46,14 +46,14 @@ class TestAddMember:
                 mock_session,
                 org_id=_ORG_ID,
                 team_id=_TEAM_ID,
-                user_id=_USER_ID,
+                account_id=_USER_ID,
                 role="viewer",
             )
 
             mock_membership.assert_called_once_with(
                 organisation_id=_ORG_ID,
                 team_id=_TEAM_ID,
-                user_id=_USER_ID,
+                account_id=_USER_ID,
                 role="viewer",
             )
             mock_session.add.assert_called_once()
@@ -71,15 +71,15 @@ class TestAddMember:
                 mock_session,
                 org_id=_ORG_ID,
                 team_id=_TEAM_ID,
-                user_id=_USER_ID,
-                role="admin",
+                account_id=_USER_ID,
+                role="operator",
             )
 
             mock_membership.assert_called_once_with(
                 organisation_id=_ORG_ID,
                 team_id=_TEAM_ID,
-                user_id=_USER_ID,
-                role="admin",
+                account_id=_USER_ID,
+                role="operator",
             )
             assert result is not None
 
@@ -107,8 +107,8 @@ class TestGetMembership:
 class TestListTeamMembers:
     async def test_returns_paginated_members(self, mock_session: AsyncMock) -> None:
         members = [
-            _make_membership(user_id=uuid.uuid4(), role="viewer"),
-            _make_membership(user_id=uuid.uuid4(), role="admin"),
+            _make_membership(account_id=uuid.uuid4(), role="viewer"),
+            _make_membership(account_id=uuid.uuid4(), role="operator"),
         ]
 
         count_result = MagicMock()
@@ -174,22 +174,22 @@ class TestRemoveMember:
         assert result is False
 
 
-class TestGetTeamMembershipByTeamAndUser:
+class TestGetTeamMembershipByTeamAndAccount:
     async def test_returns_membership_when_found(self, mock_session: AsyncMock) -> None:
         membership = _make_membership()
         mock_session.execute = AsyncMock(return_value=MagicMock(scalar_one_or_none=MagicMock(return_value=membership)))
 
-        from modulo.db.crud.team_membership import get_membership_by_team_and_user
+        from modulo.db.crud.team_membership import get_membership_by_team_and_account
 
-        result = await get_membership_by_team_and_user(mock_session, _TEAM_ID, _USER_ID)
+        result = await get_membership_by_team_and_account(mock_session, _TEAM_ID, _USER_ID)
         assert result is not None
         assert result.team_id == _TEAM_ID
-        assert result.user_id == _USER_ID
+        assert result.account_id == _USER_ID
 
     async def test_returns_none_when_not_found(self, mock_session: AsyncMock) -> None:
         mock_session.execute = AsyncMock(return_value=MagicMock(scalar_one_or_none=MagicMock(return_value=None)))
 
-        from modulo.db.crud.team_membership import get_membership_by_team_and_user
+        from modulo.db.crud.team_membership import get_membership_by_team_and_account
 
-        result = await get_membership_by_team_and_user(mock_session, _TEAM_ID, uuid.uuid4())
+        result = await get_membership_by_team_and_account(mock_session, _TEAM_ID, uuid.uuid4())
         assert result is None
