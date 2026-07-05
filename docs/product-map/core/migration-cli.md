@@ -46,12 +46,14 @@ Two implementations exist: `modulo-migrate` (click-based, JSONL format with auth
 - [x] Empty database tables handled without crash
 - [x] Non-existent input file returns error
 
-### Error handling
+### Checked after QA pass (2026-07-05)
 
-- [ ] FileNotFoundError on import file → graceful SystemExit (migrate.py missing; migrate_org.py handled)
-- [ ] DB connection failure → clear error message (both CLIs missing)
-- [ ] session.rollback() inside import loop → risk of nested transaction errors (both CLIs)
-- [ ] Auth check before file read (both CLIs read file before verifying auth)
+- [x] FileNotFoundError on import file → graceful SystemExit (both CLIs handle via Click path validation + _read_jsonl / _load_bundle guards)
+- [x] DB connection failure → clear error message (both CLIs now wrap async session in try/except)
+- [x] session.rollback() inside import loop → removed harmful rollback; now lets session context manager handle cleanup
+- [x] Auth check before file read (migrate.py import-org now verifies auth before reading input file)
+- [x] Hash verification during import (migrate.py now verifies export hash before importing)
+- [x] Existing output file returns error without `--force` (migrate_org.py added --force flag)
 
 ### modulo export-org / import-org (argparse-based, JSON, unauthenticated)
 
@@ -59,11 +61,11 @@ Two implementations exist: `modulo-migrate` (click-based, JSONL format with auth
 - [x] Export includes org entity + users, teams, stages, schemas, schema_versions, model_backends, library_primitives, connector_instances, agents, pipelines, runs
 - [x] Export includes SHA-256 bundle hash for integrity verification
 - [x] Org not found returns error message
-- [ ] Existing output file returns error without `--force`
+- [x] Existing output file returns error without `--force` (added --force flag)
 - [x] `import-org --file` reads JSON file and bulk-imports records
 - [x] Import skips existing records (idempotent)
 - [x] Import creates missing org automatically (upsert)
-- [ ] Non-existent input file returns error
+- [x] Non-existent input file returns error (handled by _load_bundle path.exists() check)
 
 ### Edge cases
 
@@ -77,9 +79,17 @@ Two implementations exist: `modulo-migrate` (click-based, JSONL format with auth
 - [ ] Interrupted export: partial output file left on disk (both CLIs)
 - [ ] Hash collision during import (both CLIs)
 
+### Resilience (QA pass 2026-07-05)
+
+- [x] Auth verified before input file is read — prevents unauthenticated file probing
+- [x] Export hash verified before import begins — detection of corrupted file
+- [x] DB connection failure produces clear error message instead of raw stack trace
+- [x] Flush failure no longer calls `session.rollback()` — avoids nested transaction corruption
+- [x] Existing output file protected unless `--force` is passed
+
 ## Known Gaps
 
-- No unit tests for migrate_org.py (argparse-based modulo CLI) — migrate.py (modulo-migrate) has 26 tests; migrate_org.py has zero
+- No unit tests for migrate_org.py (argparse-based modulo CLI) — migrate.py (modulo-migrate) has 26+ tests; migrate_org.py has zero
 - No BDD feature files for migration/export behaviour
 - modulo-migrate requires auth token or admin secret — no interactive login
 - modulo (argparse) has no auth — runs with direct DB access
