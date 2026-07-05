@@ -148,13 +148,12 @@ def remove_user_from_team(request, username: str, team_name: str, client, ctx):
     with patch(
         "modulo.api.routes.teams.remove_team_member",
         new_callable=AsyncMock,
+    ), patch(
+        "modulo.api.routes.teams.get_membership",
+        new_callable=AsyncMock,
+        return_value=MagicMock(team_id=uuid.UUID(team_id)),
     ):
-        with patch(
-            "modulo.api.routes.teams.get_membership",
-            new_callable=AsyncMock,
-            return_value=MagicMock(team_id=uuid.UUID(team_id)),
-        ):
-            resp = client.delete(f"/api/v1/teams/{team_id}/members/{membership_id}")
+        resp = client.delete(f"/api/v1/teams/{team_id}/members/{membership_id}")
     request.node._resp = resp
 
 

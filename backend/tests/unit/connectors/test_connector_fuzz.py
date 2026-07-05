@@ -11,7 +11,8 @@ from typing import Any
 import httpx
 import pytest
 import respx
-from hypothesis import HealthCheck, given, settings, strategies as st
+from hypothesis import HealthCheck, given, settings
+from hypothesis import strategies as st
 
 from modulo.connectors.base import ConnectorQuery, ConnectorResult
 from modulo.connectors.github import GitHubConnector
@@ -19,7 +20,6 @@ from modulo.connectors.jira import JiraConnector
 from modulo.connectors.linear import LinearConnector
 from modulo.connectors.notion import NotionConnector
 from modulo.connectors.slack import SlackConnector
-
 
 # ── Connector fixtures ───────────────────────────────────────────────────
 

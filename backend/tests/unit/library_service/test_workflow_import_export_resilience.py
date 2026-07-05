@@ -197,7 +197,6 @@ class TestMaterializeInvalidOwnerTeamId:
             "edges": [],
         }
 
-        from modulo.core.workflow_import_export import materialize_import
 
         with pytest.raises(ValueError, match=f"Team {fake_team_id} not found in this organisation"):
             await materialize_import(

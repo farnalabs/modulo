@@ -31,7 +31,7 @@ class TestUIToolDefinitions:
         assert len(_UI_TOOLS) == 11
 
     def test_tool_names_match_dict(self):
-        assert UI_TOOL_NAMES == set(_UI_TOOLS.keys())
+        assert set(_UI_TOOLS.keys()) == UI_TOOL_NAMES
 
     def test_required_tools_exist(self):
         required = {
@@ -39,7 +39,7 @@ class TestUIToolDefinitions:
             "extract_all", "get_page_interactables", "wait",
             "go_back", "get_url", "press",
         }
-        assert UI_TOOL_NAMES == required
+        assert required == UI_TOOL_NAMES
 
     def test_each_tool_has_description(self):
         for name, schema in _UI_TOOLS.items():
@@ -61,13 +61,13 @@ class TestToolConstants:
     """Tests for READ_TOOLS, NAV_TOOLS, WRITE_TOOLS, DESTRUCTIVE_PATTERNS."""
 
     def test_read_tools(self):
-        assert READ_TOOLS == {"extract", "extract_all", "get_page_interactables", "get_url"}
+        assert {"extract", "extract_all", "get_page_interactables", "get_url"} == READ_TOOLS
 
     def test_nav_tools(self):
-        assert NAV_TOOLS == {"navigate", "go_back"}
+        assert {"navigate", "go_back"} == NAV_TOOLS
 
     def test_write_tools(self):
-        assert WRITE_TOOLS == {"click", "fill", "select", "press"}
+        assert {"click", "fill", "select", "press"} == WRITE_TOOLS
 
     def test_sets_are_disjoint(self):
         assert READ_TOOLS.isdisjoint(NAV_TOOLS)

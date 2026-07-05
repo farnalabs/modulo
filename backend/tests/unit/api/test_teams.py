@@ -47,7 +47,7 @@ def _make_team(**overrides: object) -> MagicMock:
     t.id = overrides.get("id", _TEAM_ID)
     t.organisation_id = overrides.get("organisation_id", _ORG_ID)
     t.name = overrides.get("name", "Test Team")
-    t.description = overrides.get("description", None)
+    t.description = overrides.get("description")
     t.account_id = overrides.get("account_id", _USER_ID)
     t.notification_endpoints = overrides.get("notification_endpoints", [])
     t.created_at = _NOW

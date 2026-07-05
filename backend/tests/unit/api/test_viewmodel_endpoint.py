@@ -53,7 +53,7 @@ def _make_org(**overrides: object) -> MagicMock:
     org.id = overrides.get("id", _ORG_ID)
     org.name = overrides.get("name", "Test Org")
     org.settings_json = overrides.get("settings_json", {})
-    org.daily_spend_limit = overrides.get("daily_spend_limit", None)
+    org.daily_spend_limit = overrides.get("daily_spend_limit")
     return org
 
 

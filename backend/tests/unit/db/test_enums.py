@@ -60,7 +60,7 @@ class TestModelBackendProviderEnum:
             assert repr(value) in sql
 
     def test_provider_values_are_sorted(self) -> None:
-        assert _PROVIDER_VALUES == sorted(_PROVIDER_VALUES)
+        assert sorted(_PROVIDER_VALUES) == _PROVIDER_VALUES
 
     def test_enum_and_module_agree(self) -> None:
         assert frozenset(m.value for m in ModelBackendProvider) == frozenset(_PROVIDER_VALUES)

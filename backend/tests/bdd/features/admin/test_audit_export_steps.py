@@ -2,10 +2,8 @@
 
 from unittest.mock import patch
 
-import pytest
-from pytest_bdd import given, parsers, scenarios, then, when
 from fastapi.testclient import TestClient
-
+from pytest_bdd import given, parsers, scenarios, then, when
 
 scenarios("audit_export.feature")
 

@@ -6,8 +6,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from modulo.core.remy.skill_loader import SkillEntry, SkillLoader
 from modulo.core.remy.config_service import RemyConfig
+from modulo.core.remy.skill_loader import SkillEntry, SkillLoader
 from modulo.db.models.remy_skill import RemySkill
 
 

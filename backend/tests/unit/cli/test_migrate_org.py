@@ -1,7 +1,5 @@
 """Tests for the modulo (argparse) migration CLI tool."""
 
-import hashlib
-import json
 import uuid
 from datetime import UTC, datetime
 from decimal import Decimal
@@ -155,7 +153,6 @@ class TestEntityOrder:
 
     def test_has_correct_types(self) -> None:
         from modulo.db.models import Account, Pipeline
-        from modulo.db.models import Organisation as OrgModel
 
         model_types = {name: cls for name, cls in ENTITY_ORDER}
         assert model_types["users"] is Account

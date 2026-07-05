@@ -1,7 +1,7 @@
 """Unit tests for ProgrammingError handling on feedback API routes."""
 import uuid
 from collections.abc import AsyncGenerator, Generator
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from fastapi.testclient import TestClient

@@ -4,7 +4,7 @@ import asyncio
 import json
 import uuid
 from typing import Any
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 import pytest
 from langgraph.errors import NodeInterrupt
@@ -348,8 +348,6 @@ def _evaluate_conditional_gate(ctx: dict[str, Any]) -> None:
     The node function is async (make_hitl_gate_fn returns ``async def _hitl_gate``),
     so we wrap it in ``asyncio.run()`` to execute synchronously in tests.
     """
-    from modulo.core.eval_engine import EvalDefinition, EvalEngine, EvalResult
-    from modulo.core.pipeline_engine.node_runner import make_hitl_gate_fn
 
     gate_config = ctx.get("gate_config", {}).copy()
     state = ctx.get("state", {"artifacts": [], "_hitl_gates": []})
@@ -379,7 +377,7 @@ def _patch_mock_scores(
     eval_defs: list[Any] | None,
 ) -> None:
     """Patch EvalEngine.evaluate to use _mock_score per eval definition."""
-    from modulo.core.eval_engine import EvalBlockedError, EvalEngine, EvalResult
+    from modulo.core.eval_engine import EvalEngine, EvalResult
 
     score_map: dict[str, float] = {}
     for ed in ctx.get("eval_defs", []):

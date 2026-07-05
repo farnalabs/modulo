@@ -173,8 +173,8 @@ def _check_spend(cost: str, ctx: dict[str, Any]) -> None:
     org_limit = ctx.get("org_daily_spend_limit")
     team_limit = ctx.get("team_spend_limit")
     team_id = ctx.get("team_id")
-    org_spent = ctx.get("org_spent_today", Decimal("0"))
-    team_spent = ctx.get("team_spent_today", Decimal("0"))
+    org_spent = ctx.get("org_spent_today", Decimal(0))
+    team_spent = ctx.get("team_spent_today", Decimal(0))
 
     mock_org_count = MagicMock()
     mock_org_count.total_spend_usd = org_spent

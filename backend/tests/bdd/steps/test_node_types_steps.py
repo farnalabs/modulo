@@ -3,8 +3,6 @@
 Covers node_types.feature — standard agent, manual, and HITL gate nodes.
 """
 
-import uuid
-from unittest.mock import patch
 
 import pytest
 from pytest_bdd import given, parsers, scenarios, then, when

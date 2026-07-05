@@ -6,7 +6,6 @@ from unittest.mock import patch
 import pytest
 import yaml
 
-
 SAMPLE_MANIFEST = {
     "schema_version": 1,
     "routes": {
@@ -38,7 +37,6 @@ SAMPLE_MANIFEST = {
 
 
 def _reset_manifest():
-    from modulo.core.manifest import _MANIFEST
     import modulo.core.manifest as m
 
     m._MANIFEST = None
@@ -83,7 +81,7 @@ class TestManifestLoad:
 
     def test_returns_empty_dicts_when_file_missing(self):
         _reset_manifest()
-        from modulo.core.manifest import load_manifest, _MANIFEST
+        from modulo.core.manifest import load_manifest
 
         with tempfile.TemporaryDirectory() as tmpdir:
             fake_path = Path(tmpdir) / "nonexistent.yaml"
@@ -166,7 +164,6 @@ class TestManifestEndpoint:
 
 class TestGetManifestPathFiltering:
     def _reset_manifest(self):
-        from modulo.core.manifest import _MANIFEST
         import modulo.core.manifest as m
 
         m._MANIFEST = None

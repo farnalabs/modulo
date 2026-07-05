@@ -157,9 +157,7 @@ def when_write_resource(n8n_connector, resource, name):
             respx.post(f"{BASE_URL}/rest/workflows").mock(
                 return_value=httpx.Response(201, json={"data": {"id": "W1", "name": name, "active": False}})
             )
-        elif resource == "credential":
-            pass
-        elif resource == "invalid_resource":
+        elif resource == "credential" or resource == "invalid_resource":
             pass
         try:
             data: dict = {}

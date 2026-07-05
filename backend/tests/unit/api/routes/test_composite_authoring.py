@@ -47,11 +47,11 @@ def _make_template(**overrides: object) -> MagicMock:
     t.id = overrides.get("id", _TEMPLATE_ID)
     t.organisation_id = overrides.get("organisation_id", _ORG_ID)
     t.name = overrides.get("name", "Devil's Advocate")
-    t.description = overrides.get("description", None)
+    t.description = overrides.get("description")
     t.sub_pipeline_graph_json = overrides.get("sub_pipeline_graph_json", {"nodes": [], "edges": []})
     t.parameter_ports_json = overrides.get("parameter_ports_json", [])
-    t.input_schema_id = overrides.get("input_schema_id", None)
-    t.output_schema_id = overrides.get("output_schema_id", None)
+    t.input_schema_id = overrides.get("input_schema_id")
+    t.output_schema_id = overrides.get("output_schema_id")
     t.version = overrides.get("version", "1.0.0")
     t.account_id = _USER_ID
     t.created_at = _NOW
@@ -73,7 +73,7 @@ def _make_pipeline_mock(**overrides: object) -> MagicMock:
     p.id = overrides.get("id", _PIPELINE_ID)
     p.organisation_id = _ORG_ID
     p.name = overrides.get("name", "Test Pipeline")
-    p.description = overrides.get("description", None)
+    p.description = overrides.get("description")
     p.graph_nodes_json = overrides.get(
         "graph_nodes_json",
         [

@@ -3,8 +3,6 @@
 import asyncio
 from unittest.mock import AsyncMock, MagicMock, patch
 
-import pytest
-
 
 class TestStartSchedulers:
     def test_returns_three_tasks(self):

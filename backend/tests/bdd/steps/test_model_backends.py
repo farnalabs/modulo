@@ -65,10 +65,10 @@ def _make_mock_model_backend(**kwargs: object) -> MagicMock:
     )
     mb.default_params = kwargs.get("default_params", {})
     mb.visibility = kwargs.get("visibility", "org")
-    mb.fallback_backend_ids = kwargs.get("fallback_backend_ids", None)
+    mb.fallback_backend_ids = kwargs.get("fallback_backend_ids")
     mb.account_id = kwargs.get("account_id", uuid.UUID("00000000-0000-0000-0000-000000000002"))
-    mb.created_at = kwargs.get("created_at", None)
-    mb.updated_at = kwargs.get("updated_at", None)
+    mb.created_at = kwargs.get("created_at")
+    mb.updated_at = kwargs.get("updated_at")
     return mb
 
 

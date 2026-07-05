@@ -14,8 +14,8 @@ try:
 except (FileNotFoundError, OSError):
     pass
 
-from modulo.db.models.trigger import Trigger  # noqa: E402
-from tests.bdd.conftest import make_mock_run  # noqa: E402
+from modulo.db.models.trigger import Trigger
+from tests.bdd.conftest import make_mock_run
 
 
 def _make_mock_trigger(**overrides) -> MagicMock:
@@ -26,11 +26,11 @@ def _make_mock_trigger(**overrides) -> MagicMock:
     t.trigger_type = "cron"
     t.active = overrides.get("active", True)
     t.max_concurrent_runs = overrides.get("max_concurrent_runs", 5)
-    t.daily_spend_limit = overrides.get("daily_spend_limit", None)
+    t.daily_spend_limit = overrides.get("daily_spend_limit")
     t.cron_expression = overrides.get("cron_expression", "0 6 * * *")
     t.cron_timezone = overrides.get("cron_timezone", "UTC")
     t.config_json = overrides.get("config_json", {})
-    t.last_fired_at = overrides.get("last_fired_at", None)
+    t.last_fired_at = overrides.get("last_fired_at")
     t.next_fire_at = overrides.get("next_fire_at", datetime.datetime.now(datetime.UTC) + datetime.timedelta(hours=1))
     t.created_by = uuid.UUID("00000000-0000-0000-0000-000000000002")
     return t
@@ -199,7 +199,7 @@ def fire_cron_trigger(request, client):
     execute_result = MagicMock()
     execute_result.scalar_one_or_none = MagicMock(return_value=trigger_mock)
     execute_result.scalar_one = MagicMock(
-        return_value=getattr(request.node, "_today_cost", Decimal("0"))
+        return_value=getattr(request.node, "_today_cost", Decimal(0))
     )
     session.execute = AsyncMock(return_value=execute_result)
 

@@ -2,7 +2,6 @@
 
 import json
 import uuid
-from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from pytest_bdd import given, parsers, scenarios, then, when
@@ -296,7 +295,7 @@ def event_includes_name_and_detail(ctx):
     parsers.parse('EvalBlockedError is raised on "{eval_name}"'),
 )
 def eval_blocked_on(eval_name: str, ctx):
-    assert ctx.get("eval_blocked"), f"EvalBlockedError was not raised"
+    assert ctx.get("eval_blocked"), "EvalBlockedError was not raised"
     assert ctx.get("eval_blocked_detail") == eval_name, (
         f"Expected EvalBlockedError on {eval_name!r}, got {ctx.get('eval_blocked_detail')!r}"
     )
