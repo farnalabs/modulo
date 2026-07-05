@@ -154,14 +154,18 @@ async def _query_weekly_agg(
     }
 
 
+def _date_to_dt(d: date) -> datetime:
+    return datetime(d.year, d.month, d.day, tzinfo=UTC)
+
+
 async def _query_eval_summary(
     session: AsyncSession,
     org_id: uuid.UUID,
     start: date,
     end: date,
 ) -> dict[str, Any]:
-    start_dt = datetime(start.year, start.month, start.day, tzinfo=UTC)
-    end_dt = datetime(end.year, end.month, end.day, tzinfo=UTC) + timedelta(days=1)
+    start_dt = _date_to_dt(start)
+    end_dt = _date_to_dt(end) + timedelta(days=1)
     q = select(
         func.count().label("total_evals"),
         func.sum(case((EvalResult.passed == True, 1), else_=0)).label("passed_evals"),  # noqa: E712
@@ -173,7 +177,7 @@ async def _query_eval_summary(
     result = await session.execute(q)
     row = result.one()
     total = int(row.total_evals)
-    passed = int(row.passed_evals)
+    passed = int(row.passed_evals) if row.passed_evals else 0
     return {
         "total_evals": total,
         "passed_evals": passed,
@@ -187,8 +191,8 @@ async def _query_daily_eval_rates(
     start: date,
     end: date,
 ) -> list[tuple[date, int, int]]:
-    start_dt = datetime(start.year, start.month, start.day, tzinfo=UTC)
-    end_dt = datetime(end.year, end.month, end.day, tzinfo=UTC) + timedelta(days=1)
+    start_dt = _date_to_dt(start)
+    end_dt = _date_to_dt(end) + timedelta(days=1)
     eval_date = func.date(EvalResult.evaluated_at)
     q = (
         select(
@@ -206,6 +210,10 @@ async def _query_daily_eval_rates(
     )
     result = await session.execute(q)
     return [(row.eval_date, int(row.total), int(row.passed)) for row in result.all()]
+
+
+def _fmt_pct(value: float | None) -> str:
+    return f"{value}%" if value is not None else "\u2014"
 
 
 def _pct_delta(current: float, previous: float) -> float | None:
@@ -227,15 +235,11 @@ def _trend_symbol(delta_pct: float | None) -> str:
         return _TREND_UP
     if delta_pct < -threshold:
         return _TREND_DOWN
-    if delta_pct > 0:
-        return _TREND_UP
-    if delta_pct < 0:
-        return _TREND_DOWN
     return _TREND_FLAT
 
 
 def _format_summary_block(summary: dict[str, Any]) -> dict[str, Any]:
-    rate_str = f"{summary['avg_eval_pass_rate']}%" if summary["avg_eval_pass_rate"] is not None else "\u2014"
+    rate_str = _fmt_pct(summary['avg_eval_pass_rate'])
     return {
         "type": "section",
         "fields": [
@@ -247,9 +251,9 @@ def _format_summary_block(summary: dict[str, Any]) -> dict[str, Any]:
 
 
 def _format_trend_section(wow: dict[str, Any], summary: dict[str, Any]) -> dict[str, Any]:
-    rate_str = f"{summary['avg_eval_pass_rate']}%" if summary["avg_eval_pass_rate"] is not None else "\u2014"
+    rate_str = _fmt_pct(summary['avg_eval_pass_rate'])
     prev_rate = wow["previous_week_avg_pass_rate"]
-    prev_rate_str = f"{prev_rate}%" if prev_rate is not None else "\u2014"
+    prev_rate_str = _fmt_pct(prev_rate)
 
     runs_line = (
         f"{_trend_symbol(wow['runs_delta_pct'])} *Runs*: {summary['total_runs']} "
@@ -282,8 +286,8 @@ def _fmt_delta(delta_pct: float | None) -> str:
 def _format_eval_breakdown(eval_bd: dict[str, Any]) -> dict[str, Any]:
     cw = eval_bd["current_week"]
     pw = eval_bd["previous_week"]
-    cw_rate = f"{cw['pass_rate']}%" if cw["pass_rate"] is not None else "\u2014"
-    pw_rate = f"{pw['pass_rate']}%" if pw["pass_rate"] is not None else "\u2014"
+    cw_rate = _fmt_pct(cw['pass_rate'])
+    pw_rate = _fmt_pct(pw['pass_rate'])
     return {
         "type": "section",
         "text": {
@@ -300,7 +304,7 @@ def _format_eval_breakdown(eval_bd: dict[str, Any]) -> dict[str, Any]:
 def _format_trend_block(trend: list[dict[str, Any]]) -> dict[str, Any]:
     lines = ["*Daily Trend (last 7 days)*"]
     for entry in trend:
-        rate_str = f"{entry['eval_pass_rate']}%" if entry["eval_pass_rate"] is not None else "\u2014"
+        rate_str = _fmt_pct(entry['eval_pass_rate'])
         lines.append(
             f"\u2022 {entry['date']}: {entry['run_count']} runs, {rate_str} pass, ${entry['token_spend_usd']:.2f}"
         )
@@ -344,20 +348,28 @@ def format_slack_message(report: dict[str, Any]) -> str:
 
 
 async def deliver_quality_report(
-    report_data: dict[str, Any],
+    report_data: dict[str, Any] | str,
     recipient_config: dict[str, Any],
 ) -> list[dict[str, Any]]:
     """Deliver a formatted quality report to Slack webhook URLs.
 
+    Accepts either a raw report dict (from ``generate_quality_report``) or a
+    pre-formatted JSON string (when called via the scheduler's formatter
+    pipeline). Handles both cases transparently.
+
     Args:
-        report_data: The report dict from ``generate_quality_report``.
+        report_data: The report dict from ``generate_quality_report`` or a
+            pre-formatted Slack blocks JSON string.
         recipient_config: Config dict with ``webhook_urls`` list.
 
     Returns a list of delivery results with keys: url, status, status_code, error.
     """
     from modulo.core.reports.scheduler import _deliver_to_urls
 
-    slack_blocks_str = format_slack_message(report_data)
+    if isinstance(report_data, str):
+        slack_blocks_str = report_data
+    else:
+        slack_blocks_str = format_slack_message(report_data)
     payload = {"blocks": json.loads(slack_blocks_str)}
     return await _deliver_to_urls(
         recipient_config.get("webhook_urls", []),
