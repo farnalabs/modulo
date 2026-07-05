@@ -85,13 +85,14 @@ Org-level dashboard with run overview, team breakdown, eval quality metrics, tre
 - [ ] TeamComparisonView consumes store instead of calling API directly
 
 ### Edge Cases & Error States
-- [ ] Empty org (zero runs, zero pipelines) renders all-zero stat cards
-- [ ] Org with teams but zero runs shows zero-team metrics
-- [ ] Eval_pass_rate is null when no EvalResult rows exist
-- [ ] Trend day with missing data shows 0 run_count, null eval_pass_rate, 0.0 token_spend
-- [ ] API returns 500/503 — frontend shows graceful error message
-- [ ] Network failure — frontend catches and displays error
-- [ ] Large number of teams (100+) renders without degradation
+- [x] Empty org (zero runs, zero pipelines) renders all-zero stat cards with welcome CTA — verified in DashboardView.vue:242
+- [x] Org with teams but zero runs — team table renders with zero values; no crash
+- [x] Eval_pass_rate is null when no EvalResult rows exist — handled in dashboard.py:271-279 + template:77-89
+- [x] Trend day with missing data — defaults to 0 run_count, null eval_pass_rate, 0.0 token_spend (dashboard.py:332-339)
+- [x] API returns 500 — frontend ErrorAlert with retry button rendered (DashboardView.vue:23)
+- [ ] API returns 503 — FastAPI does not return 503; backend catches Exception → 500. 503 is not explicitly handled.
+- [x] Network failure — frontend catch blocks in fetchSummary / fetchTrends display error via ErrorAlert
+- [ ] Large number of teams (100+) — not load-tested. No pagination on team query.
 
 ### Testing
 - [x] Unit test: dashboard_summary returns expected keys
@@ -122,14 +123,15 @@ Org-level dashboard with run overview, team breakdown, eval quality metrics, tre
 - [ ] BDD scenario: navigate from dashboard to run detail
 
 ### Error Handling
-- [ ] ProgrammingError caught → 501 on all DB-accessing dashboard endpoints
-- [ ] API returns 401 for unauthenticated requests (both summary and trends)
-- [ ] API returns 403 for non-admin users on org-level operations
-- [ ] API returns 422 for invalid `days` parameter (0 or 91)
-- [ ] API returns 500/503 — frontend shows graceful error message with retry
-- [ ] Network failure — frontend catches and displays ErrorAlert
-- [ ] Empty org (zero runs, zero pipelines) renders all-zero stat cards (no crash)
-- [ ] Eval_pass_rate is null when no EvalResult rows exist
+- [x] `ProgrammingError` caught → 501 on all 3 dashboard endpoints (/summary, /trends, /daily-run-counts)
+- [x] API returns 401 for unauthenticated requests (both summary and trends) — verified by test_dashboard.py:186-188, 228-230
+- [ ] API returns 403 for non-admin users — `get_current_user` dependency only checks auth, not role. No org-role enforcement on dashboard routes.
+- [x] API returns 422 for invalid `days` parameter (0 or 91) — FastAPI `Query(ge=1, le=90)` validation
+- [x] API returns 500 — frontend ErrorAlert with retry button (DashboardView.vue:23, ErrorAlert)
+- [ ] API returns 503 — FastAPI never returns 503 from these routes; internal server errors map to 500
+- [x] Network failure — frontend catch blocks in fetchSummary / fetchTrends display error via ErrorAlert
+- [x] Empty org renders all-zero stat cards — verified at DashboardView.vue:242
+- [x] `eval_pass_rate` is null when no EvalResult rows exist — verified at dashboard.py:271-279
 
 ### Future / V2 Scope
 - [ ] Full eval dashboard with chart visualisation (14 V2)
@@ -149,3 +151,5 @@ Org-level dashboard with run overview, team breakdown, eval quality metrics, tre
 - **TeamComparisonView calls API directly** instead of consuming the store.
 - **No frontend unit test coverage** for loading state, error state, or data rendering (only a "renders heading" smoke test exists).
 - **`GET /api/v1/dashboard/trends` endpoint is fully implemented** but has no frontend page or component consuming it.
+- **Shared error ref in dashboard.ts** — `error.value` is shared between `fetchSummary` and `fetchTrends`. A failed trends call overwrites the summary error, so a partial data state (summary loaded, trends failed) shows no error while rendering stale trend charts.
+- **DashboardView references `views.ABTestModelsView.eval_pass_rate`** in TeamComparisonView (lines 24, 44) — cross-view i18n key reference. Works but is an organizational concern.
