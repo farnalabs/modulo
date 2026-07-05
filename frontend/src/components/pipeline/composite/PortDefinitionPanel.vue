@@ -56,7 +56,7 @@ function openEditForm(index: number) {
     required: p.required,
     default:
       p.default !== undefined && p.default !== null ? String(p.default) : "",
-    multiline: p.multiline || false,
+    multiline: p.multiline,
   };
   showAddForm.value = true;
   formError.value = null;
@@ -89,6 +89,11 @@ function savePort() {
         ? Number(form.value.default)
         : form.value.default || undefined,
     multiline: form.value.multiline,
+    target_injection: {
+      mode: "prompt_replace",
+      node_id: "",
+      injection_point: "prompt_template",
+    },
   };
 
   const updated = [...props.ports];

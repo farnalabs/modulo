@@ -1,15 +1,22 @@
 export type ParameterPortType = 'string' | 'number' | 'boolean' | 'select' | 'model_backend_ref' | 'schema_ref'
 
+export interface TargetInjection {
+  mode: string
+  node_id: string
+  injection_point: string
+}
+
 export interface ParameterPort {
   id: string
   name: string
   label: string
-  description: string | null
+  description?: string | null
   type: ParameterPortType
   required: boolean
   default: unknown | null
   options: { label: string; value: string }[] | null
-  multiline: boolean | null
+  multiline: boolean
+  target_injection: TargetInjection
 }
 
 export interface SchemaField {
@@ -24,9 +31,11 @@ export interface CompositeDefinition {
   name: string
   description: string | null
   version: string
-  ports: ParameterPort[]
+  parameter_ports_json: Record<string, unknown>[]
   input_schema_id: string | null
   output_schema_id: string | null
+  organisation_id: string
+  created_by: string
   created_at: string
   updated_at: string
 }
