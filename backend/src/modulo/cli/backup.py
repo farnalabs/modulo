@@ -17,7 +17,7 @@ from pathlib import Path
 from typing import Any
 
 import click
-from cryptography.fernet import Fernet
+from cryptography.fernet import Fernet, InvalidToken
 
 try:
     import psycopg
@@ -72,10 +72,11 @@ def _write_json(path: Path, data: Any) -> None:
 
 
 def _get_backend_dir() -> Path:
-    for candidate in (Path(__file__).resolve().parent.parent.parent, Path(__file__).resolve().parent.parent.parent.parent):
+    resolved = Path(__file__).resolve()
+    for candidate in (resolved.parent.parent.parent, resolved.parent.parent.parent.parent):
         if (candidate / "pyproject.toml").exists() and (candidate / "alembic.ini").exists():
             return candidate
-    return Path(__file__).resolve().parent.parent.parent.parent
+    return resolved.parent.parent.parent.parent
 
 
 def _get_schema_versions() -> list[str]:
@@ -130,8 +131,8 @@ def _run_pg_dump(raw_url: str, output: Path, timeout: int = 300) -> None:
     try:
         with output.open("wb") as f:
             result = subprocess.run(cmd, stdout=f, stderr=subprocess.PIPE, timeout=timeout)  # noqa: S603 — cmd is a hardcoded list, not user input
-    except subprocess.TimeoutExpired:
-        raise RuntimeError(f"pg_dump timed out after {timeout}s")
+    except subprocess.TimeoutExpired as exc:
+        raise RuntimeError(f"pg_dump timed out after {timeout}s") from exc
     if result.returncode != 0:
         raise RuntimeError(f"pg_dump failed: {result.stderr.decode(errors='replace').strip()}")
 
@@ -142,8 +143,8 @@ def _run_psql(raw_url: str, input_path: Path, timeout: int = 600) -> None:
     try:
         with input_path.open("rb") as f:
             result = subprocess.run(cmd, stdin=f, capture_output=True, timeout=timeout)  # noqa: S603 — cmd is a hardcoded list with trusted input
-    except subprocess.TimeoutExpired:
-        raise RuntimeError(f"psql restore timed out after {timeout}s")
+    except subprocess.TimeoutExpired as exc:
+        raise RuntimeError(f"psql restore timed out after {timeout}s") from exc
     if result.returncode != 0:
         raise RuntimeError(f"psql restore failed: {result.stderr.decode(errors='replace').strip()}")
 
@@ -180,10 +181,9 @@ def _export_credentials_references_sync(raw_url: str) -> dict[str, list[dict[str
         for table in _CREDENTIALS_TABLES:
             rows: list[dict[str, Any]] = []
             with conn.cursor() as cur:
-                cur.execute(
-                    "SELECT id, organisation_id, name, credentials_ciphertext"
-                    " FROM %s ORDER BY id" % table  # nosec B608 — table is from a hardcoded whitelist
-                )
+                assert table in _CREDENTIALS_TABLES, f"Unexpected credentials table: {table}"
+                sql = f"SELECT id, organisation_id, name, credentials_ciphertext FROM {table} ORDER BY id"  # noqa: S608 — guarded by whitelist assertion
+                cur.execute(sql)
                 for row in cur:
                     org_id = row.get("organisation_id")
                     row["id"] = str(row["id"])
@@ -201,15 +201,19 @@ def _restore_checkpoint_blobs_sync(raw_url: str, blobs: list[dict[str, Any]]) ->
         raise RuntimeError("psycopg library is not available")
     with psycopg.connect(raw_url, connect_timeout=10) as conn:
         with conn.cursor() as cur:
-            cur.execute("TRUNCATE TABLE checkpoint_blobs")
+            cur.execute("TRUNCATE TABLE checkpoint_blobs CASCADE")
             for row in blobs:
                 blob: bytes | None = None
                 raw_blob = row.get("blob")
                 if raw_blob is not None:
                     blob = bytes.fromhex(raw_blob) if raw_blob else b""
-                try:
-                    org_uuid = uuid.UUID(row["organisation_id"]) if row.get("organisation_id") else None
-                except (ValueError, TypeError):
+                org_id_raw = row.get("organisation_id")
+                if org_id_raw:
+                    try:
+                        org_uuid = uuid.UUID(org_id_raw)
+                    except (ValueError, TypeError) as exc:
+                        raise RuntimeError(f"Invalid organisation_id in checkpoint_blobs: {org_id_raw!r}") from exc
+                else:
                     org_uuid = None
                 cur.execute(
                     "INSERT INTO checkpoint_blobs "
@@ -253,15 +257,22 @@ def _re_encrypt_credentials_sync(
                     if not hex_ct:
                         continue
                     old_ct = bytes.fromhex(hex_ct)
-                    plaintext = old_fernet.decrypt(old_ct)
+                    try:
+                        plaintext = old_fernet.decrypt(old_ct)
+                    except InvalidToken as exc:
+                        raise RuntimeError(
+                            f"Failed to decrypt {table} row {row.get('id', '?')}: "
+                            "--previous-fernet-key may be wrong"
+                        ) from exc
                     new_ct = new_fernet.encrypt(plaintext)
                     try:
                         row_id = uuid.UUID(row["id"])
                     except (ValueError, TypeError):
                         _log.warning("Invalid UUID in credentials row: %s", row.get("id", "?"))
                         continue
+                    assert table in _CREDENTIALS_TABLES, f"Unexpected credentials table: {table}"
                     cur.execute(
-                        "UPDATE " + table + " SET credentials_ciphertext = %s WHERE id = %s",
+                        f"UPDATE {table} SET credentials_ciphertext = %s WHERE id = %s",  # noqa: S608 — guarded by whitelist assertion
                         (new_ct, row_id),
                     )
                     rekeyed += 1
@@ -322,8 +333,17 @@ def backup(db_url: str | None, output_dir: Path | None) -> None:
     settings = get_settings()
 
     ts = datetime.now(UTC).strftime("%Y%m%d-%H%M%S")
-    backup_dir = output_dir or Path(f"./modulo-backup-{ts}")
-    backup_dir.mkdir(parents=True, exist_ok=True)
+    if output_dir is not None:
+        backup_dir = output_dir
+        backup_dir.mkdir(parents=True, exist_ok=True)
+    else:
+        import random
+        suffix = random.randint(1000, 9999)  # noqa: S311 — not crypto, just avoiding directory collision
+        backup_dir = Path(f"./modulo-backup-{ts}-{suffix}")
+        while backup_dir.exists():
+            suffix = random.randint(1000, 9999)  # noqa: S311
+            backup_dir = Path(f"./modulo-backup-{ts}-{suffix}")
+        backup_dir.mkdir(parents=True, exist_ok=False)
 
     try:
         click.echo(f"Backup directory: {backup_dir}")
