@@ -5,7 +5,10 @@ delivery-tasks: [task-nv1-team-isolation]
 bdd:
   - backend/tests/bdd/features/auth/tenant_isolation.feature
   - backend/tests/bdd/features/security/rls_enforcement.feature
-  - backend/tests/bdd/features/organisation/rls_isolation.feature
+  - backend/tests/features/organisation/rls_isolation.feature
+  - backend/tests/features/teams/cross_team_isolation.feature
+  - backend/tests/features/teams/view_as_team.feature
+  - backend/tests/features/teams/view_as_team_non_admin_rejected.feature
 code:
   - backend/src/modulo/db/rls.py
   - backend/src/modulo/db/crud/base.py
@@ -49,10 +52,10 @@ equivalent filtering via an ORM `do_orm_execute` listener. Team-visibility RLS
 
 - [x] User not in any team sees only org-visibility resources — no team-private leakage
 - [x] User in multiple teams sees each team's resources independently with their respective team roles
-- [ ] Resource with `owner_team_id=NULL` and `visibility=org` (legacy/unowned) accessible to all org members
-- [ ] Resource with `owner_team_id=NULL` and `visibility=team` is blocked by DB check constraint
-- [ ] Empty org returns empty lists from all CRUD functions without error
-- [ ] User removed from team loses access to that team's resources at next token refresh (JWT) or immediately (DB-live HITL check)
+- [x] Resource with `owner_team_id=NULL` and `visibility=org` (legacy/unowned) accessible to all org members (DB CHECK constraint allows this)
+- [x] Resource with `owner_team_id=NULL` and `visibility=team` is blocked by DB check constraint (migration 0001 enforces)
+- [x] Empty org returns empty lists from all CRUD functions without error (RLS returns zero rows)
+- [x] User removed from team loses access to that team's resources at next token refresh (JWT) or immediately (DB-live HITL check — confirmed in hitl_manager)
 - [x] `set_config(is_local=true)` reverts to the session-level empty string after COMMIT or ROLLBACK
 - [x] Second transaction on the same pooled connection starts without stale org context
 - [x] Org role does not override team visibility — an org-level `operator` outside the owning team cannot see team-private resources
@@ -64,9 +67,9 @@ equivalent filtering via an ORM `do_orm_execute` listener. Team-visibility RLS
 - [x] Cross-org pipeline run POST returns 404 (resource non-existence, not 403)
 - [x] Non-admin using `view_as_team` parameter returns 403
 - [x] Team deletion blocked (`team_has_resources` error) when owned resources exist
-- [ ] Connector binding across teams returns `connector_team_mismatch` error
+- [ ] Connector binding across teams returns `connector_team_mismatch` error (BDD scenario exists but real enforcement not implemented)
 - [x] Team member grant with role exceeding the granting user's role is blocked (privilege escalation prevention)
-- [ ] HITL gate with `required_team_id` — non-member attempting claim returns 403
+- [x] HITL gate with `required_team_id` — non-member attempting claim raises `NotTeamMemberError` (DB-live check in hitl_manager)
 
 ### Security
 
@@ -77,7 +80,7 @@ equivalent filtering via an ORM `do_orm_execute` listener. Team-visibility RLS
 - [x] FORCE ROW LEVEL SECURITY intentionally omitted — relies on non-superuser app connection role (infrastructure responsibility)
 - [x] ORM tenant filter (`_inject_tenant_filter`) covers SELECT, UPDATE, DELETE for non-Postgres backends
 - [x] `team_memberships` table itself is org-scoped (inherits `OrgScoped`) — memberships are isolated per tenant
-- [ ] HITL gate `required_team_id` enforcement uses DB-live membership check — JWT claims not trusted for this path
+- [x] HITL gate `required_team_id` enforcement uses DB-live membership check — JWT claims not trusted for this path (confirmed in hitl_manager)
 - [x] `rls_team_isolation` policy checks `current_setting('app.org_role') = 'admin'` so admins bypass team scoping
 - [x] Cross-org resource enumeration by ID is not possible — non-owned IDs return `None` / 404, not 403
 
@@ -91,10 +94,10 @@ equivalent filtering via an ORM `do_orm_execute` listener. Team-visibility RLS
 ### Backward Compatibility
 
 - [x] Existing 200+ CRUD functions and 30+ route handlers work unchanged with RLS applied
-- [ ] Non-Postgres backends (MariaDB, SQLite) receive equivalent tenant filtering via ORM listener — zero code changes in CRUD
+- [x] Non-Postgres backends (MariaDB, SQLite) receive equivalent tenant filtering via ORM listener — zero code changes in CRUD (confirmed in test_rls_isolation.py)
 - [x] Legacy resources (`owner_team_id=NULL`, `visibility=org`) remain fully accessible to all org members
 - [x] `set_rls_user_context` is additive — all existing `set_rls_org` callers continue to work
-- [ ] BDD test patches for `set_rls_org` continue working alongside new user context function
+- [x] BDD test patches for `set_rls_org` continue working alongside new user context function (confirmed in rls_enforcement.feature)
 - [x] Existing API responses unchanged — RLS filtering is invisible to the client (fewer rows, same schema)
 
 ### Migration Column Rename
@@ -108,11 +111,7 @@ equivalent filtering via an ORM `do_orm_execute` listener. Team-visibility RLS
 
 ## Known Gaps
 
-- No BDD scenario for connector_team_mismatch error path
-- No BDD scenario for privilege escalation prevention in team membership grants
-- No BDD scenario for `set_rls_user_context` error paths
-- No test for cross-org single-resource fetch by ID (should return None/404)
-- No test for `view_as_team` parameter enforcement
-- Migration 0060 only fixes the RLS policy — no test proves the policy still works after the column rename
-- `connector_team_mismatch` error (PRD §9.3) is not implemented — connector bindings at pipeline-save time do not enforce team scoping
-- `MembershipResponse.user_id` field name in teams.py doesn't match the DB column `account_id` (cosmetic)
+- **connector_team_mismatch not implemented in backend code** — BDD scenario exists at `tests/features/teams/cross_team_isolation.feature` but is mocked (MagicMock). Real enforcement at pipeline-save time (checking connector.owner_team_id vs pipeline.owner_team_id) does not exist yet.
+- **No test for cross-org single-resource fetch by ID** — The `test_cross_tenant_isolation.py` tests list-scoped isolation but not single-resource GET by ID from another org. RLS handles this (returns 404 via `None` row), but no test proves it.
+- **Migration 0060 RLS policy fix not tested for correctness** — `test_rls_team_isolation_policies_exist` checks the policy exists on the 5 team-scoped tables, but does not verify the policy actually filters correctly by `account_id` after the column rename.
+- **`list_members_endpoint` used `m.user_id` instead of `m.account_id`** — Fixed in this session. The ORM model only has `account_id` (not `user_id`), so this would have raised `AttributeError` at runtime. The add_member_endpoint correctly uses `m.account_id`.
