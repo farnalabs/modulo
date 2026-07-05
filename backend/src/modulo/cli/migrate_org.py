@@ -307,7 +307,9 @@ async def _do_import(
                                 new_name = f"{base}_{counter}"
                                 counter += 1
                             else:
-                                raise SystemExit(f"Could not find available name for '{name_val}' after {max_attempts} attempts")
+                                raise SystemExit(
+                                    f"Could not find available name for '{name_val}' after {max_attempts} attempts"
+                                )
                             row[name_field] = new_name
                             existing = None
 
@@ -317,26 +319,26 @@ async def _do_import(
                     for col in skip_cols:
                         row_data.pop(col, None)
 
-                    if existing is not None and strategy == "overwrite":
-                        for col, val in row_data.items():
-                            if hasattr(existing, col):
-                                setattr(existing, col, val)
-                        if old_id_str:
-                            id_map[old_id_str] = str(existing.id)
-                        counts["overwritten"] += 1
-                    else:
-                        row_data["organisation_id"] = org_id
-                        obj = model_cls(**row_data)
-                        session.add(obj)
-                        await session.flush()
-                        if old_id_str:
-                            id_map[old_id_str] = str(obj.id)
-                        counts["created"] += 1
+                    async with session.begin_nested():
+                        if existing is not None and strategy == "overwrite":
+                            for col, val in row_data.items():
+                                if hasattr(existing, col):
+                                    setattr(existing, col, val)
+                            if old_id_str:
+                                id_map[old_id_str] = str(existing.id)
+                            counts["overwritten"] += 1
+                        else:
+                            row_data["organisation_id"] = org_id
+                            obj = model_cls(**row_data)
+                            session.add(obj)
+                            await session.flush()
+                            if old_id_str:
+                                id_map[old_id_str] = str(obj.id)
+                            counts["created"] += 1
 
                 except Exception as exc:
                     rid = row.get("id", "?")
                     tqdm.write(f"  ERROR importing {table_name} row {rid}: {exc}")
-                    await session.rollback()
                     counts["errors"] += 1
 
         await session.commit()
