@@ -125,16 +125,22 @@ async def detect_regressions(
         drop = prev_pass_rate - current_pass_rate
 
         if drop >= threshold:
-            alerts.append(
-                RegressionAlert(
-                    eval_id=row.eval_id,
-                    eval_name=row.eval_name,
-                    prev_pass_rate=round(prev_pass_rate, 4),
-                    current_pass_rate=round(current_pass_rate, 4),
-                    drop_pct=round(drop, 4),
-                    trend="declining",
-                    affected_run_ids=list(row.affected_run_ids),
-                )
+            trend = "declining"
+        elif drop <= -threshold:
+            trend = "improving"
+        else:
+            trend = "stable"
+
+        alerts.append(
+            RegressionAlert(
+                eval_id=row.eval_id,
+                eval_name=row.eval_name,
+                prev_pass_rate=round(prev_pass_rate, 4),
+                current_pass_rate=round(current_pass_rate, 4),
+                drop_pct=round(drop, 4),
+                trend=trend,
+                affected_run_ids=list(row.affected_run_ids),
             )
+        )
 
     return alerts
