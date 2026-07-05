@@ -394,20 +394,21 @@ async def dashboard_summary(
                 try:
                     remy_config = await RemyConfigService(session).get_config(org_id)
                     default_provider = remy_config.default_provider
-                    provider_creds_result = await session.execute(
+                    default_provider_result = await session.execute(
                         select(func.count()).select_from(ModelBackend).where(
                             ModelBackend.organisation_id == org_id,
                             ModelBackend.provider == default_provider,
                             ModelBackend.credentials_ciphertext.is_not(None),
                         )
                     )
-                    provider_count = int(provider_creds_result.scalar_one())
-                    if provider_count == 0:
+                    default_provider_count = int(default_provider_result.scalar_one())
+                    if default_provider_count == 0 and mb_with_creds > 1:
                         config_warnings.append(
                             {
                                 "type": "remy_provider_not_configured",
-                                "severity": "high",
-                                "message": f"Remy is configured to use {default_provider} but no API key has been set for that provider.",
+                                "severity": "low",
+                                "message": f"Remy is configured to use {default_provider} but no API key is set for that provider. "
+                                           "Remy will auto-detect the first configured provider. Change the default in Remy Config.",
                                 "action_label": f"Configure {default_provider}",
                                 "action_url": "/admin/model-backends",
                             }

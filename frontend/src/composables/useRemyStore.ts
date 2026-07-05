@@ -62,16 +62,18 @@ export const useRemyStore = defineStore('remy', () => {
   const isExecutingUi = ref(false)
 
   const activeSession = computed(() =>
-    sessions.value.find(s => s.id === activeSessionId.value) ?? null,
+    Array.isArray(sessions.value) ? sessions.value.find(s => s.id === activeSessionId.value) ?? null : null,
   )
 
   const sortedSessions = computed(() =>
-    [...sessions.value].sort((a, b) => {
-      const ta = new Date(a.updated_at).getTime()
-      const tb = new Date(b.updated_at).getTime()
-      if (isNaN(ta) || isNaN(tb)) return 0
-      return tb - ta
-    }),
+    Array.isArray(sessions.value)
+      ? [...sessions.value].sort((a, b) => {
+          const ta = new Date(a.updated_at).getTime()
+          const tb = new Date(b.updated_at).getTime()
+          if (isNaN(ta) || isNaN(tb)) return 0
+          return tb - ta
+        })
+      : [],
   )
 
   function persistPosition() {
@@ -103,7 +105,7 @@ export const useRemyStore = defineStore('remy', () => {
     error.value = null
     try {
       const { data, error: err } = await (api as any).POST('/api/v1/remy/sessions', {
-        body: { name: null, provider: 'anthropic', model: 'claude-sonnet-4-20250514', context_window_tokens: 200000 },
+        body: { name: null, provider: null, model: null, context_window_tokens: 200000 },
       })
       if (err) throw new Error(extractErrorMessage(err))
       const session = data as ChatSession

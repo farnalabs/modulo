@@ -101,8 +101,8 @@ _SESSION_APPROVAL_TTL = timedelta(minutes=30)
 
 
 class CreateSessionRequest(BaseModel):
-    provider: str = Field(..., description="LLM provider (e.g. openai, anthropic)")
-    model: str = Field(..., description="Model ID (e.g. gpt-4o, claude-sonnet-4-20250514)")
+    provider: str | None = Field(None, description="LLM provider (e.g. openai, anthropic). Auto-detected if omitted.")
+    model: str | None = Field(None, description="Model ID (e.g. gpt-4o, claude-sonnet-4-20250514). Auto-detected if omitted.")
     context_window_tokens: int = Field(..., ge=1024, le=1_000_000)
     name: str | None = None
 
@@ -442,12 +442,31 @@ async def create_session(
             )
             next_session_number = max_sn.scalar() + 1
 
+            provider = req.provider
+            model = req.model
+
+            if provider is None or model is None:
+                mb_result = await session.execute(
+                    select(ModelBackend).where(
+                        ModelBackend.organisation_id == principal.organisation_id,
+                        ModelBackend.credentials_ciphertext.is_not(None),
+                    ).limit(1)
+                )
+                mb = mb_result.scalar_one_or_none()
+                if mb:
+                    provider = provider or mb.provider
+                    model = model or mb.model_id
+                else:
+                    config = await RemyConfigService(session).get_config(principal.organisation_id)
+                    provider = provider or config.default_provider
+                    model = model or config.default_model
+
             chat_session = ChatSession(
                 organisation_id=principal.organisation_id,
                 user_id=principal.account_id,
                 name=req.name,
-                provider=req.provider,
-                model=req.model,
+                provider=provider,
+                model=model,
                 context_window_tokens=req.context_window_tokens,
                 session_number=next_session_number,
             )
