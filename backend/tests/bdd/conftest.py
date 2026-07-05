@@ -170,8 +170,13 @@ def client(mock_session: AsyncMock) -> Generator[TestClient, None, None]:
 
 
 @pytest.fixture
-def unauth_client() -> Generator[TestClient, None, None]:
+def unauth_client(mock_session: AsyncMock) -> Generator[TestClient, None, None]:
+    async def override_session() -> AsyncGenerator[AsyncMock, None]:
+        yield mock_session
+
     app.dependency_overrides[get_settings] = make_settings
+    app.dependency_overrides[get_db_session] = override_session
+    app.dependency_overrides[_get_engine] = lambda: MagicMock()
     yield TestClient(app)
 
     app.dependency_overrides.clear()
@@ -258,3 +263,24 @@ def system_admin_client(mock_session: AsyncMock) -> Generator[TestClient, None, 
         org_role="admin",
         is_system_admin=True,
     )
+
+
+# ---------------------------------------------------------------------------
+# Shared response store — standardises how @when steps record responses for
+# @then assertions.  Reduces the 3-location-store pattern that was duplicated
+# in 19+ step files to a single importable helper.
+# ---------------------------------------------------------------------------
+
+
+def store_response(request: Any, resp: Any, ctx: dict[str, Any] | None = None) -> None:
+    """Record a response so shared ``@then`` steps can inspect it.
+
+    Writes to all three locations expected by the various step-file conventions:
+    - ``request.node._resp`` — test_connectors.py, test_auth.py
+    - ``request.node.response`` — test_auth.py, test_jwt_security.py
+    - ``ctx["response"]`` — test_library.py (when ctx is provided)
+    """
+    request.node._resp = resp
+    request.node.response = resp
+    if ctx is not None:
+        ctx["response"] = resp
