@@ -60,28 +60,19 @@ class TestTrendSymbol:
     def test_flat_when_delta_none(self) -> None:
         assert _trend_symbol(None) == "\u2192"
 
-    def test_flat_only_when_exactly_zero(self) -> None:
-        assert _trend_symbol(0.0) == "\u2192"
+    def test_within_threshold_returns_flat(self) -> None:
+        assert _trend_symbol(3.0) == "\u2192"
+        assert _trend_symbol(-3.0) == "\u2192"
+        assert _trend_symbol(0.1) == "\u2192"
+        assert _trend_symbol(-0.1) == "\u2192"
+        assert _trend_symbol(4.9) == "\u2192"
+        assert _trend_symbol(-4.9) == "\u2192"
 
-    def test_small_positive_yields_up(self) -> None:
-        assert _trend_symbol(3.0) == "\u2191"
-
-    def test_small_negative_yields_down(self) -> None:
-        assert _trend_symbol(-3.0) == "\u2193"
-
-    def test_exact_threshold_returns_up(self) -> None:
-        assert _trend_symbol(5.0) == "\u2191"
+    def test_exact_threshold_strict_returns_flat(self) -> None:
+        assert _trend_symbol(5.0) == "\u2192"
         assert _trend_symbol(5.1) == "\u2191"
-        assert _trend_symbol(-5.0) == "\u2193"
+        assert _trend_symbol(-5.0) == "\u2192"
         assert _trend_symbol(-5.1) == "\u2193"
-
-    def test_small_positive_yields_up_not_flat(self) -> None:
-        assert _trend_symbol(0.1) == "\u2191"
-        assert _trend_symbol(4.9) == "\u2191"
-
-    def test_small_negative_yields_down_not_flat(self) -> None:
-        assert _trend_symbol(-0.1) == "\u2193"
-        assert _trend_symbol(-4.9) == "\u2193"
 
 
 # ---------------------------------------------------------------------------
