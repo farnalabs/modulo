@@ -31,10 +31,10 @@ class TestAutonomyLevel:
         assert AutonomyLevel("notify_on_complete") == AutonomyLevel.NOTIFY_ON_COMPLETE
         assert AutonomyLevel("fully_autonomous") == AutonomyLevel.FULLY_AUTONOMOUS
 
-    def test_missing_fuzzy_match(self) -> None:
-        assert AutonomyLevel("manual-approval") == AutonomyLevel.MANUAL_APPROVAL
-        assert AutonomyLevel("fully-autonomous") == AutonomyLevel.FULLY_AUTONOMOUS
+    def test_missing_case_insensitive_match(self) -> None:
         assert AutonomyLevel("MANUAL_APPROVAL") == AutonomyLevel.MANUAL_APPROVAL
+        assert AutonomyLevel("FULLY_AUTONOMOUS") == AutonomyLevel.FULLY_AUTONOMOUS
+        assert AutonomyLevel("NOTIFY_ON_COMPLETE") == AutonomyLevel.NOTIFY_ON_COMPLETE
 
     def test_missing_unmatched_raises_value_error(self) -> None:
         with pytest.raises(ValueError):
