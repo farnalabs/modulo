@@ -4,7 +4,7 @@ import json
 import logging
 import uuid
 
-from sqlalchemy import exists, select
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.core.audit_logger import append_audit_event
@@ -56,9 +56,10 @@ async def create_provider(
     actor_user_id: uuid.UUID | None = None,
 ) -> SsoProvider:
     result = await session.execute(
-        select(exists().where(SsoProvider.name == name, SsoProvider.organisation_id == org_id)).with_for_update()
+        select(SsoProvider).where(SsoProvider.name == name, SsoProvider.organisation_id == org_id).with_for_update()
     )
-    if result.scalar():
+    existing = result.scalar_one_or_none()
+    if existing:
         raise ValueError(f"An SSO provider with name '{name}' already exists in this organisation")
 
     provider = SsoProvider(
