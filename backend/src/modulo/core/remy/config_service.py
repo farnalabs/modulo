@@ -13,12 +13,17 @@ from modulo.db.crud.system_config import get_config, set_config
 logger = logging.getLogger(__name__)
 
 
-def _normalize_uuids(items: list[Any]) -> list[uuid.UUID]:
+def _normalize_uuids(items: list[Any] | None) -> list[uuid.UUID]:
+    if not items:
+        return []
     result: list[uuid.UUID] = []
     for item in items:
         try:
-            result.append(uuid.UUID(item) if isinstance(item, str) else item)
-        except (ValueError, AttributeError):
+            if isinstance(item, str):
+                result.append(uuid.UUID(item))
+            elif isinstance(item, uuid.UUID):
+                result.append(item)
+        except (ValueError, AttributeError, TypeError):
             logger.warning("Skipping invalid UUID in config access list: %s", item)
     return result
 
@@ -78,7 +83,7 @@ PERMISSION_MODE_PRESETS: dict[str, dict[str, str]] = {
 
 
 def apply_permission_mode_preset(mode: str, current_overrides: dict[str, str] | None = None) -> dict[str, str]:
-    """Apply a permission mode preset, preserving any custom overrides."""
+    """Apply a permission mode preset. Overrides are only merged when mode is 'custom'."""
     preset = dict(PERMISSION_MODE_PRESETS.get(mode, {}))
     if current_overrides and mode == "custom":
         preset.update(current_overrides)

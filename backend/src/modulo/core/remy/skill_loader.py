@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 import uuid
+from collections.abc import Callable
 from typing import Any
 
 from pydantic import BaseModel
@@ -9,9 +10,11 @@ from sqlalchemy import select
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from modulo.api.ui_tools import build_tool_definitions_for_text
-from modulo.core.remy.config_service import RemyConfigService
+from modulo.core.remy.config_service import RemyConfig, RemyConfigService
 from modulo.core.remy.context_source_service import RemyContextSourceService
+from modulo.db.models.account import Account
+from modulo.db.models.org_membership import OrgMembership
+from modulo.db.models.organisation import Organisation
 from modulo.db.models.remy_skill import RemySkill
 
 logger = logging.getLogger(__name__)
@@ -23,7 +26,6 @@ _SECTION_PRODUCT_OVERVIEW = "## Product Overview"
 _SECTION_USER_PROFILE = "## User Profile"
 _SECTION_KNOWLEDGE_TOOLS = "## Available Knowledge Tools"
 _DELIMITER = "---"
-_DELIMITER_LEN = 3
 
 # Tool descriptions for built-in context sources with tool mode
 _TOOL_DESCRIPTIONS: dict[str, str] = {
@@ -32,6 +34,8 @@ _TOOL_DESCRIPTIONS: dict[str, str] = {
     "org_config": "get_org_config(section?) — Get org settings and feature flags",
     "feature_overview": "get_available_features() — Get feature availability by plan tier",
 }
+
+_SKILL_PAGE_SIZE = 500
 
 
 class SkillEntry(BaseModel):
@@ -49,9 +53,13 @@ class SkillLoader:
         self,
         session: AsyncSession,
         config_service: RemyConfigService | None = None,
+        ctx_service: RemyContextSourceService | None = None,
+        ui_tools_text_fn: Callable[[], str] | None = None,
     ) -> None:
         self._session = session
         self._config_service = config_service
+        self._ctx_service = ctx_service
+        self._ui_tools_text_fn = ui_tools_text_fn
 
     async def _get_skills(self, **filters: Any) -> list[SkillEntry]:
         try:
@@ -62,13 +70,16 @@ class SkillLoader:
                     logger.warning("Unknown skill filter column: %s", k)
                     continue
                 conditions.append(col == v)
-            stmt = select(RemySkill).where(
-                *conditions,
-                RemySkill.active.is_(True),
+            stmt = (
+                select(RemySkill)
+                .where(*conditions, RemySkill.active.is_(True))
+                .order_by(RemySkill.id)
+                .limit(_SKILL_PAGE_SIZE)
             )
             result = await self._session.execute(stmt)
             return [self._to_entry(s) for s in result.scalars().all()]
         except SQLAlchemyError:
+            await self._session.rollback()
             logger.exception("Failed to query skills with filters %s", filters)
             return []
 
@@ -88,10 +99,6 @@ class SkillLoader:
             parts.append(f"### {skill.name}\n\n{skill.body}")
 
     async def _build_user_profile(self, org_id: uuid.UUID, user_id: uuid.UUID) -> str | None:
-        from modulo.db.models.account import Account
-        from modulo.db.models.org_membership import OrgMembership
-        from modulo.db.models.organisation import Organisation
-
         try:
             acct_result = await self._session.execute(
                 select(Account).where(Account.id == user_id)
@@ -123,7 +130,7 @@ class SkillLoader:
                 if org.plan_id:
                     lines.append(f"- **Plan:** {org.plan_id}")
             return "\n".join(lines)
-        except Exception:
+        except SQLAlchemyError:
             logger.exception("Failed to build user profile for user %s", user_id)
             return None
 
@@ -131,8 +138,11 @@ class SkillLoader:
         lines: list[str] = []
 
         for source_key, mode in ctx_sources.items():
-            if mode == "tool" and source_key in _TOOL_DESCRIPTIONS:
-                lines.append(f"- {_TOOL_DESCRIPTIONS[source_key]}")
+            if mode == "tool":
+                if source_key in _TOOL_DESCRIPTIONS:
+                    lines.append(f"- {_TOOL_DESCRIPTIONS[source_key]}")
+                else:
+                    logger.debug("Context source key '%s' has no tool description, skipping", source_key)
 
         tool_skills = [s for s in skills if s.source_mode == "tool"]
         if tool_skills:
@@ -141,7 +151,41 @@ class SkillLoader:
         if not lines:
             return None
 
-        return f"{_SECTION_KNOWLEDGE_TOOLS}\n\nYou can retrieve additional knowledge by calling these tools:\n" + "\n".join(lines) + "\n"
+        heading = f"{_SECTION_KNOWLEDGE_TOOLS}\n\nYou can retrieve additional knowledge by calling these tools:\n"
+        return heading + "\n".join(lines) + "\n"
+
+    def _build_config_section(self, config: RemyConfig | None, system_prompt_override: str | None) -> str | None:
+        if config is None:
+            return None
+        base_prompt = system_prompt_override if system_prompt_override is not None else config.system_prompt
+        return base_prompt if base_prompt else None
+
+    def _build_guidance_section(self, config: RemyConfig | None) -> str | None:
+        if config is None:
+            return None
+        return config.additional_guidance if config.additional_guidance else None
+
+    def _build_overview_section(self, config: RemyConfig | None, ctx_sources: dict[str, str]) -> str | None:
+        if config is None:
+            return None
+        if ctx_sources.get("product_primer") == "always_on" and config.product_primer:
+            return f"{_SECTION_PRODUCT_OVERVIEW}\n\n{config.product_primer}"
+        return None
+
+    def _build_page_context_section(self, ctx_sources: dict[str, str], page_context: str | None) -> str | None:
+        if ctx_sources.get("page_context") == "always_on" and page_context:
+            return f"{_SECTION_PAGE_CONTEXT}\n\n{page_context}"
+        return None
+
+    async def _build_profile_section(
+        self, org_id: uuid.UUID, user_id: uuid.UUID, ctx_sources: dict[str, str]
+    ) -> str | None:
+        if ctx_sources.get("user_profile") == "always_on":
+            return await self._build_user_profile(org_id, user_id)
+        return None
+
+    def _filter_always_on(self, skills: list[SkillEntry]) -> list[SkillEntry]:
+        return [s for s in skills if s.source_mode is None or s.source_mode == "always_on"]
 
     async def build_system_prompt(
         self,
@@ -158,7 +202,7 @@ class SkillLoader:
             logger.exception("Failed to load Remy config for org %s", org_id)
             config = None
 
-        ctx_service = RemyContextSourceService(self._session)
+        ctx_service = self._ctx_service or RemyContextSourceService(self._session)
         try:
             effective = await ctx_service.get_effective_config(org_id, user_id)
         except Exception:
@@ -169,31 +213,26 @@ class SkillLoader:
 
         parts: list[str] = []
 
-        # 1. Base admin system prompt
-        if config:
-            base_prompt = system_prompt_override if system_prompt_override is not None else config.system_prompt
-            if base_prompt:
-                parts.append(base_prompt)
+        base = self._build_config_section(config, system_prompt_override)
+        if base:
+            parts.append(base)
 
-        # 2. Additional guidance
-            if config.additional_guidance:
-                parts.append(config.additional_guidance)
+        guidance = self._build_guidance_section(config)
+        if guidance:
+            parts.append(guidance)
 
-        # 3. Product Overview
-            if ctx_sources.get("product_primer") == "always_on" and config.product_primer:
-                parts.append(f"{_SECTION_PRODUCT_OVERVIEW}\n\n{config.product_primer}")
+        overview = self._build_overview_section(config, ctx_sources)
+        if overview:
+            parts.append(overview)
 
-        # 4. Page Context
-        if ctx_sources.get("page_context") == "always_on" and page_context:
-            parts.append(f"{_SECTION_PAGE_CONTEXT}\n\n{page_context}")
+        page_ctx = self._build_page_context_section(ctx_sources, page_context)
+        if page_ctx:
+            parts.append(page_ctx)
 
-        # 5. User Profile
-        if ctx_sources.get("user_profile") == "always_on":
-            profile = await self._build_user_profile(org_id, user_id)
-            if profile:
-                parts.append(profile)
+        profile = await self._build_profile_section(org_id, user_id, ctx_sources)
+        if profile:
+            parts.append(profile)
 
-        # 6. Available Knowledge Tools
         org_skills = await self.get_org_skills(org_id)
         user_skills = await self.get_user_skills(user_id)
 
@@ -201,16 +240,19 @@ class SkillLoader:
         if tool_section:
             parts.append(tool_section)
 
-        # 7. Organisation Skills (source_mode = always_on or null)
-        always_on_org = [s for s in org_skills if s.source_mode is None or s.source_mode == "always_on"]
+        always_on_org = self._filter_always_on(org_skills)
         self._append_skills_block(parts, always_on_org, _SECTION_ORG_SKILLS)
 
-        # 8. User Skills (source_mode = always_on or null)
-        always_on_user = [s for s in user_skills if s.source_mode is None or s.source_mode == "always_on"]
+        always_on_user = self._filter_always_on(user_skills)
         self._append_skills_block(parts, always_on_user, _SECTION_USER_SKILLS)
 
         if include_ui_tools_text:
-            tools_text = build_tool_definitions_for_text()
+            try:
+                fn = self._ui_tools_text_fn or build_tool_definitions_for_text
+                tools_text = fn()
+            except Exception:
+                logger.exception("Failed to build UI tools text")
+                tools_text = None
             if tools_text:
                 parts.append(tools_text)
                 parts.append("- Before navigating, call get_manifest() to learn page structure and elements.")
@@ -226,12 +268,12 @@ class SkillLoader:
         if not stripped.startswith(_DELIMITER):
             return None, markdown
 
-        end_idx = stripped.find(_DELIMITER, _DELIMITER_LEN)
+        end_idx = stripped.find(_DELIMITER, len(_DELIMITER))
         if end_idx == -1:
             return None, markdown
 
-        frontmatter_text = stripped[_DELIMITER_LEN:end_idx].strip()
-        body = stripped[end_idx + _DELIMITER_LEN :].lstrip()
+        frontmatter_text = stripped[len(_DELIMITER):end_idx].strip()
+        body = stripped[end_idx + len(_DELIMITER):].lstrip()
 
         frontmatter: dict[str, Any] = {}
         for line in frontmatter_text.split("\n"):
@@ -240,6 +282,8 @@ class SkillLoader:
                 continue
             key, _, value = line.partition(":")
             key = key.strip()
+            if not key:
+                continue
             value = value.strip()
 
             if value.startswith("[") and value.endswith("]"):
@@ -264,3 +308,8 @@ class SkillLoader:
             frontmatter=fm,
             source_mode=skill.source_mode,
         )
+
+
+def build_tool_definitions_for_text() -> str:
+    from modulo.api.ui_tools import build_tool_definitions_for_text as _api_fn
+    return _api_fn()
