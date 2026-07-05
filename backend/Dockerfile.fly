@@ -17,7 +17,7 @@ ARG VITE_AUTO_LOGIN_PASSWORD
 WORKDIR /build
 
 COPY frontend/package.json frontend/package-lock.json ./
-RUN npm install --ignore-scripts --no-audit --no-fund
+RUN npm install --ignore-scripts --no-audit --no-fund --ignore-platform-reqs
 
 COPY frontend/ ./
 RUN VITE_AUTO_LOGIN_USERNAME=${VITE_AUTO_LOGIN_USERNAME} VITE_AUTO_LOGIN_PASSWORD=${VITE_AUTO_LOGIN_PASSWORD} npm run build
