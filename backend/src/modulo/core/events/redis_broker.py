@@ -82,6 +82,7 @@ class RedisEventBroker:
                 if sub is not None:
                     self._sub = sub
             except Exception:
+                _log.exception("redis_broker.connect_failed", extra={"url": self._redact_url(self._redis_url)})
                 if pub is not None:
                     await pub.close()
                 if sub is not None:
@@ -96,11 +97,17 @@ class RedisEventBroker:
 
     async def publish(self, channel: str, data: dict[str, Any]) -> None:
         """Serialize *data* as JSON and publish to the given *channel*."""
-        await self._ensure_connected()
         async with self._lock:
             if self._pub is None:
-                raise RuntimeError("Redis publisher connection not established. Call connect() first.")
-            await self._pub.publish(f"{CHANNEL_PREFIX}{channel}", json.dumps(data))
+                await self.connect()
+            if self._pub is None:
+                _log.error("redis_broker.publish_no_connection", extra={"channel": channel})
+                return
+            try:
+                await self._pub.publish(f"{CHANNEL_PREFIX}{channel}", json.dumps(data))
+            except (ConnectionError, TimeoutError, OSError) as exc:
+                _log.exception("redis_broker.publish_failed", extra={"channel": channel, "error": str(exc)})
+                self._pub = None
 
     async def subscribe(self, channel: str) -> PubSub:
         """Return a PubSub object subscribed to the given *channel*.
@@ -109,8 +116,9 @@ class RedisEventBroker:
         calling ``await pubsub.unsubscribe()`` / ``await pubsub.close()``
         when done.
         """
-        await self._ensure_connected()
         async with self._lock:
+            if self._sub is None:
+                await self.connect()
             if self._sub is None:
                 raise RuntimeError("Redis subscriber connection not established. Call connect() first.")
             pubsub = self._sub.pubsub()
@@ -126,12 +134,12 @@ class RedisEventBroker:
             self._sub = None
         if pub is not None:
             try:
-                await pub.close()
+                await pub.close(close_connection_pool=True)
             except Exception:
                 _log.warning("redis_broker.pub_close_failed", exc_info=True)
         if sub is not None:
             try:
-                await sub.close()
+                await sub.close(close_connection_pool=True)
             except Exception:
                 _log.warning("redis_broker.sub_close_failed", exc_info=True)
         _log.info("RedisEventBroker closed for %s", self._redact_url(self._redis_url))
