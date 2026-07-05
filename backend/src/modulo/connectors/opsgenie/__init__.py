@@ -104,9 +104,9 @@ class OpsgenieConnector(ConnectorBase):
         )
 
     async def _query_alert(self, c: httpx.AsyncClient, q: ConnectorQuery) -> ConnectorResult:
-        alert_id = q.filters.get("id") or q.cursor
+        alert_id = q.filters.get("id")
         if not alert_id:
-            raise ValueError("Opsgenie alert query requires 'id' in filters or cursor")
+            raise ValueError("Opsgenie alert query requires 'id' in filters")
         identifier = cast(str, alert_id)
         params: dict[str, Any] = {"identifierType": "id"}
         resp = await c.get(f"/alerts/{identifier}", params=params)
@@ -116,9 +116,9 @@ class OpsgenieConnector(ConnectorBase):
         return ConnectorResult(records=[data] if data else [], total=1 if data else 0)
 
     async def _query_alert_notes(self, c: httpx.AsyncClient, q: ConnectorQuery) -> ConnectorResult:
-        alert_id = q.filters.get("id") or q.cursor
+        alert_id = q.filters.get("id")
         if not alert_id:
-            raise ValueError("Opsgenie alert_notes query requires 'id' in filters or cursor")
+            raise ValueError("Opsgenie alert_notes query requires 'id' in filters")
         identifier = cast(str, alert_id)
         params: dict[str, Any] = {}
         if q.limit:
@@ -136,9 +136,9 @@ class OpsgenieConnector(ConnectorBase):
         )
 
     async def _query_alert_logs(self, c: httpx.AsyncClient, q: ConnectorQuery) -> ConnectorResult:
-        alert_id = q.filters.get("id") or q.cursor
+        alert_id = q.filters.get("id")
         if not alert_id:
-            raise ValueError("Opsgenie alert_logs query requires 'id' in filters or cursor")
+            raise ValueError("Opsgenie alert_logs query requires 'id' in filters")
         identifier = cast(str, alert_id)
         params: dict[str, Any] = {}
         if q.limit:
@@ -190,7 +190,7 @@ class OpsgenieConnector(ConnectorBase):
         )
 
     async def _query_on_calls(self, c: httpx.AsyncClient, q: ConnectorQuery) -> ConnectorResult:
-        schedule_id = q.filters.get("schedule_id") or q.cursor
+        schedule_id = q.filters.get("schedule_id")
         if not schedule_id:
             raise ValueError("Opsgenie on_calls query requires 'schedule_id' in filters or cursor")
         identifier = cast(str, schedule_id)

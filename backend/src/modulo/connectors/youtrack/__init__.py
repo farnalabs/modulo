@@ -33,7 +33,7 @@ class YouTrackConnector(ConnectorBase):
       "comment"         — add comment; data: {"issue_id": "...", "text": "..."}
     """
 
-    def __init__(self, token: str, base_url: str = "https://youtrack.mycompany.com/api") -> None:
+    def __init__(self, token: str, base_url: str = "") -> None:
         self._token = token
         self._base_url = base_url
 

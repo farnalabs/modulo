@@ -1,6 +1,7 @@
 """MicrosoftTeamsConnector — async Microsoft Graph API connector for Teams."""
 
 from typing import Any, cast
+from urllib.parse import parse_qs, urlparse
 
 import httpx
 
@@ -95,7 +96,6 @@ class MicrosoftTeamsConnector(ConnectorBase):
         next_link = body.get("@odata.nextLink", "")
         skiptoken = ""
         if next_link:
-            from urllib.parse import parse_qs, urlparse
             parsed = urlparse(next_link)
             params_qs = parse_qs(parsed.query)
             skiptoken = params_qs.get("$skiptoken", [""])[0]
