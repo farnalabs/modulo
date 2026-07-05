@@ -342,7 +342,13 @@ async def resolve_plan_context(settings: Any, session: Any, org: Any | None = No
         except Exception:
             logger.warning("Failed to parse env-var license key", exc_info=True)
 
-    # 4. Community fallback
+    # 4. Org-level plan_id (per-org, from DB)
+    if org is not None:
+        org_plan_id: str | None = getattr(org, "plan_id", None)
+        if org_plan_id:
+            return await DbPlanContext.from_db(session, org_plan_id)
+
+    # 5. Community fallback
     return await DbPlanContext.from_db(session, "community")
 
 
@@ -465,3 +471,4 @@ async def get_plan_for_org(
         return str(config.value)
 
     return "community"
+
