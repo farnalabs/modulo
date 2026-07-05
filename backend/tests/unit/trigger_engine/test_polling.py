@@ -249,6 +249,11 @@ def _setup_session_for_polling(
 
     rls_result = MagicMock()
 
+    # Replace AsyncMock get_bind with sync MagicMock to avoid coroutine issues with Python 3.13+
+    bind_mock = MagicMock()
+    bind_mock.dialect.name = "postgresql"
+    session.get_bind = MagicMock(return_value=bind_mock)
+
     # Route to the right result based on query type
     async def _execute(stmt, *args, **kwargs):
         stmt_str = str(stmt).lower()
