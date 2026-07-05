@@ -124,6 +124,60 @@ async def test_validate_api_key_expired_raises() -> None:
 
 
 # ---------------------------------------------------------------------------
+# _validate_team_key_role
+# ---------------------------------------------------------------------------
+
+
+def test_validate_team_key_role_rejects_admin() -> None:
+    from unittest.mock import MagicMock
+
+    from modulo.auth.api_key import ApiKeyInvalidError, _validate_team_key_role
+
+    key = MagicMock()
+    key.team_id = uuid.uuid4()
+    key.role = "admin"
+
+    with pytest.raises(ApiKeyInvalidError, match="team-scoped API keys cannot have admin role"):
+        _validate_team_key_role(key)
+
+
+def test_validate_team_key_role_allows_operator() -> None:
+    from unittest.mock import MagicMock
+
+    from modulo.auth.api_key import _validate_team_key_role
+
+    key = MagicMock()
+    key.team_id = uuid.uuid4()
+    key.role = "operator"
+
+    _validate_team_key_role(key)
+
+
+def test_validate_team_key_role_allows_runner() -> None:
+    from unittest.mock import MagicMock
+
+    from modulo.auth.api_key import _validate_team_key_role
+
+    key = MagicMock()
+    key.team_id = uuid.uuid4()
+    key.role = "runner"
+
+    _validate_team_key_role(key)
+
+
+def test_validate_team_key_role_skips_org_wide() -> None:
+    from unittest.mock import MagicMock
+
+    from modulo.auth.api_key import _validate_team_key_role
+
+    key = MagicMock()
+    key.team_id = None
+    key.role = "admin"
+
+    _validate_team_key_role(key)
+
+
+# ---------------------------------------------------------------------------
 # create_api_key
 # ---------------------------------------------------------------------------
 
@@ -151,6 +205,52 @@ async def test_create_api_key_accepts_expires_at() -> None:
     )
     assert key is not None
     assert full_key.startswith("mk_")
+
+
+@pytest.mark.asyncio
+async def test_create_api_key_with_team_id() -> None:
+    from modulo.auth.api_key import create_api_key
+
+    session = AsyncMock()
+    session.add = MagicMock()
+    session.flush = AsyncMock()
+    org_id = uuid.uuid4()
+    user_id = uuid.uuid4()
+    team_id = uuid.uuid4()
+
+    key, full_key = await create_api_key(
+        session,
+        org_id=org_id,
+        name="Team Key",
+        role="operator",
+        account_id=user_id,
+        team_id=team_id,
+    )
+    assert key is not None
+    assert key.team_id == team_id
+    assert full_key.startswith("mk_")
+
+
+@pytest.mark.asyncio
+async def test_create_api_key_with_team_id_rejects_admin() -> None:
+    from modulo.auth.api_key import ApiKeyInvalidError, create_api_key
+
+    session = AsyncMock()
+    session.add = MagicMock()
+    session.flush = AsyncMock()
+    org_id = uuid.uuid4()
+    user_id = uuid.uuid4()
+    team_id = uuid.uuid4()
+
+    with pytest.raises(ApiKeyInvalidError):
+        await create_api_key(
+            session,
+            org_id=org_id,
+            name="Bad Key",
+            role="admin",
+            account_id=user_id,
+            team_id=team_id,
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -197,3 +297,104 @@ async def test_update_api_key_not_found_returns_none() -> None:
 
     updated = await update_api_key(session, uuid.uuid4(), uuid.uuid4(), name="Nope")
     assert updated is None
+
+
+@pytest.mark.asyncio
+async def test_update_api_key_updates_team_id() -> None:
+    from unittest.mock import AsyncMock, MagicMock
+
+    from modulo.auth.api_key import update_api_key
+    from modulo.db.models.api_key import OrgApiKey
+
+    org_id = uuid.uuid4()
+    key_id = uuid.uuid4()
+    team_id = uuid.uuid4()
+    key = MagicMock(spec=OrgApiKey)
+    key.id = key_id
+    key.name = "Original"
+    key.role = "operator"
+    key.team_id = None
+
+    result = MagicMock()
+    result.scalar_one_or_none.return_value = key
+
+    session = AsyncMock()
+    session.execute = AsyncMock(return_value=result)
+    session.flush = AsyncMock()
+
+    updated = await update_api_key(session, key_id, org_id, team_id=team_id)
+    assert updated is not None
+    assert updated.team_id == team_id
+
+
+@pytest.mark.asyncio
+async def test_update_api_key_with_team_id_rejects_admin() -> None:
+    from unittest.mock import AsyncMock, MagicMock
+
+    from modulo.auth.api_key import ApiKeyInvalidError, update_api_key
+    from modulo.db.models.api_key import OrgApiKey
+
+    org_id = uuid.uuid4()
+    key_id = uuid.uuid4()
+    team_id = uuid.uuid4()
+    key = MagicMock(spec=OrgApiKey)
+    key.id = key_id
+    key.name = "Original"
+    key.role = "admin"
+    key.team_id = None
+
+    result = MagicMock()
+    result.scalar_one_or_none.return_value = key
+
+    session = AsyncMock()
+    session.execute = AsyncMock(return_value=result)
+    session.flush = AsyncMock()
+
+    with pytest.raises(ApiKeyInvalidError):
+        await update_api_key(session, key_id, org_id, team_id=team_id)
+
+
+@pytest.mark.asyncio
+async def test_update_api_key_updates_expires_at() -> None:
+    from datetime import UTC, datetime, timedelta
+    from unittest.mock import AsyncMock, MagicMock
+
+    from modulo.auth.api_key import update_api_key
+    from modulo.db.models.api_key import OrgApiKey
+
+    org_id = uuid.uuid4()
+    key_id = uuid.uuid4()
+    future = datetime.now(UTC) + timedelta(days=60)
+    key = MagicMock(spec=OrgApiKey)
+    key.id = key_id
+    key.name = "Original"
+    key.role = "operator"
+    key.expires_at = None
+
+    result = MagicMock()
+    result.scalar_one_or_none.return_value = key
+
+    session = AsyncMock()
+    session.execute = AsyncMock(return_value=result)
+    session.flush = AsyncMock()
+
+    updated = await update_api_key(session, key_id, org_id, expires_at=future)
+    assert updated is not None
+    assert updated.expires_at == future
+
+
+# ---------------------------------------------------------------------------
+# validate_api_key — revoked
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_validate_api_key_revoked_raises() -> None:
+    """Revoked keys are filtered out by the query (revoked_at IS NULL) — not found."""
+
+    full_key, _, _ = generate_api_key()
+    org_id = uuid.uuid4()
+    session = _make_session(None)
+
+    with pytest.raises(ApiKeyInvalidError):
+        await validate_api_key(session, full_key, org_id)

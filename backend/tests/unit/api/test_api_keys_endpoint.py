@@ -115,7 +115,7 @@ def test_create_api_key_returns_201(client: TestClient) -> None:
         resp = client.post("/api/v1/api-keys", json={"name": "Test Key", "role": "operator"})
     assert resp.status_code == 201
     body = resp.json()
-    assert body["full_key"] == "mk_test_key"
+    assert body["key_value"] == "mk_test_key"
     assert body["role"] == "operator"
     assert "hashed_secret" not in body
 
@@ -128,7 +128,7 @@ def test_create_api_key_returns_full_key_once(client: TestClient) -> None:
         patch("modulo.api.routes.api_keys.set_rls_user_context"),
     ):
         resp = client.post("/api/v1/api-keys", json={"name": "k", "role": "runner"})
-    assert resp.json()["full_key"] == "mk_abc123"
+    assert resp.json()["key_value"] == "mk_abc123"
 
 
 def test_create_api_key_rejects_admin_role(client: TestClient) -> None:
@@ -148,7 +148,7 @@ def test_create_api_key_with_expires_at(client: TestClient) -> None:
             json={"name": "k", "role": "runner", "expires_at": "2026-12-31T00:00:00"},
         )
     assert resp.status_code == 201
-    assert resp.json()["full_key"] == "mk_key"
+    assert resp.json()["key_value"] == "mk_key"
 
 
 # ---------------------------------------------------------------------------
@@ -289,7 +289,7 @@ def test_create_api_key_with_team_id_returns_team_id(client: TestClient) -> None
     assert resp.status_code == 201
     body = resp.json()
     assert body["team_id"] == str(_TEAM_ID)
-    assert body["full_key"] == "mk_team_key"
+    assert body["key_value"] == "mk_team_key"
 
 
 def test_create_api_key_with_team_id_requires_admin(operator_client: TestClient) -> None:
@@ -348,3 +348,32 @@ def test_update_api_key_with_team_id_requires_admin(operator_client: TestClient)
         json={"name": "k", "team_id": str(_TEAM_ID)},
     )
     assert resp.status_code == 403
+
+
+def test_update_api_key_with_expires_at(client: TestClient) -> None:
+    key = _make_key()
+    key.name = "Expiring Key"
+    with (
+        patch("modulo.api.routes.api_keys.update_api_key", return_value=key),
+        patch("modulo.api.routes.api_keys.set_rls_org"),
+        patch("modulo.api.routes.api_keys.set_rls_user_context"),
+    ):
+        resp = client.put(
+            f"/api/v1/api-keys/{_KEY_ID}",
+            json={"name": "Expiring Key", "expires_at": "2026-12-31T00:00:00"},
+        )
+    assert resp.status_code == 200
+    assert resp.json()["name"] == "Expiring Key"
+
+
+def test_create_api_key_rejects_empty_name(client: TestClient) -> None:
+    resp = client.post("/api/v1/api-keys", json={"name": "", "role": "operator"})
+    assert resp.status_code == 422
+
+
+def test_update_api_key_rejects_empty_name(client: TestClient) -> None:
+    resp = client.put(
+        f"/api/v1/api-keys/{_KEY_ID}",
+        json={"name": ""},
+    )
+    assert resp.status_code == 422
