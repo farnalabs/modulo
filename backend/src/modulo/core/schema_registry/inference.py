@@ -38,8 +38,10 @@ def _build_infer_prompt(
     display = samples[:max_records]
     try:
         sample_text = json.dumps(display, indent=2, default=str)
-    except ValueError as exc:
-        raise ValueError(f"Sample data contains non-serializable values (e.g. circular references): {exc}") from exc
+    except (ValueError, TypeError) as exc:
+        raise ValueError(
+            f"Sample data contains non-serializable values (e.g. circular references): {exc}"
+        ) from exc
     message_text = (
         f"Sample data ({len(display)} records):\n```\n{sample_text}\n```\nReturn ONLY the JSON Schema object."
     )
@@ -70,6 +72,8 @@ class SchemaInferenceService:
         self._timeout = timeout
 
     async def infer(self, samples: list[dict[str, Any]]) -> dict[str, Any]:
+        if samples is None:
+            raise SchemaInferenceError("samples must be a list of dicts, got None")
         if not all(isinstance(r, dict) for r in samples):
             raise SchemaInferenceError("samples must be a list of dicts")
 
