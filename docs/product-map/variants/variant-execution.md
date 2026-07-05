@@ -79,7 +79,7 @@ Weighted random variant selection, run_context_overrides merging, quota enforcem
 - PRD 8.19 specifies batch firing N variants (all-or-nothing pre-flight) but current code fires one per call — no batch endpoint exists
 - PRD 8.19 specifies partial completion with HITL but no HITL-aware execution handling exists
 - PRD 8.19 specifies cancel/abandon variant endpoint — not implemented
-- No frontend exists for variant group creation, comparison view, or coverage signal
+- No frontend exists for variant group creation or coverage signal UI (comparison view exists as VariantCompareView.vue)
 - No all-or-nothing N-variant quota pre-flight
 - No website docs page — stub exists at Website/src/docs/variant-execution.md
 - Integration tests skipped (all `@pytest.mark.skip`)

@@ -108,7 +108,6 @@ A/B test variant management — named sets of runs against the same pipeline tha
 - [ ] Cancel/abandon variant: no endpoint or status for marking a variant run as abandoned and excluding from aggregates
 - [ ] All-or-nothing pre-flight quota: PRD says check all N variants before firing any — current code checks per-run only
 - [ ] Prompt versioning library guide: `get_prompt_diffs` exists but documented library pattern for prompt versioning does not
-- [x] BDD feature file: now has real Gherkin scenarios for create, run, coverage gaps, 404, and 429 paths
 
 ## Test coverage gaps
 
