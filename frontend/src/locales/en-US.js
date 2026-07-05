@@ -387,7 +387,7 @@ export default {
       "status": "Status",
       "description": "Description",
       "would_activate": "Would activate with a license key",
-      "would_activate_features": "The following {count} feature{count === 1 ? '' : 's'} would become available if a Team license key were configured.",
+      "would_activate_features": "The following feature would become available if a Team license key were configured.",
       "no_results": "No feature flags match your search.",
       "page_of": "Page {current} of {total}",
       "tier": "Tier",
