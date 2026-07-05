@@ -30,34 +30,19 @@ import time
 
 from locust import HttpUser, between, events, task
 
-try:
-    from conftest import (
-        DEFAULT_BASE_URL,
-        approve_hitl,
-        build_ws_url,
-        claim_hitl,
-        create_pipeline,
-        get_pending_hitl,
-        get_ws_token,
-        login,
-        reject_hitl,
-        trigger_run,
-        wait_for_run,
-    )
-except ImportError:
-    from tests.load.conftest import (
-        DEFAULT_BASE_URL,
-        approve_hitl,
-        build_ws_url,
-        claim_hitl,
-        create_pipeline,
-        get_pending_hitl,
-        get_ws_token,
-        login,
-        reject_hitl,
-        trigger_run,
-        wait_for_run,
-    )
+from tests.load.conftest import (
+    DEFAULT_BASE_URL,
+    approve_hitl,
+    build_ws_url,
+    claim_hitl,
+    create_pipeline,
+    get_pending_hitl,
+    get_ws_token,
+    login,
+    reject_hitl,
+    trigger_run,
+    wait_for_run,
+)
 
 _log = logging.getLogger(__name__)
 
@@ -95,14 +80,24 @@ def _fire_failure(request_type: str, name: str, start: float, exception: Excepti
 # ---------------------------------------------------------------------------
 
 _run_waitlist: list[str] = []
-_hitl_gate_queue: list[dict[str, str]] = []
+
+
+# ---------------------------------------------------------------------------
+# Base load user (shared on_start)
+# ---------------------------------------------------------------------------
+
+class BaseLoadUser(HttpUser):
+    abstract = True
+
+    def on_start(self) -> None:
+        self.token = login(self.client, ADMIN_EMAIL, ADMIN_PASSWORD, BASE_URL)
 
 
 # ---------------------------------------------------------------------------
 # PipelineRunUser
 # ---------------------------------------------------------------------------
 
-class PipelineRunUser(HttpUser):
+class PipelineRunUser(BaseLoadUser):
     """Simulates pipeline creation, run triggering, and completion polling.
 
     Each iteration:
@@ -117,10 +112,6 @@ class PipelineRunUser(HttpUser):
 
     wait_time = between(5, 15)
     abstract = True
-
-    def on_start(self) -> None:
-        self.token = login(self.client, ADMIN_EMAIL, ADMIN_PASSWORD, BASE_URL)
-        self._pipeline_counter = 0
 
     @task
     def pipeline_full_lifecycle(self) -> None:
@@ -146,7 +137,7 @@ class PipelineRunUser(HttpUser):
 # HitlReviewUser
 # ---------------------------------------------------------------------------
 
-class HitlReviewUser(HttpUser):
+class HitlReviewUser(BaseLoadUser):
     """Simulates human-in-the-loop review workflow.
 
     Each iteration:
@@ -161,9 +152,6 @@ class HitlReviewUser(HttpUser):
 
     wait_time = between(2, 8)
     abstract = True
-
-    def on_start(self) -> None:
-        self.token = login(self.client, ADMIN_EMAIL, ADMIN_PASSWORD, BASE_URL)
 
     @task
     def hitl_review_cycle(self) -> None:
@@ -191,13 +179,14 @@ class HitlReviewUser(HttpUser):
                 _fire_success("hitl", "hitl_reject", start)
         except Exception as exc:
             _fire_failure("hitl", "hitl_review_cycle", start, exc)
+            raise
 
 
 # ---------------------------------------------------------------------------
 # WebSocketUser
 # ---------------------------------------------------------------------------
 
-class WebSocketUser(HttpUser):
+class WebSocketUser(BaseLoadUser):
     """Simulates WebSocket event stream subscribers.
 
     Each iteration:
@@ -214,7 +203,7 @@ class WebSocketUser(HttpUser):
     abstract = True
 
     def on_start(self) -> None:
-        self.token = login(self.client, ADMIN_EMAIL, ADMIN_PASSWORD, BASE_URL)
+        super().on_start()
         self._ws = None
 
     def on_stop(self) -> None:
@@ -222,7 +211,7 @@ class WebSocketUser(HttpUser):
             try:
                 self._ws.close()
             except Exception:
-                pass
+                _log.warning("WebSocket close failed during on_stop", exc_info=True)
 
     @task
     def ws_event_subscribe(self) -> None:
@@ -230,9 +219,7 @@ class WebSocketUser(HttpUser):
             time.sleep(2)
             return
 
-        run_id = _run_waitlist[-1] if _run_waitlist else None
-        if run_id is None:
-            return
+        run_id = _run_waitlist[-1]
 
         start = time.time()
         try:
@@ -273,7 +260,7 @@ class WebSocketUser(HttpUser):
                 try:
                     self._ws.close()
                 except Exception:
-                    pass
+                    _log.warning("WebSocket close failed during cleanup", exc_info=True)
                 self._ws = None
 
 
