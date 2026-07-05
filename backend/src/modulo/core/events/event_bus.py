@@ -15,6 +15,7 @@ _log = logging.getLogger(__name__)
 type _SubscriberMap = dict[str, list[asyncio.Queue[dict[str, Any]]]]
 
 _background_tasks: set[asyncio.Task[Any]] = set()
+_bus_init_lock: asyncio.Lock = asyncio.Lock()
 
 
 class EventBus:
@@ -55,7 +56,8 @@ class EventBus:
             "org_id": org_id,
         }
         dead: list[asyncio.Queue[dict[str, Any]]] = []
-        queues = list(self._subscribers.get(org_id, []))
+        async with self._lock:
+            queues = list(self._subscribers.get(org_id, []))
         for q in queues:
             try:
                 q.put_nowait(event)
@@ -65,7 +67,9 @@ class EventBus:
         await self._redis_broadcast_if_configured(org_id, event)
 
     async def _remove_dead_queues(
-        self, org_id: str, dead: list[asyncio.Queue[dict[str, Any]]],
+        self,
+        org_id: str,
+        dead: list[asyncio.Queue[dict[str, Any]]],
     ) -> None:
         if not dead:
             return
@@ -86,7 +90,14 @@ class EventBus:
         try:
             asyncio.get_running_loop()
         except RuntimeError:
-            _log.warning("event_bus.no_running_loop", extra={"org_id": org_id})
+            _log.warning(
+                "event_bus.no_running_loop",
+                extra={
+                    "org_id": org_id,
+                    "resource_type": event.get("type"),
+                    "action": event.get("action"),
+                },
+            )
         else:
             task = asyncio.create_task(self._redis_broadcast(broker, org_id, event))
             _background_tasks.add(task)
@@ -96,7 +107,7 @@ class EventBus:
         """Fire-and-forget: publish event to Redis channel (best-effort)."""
         try:
             await broker.publish(f"resource:{org_id}", event)
-        except Exception:
+        except (ConnectionError, TimeoutError, OSError):
             _log.exception("event_bus.redis_broadcast_failed", extra={"org_id": org_id})
 
     async def subscribe(self, org_id: str, maxsize: int = 256) -> asyncio.Queue[dict[str, Any]]:
@@ -140,13 +151,10 @@ def get_event_bus() -> EventBus:
     """Return the module-level EventBus singleton (lazy init)."""
     if _event_bus is None:
         _set_event_bus(EventBus())
-    bus = _event_bus
-    if bus is None:
-        raise RuntimeError("EventBus singleton accessed before initialization")
-    return bus
+    return _event_bus  # type: ignore[return-value]
 
 
-def configure_event_bus(redis_broker: RedisEventBroker | None = None) -> None:
+async def configure_event_bus(redis_broker: RedisEventBroker | None = None) -> None:
     """Configure the module-level EventBus with an optional Redis broker.
 
     Call during application startup (before any events are published) to
@@ -155,4 +163,7 @@ def configure_event_bus(redis_broker: RedisEventBroker | None = None) -> None:
     if _event_bus is None:
         _set_event_bus(EventBus(redis_broker=redis_broker))
     else:
+        old = _event_bus._redis_broker
+        if old is not None and old is not redis_broker:
+            await old.close()
         _event_bus._redis_broker = redis_broker

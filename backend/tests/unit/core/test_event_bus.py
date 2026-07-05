@@ -98,7 +98,7 @@ class TestEventBus:
         mock_redis = MagicMock(spec=["publish"])
         mock_redis.publish = AsyncMock()
 
-        configure_event_bus(redis_broker=mock_redis)
+        await configure_event_bus(redis_broker=mock_redis)
         bus = get_event_bus()
         assert bus._redis_broker is mock_redis
 
@@ -109,7 +109,7 @@ class TestEventBus:
         mock_redis = MagicMock(spec=["publish"])
         mock_redis.publish = AsyncMock()
 
-        configure_event_bus(redis_broker=mock_redis)
+        await configure_event_bus(redis_broker=mock_redis)
         bus = get_event_bus()
         assert bus._redis_broker is mock_redis
 
