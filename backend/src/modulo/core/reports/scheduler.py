@@ -234,7 +234,20 @@ async def _fire_scheduled_report(
                 delivery_results = await _deliver_via_config(payload, recipient_config, org_id)
 
             now = datetime.datetime.now(datetime.UTC)
-            next_send = compute_next_send(report.cron_expression, after=now)
+            try:
+                next_send = compute_next_send(report.cron_expression, after=now)
+            except (ValueError, TypeError) as exc:
+                _log.error(
+                    "Invalid cron expression '%s' for report %s: %s",
+                    report.cron_expression, report_id, exc,
+                )
+                await session.execute(
+                    update(ScheduledReport)
+                    .where(ScheduledReport.id == report_id)
+                    .values(active=False)
+                )
+                return {"status": "failed", "reason": f"invalid_cron: {exc}"}
+
             await session.execute(
                 update(ScheduledReport)
                 .where(ScheduledReport.id == report_id)
@@ -274,6 +287,7 @@ async def _deliver_via_config(
         urls = recipient_config.get("webhook_urls", [])
         return await _deliver_slack_webhook(payload, urls)
 
+    _log.warning("Unknown recipient config type '%s', falling back to generic webhook", config_type)
     return await _deliver_webhook(payload, recipient_config)
 
 
@@ -288,13 +302,16 @@ async def _deliver_to_urls(
         for url in urls:
             try:
                 resp = await client.post(url, json=body, headers=headers or {})
+                if not resp.is_success:
+                    _log.warning("Delivery to %s returned %d: %.200s", url, resp.status_code, resp.text)
                 results.append({
                     "url": url,
                     "status": "delivered" if resp.is_success else "failed",
                     "status_code": resp.status_code,
                     "error": None if resp.is_success else resp.text[:200],
                 })
-            except httpx.RequestError as exc:
+            except (httpx.RequestError, TypeError) as exc:
+                _log.warning("Delivery to %s failed: %s", url, exc)
                 results.append({
                     "url": url,
                     "status": "failed",
@@ -305,7 +322,7 @@ async def _deliver_to_urls(
 
 
 async def _deliver_slack_webhook(payload: Any, webhook_urls: list[str]) -> list[dict[str, Any]]:
-    body = payload if isinstance(payload, dict) else {"text": str(payload)}
+    body = payload if isinstance(payload, (dict, list)) else {"text": str(payload)}
     return await _deliver_to_urls(webhook_urls, body)
 
 
@@ -402,6 +419,7 @@ class DatabaseReportScheduler(Scheduler):
 
         current_ids = set(self._schedule.keys())
         db_ids: set[str] = set()
+        had_rows = bool(rows)
 
         for row in rows:
             entry_id = f"report-{row['report_id']}"
@@ -420,9 +438,10 @@ class DatabaseReportScheduler(Scheduler):
             )
             self._schedule[entry_id] = entry
 
-        stale = current_ids - db_ids
-        for sid in stale:
-            self._schedule.pop(sid, None)
+        if had_rows:
+            stale = current_ids - db_ids
+            for sid in stale:
+                self._schedule.pop(sid, None)
 
     async def _fetch_due_reports(self) -> list[dict[str, Any]]:
         """Async query for scheduled reports due to fire."""
