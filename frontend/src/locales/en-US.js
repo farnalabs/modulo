@@ -884,7 +884,8 @@ export default {
         "create_a_new_skill": "Create a new skill.",
         "update_the_skill_configuration": "Update the skill configuration.",
         "trigger1_trigger2": "trigger1, trigger2",
-        "skill_instructions10write_markdown_here": "# Skill instructions\nWrite markdown here..."
+        "skill_instructions_heading": "# Skill instructions",
+        "skill_instructions_body": "Write markdown here..."
       },
       "RemySessionDrawer": {
         "no_sessions_yet": "No sessions yet",

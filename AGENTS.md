@@ -580,6 +580,17 @@ Wait-Process -Name "uv" -ErrorAction SilentlyContinue  # doesn't block; just con
 - `en-US.json` can accumulate non-user-facing artifacts (SVG path data, JS expressions with `??`/`||`, template literals, function calls) from the auto-extraction script. After extraction, verify all JSON values are human-readable text. Remove keys containing `??`, `${`, `||`, function calls, or SVG path data.
 - When adding locale sync between frontend and backend, verify the Pinia store's payload shape matches the API model. `PUT /api/v1/me/settings` expects `{ locale: "..." }` at top level (flat), not `{ preferences: { locale: "..." } }` (nested). Misaligned shapes silently fail — the locale is never persisted. Verify both the send direction (`syncToBackend`) and the read direction (`initLocale`) match the backend's `SettingsResponse`/`SettingsUpdate` Pydantic models.
 
+### Translation values must not contain newlines or HTML entities
+
+Translation values in `en-US.js` (and all locale JSON files) must NEVER contain:
+- Literal newlines (`\n`)
+- HTML entities like `&#10;`, `&amp;`, etc.
+
+If a UI element needs multi-line text (like a textarea placeholder with multiple lines), split it into separate translation keys and concatenate them in the template with `+ '\n' +`. This ensures:
+1. Translation files stay machine-parseable and diffable
+2. No encoding issues between JSON values and HTML attribute bindings
+3. Translators see clean, single-line strings
+
 ### Frontend / Store & View Patterns
 
 - Do not duplicate computed properties across a Pinia store and a Vue view. Define the computed once in the store and reference it from the view via `storeName.propertyName`.
