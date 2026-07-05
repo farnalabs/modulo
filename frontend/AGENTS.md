@@ -2,6 +2,17 @@
 
 ## Lessons Learned
 
+### reka-ui v2.10.1 ships `index.d.cts` but `package.json.types` points to `index.d.ts`
+
+The `reka-ui` npm package v2.10.1 ships its type declarations as `dist/index.d.cts` (CommonJS TypeScript)
+but its `package.json` `types` field points to the non-existent `dist/index.d.ts`. This causes
+`@vue/compiler-sfc` to fail with "Unresolvable type reference" when resolving
+`defineProps<RekaUiProps>()` in `.vue` components, breaking both `npm run build` and `npm run test:unit`.
+
+The `postinstall` script in `package.json` copies `index.d.cts` → `index.d.ts` after each `npm install`.
+When upgrading reka-ui, verify the package still ships `.d.cts` only and that the copy succeeds.
+If reka-ui ships proper `.d.ts` in a future version, remove the postinstall script.
+
 ### Permission gating: `canSeeItem()` must check `requiredPermissions`
 
 - The sidebar nav gating function was ignoring `requiredPermissions` from navigation config, causing unauthorized items to be visible (though non-functional). Always verify that permission-gated nav items actually check permissions — not just feature flags but also role-based `requiredPermissions`. Add an explicit assertion per item: `if (item.requiredPermissions && !userHasPermission(item.requiredPermissions)) return false;`.

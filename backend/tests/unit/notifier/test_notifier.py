@@ -12,8 +12,8 @@ from cryptography.fernet import Fernet
 from httpx import Response
 
 from modulo.core.notifier import (
+    MAX_ATTEMPTS,
     MAX_DEAD_LETTERS,
-    MAX_RETRIES,
     DispatchResult,
     Notifier,
 )
@@ -245,7 +245,7 @@ async def test_dispatch_retries_then_dead_letters() -> None:
             result = await _do_dispatch(n, ep, "run_failed")
 
     assert result.status == "dead_lettered"
-    assert result.attempt_count == MAX_RETRIES
+    assert result.attempt_count == MAX_ATTEMPTS
     mock_dead.assert_called_once()
 
 
