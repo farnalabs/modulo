@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+import logging
+
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field
+from sqlalchemy.exc import ProgrammingError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.api.dependencies import get_db_session
@@ -17,6 +20,8 @@ from modulo.core.license import (
 )
 from modulo.db.crud.organisation import get_organisation
 from modulo.settings import Settings, get_settings
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/v1/admin/license", tags=["admin-license"])
 
@@ -103,12 +108,19 @@ async def get_license_status(
 ) -> LicenseStatusResponse:
     _require_admin(current_user)
 
-    org = None
-    if current_user.organisation_id is not None:
-        async with session.begin():
-            org = await get_organisation(session, current_user.organisation_id)
+    try:
+        org = None
+        if current_user.organisation_id is not None:
+            async with session.begin():
+                org = await get_organisation(session, current_user.organisation_id)
 
-    return _resolve_effective_license(settings, org=org)
+        return _resolve_effective_license(settings, org=org)
+    except ProgrammingError:
+        logger.exception("license.get_failed")
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="License information is not available. Run database migrations to enable this feature.",
+        ) from None
 
 
 @router.post("", response_model=LicenseUploadResponse, status_code=status.HTTP_200_OK)
