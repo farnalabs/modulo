@@ -88,6 +88,79 @@ Per-org, role-scoped API keys for CI/CD pipelines and external agents, with opti
 
 - [x] Team RBAC toggle controls whether team-scoped API keys are usable
 
+## Error Handling
+
+### Database errors
+
+- [x] All 4 DB-accessing route handlers wrap queries in `try/except ProgrammingError` → 501 Not Implemented
+- [x] `ProgrammingError` catch returns structured JSON with `detail` explaining the migration requirement
+- [ ] Route handlers do NOT catch `SQLAlchemyError` for general DB failures (integrity, connection) — these propagate as 500
+- [ ] Route handlers do NOT catch generic `Exception` for Python-level errors (`TypeError`, `AttributeValue`) — also propagate as 500
+
+### API key validation errors
+
+- [x] Invalid prefix → `ApiKeyInvalidError` (401)
+- [x] Key not found in DB → `ApiKeyInvalidError` (401)
+- [x] Expired key → `ApiKeyInvalidError` (401)
+- [x] Revoked key → caught by "not found" filter (query excludes revoked)
+- [x] Hash mismatch → `ApiKeyInvalidError` (401, constant-time compare)
+- [x] Missing bearer token → 401 raised by `get_current_user` dependency
+
+### Input validation errors
+
+- [x] Empty key name (length < 1) → 422 from Pydantic `Field(min_length=1)`
+- [x] Invalid role (not `operator`/`runner`) → 422 from route handler guard
+- [x] Invalid `team_id` format (not a valid UUID) → 422 from `uuid.UUID()` conversion
+- [x] Invalid `expires_at` format (not ISO 8601) → 422 from `datetime.fromisoformat()`
+- [ ] Team-scoped key with admin role → raised as `ApiKeyInvalidError` at the `api_key.py` layer; route-level guard catches before service layer is reached
+
+## Resilience
+
+### Startup / migration readiness
+
+- [x] Missing `org_api_keys` table → 501 from all route handlers (ProgrammingError catch)
+- [x] `lookup_prefix` UNIQUE constraint prevents prefix collision at DB level
+- [ ] Missing DB or connection failure is NOT caught separately from ProgrammingError
+
+### Runtime resilience
+
+- [x] `last_used_at` update failure does not block key validation — update is fire-and-forget via `session.execute()`
+- [x] `last_used_at` is nullable — no data loss if migration hasn't added the column
+- [x] `revoked_at` is nullable — permanent keys work without it
+- [x] `expires_at` is nullable — non-expiring keys work without it
+- [x] Constant-time comparison (`hmac.compare_digest`) prevents timing side-channels
+- [ ] Session rollback on `ProgrammingError` may leave stale session state — no explicit `session.rollback()` after the exception
+
+### Team-scoped resilience
+
+- [ ] `_validate_team_key_role` is called AFTER the key is constructed and added to the session — on failure, the session has a partially-initialised key object that may need rollback
+
+## Edge Cases
+
+### Key lifecycle edge cases
+
+- [ ] Create key with `team_id` for a non-existent team → FK violation → 500 (not caught by ProgrammingError)
+- [ ] Create key with `expires_at` in the past → accepted (no validation that `expires_at > now`)
+- [ ] Update key with `expires_at` in the past → accepted (no validation that `expires_at > now`)
+- [ ] Update revoked key → returns 404 (query filters `revoked_at.is_(None)`)
+- [ ] Re-revoke an already-revoked key → 404 (query filters `revoked_at.is_(None)`)
+- [ ] Key name with leading/trailing whitespace → stored as-is (no `.strip()`)
+- [ ] `lookup_prefix` of exactly 8 chars in the DB model — any shorter/longer prefix fails to match (DB column is `String(8)`)
+- [ ] MCP middleware validates API key without `org_id` → resolves org from the key's `organisation_id` column, but `_ctx_team_id` is never set
+
+### Team-scoped edge cases
+
+- [x] Team-scoped key with admin role raises `ApiKeyInvalidError` in `_validate_team_key_role`
+- [x] `_validate_team_key_role` fires on BOTH create and update when `team_id` is non-None
+- [ ] Updating a key from org-wide (team_id=None) to team-scoped → `_validate_team_key_role` fires after setting `team_id`
+- [ ] Updating a key from team-scoped to org-wide (team_id=None) → allowed (no validation needed)
+- [ ] Team deletion cascades to `team_id` via `FOREIGN KEY (team_id) REFERENCES teams(id) ON DELETE CASCADE` — keys become org-wide on team deletion
+
+### Concurrency edge cases
+
+- [ ] No row-level locking (`FOR UPDATE`) on read-then-update in `validate_api_key` or `revoke_api_key` — potential race between concurrent validation and revocation
+- [ ] Two concurrent revocations for the same key — both read `revoked_at IS NULL`, both proceed; second write is a no-op
+
 ## Known Gaps
 
 - **MCP middleware does not propagate `team_id` to request context.** The `_ctx_team_id` ContextVar does not exist — tool handlers have no way to know which team scope an API key was issued for. Team-scoped enforcement at the MCP layer is incomplete.
@@ -106,3 +179,11 @@ Per-org, role-scoped API keys for CI/CD pipelines and external agents, with opti
 
 ### 2026-07-05 — QA-iterate (prodmap auth)
 - Moved `_validate_team_key_role` fix note from Known Gaps to QA History
+
+### 2026-07-05 — Cross-cutting QA (feat-auth-team-api-keys)
+- Added Error Handling, Resilience, and Edge Cases sections to product map
+- Added 10 new unit tests for `_validate_team_key_role`, team-scoped create/update, `expires_at` update, and revoked key validation
+- Added 3 new endpoint tests for `expires_at` update, empty name rejection on create and update
+- Fixed pre-existing test bug: `ApiKeyCreatedResponse` field is `key_value`, not `full_key` — 4 tests were asserting `body["full_key"]` which always failed with `KeyError`
+- Website docs stub not created — `Website` is a separate git repo, not part of this worktree
+- Product map now has structured Error Handling, Resilience, and Edge Cases sections with 44 checkboxes covering both covered and gap behaviours
