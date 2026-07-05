@@ -92,7 +92,7 @@ export const useRemyStore = defineStore('remy', () => {
       if (err) {
         error.value = extractErrorMessage(err)
       } else {
-        sessions.value = (data as any) ?? []
+        sessions.value = (data as any)?.items ?? []
       }
     } catch (e: unknown) {
       error.value = e instanceof Error ? e.message : extractErrorMessage(e)
@@ -109,7 +109,7 @@ export const useRemyStore = defineStore('remy', () => {
       })
       if (err) throw new Error(extractErrorMessage(err))
       const session = data as ChatSession
-      sessions.value.unshift(session)
+      if (Array.isArray(sessions.value)) sessions.value.unshift(session)
       activeSessionId.value = session.id
       messages.value = []
       return session
@@ -147,7 +147,7 @@ export const useRemyStore = defineStore('remy', () => {
         params: { path: { id } },
       })
       if (err) throw new Error(extractErrorMessage(err))
-      sessions.value = sessions.value.filter(s => s.id !== id)
+      sessions.value = Array.isArray(sessions.value) ? sessions.value.filter(s => s.id !== id) : []
       if (activeSessionId.value === id) {
         activeSessionId.value = null
         messages.value = []
