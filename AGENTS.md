@@ -517,6 +517,30 @@ Wait-Process -Name "uv" -ErrorAction SilentlyContinue  # doesn't block; just con
 
 ## Lessons Learned
 
+### Deployment: checkpointer init silently fails when pg_connection_string strips sslmode
+
+`pg_connection_string()` had `.split("?")[0]` which stripped `?sslmode=require` from Fly.io's DATABASE_URL. psycopg's `AsyncConnection.connect()` needs SSL on Fly.io Postgres, so without sslmode the connection fails silently (exception is caught and logged as a warning). This means the `checkpoint_migrations` table is never created, which causes the health check to fail, which blocks bluegreen deployments.
+
+Fix: never strip query params from DATABASE_URL. `asyncpg.connect()` and `psycopg.AsyncConnection.connect()` both accept standard Postgres query params like `sslmode=require`.
+
+### Deployment: health check `finally` block `conn.close()` can override inner `return`
+
+In `_check_checkpointer()`, the inner `try/except` catches query failures and returns "degraded". But the `finally` block runs `conn.close()` before the return completes. If `conn.close()` raises, the exception propagates to the outer `except Exception`, overrides the "degraded" result, and produces "unavailable" with empty detail — even though the query failure was the real issue.
+
+Fix: wrap `conn.close()` in a nested `try/except` so a close() failure can never override the inner result.
+
+### Deployment: any unavailability blocks bluegreen — return "degraded" for non-critical checks
+
+Fly.io's bluegreen strategy waits for ALL health checks to return non-"unavailable" before cutting over. A single non-critical check (like checkpointer tables missing) returning "unavailable" blocks the entire deployment. Change any check that the app can function without to return "degraded" instead of "unavailable".
+
+### Frontend i18n: vue-i18n message compiler cannot parse JS ternary expressions in translation values
+
+`{count === 1 ? '' : 's'}` inside a translation value is parsed by `@intlify/message-compiler` as a malformed interpolation expression, causing build failures with error code 7. Never use JS expressions inside translation strings. Use vue-i18n pluralization syntax (`"key | key_plural"`) or simplify the message.
+
+### Ops: npm install on Windows generates lockfile with platform-specific packages
+
+Running `npm install` on Windows adds packages like `@rollup/rollup-win32-x64-msvc` to the lockfile. Docker builds on Linux reject these with EBADPLATFORM. Use `npm install --force` to skip platform checks. The `--force` flag is needed because the lockfile is generated from a Windows development environment and deployed to Linux.
+
 ### Database / Multi-backend
 
 - `GenericRepository.set_org_context` no-op (`pass`) on non-Postgres backends → must call `set_rls_org(session, org_id)` so that `session.info` is populated for the `do_orm_execute` tenant-filter listener
