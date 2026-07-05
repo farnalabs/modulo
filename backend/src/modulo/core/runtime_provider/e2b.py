@@ -6,6 +6,7 @@ import asyncio
 import logging
 import os
 import shlex
+import time
 from typing import Any
 
 from modulo.core.runtime_provider import ExecResult, RuntimeProvider, WorkspaceSpec
@@ -98,20 +99,24 @@ class E2BRuntimeProvider(RuntimeProvider):
         cmd_str = " ".join(shlex.quote(c) for c in command)
         effective_timeout = timeout if timeout is not None else _DEFAULT_CMD_TIMEOUT
 
+        start = time.monotonic()
         try:
             proc = await sandbox.commands.run(cmd_str, timeout=effective_timeout)
+            duration = int((time.monotonic() - start) * 1000)
             return ExecResult(
                 exit_code=getattr(proc, "exit_code", -1),
                 stdout=getattr(proc, "stdout", "") or "",
                 stderr=getattr(proc, "stderr", "") or "",
+                duration_ms=duration,
             )
         except Exception:
+            duration = int((time.monotonic() - start) * 1000)
             _log.exception("exec_command failed in sandbox %s", provider_ref)
             return ExecResult(
                 exit_code=-1,
                 stdout="",
                 stderr="Command execution failed",
-                duration_ms=None,
+                duration_ms=duration,
             )
 
     async def destroy_workspace(self, provider_ref: str) -> None:
@@ -129,7 +134,9 @@ class E2BRuntimeProvider(RuntimeProvider):
 
     async def get_workspace_status(self, provider_ref: str) -> str:
         """Return the current status of the sandbox."""
-        sandbox = self._get_sandbox(provider_ref)
+        sandbox = self._sandboxes.get(provider_ref)
+        if sandbox is None:
+            return "terminated"
         try:
             running = await sandbox.is_running()
             return "running" if running else "stopped"

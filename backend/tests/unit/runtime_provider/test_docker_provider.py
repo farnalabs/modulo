@@ -165,6 +165,8 @@ async def test_exec_command(
     assert result.stdout == "Hello, Docker!"
     assert result.stderr == ""
     assert result.exit_code == 0
+    assert result.duration_ms is not None
+    assert result.duration_ms >= 0
 
 
 async def test_exec_command_unknown_ref(provider: DockerRuntimeProvider) -> None:
