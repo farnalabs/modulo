@@ -36,8 +36,6 @@ class DatadogConnector(ConnectorBase):
 
     def _client(self) -> httpx.AsyncClient:
         base = self._base
-        if base is None:
-            raise RuntimeError("site was validated in __init__")
         return httpx.AsyncClient(
             base_url=base,
             headers={

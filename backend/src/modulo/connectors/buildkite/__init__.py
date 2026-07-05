@@ -1,5 +1,6 @@
 """Buildkite CI/CD connector — triggers and observes pipeline runs via the Buildkite REST API v2."""
 
+from datetime import datetime
 from typing import Any, cast
 
 import httpx
@@ -40,8 +41,6 @@ def _duration_seconds(raw: dict[str, Any]) -> int | None:
     finished_at = raw.get("finished_at")
     if started_at and finished_at:
         try:
-            from datetime import datetime
-
             fmt = "%Y-%m-%dT%H:%M:%S.%fZ"
             started = datetime.strptime(started_at, fmt) if "T" in started_at else datetime.fromisoformat(started_at)
             if "T" in finished_at:

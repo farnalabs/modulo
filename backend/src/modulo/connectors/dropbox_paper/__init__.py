@@ -129,10 +129,12 @@ class DropboxPaperConnector(ConnectorBase):
                     r.raise_for_status()
                     body = r.json()
                     entries = body.get("entries", [])
+                    cursor = body.get("cursor")
+                    next_cursor = cursor.get("value") if isinstance(cursor, dict) else cursor
                     return ConnectorResult(
                         records=entries,
                         total=len(entries),
-                        next_cursor=body.get("cursor"),
+                        next_cursor=next_cursor,
                     )
 
                 case _:

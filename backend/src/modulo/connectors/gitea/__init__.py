@@ -1,5 +1,6 @@
 """GiteaConnector — async Gitea API connector for self-hosted Gitea instances."""
 
+import base64
 from typing import Any
 
 import httpx
@@ -130,8 +131,6 @@ class GiteaConnector(ConnectorBase):
                     info: dict[str, Any] = r.json()
                     # Gitea returns content as base64-encoded string
                     if "content" in info and info.get("encoding") == "base64":
-                        import base64
-
                         info["content"] = base64.b64decode(info["content"]).decode("utf-8")
                     return ConnectorResult(records=[info])
                 case "pulls":
