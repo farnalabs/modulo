@@ -16,24 +16,23 @@ _log = getLogger(__name__)
 __all__ = [
     "TOOL_SCOPE_REQUIREMENTS",
     "MCPAuthorizationError",
+    "MCPConfigurationError",
     "check_tool_scope",
 ]
 
 
 class MCPAuthorizationError(Exception):
-    """Raised when the MCP principal lacks the required scope for a tool.
+    """Raised when the MCP principal lacks the required scope for a tool."""
 
-    The caller should catch this and return an appropriate error response
-    to the MCP client — never let it propagate to the HTTP layer.
-    """
+
+class MCPConfigurationError(Exception):
+    """Raised when a scope-requirement configuration error is detected."""
 
 
 TOOL_SCOPE_REQUIREMENTS: dict[str, str] = {
     "trigger_pipeline": "runner",
     "cancel_run": "runner",
-    # Tool-level default for review_hitl (no action = operator)
     "review_hitl": "operator",
-    # Action-scoped sub-requirements
     "review_hitl:claim": "runner",
     "review_hitl:approve": "operator",
     "review_hitl:reject": "operator",
@@ -46,17 +45,20 @@ TOOL_SCOPE_REQUIREMENTS: dict[str, str] = {
     "create_model_backend": "operator",
 }
 
-
-def _require_role_exists(role: str) -> None:
-    """Validate that *role* is a known key in the role hierarchy.
-
-    Raises ``MCPAuthorizationError`` if the role is not defined — this is
-    a configuration error that must be surfaced, not silently tolerated.
-    """
-    if role not in ORG_ROLE_HIERARCHY:
-        raise MCPAuthorizationError(
-            f"Misconfigured scope requirement: role '{role}' is not in the role hierarchy",
+_VALID_ROLES = frozenset(ORG_ROLE_HIERARCHY)
+for _tool, _role in TOOL_SCOPE_REQUIREMENTS.items():
+    if _role not in _VALID_ROLES:
+        raise MCPConfigurationError(
+            f"Misconfigured scope requirement for '{_tool}': "
+            f"role '{_role}' is not in the role hierarchy",
         )
+
+
+def _sanitize(value: str) -> str:
+    stripped = value.strip().lower()
+    if not stripped:
+        raise MCPAuthorizationError("Value is empty or whitespace-only")
+    return stripped
 
 
 def check_tool_scope(
@@ -64,48 +66,45 @@ def check_tool_scope(
     tool_name: str,
     action: str | None = None,
 ) -> None:
-    """Validate that ``current_role`` meets the tool's minimum role requirement.
-
-    Args:
-        current_role: The role derived by the middleware (``_ctx_role``).
-        tool_name: The MCP tool being invoked.
-        action: Optional sub-action (e.g. ``"approve"`` for ``review_hitl``).
-
-    Raises:
-        MCPAuthorizationError: If the principal's role is below the minimum.
-    """
     if current_role is None:
+        _log.warning("Scope check failed: no authentication context")
         raise MCPAuthorizationError("No authentication context: role not set")
 
-    name = tool_name.strip().lower()
-    if not name:
-        raise MCPAuthorizationError("Tool name is empty or whitespace-only")
+    if not isinstance(tool_name, str):
+        _log.error("Scope check failed: tool_name is not a string (type=%s)", type(tool_name).__name__)
+        raise MCPAuthorizationError("Tool name must be a string")
+
+    name = _sanitize(tool_name)
 
     if action is not None:
-        act = action.strip().lower()
-        if not act:
-            raise MCPAuthorizationError("Action is empty or whitespace-only")
+        if not isinstance(action, str):
+            _log.error("Scope check failed: action is not a string (type=%s)", type(action).__name__)
+            raise MCPAuthorizationError("Action must be a string")
+        act = _sanitize(action)
         key = f"{name}:{act}"
         required = TOOL_SCOPE_REQUIREMENTS.get(key)
         if required is None:
-            # Action not found in scope requirements — caller bug
+            _log.warning("Unknown action '%s' for tool '%s'", action, tool_name)
             raise MCPAuthorizationError(
                 f"Unknown action '{action}' for tool '{tool_name}'",
             )
     else:
         required = TOOL_SCOPE_REQUIREMENTS.get(name)
         if required is None:
-            return  # No scope gate — accessible to all authenticated roles
-
-    _require_role_exists(required)
+            return
 
     current_level = org_role_level(current_role)
     required_level = ORG_ROLE_HIERARCHY[required]
 
     if current_level < 0:
+        _log.warning("Scope check failed: unknown role '%s'", current_role)
         raise MCPAuthorizationError(f"Unknown role: '{current_role}'")
 
     if current_level < required_level:
+        _log.warning(
+            "Insufficient scope for '%s': requires '%s' role, got '%s'",
+            tool_name, required, current_role,
+        )
         raise MCPAuthorizationError(
             f"Insufficient scope for '{tool_name}': "
             f"requires '{required}' role, got '{current_role}'",
