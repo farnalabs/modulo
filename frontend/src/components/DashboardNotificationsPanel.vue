@@ -2,6 +2,7 @@
   <div class="dashboard-notifications rounded-lg border bg-background">
     <button
       type="button"
+      data-testid="notif-panel-toggle"
       class="flex w-full items-center justify-between px-4 py-3 text-sm font-medium text-foreground hover:bg-muted/50 transition-colors"
       @click="toggleCollapsed"
     >

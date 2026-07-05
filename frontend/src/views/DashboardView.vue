@@ -170,7 +170,7 @@
         <div class="flex items-center justify-between mb-4">
           <h2 class="text-lg font-semibold">{{ $t('views.DashboardView.run_activity') }}</h2>
           <div class="flex gap-1">
-            <button v-for="d in trendDurations" :key="d.value"
+            <button v-for="d in trendDurations" :key="d.value" data-testid="trend-duration-btn"
                     :class="['px-3 py-1 text-xs font-medium rounded transition-colors',
                              trendDuration === d.value ? 'bg-primary text-primary-foreground' : 'bg-muted text-muted-foreground hover:bg-muted/80']"
                     @click="switchTrendDuration(d.value)">

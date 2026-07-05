@@ -107,7 +107,7 @@ describe('AdminCostControlsView', () => {
     mockGet.mockImplementation((path: string) => {
       if (path === '/api/v1/admin/feature-flags') {
         return Promise.resolve({
-          data: { license: { tier: 'community', has_license_key: false, is_valid: true }, flags: [], would_activate: [] },
+          data: { license: { tier: 'community', has_license_key: false, is_valid: true }, flags: [{ name: 'admin_cost_controls', description: 'Cost Controls', tier: 'team', currently_active: false, depends_on: null }], would_activate: [] },
           error: undefined,
         })
       }

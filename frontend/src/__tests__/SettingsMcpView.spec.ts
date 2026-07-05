@@ -8,23 +8,19 @@ const mockMcpConfig = {
   config_snippet: '',
 }
 
-const mockApiKeys = {
-  items: [
-    { id: 'key-1', prefix: 'mod_mk_abc', name: 'Claude Key', role: 'operator', is_active: true, last_used_at: '2026-06-28T12:00:00Z', created_at: '2026-06-01T00:00:00Z' },
-    { id: 'key-2', prefix: 'mod_mk_def', name: 'Cursor Key', role: 'runner', is_active: false, last_used_at: null, created_at: '2026-06-15T00:00:00Z' },
-  ],
-}
+const mockApiKeys = [
+  { id: 'key-1', lookup_prefix: 'mod_mk_abc', name: 'Claude Key', role: 'operator', is_active: true, last_used_at: '2026-06-28T12:00:00Z', created_at: '2026-06-01T00:00:00Z' },
+  { id: 'key-2', lookup_prefix: 'mod_mk_def', name: 'Cursor Key', role: 'runner', is_active: false, last_used_at: null, created_at: '2026-06-15T00:00:00Z' },
+]
 
 const mockMcpConfigEmpty = {
   mcp_url: '',
   config_snippet: '',
 }
 
-const mockApiKeysNoActive = {
-  items: [
-    { id: 'key-3', prefix: 'mod_mk_ghi', name: 'Revoked Key', role: 'operator', is_active: false, last_used_at: null, created_at: '2026-06-10T00:00:00Z' },
-  ],
-}
+const mockApiKeysNoActive = [
+  { id: 'key-3', lookup_prefix: 'mod_mk_ghi', name: 'Revoked Key', role: 'operator', is_active: false, last_used_at: null, created_at: '2026-06-10T00:00:00Z' },
+]
 
 const mockOAuthClients = {
   items: [

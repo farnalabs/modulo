@@ -60,7 +60,15 @@ describe('usePlanStore', () => {
 
   it('fetchPlan populates state from API', async () => {
     const { api } = await import('../lib/api/client')
-    ;(api.GET as any).mockResolvedValue({ data: mockFlagsResponse, error: null })
+    ;(api.GET as any).mockImplementation((path: string) => {
+      if (path === '/api/v1/admin/tiers') {
+        return Promise.resolve({ data: mockTiersResponse, error: null })
+      }
+      if (path === '/api/v1/admin/license') {
+        return Promise.resolve({ data: mockLicenseResponse, error: null })
+      }
+      return Promise.resolve({ data: mockFlagsResponse, error: null })
+    })
 
     const store = usePlanStore()
     await store.fetchPlan()

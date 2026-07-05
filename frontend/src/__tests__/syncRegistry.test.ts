@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { registerHandler, getHandlers } from '../stores/syncRegistry'
+import { registerHandler, getHandlers, clearAllRegistrations } from '../stores/syncRegistry'
 import type { EventBusEvent } from '../types/events'
 
 function makeEvent(overrides: Partial<EventBusEvent> = {}): EventBusEvent {
@@ -15,9 +15,7 @@ function makeEvent(overrides: Partial<EventBusEvent> = {}): EventBusEvent {
 
 describe('syncRegistry', () => {
   beforeEach(() => {
-    getHandlers('run').clear()
-    getHandlers('pipeline').clear()
-    getHandlers('schema').clear()
+    clearAllRegistrations()
   })
 
   it('registers and dispatches to a handler', () => {
