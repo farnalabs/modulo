@@ -63,6 +63,7 @@ class SlackConnector(ConnectorBase):
                     r.raise_for_status()
                     return r
             except httpx.HTTPStatusError as exc:
+                last_exc = exc
                 if exc.response.status_code == _RATE_LIMITED_STATUS and attempt < _MAX_RETRIES:
                     retry_after = _parse_retry_after(exc.response)
                     delay = min(retry_after, _MAX_DELAY) if retry_after else min(_BASE_DELAY * (2 ** attempt), _MAX_DELAY)
@@ -70,12 +71,14 @@ class SlackConnector(ConnectorBase):
                     continue
                 raise ValueError(f"Slack API HTTP {exc.response.status_code}: {exc.response.text[:200]}") from exc
             except httpx.TimeoutException as exc:
+                last_exc = exc
                 if attempt < _MAX_RETRIES:
                     delay = min(_BASE_DELAY * (2 ** attempt), _MAX_DELAY)
                     await asyncio.sleep(delay)
                     continue
                 raise ValueError("Slack API timeout") from exc
             except httpx.ConnectError as exc:
+                last_exc = exc
                 if attempt < _MAX_RETRIES:
                     delay = min(_BASE_DELAY * (2 ** attempt), _MAX_DELAY)
                     await asyncio.sleep(delay)

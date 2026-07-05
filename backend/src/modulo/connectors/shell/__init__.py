@@ -178,8 +178,9 @@ class ShellConnector(ConnectorBase):
         shell_parts: list[str] = []
         if cwd:
             shell_parts.append(f"cd {shlex.quote(cwd)}")
-        if env:
-            shell_parts.append(" ".join(f"{shlex.quote(k)}={shlex.quote(v)}" for k, v in env.items()))
         quoted_cmd = " ".join(shlex.quote(p) for p in command_parts)
+        if env:
+            env_prefix = " ".join(f"{shlex.quote(k)}={shlex.quote(v)}" for k, v in env.items())
+            quoted_cmd = f"{env_prefix} {quoted_cmd}"
         shell_parts.append(quoted_cmd)
         return ["sh", "-c", " && ".join(shell_parts)]

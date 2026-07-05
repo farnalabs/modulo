@@ -144,6 +144,8 @@ class AzurePipelinesConnector(ConnectorBase):
     async def get_run_status(self, run_id: str) -> CIRun:
         parts = run_id.split("/", 1)
         pipeline_id = parts[0] if len(parts) == 2 else ""
+        if not pipeline_id:
+            raise ValueError(f"Invalid run_id format: {run_id!r}. Expected 'pipeline_id/run_id'.")
         run_identifier = parts[1] if len(parts) == 2 else run_id
         async with self._client() as client:
             r = await client.get(
@@ -156,6 +158,8 @@ class AzurePipelinesConnector(ConnectorBase):
     async def get_run_logs(self, run_id: str, cursor: str | None = None) -> CIRunLog:
         parts = run_id.split("/", 1)
         pipeline_id = parts[0] if len(parts) == 2 else ""
+        if not pipeline_id:
+            raise ValueError(f"Invalid run_id format: {run_id!r}. Expected 'pipeline_id/run_id'.")
         run_identifier = parts[1] if len(parts) == 2 else run_id
         async with self._client() as client:
             logs_r = await client.get(
@@ -239,6 +243,8 @@ class AzurePipelinesConnector(ConnectorBase):
                     )
                 case "runs":
                     pipeline_id = q.filters.get("pipeline_id", "")
+                    if not pipeline_id:
+                        raise ValueError("Azure Pipelines runs query requires 'pipeline_id' filter")
                     r = await client.get(
                         f"{self._pipelines_base()}/{pipeline_id}/runs",
                         params={"api-version": "7.0"},
