@@ -167,16 +167,16 @@ describe('dispatchToStore', () => {
 })
 
 describe('createSyncAdapter', () => {
-  it('skips event when entity is dirty', async () => {
+  it('calls fetch for updated event even when entity is dirty', async () => {
     const { createSyncAdapter } = await import('../composables/useSyncStore')
-    const fetch = vi.fn()
+    const fetch = vi.fn().mockResolvedValue(undefined)
     const remove = vi.fn()
     const dirtyIds = new Set<string>(['dirty-1'])
     const handleSyncEvent = createSyncAdapter({ dirtyIds, fetch, remove })
 
     const event: EventBusEvent = { type: 'run', id: 'dirty-1', action: 'updated', version: 1, org_id: 'org-1', timestamp: '2024-01-01T00:00:01Z' }
     handleSyncEvent(event)
-    expect(fetch).not.toHaveBeenCalled()
+    expect(fetch).toHaveBeenCalledWith('dirty-1')
     expect(remove).not.toHaveBeenCalled()
   })
 

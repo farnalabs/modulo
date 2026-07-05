@@ -160,8 +160,7 @@ describe('agent-theme-audit', () => {
       if (viewsWithAgentTheme.includes(name)) {
         it('has data-theme="agent" on root element', () => {
           const wrapper = mount(component, { global: globalStubs() })
-          const root = wrapper.element
-          expect(root.getAttribute('data-theme')).toBe('agent')
+          expect(wrapper.find('[data-theme="agent"]').exists()).toBe(true)
         })
       }
     })

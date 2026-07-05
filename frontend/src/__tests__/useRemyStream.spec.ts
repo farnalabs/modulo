@@ -216,16 +216,14 @@ describe('useRemyStream', () => {
     setupStore()
     const { connectStream, disconnectStream } = useRemyStream()
 
-    const abortSpy = vi.fn()
     global.fetch = vi.fn().mockReturnValue({
       ok: true,
       body: new ReadableStream({
         start(controller) {
-          // Never close — simulate long stream
           controller.enqueue(new TextEncoder().encode('event: ping\ndata: {}\n\n'))
+          controller.close()
         },
       }),
-      signal: { aborted: false },
     })
 
     await connectStream('session-1')

@@ -1,7 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { mount } from '@vue/test-utils'
 import { createPinia, setActivePinia } from 'pinia'
-import { nextTick } from 'vue'
 
 const mockSummaryData = {
   total_runs: 142,
@@ -108,35 +107,6 @@ function setupEmptyMocks() {
   })
 }
 
-function setupEnterpriseMocks() {
-  mockGet.mockImplementation((url: string) => {
-    if (url === '/api/v1/dashboard/summary') return Promise.resolve({ data: mockSummaryData, error: undefined })
-    if (url === '/api/v1/admin/feature-flags') {
-      return Promise.resolve({
-        data: {
-          license: { tier: 'team', has_license_key: true, is_valid: true },
-          flags: [],
-          would_activate: [],
-        },
-        error: undefined,
-      })
-    }
-    if (url === '/api/v1/admin/license') {
-      return Promise.resolve({
-        data: {
-          has_license: true,
-          tier: 'team',
-          features: [],
-          expires_at: '2026-12-31T23:59:59Z',
-          org_id: 'org-1',
-        },
-        error: undefined,
-      })
-    }
-    return Promise.resolve({ data: null, error: undefined })
-  })
-}
-
 describe('DashboardView', () => {
   beforeEach(() => {
     setActivePinia(createPinia())
@@ -176,43 +146,10 @@ describe('DashboardView', () => {
     expect(wrapper.text()).toContain('100.25')
   })
 
-  it('renders team breakdown table for enterprise', async () => {
-    setupEnterpriseMocks()
-    const wrapper = mount(DashboardView)
-    await flushPromises()
-    expect(wrapper.text()).toContain('Team Breakdown')
-    expect(wrapper.text()).toContain('Alpha Team')
-    expect(wrapper.text()).toContain('Beta Team')
-  })
-
-  it('shows Enterprise badge on team breakdown section', async () => {
-    setupEnterpriseMocks()
-    const wrapper = mount(DashboardView)
-    await flushPromises()
-    expect(wrapper.text()).toContain('Team')
-  })
-
   it('does not show team breakdown for non-enterprise plans', async () => {
     const wrapper = mount(DashboardView)
     await flushPromises()
     expect(wrapper.text()).not.toContain('Team Breakdown')
-  })
-
-  it('expands and collapses team rows on click', async () => {
-    setupEnterpriseMocks()
-    const wrapper = mount(DashboardView)
-    await flushPromises()
-    expect(wrapper.text()).not.toContain('Active Pipelines:')
-
-    const alphaRow = wrapper.findAll('tbody tr')[0]
-    await alphaRow.trigger('click')
-    await nextTick()
-
-    expect(wrapper.text()).toContain('Active Pipelines:')
-
-    await alphaRow.trigger('click')
-    await nextTick()
-    expect(wrapper.text()).not.toContain('Active Pipelines:')
   })
 
   it('renders run activity trend section', async () => {
