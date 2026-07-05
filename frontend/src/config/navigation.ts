@@ -21,108 +21,57 @@ export interface NavGroup {
   systemAdminOnly?: boolean
 }
 
-const routeIconMap: Record<string, string> = {
-  dashboard: 'LayoutDashboard',
-  notifications: 'Bell',
-  'pipeline-list': 'BookOpen',
-  library: 'BookOpen',
-  'pipeline-templates': 'LayoutTemplate',
-  'pipeline-copy': 'Copy',
-  stages: 'Columns',
-  'runs-diff': 'GitCommit',
-  'eval-editor': 'CheckSquare',
-  'eval-proposals-queue': 'Clipboard',
-  'variant-compare': 'GitFork',
-  'ab-test-models': 'FlaskConical',
-  schemas: 'Database',
-  'schema-editor': 'FileText',
-  'schema-infer': 'Search',
-  'settings-remy': 'Bot',
-  'admin-remy': 'Settings',
-  'settings-teams': 'Users',
-  'settings-sso': 'Shield',
-  'settings-license': 'KeyRound',
-  'settings-mcp': 'Cable',
-  'settings-triggers': 'Zap',
-  'admin-triggers': 'Zap',
-  'settings-runtime-config': 'Settings',
-  'settings-rate-limits': 'Gauge',
-  'settings-hitl-review': 'ShieldQuestion',
-  'settings-observability': 'Eye',
-  'settings-error-forwarders': 'AlertTriangle',
-  'admin-users': 'UserCircle',
-  'admin-org': 'Building',
-  'admin-audit': 'FileText',
-  'admin-costs': 'DollarSign',
-  'admin-costs-limits': 'CreditCard',
-  'admin-costs-controls': 'SlidersHorizontal',
-  'admin-connectors': 'Plug',
-  'admin-model-backends': 'Cpu',
-  'admin-node-categories': 'Tag',
-  'admin-feature-flags': 'Flag',
-  'admin-environments': 'Container',
-  'admin-run-retention': 'Clock',
-  'admin-views': 'Eye',
-  'admin-pipelines': 'BookOpen',
-  'admin-errors': 'AlertTriangle',
-  'admin-error-detail': 'AlertTriangle',
-  'admin-notification-delivery': 'Bell',
-  'api-changelog': 'History',
-  'team-comparison': 'BarChart',
-  'admin-plugins': 'Puzzle',
-  'feedback-inbox': 'MessageSquare',
-}
-
-const routeLabelKeyMap: Record<string, string> = {
-  dashboard: 'components.SidebarNav.item_dashboard',
-  notifications: 'components.SidebarNav.item_notifications',
-  library: 'components.SidebarNav.item_library',
-  'pipeline-list': 'components.SidebarNav.item_my_pipelines',
-  'pipeline-templates': 'components.SidebarNav.item_templates',
-  'pipeline-copy': 'components.SidebarNav.item_copy_pipeline',
-  stages: 'components.SidebarNav.item_stages_board',
-  'runs-diff': 'components.SidebarNav.item_output_diff',
-  'eval-editor': 'components.SidebarNav.item_evals',
-  'eval-proposals-queue': 'components.SidebarNav.item_eval_proposals',
-  'variant-compare': 'components.SidebarNav.item_variants',
-  'ab-test-models': 'components.SidebarNav.item_ab_test_models',
-  schemas: 'components.SidebarNav.item_browse',
-  'schema-editor': 'components.SidebarNav.item_editor',
-  'schema-infer': 'components.SidebarNav.item_infer',
-  'settings-remy': 'components.SidebarNav.item_my_skills',
-  'admin-remy': 'components.SidebarNav.item_admin_config',
-  'settings-teams': 'components.SidebarNav.item_teams',
-  'settings-sso': 'components.SidebarNav.item_sso',
-  'settings-license': 'components.SidebarNav.item_license',
-  'settings-mcp': 'components.SidebarNav.item_mcp',
-  'admin-triggers': 'components.SidebarNav.item_triggers',
-  'settings-triggers': 'components.SidebarNav.item_triggers',
-  'settings-runtime-config': 'components.SidebarNav.item_runtime_config',
-  'settings-rate-limits': 'components.SidebarNav.item_rate_limits',
-  'settings-monitoring': 'components.SidebarNav.item_browser_monitoring',
-  'settings-hitl-review': 'components.SidebarNav.item_hitl_review',
-  'settings-observability': 'components.SidebarNav.item_observability',
-  'settings-error-forwarders': 'components.SidebarNav.item_error_forwarders',
-  'admin-users': 'components.SidebarNav.item_users',
-  'admin-org': 'components.SidebarNav.item_org_settings',
-  'admin-audit': 'components.SidebarNav.item_audit_log',
-  'admin-costs': 'components.SidebarNav.item_overview',
-  'admin-costs-limits': 'components.SidebarNav.item_spend_limits',
-  'admin-costs-controls': 'components.SidebarNav.item_cost_controls',
-  'admin-connectors': 'components.SidebarNav.item_connectors',
-  'admin-model-backends': 'components.SidebarNav.item_model_backends',
-  'admin-node-categories': 'components.SidebarNav.item_node_categories',
-  'admin-feature-flags': 'components.SidebarNav.item_feature_flags',
-  'admin-environments': 'components.SidebarNav.item_environments',
-  'admin-run-retention': 'components.SidebarNav.item_run_retention',
-  'admin-pipelines': 'components.SidebarNav.item_admin_pipelines',
-  'admin-views': 'components.SidebarNav.item_saved_views',
-  'admin-errors': 'components.SidebarNav.item_error_dashboard',
-  'admin-notification-delivery': 'components.SidebarNav.item_notification_log',
-  'api-changelog': 'components.SidebarNav.item_api_changelog',
-  'team-comparison': 'components.SidebarNav.item_team_comparison',
-  'admin-plugins': 'components.SidebarNav.item_plugins',
-  'feedback-inbox': 'components.SidebarNav.item_feedback_inbox',
+const routeConfigMap: Record<string, { icon: string; labelKey: string }> = {
+  dashboard: { icon: 'LayoutDashboard', labelKey: 'components.SidebarNav.item_dashboard' },
+  notifications: { icon: 'Bell', labelKey: 'components.SidebarNav.item_notifications' },
+  library: { icon: 'BookOpen', labelKey: 'components.SidebarNav.item_library' },
+  'pipeline-list': { icon: 'BookOpen', labelKey: 'components.SidebarNav.item_my_pipelines' },
+  'pipeline-templates': { icon: 'LayoutTemplate', labelKey: 'components.SidebarNav.item_templates' },
+  'pipeline-copy': { icon: 'Copy', labelKey: 'components.SidebarNav.item_copy_pipeline' },
+  stages: { icon: 'Columns', labelKey: 'components.SidebarNav.item_stages_board' },
+  'runs-diff': { icon: 'GitCommit', labelKey: 'components.SidebarNav.item_output_diff' },
+  'eval-editor': { icon: 'CheckSquare', labelKey: 'components.SidebarNav.item_evals' },
+  'eval-proposals-queue': { icon: 'Clipboard', labelKey: 'components.SidebarNav.item_eval_proposals' },
+  'variant-compare': { icon: 'GitFork', labelKey: 'components.SidebarNav.item_variants' },
+  'ab-test-models': { icon: 'FlaskConical', labelKey: 'components.SidebarNav.item_ab_test_models' },
+  schemas: { icon: 'Database', labelKey: 'components.SidebarNav.item_browse' },
+  'schema-editor': { icon: 'FileText', labelKey: 'components.SidebarNav.item_editor' },
+  'schema-infer': { icon: 'Search', labelKey: 'components.SidebarNav.item_infer' },
+  'settings-remy': { icon: 'Bot', labelKey: 'components.SidebarNav.item_my_skills' },
+  'admin-remy': { icon: 'Settings', labelKey: 'components.SidebarNav.item_admin_config' },
+  'settings-teams': { icon: 'Users', labelKey: 'components.SidebarNav.item_teams' },
+  'settings-sso': { icon: 'Shield', labelKey: 'components.SidebarNav.item_sso' },
+  'settings-license': { icon: 'KeyRound', labelKey: 'components.SidebarNav.item_license' },
+  'settings-mcp': { icon: 'Cable', labelKey: 'components.SidebarNav.item_mcp' },
+  'admin-triggers': { icon: 'Zap', labelKey: 'components.SidebarNav.item_triggers' },
+  'settings-triggers': { icon: 'Zap', labelKey: 'components.SidebarNav.item_triggers' },
+  'settings-runtime-config': { icon: 'Settings', labelKey: 'components.SidebarNav.item_runtime_config' },
+  'settings-rate-limits': { icon: 'Gauge', labelKey: 'components.SidebarNav.item_rate_limits' },
+  'settings-monitoring': { icon: 'Eye', labelKey: 'components.SidebarNav.item_browser_monitoring' },
+  'settings-hitl-review': { icon: 'ShieldQuestion', labelKey: 'components.SidebarNav.item_hitl_review' },
+  'settings-observability': { icon: 'Eye', labelKey: 'components.SidebarNav.item_observability' },
+  'settings-error-forwarders': { icon: 'AlertTriangle', labelKey: 'components.SidebarNav.item_error_forwarders' },
+  'admin-users': { icon: 'UserCircle', labelKey: 'components.SidebarNav.item_users' },
+  'admin-org': { icon: 'Building', labelKey: 'components.SidebarNav.item_org_settings' },
+  'admin-audit': { icon: 'FileText', labelKey: 'components.SidebarNav.item_audit_log' },
+  'admin-costs': { icon: 'DollarSign', labelKey: 'components.SidebarNav.item_overview' },
+  'admin-costs-limits': { icon: 'CreditCard', labelKey: 'components.SidebarNav.item_spend_limits' },
+  'admin-costs-controls': { icon: 'SlidersHorizontal', labelKey: 'components.SidebarNav.item_cost_controls' },
+  'admin-connectors': { icon: 'Plug', labelKey: 'components.SidebarNav.item_connectors' },
+  'admin-model-backends': { icon: 'Cpu', labelKey: 'components.SidebarNav.item_model_backends' },
+  'admin-node-categories': { icon: 'Tag', labelKey: 'components.SidebarNav.item_node_categories' },
+  'admin-feature-flags': { icon: 'Flag', labelKey: 'components.SidebarNav.item_feature_flags' },
+  'admin-environments': { icon: 'Container', labelKey: 'components.SidebarNav.item_environments' },
+  'admin-run-retention': { icon: 'Clock', labelKey: 'components.SidebarNav.item_run_retention' },
+  'admin-pipelines': { icon: 'BookOpen', labelKey: 'components.SidebarNav.item_admin_pipelines' },
+  'admin-views': { icon: 'Eye', labelKey: 'components.SidebarNav.item_saved_views' },
+  'admin-errors': { icon: 'AlertTriangle', labelKey: 'components.SidebarNav.item_error_dashboard' },
+  'admin-error-detail': { icon: 'AlertTriangle', labelKey: 'components.SidebarNav.item_error_dashboard' },
+  'admin-notification-delivery': { icon: 'Bell', labelKey: 'components.SidebarNav.item_notification_log' },
+  'api-changelog': { icon: 'History', labelKey: 'components.SidebarNav.item_api_changelog' },
+  'team-comparison': { icon: 'BarChart', labelKey: 'components.SidebarNav.item_team_comparison' },
+  'admin-plugins': { icon: 'Puzzle', labelKey: 'components.SidebarNav.item_plugins' },
+  'feedback-inbox': { icon: 'MessageSquare', labelKey: 'components.SidebarNav.item_feedback_inbox' },
 }
 
 const groupLabelKeyMap: Record<string, string> = {
@@ -167,13 +116,8 @@ function isManifestRoute(route: ManifestRoute): route is ManifestRoute & { sideb
 }
 
 function buildSidebarGroups(): NavGroup[] {
-  const m = manifest as Manifest
-  const orderMap: Record<string, number> = {}
+  const m = manifest as unknown as Manifest
   const itemsByGroup: Record<string, NavItem[]> = {}
-
-  for (const routeGroup of Object.values(m.sidebar_groups || {})) {
-    orderMap[routeGroup.label] = 0
-  }
 
   for (const [path, route] of Object.entries(m.routes || {})) {
     if (!route.sidebar_group) continue
@@ -181,17 +125,21 @@ function buildSidebarGroups(): NavGroup[] {
     if (!isManifestRoute(route)) continue
 
     const group = m.sidebar_groups[route.sidebar_group]
-    if (!group) continue
+    if (!group) {
+      console.warn(`[navigation] Route "${path}" references non-existent sidebar_group "${route.sidebar_group}"`)
+      continue
+    }
 
     if (!itemsByGroup[route.sidebar_group]) {
       itemsByGroup[route.sidebar_group] = []
     }
 
+    const rc = routeConfigMap[route.name]
     itemsByGroup[route.sidebar_group].push({
       to: path,
-      icon: routeIconMap[route.name] || 'File',
-      label: route.breadcrumb,
-      labelKey: routeLabelKeyMap[route.name] || `nav.${route.name}`,
+      icon: rc?.icon || 'File',
+      label: route.breadcrumb || route.name,
+      labelKey: rc?.labelKey || `nav.${route.name}`,
       exact: route.exact || undefined,
       requiredRoles: route.required_roles || null,
       requiredTier: route.required_tier || null,
@@ -220,18 +168,41 @@ function buildSidebarGroups(): NavGroup[] {
         simpleMode: sg.simple_mode,
       }
     })
+    .filter((g) => g.items.length > 0)
 
   return groups
 }
 
 export function canSeeItem(
   item: NavItem,
-  user: { role: string },
+  user: { role: string; permissions?: string[] },
   plan: { isAtMinimumTier: (tier: string) => boolean },
 ): boolean {
   if (item.requiredRoles && item.requiredRoles.length > 0 && !item.requiredRoles.includes(user.role)) return false
   if (item.requiredTier && !plan.isAtMinimumTier(item.requiredTier)) return false
+  if (item.requiredPermissions && item.requiredPermissions.length > 0 && user.permissions) {
+    const hasPermission = item.requiredPermissions.some((p) => user.permissions!.includes(p))
+    if (!hasPermission) return false
+  }
   return true
 }
 
-export const navGroups: NavGroup[] = buildSidebarGroups()
+function validateManifest(m: Manifest): void {
+  if (typeof m.routes !== 'object' || m.routes === null) {
+    console.error('[navigation] manifest.routes is missing or invalid')
+  }
+  if (typeof m.sidebar_groups !== 'object' || m.sidebar_groups === null) {
+    console.error('[navigation] manifest.sidebar_groups is missing or invalid')
+  }
+}
+
+let _navGroups: NavGroup[] = []
+try {
+  validateManifest(manifest as unknown as Manifest)
+  _navGroups = buildSidebarGroups()
+} catch (e) {
+  console.error('[navigation] Failed to build sidebar groups:', e)
+  _navGroups = []
+}
+
+export const navGroups: NavGroup[] = _navGroups

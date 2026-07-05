@@ -35,6 +35,7 @@ import { usePlanStore } from "../stores/planStore";
 const props = defineProps<{
   isSystemAdmin: boolean;
   userRole?: string | null;
+  userPermissions?: string[];
 }>();
 
 defineEmits<{
@@ -75,7 +76,10 @@ const visibleSidebarGroups = computed(() =>
         if (item.requiredTier && !tierInfoLoaded.value) return true
         return canSeeItem(
           item,
-          { role: props.userRole || "" },
+          {
+            role: props.userRole || "",
+            permissions: props.userPermissions,
+          },
           { isAtMinimumTier: (tier: string) => planStore.isAtMinimumTier(tier) },
         )
       }),
