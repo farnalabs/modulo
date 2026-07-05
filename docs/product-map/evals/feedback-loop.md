@@ -36,8 +36,8 @@ The Feedback System treats every human rejection as structured signal. Handles F
 - [ ] FeedbackRecord status transitions are audited (no audit trail yet)
 
 ### Feedback routing
-- [x] Pipeline-level default_feedback_handler field (default: "human")
-- [x] Gate-level feedback_handler field overrides pipeline default
+- [ ] Pipeline-level default_feedback_handler field is defined on Pipeline model but NEVER consumed — create API hardcodes "human", no runtime code reads the field
+- [ ] Gate-level feedback_handler field does not exist on HitlGateConfig (only reject_target exists) — gate-level override is unimplemented
 - [x] Three handler types: human, ai_correction, ai_correction_with_human_review
 - [x] Create FeedbackRecord with type "human" — status stays "pending", no auto-correction
 - [x] Create FeedbackRecord with type "ai_correction" — auto-transitions to "correcting", spawns correction run
@@ -75,7 +75,7 @@ The Feedback System treats every human rejection as structured signal. Handles F
 - [x] Handles None input_payload on original run gracefully
 - [x] Links correction run to FeedbackRecord via link_correction_run
 - [x] Returns new correction run UUID
-- [ ] Correction run uses same PipelineSnapshot as original run — not verified
+- [x] Correction run uses same PipelineSnapshot as original run — spawn_correction_run copies original_run.snapshot_id
 - [ ] Correction run pre-seeded from original LangGraph checkpoint at target_node_id — not implemented (creates fresh run)
 
 ### Post-correction eval
@@ -113,6 +113,34 @@ The Feedback System treats every human rejection as structured signal. Handles F
 - [ ] Concurrent status transitions not guarded (no advisory lock or optimistic locking)
 - [ ] Input validation on rejection_reason length — not enforced
 - [ ] Input validation on rejected_output size — not enforced
+
+### Error Handling
+- [ ] detect_eval_gap wraps eval_engine.evaluate() in a bare loop — eval engine exceptions (invalid eval_def, EvalBlockedError) propagate as 500s
+- [x] run_post_correction_eval raises specific exceptions: FeedbackRecordNotFoundError, InvalidTransitionError for each precondition violation
+- [ ] run_post_correction_eval does not catch exceptions from engine.standalone_evaluate() — an eval crash propagates as 500
+- [x] spawn_correction_run raises FeedbackRecordNotFoundError for missing record AND missing run (exception type reused for two distinct conditions)
+- [x] All 9 API routes have ProgrammingError → 501 mapping, tested in test_feedback_programming_error.py
+- [x] Create feedback validates empty rejection_reason (ValidationError) and unknown handler_type (ValidationError)
+- [x] update_status validates transitions via _VALID_STATUS_TRANSITIONS with descriptive error message
+- [x] HITL reject path (/hitl/{gate_id}/reject) does NOT create a FeedbackRecord — feedback records are created exclusively via the explicit POST /runs/{run_id}/feedback endpoint
+- [ ] Review feedback endpoint catches ValueError from spawn_correction_run as 404 — too broad; ValueError could also come from other logic
+- [ ] Review feedback endpoint catches ValueError from spawn_correction_run as 404 — Valid for handler_type misuse
+
+### Resilience
+- [ ] ConcurrentModificationError on update_status/link_correction_run has no automatic retry — caller must catch and retry
+- [ ] spawn_correction_run does not check whether a correction run already exists before spawning — link_correction_run catches the duplicate but the spawned run is already created (leaked run)
+- [ ] No advisory lock or optimistic locking on FeedbackRecord row — concurrent transitions can race on the same record
+- [ ] detect_eval_gap iterates eval_suite sequentially — no timeout or circuit-breaker for slow evals
+- [ ] RLS decorator on all FeedbackManager methods catches/sets before each call — no caching, incurs per-call DB round-trip
+
+### Edge Cases
+- [ ] rejection_reason is not length-validated — could accept very long strings hitting DB column (Text)
+- [ ] rejected_output size is not validated — could accept arbitrarily large JSON blobs
+- [ ] producing_node_id is not format-validated — accepts any string
+- [ ] Empty rejected_output {} is accepted without semantic validation
+- [ ] FeedbackRecord created for a deleted run (CASCADE deletes the record too) — no soft-delete or archival
+- [ ] Correction run spawned for a deleted pipeline — pipeline_id points to a non-existent pipeline
+- [ ] Gate_id is limited to 255 chars but is validated by the route param, not the model
 
 ## Known Gaps
 - BDD feature file (feedback_system.feature) has 7 real scenarios (not a placeholder) — covers create, status transitions, invalid transitions, gap detection, and correction run spawning
