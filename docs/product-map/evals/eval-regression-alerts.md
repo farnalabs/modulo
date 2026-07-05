@@ -15,7 +15,7 @@ code:
 unit-tests:
   - backend/tests/unit/core/test_eval_regressions.py
 depends-on: [feat-evals-eval-engine]
-status: partial
+status: covered
 ---
 
 # Eval Regression Alerts
@@ -88,7 +88,8 @@ Detects significant pass-rate drops for eval definitions by comparing a recent w
 - [x] Single SQL query within read transaction — atomic
 - [x] RLS enforced via set_rls_org before query
 - [x] DB connection failure → ProgrammingError→501
-- [x] DB timeout/connection pool exhaustion → SQLAlchemyError→503
+- [x] DB timeout → TimeoutError→503 with user-facing suggestion
+- [x] DB connection pool exhaustion → SQLAlchemyError→503
 - [x] No retry logic (acceptable for admin-only diagnostic endpoint)
 
 ## Known Gaps
@@ -97,4 +98,5 @@ Detects significant pass-rate drops for eval definitions by comparing a recent w
 - [ ] No notification/webhook on regression detection
 - [ ] No per-pipeline scoping — query is org-wide only
 - [ ] No configurable recent window ratio (hardcoded at max(days // 4, 1))
-- [ ] No historical trend persistence — each call recomputes from raw eval_results 
+- [ ] No historical trend persistence — each call recomputes from raw eval_results
+- [ ] Eval alerts include improving and stable trends — declining-only filter could reduce noise for frontend display 
