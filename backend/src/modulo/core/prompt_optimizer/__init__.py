@@ -1,24 +1,29 @@
 """PromptOptimizer — analyses eval failures and suggests prompt improvements via LLM."""
 
+import asyncio
 import json
 import logging
 import re
 from dataclasses import dataclass
-from typing import Any, Protocol
+from typing import Any, Protocol, cast
 
 from langchain_core.messages import BaseMessage, HumanMessage, SystemMessage
 
 __all__ = [
     "SYSTEM_PROMPT",
     "LLMCallable",
+    "OptimizationFailedError",
     "OptimizationResult",
     "PromptOptimizer",
-    "_build_failure_context",
-    "_ensure_dict",
-    "_parse_llm_response",
+    "PromptOptimizerError",
 ]
 
 _log = logging.getLogger(__name__)
+
+_UNKNOWN_LABEL = "unknown"
+_LLM_TIMEOUT = 60.0
+_MAX_RETRIES = 3
+_RETRY_BASE_DELAY = 1.0
 
 SYSTEM_PROMPT = """You are an expert prompt engineer. Your task is to analyse eval failures
 for an AI agent prompt and suggest concrete improvements.
@@ -47,6 +52,14 @@ Rules:
 """
 
 
+class PromptOptimizerError(Exception):
+    """Base exception for prompt optimizer errors."""
+
+
+class OptimizationFailedError(PromptOptimizerError):
+    """Raised when the LLM response cannot be parsed or the LLM call fails."""
+
+
 @dataclass
 class OptimizationResult:
     suggested_prompt: str
@@ -63,9 +76,11 @@ def _ensure_dict(value: Any) -> dict[str, Any]:
         return value
     if isinstance(value, str):
         try:
-            return json.loads(value)
+            return cast("dict[str, Any]", json.loads(value))
         except json.JSONDecodeError:
+            _log.warning("Failed to parse JSON string as dict", exc_info=True)
             return {}
+    _log.warning("Unexpected type for _ensure_dict: %s", type(value).__name__)
     return {}
 
 
@@ -77,13 +92,17 @@ def _build_failure_context(
     failures = []
     for er in eval_results:
         if not isinstance(er, dict):
+            _log.warning("Skipping non-dict eval result: %s", type(er).__name__)
             continue
-        eval_id = str(er.get("eval_id", ""))
-        edef = eval_definitions.get(eval_id, {})
+        if er.get("passed"):
+            continue
+        eval_id = er.get("eval_id")
+        eval_id_str = str(eval_id) if eval_id is not None else ""
+        edef = eval_definitions.get(eval_id_str, {})
         failures.append(
             {
-                "eval_name": edef.get("name", "unknown"),
-                "eval_type": edef.get("eval_type", "unknown"),
+                "eval_name": edef.get("name", _UNKNOWN_LABEL),
+                "eval_type": edef.get("eval_type", _UNKNOWN_LABEL),
                 "passed": er.get("passed", False),
                 "score": er.get("score"),
                 "detail": er.get("detail", ""),
@@ -96,51 +115,121 @@ def _build_failure_context(
 </current_prompt>
 
 <failing_evals>
-{json.dumps(failures, indent=2)}
+{json.dumps(failures, indent=2, default=str)}
 </failing_evals>"""
 
 
-_CODE_FENCE_RE = re.compile(r"```(?:json)?\s*\n(.*?)```", re.DOTALL)
+# Matches a fenced code block with optional json language tag
+_CODE_FENCE_RE = re.compile(r"``` ?(?:json)?\s*\n(.*?)```", re.DOTALL)
 
 
 def _parse_llm_response(raw: str) -> OptimizationResult:
     cleaned = raw.strip()
     if not cleaned:
-        raise json.JSONDecodeError("Empty LLM response", raw, 0)
+        raise OptimizationFailedError("Empty LLM response")
 
+    parsed: dict[str, Any] | None = None
     try:
         parsed = json.loads(cleaned)
     except json.JSONDecodeError:
         match = _CODE_FENCE_RE.search(cleaned)
         if match:
-            cleaned = match.group(1).strip()
-            parsed = json.loads(cleaned)
+            extracted = match.group(1).strip()
+            try:
+                parsed = json.loads(extracted)
+            except json.JSONDecodeError as exc:
+                raise OptimizationFailedError(
+                    f"Failed to parse JSON from code-fenced response: {exc}"
+                ) from exc
         else:
-            raise
+            raise OptimizationFailedError(
+                "LLM response is not valid JSON and contains no code-fenced block"
+            ) from None
 
-    return OptimizationResult(
-        suggested_prompt=parsed["suggested_prompt"],
-        rationale=parsed["rationale"],
-        analysis=parsed.get("analysis", ""),
-    )
+    try:
+        return OptimizationResult(
+            suggested_prompt=parsed["suggested_prompt"],
+            rationale=parsed["rationale"],
+            analysis=parsed.get("analysis", ""),
+        )
+    except KeyError as exc:
+        raise OptimizationFailedError(
+            f"LLM response is missing required key: {exc}"
+        ) from exc
 
 
 class PromptOptimizer:
-    def __init__(self, llm_call: LLMCallable) -> None:
+    def __init__(
+        self,
+        llm_call: LLMCallable,
+        system_prompt: str | None = None,
+    ) -> None:
+        if llm_call is None:
+            raise ValueError("llm_call must not be None")
         self._llm_call = llm_call
+        self._system_prompt = system_prompt or SYSTEM_PROMPT
 
     async def optimize(
         self,
         current_prompt: str,
-        eval_results: list[dict[str, Any]],
-        eval_definitions: dict[str, Any],
+        eval_results: list[dict[str, Any]] | None = None,
+        eval_definitions: dict[str, Any] | None = None,
     ) -> OptimizationResult:
+        if current_prompt is None:
+            raise ValueError("current_prompt must not be None")
+        if eval_results is None:
+            eval_results = []
+        if eval_definitions is None:
+            eval_definitions = {}
+
         context = _build_failure_context(current_prompt, eval_results, eval_definitions)
 
         messages: list[BaseMessage] = [
-            SystemMessage(content=SYSTEM_PROMPT),
+            SystemMessage(content=self._system_prompt),
             HumanMessage(content=context),
         ]
 
-        raw = await self._llm_call(messages)
-        return _parse_llm_response(raw)
+        last_exc: Exception | None = None
+        for attempt in range(_MAX_RETRIES):
+            try:
+                _log.info(
+                    "Calling LLM for prompt optimization (attempt %d/%d)",
+                    attempt + 1,
+                    _MAX_RETRIES,
+                )
+                raw = await asyncio.wait_for(
+                    self._llm_call(messages),
+                    timeout=_LLM_TIMEOUT,
+                )
+                _log.info("LLM response received (%d chars)", len(raw))
+                return _parse_llm_response(raw)
+            except TimeoutError:
+                _log.warning(
+                    "LLM call timed out after %ss (attempt %d/%d)",
+                    _LLM_TIMEOUT,
+                    attempt + 1,
+                    _MAX_RETRIES,
+                )
+                last_exc = TimeoutError(
+                    f"LLM call timed out after {_LLM_TIMEOUT}s"
+                )
+            except OptimizationFailedError:
+                raise
+            except Exception as exc:
+                _log.error(
+                    "LLM call failed (attempt %d/%d): %s",
+                    attempt + 1,
+                    _MAX_RETRIES,
+                    exc,
+                    exc_info=True,
+                )
+                last_exc = exc
+
+            if attempt < _MAX_RETRIES - 1:
+                delay = _RETRY_BASE_DELAY * (2**attempt)
+                _log.info("Retrying in %.1fs", delay)
+                await asyncio.sleep(delay)
+
+        raise OptimizationFailedError(
+            f"LLM call failed after {_MAX_RETRIES} attempts"
+        ) from last_exc
