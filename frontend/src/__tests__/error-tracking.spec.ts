@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { setActivePinia, createPinia } from 'pinia'
 import { createApp, h } from 'vue'
 import { createErrorTracker, getErrorTracker } from '../lib/error-tracking'
+import { BuiltinMonitorBackend } from '../monitor/backends/builtin'
 import { BreadcrumbCollector } from '../lib/error-tracking/breadcrumbs'
 import { usePlanStore } from '../stores/planStore'
 
@@ -86,7 +87,7 @@ describe('ErrorTracker', () => {
   describe('window error handlers', () => {
     it('captures errors via window.onerror', async () => {
       window.fetch = mockFetch as unknown as typeof fetch
-      const tracker = createErrorTracker()
+      const tracker = createErrorTracker({ monitorBackends: [new BuiltinMonitorBackend()] })
 
       for (let i = 0; i < 9; i++) {
         tracker.captureMessage(`fill ${i}`)
@@ -146,7 +147,7 @@ describe('ErrorTracker', () => {
 
     it('captures errors thrown in Vue lifecycle', async () => {
       window.fetch = mockFetch as unknown as typeof fetch
-      const tracker = createErrorTracker()
+      const tracker = createErrorTracker({ monitorBackends: [new BuiltinMonitorBackend()] })
       const app = createApp({
         mounted() { throw new Error('vue-lifecycle-error') },
         render() { return h('div') },
@@ -296,7 +297,7 @@ describe('BreadcrumbCollector', () => {
 describe('Transport batching', () => {
   it('flushes when 10 errors are enqueued', async () => {
     window.fetch = mockFetch as unknown as typeof fetch
-    const tracker = createErrorTracker()
+    const tracker = createErrorTracker({ monitorBackends: [new BuiltinMonitorBackend()] })
 
     for (let i = 0; i < 10; i++) {
       tracker.captureError(new Error(`error ${i}`))
@@ -315,7 +316,7 @@ describe('Transport batching', () => {
   it('sets timer on first error and clears on dispose', () => {
     vi.useFakeTimers()
     window.fetch = mockFetch as unknown as typeof fetch
-    const tracker = createErrorTracker()
+    const tracker = createErrorTracker({ monitorBackends: [new BuiltinMonitorBackend()] })
 
     // Before any error, no timer
     const t1 = vi.getTimerCount()
