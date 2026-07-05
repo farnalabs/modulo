@@ -100,7 +100,7 @@ async def _check_checkpointer() -> CheckResult:
                 pass
         return CheckResult(status="ok", detail="checkpointer schema accessible")
     except Exception as exc:
-        return CheckResult(status="unavailable", detail=str(exc))
+        return CheckResult(status="degraded", detail=str(exc) or "checkpointer check failed")
 
 
 async def _check_migrations() -> CheckResult:
