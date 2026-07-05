@@ -42,20 +42,21 @@ Async Jira Cloud REST API v3 connector implementing `ConnectorBase`. Provides re
 - [x] Create issue via `write("issue")` with `project`, `summary`, `issuetype`, optional `description`, `priority`, `assignee`
 - [x] Update issue fields via `write("issue_update")` with `key` and fields to update
 - [x] Raise `ValueError` for unsupported resources in `query()` and `write()`
-- [ ] Transition issue status (e.g. In Progress → Done) — not implemented
-- [ ] Add issue comment — not implemented
-- [ ] Assign/reassign issue via dedicated operation
+- [x] Transition issue status via `write("transition")` with `transition_id`
+- [x] List available transitions via `query("transitions")`
+- [x] Add issue comment via `write("issue_comment")` with `body`
+- [x] List issue comments via `query("issue_comments")` with pagination
+- [ ] Assign/reassign issue via dedicated operation — not implemented
 - [ ] Add issue attachment — not implemented
 - [ ] List issue remote links — not implemented
 - [ ] Set issue labels — not implemented
-- [ ] List issue comments — not implemented
 - [ ] Delete issue — not implemented
-- [ ] JQL search does not support pagination cursor — `next_cursor` always `None`
+- [x] JQL search supports pagination cursor via `startAt` parsing
 - [x] JQL search returns total count
 
 ### Project Operations — discovery and metadata
 
-- [ ] List accessible projects — not implemented
+- [x] List accessible projects via `query("projects")` — returns key, name, lead, avatarUrls
 - [ ] Get project metadata (issue types, statuses, fields) — not implemented
 - [ ] Get project components and versions — not implemented
 
@@ -84,24 +85,28 @@ Async Jira Cloud REST API v3 connector implementing `ConnectorBase`. Provides re
 
 ### Error Handling
 
-- [x] `health_check` catches `httpx.HTTPStatusError` — returns `HealthResult(ok=False)` with status code and response text
+- [x] `health_check` catches `ValueError` (from `_call_api`) — returns `HealthResult(ok=False)` with truncated message
 - [x] `health_check` catches generic `Exception` — returns `HealthResult(ok=False)` with truncated message
 - [x] Query/write methods catch `httpx.HTTPStatusError` — raises `ValueError` with status code and response text
-- [x] Query/write methods catch `httpx.TimeoutException` and `httpx.ConnectError` — raises `ValueError` with connection error detail
-- [x] Query/write methods catch JSON decode errors — raises `ValueError` with parsing error detail
+- [x] Query/write methods catch `httpx.TimeoutException` — raises `ValueError` after retries exhausted
+- [x] Query/write methods catch `httpx.ConnectError` — raises `ValueError` after retries exhausted
+- [x] Query/write methods catch JSON decode errors — raises `ValueError` with response text snippet
 - [x] `query("issue")` with missing `issue_key` — raises `ValueError` with descriptive message
 - [x] `write("issue_update")` with missing `issue_key` — raises `ValueError` with descriptive message
 - [x] `query()` with unsupported resource — raises `ValueError`
 - [x] `write()` with unsupported resource — raises `ValueError`
+- [x] `_call_api` retries 429/502/503/504 with exponential backoff + jitter (max 3 retries)
+- [x] `_call_api` raises `ValueError` for 304 Not Modified — resource unchanged
+- [x] `_call_api` respects `Retry-After` header from Jira API
+- [x] `_parse_json` narrowed to `json.JSONDecodeError` only — prevents masking programming errors
 
 ## Known Gaps
 
 - [ ] **Jira Data Center not supported**: URL format is `https://{instance}/rest/api/3` — Jira Server/Data Center uses a different path structure
-- [ ] **Issue transitions unimplemented**: cannot move issues through workflow states (To Do → In Progress → Done)
-- [ ] **No comment operations**: cannot read or write issue comments
 - [ ] **No attachment support**: cannot upload or download issue attachments
-- [ ] **No project discovery**: `query("projects")` not implemented, agents cannot enumerate accessible projects at runtime
 - [ ] **No field metadata**: agents cannot discover custom fields, available issue types, or statuses for a given project
-- [ ] **No pagination**: JQL search results are limited to `maxResults` with no cursor-based continuation
-- [ ] **No rate-limit handling**: no 429 retry, no `X-RateLimit-*` header inspection
+- [ ] **No assign/reassign via dedicated operation**: issue assignment only possible through `issue_update` with `fields.assignee`
+- [ ] **No issue labels management**: cannot add/remove labels via dedicated write resource
+- [ ] **No issue delete**: deletion not exposed through connector interface
+- [ ] **No X-RateLimit-* header inspection**: rate-limit retry is blind (no remaining/quota tracking)
 

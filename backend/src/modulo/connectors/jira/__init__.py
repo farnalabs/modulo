@@ -1,5 +1,7 @@
 """JiraConnector — async Jira Cloud REST API v3 connector."""
 
+import asyncio
+import json
 from typing import Any
 
 import httpx
@@ -12,6 +14,22 @@ from modulo.connectors.base import (
     ConnectorType,
     HealthResult,
 )
+
+_RETRYABLE_STATUSES = frozenset({429, 502, 503, 504})
+_MAX_RETRIES = 3
+_BASE_DELAY = 1.0
+_MAX_DELAY = 30.0
+
+
+def _parse_retry_after(response: httpx.Response) -> float | None:
+    """Parse Retry-After header from Jira API response."""
+    value = response.headers.get("Retry-After") or response.headers.get("retry-after")
+    if value:
+        try:
+            return float(value)
+        except (ValueError, TypeError):
+            pass
+    return None
 
 
 class JiraConnector(ConnectorBase):
@@ -27,13 +45,18 @@ class JiraConnector(ConnectorBase):
       "token"    — OAuth/Personal Access Token
 
     Supported query resources:
-      "issue"    — get a single issue; filters: {"issue_key": "PROJ-123"}
-      "search"   — JQL search; filters: {"jql": "project = PROJ", "max_results": 50}
+      "issue"           — get a single issue; filters: {"issue_key": "PROJ-123"}
+      "search"          — JQL search; filters: {"jql": "project = PROJ", "max_results": 50}
+      "issue_comments"  — list comments on an issue; filters: {"issue_key": "PROJ-123"}
+      "transitions"     — get available transitions for an issue; filters: {"issue_key": "PROJ-123"}
+      "projects"        — list accessible projects
 
     Supported write resources:
-      "issue"    — create an issue; data: {"project": {"key": "PROJ"}, "summary": "...",
-                   "issuetype": {"name": "Task"}, ...}
-      "issue_update" — update an issue; data: {"issue_key": "PROJ-123", "fields": {...}}
+      "issue"           — create an issue; data: {"project": {"key": "PROJ"}, "summary": "...",
+                           "issuetype": {"name": "Task"}, ...}
+      "issue_update"    — update an issue; data: {"issue_key": "PROJ-123", "fields": {...}}
+      "issue_comment"   — add a comment to an issue; data: {"issue_key": "PROJ-123", "body": "..."}
+      "transition"      — transition an issue; data: {"issue_key": "PROJ-123", "transition_id": "..."}
     """
 
     def __init__(self, instance: str, creds: dict[str, str]) -> None:
@@ -72,41 +95,61 @@ class JiraConnector(ConnectorBase):
         )
 
     async def _call_api(self, method: str, path: str, **kwargs: Any) -> httpx.Response:
-        """Make an HTTP request with wrapped exception handling."""
-        async with self._client() as client:
+        """Call Jira API with retry/backoff for retryable statuses.
+
+        Retries on 429, 502, 503, 504 with exponential backoff + jitter.
+        Wraps HTTP/network/parse errors as ValueError.
+        """
+        for attempt in range(_MAX_RETRIES + 1):
             try:
-                r = await client.request(method, path, **kwargs)
-                r.raise_for_status()
-                return r
+                async with self._client() as client:
+                    r = await client.request(method, path, **kwargs)
+                    if r.status_code == 304:
+                        raise ValueError("Jira API returned 304 Not Modified — resource unchanged")
+                    if r.status_code in _RETRYABLE_STATUSES and attempt < _MAX_RETRIES:
+                        retry_after = _parse_retry_after(r)
+                        delay = min(retry_after, _MAX_DELAY) if retry_after else min(_BASE_DELAY * (2 ** attempt), _MAX_DELAY)
+                        await asyncio.sleep(delay)
+                        continue
+                    r.raise_for_status()
+                    return r
             except httpx.HTTPStatusError as exc:
-                raise ValueError(
-                    f"Jira API HTTP {exc.response.status_code}: {exc.response.text[:200]}"
-                ) from exc
-            except (httpx.TimeoutException, httpx.ConnectError) as exc:
-                raise ValueError(f"Jira API connection error: {exc}") from exc
+                if exc.response.status_code in _RETRYABLE_STATUSES and attempt < _MAX_RETRIES:
+                    retry_after = _parse_retry_after(exc.response)
+                    delay = min(retry_after, _MAX_DELAY) if retry_after else min(_BASE_DELAY * (2 ** attempt), _MAX_DELAY)
+                    await asyncio.sleep(delay)
+                    continue
+                raise ValueError(f"Jira API HTTP {exc.response.status_code}: {exc.response.text[:200]}") from exc
+            except httpx.TimeoutException as exc:
+                if attempt < _MAX_RETRIES:
+                    delay = min(_BASE_DELAY * (2 ** attempt), _MAX_DELAY)
+                    await asyncio.sleep(delay)
+                    continue
+                raise ValueError("Jira API timeout") from exc
+            except httpx.ConnectError as exc:
+                if attempt < _MAX_RETRIES:
+                    delay = min(_BASE_DELAY * (2 ** attempt), _MAX_DELAY)
+                    await asyncio.sleep(delay)
+                    continue
+                raise ValueError("Jira API connection error") from exc
+        raise ValueError("Jira API request failed after retries")
 
     async def _parse_json(self, response: httpx.Response) -> dict[str, Any]:
         """Safely parse JSON response, wrapping decode errors."""
         try:
             return response.json()
-        except Exception as exc:
-            raise ValueError(f"Jira API invalid response: {exc}") from exc
+        except json.JSONDecodeError as exc:
+            raise ValueError(f"Jira API invalid response: {response.text[:200]}") from exc
 
     async def health_check(self) -> HealthResult:
         """Verify connectivity by fetching the current user's profile."""
         try:
-            async with self._client() as client:
-                r = await client.get("/myself")
-
-            if r.status_code != 200:
-                return HealthResult(ok=False, detail=f"HTTP {r.status_code}: {r.text[:200]}")
-
+            r = await self._call_api("GET", "/myself")
             user_info = await self._parse_json(r)
             display_name = user_info.get("displayName", "")
-
             return HealthResult(ok=True, detail=display_name)
-        except (httpx.HTTPStatusError, httpx.TimeoutException, httpx.ConnectError) as exc:
-            return HealthResult(ok=False, detail=f"Jira API error: {exc}")
+        except ValueError as exc:
+            return HealthResult(ok=False, detail=str(exc)[:200])
         except Exception as exc:
             return HealthResult(ok=False, detail=str(exc)[:200])
 
@@ -122,15 +165,49 @@ class JiraConnector(ConnectorBase):
             case "search":
                 jql = q.filters.get("jql", "")
                 max_results = q.filters.get("max_results", q.limit)
-                r = await self._call_api(
-                    "POST",
-                    "/search",
-                    json={"jql": jql, "maxResults": max_results},
-                )
+                params: dict[str, Any] = {"jql": jql, "maxResults": max_results}
+                if q.cursor:
+                    params["startAt"] = int(q.cursor)
+                r = await self._call_api("POST", "/search", json=params)
                 body: dict[str, Any] = await self._parse_json(r)
                 issues: list[dict[str, Any]] = body.get("issues", [])
                 total = body.get("total", len(issues))
-                return ConnectorResult(records=issues, total=total)
+                start_at = body.get("startAt", 0)
+                max_results = body.get("maxResults", max_results)
+                next_cursor: str | None = None
+                if start_at + max_results < total:
+                    next_cursor = str(start_at + max_results)
+                return ConnectorResult(records=issues, total=total, next_cursor=next_cursor)
+            case "issue_comments":
+                issue_key = q.filters.get("issue_key")
+                if not issue_key:
+                    raise ValueError("Jira issue_comments query requires 'issue_key' filter")
+                params: dict[str, Any] = {}
+                if q.cursor:
+                    params["startAt"] = int(q.cursor)
+                r = await self._call_api("GET", f"/issue/{issue_key}/comment", params=params)
+                body = await self._parse_json(r)
+                comments = body.get("comments", [])
+                total = body.get("total", len(comments))
+                start_at = body.get("startAt", 0)
+                max_results = body.get("maxResults", 50)
+                next_cursor: str | None = None
+                if start_at + max_results < total:
+                    next_cursor = str(start_at + max_results)
+                return ConnectorResult(records=comments, total=total, next_cursor=next_cursor)
+            case "transitions":
+                issue_key = q.filters.get("issue_key")
+                if not issue_key:
+                    raise ValueError("Jira transitions query requires 'issue_key' filter")
+                r = await self._call_api("GET", f"/issue/{issue_key}/transitions")
+                body = await self._parse_json(r)
+                transitions = body.get("transitions", [])
+                return ConnectorResult(records=transitions, total=len(transitions))
+            case "projects":
+                r = await self._call_api("GET", "/project")
+                data = await self._parse_json(r)
+                projects = data if isinstance(data, list) else data.get("values", [])
+                return ConnectorResult(records=projects, total=len(projects))
             case _:
                 raise ValueError(f"Unsupported Jira resource: {q.resource!r}")
 
@@ -147,5 +224,26 @@ class JiraConnector(ConnectorBase):
                 fields: dict[str, Any] = payload.data["fields"]
                 r = await self._call_api("PUT", f"/issue/{issue_key}", json={"fields": fields})
                 return {"issue_key": issue_key, "updated": True}
+            case "issue_comment":
+                issue_key = payload.data.get("issue_key")
+                if not issue_key:
+                    raise ValueError("Jira issue comment requires 'issue_key' in data")
+                body = payload.data.get("body")
+                if not body:
+                    raise ValueError("Jira issue comment requires 'body' in data")
+                r = await self._call_api("POST", f"/issue/{issue_key}/comment", json={"body": body})
+                return await self._parse_json(r)
+            case "transition":
+                issue_key = payload.data.get("issue_key")
+                if not issue_key:
+                    raise ValueError("Jira transition requires 'issue_key' in data")
+                transition_id = payload.data.get("transition_id")
+                if not transition_id:
+                    raise ValueError("Jira transition requires 'transition_id' in data")
+                r = await self._call_api(
+                    "POST", f"/issue/{issue_key}/transitions",
+                    json={"transition": {"id": transition_id}},
+                )
+                return {"issue_key": issue_key, "transitioned": True}
             case _:
                 raise ValueError(f"Unsupported Jira write resource: {payload.resource!r}")

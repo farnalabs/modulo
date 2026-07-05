@@ -163,3 +163,195 @@ async def test_write_update_missing_key(connector):
                 data={"fields": {"summary": "No key provided"}},
             )
         )
+
+
+@respx.mock
+async def test_query_issue_comments(connector):
+    comments_data = {
+        "comments": [
+            {"id": "10001", "body": "First comment", "author": {"displayName": "Alice"}},
+            {"id": "10002", "body": "Second comment", "author": {"displayName": "Bob"}},
+        ],
+        "total": 2,
+        "startAt": 0,
+        "maxResults": 50,
+    }
+    respx.get(f"{_BASE}/issue/PROJ-123/comment").mock(return_value=httpx.Response(200, json=comments_data))
+    result = await connector.query(ConnectorQuery(resource="issue_comments", filters={"issue_key": "PROJ-123"}))
+    assert len(result.records) == 2
+    assert result.total == 2
+    assert result.records[0]["body"] == "First comment"
+
+
+@respx.mock
+async def test_query_issue_comments_pagination(connector):
+    comments_data = {
+        "comments": [{"id": "10001", "body": "First comment"}],
+        "total": 3,
+        "startAt": 0,
+        "maxResults": 1,
+    }
+    respx.get(f"{_BASE}/issue/PROJ-123/comment").mock(return_value=httpx.Response(200, json=comments_data))
+    result = await connector.query(ConnectorQuery(resource="issue_comments", filters={"issue_key": "PROJ-123"}, limit=1))
+    assert result.next_cursor == "1"
+
+
+@respx.mock
+async def test_query_issue_comments_missing_key(connector):
+    with pytest.raises(ValueError, match="requires 'issue_key'"):
+        await connector.query(ConnectorQuery(resource="issue_comments", filters={}))
+
+
+@respx.mock
+async def test_write_issue_comment(connector):
+    comment_response = {"id": "10001", "body": "Nice work!", "author": {"displayName": "Alice"}}
+    respx.post(f"{_BASE}/issue/PROJ-123/comment").mock(return_value=httpx.Response(201, json=comment_response))
+    result = await connector.write(
+        ConnectorPayload(
+            resource="issue_comment",
+            data={"issue_key": "PROJ-123", "body": "Nice work!"},
+        )
+    )
+    assert result["id"] == "10001"
+
+
+@respx.mock
+async def test_write_issue_comment_missing_body(connector):
+    with pytest.raises(ValueError, match="requires 'body'"):
+        await connector.write(
+            ConnectorPayload(
+                resource="issue_comment",
+                data={"issue_key": "PROJ-123"},
+            )
+        )
+
+
+@respx.mock
+async def test_write_issue_comment_missing_key(connector):
+    with pytest.raises(ValueError, match="requires 'issue_key'"):
+        await connector.write(
+            ConnectorPayload(
+                resource="issue_comment",
+                data={"body": "Nice work!"},
+            )
+        )
+
+
+@respx.mock
+async def test_query_transitions(connector):
+    transitions_data = {
+        "transitions": [
+            {"id": "11", "name": "To Do", "to": {"statusCategory": {"key": "new"}}},
+            {"id": "21", "name": "In Progress", "to": {"statusCategory": {"key": "indeterminate"}}},
+            {"id": "31", "name": "Done", "to": {"statusCategory": {"key": "done"}}},
+        ]
+    }
+    respx.get(f"{_BASE}/issue/PROJ-123/transitions").mock(return_value=httpx.Response(200, json=transitions_data))
+    result = await connector.query(ConnectorQuery(resource="transitions", filters={"issue_key": "PROJ-123"}))
+    assert len(result.records) == 3
+    assert result.records[0]["name"] == "To Do"
+
+
+@respx.mock
+async def test_query_transitions_missing_key(connector):
+    with pytest.raises(ValueError, match="requires 'issue_key'"):
+        await connector.query(ConnectorQuery(resource="transitions", filters={}))
+
+
+@respx.mock
+async def test_write_transition(connector):
+    respx.post(f"{_BASE}/issue/PROJ-123/transitions").mock(return_value=httpx.Response(204))
+    result = await connector.write(
+        ConnectorPayload(
+            resource="transition",
+            data={"issue_key": "PROJ-123", "transition_id": "31"},
+        )
+    )
+    assert result["issue_key"] == "PROJ-123"
+    assert result["transitioned"] is True
+
+
+@respx.mock
+async def test_write_transition_missing_transition_id(connector):
+    with pytest.raises(ValueError, match="requires 'transition_id'"):
+        await connector.write(
+            ConnectorPayload(
+                resource="transition",
+                data={"issue_key": "PROJ-123"},
+            )
+        )
+
+
+@respx.mock
+async def test_query_projects(connector):
+    projects_data = [
+        {"key": "PROJ", "name": "Project Alpha", "lead": {"displayName": "Alice"}},
+        {"key": "SUP", "name": "Support", "lead": {"displayName": "Bob"}},
+    ]
+    respx.get(f"{_BASE}/project").mock(return_value=httpx.Response(200, json=projects_data))
+    result = await connector.query(ConnectorQuery(resource="projects"))
+    assert len(result.records) == 2
+    assert result.records[0]["key"] == "PROJ"
+
+
+@respx.mock
+async def test_search_pagination_cursor(connector):
+    search_body = {
+        "issues": [{"id": "1", "key": "PROJ-1", "fields": {"summary": "Task 1"}}],
+        "total": 10,
+        "startAt": 0,
+        "maxResults": 1,
+    }
+    respx.post(f"{_BASE}/search").mock(return_value=httpx.Response(200, json=search_body))
+    result = await connector.query(ConnectorQuery(resource="search", filters={"jql": "project = PROJ", "max_results": 1}))
+    assert len(result.records) == 1
+    assert result.total == 10
+    assert result.next_cursor == "1"
+
+
+@respx.mock
+async def test_search_pagination_last_page(connector):
+    search_body = {
+        "issues": [{"id": "1", "key": "PROJ-1", "fields": {"summary": "Task 1"}}],
+        "total": 1,
+        "startAt": 0,
+        "maxResults": 50,
+    }
+    respx.post(f"{_BASE}/search").mock(return_value=httpx.Response(200, json=search_body))
+    result = await connector.query(ConnectorQuery(resource="search", filters={"jql": "project = PROJ"}))
+    assert result.total == 1
+    assert result.next_cursor is None
+
+
+@respx.mock
+async def test_retry_429_then_success(connector):
+    respx.get(f"{_BASE}/myself").mock(
+        side_effect=[
+            httpx.Response(429),
+            httpx.Response(200, json={"displayName": "Alice"}),
+        ]
+    )
+    result = await connector.health_check()
+    assert result.ok is True
+
+
+@respx.mock
+async def test_retry_429_exhausted(connector):
+    respx.get(f"{_BASE}/myself").mock(
+        side_effect=[
+            httpx.Response(429),
+            httpx.Response(429),
+            httpx.Response(429),
+            httpx.Response(429),
+        ]
+    )
+    result = await connector.health_check()
+    assert result.ok is False
+    assert "429" in result.detail
+
+
+@respx.mock
+async def test_304_not_modified(connector):
+    respx.get(f"{_BASE}/issue/PROJ-123").mock(return_value=httpx.Response(304))
+    with pytest.raises(ValueError, match="304 Not Modified"):
+        await connector.query(ConnectorQuery(resource="issue", filters={"issue_key": "PROJ-123"}))
