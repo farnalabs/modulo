@@ -2,6 +2,7 @@ export default {
   "views": {
     "TeamComparisonView": {
       "failed_to_load_data": "Failed to load data:",
+      "failed_to_load_teams": "Failed to load teams:",
       "sidebyside_eval_pass_rates_and_pipeline_metrics_across_teams": "Side-by-side eval pass rates and pipeline metrics across teams",
       "total_runs": "Total Runs",
       "team_comparison": "Team Comparison",

@@ -989,32 +989,38 @@ async def admin_list_teams(
 ) -> AdminTeamListResponse:
     if current_user.org_role != "admin":
         raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
+            status_code=status.HTTP_400_BAD_REQUEST,
             detail="Only admin users can list teams",
         )
 
-    async with session.begin():
-        await set_rls_org(session, current_user.organisation_id)
-        org_id = current_user.organisation_id
-        result = await list_teams(session, org_id=org_id, page=page, page_size=page_size)
+    try:
+        async with session.begin():
+            await set_rls_org(session, current_user.organisation_id)
+            org_id = current_user.organisation_id
+            result = await list_teams(session, org_id=org_id, page=page, page_size=page_size)
 
-        # Enrich with member counts
-        team_ids = [t.id for t in result.items]
-        member_counts: dict[uuid.UUID, int] = {}
-        if team_ids:
-            count_rows = (
-                await session.execute(
-                    text("""
-                        SELECT team_id, COUNT(*) AS cnt
-                        FROM team_memberships
-                        WHERE team_id = ANY(:team_ids)
-                        GROUP BY team_id
-                    """),
-                    {"team_ids": team_ids},
-                )
-            ).all()
-            for row in count_rows:
-                member_counts[row.team_id] = row.cnt
+            # Enrich with member counts
+            team_ids = [t.id for t in result.items]
+            member_counts: dict[uuid.UUID, int] = {}
+            if team_ids:
+                count_rows = (
+                    await session.execute(
+                        text("""
+                            SELECT team_id, COUNT(*) AS cnt
+                            FROM team_memberships
+                            WHERE team_id = ANY(:team_ids)
+                            GROUP BY team_id
+                        """),
+                        {"team_ids": team_ids},
+                    )
+                ).all()
+                for row in count_rows:
+                    member_counts[row.team_id] = row.cnt
+    except ProgrammingError:
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="Feature is not available. Run database migrations to enable it.",
+        )
 
     return AdminTeamListResponse(
         items=[
