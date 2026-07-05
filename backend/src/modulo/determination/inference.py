@@ -11,6 +11,8 @@ from typing import Any
 
 from modulo.determination.scanner import ScanSample
 
+_VALID_CONFIDENCES = frozenset({"high", "medium", "low"})
+
 
 class Finding:
     """A single finding about the SDLC."""
@@ -24,6 +26,8 @@ class Finding:
         uncertainty: str = "",
         related_connector: uuid.UUID | None = None,
     ) -> None:
+        if confidence not in _VALID_CONFIDENCES:
+            raise ValueError(f"confidence must be one of {sorted(_VALID_CONFIDENCES)}, got {confidence!r}")
         self.category = category
         self.finding = finding
         self.evidence = evidence
@@ -31,19 +35,6 @@ class Finding:
         self.uncertainty = uncertainty
         self.related_connector = related_connector
 
-
-_INTERESTING_LANGUAGES = {
-    "python",
-    "typescript",
-    "javascript",
-    "go",
-    "rust",
-    "java",
-    "ruby",
-    "kotlin",
-    "swift",
-    "csharp",
-}
 
 _CI_FILES = {
     ".github/workflows",
@@ -87,10 +78,6 @@ def infer(samples: list[ScanSample]) -> list[Finding]:
                     name = rec.get("name") or rec.get("path_with_namespace") or ""
                     if name:
                         repo_names.append(name)
-                    topics = rec.get("topics") or []
-                    for t in topics:
-                        if t in _INTERESTING_LANGUAGES:
-                            pass
 
             case "pulls" | "mrs":
                 pull_requests.extend(s.records)
