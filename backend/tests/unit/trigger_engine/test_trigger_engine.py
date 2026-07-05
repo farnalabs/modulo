@@ -102,6 +102,11 @@ def _make_session(
     session.add = MagicMock()
     session.flush = AsyncMock()
 
+    # Replace AsyncMock get_bind with sync MagicMock (Python 3.13+ AsyncMock returns coroutines)
+    bind_mock = MagicMock()
+    bind_mock.dialect.name = "postgresql"
+    session.get_bind = MagicMock(return_value=bind_mock)
+
     nested_cm = AsyncMock()
     nested_cm.__aenter__ = AsyncMock(return_value=None)
     nested_cm.__aexit__ = AsyncMock(return_value=False)
