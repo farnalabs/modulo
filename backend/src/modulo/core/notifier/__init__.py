@@ -36,8 +36,18 @@ from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker
 
 from modulo.db.models.notification_delivery import NotificationDeliveryLog
 from modulo.db.models.notification_endpoint import NotificationEndpoint
+from modulo.db.rls import set_rls_org
 
 __all__ = [
+    "EVENT_BUDGET_EXCEEDED",
+    "EVENT_CLAIM_EXPIRED",
+    "EVENT_EVAL_BLOCKED",
+    "EVENT_EVAL_REGRESSION",
+    "EVENT_FEEDBACK_PENDING",
+    "EVENT_HITL_AWAITING",
+    "EVENT_HITL_OVERDUE",
+    "EVENT_RUN_FAILED",
+    "EVENT_SYSTEM_ANNOUNCEMENT",
     "MAX_ATTEMPTS",
     "MAX_DEAD_LETTERS",
     "RETRY_DELAYS",
@@ -50,6 +60,17 @@ _log = logging.getLogger(__name__)
 MAX_ATTEMPTS = 4  # 1 initial + 3 retries
 MAX_DEAD_LETTERS = 10
 RETRY_DELAYS = [5.0, 30.0, 120.0]
+
+# Event type constants — single source of truth
+EVENT_HITL_AWAITING = "hitl_awaiting"
+EVENT_RUN_FAILED = "run_failed"
+EVENT_BUDGET_EXCEEDED = "budget_exceeded"
+EVENT_CLAIM_EXPIRED = "claim_expired"
+EVENT_HITL_OVERDUE = "hitl_overdue"
+EVENT_EVAL_REGRESSION = "eval_regression"
+EVENT_EVAL_BLOCKED = "eval_blocked"
+EVENT_FEEDBACK_PENDING = "feedback_pending"
+EVENT_SYSTEM_ANNOUNCEMENT = "system_announcement"
 
 
 @dataclass
@@ -72,13 +93,18 @@ class Notifier:
     def __init__(self, db_engine: AsyncEngine, fernet_key: str, *, use_celery: bool = False) -> None:
         self._engine = db_engine
         self._session_factory = async_sessionmaker(db_engine, expire_on_commit=False)
-        self._fernet = Fernet(fernet_key.encode())
+        try:
+            self._fernet = Fernet(fernet_key.encode())
+        except (ValueError, TypeError) as exc:
+            raise ValueError(f"Invalid Fernet key: {exc}") from exc
         self._http_client: httpx.AsyncClient | None = None
+        self._http_client_lock = asyncio.Lock()
         self._use_celery = use_celery
 
     async def _get_client(self) -> httpx.AsyncClient:
-        if self._http_client is None or self._http_client.is_closed:
-            self._http_client = httpx.AsyncClient(timeout=httpx.Timeout(connect=10.0, read=25.0, pool=30.0))
+        async with self._http_client_lock:
+            if self._http_client is None or self._http_client.is_closed:
+                self._http_client = httpx.AsyncClient(timeout=httpx.Timeout(connect=10.0, read=25.0, pool=30.0))
         return self._http_client
 
     async def dispatch_event(
@@ -167,45 +193,61 @@ class Notifier:
         """Return active endpoints subscribed to ``event_type``.
 
         When ``team_id`` is provided, first queries endpoints matching the
-        team. If none match, falls back to org-wide (team_id IS NULL)
-        endpoints.
+        team. If none match by subscription, falls back to org-wide
+        (team_id IS NULL) endpoints.
 
         When ``team_id`` is None, returns only org-wide endpoints.
         """
         async with self._session_factory() as session:
             if team_id is not None:
-                stmt = select(NotificationEndpoint).where(
+                team_stmt = (
+                    select(NotificationEndpoint)
+                    .where(
+                        NotificationEndpoint.organisation_id == org_id,
+                        NotificationEndpoint.team_id == team_id,
+                        NotificationEndpoint.auto_disabled.is_(False),
+                    )
+                )
+                result = await session.execute(team_stmt)
+                subscribed = self._filter_subscribed(list(result.scalars()), event_type)
+                if subscribed:
+                    return subscribed
+                fallback_stmt = (
+                    select(NotificationEndpoint)
+                    .where(
+                        NotificationEndpoint.organisation_id == org_id,
+                        NotificationEndpoint.team_id.is_(None),
+                        NotificationEndpoint.auto_disabled.is_(False),
+                    )
+                )
+                result = await session.execute(fallback_stmt)
+                return self._filter_subscribed(list(result.scalars()), event_type)
+
+            stmt = (
+                select(NotificationEndpoint)
+                .where(
                     NotificationEndpoint.organisation_id == org_id,
-                    NotificationEndpoint.team_id == team_id,
+                    NotificationEndpoint.team_id.is_(None),
                     NotificationEndpoint.auto_disabled.is_(False),
                 )
-                result = await session.execute(stmt)
-                all_endpoints = list(result.scalars())
-                if not all_endpoints:
-                    stmt = select(NotificationEndpoint).where(
-                        NotificationEndpoint.organisation_id == org_id,
-                        NotificationEndpoint.team_id.is_(None),
-                        NotificationEndpoint.auto_disabled.is_(False),
-                    )
-                    result = await session.execute(stmt)
-                    all_endpoints = list(result.scalars())
-            else:
-                result = await session.execute(
-                    select(NotificationEndpoint).where(
-                        NotificationEndpoint.organisation_id == org_id,
-                        NotificationEndpoint.team_id.is_(None),
-                        NotificationEndpoint.auto_disabled.is_(False),
-                    )
-                )
-                all_endpoints = list(result.scalars())
-        subscribed = []
-        for ep in all_endpoints:
+            )
+            result = await session.execute(stmt)
+            return self._filter_subscribed(list(result.scalars()), event_type)
+
+    def _filter_subscribed(
+        self,
+        endpoints: list[NotificationEndpoint],
+        event_type: str,
+    ) -> list[NotificationEndpoint]:
+        """Filter endpoints whose events JSON includes ``event_type``."""
+        subscribed: list[NotificationEndpoint] = []
+        for ep in endpoints:
             try:
                 events_list = json.loads(ep.events)
             except (json.JSONDecodeError, TypeError):
                 _log.warning(
                     "notifier.unparseable_events_json",
-                    extra={"endpoint_id": str(ep.id), "org_id": str(org_id)},
+                    extra={"endpoint_id": str(ep.id), "org_id": str(ep.organisation_id)},
                 )
                 continue
             if event_type in events_list:
@@ -225,23 +267,6 @@ class Notifier:
         if not endpoints:
             _log.debug("notifier.no_subscribers", extra={"event_type": event_type, "org_id": str(org_id)})
             return []
-        http_client = await self._get_client()
-        results: list[DispatchResult] = []
-        for ep in endpoints:
-            result = await self._dispatch_to_endpoint(http_client, ep, event_type, payload, run_id, retain_payload)
-            results.append(result)
-        return results
-
-    async def _dispatch_to_endpoint(
-        self,
-        client: httpx.AsyncClient,
-        endpoint: NotificationEndpoint,
-        event_type: str,
-        payload: dict[str, Any],
-        run_id: uuid.UUID | None,
-        retain_payload: bool,
-    ) -> DispatchResult:
-        """Send a single notification to one endpoint with retry logic."""
         body = json.dumps(
             {
                 "event": event_type,
@@ -251,6 +276,23 @@ class Notifier:
             default=str,
             separators=(",", ":"),
         ).encode()
+        http_client = await self._get_client()
+        results: list[DispatchResult] = []
+        for ep in endpoints:
+            result = await self._dispatch_to_endpoint(http_client, ep, event_type, body, run_id, retain_payload)
+            results.append(result)
+        return results
+
+    async def _dispatch_to_endpoint(
+        self,
+        client: httpx.AsyncClient,
+        endpoint: NotificationEndpoint,
+        event_type: str,
+        body: bytes,
+        run_id: uuid.UUID | None,
+        retain_payload: bool,
+    ) -> DispatchResult:
+        """Send a single notification to one endpoint with retry logic."""
 
         signature = await self._sign_payload(body, endpoint)
 
@@ -356,6 +398,7 @@ class Notifier:
     ) -> None:
         try:
             async with self._session_factory() as session, session.begin():
+                await set_rls_org(session, endpoint.organisation_id)
                 log_entry = NotificationDeliveryLog(
                     organisation_id=endpoint.organisation_id,
                     event_type=event_type,
@@ -383,9 +426,13 @@ class Notifier:
         """Increment dead-letter counter and auto-disable if threshold exceeded."""
         try:
             async with self._session_factory() as session, session.begin():
+                await set_rls_org(session, endpoint.organisation_id)
                 result = await session.execute(
                     update(NotificationEndpoint)
-                    .where(NotificationEndpoint.id == endpoint.id)
+                    .where(
+                        NotificationEndpoint.id == endpoint.id,
+                        NotificationEndpoint.organisation_id == endpoint.organisation_id,
+                    )
                     .values(
                         consecutive_dead_letter_count=(NotificationEndpoint.consecutive_dead_letter_count + 1),
                     )
@@ -396,7 +443,10 @@ class Notifier:
                 if new_count >= MAX_DEAD_LETTERS:
                     await session.execute(
                         update(NotificationEndpoint)
-                        .where(NotificationEndpoint.id == endpoint.id)
+                        .where(
+                            NotificationEndpoint.id == endpoint.id,
+                            NotificationEndpoint.organisation_id == endpoint.organisation_id,
+                        )
                         .values(
                             auto_disabled=True,
                             disabled_at=datetime.now(UTC),
@@ -416,10 +466,12 @@ class Notifier:
         """Reset consecutive dead-letter counter to 0 on successful delivery."""
         try:
             async with self._session_factory() as session, session.begin():
+                await set_rls_org(session, endpoint.organisation_id)
                 await session.execute(
                     update(NotificationEndpoint)
                     .where(
                         NotificationEndpoint.id == endpoint.id,
+                        NotificationEndpoint.organisation_id == endpoint.organisation_id,
                         NotificationEndpoint.consecutive_dead_letter_count > 0,
                     )
                     .values(consecutive_dead_letter_count=0)
@@ -432,12 +484,8 @@ class Notifier:
 
     async def close(self) -> None:
         """Close the underlying HTTP client, if one was created."""
-        client = self._http_client
-        if client is not None and not client.is_closed:
-            self._http_client = None
-            try:
+        async with self._http_client_lock:
+            client = self._http_client
+            if client is not None and not client.is_closed:
+                self._http_client = None
                 await client.aclose()
-            except Exception:
-                _log.exception("notifier.http_client_close_failed")
-            else:
-                _log.debug("notifier.http_client_closed")
