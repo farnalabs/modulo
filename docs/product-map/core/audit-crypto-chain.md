@@ -43,7 +43,7 @@ SHA-256 cryptographic chaining of audit events per organisation, providing tampe
 - [x] Each event's stored previous_hash must match the recomputed hash of the prior event
 - [x] Returns valid: True when all links intact
 - [x] Returns valid: False + first_tampered_id + first_gap_index when a mismatch is found
-- [x] Detail message includes expected vs actual previous_hash
+- [ ] Detail message includes expected vs actual previous_hash — `_recompute_chain` returns only `(gap_index, tampered_id)`, `_make_verify_result` never receives `detail`
 - [x] Empty chain returns valid: True, total_events=0, checked_events=0
 - [x] Validates last recomputed hash against AuditChainHead.last_event_hash
 - [x] chain_head_match is None when no chain head exists
@@ -67,11 +67,32 @@ SHA-256 cryptographic chaining of audit events per organisation, providing tampe
 - [x] Chain head deleted (ON DELETE SET NULL FK) — AuditChainHead.last_event_id is null, chain still verifiable via recomputation
 - [x] Actor user deleted — actor_user_id is None in canonical hash, event still verifiable
 - [x] Org with zero events — verification returns valid: True, total_events=0
+- [x] Multiple events with identical `created_at` — order within same timestamp is deterministic via `id ASC` tiebreaker
+- [x] Actor user ID passed as UUID object vs string — `_uuid_or_none` handles both, hash consistent regardless of input type
+- [x] Large payload in export (10 KB tested) — serialized correctly, no truncation
+- [x] `created_at` is None on DB record — export returns `None` in dict, verify skips isoformat with `""` fallback
+- [x] Chain head `event_count` mismatch with actual DB count — flagged as `chain_count_mismatch`, chain still verifiable via recomputation
+- [x] Chain head missing with events present — `chain_head_match` returns `None`, `no_head_corruption` is False, `valid` is False
 
 ### Error Handling
 
 - [x] verify_chain with DB failure — exception propagates (no silent fallback)
-- [x] Missing previous_hash on non-first event — detected as chain break, returns first_gap_index=0
+- [x] Missing previous_hash on non-first event — detected as chain break, returns gap index of the broken event
+- [x] Invalid UUID in batch detail request — skipped with warning log, caller gets fewer results (no crash)
+- [x] Invalid cursor in list — silently falls back to first page with warning log (caller gets unexpected page)
+- [x] Batch size exceeded — truncated to `BATCH_MAX_SIZE` (100) with warning log
+- [x] append_audit_event IntegrityError retry exhaustion — re-raises after 3 attempts with exponential backoff
+- [x] append_audit_event with `payload_json=None` — resolved to `{}` via `resolved_payload = payload_json or {}`
+- [x] append_audit_event with `actor_user_id=None` / `resource_type=None` / `resource_id=None` — all optional, stored as None in DB
+- [x] Chain break verification lacks detail message — `_recompute_chain` does not compute expected vs actual hash strings
+
+### Resilience
+
+- [x] Concurrent appends serialized by `SELECT ... FOR UPDATE` on chain head — prevents forks under Postgres
+- [ ] Non-Postgres backends (MariaDB, SQLite) — `with_for_update()` is a no-op, concurrent appends could create chain forks (gap detected on verify)
+- [x] append_audit_event retries on IntegrityError — up to 3 attempts with `0.1s × attempt` backoff, handles concurrent first-event race
+- [x] All read operations (export, list, batch, verify) are independent queries — a DB failure in one does not cascade
+- [x] Cursor decode failure falls back to first page — caller can retry with fresh cursor
 
 ### Security
 
@@ -81,6 +102,7 @@ SHA-256 cryptographic chaining of audit events per organisation, providing tampe
 
 ## QA History
 - **2026-07-02**: Cross-cutting QA (index 49). Fixed BDD scenario path (scenarios() was resolving to nonexistent bdd/features/audit/, now uses ../../features/ corrected path) for test_alpha_audit.py, test_audit.py, and test_personas.py step files. Fixed check_previous_hash step to handle both _appended_events and verify API response (was passing vacuously for "Audit events have cryptographic chaining" scenario). Added 4 missing step definitions for `@goal-marcus-crypto-chain` scenario (sequence of 100 events, chain verification, tampering detection). Updated unit-tests frontmatter from empty [] to 3 actual test file references. Marked both BDD scenario behaviours [ ]→[x].
+- **2026-07-05**: Cross-cutting QA (feat-core-audit-crypto-chain). Verified all 40 behaviours against code. Found 1 inaccurate claim: "Detail message includes expected vs actual previous_hash" — code does not pass `detail` to `_make_verify_result`. Added detailed Error Handling (9 items), Resilience (5 items), and Edge Cases (6 new items) sections. Created website docs stub at `Website/modulo-website/src/docs/audit/audit-crypto-chain.md`.
 
 ## Known Gaps
 - verify_chain limited to 10,000 events by default — large orgs may need batched or incremental verification
