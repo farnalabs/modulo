@@ -10,6 +10,7 @@ from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, Field
+from sqlalchemy.exc import ProgrammingError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.api.dependencies import get_db_session
@@ -265,31 +266,37 @@ async def download_registry_primitive_endpoint(
 
     entry.download_count += 1
 
-    async with session.begin():
-        await set_rls_org(session, principal.organisation_id)
-        await create_library_primitive(
-            session,
-            org_id=principal.organisation_id,
-            source="registry",
-            primitive_type=entry.primitive_type,
-            name=f"{entry.author}/{entry.name}",
-            slug=entry.slug.replace("/", "-"),
-            description=entry.description,
-            author=entry.author,
-            version=entry.version,
-            tags=entry.tags,
-            content_json=entry.content_json,
-            source_url=f"/api/v1/registry/primitives/{entry.slug}",
-            forked_from=None,
-            checksum=entry.checksum_sha256,
-            ed25519_signature=entry.ed25519_signature_hex,
-            verified=verified,
-            download_count=None,
-            average_rating=None,
-            review_count=None,
-            owner_team_id=None,
-            visibility="org",
-            account_id=principal.account_id,
+    try:
+        async with session.begin():
+            await set_rls_org(session, principal.organisation_id)
+            await create_library_primitive(
+                session,
+                org_id=principal.organisation_id,
+                source="registry",
+                primitive_type=entry.primitive_type,
+                name=f"{entry.author}/{entry.name}",
+                slug=entry.slug.replace("/", "-"),
+                description=entry.description,
+                author=entry.author,
+                version=entry.version,
+                tags=entry.tags,
+                content_json=entry.content_json,
+                source_url=f"/api/v1/registry/primitives/{entry.slug}",
+                forked_from=None,
+                checksum=entry.checksum_sha256,
+                ed25519_signature=entry.ed25519_signature_hex,
+                verified=verified,
+                download_count=None,
+                average_rating=None,
+                review_count=None,
+                owner_team_id=None,
+                visibility="org",
+                account_id=principal.account_id,
+            )
+    except ProgrammingError:
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="Feature is not available. Run database migrations to enable it.",
         )
 
     return PullResponse(
@@ -529,12 +536,18 @@ async def verify_registry_primitive_v2(
         }
         verified = crypto_verify_signature(payload, entry.ed25519_signature_hex, public_key_hex)
 
-        async with session.begin():
-            await set_rls_org(session, principal.organisation_id)
-            db_pub = await db_get_publisher_by_key(session, principal.organisation_id, public_key_hex)
-            if db_pub is not None:
-                trust_tier = db_pub.trust_tier
-                publisher_name = db_pub.name
+        try:
+            async with session.begin():
+                await set_rls_org(session, principal.organisation_id)
+                db_pub = await db_get_publisher_by_key(session, principal.organisation_id, public_key_hex)
+                if db_pub is not None:
+                    trust_tier = db_pub.trust_tier
+                    publisher_name = db_pub.name
+        except ProgrammingError:
+            raise HTTPException(
+                status_code=status.HTTP_501_NOT_IMPLEMENTED,
+                detail="Feature is not available. Run database migrations to enable it.",
+            )
     else:
         verified = verify_primitive_signature(entry)
 
