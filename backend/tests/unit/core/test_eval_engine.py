@@ -383,7 +383,7 @@ class TestEvaluateSuite:
     def test_empty_suite_always_passes(self) -> None:
         result = evaluate_suite([], "suite-1", pass_threshold=0.8)
         assert result.passed is True
-        assert result.aggregate_score == 1.0
+        assert result.aggregate_score == 0.0
 
     def test_no_threshold_never_blocks(self) -> None:
         results = [

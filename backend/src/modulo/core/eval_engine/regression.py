@@ -53,6 +53,11 @@ async def detect_regressions(
     Returns:
         List of ``RegressionAlert`` for evals with significant drops.
     """
+    if days < 1:
+        raise ValueError(f"days must be >= 1, got {days}")
+    if threshold < 0:
+        raise ValueError(f"threshold must be >= 0, got {threshold}")
+
     now = datetime.now(UTC)
     baseline_start = now - timedelta(days=days)
     recent_window_days = max(days // 4, 1)
@@ -80,6 +85,7 @@ async def detect_regressions(
             FROM eval_results er
             JOIN eval_definitions ed ON ed.id = er.eval_id
             WHERE er.organisation_id = :org_id
+              AND ed.organisation_id = :org_id
               AND er.evaluated_at >= :baseline_start
             GROUP BY er.eval_id, ed.name
         """)
@@ -94,6 +100,9 @@ async def detect_regressions(
                 },
             )
         ).all()
+    except TimeoutError:
+        _log.error("regression.detect_timeout", extra={"org_id": str(org_id), "days": days})
+        raise
     except SQLAlchemyError:
         _log.exception("regression.detect_db_error", extra={"org_id": str(org_id), "days": days})
         raise
@@ -106,8 +115,9 @@ async def detect_regressions(
         baseline_passed: int = row.baseline_passed or 0
 
         if recent_total == 0 or baseline_total == 0:
-            _log.info("regression.skip_insufficient_data",
-                       extra={"eval_id": str(row.eval_id), "eval_name": row.eval_name})
+            _log.info(
+                "regression.skip_insufficient_data", extra={"eval_id": str(row.eval_id), "eval_name": row.eval_name}
+            )
             continue
 
         current_pass_rate = recent_passed / recent_total

@@ -91,7 +91,7 @@ def _days_between(from_date: datetime, target_date_str: str | None) -> int | Non
         target = datetime.strptime(target_date_str, "%Y-%m-%d").replace(tzinfo=UTC)
         delta = target - from_date
         return max(0, delta.days)
-    except (ValueError, TypeError):
+    except ValueError:
         _log.warning("okr.days_between_invalid_date", extra={"target_date": target_date_str})
         return None
 
@@ -123,34 +123,25 @@ async def track_okr_progress(
         ValueError: If no eval definitions exist with the given suite_id.
         SQLAlchemyError: If a database error occurs.
     """
+    if not suite_id:
+        raise ValueError("suite_id must not be empty")
+
     as_of = datetime.now(UTC)
 
     try:
-        # Verify suite exists and get its name (use suite_id as display name)
-        exists_q = text("""
-            SELECT 1 FROM eval_definitions
+        info_q = text("""
+            SELECT
+                COUNT(*) AS def_count,
+                MAX(pass_threshold) AS pass_threshold
+            FROM eval_definitions
             WHERE suite_id = :suite_id AND organisation_id = :org_id
-            LIMIT 1
         """)
-        exists_row = (await session.execute(exists_q, {"suite_id": suite_id, "org_id": org_id})).first()
-        if exists_row is None:
+        info_row = (await session.execute(info_q, {"suite_id": suite_id, "org_id": org_id})).first()
+        if info_row is None or info_row.def_count == 0:
             raise ValueError(f"Suite {suite_id!r} not found for organisation {org_id}")
 
-        suite_name = suite_id
+        pass_threshold = info_row.pass_threshold
 
-        # Get pass_threshold from the suite's definitions
-        threshold_q = text("""
-            SELECT pass_threshold
-            FROM eval_definitions
-            WHERE suite_id = :suite_id
-              AND organisation_id = :org_id
-              AND pass_threshold IS NOT NULL
-            LIMIT 1
-        """)
-        threshold_row = (await session.execute(threshold_q, {"suite_id": suite_id, "org_id": org_id})).first()
-        pass_threshold = threshold_row.pass_threshold if threshold_row else None
-
-        # Trend query — bucket pass rates into sequential non-overlapping windows
         window_7 = as_of - timedelta(days=7)
         window_14 = as_of - timedelta(days=14)
         window_30 = as_of - timedelta(days=30)
@@ -192,18 +183,21 @@ async def track_okr_progress(
             "window_30": window_30,
         }
         trend_row = (await session.execute(trend_q, trend_params)).first()
+    except TimeoutError:
+        _log.error("okr.track_progress_timeout", extra={"suite_id": suite_id, "org_id": str(org_id)})
+        raise
     except SQLAlchemyError:
         _log.exception("okr.track_progress_db_error", extra={"suite_id": suite_id, "org_id": str(org_id)})
         raise
 
-    total_7d = trend_row.total_7d if trend_row and trend_row.total_7d else 0
-    passed_7d = trend_row.passed_7d if trend_row and trend_row.passed_7d else 0
-    total_14d = trend_row.total_14d if trend_row and trend_row.total_14d else 0
-    passed_14d = trend_row.passed_14d if trend_row and trend_row.passed_14d else 0
-    total_30d = trend_row.total_30d if trend_row and trend_row.total_30d else 0
-    passed_30d = trend_row.passed_30d if trend_row and trend_row.passed_30d else 0
-    total_all = trend_row.total_all if trend_row and trend_row.total_all else 0
-    passed_all = trend_row.passed_all if trend_row and trend_row.passed_all else 0
+    total_7d = trend_row.total_7d or 0 if trend_row else 0
+    passed_7d = trend_row.passed_7d or 0 if trend_row else 0
+    total_14d = trend_row.total_14d or 0 if trend_row else 0
+    passed_14d = trend_row.passed_14d or 0 if trend_row else 0
+    total_30d = trend_row.total_30d or 0 if trend_row else 0
+    passed_30d = trend_row.passed_30d or 0 if trend_row else 0
+    total_all = trend_row.total_all or 0 if trend_row else 0
+    passed_all = trend_row.passed_all or 0 if trend_row else 0
 
     trend = [
         _trend_point("7d", total_7d, passed_7d),
@@ -212,7 +206,6 @@ async def track_okr_progress(
         _trend_point("overall", total_all, passed_all),
     ]
 
-    # Use 7d rate as current score; fall back to overall
     current_score = trend[0].pass_rate if total_7d > 0 else trend[3].pass_rate
     trend_direction = _compute_trend_direction(trend)
     days_to_target = _days_between(as_of, target_date)
@@ -220,7 +213,7 @@ async def track_okr_progress(
 
     return OkrProgress(
         suite_id=suite_id,
-        suite_name=suite_name,
+        suite_name=suite_id,
         current_score=current_score,
         pass_threshold=pass_threshold,
         trend=trend,
@@ -241,8 +234,3 @@ def alert_on_breach(pass_threshold: float, current_pass_rate: float) -> bool:
         True if the current pass rate is below the threshold.
     """
     return current_pass_rate < pass_threshold
-
-
-def alert_on_breach_for_suite(suite: OkrSuite, current_pass_rate: float) -> bool:
-    """Convenience wrapper — check breach status for an :class:`OkrSuite`."""
-    return alert_on_breach(suite.pass_threshold, current_pass_rate)
