@@ -63,6 +63,7 @@ def _make_settings() -> Settings:
         modulo_admin_password="testpass",
         modulo_license_key="enterprise-license",
         modulo_scim_token=_SCIM_TOKEN,
+        modulo_public_url="http://localhost:8000",
     )
 
 
@@ -73,6 +74,7 @@ def _make_no_license_settings() -> Settings:
         fernet_key=_VALID_32,
         modulo_admin_password="testpass",
         modulo_license_key="",
+        modulo_public_url="http://localhost:8000",
     )
 
 
@@ -499,6 +501,7 @@ class TestScimAuth:
             modulo_admin_password="testpass",
             modulo_license_key="team-license",
             modulo_scim_token="",
+            modulo_public_url="http://localhost:8000",
         )
         app.dependency_overrides[get_settings] = lambda: settings
         app.dependency_overrides[get_db_session] = lambda: _make_mock_session()

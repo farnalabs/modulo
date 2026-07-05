@@ -30,6 +30,7 @@ def _make_settings() -> Settings:
         modulo_admin_password="testpass",
         modulo_license_key="enterprise-license",
         modulo_scim_token=_SCIM_TOKEN,
+        modulo_public_url="http://localhost:8000",
     )
 
 
@@ -137,6 +138,7 @@ class TestAuthEdgeCases:
                 modulo_admin_password="testpass",
                 modulo_license_key="enterprise-license",
                 modulo_scim_token="",
+                modulo_public_url="http://localhost:8000",
             )
 
         app.dependency_overrides[get_settings] = _settings_no_scim_token
@@ -168,6 +170,7 @@ class TestAuthEdgeCases:
                 modulo_license_key="enterprise-license",
                 modulo_scim_token=_SCIM_TOKEN,
                 modulo_scim_default_org_id="not-a-uuid",
+                modulo_public_url="http://localhost:8000",
             )
 
         app.dependency_overrides[get_settings] = _settings_bad_org_uuid
@@ -1225,6 +1228,7 @@ class TestLicenseGate:
                 modulo_admin_password="testpass",
                 modulo_license_key="",
                 modulo_scim_token=_SCIM_TOKEN,
+                modulo_public_url="http://localhost:8000",
             )
 
         app.dependency_overrides[get_settings] = _settings_no_license
