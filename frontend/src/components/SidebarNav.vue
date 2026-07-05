@@ -83,6 +83,7 @@ const visibleSidebarGroups = computed(() =>
           { isAtMinimumTier: (tier: string) => planStore.isAtMinimumTier(tier) },
         )
       }),
-    })),
+    }))
+    .filter(g => g.items.length > 0)
 );
 </script>

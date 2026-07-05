@@ -505,6 +505,7 @@ import { Controls } from '@vue-flow/controls'
 import '@vue-flow/core/dist/style.css'
 import '@vue-flow/core/dist/theme-default.css'
 import { useApi } from '../composables/useApi'
+import { formatApiError } from '../lib/api/formatError'
 import BackLink from '../components/BackLink.vue'
 import { shortId } from '../utils/format'
 
@@ -622,7 +623,7 @@ async function loadGraph() {
     flowNodes.value = rawNodes.value.map(convertBackendNode)
     flowEdges.value = rawEdges.value.map(convertBackendEdge)
   } catch (e: unknown) {
-    pageError.value = `Failed to load graph: ${e instanceof Error ? e.message : String(e)}`
+    pageError.value = `Failed to load graph: ${formatApiError(e)}`
   }
 }
 

@@ -316,6 +316,7 @@ import ErrorAlert from '../components/shared/ErrorAlert.vue'
 import TeamNotificationEndpoints from '../components/TeamNotificationEndpoints.vue'
 import { usePlanStore } from '../stores/planStore'
 import FeatureGate from '../components/FeatureGate.vue'
+import { formatApiError } from '../lib/api/formatError'
 import { shortId } from '../utils/format'
 
 const planStore = usePlanStore()
@@ -377,12 +378,12 @@ async function loadTeams() {
   try {
     const { data, error: err } = await api.GET('/api/v1/admin/teams')
     if (err) {
-      error.value = `Failed to load teams: ${err}`
+      error.value = `Failed to load teams: ${formatApiError(err)}`
     } else if (data) {
       teams.value = data.items
     }
   } catch (e: unknown) {
-    error.value = `Failed to load teams: ${e instanceof Error ? e.message : String(e)}`
+    error.value = `Failed to load teams: ${formatApiError(e)}`
   } finally {
     loading.value = false
   }
@@ -410,12 +411,12 @@ async function loadMembers(teamId: string) {
       params: { path: { team_id: teamId } },
     })
     if (err) {
-      membersError.value[teamId] = `Failed to load members: ${err}`
+      membersError.value[teamId] = `Failed to load members: ${formatApiError(err)}`
     } else if (data) {
       membersByTeam.value[teamId] = data.items
     }
   } catch (e: unknown) {
-    membersError.value[teamId] = `Failed to load members: ${e instanceof Error ? e.message : String(e)}`
+    membersError.value[teamId] = `Failed to load members: ${formatApiError(e)}`
   } finally {
     membersLoading.value[teamId] = false
   }
@@ -459,7 +460,7 @@ async function createTeam() {
       },
     })
     if (err) {
-      createError.value = String(err)
+      createError.value = formatApiError(err)
     } else if (data) {
       createSuccess.value = `Team "${data.name}" created.`
       createName.value = ''
@@ -469,7 +470,7 @@ async function createTeam() {
       teamsCreateTimeout = setTimeout(() => { createSuccess.value = null; showCreateForm.value = false }, 1500)
     }
   } catch (e: unknown) {
-    createError.value = e instanceof Error ? e.message : String(e)
+    createError.value = formatApiError(e)
   } finally {
     creatingTeam.value = false
   }
@@ -496,7 +497,7 @@ async function saveRename() {
       body: { name: renameName.value.trim() },
     })
     if (err) {
-      memberActionError.value[renameTeamId.value] = `Rename failed: ${err}`
+      memberActionError.value[renameTeamId.value] = `Rename failed: ${formatApiError(err)}`
     } else {
       renameTeamId.value = null
       renameName.value = ''
@@ -524,7 +525,7 @@ async function deleteTeam(teamId: string) {
       params: { path: { team_id: teamId } },
     })
     if (err) {
-      deleteError.value = String(err)
+      deleteError.value = formatApiError(err)
     } else if (response.status === 204 || response.ok) {
       deleteConfirmTeamId.value = null
       expandedTeamId.value = null
@@ -550,7 +551,7 @@ async function addMember(teamId: string) {
       },
     })
     if (err) {
-      memberActionError.value[teamId] = `Add member failed: ${err}`
+      memberActionError.value[teamId] = `Add member failed: ${formatApiError(err)}`
     } else if (data) {
       membersByTeam.value[teamId] = [...(membersByTeam.value[teamId] ?? []), data]
       addMemberUserId.value = ''
@@ -577,7 +578,7 @@ async function changeMemberRole(teamId: string, member: MembershipResponse) {
       },
     })
     if (err) {
-      memberActionError.value[teamId] = `Role change failed: ${err}`
+      memberActionError.value[teamId] = `Role change failed: ${formatApiError(err)}`
       await loadMembers(teamId)
     }
   } catch (e: unknown) {
@@ -593,7 +594,7 @@ async function removeMember(teamId: string, member: MembershipResponse) {
       params: { path: { team_id: teamId, membership_id: member.id } },
     })
     if (err) {
-      memberActionError.value[teamId] = `Remove failed: ${err}`
+      memberActionError.value[teamId] = `Remove failed: ${formatApiError(err)}`
     } else if (response.status === 204 || response.ok) {
       membersByTeam.value[teamId] = membersByTeam.value[teamId].filter(m => m.id !== member.id)
       const team = teams.value.find(t => t.id === teamId)
