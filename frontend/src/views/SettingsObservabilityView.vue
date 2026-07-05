@@ -1,17 +1,20 @@
 ﻿<template>
   <div class="mx-auto max-w-4xl space-y-8 p-6">
     <header>
-      <h1 class="text-3xl font-bold tracking-tight">Observability</h1>
+      <h1 class="text-3xl font-bold tracking-tight">{{ $t('views.SettingsObservabilityView.observability') }}</h1>
       <p class="mt-1 text-muted-foreground">{{ $t('views.SettingsObservabilityView.configure_opentelemetry_export_and_langsmith_integration') }}</p>
     </header>
 
     <FeatureGate feature-name="observability" required-tier="team" show-disabled>
 
       <div v-if="envOverrideActive" data-testid="settings-observability-env-override" class="rounded-lg border border-warning/50 bg-warning/10 p-4 text-sm text-warning">
-        <p class="font-medium">Environment variable override active</p>
+        <p class="font-medium">{{ $t('views.SettingsObservabilityView.env_override_active') }}</p>
         <p class="mt-1">
-          The environment variable <code class="rounded bg-warning/10 px-1 py-0.5 text-xs">OTEL_EXPORTER_OTLP_ENDPOINT</code>
-          is set to <strong>{{ effectiveOtlpEndpoint }}</strong>. Changes made here will apply when the environment variable is unset.
+          {{ $t('views.SettingsObservabilityView.env_override_description_prefix') }}
+          <code class="rounded bg-warning/10 px-1 py-0.5 text-xs">OTEL_EXPORTER_OTLP_ENDPOINT</code>
+          {{ $t('views.SettingsObservabilityView.env_override_description_mid') }}
+          <strong>{{ effectiveOtlpEndpoint }}</strong>.
+          {{ $t('views.SettingsObservabilityView.env_override_description_suffix') }}
         </p>
       </div>
 
@@ -21,9 +24,9 @@
 
       <form v-else @submit.prevent="saveSettings" class="space-y-6">
         <div class="rounded-lg border bg-card p-6 shadow-sm">
-          <h2 class="mb-4 text-lg font-semibold">OTLP Endpoint</h2>
+          <h2 class="mb-4 text-lg font-semibold">{{ $t('views.SettingsObservabilityView.otlp_endpoint') }}</h2>
           <div>
-            <label class="mb-1 block text-sm font-medium">Endpoint URL</label>
+            <label class="mb-1 block text-sm font-medium">{{ $t('views.SettingsObservabilityView.endpoint_url') }}</label>
             <input
               v-model="otlpEndpoint"
               type="url"
@@ -36,18 +39,18 @@
 
         <div class="rounded-lg border bg-card p-6 shadow-sm">
           <div class="mb-4 flex items-center justify-between">
-            <h2 class="text-lg font-semibold">OTLP Headers</h2>
+            <h2 class="text-lg font-semibold">{{ $t('views.SettingsObservabilityView.otlp_headers') }}</h2>
             <button
               type="button"
               class="rounded-lg bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground hover:bg-primary/90"
               data-testid="settings-observability-add-header"
               @click="addHeader"
             >
-              Add Header
+              {{ $t('views.SettingsObservabilityView.add_header') }}
             </button>
           </div>
           <div v-if="otlpHeaders.length === 0" data-testid="settings-observability-no-headers" class="text-sm text-muted-foreground">
-            No custom headers configured.
+            {{ $t('views.SettingsObservabilityView.no_custom_headers_configured') }}
           </div>
           <div v-for="(header, index) in otlpHeaders" :key="index" class="mb-2 flex items-center gap-2">
             <input
@@ -55,21 +58,21 @@
               type="text"
               data-testid="settings-observability-header-key"
               class="flex-1 rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-              placeholder="Header name"
+              :placeholder="$t('views.SettingsObservabilityView.header_name')"
             />
             <input
               v-model="header.value"
               type="text"
               data-testid="settings-observability-header-value"
               class="flex-1 rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-              placeholder="Header value"
+              :placeholder="$t('views.SettingsObservabilityView.header_value')"
             />
             <button
               type="button"
               class="rounded p-1 text-destructive hover:bg-destructive/10"
               data-testid="settings-observability-remove-header"
-              :aria-label="'Remove header'"
-              title="Remove header"
+              :aria-label="$t('views.SettingsObservabilityView.remove_header')"
+              :title="$t('views.SettingsObservabilityView.remove_header')"
               @click="removeHeader(index)"
             >
               <svg class="h-4 w-4" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -80,9 +83,9 @@
         </div>
 
         <div class="rounded-lg border bg-card p-6 shadow-sm">
-          <h2 class="mb-4 text-lg font-semibold">Export Interval</h2>
+          <h2 class="mb-4 text-lg font-semibold">{{ $t('views.SettingsObservabilityView.export_interval') }}</h2>
           <div>
-            <label class="mb-1 block text-sm font-medium">Interval (seconds)</label>
+            <label class="mb-1 block text-sm font-medium">{{ $t('views.SettingsObservabilityView.interval_seconds') }}</label>
             <input
               v-model.number="exportIntervalSeconds"
               type="number"
@@ -90,19 +93,19 @@
               data-testid="settings-observability-export-interval"
               class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
             />
-            <p class="mt-1 text-xs text-muted-foreground">How frequently telemetry data is exported. Minimum 1 second.</p>
+            <p class="mt-1 text-xs text-muted-foreground">{{ $t('views.SettingsObservabilityView.export_interval_description') }}</p>
           </div>
         </div>
 
         <div class="rounded-lg border bg-card p-6 shadow-sm">
-          <h2 class="mb-4 text-lg font-semibold">LangSmith</h2>
+          <h2 class="mb-4 text-lg font-semibold">{{ $t('views.SettingsObservabilityView.langsmith') }}</h2>
           <div class="space-y-4">
             <div class="flex items-center gap-3">
               <button
                 type="button"
                 class="relative inline-flex h-6 w-11 cursor-pointer items-center"
                 data-testid="settings-observability-langsmith-toggle"
-                :aria-label="'Toggle LangSmith'"
+                :aria-label="$t('views.SettingsObservabilityView.toggle_langsmith')"
                 @click="langsmithEnabled = !langsmithEnabled"
               >
                 <div
@@ -116,16 +119,16 @@
                   />
                 </div>
               </button>
-              <span class="text-sm font-medium">Enable LangSmith tracing</span>
+              <span class="text-sm font-medium">{{ $t('views.SettingsObservabilityView.enable_langsmith_tracing') }}</span>
             </div>
             <div v-if="langsmithEnabled">
-              <label class="mb-1 block text-sm font-medium">API Key</label>
+              <label class="mb-1 block text-sm font-medium">{{ $t('views.SettingsObservabilityView.api_key') }}</label>
               <textarea
                 v-model="langsmithApiKey"
                 data-testid="settings-observability-langsmith-api-key"
                 rows="3"
                 class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                :placeholder="hasLangsmithKey ? 'Leave blank to keep existing key' : 'Enter LangSmith API key'"
+                :placeholder="hasLangsmithKey ? $t('views.SettingsObservabilityView.leave_blank_to_keep_existing_key') : $t('views.SettingsObservabilityView.enter_langsmith_api_key')"
               />
               <div class="mt-1 flex items-center gap-2">
                 <button
@@ -134,9 +137,9 @@
                   data-testid="settings-observability-toggle-key-visibility"
                   @click="showLangsmithKey = !showLangsmithKey"
                 >
-                  {{ showLangsmithKey ? 'Hide' : 'Show' }}
+                  {{ showLangsmithKey ? $t('views.SettingsObservabilityView.hide') : $t('views.SettingsObservabilityView.show') }}
                 </button>
-                <span v-if="hasLangsmithKey && !langsmithApiKey" class="text-xs text-muted-foreground">A key is already stored.</span>
+                <span v-if="hasLangsmithKey && !langsmithApiKey" class="text-xs text-muted-foreground">{{ $t('views.SettingsObservabilityView.key_already_stored') }}</span>
               </div>
             </div>
           </div>
@@ -155,7 +158,7 @@
           class="rounded-lg border p-4 text-sm"
           :class="testResult.success ? 'border-success/50 bg-success/10 text-success' : 'border-destructive/50 bg-destructive/10 text-destructive'"
         >
-          <p class="font-medium">{{ testResult.success ? 'Connection successful' : 'Connection failed' }}</p>
+          <p class="font-medium">{{ testResult.success ? $t('views.SettingsObservabilityView.connection_successful') : $t('views.SettingsObservabilityView.connection_failed') }}</p>
           <p class="mt-1">{{ testResult.message }}</p>
         </div>
 
@@ -167,7 +170,7 @@
             data-testid="settings-observability-test-connection"
             @click="testConnection"
           >
-            {{ testing ? 'Testing...' : 'Test Connection' }}
+            {{ testing ? $t('views.SettingsObservabilityView.testing') : $t('views.SettingsObservabilityView.test_connection') }}
           </button>
           <div class="flex-1" />
           <button
@@ -176,7 +179,7 @@
             data-testid="settings-observability-reset"
             @click="resetForm"
           >
-            Reset
+            {{ $t('views.SettingsObservabilityView.reset') }}
           </button>
           <button
             type="submit"
@@ -184,7 +187,7 @@
             class="rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
             data-testid="settings-observability-save"
           >
-            {{ saving ? 'Saving...' : 'Save' }}
+            {{ saving ? $t('views.SettingsObservabilityView.saving') : $t('views.SettingsObservabilityView.save') }}
           </button>
         </div>
       </form>
@@ -194,9 +197,11 @@
 
 <script setup lang="ts">
 import { ref, onMounted, onBeforeUnmount } from 'vue'
+import { useI18n } from 'vue-i18n'
 import { api } from '../lib/api/client'
 import type { components } from '../lib/api/client'
 import { usePlanStore } from '../stores/planStore'
+import { formatApiError } from '../lib/api/formatError'
 import FeatureGate from '../components/FeatureGate.vue'
 import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
@@ -210,6 +215,7 @@ interface HeaderRow {
 }
 
 const planStore = usePlanStore()
+const { t } = useI18n()
 
 const loading = ref(true)
 const loadError = ref<string | null>(null)
@@ -260,7 +266,7 @@ async function loadSettings() {
   try {
     const { data, error: err } = await api.GET('/api/v1/settings/observability')
     if (err) {
-      loadError.value = `Failed to load settings: ${err}`
+      loadError.value = t('views.SettingsObservabilityView.failed_to_load_settings') + ' ' + formatApiError(err)
     } else if (data) {
       const s = data as unknown as OtelSettingsResponse
       otlpEndpoint.value = s.otlp_endpoint
@@ -273,7 +279,7 @@ async function loadSettings() {
       effectiveOtlpEndpoint.value = s.effective_otlp_endpoint
     }
   } catch (e: unknown) {
-    loadError.value = `Failed to load settings: ${e instanceof Error ? e.message : String(e)}`
+    loadError.value = t('views.SettingsObservabilityView.failed_to_load_settings') + ' ' + formatApiError(e)
   } finally {
     loading.value = false
   }
@@ -303,14 +309,14 @@ async function saveSettings() {
     try {
       new URL(otlpEndpoint.value)
     } catch {
-      formError.value = 'Invalid endpoint URL. Please enter a valid URL (e.g., https://otlp.example.com:4318).'
+      formError.value = t('views.SettingsObservabilityView.invalid_endpoint_url_please_enter_a_valid_url_eg_httpsotlpex')
       saving.value = false
       return
     }
   }
 
   if (exportIntervalSeconds.value < 1) {
-    formError.value = 'Export interval must be at least 1 second.'
+    formError.value = t('views.SettingsObservabilityView.export_interval_must_be_at_least_1_second')
     saving.value = false
     return
   }
@@ -333,7 +339,7 @@ async function saveSettings() {
       body: body as components['schemas']['OtelSettingsUpdate'],
     })
     if (err) {
-      formError.value = `Save failed: ${err}`
+      formError.value = t('views.SettingsObservabilityView.save_failed') + ' ' + formatApiError(err)
     } else if (data) {
       const s = data as unknown as OtelSettingsResponse
       otlpEndpoint.value = s.otlp_endpoint
@@ -345,12 +351,12 @@ async function saveSettings() {
       langsmithApiKey.value = ''
       envOverrideActive.value = s.env_override_active
       effectiveOtlpEndpoint.value = s.effective_otlp_endpoint
-      formSuccess.value = 'Settings saved successfully.'
+      formSuccess.value = t('views.SettingsObservabilityView.settings_saved_successfully')
       if (observabilityFormTimeout) clearTimeout(observabilityFormTimeout)
       observabilityFormTimeout = setTimeout(() => { formSuccess.value = null }, 3000)
     }
   } catch (e: unknown) {
-    formError.value = `Save failed: ${e instanceof Error ? e.message : String(e)}`
+    formError.value = t('views.SettingsObservabilityView.save_failed') + ' ' + formatApiError(e)
   } finally {
     saving.value = false
   }

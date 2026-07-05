@@ -91,7 +91,37 @@ Settings page at `/settings/observability`.
 - [ ] BatchSpanProcessor (currently uses SimpleSpanProcessor — synchronous, one-at-a-time export)
 - [ ] Effective endpoint read-only display in normal mode (only shown in env-override banner)
 - [ ] Per-org telemetry toggle in UI (currently controlled by global env var only — per-org is DB-stored but needs UI control)
-- [ ] ProgrammingError not caught on observability endpoints — raw 500 if DB table missing
+
+### Error Handling
+
+- [x] `GET` endpoint catches `ProgrammingError` → returns 501 Not Implemented
+- [x] `PUT` endpoint catches `ProgrammingError` → returns 501 Not Implemented
+- [x] `GET /preview` endpoint catches `ProgrammingError` → returns 501 Not Implemented
+- [x] `POST /test` no DB access — no ProgrammingError risk
+- [x] All ProgrammingError catches use `except ProgrammingError` (not broad `except SQLAlchemyError`)
+- [x] `GET` endpoint catches `TimeoutError` → falls back to degraded response with cached/default config
+- [x] `PUT` endpoint catches `TimeoutError` → re-raises as 500
+- [x] `GET /preview` endpoint catches `TimeoutError` → falls back to cached/default config
+- [x] `GET` endpoint catches generic `Exception` → falls back to degraded response
+- [x] `PUT` endpoint catches generic `Exception` → re-raises as 500
+- [x] Wait-for-DB timeout enforced via `asyncio.wait_for` with `_DB_TIMEOUT` (10s)
+- [x] Timeout/error events logged with org_id context via `_log.warning` / `_log.exception`
+
+### Resilience
+
+- [x] In-memory cache (`_config_cache`) stores last successful DB read per org_id
+- [x] Cache TTL of 60 seconds (`_CACHE_TTL`) — avoids serving stale data for too long
+- [x] Cache returns defensive copy (`dict(entry)`) — callers cannot corrupt cached state
+- [x] Cache invalidated on successful write (`_invalidate_cache`)
+- [x] Degraded response (`_build_degraded_response`) returns cached config when DB unavailable
+- [x] Degraded response falls through to `_DEFAULT_OTEL_CONFIG` when no cache exists
+- [x] Default config provides safe fallback values for all fields (empty endpoint, 10s interval, disabled LangSmith)
+- [x] Sensitive header values masked with `••••••` in API responses — never leaked in degraded mode
+- [x] LangSmith API key never returned in plaintext — boolean `has_langsmith_api_key` only
+- [x] Empty LangSmith key on write clears stored key (`langsmith_api_key_ciphertext = None`)
+- [x] Fernet encryption for LangSmith API key at rest
+- [x] Test endpoint distinguishes TimeoutException vs ConnectError vs generic errors with user-friendly messages
+- [x] Test endpoint returns 200 with `success: false` if no endpoint configured
 
 ## Known Gaps
 
@@ -100,3 +130,6 @@ Settings page at `/settings/observability`.
 - **SimpleSpanProcessor:** Uses synchronous per-span export instead of production-grade BatchSpanProcessor with buffering, batching, and backpressure
 - **No sampling config:** No UI field or DB schema for trace sampling rate — every span is either exported or not
 - **Per-org telemetry control:** LangSmith toggle exists but the core OTLP enable/disable is global env-var-only at startup, not per-org through the UI
+- **Frontend i18n gap:** SettingsObservabilityView.vue has ~20+ hardcoded English strings not using `$t()` (page title, section headings, labels, button text, placeholders, status messages, aria-labels)
+- **API error formatting:** `saveSettings()` and `loadSettings()` embed `${err}` directly in template literals instead of using `formatApiError(err)` — `openapi-fetch` returns error objects, causing `[object Object]` in user-facing error messages
+- **No website docs:** No observability/otel page exists under `Website/modulo-website/src/docs/`
