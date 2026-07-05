@@ -88,7 +88,7 @@ class BaseRepository(ABC):
         total: int = (await session.execute(count_stmt)).scalar_one_or_none() or 0
 
         result = await session.execute(stmt.offset(offset).limit(page_size))
-        items = result.scalars().all()
+        items = list(result.scalars().all())
 
         return PageResult(items=items, total=total, page=page, page_size=page_size)
 
