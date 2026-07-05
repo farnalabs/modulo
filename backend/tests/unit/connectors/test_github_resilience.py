@@ -89,3 +89,103 @@ async def test_health_check_invalid_json(connector):
     result = await connector.health_check()
     assert result.ok is False
     assert "invalid JSON" in result.detail
+
+
+# ---------------------------------------------------------------------------
+# Retry/backoff — retryable status codes (429, 502, 503, 504)
+# ---------------------------------------------------------------------------
+
+
+@respx.mock
+async def test_retry_on_429_then_success(connector):
+    """429 triggers retry and succeeds on second attempt."""
+    route = respx.get("https://api.github.com/user/repos")
+    route.mock(
+        side_effect=[
+            httpx.Response(429, text="Rate limit"),
+            httpx.Response(200, json=[{"id": 1}]),
+        ]
+    )
+    result = await connector.query(ConnectorQuery(resource="repos"))
+    assert len(result.records) == 1
+    assert route.call_count == 2
+
+
+@respx.mock
+async def test_retry_on_503_then_success(connector):
+    """503 triggers retry and succeeds on second attempt."""
+    route = respx.get("https://api.github.com/user/repos")
+    route.mock(
+        side_effect=[
+            httpx.Response(503, text="Unavailable"),
+            httpx.Response(200, json=[{"id": 1}]),
+        ]
+    )
+    result = await connector.query(ConnectorQuery(resource="repos"))
+    assert len(result.records) == 1
+    assert route.call_count == 2
+
+
+@respx.mock
+async def test_retry_gives_up_after_max_retries(connector):
+    """429 retries up to max then raises."""
+    route = respx.get("https://api.github.com/user/repos")
+    route.mock(return_value=httpx.Response(429, text="Rate limit"))
+    with pytest.raises(ValueError, match="429"):
+        await connector.query(ConnectorQuery(resource="repos"))
+    assert route.call_count == 4  # original + 3 retries
+
+
+@respx.mock
+async def test_retry_on_connection_error_then_success(connector):
+    """Connection error triggers retry and succeeds on second attempt."""
+    route = respx.get("https://api.github.com/user/repos")
+    route.mock(
+        side_effect=[
+            httpx.ConnectError("Connection refused"),
+            httpx.Response(200, json=[{"id": 1}]),
+        ]
+    )
+    result = await connector.query(ConnectorQuery(resource="repos"))
+    assert len(result.records) == 1
+    assert route.call_count == 2
+
+
+@respx.mock
+async def test_connection_error_gives_up_after_max_retries(connector):
+    """Connection error retries up to max then raises."""
+    route = respx.get("https://api.github.com/user/repos")
+    route.mock(side_effect=httpx.ConnectError("Connection refused"))
+    with pytest.raises(ValueError, match="connection error"):
+        await connector.query(ConnectorQuery(resource="repos"))
+    assert route.call_count == 4
+
+
+@respx.mock
+async def test_retry_on_timeout_then_success(connector):
+    """Timeout triggers retry and succeeds on second attempt."""
+    route = respx.get("https://api.github.com/user/repos")
+    route.mock(
+        side_effect=[
+            httpx.TimeoutException("Timeout"),
+            httpx.Response(200, json=[{"id": 1}]),
+        ]
+    )
+    result = await connector.query(ConnectorQuery(resource="repos"))
+    assert len(result.records) == 1
+    assert route.call_count == 2
+
+
+@respx.mock
+async def test_retry_respects_retry_after_header(connector):
+    """Retry delay uses Retry-After header when present."""
+    route = respx.get("https://api.github.com/user/repos")
+    route.mock(
+        side_effect=[
+            httpx.Response(429, text="Rate limit", headers={"Retry-After": "1"}),
+            httpx.Response(200, json=[{"id": 1}]),
+        ]
+    )
+    result = await connector.query(ConnectorQuery(resource="repos"))
+    assert len(result.records) == 1
+    assert route.call_count == 2
