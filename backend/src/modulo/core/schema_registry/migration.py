@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import threading
 from collections.abc import Callable
 from copy import deepcopy
 from dataclasses import dataclass, field
@@ -32,17 +33,14 @@ def _extract_type(prop: dict[str, Any]) -> str:
     if isinstance(raw, str):
         return raw
     if isinstance(raw, list):
-        if len(raw) == 1:
-            val = raw[0]
-            if isinstance(val, str):
-                return val
-            return "mixed"
+        if len(raw) == 1 and isinstance(raw[0], str):
+            return raw[0]
         return "mixed"
     if prop.get("oneOf") or prop.get("anyOf"):
         return "union"
     if prop.get("enum") is not None:
         return "enum"
-    if prop.get("items") or prop.get("prefixItems"):
+    if "items" in prop or "prefixItems" in prop or "contains" in prop:
         return "array"
     if prop.get("properties") is not None:
         return "object"
@@ -109,15 +107,18 @@ def _detect_renames(
     added_names: list[str],
 ) -> list[tuple[str, str]]:
     renames: list[tuple[str, str]] = []
+    consumed: set[str] = set()
     for removed_name in removed_names:
         old_type = _extract_type(from_props[removed_name])
         if old_type == "unknown":
             continue
         for added_name in added_names:
+            if added_name in consumed:
+                continue
             new_type = _extract_type(to_props[added_name])
             if old_type == new_type:
                 renames.append((removed_name, added_name))
-                added_names.remove(added_name)
+                consumed.add(added_name)
                 break
     return renames
 
@@ -181,6 +182,7 @@ class MigrationRegistry:
 
     def __init__(self) -> None:
         self._migrations: dict[tuple[str, str], SchemaMigration] = {}
+        self._lock = threading.Lock()
 
     def register(
         self,
@@ -190,37 +192,36 @@ class MigrationRegistry:
         description: str = "",
     ) -> SchemaMigration:
         key = (source_version, target_version)
-        if key in self._migrations:
-            raise ValueError(
-                f"Migration from {source_version} to {target_version} already registered"
+        with self._lock:
+            if key in self._migrations:
+                raise ValueError(
+                    f"Migration from {source_version} to {target_version} already registered"
+                )
+            m = SchemaMigration(
+                source_version=source_version,
+                target_version=target_version,
+                func=func,
+                description=description,
             )
-        m = SchemaMigration(
-            source_version=source_version,
-            target_version=target_version,
-            func=func,
-            description=description,
-        )
-        self._migrations[key] = m
+            self._migrations[key] = m
         return m
 
     def get_migration(
         self, source_version: str, target_version: str
     ) -> SchemaMigration | None:
-        return self._migrations.get((source_version, target_version))
+        with self._lock:
+            return self._migrations.get((source_version, target_version))
 
     def get_migration_chain(
         self, source_version: str, target_version: str
     ) -> list[SchemaMigration]:
-        """Return ordered list of migrations from source to target.
-
-        Raises MissingMigrationError if no chain exists.
-        """
         if source_version == target_version:
             return []
 
-        adj: dict[str, list[SchemaMigration]] = {}
-        for mf in self._migrations.values():
-            adj.setdefault(mf.source_version, []).append(mf)
+        with self._lock:
+            adj: dict[str, list[SchemaMigration]] = {}
+            for mf in self._migrations.values():
+                adj.setdefault(mf.source_version, []).append(mf)
 
         visited: set[str] = set()
         queue: list[tuple[str, list[SchemaMigration]]] = [(source_version, [])]
@@ -251,6 +252,9 @@ class MigrationRegistry:
         except MissingMigrationError:
             pass
 
+        with self._lock:
+            migrations_copy = dict(self._migrations)
+
         reachable: set[str] = set()
         q: list[str] = [source_version]
         while q:
@@ -258,7 +262,7 @@ class MigrationRegistry:
             if cur in reachable:
                 continue
             reachable.add(cur)
-            for src, tgt in self._migrations:
+            for (src, tgt) in migrations_copy:
                 if src == cur:
                     q.append(tgt)
 
@@ -267,7 +271,7 @@ class MigrationRegistry:
 
         def _longest_path(ver: str, visited: set[str]) -> list[str]:
             best = [ver]
-            for src, tgt in self._migrations:
+            for (src, tgt) in migrations_copy:
                 if src == ver and tgt not in visited:
                     visited.add(tgt)
                     sub = _longest_path(tgt, visited)
@@ -353,13 +357,16 @@ class MigrationRegistry:
         return steps
 
     def clear(self) -> None:
-        self._migrations.clear()
+        with self._lock:
+            self._migrations.clear()
 
     def list_migrations(self) -> list[SchemaMigration]:
-        return list(self._migrations.values())
+        with self._lock:
+            return list(self._migrations.values())
 
     def __len__(self) -> int:
-        return len(self._migrations)
+        with self._lock:
+            return len(self._migrations)
 
 
 # ---------------------------------------------------------------------------
