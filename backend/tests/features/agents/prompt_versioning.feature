@@ -27,5 +27,5 @@ Feature: Prompt Versioning
   Scenario: Prompt version history is preserved
     Given org "acme" has agent "reviewer" with prompt "Version 1"
     When I update the agent prompt to "Version 2"
-    And I GET /api/agents/reviewer/versions
+    And I GET the prompt versions for the agent
     Then the response contains 2 prompt versions
