@@ -72,7 +72,7 @@ class TestBaseRepository:
         stmt = MagicMock(spec=Select)
 
         count_result = MagicMock()
-        count_result.scalar_one.return_value = 42
+        count_result.scalar_one_or_none.return_value = 42
 
         scalars_result = MagicMock()
         scalars_result.all.return_value = ["item1", "item2"]
