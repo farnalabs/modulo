@@ -1,6 +1,7 @@
 """Tests for the modulo-migrate CLI tool."""
 
 import asyncio
+import hashlib
 import json
 import uuid
 from pathlib import Path
@@ -138,13 +139,13 @@ class TestVerifyExport:
     def test_verify_ok(self) -> None:
         meta = {"export_hash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"}
         records: list[dict] = []
-        result = asyncio.run(_verify_export(meta, records))
+        result = _verify_export(meta, records)
         assert result is True
 
     def test_verify_mismatch(self) -> None:
         meta = {"export_hash": "aaa"}
         records = [{"__table__": "users", "id": "1", "__hash__": _hash_record({"id": "1"})}]
-        result = asyncio.run(_verify_export(meta, records))
+        result = _verify_export(meta, records)
         assert result is False
 
 
@@ -336,8 +337,9 @@ class TestImportOrg:
         mock_session.__aenter__.return_value = mock_session
         mock_session_local.return_value.__aenter__.return_value = mock_session
 
+        _empty_hash = hashlib.sha256().hexdigest()
         input_path = tmp_path / "import.jsonl"
-        input_path.write_text(json.dumps({"__meta__": {"version": 1, "export_hash": "abc"}}) + "\n")
+        input_path.write_text(json.dumps({"__meta__": {"version": 1, "export_hash": _empty_hash}}) + "\n")
 
         runner = CliRunner()
         result = runner.invoke(
@@ -391,8 +393,9 @@ class TestImportOrg:
         mock_session.__aenter__.return_value = mock_session
         mock_session_local.return_value.__aenter__.return_value = mock_session
 
+        _empty_hash = hashlib.sha256().hexdigest()
         input_path = tmp_path / "import_skip.jsonl"
-        input_path.write_text(json.dumps({"__meta__": {"version": 1, "export_hash": "abc"}}) + "\n")
+        input_path.write_text(json.dumps({"__meta__": {"version": 1, "export_hash": _empty_hash}}) + "\n")
 
         for strategy in ["skip", "overwrite", "merge"]:
             runner = CliRunner()
@@ -582,8 +585,9 @@ class TestFlags:
         mock_session.__aenter__.return_value = mock_session
         mock_session_local.return_value.__aenter__.return_value = mock_session
 
+        _empty_hash = hashlib.sha256().hexdigest()
         input_path = tmp_path / "import_users.jsonl"
-        input_path.write_text(json.dumps({"__meta__": {"version": 1, "export_hash": "abc"}}) + "\n")
+        input_path.write_text(json.dumps({"__meta__": {"version": 1, "export_hash": _empty_hash}}) + "\n")
 
         runner = CliRunner()
         result = runner.invoke(
@@ -602,6 +606,167 @@ class TestFlags:
 
 
 # ── MODULO_ADMIN_SECRET env var auth ─────────────────────────────────────────
+
+
+# ── Import hash verification ──────────────────────────────────────────────────
+
+
+class TestImportHashVerification:
+    @patch("modulo.cli.migrate.decode_principal")
+    @patch("modulo.cli.migrate.AsyncSessionLocal")
+    @patch("modulo.cli.migrate.get_organisation")
+    @patch("modulo.cli.migrate.get_account_by_id", new_callable=AsyncMock)
+    @patch("modulo.cli.migrate.get_membership_by_account_and_org")
+    def test_import_hash_mismatch_aborts(
+        self,
+        mock_get_membership: MagicMock,
+        mock_get_account: AsyncMock,
+        mock_get_org: MagicMock,
+        mock_session_local: MagicMock,
+        mock_decode: MagicMock,
+        org_id: uuid.UUID,
+        admin_user_id: uuid.UUID,
+        tmp_path: Path,
+    ) -> None:
+        from modulo.auth.jwt import AuthenticatedPrincipal
+
+        mock_decode.return_value = AuthenticatedPrincipal(
+            username="admin",
+            organisation_id=org_id,
+            account_id=admin_user_id,
+            org_role="admin",
+        )
+        mock_admin = MagicMock()
+        mock_admin.org_role = "admin"
+        mock_admin.organisation_id = org_id
+        mock_get_account.return_value = mock_admin
+        mock_get_membership.return_value = MagicMock(role="admin")
+        mock_get_org.return_value = MagicMock()
+
+        mock_session = AsyncMock()
+        mock_session.execute.return_value.scalar_one_or_none.return_value = None
+        mock_session.__aenter__.return_value = mock_session
+        mock_session_local.return_value.__aenter__.return_value = mock_session
+
+        input_path = tmp_path / "bad_hash.jsonl"
+        input_path.write_text(json.dumps({"__meta__": {"version": 1, "export_hash": "definitely_wrong"}}) + "\n")
+
+        runner = CliRunner()
+        result = runner.invoke(
+            cli,
+            [
+                "--token",
+                "fake.jwt.token",
+                "import-org",
+                str(org_id),
+                "--input",
+                str(input_path),
+            ],
+        )
+        assert result.exit_code != 0
+        assert "hash verification failed" in result.output.lower() or "Import aborted" in result.output
+
+    @patch("modulo.cli.migrate.decode_principal")
+    @patch("modulo.cli.migrate.AsyncSessionLocal")
+    @patch("modulo.cli.migrate.get_organisation")
+    @patch("modulo.cli.migrate.get_account_by_id", new_callable=AsyncMock)
+    @patch("modulo.cli.migrate.get_membership_by_account_and_org")
+    def test_import_skips_verify_when_no_hash(
+        self,
+        mock_get_membership: MagicMock,
+        mock_get_account: AsyncMock,
+        mock_get_org: MagicMock,
+        mock_session_local: MagicMock,
+        mock_decode: MagicMock,
+        org_id: uuid.UUID,
+        admin_user_id: uuid.UUID,
+        tmp_path: Path,
+    ) -> None:
+        from modulo.auth.jwt import AuthenticatedPrincipal
+
+        mock_decode.return_value = AuthenticatedPrincipal(
+            username="admin",
+            organisation_id=org_id,
+            account_id=admin_user_id,
+            org_role="admin",
+        )
+        mock_admin = MagicMock()
+        mock_admin.org_role = "admin"
+        mock_admin.organisation_id = org_id
+        mock_get_account.return_value = mock_admin
+        mock_get_membership.return_value = MagicMock(role="admin")
+        mock_get_org.return_value = MagicMock()
+
+        mock_session = AsyncMock()
+        mock_session.execute.return_value.scalar_one_or_none.return_value = None
+        mock_session.__aenter__.return_value = mock_session
+        mock_session_local.return_value.__aenter__.return_value = mock_session
+
+        input_path = tmp_path / "no_hash.jsonl"
+        input_path.write_text(json.dumps({"__meta__": {"version": 1}}) + "\n")
+
+        runner = CliRunner()
+        result = runner.invoke(
+            cli,
+            [
+                "--token",
+                "fake.jwt.token",
+                "import-org",
+                str(org_id),
+                "--input",
+                str(input_path),
+            ],
+        )
+        assert result.exit_code == 0, f"CLI failed: {result.output}"
+
+
+# ── Auth-first enforcement (auth before file read) ──────────────────────────
+
+
+class TestAuthBeforeFileRead:
+    @patch("modulo.cli.migrate.decode_principal")
+    @patch("modulo.cli.migrate.AsyncSessionLocal")
+    @patch("modulo.cli.migrate.get_account_by_id")
+    def test_import_fails_on_auth_before_file_access(
+        self,
+        mock_get_account: MagicMock,
+        mock_session_local: MagicMock,
+        mock_decode: MagicMock,
+        org_id: uuid.UUID,
+        tmp_path: Path,
+    ) -> None:
+        from modulo.auth.jwt import AuthenticatedPrincipal
+
+        mock_decode.return_value = AuthenticatedPrincipal(
+            username="admin",
+            organisation_id=org_id,
+            account_id=uuid.UUID("00000000-0000-0000-0000-000000000002"),
+            org_role="admin",
+        )
+        mock_get_account.return_value = None
+
+        mock_session = AsyncMock()
+        mock_session.__aenter__.return_value = mock_session
+        mock_session_local.return_value.__aenter__.return_value = mock_session
+
+        input_path = tmp_path / "should_not_exist.jsonl"
+        input_path.write_text("garbage")
+
+        runner = CliRunner()
+        result = runner.invoke(
+            cli,
+            [
+                "--token",
+                "fake.jwt.token",
+                "import-org",
+                str(org_id),
+                "--input",
+                str(input_path),
+            ],
+        )
+        assert result.exit_code != 0
+        assert "Admin account not found" in result.output
+        assert input_path.exists(), "File should still exist (auth fail occurred before any file access)"
 
 
 class TestAdminSecretAuth:

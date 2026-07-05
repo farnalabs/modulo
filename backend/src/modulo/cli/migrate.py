@@ -314,7 +314,6 @@ async def _import_org_data(
             await session.flush()
         except Exception as exc:
             _log.error("Flush failed after importing table %s: %s", table_name, exc)
-            await session.rollback()
             raise
 
     return counts
@@ -458,12 +457,25 @@ async def _async_import_org(
     pipelines_only: bool,
     users_only: bool,
 ) -> None:
-    _meta, records = await _read_jsonl(input_path)
-    click.echo(f"Loaded {len(records)} records from {input_path}")
-
     try:
         async with AsyncSessionLocal() as session:
             await _verify_admin_access(session, org_id, ctx.obj["admin_user_id"])
+    except click.ClickException:
+        raise
+    except Exception as exc:
+        raise click.ClickException(f"Auth verification failed: {exc}") from exc
+
+    _meta, records = await _read_jsonl(input_path)
+    click.echo(f"Loaded {len(records)} records from {input_path}")
+
+    if _meta.get("export_hash"):
+        if not _verify_export(_meta, records):
+            raise click.ClickException(
+                "Import aborted: hash verification failed — file may be corrupted"
+            )
+
+    try:
+        async with AsyncSessionLocal() as session:
             counts = await _import_org_data(
                 session,
                 org_id,
