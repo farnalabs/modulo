@@ -1,5 +1,5 @@
 ﻿<template>
-  <BackLink to="/library" label="Back to Library" class="ml-2" />
+  <BackLink to="/library" label="Back to Library" class="ml-6" />
   <div class="flex h-[calc(100vh-3.5rem)]">
     <div v-if="loading" class="flex flex-1 items-center justify-center">
       <div class="h-8 w-8 animate-spin rounded-full border-4 border-primary border-t-transparent" />

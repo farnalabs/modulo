@@ -20,7 +20,7 @@
         @update:model-value="setViewMode"
       />
 
-      <SidebarNav class="flex-1 overflow-y-auto" :is-system-admin="isSystemAdmin" :user-role="userRole" />
+      <SidebarNav class="flex-1 overflow-y-auto min-h-0" :is-system-admin="isSystemAdmin" :user-role="userRole" />
 
       <SidebarFooter
         :user-email="userEmail"
