@@ -6,7 +6,7 @@ from typing import Any
 from langchain_core.messages import BaseMessage
 from langchain_openai import ChatOpenAI
 
-from modulo.model_backends.base import ModelBackendBase
+from modulo.model_backends.base import HealthResult, ModelBackendBase, openai_compatible_health_check
 
 PERPLEXITY_BASE_URL = "https://api.perplexity.ai"
 
@@ -33,10 +33,16 @@ class PerplexityBackend(ModelBackendBase):
     def __repr__(self) -> str:
         return f"PerplexityBackend(model_id={self._backend_id!r})"
 
+    async def health_check(self) -> HealthResult:
+        return await openai_compatible_health_check(
+            base_url=PERPLEXITY_BASE_URL,
+            api_key=self._api_key,
+        )
+
     async def invoke(self, messages: list[BaseMessage], **kwargs: Any) -> BaseMessage:
         return await self._model.ainvoke(messages, **kwargs)
 
     def stream(
     self, messages: list[BaseMessage], tools: list[dict] | None = None, **kwargs: Any,
 ) -> AsyncIterator[BaseMessage]:
-        return self._model.astream(messages, **kwargs)
+        return self._model.astream(messages, tools=tools, **kwargs)

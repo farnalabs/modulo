@@ -6,7 +6,7 @@ from typing import Any
 from langchain_core.messages import BaseMessage
 from langchain_openai import ChatOpenAI
 
-from modulo.model_backends.base import HealthResult, ModelBackendBase, _openai_compatible_health_check
+from modulo.model_backends.base import HealthResult, ModelBackendBase, openai_compatible_health_check
 
 DEFAULT_VLLM_BASE_URL = "http://localhost:8000/v1"
 
@@ -48,7 +48,7 @@ class VllmBackend(ModelBackendBase):
         return f"VllmBackend(model_id={self._backend_id!r}, base_url={self._base_url!r})"
 
     async def health_check(self) -> HealthResult:
-        return await _openai_compatible_health_check(
+        return await openai_compatible_health_check(
             base_url=self._base_url,
             api_key=self._api_key,
         )
@@ -59,4 +59,4 @@ class VllmBackend(ModelBackendBase):
     def stream(
     self, messages: list[BaseMessage], tools: list[dict] | None = None, **kwargs: Any,
 ) -> AsyncIterator[BaseMessage]:
-        return self._model.astream(messages, **kwargs)
+        return self._model.astream(messages, tools=tools, **kwargs)
