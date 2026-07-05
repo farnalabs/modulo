@@ -96,11 +96,12 @@ class PluginRegistry:
         Returns the list of newly discovered manifests.
         """
         discovered: list[PluginManifest] = []
-        for group in ("modulo.connectors", "modulo.model_backends"):
-            for ep in importlib.metadata.entry_points(group=group):
-                manifest = self._load_entry_point(ep, group)
-                if manifest is not None:
-                    discovered.append(manifest)
+        with self._lock:
+            for group in ("modulo.connectors", "modulo.model_backends"):
+                for ep in importlib.metadata.entry_points(group=group):
+                    manifest = self._load_entry_point(ep, group)
+                    if manifest is not None:
+                        discovered.append(manifest)
         if discovered:
             ids = [p.PLUGIN_ID for p in discovered]
             logger.info("Discovered %d plugin(s): %s", len(discovered), ids)
@@ -132,7 +133,7 @@ class PluginRegistry:
 
         try:
             builder = ep.load()
-        except Exception:
+        except (ImportError, TypeError, AttributeError):
             logger.exception("Failed to load entry point %s from package %s", ep.name, plugin_id)
             detail = f"Failed to load entry point {ep.name}"
             self._entry_point_errors[plugin_id] = detail
@@ -191,21 +192,25 @@ class PluginRegistry:
         self, type_id: str, builder: Callable[..., ConnectorBase], manifest: PluginManifest
     ) -> None:
         """Explicitly register a connector type builder (e.g. from an in-tree module)."""
-        self._connector_builders[type_id] = builder
-        manifest.capabilities.add("connector_type")
-        self._plugins[manifest.PLUGIN_ID] = manifest
-        self._health[manifest.PLUGIN_ID] = PluginHealth(ok=True, detail="Registered in-tree")
+        with self._lock:
+            self._connector_builders[type_id] = builder
+            self._finalize_registration(manifest, "connector_type")
         logger.info("Manually registered connector type '%s' from plugin %s", type_id, manifest.PLUGIN_ID)
 
     def register_model_backend(
         self, provider: str, builder: Callable[..., ModelBackendBase], manifest: PluginManifest
     ) -> None:
         """Explicitly register a model backend builder (e.g. from an in-tree module)."""
-        self._backend_builders[provider] = builder
-        manifest.capabilities.add("model_backend")
+        with self._lock:
+            self._backend_builders[provider] = builder
+            self._finalize_registration(manifest, "model_backend")
+        logger.info("Manually registered model backend '%s' from plugin %s", provider, manifest.PLUGIN_ID)
+
+    def _finalize_registration(self, manifest: PluginManifest, capability: str) -> None:
+        """Shared bookkeeping for registering a plugin's manifest and health."""
+        manifest.capabilities.add(capability)
         self._plugins[manifest.PLUGIN_ID] = manifest
         self._health[manifest.PLUGIN_ID] = PluginHealth(ok=True, detail="Registered in-tree")
-        logger.info("Manually registered model backend '%s' from plugin %s", provider, manifest.PLUGIN_ID)
 
     # ------------------------------------------------------------------
     # Queries
@@ -232,6 +237,11 @@ class PluginRegistry:
     def backend_providers(self) -> frozenset[str]:
         return frozenset(self._backend_builders)
 
+    @property
+    def entry_point_errors(self) -> dict[str, str]:
+        """Return a copy of entry-point load errors keyed by plugin_id."""
+        return dict(self._entry_point_errors)
+
     # ------------------------------------------------------------------
     # Health
     # ------------------------------------------------------------------
@@ -248,9 +258,10 @@ class PluginRegistry:
             return {plugin_id: self._check_single(manifest)}
 
         results: dict[str, PluginHealth] = {}
-        for pid, manifest in self._plugins.items():
-            results[pid] = self._check_single(manifest)
-        self._health.update(results)
+        with self._lock:
+            for pid, manifest in self._plugins.items():
+                results[pid] = self._check_single(manifest)
+            self._health.update(results)
         return results
 
     def _check_single(self, manifest: PluginManifest) -> PluginHealth:
