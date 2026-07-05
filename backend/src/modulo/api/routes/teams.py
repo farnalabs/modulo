@@ -182,6 +182,20 @@ async def create_team_endpoint(
             detail="Feature is not available. Run database migrations to enable it.",
         ) from None
 
+    from modulo.core.audit_logger import append_audit_event
+
+    async with session.begin():
+        await set_rls_org(session, current_user.organisation_id)
+        await append_audit_event(
+            session,
+            org_id=current_user.organisation_id,
+            event_type="team_created",
+            actor_user_id=current_user.account_id,
+            resource_type="team",
+            resource_id=team.id,
+            payload_json={"team_id": str(team.id), "name": team.name},
+        )
+
     return TeamResponse(
         id=str(team.id),
         name=team.name,
@@ -254,6 +268,20 @@ async def update_team_endpoint(
     if team is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Team not found")
 
+    from modulo.core.audit_logger import append_audit_event
+
+    async with session.begin():
+        await set_rls_org(session, current_user.organisation_id)
+        await append_audit_event(
+            session,
+            org_id=current_user.organisation_id,
+            event_type="team_updated",
+            actor_user_id=current_user.account_id,
+            resource_type="team",
+            resource_id=team_id,
+            payload_json={"team_id": str(team_id), "updates": updates},
+        )
+
     return TeamResponse(
         id=str(team.id),
         name=team.name,
@@ -279,6 +307,7 @@ async def delete_team_endpoint(
             from sqlalchemy import func, select
 
             from modulo.db.models.connector_instance import ConnectorInstance
+            from modulo.db.models.library_primitive import LibraryPrimitive
             from modulo.db.models.model_backend import ModelBackend
             from modulo.db.models.pipeline import Pipeline
             from modulo.db.models.stage import Stage
@@ -289,6 +318,7 @@ async def delete_team_endpoint(
                 (Stage, "stage"),
                 (ConnectorInstance, "connector"),
                 (ModelBackend, "model backend"),
+                (LibraryPrimitive, "library primitive"),
             ]:
                 count = (
                     await session.execute(
