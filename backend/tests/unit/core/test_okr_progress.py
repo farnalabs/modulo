@@ -24,7 +24,6 @@ from modulo.core.eval_engine.okr import (
     _compute_trend_direction,
     _days_between,
     alert_on_breach,
-    alert_on_breach_for_suite,
     track_okr_progress,
 )
 from modulo.settings import Settings, get_settings
@@ -105,15 +104,15 @@ class TestAlertOnBreach:
     def test_edge_perfect_pass_rate(self) -> None:
         assert alert_on_breach(1.0, 1.0) is False
 
-    def test_alert_on_breach_for_suite(self) -> None:
+    def test_alert_on_breach_from_suite_threshold(self) -> None:
         suite = OkrSuite(
             id="s1",
             name="test",
             pass_threshold=0.8,
             eval_definition_ids=[_EVAL_ID_1],
         )
-        assert alert_on_breach_for_suite(suite, 0.6) is True
-        assert alert_on_breach_for_suite(suite, 0.9) is False
+        assert alert_on_breach(suite.pass_threshold, 0.6) is True
+        assert alert_on_breach(suite.pass_threshold, 0.9) is False
 
 
 class TestDaysBetween:

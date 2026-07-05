@@ -80,7 +80,7 @@ class TestEvaluateSuite:
         """An empty suite with no eval results should pass."""
         result = evaluate_suite([], SUITE_ID, pass_threshold=0.8)
         assert result.passed is True
-        assert result.aggregate_score == 1.0
+        assert result.aggregate_score == 0.0
         assert result.total_evals == 0
         assert result.passed_evals == 0
         assert result.blocking_failures == []
