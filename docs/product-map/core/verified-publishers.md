@@ -82,10 +82,23 @@ Trust tiers for community registry primitives: green (verified publisher) and am
 - [x] update_publisher catches ProgrammingError → 501 Not Implemented
 - [x] delete_publisher catches ProgrammingError → 501 Not Implemented
 - [x] list_publishers catches ProgrammingError → 501 Not Implemented
+- [x] registry verify v2 endpoint catches ProgrammingError on db_get_publisher_by_key → 501 Not Implemented
+- [x] registry download endpoint catches ProgrammingError on create_library_primitive → 501 Not Implemented
+
+### Resilience
+
+- [x] admin routes use ProgrammingError catch (not SQLAlchemyError base class) — avoids masking real data errors as "need migration"
+- [x] registry verify v2 endpoint gracefully degrades trust_tier/publisher_name to null when DB is unavailable
+- [x] registry download endpoint gracefully returns 501 when library_primitives table doesn't exist yet
+- [x] No DB routes silently crash on missing tables — all DB-backed publisher routes expose 501 Not Implemented
+- [x] In-memory registry trust model (built-in publishers) works without any DB — no dependency on publisher table for basic verify
+- [ ] Registry download increments entry.download_count before DB call — count stays incremented even on ProgrammingError (in-memory state drifts from DB)
+- [ ] Admin update endpoint: conflict check for duplicate name/key runs before the update query — TOCTOU window exists between check and write
 
 ### QA History
 
 - 2026-07-03: Cross-cutting QA (index 93): Marked 25 stale [ ]→[x] implemented behaviours across Admin CRUD, Registry Verify, Error States, and Edge Cases. Added Error Handling section with 4 ProgrammingError→501 catches. Updated Known Gaps. Created unit tests for ProgrammingError handling. Created website docs stub.
+- 2026-07-05: Cross-cutting QA (index 94): Added 2 missing ProgrammingError catches in registry.py (verify v2 + download endpoints). Added Resilience section with TOCTOU and download-count drift gaps. Moved self-match name/key edge cases from unchecked to checked (code handles them via `existing.id != publisher_id`). Updated Known Gaps.
 
 ## Known Gaps
 - No BDD feature file — no `.feature` file exists specifically for verified publishers (only direct unit tests covering CRUD, registry verify, and in-memory trust model)
@@ -95,4 +108,7 @@ Trust tiers for community registry primitives: green (verified publisher) and am
 - No trust tier badge display in library browser UI (green/amber indicators)
 - No verified publisher application process or key issuance API/UI (v2 roadmap)
 - No revocation notification to downstream consumers of revoked publishers
-- No update-name-to-self or update-key-to-self tests — code allows self-match (excludes own ID from conflict check) but this path is not covered by unit tests
+- No update-name-to-self or update-key-to-self tests — code allows self-match (excludes own ID from conflict check via `existing.id != publisher_id`) but this path is not covered by unit tests
+- Registry download increments `entry.download_count` before the DB call — in-memory state drifts from DB if the DB call raises ProgrammingError
+- Admin update endpoint: conflict check for duplicate name/key runs before the update query — TOCTOU window exists between check and write
+- Registry verify v2 `public_key_pem` path does not hit the DB — trust_tier/publisher_name are only populated in the `public_key_hex` path
