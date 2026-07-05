@@ -103,8 +103,7 @@ class RunawayGuard:
     def record_tokens(self, tokens: int) -> None:
         """Accumulate token usage and check against *token_budget*."""
         if tokens < 0:
-            _log.warning("runaway.negative_tokens", extra={"tokens": tokens})
-            return
+            raise ValueError(f"Negative token count ({tokens}) is invalid")
         self._token_count += tokens
         if self._token_budget is not None and self._token_count > self._token_budget:
             _log.warning(

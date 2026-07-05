@@ -10,7 +10,6 @@ import pytest
 from modulo.core.pipeline_engine.executor import (
     PipelineExecutor,
     RunNotFoundError,
-    _graph_json_hash,
     _seed_state,
 )
 
@@ -136,26 +135,6 @@ def _mock_registry() -> MagicMock:
     registry.get_or_create.return_value = broker
     registry.close = MagicMock()
     return registry
-
-
-# ---------------------------------------------------------------------------
-# _graph_json_hash
-# ---------------------------------------------------------------------------
-
-
-def test_graph_json_hash_is_deterministic():
-    g = {"nodes": [{"id": "x"}], "edges": []}
-    assert _graph_json_hash(g) == _graph_json_hash(g)
-
-
-def test_graph_json_hash_is_order_independent():
-    g1 = {"edges": [], "nodes": [{"id": "x"}]}
-    g2 = {"nodes": [{"id": "x"}], "edges": []}
-    assert _graph_json_hash(g1) == _graph_json_hash(g2)
-
-
-def test_graph_json_hash_differs_for_different_content():
-    assert _graph_json_hash({"nodes": [], "edges": []}) != _graph_json_hash({"nodes": [{"id": "x"}], "edges": []})
 
 
 # ---------------------------------------------------------------------------
