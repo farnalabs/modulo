@@ -10,7 +10,6 @@ code:
   - backend/src/modulo/model_backends/__init__.py
   - backend/src/modulo/model_backends/base.py
   - backend/src/modulo/core/model_backend_hub/__init__.py
-  - backend/src/modulo/model_backends/base.py
 depends-on:
   - feat-model-backends-management
 status: partial
@@ -80,7 +79,7 @@ management described in `feat-model-backends-management`.
 - [x] Health check on unregistered backend → `HealthResult(ok=False, detail="Backend not registered")`
 - [x] Plugin provider fallback: registered provider → built via plugin registry
 - [x] Plugin provider fallback: not registered → `ValueError("Unknown model backend provider")`
-- [ ] Missing `aws_access_key_id`/`aws_secret_access_key` in Bedrock credentials → `KeyError` not caught — propagates as unhandled exception
+- [x] Missing `aws_access_key_id`/`aws_secret_access_key` in Bedrock credentials → `ValueError("Missing 'aws_access_key_id' in credentials for provider 'bedrock'")` (confirmed in `_build_backend()`) @ 2026-07-05
 
 ### Resilience & Integration Robustness
 
@@ -122,7 +121,6 @@ management described in `feat-model-backends-management`.
 - [ ] **No retry with backoff**: health check runs once per call. No retry logic for transient failures.
 - [ ] **No mid-run monitoring**: no periodic health re-check during a run. `mark_unhealthy()` exists but is caller-driven; no automatic detection of unreachability.
 - [ ] **No logging in Hub**: failover events (`audit_logger` callback) require the caller to provide a logger. Hub itself has no `logger.info()` or `logger.warning()` calls.
-- [ ] **Bedrock credentials not validated**: missing `aws_access_key_id`/`aws_secret_access_key` in Bedrock creds causes `KeyError` (uncaught). Other providers check for `api_key` explicitly; Bedrock doesn't.
 - [ ] **No pricing config integration**: pinned `model_id` cost tracking not implemented.
 - [ ] **`get_with_rotation()` fallback-scan returns unrelated backends**: when no fallbacks are configured and primary is unhealthy, any registered backend (different provider, different model) may be returned.
 
@@ -130,3 +128,4 @@ management described in `feat-model-backends-management`.
 
 - 2026-07-04 (improve-architecture index 173): Cross-cutting QA pass 2. Verified all unchecked behaviours against code: marked 13 behaviours [ ]→[x] (agent model_backend_id ref, run-start resolution, ConnectorHub parallel, model_id pinning, entity independence, operator-update-on-new-runs, pre-run health check, named failure, run blocking, non-existent ID validation, all-backends-pass, Hub registration pattern, one-decrypt balance). Added Error Handling (15 items), Resilience & Integration Robustness (10 items), and Edge Cases (10 items) sections. Updated Known Gaps: removed stale "no pre-run health check", "no model_backend_pins_json" (both implemented); added 7 new gaps (typed error codes, staleness bound, retry, mid-run monitoring, Hub logging, Bedrock credential validation, fallback-scan unrelated backends). Created website doc stub.
 - 2026-07-02 (improve-architecture index 54): Cross-cutting QA pass 1. Updated frontmatter (added code path for Hub implementation, added 2 unit test file refs). Marked 7 stale [ ]→[x] behaviours (registration, decryption, run-scoped lifecycle, ABC pattern, stub test double). Removed 3 stale known gaps (No Hub implementation, No credential decryption, No unit tests). Updated ConnectorHub pattern gap description to reflect current state. All Hub unit tests pass.
+- 2026-07-05 (qa-iterate prodmap model-backends): Fixed duplicate code path (`base.py` listed twice in `code:` frontmatter). Corrected Bedrock credential validation claim from `[ ]` (uncaught `KeyError`) to `[x]` (handled `ValueError` in `_build_backend()`). Removed stale Known Gap "Bedrock credentials not validated".
